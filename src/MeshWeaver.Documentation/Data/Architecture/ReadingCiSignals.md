@@ -1,7 +1,7 @@
 ---
 Name: Reading CI Signals
 Category: Architecture
-Description: What a check's colour actually means — why SKIPPED and ABSENT count as satisfied, why a red on a non-required check does not block, and the i18n mirror that reds every downstream PR until it lands.
+Description: What a check's colour actually means — why a SKIPPED required context counts as satisfied while a never-reported one blocks forever, why a red on a non-required check does not block, and the i18n mirror that reds every downstream PR until it lands.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
 ---
 
@@ -15,10 +15,9 @@ rediscover.
 
 **The absence of a red is not evidence of green.**
 
-`SKIPPED`, `CANCELLED`, `NEUTRAL`, an empty conclusion, and *a required context that never
-appeared at all* are all "not FAILURE" — and **GitHub counts a skipped or absent required context as
-SATISFIED**. A PR can therefore merge through a required gate that never ran, with a full wall of
-ticks.
+`SKIPPED`, `CANCELLED`, `NEUTRAL` and an empty conclusion are all "not FAILURE" — and **GitHub
+counts a required context that REPORTED one of them as SATISFIED**. A PR can therefore merge through
+a required gate that never ran, with a full wall of ticks.
 
 Measured: **Plugins #862** merged with
 
@@ -35,6 +34,55 @@ is not an inference you may make.
 
 **The rule:** a required context counts only when its conclusion is literally `SUCCESS`.
 
+### 🚨 SKIPPED and ABSENT are NOT the same reading — and they fail in OPPOSITE directions
+
+The sentence above used to say "skipped **or absent**". That is wrong, and the two halves are not
+even the same kind of mistake:
+
+| the required context… | classic protection | ruleset |
+|---|---|---|
+| **reported** `SKIPPED` / `NEUTRAL` / `CANCELLED` | **satisfied** — merges | **satisfied** — merges |
+| was **never reported at all** (no check-run, no commit status) | **BLOCKS, forever** | satisfied — merges |
+
+A skipped context is a check-run that *exists* and carries a non-failure conclusion; GitHub has an
+answer and accepts it. A context that was never published has no row at all, and classic protection
+renders it *"Expected — Waiting for status to be reported"* and refuses the merge until the end of
+time. Nothing retries it, because nothing is going to publish it.
+
+**Measured 2026-09-08, `MeshWeaver.Plugins#1453`.** That PR adopts the shared `node-repo-validate`
+lane, which renames the job's context from `Validate node repos` to `validate / Validate node
+repos` and splits the repo-specific half out as `Repo policy gates`. Its run
+[`34191771207`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34191771207) is
+`success` across **all 106 jobs**, `validate / Validate node repos` included, and the PR still reads:
+
+```
+mergeable_state: blocked
+required contexts (classic, MeshWeaver.Plugins):
+  Validate node repos                            <- NO check-run, NO commit status  ← the block
+  Compile every NodeType (vs core)               success
+  Build + test the portal hosts                  success
+  Module bundles / All selected bundles built    success
+  Module bundles (floor) / …                     success
+```
+
+Confound ruled out before concluding: `required_pull_request_reviews` is `null`, `strict` is
+`false`, and the repo's one ruleset (`Copilot review for default branch`) carries only `deletion`,
+`non_fast_forward` and `copilot_code_review` — none of which blocks a merge. A required status check
+is the only thing left that can.
+
+**Why it matters in both directions.** Read as *"absent counts as satisfied"*, a repo that has
+quietly stopped publishing a gate looks safe — that is the failure the rest of this page is about,
+and it is real for a **ruleset** repo. Read the same way in a **classic-protection** repo, a PR that
+is structurally stuck looks merely slow, and someone waits days for a run that can never appear. The
+cure for the second is a branch-protection edit, never patience.
+
+🚨 **Adopting a reusable lane is exactly this event**, which is why AGENTS.md says the context rename
+happens *in the same change*. Sequence it deliberately: dropping the old context and adding the new
+ones in one step blocks **every** open PR in that repo that has not yet merged the adopting change,
+because none of them publishes the new names. Dropping the old name first, merging the adopting PR,
+then adding the new names is the order that blocks nobody — and the gap between step two and step
+three is a window in which the gate is advisory, so it is a step to finish, not to leave.
+
 ```bash
 gh pr view <N> --repo <repo> --json statusCheckRollup \
   --jq '[.statusCheckRollup[]? | select(.name | IN("<required>","<contexts>","<here>"))
@@ -50,7 +98,8 @@ Two independent facts, and confusing them costs time in both directions:
 | | |
 |---|---|
 | **Required, and red** | blocks the merge |
-| **Required, and skipped/absent** | **does not block** — GitHub treats it as satisfied |
+| **Required, and it REPORTED skipped/neutral/cancelled** | **does not block** — GitHub treats it as satisfied |
+| **Required, and never reported at all** | **blocks forever** under classic protection; does **not** block under a ruleset — see *SKIPPED and ABSENT are NOT the same reading* above |
 | **Not required, and red** | does **not** block — but it is still evidence, and may be a real defect |
 | **Not required, and it is the job your diff changes** | do not arm auto-merge: the PR can land *before* that job finishes, putting a broken gate on `main` where it renders as a green tick |
 
