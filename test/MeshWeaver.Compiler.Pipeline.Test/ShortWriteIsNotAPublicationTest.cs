@@ -162,13 +162,13 @@ public class ShortWriteIsNotAPublicationTest : IDisposable
         put.Should().BeNull("the write happens at subscribe time");
 
         var refusal = await Assert.ThrowsAsync<ShortWriteException>(async () =>
-            await store.PutWithLocation("P/T", 851, bytes, pdbBytes: null).Timeout(TimeSpan.FromSeconds(30)));
+            await store.PutWithLocation("P/T", 851, bytes, pdbBytes: null).Timeout(TestTimeouts.Convergence));
         refusal.LandedBytes.Should().Be(2048);
 
         var typeDir = Directory.GetDirectories(_root).Should().ContainSingle().Subject;
         Directory.GetFiles(typeDir, "*.dll").Should().BeEmpty("no discoverable DLL for bytes that are not there");
         StagingLeftovers(typeDir).Should().BeEmpty();
-        (await store.TryGetAssemblyPath("P/T", 851).Timeout(TimeSpan.FromSeconds(30)))
+        (await store.TryGetAssemblyPath("P/T", 851).Timeout(TestTimeouts.Convergence))
             .Should().BeNull("a lookup must not resolve a publication that was refused");
     }
 
@@ -180,9 +180,9 @@ public class ShortWriteIsNotAPublicationTest : IDisposable
         var bytes = Payload(32 * 1024, 0x5C);
 
         var location = await store.PutWithLocation("P/T", 851, bytes, pdbBytes: null)
-            .Timeout(TimeSpan.FromSeconds(30));
+            .Timeout(TestTimeouts.Convergence);
         File.ReadAllBytes(location.LocalPath).Should().Equal(bytes);
-        (await store.TryGetAssemblyPath("P/T", 851).Timeout(TimeSpan.FromSeconds(30)))
+        (await store.TryGetAssemblyPath("P/T", 851).Timeout(TestTimeouts.Convergence))
             .Should().Be(location.LocalPath);
     }
 
