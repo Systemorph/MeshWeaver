@@ -382,6 +382,101 @@ public sealed class PendingModuleActivations(string moduleRoot)
         ModuleActivationStatus.LoadedModuleGenerations());
 
     /// <summary>
+    /// How many times this instance has actually read the activation state off the volume — the
+    /// sidecar, every <c>activation.d/*.json</c>, the set index, and one existence probe per landed
+    /// DLL. A measurement for the tests that pin <see cref="Read()"/>'s cost: it climbs by one per
+    /// CHANGE of the on-disk state, never per call.
+    /// </summary>
+    public int DiskReads => Volatile.Read(ref diskReads);
+
+    private int diskReads;
+
+    // 🚨 #3664 — the report is read on EVERY startup/readiness probe, and every read walked the
+    // volume: ModuleActivationSidecar.Read opens activation.json and each activation.d/*.json,
+    // ModuleSetStore.Read lists and parses sets/*.json, and the projection then asks
+    // File.Exists once per entry in three passes. On memex-cloud's shared Azure Files volume
+    // (714 module generations, 33,383 files) that is 8–10 s per probe against a 5 s probe timeout,
+    // so a fresh pod NEVER passed its startup probe — image-independent, every rollout stalled.
+    //
+    // The state this reads changes only when something LANDS or a wave is PROPOSED, and every
+    // writer in this assembly lands its file by temp-file + rename INTO one of three directories
+    // (modules/, modules/activation.d/, modules/sets/) or creates/deletes a marker there — each of
+    // which moves that directory's last-write time on every filesystem the mesh runs on. So the
+    // disk-derived half of the report is memoised behind a fingerprint of those three
+    // timestamps (three stats per probe), and only the cheap in-process half — which assemblies
+    // THIS process has loaded — is recomputed per call. The snapshot is an immutable record swapped
+    // atomically on an instance field: two concurrent probes may compute it twice, both correctly;
+    // no lock, no timer, nothing to clear.
+    private DiskSnapshot? snapshot;
+
+    /// <summary>The disk-derived inputs of one report, valid while <see cref="Fingerprint"/> stands.</summary>
+    private sealed record DiskSnapshot(
+        DiskFingerprint Fingerprint,
+        ModuleActivationList? Activation,
+        string? Corrupt,
+        Exception? OpenFailure,
+        ModuleSetIndex Sets,
+        ImmutableList<string> SetNotes,
+        Func<ModuleActivationEntry, bool> LandedDllExists);
+
+    /// <summary>
+    /// The last-write times of the three directories every activation writer renames into. PURE
+    /// over the file system; a missing directory reads as <see cref="DateTime.MinValue"/>, so the
+    /// first landing into it changes the fingerprint too.
+    /// </summary>
+    public readonly record struct DiskFingerprint(DateTime Modules, DateTime Entries, DateTime Sets)
+    {
+        public static DiskFingerprint Of(string baseDirectory) => new(
+            LastWrite(Path.Combine(baseDirectory, "modules")),
+            LastWrite(ModuleActivationSidecar.EntriesDirectory(baseDirectory)),
+            LastWrite(ModuleSetStore.SetsDirectory(baseDirectory)));
+
+        private static DateTime LastWrite(string directory) =>
+            Directory.Exists(directory) ? Directory.GetLastWriteTimeUtc(directory) : DateTime.MinValue;
+    }
+
+    private DiskSnapshot ReadDisk()
+    {
+        var fingerprint = DiskFingerprint.Of(ModuleRootPath);
+        var current = snapshot;
+        if (current is not null && current.Fingerprint == fingerprint)
+            return current;
+
+        Interlocked.Increment(ref diskReads);
+        string? corrupt = null;
+        ModuleActivationList? activation = null;
+        Exception? openFailure = null;
+        try
+        {
+            // 🚨 The corruption callback is not optional here. ModuleActivationSidecar.Read
+            // swallows an unparseable file into the EMPTY list, so a surface that ignores the
+            // callback reports a corrupt sidecar as "nothing pending" — cheerfully, forever. That
+            // is the shape this whole cluster of defects has in common.
+            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason => corrupt = reason);
+        }
+        catch (Exception exception)
+        {
+            openFailure = exception;
+        }
+        var setNotes = ImmutableList.CreateBuilder<string>();
+        var sets = openFailure is null && corrupt is null
+            ? ModuleSetStore.Read(ModuleRootPath, setNotes.Add)
+            : ModuleSetIndex.Empty;
+        // One existence probe per landed DLL for the life of this snapshot: the three projection
+        // passes below ask about the same entries, and the answer cannot change while the
+        // fingerprint stands (a landing renames into activation.d, which moves it).
+        var landed = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal);
+        bool LandedDllExists(ModuleActivationEntry entry) =>
+            landed.GetOrAdd(
+                ModuleActivationBoot.LandedDllPath(ModuleRootPath, entry),
+                path => File.Exists(path));
+        var fresh = new DiskSnapshot(
+            fingerprint, activation, corrupt, openFailure, sets, setNotes.ToImmutable(), LandedDllExists);
+        snapshot = fresh;
+        return fresh;
+    }
+
+    /// <summary>
     /// Testable form: the caller supplies what counts as loaded, BY NAME ONLY.
     ///
     /// <para>🚨 Name-only cannot see an UPDATE (#3395) — a module whose activated generation moved
@@ -404,55 +499,20 @@ public sealed class PendingModuleActivations(string moduleRoot)
         IReadOnlySet<string> loadedAssemblyNames,
         IReadOnlyDictionary<string, string> loadedModuleGenerations)
     {
-        string? corrupt = null;
-        ModuleActivationList activation;
-        try
-        {
-            // 🚨 The corruption callback is not optional here. ModuleActivationSidecar.Read
-            // swallows an unparseable file into the EMPTY list, so a surface that ignores the
-            // callback reports a corrupt sidecar as "nothing pending" — cheerfully, forever. That
-            // is the shape this whole cluster of defects has in common.
-            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason => corrupt = reason);
-        }
-        catch (Exception exception)
-        {
+        var disk = ReadDisk();
+        if (disk.OpenFailure is { } exception)
             return new ModuleActivationReport(
                 [], $"the activation sidecar under '{ModuleRootPath}' could not be opened "
                     + $"({exception.GetType().Name}: {exception.Message})");
-        }
-
-        if (corrupt is not null)
-            return new ModuleActivationReport([], corrupt);
-
-        // 🚨 The SAME existence gate boot applies, threaded here for the same reason: this report
-        // PROMISES that a restart activates what it calls pending, and only the gate boot itself
-        // uses can keep that promise. A landed DLL that is gone (#2093) means boot would skip the
-        // entry — reported SEPARATELY rather than dropped: an activated module whose bytes are gone
-        // is a fault an operator must act on, not a quiet nothing. The declared platform floor used
-        // to be the second gate here (a HELD entry — the registry shelf, 2026-08-22); since #3648
-        // boot does not skip on it and neither does this report — it is worded per entry as an
-        // advisory instead.
-        bool LandedDllExists(ModuleActivationEntry entry) =>
-            ModuleActivationBoot.LandedModuleDllExists(ModuleRootPath, entry);
-
-        // 🚨 #3395 — compare against THE MESH'S MODULE SET, which is what a restart of this process
-        // would actually load, not against the raw activation record, which is a moving target no
-        // boot resolves any more. Getting this wrong in either direction breaks the report's one
-        // promise: comparing against the record would call a pod "pending" for a landing whose wave
-        // has not completed (a restart would not load it — a promise no restart can keep, the exact
-        // false prompt the held-entry and missing-bytes rules exist to prevent), and it is what let
-        // a pod 90 minutes behind answer Healthy in the first place.
-        // 🚨 The set store's reports are NOT verdicts, and folding them into UndeterminedReason
-        // would make them into one. `ModuleSetStore.Read` reports a deterministically-RESOLVED
-        // conflict (two replicas proposed one sequence; every reader picks the same set) and a
-        // single unreadable record (skipped, the rest stand) through the same channel — both are
-        // handled conditions with a valid index behind them. Even the one genuinely blind case, a
-        // directory that cannot be listed, answers `Empty`, which projects as the IDENTITY: this
-        // pod then reports exactly what it reported before #3395, which is an answer, not an
-        // absence of one. So the notes go on the mesh-set LINE, where an operator sees them, and
-        // the verdict stays what the activation record supports.
-        var setNotes = new List<string>();
-        var sets = ModuleSetStore.Read(ModuleRootPath, setNotes.Add);
+        if (disk.Corrupt is not null)
+            return new ModuleActivationReport([], disk.Corrupt);
+        var activation = disk.Activation!;
+        // The SAME existence gate boot applies (see ReadDisk): this report PROMISES that a restart
+        // activates what it calls pending, and only the gate boot itself uses can keep that
+        // promise. A landed DLL that is gone (#2093) is reported SEPARATELY rather than dropped.
+        var LandedDllExists = disk.LandedDllExists;
+        var setNotes = disk.SetNotes;
+        var sets = disk.Sets;
 
         var deferred = ImmutableList.CreateBuilder<PendingModuleActivation>();
         var onMeshSet = ModuleActivationBoot.ProjectOntoMeshSet(
