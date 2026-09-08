@@ -194,7 +194,13 @@ public static class ServiceDefaults
             // loaded here renders empty, and until now /health said only "Degraded". No probe
             // tag — Degraded on purpose, never a reason to pull the pod — so it reads on
             // ProbeEndpoints.Health alone, with the node types named in the detail.
-            .AddCheck<ContentTypeHealthCheck>(ContentDegradationRegistry.HealthCheckName);
+            .AddCheck<ContentTypeHealthCheck>(ContentDegradationRegistry.HealthCheckName)
+            // How full the data volume is (2026-09-08): the share holding the prebuilt bundles,
+            // the modules, the assembly cache and the DataProtection keys reached 3 MiB free and
+            // every write on it failed far from the cause. Degraded below DataVolume:MinimumFreeBytes
+            // (1 GiB) on the volume of any configured store root — no probe tag, pulling the pod
+            // frees nothing — naming the path, used and total.
+            .AddCheck(DataVolumeFreeSpace.HealthCheckName, new DataVolumeHealthCheck(builder.Configuration));
 
         return builder;
     }

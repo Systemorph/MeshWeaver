@@ -251,6 +251,12 @@ public static class MemexConfiguration
             // awaiting-setup early return below on purpose — an instance parked in setup still
             // reclaims its garbage, exactly as the synchronous call did.
             builder.ConfigureServices(services => services.AddModuleGenerationsGc(moduleRoot));
+            // The sibling collector for the CI-published prebuilt-bundle store on the same volume
+            // (2026-09-08: 482 identity directories / 13.4 GiB filled the 16 GiB share). Same
+            // shape — registered here, run after ApplicationStarted behind the bake, on the
+            // file-system IIoPool — then recurring daily. Inert without PreWarm:PrebuiltBundleRoot.
+            // The rule is PrebuiltBundleStore's: prune what nothing references, never by age alone.
+            builder.ConfigureServices(services => services.AddPrebuiltBundleRetention(configuration));
             var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
 
