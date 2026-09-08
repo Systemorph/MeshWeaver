@@ -544,7 +544,25 @@ Only the reference env `deploy/aks/envs/example/` is in this repo; per-tenant en
 
 Note the tension with §2: because the chart's migration is a Job created per Helm revision, `helm upgrade` is also the *only* in-repo path that runs a migration. A schema change consequently needs this script (or a bare `helm upgrade`) even though a plain code update must not use it.
 
-## Diagnostics (private cluster)
+## Diagnostics — through the memex API first
+
+🚨 **Maintainer directive, 2026-09-08: operations and diagnostics go through the memex API, not
+through `az`/`kubectl`.** The control instance's `Hosting` module answers the two everyday
+questions as nodes, with no cluster credential on the caller:
+
+| question | `Hosting/InstanceAction` (`content.deployment: "Deployments/<id>"`) | answer |
+|---|---|---|
+| what is `<id>` running — per replica: image, ready, restarts, started, the pod's own `/health` and its detail | `{ "requestedAction": "Sample" }` | `Ops/Status/<id>` — `replicas[]`, `warnings[]` (what the sample could NOT see; unknown is never zero) |
+| what did it log | `{ "requestedAction": "Logs", "query": "<regex or \| pipeline>", "sinceMinutes": 60, "limit": 300, "pod": "<optional>" }` | `logQl`, `entryCount`, `truncated` on the run; `Hosting/LogEntry` nodes under `Ops/Logs`, the Deployment page's Logs area |
+| what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
+| roll it | pin `pinnedImageTag` on the record → `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` | the run's phases; then a `Sample` |
+
+Both observations read the cluster's monitoring stack (kube-state-metrics via Prometheus, Loki)
+from inside the cluster, where it is credential-free; the roll runs as the in-cluster operator Job.
+The fleet guide (`get @Hosting/Guide`, "Roll, restart, observe") carries the full table. What
+follows is the break-glass form, for when the control plane itself is what is broken.
+
+## Diagnostics (private cluster — break glass)
 
 - Logs: `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-portal-deployment --tail=120"`. Note: the Azure CLI can crash on non-ASCII (`→`) in log output on Windows (cp1252) — pipe through `tr -cd '\11\12\15\40-\176'` **inside** the `--command` so az only receives printable text.
 - **Intermittent hangs while most requests succeed** (portal recently synced or baked): suspect a
