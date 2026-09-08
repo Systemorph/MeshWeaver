@@ -268,6 +268,7 @@ public class SelfUpdatePendingRestartTest(ITestOutputHelper output) : MonolithMe
         RetryInterval = TimeSpan.FromMilliseconds(500),
         EventCoalesceWindow = TimeSpan.FromMilliseconds(50),
         DefaultPolicy = UpdatePolicyKind.Continuous,
+        DefaultPattern = "*-ci*",
     };
 
     private async Task<UpdatePolicyContent> RunOneCheck(
@@ -302,7 +303,12 @@ public class SelfUpdatePendingRestartTest(ITestOutputHelper output) : MonolithMe
             NodeType = UpdatePolicyNodeType.NodeType,
             Name = "Update Policy",
             State = MeshNodeState.Active,
-            Content = new UpdatePolicyContent { Policy = policy },
+            // 2026-09-08: a continuous build is eligible only when a pattern admits it.
+            Content = new UpdatePolicyContent
+            {
+                Policy = policy,
+                Pattern = policy == UpdatePolicyKind.Continuous ? "*-ci*" : null,
+            },
         };
         return Observable.Create<MeshNode>(observer =>
             {

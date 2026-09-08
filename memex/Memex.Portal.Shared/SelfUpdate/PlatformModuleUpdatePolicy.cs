@@ -14,10 +14,13 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// node that already governs the image roll. There is deliberately NO module-specific knob:
 ///
 /// <list type="bullet">
-///   <item><b>Continuous</b> (the platform default, and the value an ABSENT node reads as) —
-///     unattended module landing is allowed: store-installed modules track their registry the same
-///     way the platform tracks its image.</item>
-///   <item><b>Stable</b> / <b>None</b> — declined: a deployment that pins its image takes updates
+///   <item><b>Continuous</b> — unattended module landing is allowed: store-installed modules track
+///     their registry the same way the platform tracks its image. The record's version PATTERN
+///     governs the platform IMAGE only (<see cref="UpdateChannelPattern"/>): modules carry their
+///     own versions, so a <c>Continuous</c> record without a pattern still lands modules
+///     unattended while its platform stays on clean releases.</item>
+///   <item><b>Stable</b> (the platform default since 2026-09-08) / <b>None</b> (what an ABSENT
+///     node reads as, #3542) — declined: a deployment that pins its image takes updates
 ///     deliberately, and its modules must not run ahead of that choice. The catalog card's manual
 ///     Update (and any explicit install) still lands the module — the gate covers only the
 ///     background reconcile.</item>
@@ -35,7 +38,8 @@ public sealed class PlatformModuleUpdatePolicy(IMessageHub hub, ILogger<Platform
     {
         var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
-            // No storage = no persisted policy = the platform default (Continuous): allowed.
+            // No storage = no persisted policy = nothing an operator could have pinned: allowed
+            // (a host without storage has no image roll to run ahead of either).
             return Observable.Return<string?>(null);
 
         return storage.Read(UpdatePolicyNodeType.NodePath, hub.JsonSerializerOptions)

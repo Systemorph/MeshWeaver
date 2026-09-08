@@ -36,25 +36,25 @@ public static class UpdatePolicySettingsTab
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
         stack = stack.WithView(Controls.H2(host.Localize("ui.platformUpdates")).WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Markdown(
-            "The platform self-updates per the strategy below. **Continuous** rolls to the newest build " +
-            "(including build-numbered continuous builds); **Stable** rolls only to clean releases; " +
-            "**None** disables auto-update. **Only update to CI-verified (green) builds** (default on) " +
-            "keeps the install on builds that passed CI — turn it off to also accept unverified edge builds. " +
-            "On Kubernetes the portal patches its own deployment; elsewhere the latest version is surfaced " +
-            "for a manual update."));
+        stack = stack.WithView(Controls.Markdown(host.Localize("ui.mdUpdatePolicyIntro")));
 
         // Running version (the installed platform version baked into the binary).
         stack = stack.WithView(Controls.Markdown(
             $"**Running version:** `{ShippedReleaseSeed.InstalledPlatformVersion}`"));
 
         // Policy editor — bound DIRECTLY to Admin/UpdatePolicy. EnsureExists (create-on-absent, as
-        // System) before binding so the editor binds to an existing node.
-        stack = stack.WithView((h, _) => UpdatePolicyNodeType
-            .EnsureExists(h.Hub, h.Hub.ServiceProvider.GetService<AccessService>(), UpdatePolicyKind.Continuous)
-            .Select(_ => (UiControl?)MeshNodeContentEditorControl.ForType(
-                UpdatePolicyNodeType.NodePath, typeof(UpdatePolicyContent)))
-            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingUpdatePolicy"))));
+        // System) before binding so the editor binds to an existing node. The seed is the SAME
+        // default the poller seeds (SelfUpdateOptions.DefaultPolicy — Stable), never a second one.
+        stack = stack.WithView((h, _) =>
+        {
+            var options = h.Hub.ServiceProvider.GetService<SelfUpdateOptions>() ?? new SelfUpdateOptions();
+            return UpdatePolicyNodeType
+                .EnsureExists(h.Hub, h.Hub.ServiceProvider.GetService<AccessService>(), options.DefaultPolicy,
+                    defaultPattern: options.DefaultPattern)
+                .Select(_ => (UiControl?)MeshNodeContentEditorControl.ForType(
+                    UpdatePolicyNodeType.NodePath, typeof(UpdatePolicyContent)))
+                .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingUpdatePolicy")));
+        });
 
         // Live status: the latest available tag, when last checked, and — when the combo gate has
         // verified that tag against THIS instance's module set (mw-combo-verify) — its verdict. A

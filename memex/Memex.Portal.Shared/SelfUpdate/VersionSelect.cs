@@ -81,6 +81,17 @@ public static class VersionSelect
     private static readonly Regex PlatformVersionTag =
         new(@"^\d+\.\d+\.\d+([-+].*)?$", RegexOptions.Compiled);
 
+    // 🚨 The MOVING image pointers (2026-09-08): CD re-points `<major>-latest`, `<major.minor>-latest`
+    // and `<major.minor.patch>-latest` at every publication of that line, so an install STARTS from
+    // one and self-updates from there. The three-part one — `3.0.1-latest` — has the dotted shape
+    // above and NuGet-parses as a pre-release of 3.0.1, so without this filter it would be listed as a
+    // release, ranked in the promotion band, and could be selected by a pattern such as `3.0.1*`.
+    // A pointer is not a version: it names different bytes tomorrow, and rolling a Deployment onto
+    // it makes "what does this install run" unanswerable. Never a candidate, under any policy or
+    // pattern. `3-latest` / `3.0-latest` already fail the dotted shape; this names the rule for all.
+    private static readonly Regex MovingPointer =
+        new(@"-latest$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     /// <summary>The CD run number <paramref name="version"/> was published by — see
     /// <see cref="PlatformReleaseOrder.BuildOrdinal"/>, which owns it. Kept here as the name this
     /// file's own documentation and tests refer to, never as a second implementation.</summary>
@@ -91,14 +102,66 @@ public static class VersionSelect
     /// <see cref="UpdatePolicyKind.Continuous"/> considers every parseable tag (incl. build-numbered
     /// pre-releases); <see cref="UpdatePolicyKind.Stable"/> considers only clean releases
     /// (<c>!IsPrerelease</c>); <see cref="UpdatePolicyKind.None"/> always returns <c>null</c>.
+    /// A <paramref name="pattern"/>, when given, narrows either to the tags it admits.
     /// Returns the ORIGINAL tag string (so the image patch uses the exact registry tag).
     ///
     /// <para>Literally the head of <see cref="PickTargets"/> — one filter, one ordering, no second
     /// copy of "which release is best" to drift from the first.</para>
     /// </summary>
     public static string? PickTarget(
-        IEnumerable<string> tags, UpdatePolicyKind policy, bool requireCiGreen = true) =>
-        PickTargets(tags, policy, requireCiGreen).FirstOrDefault();
+        IEnumerable<string> tags, UpdatePolicyKind policy, bool requireCiGreen = true, string? pattern = null) =>
+        PickTargets(tags, policy, requireCiGreen, pattern).FirstOrDefault();
+
+    /// <summary>
+    /// What ONE policy record means for the image roll: which <see cref="UpdatePolicyKind"/> is
+    /// actually applied, under which pattern, and — when that differs from what the record SAYS —
+    /// the sentence an operator needs to read.
+    /// </summary>
+    /// <param name="Policy">The policy applied.</param>
+    /// <param name="Pattern">The normalized version pattern applied, or null.</param>
+    /// <param name="Advisory">Non-null exactly when the record declares <c>Continuous</c> without a
+    /// pattern: the channel is then <c>Stable</c>, and this names the record and the pattern to set.
+    /// Logged ONCE per process by the poller; never a hold, never a fault.</param>
+    public readonly record struct UpdateChannel(UpdatePolicyKind Policy, string? Pattern, string? Advisory);
+
+    /// <summary>
+    /// 🚨 <b>The channel rule (maintainer, 2026-09-08), stated once.</b> <i>"By default we will not
+    /// upgrade as long as no version without <c>-ci…</c> is labelled ⇒ we want to have a clean label
+    /// <c>3.0.1</c> to upgrade. If we want to get the <c>-ci…</c> we have to specify the pattern
+    /// <c>3.0.1-ci*</c>."</i>
+    ///
+    /// <list type="bullet">
+    /// <item><see cref="UpdatePolicyKind.None"/> — nothing; the pattern is ignored.</item>
+    /// <item><see cref="UpdatePolicyKind.Stable"/> — clean releases only; a pattern narrows them.</item>
+    /// <item><see cref="UpdatePolicyKind.Continuous"/> WITH a pattern — the tags the pattern admits,
+    /// continuous builds included, newest run first.</item>
+    /// <item><see cref="UpdatePolicyKind.Continuous"/> WITHOUT a pattern — <b>is <c>Stable</c></b>:
+    /// no pre-release is ever eligible on its own. The record is not rewritten (an operator's
+    /// choice is theirs to edit), the advisory names what to set, and the poller logs it once.</item>
+    /// </list>
+    ///
+    /// <para>Pure. <see cref="SelectCandidates"/> applies this itself, so the decision can never be
+    /// taken on an unresolved channel; <see cref="PickTargets"/> deliberately does NOT — it is the
+    /// LISTING every reader of a registry or a published root uses ("which publications exist, in
+    /// what order"), and the availability service enumerates publications through it under
+    /// <c>Continuous</c> regardless of what this install would apply.</para>
+    /// </summary>
+    public static UpdateChannel ResolveChannel(UpdatePolicyKind policy, string? pattern)
+    {
+        var normalized = UpdateChannelPattern.Normalize(pattern);
+        return policy switch
+        {
+            UpdatePolicyKind.None => new(UpdatePolicyKind.None, null, null),
+            UpdatePolicyKind.Continuous when normalized is null => new(
+                UpdatePolicyKind.Stable, null,
+                $"{UpdatePolicyNodeType.NodePath} declares policy Continuous with no version pattern, "
+                + "so it follows CLEAN releases only (the same as Stable): a continuous build is "
+                + "eligible only when a pattern admits it. To follow the current line's continuous "
+                + "builds set `pattern` on the record, e.g. \"3.0.0-ci*\" — it stops matching the "
+                + "day the next clean release is tagged, which is when following the line should end."),
+            _ => new(policy, normalized, null),
+        };
+    }
 
     /// <summary>
     /// Every eligible tag under <paramref name="policy"/>, NEWEST FIRST — where "newest" is the
@@ -123,9 +186,16 @@ public static class VersionSelect
     /// never which of them is newer than what runs. <see cref="SelectCandidates"/> makes that call —
     /// forward-only, except on the one path where the installed tag has been proven WITHDRAWN and
     /// rolling backwards is the only way out.</para>
+    ///
+    /// <para>🚨 A <paramref name="pattern"/> NARROWS, on top of the policy: <c>Stable</c> +
+    /// <c>3.0.*</c> lists one line's clean releases, <c>Continuous</c> + <c>3.0.1-ci*</c> lists that
+    /// line's continuous builds and nothing else — <c>3.0.2-ci.1</c> and the clean <c>3.0.1</c>
+    /// alike are out, because the glob says so. Whether an absent pattern turns <c>Continuous</c>
+    /// into <c>Stable</c> is <see cref="ResolveChannel"/>'s decision, taken by
+    /// <see cref="SelectCandidates"/>; this listing answers only for the arguments it is given.</para>
     /// </summary>
     public static IReadOnlyList<string> PickTargets(
-        IEnumerable<string> tags, UpdatePolicyKind policy, bool requireCiGreen = true)
+        IEnumerable<string> tags, UpdatePolicyKind policy, bool requireCiGreen = true, string? pattern = null)
     {
         if (policy == UpdatePolicyKind.None)
             return [];
@@ -134,6 +204,9 @@ public static class VersionSelect
 
         if (policy == UpdatePolicyKind.Stable)
             parsed = parsed.Where(x => !x.ver.IsPrerelease);
+
+        if (UpdateChannelPattern.Normalize(pattern) is { } glob)
+            parsed = parsed.Where(x => UpdateChannelPattern.Matches(glob, x.tag));
 
         // CI-green gate: the verified channel (continuous delivery, which builds+pushes ONLY when the
         // test workflow is green) never carries the `edge` pre-release label. An unverified "edge"
@@ -162,12 +235,14 @@ public static class VersionSelect
         ];
     }
 
-    /// <summary>The structural filter every reader of a tag listing applies: drop the per-RID images
-    /// and the git-sha / <c>main</c> pointers, keep what parses as a platform version.</summary>
+    /// <summary>The structural filter every reader of a tag listing applies: drop the per-RID images,
+    /// the git-sha / <c>main</c> pointers and the moving <c>-latest</c> pointers, keep what parses
+    /// as a platform version.</summary>
     private static IEnumerable<(string tag, NuGetVersion ver, long? ordinal)> Parse(
         IEnumerable<string> tags) =>
         tags
             .Where(t => !RuntimeIdentifierSuffix.IsMatch(t))   // exclude per-RID image tags; keep the manifest list
+            .Where(t => !MovingPointer.IsMatch(t))             // exclude `3-latest` / `3.0-latest` / `3.0.1-latest` (see MovingPointer)
             .Where(t => PlatformVersionTag.IsMatch(t))         // exclude bare git-sha / `main` tags (see PlatformVersionTag)
             .Select(t => (tag: t, ver: NuGetVersion.TryParse(t, out var v) ? v : null))
             .Where(x => x.ver is not null)
@@ -231,14 +306,22 @@ public static class VersionSelect
     /// ON the continuous line stays on it: the clean release is NOT a Continuous target, even though
     /// <see cref="IsNewer"/> correctly reports it as newer. Those are different questions and both
     /// answers are wanted — see <see cref="OnTheContinuousLine"/>.</para>
+    ///
+    /// <para>🚨 <b>And a continuous build is eligible only when the record's <paramref name="pattern"/>
+    /// admits it</b> (maintainer, 2026-09-08): the channel is <see cref="ResolveChannel"/>'d FIRST,
+    /// so <c>Continuous</c> with no pattern decides exactly as <c>Stable</c> does — clean releases
+    /// only, until <c>3.0.1</c> exists — and <c>3.0.0-ci*</c> can never select <c>3.0.1</c>.</para>
     /// </summary>
     public static RollCandidates SelectCandidates(
         IReadOnlyList<string> tags,
         string installedVersion,
         UpdatePolicyKind policy,
-        bool requireCiGreen = true)
+        bool requireCiGreen = true,
+        string? pattern = null)
     {
-        var eligible = PickTargets(tags, policy, requireCiGreen);
+        var channel = ResolveChannel(policy, pattern);
+        policy = channel.Policy;
+        var eligible = PickTargets(tags, policy, requireCiGreen, channel.Pattern);
         var installed = CheckInstalledTag(tags, installedVersion);
         var staysOnTheCiLine = OnTheContinuousLine(installedVersion, policy);
 

@@ -208,9 +208,26 @@ public record SelfUpdateOptions
     /// </summary>
     public bool AllowUnverifiedRoll { get; init; }
 
-    /// <summary>The policy seeded onto <c>Admin/UpdatePolicy</c> when it doesn't exist yet, and the
-    /// fallback used before the policy node's first live emission.</summary>
-    public UpdatePolicyKind DefaultPolicy { get; init; } = UpdatePolicyKind.Continuous;
+    /// <summary>
+    /// The policy seeded onto <c>Admin/UpdatePolicy</c> when it doesn't exist yet.
+    ///
+    /// <para>🚨 <see cref="UpdatePolicyKind.Stable"/> — clean releases only (maintainer,
+    /// 2026-09-08: <i>"by default we will not upgrade as long as no version without <c>-ci…</c> is
+    /// labelled"</i>). A host that wants a fresh install to follow continuous builds seeds
+    /// <see cref="UpdatePolicyKind.Continuous"/> together with a <see cref="DefaultPattern"/>;
+    /// <c>Continuous</c> alone is still clean-only (see <see cref="UpdateChannelPattern"/>).</para>
+    /// </summary>
+    public UpdatePolicyKind DefaultPolicy { get; init; } = UpdatePolicyKind.Stable;
+
+    /// <summary>
+    /// The version pattern seeded beside <see cref="DefaultPolicy"/> when the node is created —
+    /// <c>null</c> (the default) seeds none. Only meaningful with
+    /// <see cref="UpdatePolicyKind.Continuous"/>: a dev/test host that should stay on the current
+    /// line's continuous builds sets e.g. <c>SelfUpdate__DefaultPattern=3.0.0-ci*</c>. An EXISTING
+    /// record is never touched by this value — the pattern is edited on the record itself
+    /// (Settings → Updates).
+    /// </summary>
+    public string? DefaultPattern { get; init; }
 
     /// <summary>The full image reference for a portal version tag.</summary>
     public string PortalImage(string tag) => $"{Registry}/{PortalRepository}:{tag}";

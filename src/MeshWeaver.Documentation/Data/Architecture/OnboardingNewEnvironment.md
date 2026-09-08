@@ -134,8 +134,11 @@ environment, in this order:
    (the **same** value for every env). This authenticates the tag-list call; the chart wires the
    workload-identity annotation/label + `AZURE_CLIENT_ID` from it.
 4. **Set `Admin/UpdatePolicy` for the env.** Settings → Updates (platform admin) writes the
-   `Admin/UpdatePolicy` node. Recommended: **Continuous for dev/test** (always rolls to the newest
-   build-numbered image), **Stable for prod** (rolls only to the newest clean release). See
+   `Admin/UpdatePolicy` node. The seeded default is **Stable** (rolls only to the newest clean
+   release). For **dev/test** set **Continuous with a pattern** — `3.0.0-ci*` today — so the
+   install follows that line's build-numbered images; `Continuous` without a pattern is Stable. A
+   new install can seed that from the chart: `SelfUpdate__DefaultPolicy=Continuous` +
+   `SelfUpdate__DefaultPattern=3.0.0-ci*`. See
    [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy).
 5. **Add the env's Azure Files share to the CI bake targets** — otherwise no published bundle ever
    reaches the new portal and its pods Roslyn-compile every shipped NodeType at boot. Append its
