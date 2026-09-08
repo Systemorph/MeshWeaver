@@ -57,6 +57,19 @@ public enum ModuleUpdateAction
     /// <summary>The module was deliberately uninstalled here (activation entry disabled) — the
     /// reconcile must not fight the operator.</summary>
     SkipUninstalled,
+
+    /// <summary>
+    /// The entry is in FALLBACK — its newest landed generation could not be loaded on this
+    /// platform (<see cref="ModuleActivationEntry.UnloadableFrameworkMvid"/>, the boot's link
+    /// probe; #3649 keeps the previous generation running) — and the registry still serves that
+    /// same build (or states no identity, so a different one cannot be seen). Nothing travels; the
+    /// entry is re-examined on every reconcile and lands the moment a build for this platform
+    /// appears (#3650, rule R3 of <c>Doc/Architecture/ModuleAdoptionPolicy</c>). Distinct from
+    /// <see cref="SkipUpToDate"/> on purpose: "already landed" is the sentence that hid every
+    /// identity defect on this lane, and a deployment running its previous generation is not up
+    /// to date. Appended, never inserted: the members before it keep their ordinals.
+    /// </summary>
+    SkipUnloadable,
 }
 
 /// <summary>One reconcile verdict: the action and the human reason behind it.</summary>
@@ -90,6 +103,18 @@ public sealed record ModuleUpdateVerdict(ModuleUpdateAction Action, string? Reas
 /// image. So <see cref="ModuleUpdateAction.SkipUpToDate"/> means <i>this content against this
 /// framework</i>, never <i>this content</i>. An identity difference makes a bundle NEWER, never
 /// UNINSTALLABLE.</para>
+///
+/// <para>🚨 <b>An entry in FALLBACK is re-examined against the generation that could not load</b>
+/// (#3650, rule R3 of <c>Doc/Architecture/ModuleAdoptionPolicy</c>). When the boot's link probe
+/// refuses the newest landed generation and the previous one keeps running (#3649), the entry
+/// carries the refused build's identity in
+/// <see cref="ModuleActivationEntry.UnloadableFrameworkMvid"/>. The same-version branch then asks
+/// the only question that matters to such a deployment — does the registry serve a DIFFERENT build
+/// of this version than the one that would not load? — and answers <see cref="ModuleUpdateAction.Land"/>
+/// when it does (a build for this platform appeared) and
+/// <see cref="ModuleUpdateAction.SkipUnloadable"/> when it does not. Without this the fallback was
+/// permanent until the next boot happened to follow a publication, which is the gap the policy
+/// names.</para>
 /// </summary>
 public static class ModuleUpdateDecision
 {
@@ -232,6 +257,40 @@ public static class ModuleUpdateDecision
                 ? null : landed.FrameworkMvid;
             var servedMvid = string.IsNullOrWhiteSpace(bundleFrameworkMvid)
                 ? null : bundleFrameworkMvid;
+            var unloadableMvid = string.IsNullOrWhiteSpace(landed.UnloadableFrameworkMvid)
+                ? null : landed.UnloadableFrameworkMvid;
+
+            // 🚨 #3650 — an entry in FALLBACK is re-examined against the UNLOADABLE generation's
+            // identity, not the landed one. The boot could not load the newest generation and runs
+            // the previous one (#3649); what this deployment is waiting for is a build of this
+            // version for THIS platform. The registry serving the same unloadable build again is
+            // nothing new — a download would only re-land bytes the next boot would park again —
+            // while ANY other stated identity is a build that appeared, and rule R3 says it lands
+            // now, not at the next boot. Before the ordinary identity comparison on purpose: that
+            // one compares against FrameworkMvid, whose meaning in fallback is the fallback's
+            // business, and in either reading it would answer "already landed" for the one
+            // build that gets the module off its previous generation.
+            if (unloadableMvid is not null)
+            {
+                if (servedMvid is null)
+                    return new(ModuleUpdateAction.SkipUnloadable,
+                        $"version {bundleVersion} is landed but its newest generation (built against "
+                        + $"framework {unloadableMvid}) could not be loaded on this platform — the "
+                        + "previous generation is running; the registry states no framework identity "
+                        + "for what it serves, so a build for this platform cannot be seen from here");
+                if (string.Equals(servedMvid, unloadableMvid, StringComparison.Ordinal))
+                    return new(ModuleUpdateAction.SkipUnloadable,
+                        $"version {bundleVersion} is landed but its newest generation (built against "
+                        + $"framework {unloadableMvid}) could not be loaded on this platform — the "
+                        + "previous generation is running, and the registry still serves that same "
+                        + "build; a build for this platform lands as soon as the registry serves one");
+                return new(ModuleUpdateAction.Land,
+                    $"version {bundleVersion}'s newest landed generation (built against framework "
+                    + $"{unloadableMvid}) could not be loaded on this platform and the previous "
+                    + $"generation is running; the registry now serves that version built against "
+                    + $"{servedMvid} — a build for this platform appeared; landing it"
+                    + WithAdvisory(advisory));
+            }
 
             // 🚨 A STATED served identity is the only evidence a rebuild happened; an unstated one
             // is absence of evidence, and landing could never turn it into evidence — the registry
