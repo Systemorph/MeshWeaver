@@ -31,8 +31,8 @@
 #     source, so there is no /app to read); it SAYS which witness answered, on stderr, every time.
 #
 # When both are available the IMAGE decides and the declared list is compared to it, with any
-# disagreement printed on stderr naming the exact lines to add or drop. The list then decides
-# nothing and can be deleted; leaving it stale costs a warning, never a wrong bundle.
+# disagreement printed on stderr as a `DRIFT` line naming the exact entry to add or drop. The list
+# then decides nothing and can be deleted; leaving it stale costs a log line, never a wrong bundle.
 #
 # An absent platform-shipped.txt means "nothing is image-shipped" — the state of every node repo
 # before the storage carve-out — and is deliberately not an error: the list DECLARES exclusions.
@@ -81,17 +81,21 @@ if [ -n "$app" ]; then
   shipped="$(printf '%s\n%s\n%s\n' "$root_dlls" "$manifest_names" "$seeded" | grep -v '^$' | sort -u)"
   echo "module-owned-platform: MEASURED against $app — $(printf '%s\n' "$shipped" | grep -c '[^[:space:]]' || true) MeshWeaver.* assembl(y|ies) shipped by that host" >&2
   # The declared list decides nothing now; say where it disagrees so it can be corrected or deleted.
+  # 🚨 PLAIN stderr, never `::warning::`. This script runs THREE times per matrix entry — 111 times
+  # on MeshWeaver.Plugins' 37 — and a drift line is diagnostic about a file that decides nothing, so
+  # annotating it would bury the annotations that do decide something under two hundred that do not.
+  # The refusals above stay `::error::`: those stop the pack.
   if [ -n "$declared" ]; then
     while IFS= read -r name; do
       [ -n "$name" ] || continue
       grep -qxF "$name" <<<"$shipped" \
-        || echo "::warning::src/platform-shipped.txt names '$name' as image-shipped, but $app does not ship it — the line is stale and, before this measurement existed, kept that assembly OUT of every bundle that needs it." >&2
+        || echo "module-owned-platform: DRIFT — src/platform-shipped.txt names '$name' as image-shipped, but $app does not ship it. The line is stale; before this measurement existed it kept that assembly OUT of every bundle that needs it." >&2
     done <<<"$declared"
     while IFS= read -r name; do
       [ -n "$name" ] || continue
       [ -d "$src/$name" ] || continue
       grep -qxF "$name" <<<"$declared" \
-        || echo "::warning::$app ships '$name' and src/platform-shipped.txt does not name it — before this measurement existed, every bundle referencing it carried a second build of it." >&2
+        || echo "module-owned-platform: DRIFT — $app ships '$name' and src/platform-shipped.txt does not name it. Before this measurement existed, every bundle referencing it carried a second build of it." >&2
     done <<<"$shipped"
   fi
 else

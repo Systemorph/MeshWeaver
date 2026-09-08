@@ -94,8 +94,10 @@ a platform-shipped project also drags that project's private package dependencie
 With an app directory it measures; without one it falls back to the declared list and **says so on
 stderr**, because the fallback lane is structurally different (see the blind spot below), not because
 the input happened to be missing. When both are available the image decides and the list decides
-nothing — the disagreement is printed as a warning naming the exact lines to add or drop, so the
-file converges and can eventually be deleted.
+nothing — the disagreement is printed on stderr as a `DRIFT` line naming the exact entry to add or
+drop, so the file converges and can eventually be deleted. Plain stderr, not `::warning::`: the
+script runs three times per matrix entry (111 times on Plugins' 37), and annotating a diagnostic
+about a file that decides nothing would bury the annotations that do decide something.
 
 **The enforcement** — `module-pack --platform-app <dir>` — is a second, independent reading over the
 bundle's actual file list. Everything upstream composes the closure from *declarations* (`--with`
