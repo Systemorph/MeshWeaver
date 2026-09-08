@@ -1,0 +1,54 @@
+{{- if (.Values.registry).enabled }}
+{{- $r := include "memex.registry" . | fromYaml }}
+# ---- ONE Ingress for the registry host --------------------------------------
+# /auth → docker_auth (the realm distribution's challenge names), everything else → distribution.
+# nginx matches the longest prefix first regardless of order, so /auth wins over / for the token
+# exchange and /v2/… falls through to the registry. TLS terminates here for `registry.host`;
+# with `ingress.clusterIssuer` set, cert-manager issues the certificate into `ingress.tlsSecret`
+# (otherwise that Secret is pre-created, like the portal's).
+---
+apiVersion: "networking.k8s.io/v1"
+kind: "Ingress"
+metadata:
+  name: "memex-registry"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+{{- if $r.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ $r.clusterIssuer | quote }}
+{{- end }}
+    # A layer upload is one PATCH of hundreds of MB: no body limit ("0" = unlimited) …
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    # … streamed, not spooled to the ingress pod's disk first (a 500 MB layer would otherwise
+    # be written there in full before the first byte reached the registry) …
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    # … and given an hour each way, the same budget the portal's long-lived streams carry.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: {{ $r.ingressClassName | quote }}
+  tls:
+    - hosts:
+        - {{ $r.host | quote }}
+      secretName: {{ $r.tlsSecret | quote }}
+  rules:
+    - host: {{ $r.host | quote }}
+      http:
+        paths:
+          - path: "/auth"
+            pathType: "Prefix"
+            backend:
+              service:
+                name: "memex-registry-auth-service"
+                port:
+                  number: 5001
+          - path: "/"
+            pathType: "Prefix"
+            backend:
+              service:
+                name: "memex-registry-service"
+                port:
+                  number: 5000
+{{- end }}

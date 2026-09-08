@@ -687,6 +687,74 @@ portalNext:
   # skipping the ingress round-trip. The BROWSER still talks same-origin (cookies +
   # gRPC-web are ingress-routed), so this only affects SSR.
   portalOrigin: "http://memex-portal-service:8080"
+# ---- The fleet's own container registry (cr.meshweaver.cloud) ----------------
+# A SEPARATE service beside the portal — its own pods, host and blob container — built from two
+# off-the-shelf images and no registry code of ours: CNCF `distribution` (the registry, storage
+# driver `azure` as the namespace's workload identity) and `cesanta/docker_auth` (the token
+# server: ONE static publisher account by bcrypt hash, every other password validated as a
+# MeshWeaver instance key against the portal). One Ingress on `host` routes /auth → docker_auth
+# and everything else → distribution. Off by default (neutral chart): nothing under
+# templates/registry/ renders until `enabled: true`, and then EVERY key marked (required) must
+# be set or `helm template` fails naming it — there is no half-rendered registry.
+#
+# NAMES ONLY: the keyVault.* entries are vault OBJECT NAMES the CSI driver fetches at pod start.
+# The one value that is a credential is `publisher.passwordBcrypt`, and it is a HASH
+# (`htpasswd -nB publisher`, then paste the part after the colon) — committable.
+#
+# Design: Doc/Architecture/ContainerRegistryInMemex → "The registry as a separate service".
+# A complete, renderable example: deploy/helm/values.registry.example.yaml (the chart gate
+# renders it on every pull request).
+registry:
+  enabled: false
+  host: ""                        # (required) e.g. cr.meshweaver.cloud — NOT an Azure name
+  # Both images pinned BY DIGEST, so what runs is what was reviewed. Resolved 2026-09-08 with
+  # `docker buildx imagetools inspect` (multi-arch index digests):
+  #   ghcr.io/distribution/distribution:3.0.0@sha256:4ba3adf47f5c866e9a29288c758c5328ef03396cb8f5f6454463655fa8bc83e2
+  #   cesanta/docker_auth:1.14.0@sha256:98e0307e0d2dcbafe10098814a97d248143b78ca478693f78c3c0d67fe776ab4
+  # 🚨 docker_auth must be ≥ 1.14.0: distribution 3 looks tokens up by RFC 7638 thumbprint and
+  # 1.14.0 is the first release that can emit one (token.disable_legacy_key_id, set in the
+  # rendered config). 1.13.0 signs with the libtrust key id only and EVERY login is refused.
+  # 🚨 BOOTSTRAP: these two are the only images an installation pulls from OUTSIDE its own
+  # registry — the registry cannot serve the image that boots it (ghcr.io and Docker Hub).
+  image: ""                       # (required) distribution, pinned
+  authImage: ""                   # (required) docker_auth, pinned
+  issuer: "memex-registry"        # token issuer — docker_auth signs it, distribution checks it
+  replicas: 1
+  storage:
+    accountName: ""               # (required) the Azure Storage account; the workload identity
+                                  #            needs Storage Blob Data Contributor on it
+    container: "registry"
+  # The namespace's workload-identity service account (the portal's, by default): the pods carry
+  # `azure.workload.identity/use: "true"` and the storage driver authenticates as it.
+  serviceAccount: "memex-portal-sa"
+  keyVault:
+    name: ""                      # (required) the vault
+    tenantId: ""                  # falls back to keyVaultSecrets.tenantId
+    identityClientId: ""          # falls back to keyVaultSecrets.identityClientId
+    certObject: ""                # (required) vault secret: token-signing certificate, PEM
+    keyObject: ""                 # (required) vault secret: its private key, PEM
+    httpSecretObject: ""          # (required) vault secret: distribution's http.secret
+    notificationSecretObject: ""  # required iff notifications.url — the Authorization header
+                                  # value sent with every event (e.g. "Bearer <key>")
+  publisher:
+    username: "publisher"
+    passwordBcrypt: ""            # (required) bcrypt HASH — `htpasswd -nB publisher`
+  # Where an instance key is validated: any 200 authenticates, 401/403 denies, anything else is
+  # an error (never a pass). The default is the public portal's plugin catalog.
+  validationUrl: "https://memex.meshweaver.cloud/api/plugins?ref=HEAD"
+  notifications:
+    url: ""                       # registry events are POSTed here when set
+  ingress:
+    className: "nginx"
+    clusterIssuer: ""             # cert-manager ClusterIssuer; empty = tlsSecret is pre-created
+    tlsSecret: "memex-registry-tls"
+  resources:
+    registry:
+      requests: {cpu: "50m", memory: "128Mi"}
+      limits: {memory: "512Mi"}
+    auth:
+      requests: {cpu: "20m", memory: "32Mi"}
+      limits: {memory: "128Mi"}
 secrets:
   # ---- Database connection strings -------------------------------------------
   # Leave EMPTY to use the chart's in-cluster Postgres (memex-postgres-service) — the self-host /
