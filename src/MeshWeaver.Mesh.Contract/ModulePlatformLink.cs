@@ -27,7 +27,11 @@ public enum ModuleLinkState
     /// <summary>🚨 The third state, modelled on purpose: the check could not be MADE. Never folded
     /// into <see cref="Linkable"/> — "I could not determine whether this loads" and "this loads"
     /// are different facts, and a gate that reports the first as the second is a gate that cannot
-    /// fail. Every caller treats this exactly as <see cref="Unlinkable"/>.</summary>
+    /// fail. At landing and at boot every caller treats this exactly as <see cref="Unlinkable"/>
+    /// (the thing refused is one module's load, and the previous generation keeps serving). At the
+    /// platform ROLL gate (#3651) it is REPORTED and decides nothing — the thing that would be
+    /// refused there is the whole platform's update, on a publication that may simply predate the
+    /// surface document; the boot-time probe is the safety net.</summary>
     Indeterminate,
 }
 
