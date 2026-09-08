@@ -1,0 +1,70 @@
+name: Node repo — cancel superseded main runs
+
+# ♻️ REUSABLE (workflow_call) — the FIRST job of a satellite's push-to-main run.
+#
+# Cancels the earlier push→main runs of the SAME workflow that this push supersedes — an older
+# run whose commit is an ANCESTOR of this one — and only while they are still inside their gates.
+# Nothing has to be compared: a push run diffs against the sealed publication's source-commit.txt
+# and the ledger rebuilds every module with no Published record, so whatever a cancelled run would
+# have published, this run publishes. Design of record and the two measured failures behind the
+# guards (torn seal Plugins#826, starved burst Plugins#888):
+#   Doc/Architecture/ModuleBuildArchitecture → "Superseded runs on main"
+#
+# 🚨 The CALLER must grant the token what this lane needs — a reusable workflow cannot exceed it:
+#     permissions: { actions: write, contents: read }
+# and gate the call on the push itself:
+#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+# The script re-asserts both (event, branch) and goes RED on a mis-wired caller rather than
+# cancelling somebody's wave dispatch. It never skips: no token / no API / no ancestry = red.
+
+on:
+  workflow_call:
+    inputs:
+      platform-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref the script is fetched at. Pin it to the same platform commit
+          as the `uses:` sha of this lane; `main` floats.
+        required: false
+        type: string
+        default: main
+      protected-jobs:
+        description: >-
+          Regex over the CALLER-JOB segment of job names (the text before " / "; a plain job
+          name is matched whole). A superseded run with ANY started job matching it has begun
+          PUBLISHING and is left to finish and seal (never cancelled). The default names the
+          hand-over stage of the shared lanes only — NOT select/build/pack: those outputs are
+          content-addressed and the next run reuses them, so cancelling there loses nothing, while
+          a pattern that matched them would protect every run from its first minute and never
+          cancel anything. A caller with a differently-named publish stage overrides it.
+        required: false
+        type: string
+        default: "(?i)^(publish|bake|seal|hand-?over)"
+
+jobs:
+  supersede:
+    name: Cancel superseded main runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write        # cancel runs of this repository
+      contents: read
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Fetch the platform's supersede script at the pinned ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the script has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/supersede-main-runs.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/supersede-main-runs.py"
+          [ -s "$RUNNER_TEMP/supersede-main-runs.py" ] || { echo "::error::fetched an EMPTY supersede-main-runs.py at ${PLATFORM_REF}"; exit 1; }
+      - name: The decision can say no (self-test)
+        run: python3 "$RUNNER_TEMP/supersede-main-runs.py" --self-test
+      - name: Cancel the runs this push supersedes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUPERSEDE_PROTECTED_JOBS: ${{ inputs.protected-jobs }}
+        run: python3 "$RUNNER_TEMP/supersede-main-runs.py"
