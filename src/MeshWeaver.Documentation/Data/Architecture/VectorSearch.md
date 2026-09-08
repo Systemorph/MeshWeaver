@@ -102,6 +102,12 @@ routing site and the relevance gate, so they cannot drift apart again:
   the host's capability rather than on the outcome of a single embed call, stays widened. That is
   deliberately the safe direction — an extra re-query, never a dropped row.
 
+This is not a new idiom. `SqliteVectorMeshQuery` — the SQLite-local vector provider — has always
+filtered its cosine-ranked candidates with `parsed with { TextSearch = null }`, the identical
+expression, for the identical reason: once a vector ranks the rows, the evaluator's job is the
+structured half and nothing else. The Postgres fan-out's live gate was simply the one place the
+pattern had not reached.
+
 Pinned by `SemanticRelevanceGateParityTests` in MeshWeaver.Plugins, which carries the no-provider
 control and a `nodeType:` control — without the second, a gate that had been widened to "always
 relevant" would score identically on the first.
