@@ -27,7 +27,9 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 
 1. **select** — which bundles this diff can reach. The selector can say "these" or
    "everything", never "skip"; a workflow/pin change legitimately selects everything, because
-   the compiler itself changed.
+   the compiler itself changed. A `src/` change is bounded by the **compile tree**, not treated
+   as "everything", and a superseded `main` run is **cancelled by construction** — see
+   *Superseded runs on `main`* below.
 2. **prepare, once per run** — everything every job consumes identically is staged here, never
    per module: the platform image as a per-digest zstd tarball in the **actions cache (GitHub's
    blob storage, colocated with the runners)**, the tester-app and platform-refs extractions,
@@ -362,6 +364,77 @@ One-time on the registry portal (as a global admin): create the `Admin/ModuleBui
 grant the CI user the `Admin` role there (`MainNode = "Admin/ModuleBuilds"`), mint that user an API
 token, store it as the satellite's `REGISTRY_LEDGER_TOKEN`. `ledger: required` with an empty token
 is RED in `select` — a ledger that silently did not run and one that ran must never look alike.
+
+## 🚨 Superseded runs on `main` — cancelled by construction, selected by the compile tree
+
+**Maintainer directives, 2026-09-08** (during the memex roll block): *"cancel superseded"*,
+*"superseded means overlapping code"*, *"they are monorepos — walk the dependency tree, find all
+affected code including Roslyn dependencies"*, *"we need to build the compile tree anyway, it's not
+even wasted time"*. This section is the rule; the lane implements it.
+
+### Why a superseded `main` run can be cancelled without comparing anything
+
+Every satellite is a **monorepo**: one push to `main` touches some modules and leaves the rest
+alone, so two pushes are only "the same work" when the newer one reaches everything the older one
+reached. It is tempting to compute both affected sets and compare them. **That comparison is
+unnecessary, by construction of the baseline:** a `push` run does not diff against
+`github.event.before` — it diffs against the commit the repo's own **sealed publication** records
+(`source-commit.txt`), and the ledger rebuilds *every module whose key has no usable Published
+record*. A run that is cancelled before it publishes leaves **no** Published record, so the next run
+on `main` rebuilds and republishes exactly what the cancelled run would have — plus its own changes.
+
+So for two `push` runs on `main`, **O is superseded by N iff O's commit is an ancestor of N's**
+(`compare` API: O is `behind` N). Nothing else needs measuring: `affected(N) ⊇ affected(O)` follows
+from both narrowing against the same seal. Cancelling O loses nothing and removes a race — an older
+run publishing between a newer run's `select` and its hand-over.
+
+### The two guards, and the two failures they come from
+
+1. **A run past its gates is never cancelled.** Once a superseded run has cleared the gate suite and
+   entered bundling / `publish-bake`, it finishes and publishes; the newer run publishes after it,
+   newest identity last. Two reasons, both measured:
+   * **Torn seals (Plugins#826).** A scheduled poll cancelled a framework-released dispatch *"with
+     all 29 bundle jobs running — one of them MID publish-bake, leaving a torn, unsealed
+     publication."*
+   * **Starvation (Plugins#888).** `main` once shared a single concurrency group — GitHub's
+     built-in "newest wins". In a merge burst every new push displaced the previous one before it
+     finished: *"main last completed a run at 07:04:52Z; 43 commits / 23 merges landed after it;
+     22 of the last 25 main runs were cancelled with jobs=0."* **Nothing published for hours.**
+     Protecting past-gates runs is what stops that: in a burst, every run that proves green still
+     seals, so the fleet gets a publication roughly every gate-suite length instead of none.
+2. **Only `push` → `main` supersedes `push` → `main`.** A `repository_dispatch` (the platform wave)
+   and the `schedule` poll are never cancelled by this rule and never cancel anything — the #826
+   rule, kept intact. Each `main` push keeps its own concurrency group keyed on the commit, so GitHub
+   itself cancels nothing; the lane does, explicitly, under the guards above.
+
+The lane cannot pass silently: if it cannot list runs or resolve ancestry it goes **red naming why**
+— no `continue-on-error`, no `if: secret-is-set` (AGENTS.md → *"A gate NEVER tests its own inputs"*).
+It lives in the platform as a `workflow_call` lane and every satellite calls it first on a `main`
+push; never hand-rolled per repo. Proof of shape, 2026-09-08 by hand: three superseded Plugins
+`main` pushes cancelled, the one already inside `publish-bake` correctly left to finish.
+
+### Selection reads the compile tree — `src/` changes are no longer "everything"
+
+`affected-modules.py` already walks the dependency tree for **in-mesh content**, 1:1 with the
+runtime (`requires`, `sources`/`tests` queries, nodeType-by-path), closed over transitive
+**dependents** and then forward dependencies for the mount. Its blind spot is stated in its own
+docstring: *"anything else — scripts/, .github/, src/, test/ … → ALL modules (conservative)."* A
+change to `src/MeshWeaver.AI` selects every bundle in the repo.
+
+The precise answer is already computed in the same run. `build` compiles *every selected container
+entry in ONE workspace*, and the caller's `modules:` input declares the mapping the walk needs —
+each entry is `{package, module, project: <csproj>, …}`. So `select` derives the **project graph**
+from those `project` files and their transitive `ProjectReference` closure — the same tree the
+workspace build resolves moments later, evaluated without compiling — and for a `src/` change it
+walks: *changed file → owning project → transitive dependent projects → entries whose `project` is
+in that set → packages*, then hands those packages to the existing in-mesh dependents closure.
+**The graph is a byproduct of the build the run does regardless; using it in `select` costs nothing
+and replaces "everything" with a measured set** — fewer bundles through the gates and the seal on
+every `src/` touch, and a supersede relation that stays exact even where the baseline argument
+above does not apply (a PR narrowing against `main`).
+
+What stays conservative, deliberately: a change under `.github/` or to the platform pin still
+selects everything — the compiler itself changed, and no dependency walk can bound that.
 
 ## The compiler is the platform image
 

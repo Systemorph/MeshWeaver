@@ -93,6 +93,14 @@ the portal's on-demand compile, the batch bake, and the CI bake host all call th
 
 ---
 
+> 🚨 **In CI, what gets compiled and what gets *selected* are decided by the same tree.** The
+> module build resolves every selected entry in one Roslyn workspace; that project graph is also
+> what tells `select` which bundles a `src/` change reaches (no more "src/ → everything"), and it
+> is why a superseded `main` run can be cancelled without comparing affected sets — the next run
+> diffs against the sealed publication, not the previous push. The rule, its two guards (torn
+> seals, starvation) and the maintainer directives behind it are in
+> [Module Build Architecture → Superseded runs on main](/Doc/Architecture/ModuleBuildArchitecture).
+
 ## The model in one picture
 
 ```
