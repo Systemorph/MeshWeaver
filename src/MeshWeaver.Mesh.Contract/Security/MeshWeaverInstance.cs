@@ -33,6 +33,13 @@ public record MeshWeaverInstance
     /// used for display and support, never for authentication.</summary>
     public string HomeUrl { get; init; } = "";
 
+    /// <summary>
+    /// The organisation this instance belongs to. Empty for an instance registered before ownership
+    /// was collected, and for one whose registrant gave none — absence is "not recorded", never a
+    /// claim that the instance has no owner.
+    /// </summary>
+    public string Company { get; init; } = "";
+
     /// <summary>ObjectId of the user who registered it (matches <c>AccessContext.ObjectId</c>).</summary>
     public string OwnerUserId { get; init; } = "";
 
