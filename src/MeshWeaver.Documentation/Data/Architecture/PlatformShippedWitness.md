@@ -132,6 +132,30 @@ collapse to one identity. Judging it would hold every bundle in the fleet for a 
 claimed. See [Module Closure Accounting](../ModuleClosureAccounting) for why "the image has it" is
 never on its own a reason to leave a *package* assembly out.
 
+## What stops riding, and why that is safe
+
+The measurement removes `MeshWeaver.AI` from 13 bundles and
+`MeshWeaver.Markdown.Collaboration` from 14. Those rides were **insurance for the standalone
+install** — [Module-Owned Siblings Ride](../ModuleOwnedSiblingsRide) §3: with the sibling excluded,
+a bundle installed on its own would land without an assembly nothing supplies, and throw
+`ReflectionTypeLoadException` on first touch.
+
+That argument was always conditional on the image, and the image moved. Plugins#1515 seeds **and
+activates** both assemblies in every portal host, so the copy is there before any dependent module
+loads — and because `MeshWeaver.*` collapses to one identity, an already-loaded copy is what a later
+`Assembly.LoadFrom` binds to. The ride is therefore redundant *and* harmful today, which is exactly
+what the measurement says.
+
+🚨 **The failure this trades against is a host that SEEDS an assembly under `modules/<Name>/` but
+never activates it** — a seed nobody asks for is, in Plugins#1515's own words, *"not a third
+category; it is nothing"*. `Modules:Assemblies` is deployment configuration, not part of the image,
+so two deployments of one image can differ here. If that shape ever appears, the symptom is a
+`ReflectionTypeLoadException` naming the seeded assembly, and the fix is to activate it — not to
+re-add the ride, which would put the two-builds condition back.
+
+The self-correcting property is the point: the day the image stops shipping one of these, the
+measurement says so and the ride returns on the next pack, with nobody editing a list.
+
 ## Which repositories this changes
 
 `src/platform-shipped.txt` exists in exactly **one** repository of the fleet — `MeshWeaver.Plugins`,
