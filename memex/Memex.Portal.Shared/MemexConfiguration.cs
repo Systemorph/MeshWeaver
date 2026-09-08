@@ -359,6 +359,16 @@ public static class MemexConfiguration
                     return false;
                 })
                 .ToArray();
+            // 🚨 #3735: and the IMAGE-SHIPPED copy the landed entry displaced, as the LAST step of
+            // the fallback order. The union above substitutes a landed store entry in place of
+            // the same-named Modules:Assemblies entry on the DLL's existence alone; whether it
+            // loads is measured by the link probe inside InstallModules, and until this the
+            // image's copy was simply gone from the list by then — so a refused store generation
+            // SHADOWED the baseline that loads by construction (memex.systemorph.com,
+            // 2026-09-08: MeshWeaver.Blazor.Views, every skinned control on FallbackHtml).
+            // Resolved through MeshBuilder.ResolveModulePath WITHOUT the module root — the image's
+            // own modules/ folder and app closure, never the landed tree — because the baseline is
+            // by definition what the image ships. No pin: the image closure is immutable.
             var resolvedModules = loadableModules
                 .Select(candidate => new ModuleInstallCandidate(candidate.Path)
                 {
@@ -366,6 +376,11 @@ public static class MemexConfiguration
                     PreviousVersion = candidate.Previous?.Version,
                     Previous = candidate.Previous is { } previous
                         ? () => ModuleGenerationPin.PinnedLoadPath(moduleRoot, previous, onWarn: WarnPin)
+                        : null,
+                    ImageBaseline = candidate.Module.BaselineEntry is { } baseline
+                                    && MeshBuilder.ResolveModulePath(baseline) is { } imageCopy
+                                    && File.Exists(imageCopy)
+                        ? imageCopy
                         : null,
                 })
                 .ToArray();

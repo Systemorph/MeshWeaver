@@ -755,11 +755,14 @@ public static class ModuleSetStore
                   + $"{proposed.Generations.Count} module(s))"
                   + DescribeFallbacks(index.FallbackGenerations);
 
-    /// <summary>The "; N module(s) run a previous generation: …" suffix, or nothing (#3649).</summary>
+    /// <summary>The "; N module(s) run a previous generation: …" suffix, or nothing (#3649). A
+    /// module running the image-shipped copy (#3735) is listed with
+    /// <see cref="MeshWeaver.Mesh.FallbackModule.ImageBaselineGeneration"/> as its generation.</summary>
     private static string DescribeFallbacks(ImmutableSortedDictionary<string, string> fallbacks) =>
         fallbacks.Count == 0
             ? string.Empty
-            : $"; {fallbacks.Count} module(s) run a PREVIOUS generation because the set's does not "
+            : $"; {fallbacks.Count} module(s) run a PREVIOUS generation (or the image-shipped baseline, "
+              + $"'{MeshWeaver.Mesh.FallbackModule.ImageBaselineGeneration}') because the set's does not "
               + "load on this platform: "
               + string.Join(", ", fallbacks.Select(kv => $"{kv.Key} ({kv.Value})"));
 
