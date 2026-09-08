@@ -7,6 +7,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Module Platform Link Gate
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** The link probe becomes the ONLY platform gate on the module lane (the declared floor no longer gates first), and a refused generation no longer leaves the module absent: the previous loadable generation is loaded and named. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) and [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649) lands; this page is rewritten by that change.
+
 **A module is adopted on what this process can LOAD, never on a version string.**
 
 Until MeshWeaver#3538 the module lane had exactly one platform gate: the module's declared

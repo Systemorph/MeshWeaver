@@ -1,0 +1,66 @@
+---
+Name: Module Adoption Policy
+Category: Architecture
+Description: The one rule for what an installation runs — keep the module you have until a newer one loads, load on what is measured rather than on what is declared, and switch the moment a new version ships. Set by the maintainer on 2026-09-07 after a day in which every production portal was held on a morning build by version strings, and the plan that implements it.
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/></svg>
+---
+
+# Module Adoption Policy
+
+**Maintainer directive, 2026-09-07:** *if no plugin version is shipped, we use the old one. We make
+it load despite a newer dependency on the platform or on another module. As soon as a new module
+version ships, we start using it. We must become far more robust during deployments.*
+
+This page is the authority on what an installation runs. Every other architecture page that
+describes a floor, a hold, a skip or a decline on the module lane defers to it; where such a page
+still describes the older mechanism, it says so in a banner that names the implementing issue.
+
+## The three rules
+
+| # | Rule | What it replaces |
+|---|---|---|
+| **R1 — continuity** | An installation always runs *some* version of every module it has installed: the newest one that **loads**. If nothing newer ships for the platform it runs, the version it has keeps running. Nothing removes a working module because a newer one exists but cannot load. | A landed generation that does not load leaves the module **absent** (only image-shipped modules had a baseline to fall back to); a shelved landing overwrote the only reference to the loadable generation. |
+| **R2 — measured, never declared** | Whether a module loads is decided by **measurement** — the type-level link probe against the running platform (`ModulePlatformLink`, core #3552/#3538) and the actual load — never by a version string. A declared `minMeshVersion`, or a dependency on another module's version, is **advisory**: logged, shown on the status row, decides nothing. | `minMeshVersion` compared with `NuGetVersionComparer` at eight decision points, each of which refused, held or skipped on a miss. Because that comparator ranks `ci < rc < clean`, an `rc` or `3.0.0` floor on an installed record could never be satisfied by any `ci` build — which is how every production portal was held on the morning build for all of 2026-09-07 while every candidate would have loaded. |
+| **R3 — eager adoption** | The moment a new module version ships — a newer version on the registry, or the same version rebuilt for this platform's identity — the installation adopts it, if it loads. If it does not load, R1 applies and the row says so. | Adoption ran at boot and on catalog opens; a fallback generation was never re-examined when a loadable build for the same version appeared. |
+
+The rules compose into one sentence: **run the newest thing that loads, keep what you have until then, and never let a string decide.**
+
+## What "loads" means
+
+Two lanes, two measurements, one fallback:
+
+- **Compiled modules** (`modules/<name>@<gen>/`): `ModulePlatformLink.Check` links the entry assembly's type references against the running platform's surface before any load; the load itself is the second measurement. A refusal names the missing type. This gate exists since core #3552 and is unchanged by the policy — the policy makes it the *only* gate.
+- **NodeType content** (`prebuilt-bundles/<identity>/<source>/`): a baked assembly is adopted only for the exact framework build identity it was baked against (`PrebuiltAssemblySeeder.DeclineReason`, ordinal equality). That is also unchanged — a mismatched bake would be worse than none. What changes is the consequence of *no* bake: **the content compiles in the mesh**, which is the same code path every pull request already proves green. A missing bake is a cost (boot time), not a reason to hold a roll. `Modules:RequirePrebuilt` remains the opt-in strict mode for installations that prefer a named park to a compile.
+- **Fallback**: when the newest generation of a module does not load, the previous generation that did is loaded instead, reported as such, and kept from garbage collection. Only when *no* generation loads is the module absent — and that is the readiness probe's business (the rollout stalls on the pod, the previous pods keep serving), which is the last safety net and the one that has never failed.
+
+## What the platform roll gates on
+
+The self-updater and the CD post-promote gate select **the newest release on which no installed module is unloadable**. Concretely, per installed package: a build published for the target identity exists (it will be adopted), *or* the landed generation links against the target's surface, *or* neither can be shown — which is reported as *indeterminate*, never as clearance and never as a hold. Declared floors do not enter. A missing content bake does not enter (it is reported as "would compile at boot: …"). The sealed-set consistency check (#3175/#3221) stays: two builds of one platform assembly in one identity is a torn publication, and torn publications are refused whole.
+
+The safety net after a roll is boot-time, in this order: the link probe refuses what cannot load; the fallback keeps the previous generation; a module with no loadable generation makes the pod unhealthy and the rollout stalls, with the previous pods serving. That is what "robust during deployments" buys: the worst outcome of a wrong roll is a **stalled rollout with a named module**, never a portal that serves nothing and never an installation stuck on a month-old build because a string said so.
+
+## The implementation plan
+
+Four changes, in this order; each is one pull request against core with its tests, and each rewrites the page(s) it makes true.
+
+| Step | Issue | Change | Pages it rewrites |
+|---|---|---|---|
+| 1 | [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) | Floors become advisory at every runtime decision point (`ModuleUpdateDecision`, `LandFromBundle`, `LandCore`, boot, `ReleaseAvailability`, the status surfaces). Pack-time floor lint stays as authoring hygiene. **This also resolves the 2026-09-07 self-update deadlock without a production write.** | Modules, ReleaseGates, SelfUpdateTargetSelection, ModulePlatformLinkGate, PluginPackaging, ReleaseGateDenominator |
+| 2 | [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649) | Keep the previous generation: `ModuleActivationEntry.PreviousDirectory`, boot fallback in `MeshBuilder`, GC keeps it, the module set records what loaded, status rows name it. | ModuleSetConvergence, ModulePlatformLinkGate, Modules |
+| 3 | [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) | Eager adoption: a fallback re-examines every new build for its version; a `ModulePublished` broadcast triggers the package's reconcile; a pending restart rolls the same image within the interval rules. | PluginUpdateOnGreenBuild, Modules |
+| 4 | [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) | The roll gate on measured loadability: the publication carries `platform-surface.json` per identity, `ReleaseAvailability` links landed generations against it, `ContentBakeMissing` is advisory, `RollSelection` stops at the first release with no unloadable module. | RollSelection, ReleaseStrategy, CiContentBake, ReleaseAvailability pages, SelfUpdateSchemaWall |
+
+Until step 1 lands, the mechanism the other pages describe is what runs. The one-time exit from the 2026-09-07 hold is a pipeline roll (helm-release), taken by the maintainer's decision on the same day, with the satellites baked for the target identity first so the roll adopts their bundles rather than compiling them.
+
+## What stays exactly as it is
+
+- The **content bake identity rule**: a NodeType assembly adopts only for the identity it was baked against. Wrong bytes are worse than no bytes.
+- The **seal**: a publication is real when `_complete` is written last and every listed file exists; a torn publication is refused whole (#3461, #3401).
+- **Never roll back unattended**: an older served version is never adopted over a newer landed one (`SkipOlder`).
+- **Never swap a module in a running process**: a new generation loads at the next restart; the policy makes that restart happen (step 3), it does not make the swap live.
+- **Sources follow the seal** (Plugins#1430, core #3600): a module-bearing repository's sources advance only to the commit sealed for the instance's own identity.
+- **Pack-time floor lint** (`check-module-floors.py`, `check-module-platform-floor.py`): a module built against pin X that declares a floor above X is an authoring error and still fails the pack. The floor is documentation for humans; the runtime does not read it as a gate.
+
+## Why the version string was the wrong instrument
+
+A `minMeshVersion` is a claim written before the platform it names exists. It is authored, so it can be absent or wrong; it is coarse, so a `3.0.0` line cannot express "after commit X"; and it is compared by a total order (`ci < rc < clean`) that encodes a release *policy*, not compatibility. Every one of those properties produced an outage this year: rc7 floors deadlocking a registry against its own roll (2026-08-22), a `3.0.0-rc14` floor naming a platform that never existed, and the 2026-09-07 hold. The measured link probe has none of them: it reads the bytes, it answers per type, and it cannot be out of date because it is computed against the platform actually running. What the string was *for* — telling an operator which platform a module was built against — is served by the identity the bundle already records (`frameworkMvid`) and by the status row, not by a gate.

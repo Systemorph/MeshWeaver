@@ -8,6 +8,8 @@ icon: /static/NodeTypeIcons/box.svg
 
 # CI Content Bake
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** "An instance must roll to the newest release that is actually baked" becomes "the newest release on which everything loads": a missing satellite bake is a boot compile, reported, not a hold. The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+
 Every `.cs` stored in a mesh node compiles **at runtime in the portal** (see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation)), and until issue #1660 that was also
 the *deploy* path: every image roll changed the framework identity, invalidated every cached
@@ -865,9 +867,15 @@ evidence. So each of these resolves to a FULL bake, naming itself in the log and
 - a baseline commit this checkout cannot resolve, or one that is not an ancestor of HEAD
   (history rewritten);
 - the selector refusing — an **empty diff** is a broken range, never "nothing to do";
-- the selector answering ALL modules: a change under `scripts/`, `.github/`, a repo-root file, or
-  **a module directory that no longer exists**. That last one is why a DELETED module still
-  shrinks the publication correctly.
+- the selector answering ALL modules: a change under `scripts/`, `.github/`, a repo-root file the
+  platform's `NOOP_FILES` does not name, or **a module directory that no longer exists**. That last
+  one is why a DELETED module still shrinks the publication correctly.
+
+> 🚨 **The MODULE lane's copy of this decision — `node-repo-scope.py` — had two blind spots that
+> made "a repo-root file" and "the two `NOOP_DIRS` copies differ" cost a full run each, measured at
+> 105 jobs / 345 job-minutes for a one-file documentation diff and at *every pull request three
+> satellites ever opened*. Both are closed, with the falsification evidence and the numbers:
+> [What a Pull Request Rebuilds](/Doc/Architecture/BuildScopeNarrowing).**
 
 And one verdict that is neither: **`scope=none`**, when the sealed publication already records
 *this* commit for *this* identity. It is a positive finding — read from every target, logged with

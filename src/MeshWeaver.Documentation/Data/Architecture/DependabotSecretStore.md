@@ -173,7 +173,10 @@ remembering as the reason those two gates were exempted rather than fixed.
 ## The rule
 
 > **A secret that any `pull_request`-triggered lane requires is provisioned in BOTH stores.**
-> Adding a line to a preflight's `missing` array is a two-store act.
+> Adding a line to a preflight's `missing` array is a two-store act — and for a credential whose
+> raw value is stored NOWHERE (an `mwi_` instance key, an ACR token password), "provisioned in both"
+> means the Dependabot store gets its OWN issued credential, because mirroring one is impossible
+> for everybody. See *Three tiers* below.
 >
 > **And every secret a pull-request-reachable job consumes is asserted by a preflight** — so that a
 > store gap is reported by NAME, in the first cheap job, instead of surfacing twenty minutes later
@@ -273,8 +276,8 @@ FAILED audit, not a clean one. Remember what it cannot see: a name present with 
 
 ## Remediating it
 
-One command per missing name, same value as the Actions secret. `gh secret set` reads the value
-from **stdin** when `--body` is omitted — there is no `--body-file` flag:
+One command per missing name. `gh secret set` reads the value from **stdin** when `--body` is
+omitted — there is no `--body-file` flag:
 
 ```bash
 gh secret set <NAME> --app dependabot --repo Systemorph/MeshWeaver.<Repo>
@@ -283,29 +286,115 @@ gh secret set <NAME> --app dependabot --repo Systemorph/MeshWeaver.<Repo>
 Then re-run the Dependabot PR's workflow. The positive signal is the preflight's own success line,
 not merely a green wall.
 
-### Not everything on the list is a credential
+**Where the value comes from is the whole difficulty**, and it is not the same question for every
+name — see the three tiers below. Never echo a value into a shell, a log or a file you keep:
+`az keyvault secret show … -o tsv > file` then `gh secret set … < file`, and shred the file.
 
-Some of these names are **identifiers**, recoverable from a source an operator is already entitled
-to read, and mirroring them needs nobody who holds a secret. Fourteen were mirrored this way on
-2026-09-06:
+### Three tiers, not two — and the third one nobody can mirror
+
+The list splits three ways, not two, and the third tier is the one that made this recur:
+
+**1 · Identifiers.** Recoverable from a source an operator is already entitled to read, so mirroring
+them needs nobody who holds a secret. Fourteen were mirrored this way on 2026-09-06:
 
 | name | value established from | mirrored into |
 |---|---|---|
 | `AZURE_CLIENT_ID` | the `github-actions-bake` user-assigned identity — the only principal in the tenant with a federated credential for these repos (`repo:Systemorph/<repo>:ref:refs/heads/main`, in both the classic and the immutable subject format), holding exactly *Storage File Data Privileged Contributor* on the bake storage account | Reinsurance, SocialMedia, Crm, Education |
 | `AZURE_TENANT_ID` | that identity's tenant (`az account show`) | the same four |
 | `AZURE_SUBSCRIPTION_ID` | the subscription of the storage account each repo's own `vars.BAKE_PUBLISH_TARGETS` names | the same four |
-| `MESHWEAVER_APP_ID` | `gh api /apps/meshweaver-cloud` — a public App id, and the App `auto-arm.yml` names by slug | MeshWeaver, Memex |
+| `MESHWEAVER_APP_ID` | `gh api /apps/meshweaver-cloud` — a public App id, and the App `auto-arm.yml` names by slug | MeshWeaver, Memex, Education |
 
 **Giving a Dependabot run the OIDC client id grants it nothing.** Federation is keyed on the token's
 *subject*, and a Dependabot pull-request run's subject matches no federated credential — so
 `azure/login` still refuses. The identifier is what lets the preflight get past *"this is not
 provisioned"* to the honest answer.
 
-What genuinely cannot be recovered is anything whose value is a secret: `*_PRIVATE_KEY`, `*_TOKEN`,
-`*_PASSWORD`, `MW_REGISTRY_KEY` / `MW_REGISTRY_INSTANCE_KEY`, `ACR_USERNAME` / `ACR_PASSWORD`.
-Do not guess one and do not copy one from a similarly-named secret in another repo — a wrong
-credential fails as an authentication error deep in a lane, which is strictly worse than the missing
-one it replaced.
+**2 · Secrets that are STORED somewhere an operator can read.** A real credential, but Key Vault (or
+the running pod) holds the same bytes, so mirroring is a copy and can be *proved* to be one. Two of
+these, both verified before they were written anywhere:
+
+| name | authoritative source | how the copy was proved correct |
+|---|---|---|
+| `MESHWEAVER_APP_PRIVATE_KEY` | keyvault `meshweaverkeyvault/github-app-privatekey` | minted an RS256 App JWT with it and called `GET https://api.github.com/app` — the answer was `id 4220566 / meshweaver-cloud`, the App `auto-arm.yml` names |
+| `REGISTRY_PUBLISH_TOKEN` | keyvault `Systemorph/memexcloud-Plugins-Registry-PublishToken` | `sha256` of the vault value equals `sha256` of the RUNNING registry pod's `Plugins__Registry__PublishToken` (`printenv` inside a `kubectl exec`, piped through `sha256sum`) — a byte-identity proof that prints no value |
+
+🚨 **Pick the vault object by the DEPLOYMENT, never by the secret's bare name.** Both portals keep a
+publish token and an instance key, and the prefix is the only thing that tells them apart:
+`memex.meshweaver.cloud` is the **memex-cloud** deployment (the `memex` deployment serves
+`memex.systemorph.com`), so the registry every satellite's `vars.MW_REGISTRY_URL` names is fed by
+the `memexcloud-`-prefixed objects. The unprefixed `Systemorph/Plugins-Registry-PublishToken` is a
+*different, equally valid-looking* token for the other portal — measured 2026-09-07, its hash does
+not match the running registry, so copying it would have installed a credential that authenticates
+against nothing and fails deep in the module lane.
+
+**3 · Secrets that exist NOWHERE but inside the Actions store — mirroring them is impossible, for
+everyone.** This is the tier the earlier revision of this page got wrong by saying the values
+"need someone who holds them". For these, *nobody holds them*:
+
+- **`MW_REGISTRY_KEY` / `MW_REGISTRY_INSTANCE_KEY`.** An `mwi_` instance key is
+  `InstanceKeys.Generate()` → 32 random bytes handed back in ONE HTTP response, and only
+  `InstanceKeys.Hash()` is ever persisted (`src/MeshWeaver.Mesh.Contract/Security/InstanceKeys.cs`:
+  *"The raw value is returned ONCE — only Hash of it is ever stored"*). The registry cannot tell you
+  the key; it can only tell you whether one you present hashes to a record it holds.
+- **`ACR_USERNAME` / `ACR_PASSWORD`.** The fleet convention is a per-repo ACR **token** on a per-repo
+  scope map, and a token password is write-only: `az acr token credential generate` *replaces* the
+  slot it names. `az acr credential show` reads the ADMIN user instead — and admin is disabled on
+  `meshweaver` (measured 2026-09-07, `adminUserEnabled: false`), so there is no admin pair to copy
+  either.
+
+For tier 3 the remediation is not a copy. **Issue the Dependabot lane its OWN credential.**
+
+### Tier 3: the Dependabot lane gets its own credential, and that is better
+
+A second credential is not a workaround for an unreadable first one — it is the shape this should
+have had all along:
+
+- **Nothing is rotated.** The Actions-side credential keeps working; a new instance / a new token is
+  purely additive, so a mistake cannot take a green lane red.
+- **It is separately revocable.** A Dependabot pull request is composed from third-party registry
+  metadata and GitHub deliberately puts it in the fork trust class. Handing that lane a credential
+  that can be revoked without touching CI is the correct blast radius, not a compromise.
+- **It is already the fleet's own convention on the ACR side** — the `dependabot-pull` token
+  (created 2026-08-14 on the `_repositories_pull` scope map) exists for exactly this reason.
+
+🚨 **The one thing to get right is that the new credential grants the SAME thing and no more.**
+Register the instance, do not hand-write its grant: registration seeds
+`Admin/_PluginGrant/<id>` from `PluginCatalog:DefaultGrants` (`Plugins/*`), which is what the gate
+reads. For ACR, create the new token on the **existing** per-repo scope map rather than a new one,
+so the permission set is identical by construction. And **verify the credential before storing it** —
+`GET /api/plugins` must answer 200 for an instance key, and
+`GET /v2/<repo>/manifests/<tag>` must answer 200 for an ACR token. A credential written into a store
+unverified is the failure mode this whole page is about, one level down.
+
+## The 2026-09-07 provisioning — the fleet at zero
+
+Every repository measured `0 missing` afterwards with
+`check-pr-secret-preflight.py --check-stores` (before: 12 gaps across 7 repositories):
+
+| repo | provisioned into the Dependabot store | tier | source |
+|---|---|:-:|---|
+| MeshWeaver | `MESHWEAVER_APP_PRIVATE_KEY` | 2 | keyvault, JWT-verified |
+| MeshWeaver.Plugins | `REGISTRY_PUBLISH_TOKEN` | 2 | keyvault, hash-verified vs the running registry |
+| MeshWeaver.SocialMedia | `REGISTRY_PUBLISH_TOKEN`, `MW_REGISTRY_KEY` | 2, 3 | keyvault; new instance `dependabot-socialmedia` |
+| MeshWeaver.Reinsurance | `MW_REGISTRY_KEY` | 3 | new instance `dependabot-reinsurance` |
+| MeshWeaver.Crm | `MW_REGISTRY_KEY` | 3 | new instance `dependabot-crm` |
+| MeshWeaver.Education | `MESHWEAVER_APP_ID`, `MESHWEAVER_APP_PRIVATE_KEY`, `MW_REGISTRY_KEY` | 1, 2, 3 | public id; keyvault; new instance `dependabot-education` |
+| MeshWeaver.Manufacturing | `ACR_USERNAME`, `ACR_PASSWORD`, `MW_REGISTRY_INSTANCE_KEY` | 3 | new ACR token `manufacturing-dependabot-pull` on the existing `manufacturing-ci-pull-scope-map`; new instance `dependabot-manufacturing` |
+| Memex | `MESHWEAVER_APP_PRIVATE_KEY` | 2 | keyvault, JWT-verified |
+
+The five `dependabot-*` registry instances were registered through
+`POST /api/instances/register` under one 15-minute `mwr_` bootstrap key, which was **revoked
+immediately afterwards** (`RegistrationKeyService.SetRevoked`) rather than left to expire. Each
+instance key was verified against `GET /api/plugins` (200, 45 packages) *before* it was written to a
+store, and the ACR token against `GET /v2/mw-plugin-test/manifests/latest` (200, a two-arch manifest
+list).
+
+**What is still open after this**: `MeshWeaver.Plugins` has three *static* violations — `auto-arm.yml`
+consumes `MESHWEAVER_APP_ID` / `MESHWEAVER_APP_PRIVATE_KEY` and `ci.yml`'s `modules-*` jobs consume
+`REGISTRY_PUBLISH_TOKEN`, and no preflight in that repo asserts any of them. Its store is complete,
+so nothing is red today; the gate will say so the moment that repo's platform pin moves past the
+commit that introduced it. That is the enforced half of the rule doing its job, and the fix is three
+preflight assertions (or three reasoned allow-file lines) in `MeshWeaver.Plugins`.
 
 ## Related
 

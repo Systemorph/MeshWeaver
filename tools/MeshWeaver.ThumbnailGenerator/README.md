@@ -2,10 +2,13 @@
 
 A .NET tool for generating thumbnails of MeshWeaver Layout Areas using Playwright.
 
-## Installation
+## Running it
+
+Not published as a dotnet tool ([NuGet Package Retirement](../../src/MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md)).
+Run it from a checkout:
 
 ```bash
-dotnet tool install -g MeshWeaver.ThumbnailGenerator
+dotnet run --project tools/MeshWeaver.ThumbnailGenerator -- <args>
 ```
 
 ## Usage

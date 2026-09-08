@@ -443,7 +443,7 @@ public static class ServiceDefaults
 /// The <c>/api/version</c> response — the whole of it. Which build is running, and which public
 /// commit it was produced from; deliberately nothing else.
 /// </summary>
-/// <param name="Version">The platform version (<c>3.0.0-rc1.ci.{run}</c> for CI builds).</param>
+/// <param name="Version">The platform version (<c>3.0.0-ci.{run}</c> for CI builds).</param>
 /// <param name="Commit">The full git SHA the build was produced from, or empty when the build
 /// carried no source-control information.</param>
 public record BuildIdentity(string Version, string Commit);

@@ -8,6 +8,8 @@ icon: /static/NodeTypeIcons/box.svg
 
 # Plugin Packaging
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** `minMeshVersion` stops being "THE landing gate": it is carried, shown and linted at pack time, and decides nothing at landing, serving or boot. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) lands; this page is rewritten by that change.
+
 C# stored in mesh nodes compiles **at runtime, in the portal** — see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation). This page is about compiling the same
 source **outside** it: in CI, ahead of time, so the bytes can be shipped rather than recomputed.
@@ -15,8 +17,9 @@ source **outside** it: in CI, ahead of time, so the bytes can be shipped rather 
 The compile toolchain itself is **`MeshWeaver.Compiler`** (#1707) — the same code path whether the
 portal compiles at runtime, CI gates and bakes, or you run it by hand — and it is distributed
 two ways: in every portal image, and as the `mw-plugin-test` container image. (The
-`MeshWeaver.Compiler.Cli` dotnet tool, `mw-compiler`, was published to nuget.org up to
-`3.0.0-rc13`; NuGet publication is retired — a module compiles against the image, never a feed.)
+`MeshWeaver.Compiler.Cli` dotnet tool, `mw-compiler`, was published to nuget.org up to `3.0.0-rc13`
+and is retired and unlisted — a module compiles against the image, never a feed. See
+[NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement).)
 `MeshWeaver.Plugin.Build` is the packaging tool on top. Everything below is what the pipeline has
 to get right to produce an assembly the portal would accept — each item established by a build
 that failed in a way that read as author error rather than harness error.

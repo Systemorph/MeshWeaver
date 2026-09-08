@@ -59,16 +59,20 @@ jobs:
         with:
           dotnet-version: 10.0.x
       # Compute the green continuous version, then swap the channel label `ci` → `edge` so the result
-      # parses as an `edge` SemVer pre-release (VersionSelect.IsEdge). Handles both the clean-base
-      # (`3.0.0-ci.N`) and rc (`3.0.0-rc1.ci.N`) shapes; falls back to appending if there is no ci segment.
+      # parses as an `edge` SemVer pre-release (VersionSelect.IsEdge). $(Version) comes from THIS tree,
+      # which can only mint the clean `3.0.0-ci.N` shape (Doc/Architecture/ReleaseProcess §1), so the
+      # second substitution is the live one. The first (`.ci.` → `.edge.`, the retired
+      # `3.0.0-rc1.ci.N` shape) is kept as harmless tolerance — it costs nothing and it is the same
+      # both-separators reading every consumer of a run number does. Falls back to appending if there
+      # is no ci segment at all.
       - name: Compute edge version
         id: vars
         run: |
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
-          EDGE_VERSION="${VERSION/.ci./.edge.}"          # rc:    3.0.0-rc1.ci.N -> 3.0.0-rc1.edge.N
-          EDGE_VERSION="${EDGE_VERSION/-ci./-edge.}"      # clean: 3.0.0-ci.N    -> 3.0.0-edge.N
+          EDGE_VERSION="${VERSION/.ci./.edge.}"          # retired: 3.0.0-rc1.ci.N -> 3.0.0-rc1.edge.N
+          EDGE_VERSION="${EDGE_VERSION/-ci./-edge.}"      # minted:  3.0.0-ci.N     -> 3.0.0-edge.N
           [ "$EDGE_VERSION" = "$VERSION" ] && EDGE_VERSION="${VERSION}-edge.${GITHUB_RUN_NUMBER}"
           echo "version=$EDGE_VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed edge version: $EDGE_VERSION (from $VERSION, run #$GITHUB_RUN_NUMBER)"

@@ -99,8 +99,19 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
     /// The discriminator a LOCAL write stamps. Content written without a <c>$type</c> is stored
     /// perfectly and then materialises as NOTHING — the node keeps the whole document while every
     /// reader of the control instance's record type sees an empty record.
+    ///
+    /// <para>🚨 <b>It must name a REGISTERED CLR type, and for its first months it did not</b>
+    /// (#3625). This was the literal <c>"ModuleInventoryContent"</c>, a name no type in the fleet
+    /// carries — so the reading hub could not resolve it, the polymorphic converter degraded the
+    /// value back to a raw <see cref="System.Text.Json.JsonElement"/>, and the node materialised as
+    /// nothing anyway: exactly the outcome the paragraph above says this constant exists to
+    /// prevent. Stamping a discriminator is only half the cure; the other half is that something
+    /// can resolve it, which is why <see cref="DeploymentReport"/> is now registered in
+    /// <c>AddPluginCatalogTypes</c> and this constant is derived from it with <c>nameof</c> rather
+    /// than typed out. The old value was invisible to every instrument the platform had until the
+    /// untyped-content shard gate was repaired and caught it on its first working run.</para>
     /// </summary>
-    public const string InventoryContentType = "ModuleInventoryContent";
+    public const string InventoryContentType = nameof(DeploymentReport);
     /// <summary>
     /// The self-update policy node this reporter reads the policy off. The declaring type lives in
     /// Memex.Portal.Shared, which this assembly cannot reference; a parity test there keeps the two
