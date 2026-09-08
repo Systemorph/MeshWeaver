@@ -133,6 +133,32 @@ understands the defect.
   merged, on an image that by construction could not contain it. Falsifiable, and falsified: had it
   been the cause, the recovery would have had to postdate the merge and arrive on a later image.
 
+## What is NOT established: why the pass was short
+
+This page fixes what a short pass is allowed to CONCLUDE. It does not explain why that one pass was
+short, and nothing here should be read as if it did.
+
+The leading candidate is the completion rule. `RunQuery` accumulates a query's chunked `Initial` and
+treats **one second of silence** as "the answer is complete" (`QueryQuietWindow`, then
+`.Throttle(…).Take(1)`). `QueryResultChange<T>` carries no terminal marker — `Initial`, `Added`,
+`Updated`, `Removed`, `Reset` and nothing that says *done* — so a quiet window is the only completion
+signal available to the reader, and a chunk gap wider than it silently truncates the fold. The
+suspect boot ran its discovery 14 seconds after a 35-second burst of bundle seeding onto the shared
+volume, which is exactly the kind of contention that widens a gap.
+
+**That is a hypothesis, and it has not been measured.** What would settle it: instrument `RunQuery`
+to record, per query, the number of change events folded and the largest inter-chunk gap, then
+compare a short pass against a complete one on the same portal. A pass whose largest gap approaches
+`QueryQuietWindow` names the completion rule; one whose gaps are all small says the shortfall is
+upstream, in what the providers returned, and the search moves to the static catalog (which is the
+only route by which a `Doc/**` Code node reaches discovery — its nodes are served from the image, not
+from the Postgres `code` satellite, so they arrive through the unpinned `nodeType:Code` fetch alone).
+
+🚨 **Do not "fix" this by widening `QueryQuietWindow`.** A longer window makes a short read rarer
+without making it impossible, and the invariant above is what makes rarity irrelevant: a short read
+now produces "I don't know" instead of a verdict. Widening the bound would trade a correctness
+property for a probability.
+
 ## Re-measuring this
 
 One Loki query answers whether a pass was short, and it needs no pod to still exist:
