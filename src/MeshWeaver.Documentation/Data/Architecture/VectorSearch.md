@@ -68,6 +68,45 @@ When the parsed query has a non-empty `TextSearch` **and** an `IEmbeddingProvide
 
 🚨 **Until MeshWeaver.Plugins#1493 (2026-09-08) the unpinned route was lexical only.** `GenerateTextSearchClause` demanded every whitespace-separated term as an ILIKE substring of name/path/description/node_type, AND-ed, so a natural-language query returned nothing mesh-wide while the same words pinned to one partition found their documents — measured on both production portals on 2026-09-07 (`asynchronous calls observable subscribe never await task namespace:Doc scope:descendants` → 3 hits; the same words unpinned → 0; the hit count shrank with every added word). The 80k stored embeddings were consulted exactly when a caller already knew where to look. A host with no embedding provider, and the Snowflake fan-out, keep the lexical contract — the table below describes a Postgres host with a provider.
 
+### 🚨 The live half: a semantic query must not be gated by a lexical matcher
+
+Ranking the *first* read semantically is only half of it. A `Query` is live — it re-reads when a
+change notification looks like it could alter the result set — and that relevance decision is taken
+by the **other** executor of the query language, in memory: `PostgreSqlPartitionedMeshQuery`'s
+`IsRelevant` asks core's `QueryEvaluator.Matches` whether a newly written node could enter.
+
+`QueryEvaluator.GetFuzzyScore` requires **every** term to be a case-insensitive substring of the
+node's searchable text. That is precisely the predicate the vector index replaced. So for one day
+after #1493 the two executors disagreed in the direction that drops rows: SQL ranked a semantic
+neighbour in, the in-memory gate answered `false` for the same node, the notification was dropped,
+and the live query never re-read. **A search that works on first paint and then silently stops
+updating is the same "returns nothing" symptom, deferred** — and it is invisible to any test that
+only measures the Initial read.
+
+The rule is now one predicate, `TakesSemanticRoute(parsed, semanticCapable)`, read by **both** the
+routing site and the relevance gate, so they cannot drift apart again:
+
+- **Semantic query** → the gate evaluates the **structured half only** (`parsed with { TextSearch =
+  null }`). `nodeType:`, `namespace:` and every `content.` selector are resolved identically by both
+  executors, so the gate stays narrow enough not to re-query on every write
+  (Systemorph/MeshWeaver#2194) — but the free-text half is **dropped rather than answered wrongly**.
+  Dropping it can only cost an extra re-query, which the serialised re-query path already bounds;
+  answering it lexically drops rows.
+- **No embedding provider, or a satellite table** (`nodeType:Thread` → `threads`, which carries no
+  embedding column) → nothing changes: the SQL is lexical there too, so `Matches` is the right
+  question and is asked unchanged. The capability is read as *is an `IEmbeddingProvider`
+  registered* — the same `GetService` signal described under the fallback below, which is why
+  `NullEmbeddingProvider` must never be registered as a default.
+- **A registered provider that returns `null` for one query** (a transient failure) is the one
+  asymmetric case: the SQL falls back to lexical for that query while the gate, which decides on
+  the host's capability rather than on the outcome of a single embed call, stays widened. That is
+  deliberately the safe direction — an extra re-query, never a dropped row.
+
+Pinned by `SemanticRelevanceGateParityTests` in MeshWeaver.Plugins, which carries the no-provider
+control and a `nodeType:` control — without the second, a gate that had been widened to "always
+relevant" would score identically on the first.
+
+
 **Routing examples:**
 
 | Query | TextSearch | Vector path? |
