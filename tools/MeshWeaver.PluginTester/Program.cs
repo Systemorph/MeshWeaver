@@ -69,6 +69,8 @@ try
         return await RunBuildProject(args[1..]);
     if (args.Length > 0 && args[0] == "framework-identity")
         return RunFrameworkIdentity(args[1..]);
+    if (args.Length > 0 && args[0] == "platform-surface")
+        return RunPlatformSurface(args[1..]);
     return await RunGate(args);
 }
 catch (Exception ex)
@@ -681,6 +683,128 @@ static int RunFrameworkIdentity(string[] args)
     return 1;
 }
 
+// 🚨 THE `platform-surface` VERB (#3651) — the operator's and the pipeline's way to write what a
+// platform CARRIES, as the document the release gate reads back.
+//
+//     mw-plugin-test platform-surface [<app-dir> --shared-frameworks <dir>] [--identity <id>] [--output <file>]
+//
+// Without <app-dir> the surface is THIS process's (its loaded assemblies plus its application
+// directory — what the portal's boot probe measures); with one, it is that directory's files plus
+// the named shared frameworks, and --identity names the identity the document is keyed to (the
+// value `framework-identity <app-dir>` prints). Every bake writes the same document beside its
+// framework-mvid.txt on its own; this verb exists for a bake that predates it, and for reading a
+// platform's surface by hand when a gate's advisory names a type nobody expected.
+static int RunPlatformSurface(string[] args)
+{
+    string? appDirectory = null;
+    string? sharedFrameworks = null;
+    string? identity = null;
+    string? output = null;
+    for (var i = 0; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--shared-frameworks" when i + 1 < args.Length:
+                sharedFrameworks = args[++i];
+                break;
+            case "--identity" when i + 1 < args.Length:
+                identity = args[++i].Trim();
+                break;
+            case "--output" when i + 1 < args.Length:
+                output = args[++i];
+                break;
+            case "--shared-frameworks" or "--identity" or "--output":
+                Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
+                return 2;
+            case "--help" or "-h":
+                Console.WriteLine(
+                    "usage: mw-plugin-test platform-surface [<app-dir> --shared-frameworks <dir>] "
+                    + "[--identity <id>] [--output <file>]");
+                return 0;
+            default:
+                if (args[i].StartsWith('-') || appDirectory is not null)
+                {
+                    Console.Error.WriteLine($"Unknown argument '{args[i]}'. Try --help.");
+                    return 2;
+                }
+                appDirectory = args[i];
+                break;
+        }
+    }
+
+    MeshWeaver.Mesh.ModulePlatformSurface surface;
+    if (appDirectory is null)
+    {
+        if (sharedFrameworks is not null)
+        {
+            Console.Error.WriteLine(
+                "platform-surface: --shared-frameworks names another host's frameworks and needs "
+                + "that host's <app-dir>; without one the surface is this process's own.");
+            return 2;
+        }
+        identity ??= MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        surface = MeshWeaver.Mesh.ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory);
+    }
+    else
+    {
+        // Both or neither, for the reason `compile` states: which shared frameworks apply is never
+        // inferred, and a directory host without them is a surface no portal binds a module to.
+        if (sharedFrameworks is null)
+        {
+            Console.Error.WriteLine(
+                "platform-surface: <app-dir> and --shared-frameworks go together — the platform "
+                + "host's /app AND its <dotnet root>/shared are what a module binds to there.");
+            return 2;
+        }
+        var full = Path.GetFullPath(appDirectory);
+        if (!Directory.Exists(full))
+        {
+            Console.Error.WriteLine($"platform-surface: '{full}' does not exist.");
+            return 2;
+        }
+        ContainerReferenceSet set;
+        try
+        {
+            set = ContainerReferenceSet.Read(
+                full, trustedPlatformAssemblies: string.Empty, sharedFrameworksRoot: sharedFrameworks);
+        }
+        catch (ContainerReferenceSet.UnreadableContainerException ex)
+        {
+            Console.Error.WriteLine($"platform-surface: '{full}' is not a readable platform host — {ex.Message}");
+            return 1;
+        }
+        if (identity is null)
+        {
+            // The document is keyed to the identity the DIRECTORY resolves — the same rule the
+            // framework-identity verb applies, and never a fallback (two manifest-less hosts of
+            // one commit resolve the same fallback, which would key one surface to two platforms).
+            var (resolved, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(full);
+            if (resolved is null)
+            {
+                Console.Error.WriteLine(
+                    $"platform-surface: cannot resolve an identity for '{full}' — {problem}. Pass "
+                    + "--identity explicitly if the document must be written anyway.");
+                return 1;
+            }
+            identity = resolved;
+        }
+        surface = MeshWeaver.Mesh.ModulePlatformSurface.OfFiles(set.AssemblyPaths);
+    }
+
+    var json = surface.ToJson(identity);
+    if (output is null)
+    {
+        Console.Out.Write(json);
+        return 0;
+    }
+    var directory = Path.GetDirectoryName(Path.GetFullPath(output));
+    if (!string.IsNullOrEmpty(directory))
+        Directory.CreateDirectory(directory);
+    File.WriteAllText(output, json);
+    Console.Error.WriteLine($"platform-surface: {identity} → {Path.GetFullPath(output)} ({json.Length:N0} bytes)");
+    return 0;
+}
+
 // The GATE verb (`mw-plugin-test <repo-root>`). A LOCAL FUNCTION rather than bare top-level
 // statements so the guard above can wrap it: top-level statements are the body of `Main` itself,
 // and anything thrown from them escapes the process (see the #1741 note above).
@@ -839,7 +963,7 @@ static async Task<int> RunGate(string[] args)
             }
             case "--help" or "-h":
                 Console.WriteLine(
-                    "usage: mw-plugin-test build <repo-root> [<package>... | all] ...   (see build --help)\n       mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
+                    "usage: mw-plugin-test build <repo-root> [<package>... | all] ...   (see build --help)\n       mw-plugin-test platform-surface [<app-dir> --shared-frameworks <dir>] [--identity <id>] [--output <file>]   (see platform-surface --help)\n       mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
                     + "[--allow <file>] [--report <file>] [--seed <dir>] [--bake-output <dir>] "
                     + "[--source-sha <sha>] [--module <dll>]... [--app <dir>] [--shard <i>/<n>] "
                     + "[--print-framework-identity]\n"

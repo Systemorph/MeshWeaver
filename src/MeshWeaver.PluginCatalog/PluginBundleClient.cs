@@ -107,7 +107,9 @@ public sealed class PluginBundleClient
     /// <param name="Module">The compiled module the bundle carries (its entry-assembly name), or
     /// null for a NodeType-only bundle (#1664). Additive: an older registry simply omits it.</param>
     /// <param name="MinMeshVersion">The module's declared platform FLOOR — surfaced on the index
-    /// so a consumer can skip an uninstallable bundle without downloading it. Null = none.</param>
+    /// so a consumer can say what the bundle claims ("declares platform ≥ X; running Y") before
+    /// downloading it. ADVISORY since #3648: it skips nothing; the consumer's landing measures the
+    /// bytes. Null = none.</param>
     public sealed record BundleRef(
         string Plugin, string Version, string Url, string? Module = null,
         string? MinMeshVersion = null)
@@ -277,18 +279,20 @@ public sealed class PluginBundleClient
     /// <see cref="Adopt"/>, riding the same index, the same download route and the same MVID gate.
     ///
     /// <para>The whole decision is <see cref="ModuleUpdateDecision.Decide"/>, taken BEFORE any
-    /// download: an up-to-date module, a bundle whose platform floor this deployment does not
-    /// satisfy, an uninstalled module and a policy-declined unattended run each cost zero bytes.
-    /// The gate is the <c>minMeshVersion</c> FLOOR (<see cref="ModulePlatformFloor"/>), never MVID
-    /// equality — that strict gate is the NodeType lane's (<see cref="Adopt"/>); a module built
-    /// against a different platform build lands fine as long as its floor is satisfied. Landing
-    /// goes through <see cref="ModuleLandingService"/> (restart-as-activation — the sidecar's
-    /// <c>PendingRestart</c> is the step-10 signal); the module LOADS at the next restart.</para>
+    /// download: an up-to-date module, an uninstalled module and a policy-declined unattended run
+    /// each cost zero bytes. 🚨 There is NO platform gate on this side since #3648: the bundle's
+    /// declared <c>minMeshVersion</c> floor (<see cref="ModulePlatformFloor"/>) is ADVISORY — worded
+    /// into the log line, never a skip — and MVID equality never was one (that strict gate is the
+    /// NodeType lane's, <see cref="Adopt"/>). Whether the bytes can load here is MEASURED by
+    /// <see cref="ModuleLandingService"/>'s link probe at placement, which is the one refusal on
+    /// this path; a module built against a different platform build lands fine as long as it
+    /// links. Landing is restart-as-activation — the sidecar's <c>PendingRestart</c> is the
+    /// step-10 signal; the module LOADS at the next restart.</para>
     ///
     /// <para>Emits how many module files were landed — zero is a normal, non-error outcome (nothing
-    /// to land, or the bundle is for a framework this deployment does not run yet). Like
-    /// <see cref="Adopt"/>, nothing here may fail an install: every refusal is logged and absorbed.
-    /// Cold: nothing is fetched until Subscribe.</para>
+    /// to land, or the bytes do not link against this platform). Like <see cref="Adopt"/>, nothing
+    /// here may fail an install: every refusal is logged and absorbed. Cold: nothing is fetched
+    /// until Subscribe.</para>
     /// </summary>
     /// <param name="pluginId">The package id whose bundle carries the module.</param>
     /// <param name="moduleName">The module's entry-assembly name (the package manifest's
@@ -377,12 +381,14 @@ public sealed class PluginBundleClient
     }
 
     /// <summary>
-    /// Reads the downloaded bundle's module section and lands it. The platform FLOOR is verified
-    /// AGAIN here, against the manifest inside the archive — the index said what the registry
-    /// advertises, the manifest says what these bytes require, and only the second is the gate
-    /// that holds (<see cref="ModuleLandingService"/> re-checks it a third time at placement;
-    /// declining twice is cheaper than debugging a MissingMethodException once). The MVID the
-    /// bundle records is logged as DIAGNOSTIC metadata, never refused.
+    /// Reads the downloaded bundle's module section and lands it. The declared platform FLOOR in
+    /// the archive's manifest is LOGGED here (Information) when it ranks above the running platform
+    /// — "declares platform ≥ X; running Y" — and the landing proceeds: since #3648 the floor is
+    /// advisory, and the one gate is <see cref="ModuleLandingService"/>'s measured link probe at
+    /// placement. (This used to be a second refusal, "DECLINED … nothing landed", on the same
+    /// string comparison that held every production portal on 2026-09-07.) The name-drift refusal
+    /// stays: a bundle declaring a different module than the package is never landed. The MVID
+    /// the bundle records is logged as DIAGNOSTIC metadata, never refused.
     /// </summary>
     /// <param name="advertisedFrameworkMvid">
     /// 🚨 The framework identity the registry advertised for THESE module bytes
@@ -410,13 +416,16 @@ public sealed class PluginBundleClient
             {
                 var (manifest, files) = payload;
 
-                if (ModulePlatformFloor.DeclineReason(manifest?.Module?.MinMeshVersion) is { } reason)
-                {
+                // 🚨 #3648 — ADVISORY, not a refusal. "Module bundle for {Plugin} DECLINED:
+                // {Reason} — nothing landed" stood here and returned 0; on 2026-09-07 it declined
+                // every rc-floored bundle on every ci-built portal. The link probe at placement
+                // decides whether these bytes load; this line only says what they claim.
+                if (ModulePlatformFloor.DeclineReason(manifest?.Module?.MinMeshVersion) is { } advisory)
                     _logger?.LogInformation(
-                        "Module bundle for {Plugin} DECLINED: {Reason} — nothing landed",
-                        pluginId, reason);
-                    return Observable.Return(0);
-                }
+                        "Module bundle for {Plugin} declares platform ≥ {Floor}; this deployment "
+                        + "runs {Running} — advisory, the link probe decides at placement: {Advisory}",
+                        pluginId, manifest?.Module?.MinMeshVersion,
+                        ModulePlatformFloor.RunningVersion ?? "(unknown)", advisory);
 
                 if (files.Count == 0)
                 {
@@ -444,7 +453,7 @@ public sealed class PluginBundleClient
                         files.Select(f => (f.FileName, f.Bytes)).ToArray(),
                         // Which exact platform build produced these bytes — the registry's
                         // per-bundle claim first, the archive's requested-lane stamp only as the
-                        // legacy fallback. Still never a LANDING gate (the floor is), but no
+                        // legacy fallback. Still never a LANDING gate (the link probe is), but no
                         // longer merely diagnostic: ModuleUpdateDecision reads it back to tell a
                         // rebuild from a no-op (Plugins#931).
                         advertisedFrameworkMvid ?? manifest!.FrameworkMvid,

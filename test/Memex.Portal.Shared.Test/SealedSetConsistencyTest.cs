@@ -29,7 +29,7 @@ namespace Memex.Portal.Shared.Test;
 ///
 /// <para>These pin <see cref="PublishedBundleCatalogue.ArtifactsForIdentity"/> — the observation
 /// now reads each sealed module bundle's entry assembly for its MVID and each sealed bundle's
-/// dependency records — and <see cref="ReleaseAvailability.IsUpdatable"/>'s rule over them. Both
+/// dependency records — and <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/>'s rule over them. Both
 /// failure directions are pinned on purpose: a false "available" rolls a fleet onto a half-broken
 /// platform; a false "hold" freezes every install (#1754), so an UNREADABLE module set is
 /// <see cref="PackageAvailabilityKind.Indeterminate"/> and a module the set does not carry is not

@@ -219,6 +219,16 @@ public static class UpdatePolicySettingsTab
                     ? "\n\n" + localize("ui.updateHeldAt", [DisplayTimeExtensions.ToDisplayTime(heldAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
                     : "");
 
+        // 🚨 What the gate SAID about this tag without holding on it (#3651): the packages the
+        // roll compiles at boot, a landed module whose loadability there could not be measured, a
+        // declared floor the target does not rank above. Rendered whether or not the tag is held,
+        // because a roll that compiles content at boot is a state an operator must be able to see
+        // on this tab — a cost that lived only in a pod log is how a "routine" update surprises.
+        if (content.HasAdvisoriesFor(tag))
+            available += "\n\n"
+                + localize("ui.updateAdvisories", [tag])
+                + "\n\n> " + Sanitize(content.Advisories!);
+
         var verdict = content.VerificationFor(tag);
         if (verdict is null)
             return available;

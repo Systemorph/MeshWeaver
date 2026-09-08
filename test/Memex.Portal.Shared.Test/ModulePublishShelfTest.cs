@@ -19,7 +19,9 @@ namespace Memex.Portal.Shared.Test;
 
 /// <summary>
 /// The registry SHELF over the publish route (2026-08-22): a module whose declared platform floor
-/// exceeds the registry's own version is ACCEPTED and held, never 409'd.
+/// exceeds the registry's own version is ACCEPTED, never 409'd — and since #3648 not even held:
+/// the floor is advisory, and what the shelf holds is what the link probe measures as unloadable
+/// here (<see cref="ModulePlatformLinkTest.AnUnloadableModule_IsShelvedRatherThanRefused_OnThePublishPath"/>).
 ///
 /// <para><b>The deadlock the old behaviour produced (2026-08-22).</b> Modules extracted from the
 /// platform image declared <c>minMeshVersion: 3.0.0-rc7</c> while the registry ran rc6, so the
@@ -27,9 +29,8 @@ namespace Memex.Portal.Shared.Test;
 /// its <c>Modules:Required</c> gate held the rollout for exactly those absent modules. Image
 /// doesn't ship them → only the registry can deliver them → the registry refuses to CARRY them
 /// until it updates → it can't update without them. The shelf semantics break the cycle: the
-/// warehouse carries modules for platforms newer than itself, serves them to consumers (whose own
-/// install path gates on THEIR platform), and activates its own copy at the first boot whose
-/// platform satisfies the floor.</para>
+/// warehouse carries modules for platforms newer than itself and serves them to consumers, whose
+/// own landing measures them against THEIR platform.</para>
 ///
 /// <para>Driven over a real HTTP pipeline (TestServer) like <see cref="PluginBundleAuthTest"/>,
 /// because the claim under test is the ROUTE's answer — a publisher must be able to tell
@@ -116,28 +117,34 @@ public class ModulePublishShelfTest : IDisposable
     }
 
     /// <summary>
-    /// 🚨 The shelf acceptance: an above-floor publish answers 200 with <c>held: true</c> and the
-    /// reason — the exact upload that used to 409 into the deadlock. The bytes are on the shelf,
-    /// the entry is recorded (which is what makes the index list it for consumers), and NOTHING
-    /// locally activates: PendingRestart stays down, because a restart of this instance cannot
-    /// load a held module.
+    /// 🚨 <b>An above-floor publish is neither 409'd nor HELD (#3648)</b> — it lands, unheld, with
+    /// the floor recorded as an advisory. The upload that used to 409 into the 2026-08-22 deadlock
+    /// answered <c>held: true</c> from then until #3648; on 2026-09-07 that same string comparison
+    /// held every production portal on its morning build. The declared floor decides nothing now:
+    /// the bytes LINK against this platform (real assembly bytes, measured by the landing), so
+    /// they land exactly as a floor-satisfied publish does — PendingRestart raised, entry enabled,
+    /// the floor on the record for the index and the status row to SAY, never to gate on.
     /// </summary>
     [Fact]
-    public async Task AnAboveFloorPublish_IsShelvedAndHeld_Not409d()
+    public async Task AnAboveFloorPublish_LandsUnheld_TheFloorIsAdvisory()
     {
+        // The precondition that makes this able to fail: 999.0.0 ranks ABOVE whatever this test
+        // process runs, so the old gate would have held it. A comparator that stopped saying so
+        // would turn every assertion below into a vacuous pass.
+        Assert.NotNull(ModulePlatformFloor.DeclineReason("999.0.0"));
+
         using var response = await Publish(minMeshVersion: "999.0.0");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        Assert.True(body.RootElement.GetProperty("held").GetBoolean());
-        var reason = body.RootElement.GetProperty("holdReason").GetString();
-        Assert.Contains("999.0.0", reason);
-        Assert.Contains(ModulePlatformFloor.RunningVersion!, reason);
-        Assert.False(body.RootElement.GetProperty("pendingRestart").GetBoolean(),
-            "a restart cannot activate a held module, so nothing is pending on one");
+        Assert.False(body.RootElement.GetProperty("held").GetBoolean(),
+            "a declared floor above the running platform is advisory — the bytes link, so nothing holds them");
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("holdReason").ValueKind);
+        Assert.True(body.RootElement.GetProperty("pendingRestart").GetBoolean(),
+            "an unheld landing loads at the next restart, so the restart IS pending");
 
-        // The shelf state on disk: bytes in a generation directory, entry recorded with its
-        // floor (held-ness is DERIVED from it — boot re-gates the same entry), no restart flag.
+        // The state on disk: bytes in a generation directory, entry recorded WITH its floor (the
+        // index and the status row say what the module claims), restart flag raised.
         var list = ModuleActivationSidecar.Read(root);
         var entry = Assert.Single(list.Entries);
         Assert.Equal("MeshWeaver.Speech", entry.Name);
@@ -149,13 +156,13 @@ public class ModulePublishShelfTest : IDisposable
         // the SAME version, so if the shelf drops the identity here the whole comparison downstream
         // silently reads "unknown" and the defect is back.
         Assert.Equal("test-build", entry.FrameworkMvid);
-        Assert.False(list.PendingRestart);
+        Assert.True(list.PendingRestart);
         Assert.True(File.Exists(Path.Combine(
             ModuleLandingService.ModuleDirectoryFor(root, "MeshWeaver.Speech", entry),
             "MeshWeaver.Speech.dll")));
 
-        // …and the SERVE side lists exactly this held landing for consumers — the same Collect
-        // the index and the download route resolve through, against the state the route wrote.
+        // …and the SERVE side lists exactly this landing for consumers — the same Collect the
+        // index and the download route resolve through, against the state the route wrote.
         var (files, _, decline) = ModuleBundleSource.Collect(root, "MeshWeaver.Speech", list);
         Assert.Null(decline);
         Assert.Single(files);

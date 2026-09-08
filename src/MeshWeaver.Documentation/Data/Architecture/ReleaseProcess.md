@@ -128,7 +128,7 @@ two places it is compared are diverging, and only one of them keeps a verdict:**
 | | who compares | verdict |
 |---|---|---|
 | **Authoring / pack time** | `.github/scripts/check-module-platform-floor.py`, MeshWeaver.Plugins' `check-module-floors.py` | **an ERROR.** A floor above the platform the bundle is built against is unsatisfiable by construction, and the lane refuses it. This is where the ordering above bites, and it is the gate that reddened the Plugins pull requests. |
-| **Runtime** | `ModulePlatformLink.Check` plus the actual load | **not this page's to state, and moving.** [Issue #3648](https://github.com/Systemorph/MeshWeaver/issues/3648) is removing the declared floor from all eight of its runtime decision points, leaving only the measured check and the load itself; while it is open, a miss still holds. Read the current answer where #3648 lands it — never off this page. |
+| **Runtime** | `ModulePlatformLink.Check` plus the actual load | **the declared floor decides nothing here** ([#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661)): the type-level link probe at landing and at boot, plus the load itself, are the only runtime gates; a declared floor the platform does not satisfy is logged and shown as an advisory, and a generation that cannot load falls back to the previous one (#3649). |
 
 So read the `HOLDING …` line above as a **measurement of what happened on 2026-09-07**, never as the
 contract: that hold is precisely what #3648 is removing, and this page deliberately does not restate

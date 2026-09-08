@@ -562,13 +562,16 @@ public static class PluginBundleEndpoints
                 {
                     // 🚨 The SHELF landing, not the adopt one (2026-08-22): publishing stocks the
                     // registry's warehouse, and a warehouse may carry modules for platforms NEWER
-                    // than itself. An above-floor upload therefore lands as HELD — bytes on the
-                    // shelf, served to consumers (whose own install path applies the floor
-                    // against THEIR platform), excluded from this instance's boot until a
-                    // platform update satisfies the floor — instead of the 409 that deadlocked
+                    // than itself. An upload whose bytes this instance cannot LINK therefore lands
+                    // as HELD — bytes on the shelf, served to consumers (whose own landing
+                    // measures them against THEIR platform), parked by this instance's boot until
+                    // a platform update carries the types — instead of the 409 that deadlocked
                     // extracted modules against the very platform update that needed them
-                    // (rc6→rc7, 2026-08-22). Real refusals (the app-closure same-identity
-                    // trap-door, malformed names) still surface as the observable's error.
+                    // (rc6→rc7, 2026-08-22). 🚨 A declared minMeshVersion above this instance's
+                    // platform no longer holds anything (#3648): it is recorded and logged as an
+                    // advisory, and bytes that link land unheld. Real refusals (the app-closure
+                    // same-identity trap-door, malformed names) still surface as the observable's
+                    // error.
                     outcome = (await landing.ShelveModule(
                         accepted.Module, accepted.Files,
                         frameworkMvid: accepted.FrameworkMvid,
@@ -595,22 +598,24 @@ public static class PluginBundleEndpoints
                     logger?.LogInformation(
                         "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
                         + "{Version}) — HELD from local activation ({Reason}); it serves from this "
-                        + "registry, and this instance loads it once its platform satisfies the floor",
+                        + "registry, and this instance loads it once its platform carries the types "
+                        + "it links against",
                         accepted.Module, plugin, accepted.Files.Count,
                         accepted.Version ?? "(unversioned)", outcome.HoldReason);
                 else
                     logger?.LogInformation(
                         "Module publish: landed '{Module}' for {Plugin} ({Files} file(s), version {Version}, "
-                        + "floor {Floor}) — it serves from this registry and loads here on the next restart",
+                        + "declared floor {Floor} — advisory) — it serves from this registry and loads "
+                        + "here on the next restart",
                         accepted.Module, plugin, accepted.Files.Count,
                         accepted.Version ?? "(unversioned)", accepted.MinMeshVersion ?? "(none)");
 
                 // 🚨 #3395 — a publish is a landing wave of one module, and a wave that does not
                 // propose its module set never activates ANYWHERE: boot loads the mesh's set, not
                 // the activation record it was derived from. Held or not, the set has to name it:
-                // a held entry is skipped by the platform-floor gate at boot exactly as before,
-                // and it must still be in the set for the boot AFTER a platform update to be able
-                // to load it (which is the whole shelf contract). Never fails the publish — an
+                // a held entry is parked by the link probe at boot exactly as before, and it must
+                // still be in the set for the boot AFTER a platform update to be able to load it
+                // (which is the whole shelf contract). Never fails the publish — an
                 // unproposable set leaves this instance on the set it is already on, the bytes
                 // still serve to consumers, and the next wave proposes again.
                 try
@@ -631,6 +636,15 @@ public static class PluginBundleEndpoints
                         plugin, accepted.Module);
                 }
 
+                // 🚨 #3650 — the bytes are on the shelf: tell every consumer NOW, so the one that
+                // installed this package reconciles it within minutes instead of at its next boot
+                // (rule R3 of Doc/Architecture/ModuleAdoptionPolicy). Detached from this response
+                // on purpose: the publisher is a CI job, and a slow or unreachable consumer must
+                // hold neither it nor the publish's own verdict — the broadcaster absorbs every
+                // per-consumer failure into a logged outcome, and a consumer the broadcast never
+                // reaches is caught by its own safety net.
+                BroadcastPublished(http, plugin, accepted, logger);
+
                 // held/holdReason let the publisher tell "shelved, will serve" apart from
                 // "activated here"; pendingRestart is honest for the held case — a restart of
                 // THIS instance would not load a held module, so nothing is pending on one.
@@ -646,6 +660,44 @@ public static class PluginBundleEndpoints
                 });
             })
             .AllowAnonymous();
+    }
+
+    /// <summary>
+    /// Fires the module-published broadcast for one accepted publish (#3650), subscribed detached
+    /// from the request: the registry names itself by its configured public URL
+    /// (<c>PluginCatalog:HomeUrl</c>) when it has one, else by the host this publish arrived on —
+    /// which is what consumers matched their <c>PluginCatalog:Registries:N:Url</c> against.
+    /// </summary>
+    private static void BroadcastPublished(
+        HttpContext http, string plugin, ModulePublish.Accepted accepted, ILogger? logger)
+    {
+        // Request services first, then the mesh's — the same two-step resolution the landing
+        // service above uses, and OPTIONAL at both steps: a host (or a test) that wires the
+        // landing service without a mesh publishes fine and simply tells nobody.
+        var rootHub = http.RequestServices.GetService<IMessageHub>();
+        var broadcaster = http.RequestServices.GetService<ModulePublishedBroadcaster>()
+                          ?? rootHub?.ServiceProvider.GetService<ModulePublishedBroadcaster>();
+        if (broadcaster is null)
+            return;
+        var configuredHome = (http.RequestServices.GetService<PluginCatalogOptions>()
+                              ?? rootHub?.ServiceProvider.GetService<PluginCatalogOptions>())?.HomeUrl;
+        var registryUrl = string.IsNullOrWhiteSpace(configuredHome)
+            ? $"{http.Request.Scheme}://{http.Request.Host}"
+            : configuredHome.Trim();
+        broadcaster.Broadcast(new ModulePublished
+            {
+                Registry = registryUrl,
+                Package = plugin,
+                Module = accepted.Module,
+                Version = accepted.Version,
+                FrameworkMvid = accepted.FrameworkMvid,
+                PublishedAt = DateTimeOffset.UtcNow,
+            })
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "Module publish for {Plugin}: the module-published broadcast faulted — consumers "
+                    + "reconcile on their safety net and at boot", plugin));
     }
 
     /// <summary>

@@ -11,7 +11,7 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para><b>Why this exists.</b> Every other link was already built: a satellite repo packs a
 /// bundle (<c>module-pack</c>), a package declares <c>content.module</c>, a consumer fetches
-/// <c>/api/plugins/bundles</c>, gates it on the platform floor and lands it into
+/// <c>/api/plugins/bundles</c>, measures it against its platform and lands it into
 /// <c>modules/</c> (restart-as-activation). But a registry serves only what IT runs
 /// (<see cref="ModuleBundleSource"/> reads its own <c>modules/</c>), and that folder is written by
 /// the platform image's publish layout. So a module whose source has LEFT the platform repo can be
@@ -20,8 +20,9 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para>Pure decisions only — no HTTP, no mesh, no disk — so the authorization and acceptance
 /// rules are pinnable in unit tests, the way <see cref="ModuleBundleSource"/>'s serve rules are.
-/// The route wires these to <c>ModuleLandingService</c>, which re-checks the floor and refuses the
-/// same-identity trap-door at placement.</para>
+/// The route wires these to <c>ModuleLandingService</c>, which measures the bytes against this
+/// platform (holding, on the shelf, what it cannot load), records the declared floor as an
+/// advisory (#3648) and refuses the same-identity trap-door at placement.</para>
 /// </summary>
 public static class ModulePublish
 {
@@ -35,7 +36,8 @@ public static class ModulePublish
     /// <summary>An accepted upload, ready for <c>ModuleLandingService.LandModule</c>.</summary>
     /// <param name="Module">Entry-assembly name without extension — the <c>modules/&lt;name&gt;/</c> folder.</param>
     /// <param name="Version">The package version these bytes were packed at, recorded on the activation entry.</param>
-    /// <param name="MinMeshVersion">The module's declared platform floor, re-checked at placement.</param>
+    /// <param name="MinMeshVersion">The module's declared platform floor, recorded at placement as
+    /// an advisory (#3648) — never a hold.</param>
     /// <param name="FrameworkMvid">
     /// The framework build the producer compiled against.
     ///

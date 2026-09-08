@@ -10,7 +10,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 An image being **newer** says nothing about whether it can **serve** what an instance already runs.
 A framework-identity change invalidates the whole assembly cache by design, and an optional
 parameter added to a record's primary constructor *replaces* the signature — so a portal can roll to
-a build that passed every CI job, has a sealed content bake, satisfies every module floor, and still
+a build that passed every CI job, has a sealed content bake, links every landed module, and still
 aborts at boot with a `MissingMethodException` because a landed module binds a method that no longer
 exists.
 

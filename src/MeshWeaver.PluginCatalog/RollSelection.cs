@@ -14,7 +14,17 @@ namespace MeshWeaver.PluginCatalog;
 /// took the newest published set, booted onto it, and only then discovered a plugin missing or
 /// regressed — at which point the readiness gate refused and the rollout stalled. Completeness was
 /// a <i>post-hoc verdict</i>. Here it is a <b>selection criterion</b>: an environment never targets
-/// a release that does not ship all of its plugins, so there is nothing left to refuse.</para>
+/// a release on which one of its modules provably cannot load, so there is nothing left to refuse.</para>
+///
+/// <para>🚨 <b>"Ships all plugins" means "no installed module is UNLOADABLE on it" since #3651</b>
+/// (maintainer rule of 2026-09-07, <c>Doc/Architecture/ModuleAdoptionPolicy</c>). The walk stops
+/// at the first release, newest first, on which no module of this environment is measured
+/// unloadable. A missing content bake is a COST the outcome reports
+/// (<see cref="RollSelectionOutcome.BootCompiles"/>: "would recompile at boot: …"), not a reason to
+/// walk past the release — holding on it is what would have kept every portal on the morning
+/// build a second day. A link check that could not be made is reported the same way and decides
+/// nothing. Only a module whose landed bytes reference a type the target does not carry declines a
+/// candidate, and "no complete release" then names that module.</para>
 ///
 /// <para><b>The quantifier is PER ENVIRONMENT.</b> "Ships all plugins" is not a property of a
 /// release — it is a question about <i>that environment's</i> plugin list. Two environments looking
@@ -22,7 +32,7 @@ namespace MeshWeaver.PluginCatalog;
 /// </para>
 ///
 /// <para>🚨 <b>The predicate is SHARED, never re-implemented.</b> Whether one release ships one
-/// environment's plugins is <see cref="ReleaseAvailability.IsUpdatable"/> — the gate #3441/#3443
+/// environment's plugins is <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> — the gate #3441/#3443
 /// built and falsified. This type contributes the <i>walk</i> and the <i>denominator discipline</i>
 /// around it, and takes the per-candidate verdict as a function so there can never be a second copy
 /// of the rule to drift from the first.</para>
@@ -47,7 +57,7 @@ namespace MeshWeaver.PluginCatalog;
 public static class RollSelection
 {
     /// <summary>
-    /// The latest candidate that ships every one of this environment's plugins, walked newest-first.
+    /// The latest candidate on which no installed module is unloadable, walked newest-first.
     /// Cold and LAZY: <paramref name="verdictOf"/> is asked about one candidate at a time and the
     /// walk stops at the first acceptance, so the common case (the head is complete) costs exactly
     /// one verdict.
@@ -56,7 +66,7 @@ public static class RollSelection
     /// able to serve.</param>
     /// <param name="verdictOf">The SHARED completeness predicate for one candidate — in production
     /// <c>ReleaseAvailabilityService.IsUpdatable</c>, which is
-    /// <see cref="ReleaseAvailability.IsUpdatable"/> plus the observation it needs. Must be total:
+    /// <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> plus the observation it needs. Must be total:
     /// every failure resolves to a verdict carrying its reason, never a fault.</param>
     /// <returns>Exactly one outcome, then completes.</returns>
     public static IObservable<RollSelectionOutcome> Select(
@@ -148,16 +158,24 @@ public static class RollSelection
             return new RollSelectionOutcome(
                 RollSelectionKind.NoCompleteRelease,
                 null, inputs.CurrentVersion, required, 0, walk.Declined,
-                $"{head}; NO published release ships all of them. "
+                $"{head}; NO published release can serve all of them. "
                 + $"{walk.Declined.Length} candidate(s) were examined and every one was declined — "
                 + $"{FirstReasons(walk.Declined)}. Staying on {Describe(inputs.CurrentVersion)}.");
 
         var kind = Position(inputs, selected);
+        var advisories = walk.Verdict?.Advisories ?? [];
+        var bootCompiles = walk.Verdict?.BootCompiles ?? [];
         var tail = $"; {satisfied} of {required} satisfied by {selected}"
                    + (walk.Declined.IsEmpty
                        ? " (the newest candidate)"
                        : $", after declining {walk.Declined.Length} newer candidate(s) — "
-                         + FirstReasons(walk.Declined));
+                         + FirstReasons(walk.Declined))
+                   // 🚨 The COST is said on the same line as the choice (#3651): a reader must
+                   // never learn from a boot log that the roll it was told about compiled content.
+                   + (bootCompiles.IsDefaultOrEmpty
+                       ? string.Empty
+                       : $"; {bootCompiles.Length} package(s) would recompile at boot: "
+                         + string.Join(", ", bootCompiles));
 
         return new RollSelectionOutcome(
             kind, selected, inputs.CurrentVersion, required, satisfied, walk.Declined,
@@ -167,12 +185,16 @@ public static class RollSelection
                     $"{head}{tail}. That is what this environment already runs — no update.",
                 RollSelectionKind.BehindCurrent =>
                     $"{head}{tail}. 🚨 That is BEHIND {Describe(inputs.CurrentVersion)}, which this "
-                    + "environment is running: nothing published at or above the running version "
-                    + "ships all its plugins. Rolling BACKWARDS is a separate decision and is never "
-                    + "taken here — this is reported, not applied.",
+                    + "environment is running: on every release at or above the running version an "
+                    + "installed module is unloadable. Rolling BACKWARDS is a separate decision and "
+                    + "is never taken here — this is reported, not applied.",
                 _ =>
                     $"{head}{tail}. Different from {Describe(inputs.CurrentVersion)} ⇒ update.",
-            });
+            })
+        {
+            Advisories = advisories,
+            BootCompiles = bootCompiles,
+        };
     }
 
     /// <summary>
@@ -306,8 +328,8 @@ public sealed record DeclinedRelease(
 /// identically.</summary>
 public enum RollSelectionKind
 {
-    /// <summary>A release ships all of this environment's plugins and it is not what the
-    /// environment runs ⇒ update to it.</summary>
+    /// <summary>A release on which none of this environment's modules is unloadable, and it is
+    /// not what the environment runs ⇒ update to it.</summary>
     Update,
 
     /// <summary>The newest release that ships all plugins is the one already running ⇒ nothing to
@@ -320,8 +342,9 @@ public enum RollSelectionKind
     /// reversible), and taking it silently would be worse than the state it fixes.</summary>
     BehindCurrent,
 
-    /// <summary>No candidate ships all plugins. Stay put, and name the plugin and the environment —
-    /// a plugin no published release can satisfy is an alert, not a quiet hold.</summary>
+    /// <summary>On every candidate an installed module is unloadable (or the sealed set is torn).
+    /// Stay put, and name the module and the environment — a module no published release can
+    /// serve is an alert, not a quiet hold.</summary>
     NoCompleteRelease,
 
     /// <summary>🚨 The environment's plugin list is EMPTY, so completeness is vacuous. Never a
@@ -371,6 +394,19 @@ public sealed record RollSelectionOutcome(
     ImmutableArray<DeclinedRelease> Declined,
     string Summary)
 {
+    /// <summary>
+    /// What the selected release's verdict SAID without deciding on it (#3651,
+    /// <see cref="UpdatabilityVerdict.Advisories"/>): the boot-compile cost, a link check that
+    /// could not be made, a declared floor the target does not rank above. Empty when nothing was
+    /// selected or there was nothing to say. Init-only: the positional constructor is binary API.
+    /// </summary>
+    public ImmutableArray<string> Advisories { get; init; } = [];
+
+    /// <summary>The packages the selected release would Roslyn-compile at boot (#3651,
+    /// <see cref="UpdatabilityVerdict.BootCompiles"/>), by name; empty when nothing was selected or
+    /// every content-bearing package has a sealed bake for it.</summary>
+    public ImmutableArray<string> BootCompiles { get; init; } = [];
+
     /// <summary>Whether this outcome asks for a roll. <b>Only</b>
     /// <see cref="RollSelectionKind.Update"/> does — every other member is a state to report, and
     /// there is deliberately no branch that turns "could not tell" into a roll.</summary>

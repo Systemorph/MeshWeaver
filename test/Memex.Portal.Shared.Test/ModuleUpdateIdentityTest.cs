@@ -43,6 +43,10 @@ public class ModuleUpdateIdentityTest
     /// <summary>The production gate's shape, bound to a fixed running platform version.</summary>
     private static string? Gate(string? floor) => ModulePlatformFloor.DeclineReason(floor, Running);
 
+    /// <summary>A third build of the same source — the one a rebuild for THIS platform produces
+    /// after the newest landed generation turned out not to load.</summary>
+    private const string RebuiltFramework = "s0c0ffee0c0ffee0c0ffee0c0ffee0c0";
+
     private static ModuleActivationEntry Landed(
         string? version, string? frameworkMvid, bool enabled = true) => new()
         {
@@ -51,6 +55,16 @@ public class ModuleUpdateIdentityTest
             Version = version,
             Enabled = enabled,
         };
+
+    /// <summary>
+    /// An entry in FALLBACK (#3649/#3650): the newest landed generation — built against
+    /// <paramref name="unloadable"/> — could not be loaded at the last boot and the previous one
+    /// (built against <paramref name="running"/>) is what runs. What #3649's boot writes; the
+    /// decision under test only reads it.
+    /// </summary>
+    private static ModuleActivationEntry InFallback(
+        string version, string running, string unloadable, bool enabled = true) =>
+        Landed(version, running, enabled) with { UnloadableFrameworkMvid = unloadable };
 
     private static bool BytesPresent(ModuleActivationEntry _) => true;
 
@@ -243,6 +257,121 @@ public class ModuleUpdateIdentityTest
 
         Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
         Assert.Contains("never landed here", verdict.Reason);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  The fallback is re-examined on every reconcile (#3650, policy rule R3)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 <b>The acceptance criterion of #3650's first gap.</b> The newest landed generation of
+    /// 1.1.0 (built against <see cref="NewFramework"/>) could not be loaded and the previous one
+    /// runs; the registry now serves 1.1.0 built against a THIRD identity. That is a build for
+    /// this platform appearing under an unchanged version — and it lands NOW, not at whatever boot
+    /// happens to follow a publication. The reason names the build that would not load and the
+    /// one that replaces it, so the next reader of the log knows why a same-version landing ran.
+    /// </summary>
+    [Fact]
+    public void InFallback_SameVersion_ADifferentBuildThanTheUnloadableOne_Lands()
+    {
+        var verdict = Decide("1.1.0", InFallback("1.1.0", OldFramework, NewFramework), RebuiltFramework);
+
+        Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
+        Assert.Contains(NewFramework, verdict.Reason);
+        Assert.Contains(RebuiltFramework, verdict.Reason);
+        Assert.Contains("could not be loaded", verdict.Reason);
+        Assert.Contains("appeared", verdict.Reason);
+    }
+
+    /// <summary>
+    /// The registry still serves the build that would not load. Landing it again would only
+    /// re-park it at the next boot, so nothing travels — and the verdict says the deployment is
+    /// in fallback rather than "already landed", which is the sentence that hid every identity
+    /// defect on this lane. Distinct action, so a surface can render the state.
+    /// </summary>
+    [Fact]
+    public void InFallback_SameVersion_StillTheUnloadableBuild_SkipsAndSaysSo()
+    {
+        var verdict = Decide("1.1.0", InFallback("1.1.0", OldFramework, NewFramework), NewFramework);
+
+        Assert.Equal(ModuleUpdateAction.SkipUnloadable, verdict.Action);
+        Assert.Contains(NewFramework, verdict.Reason);
+        Assert.Contains("still serves that same build", verdict.Reason);
+        Assert.DoesNotContain("already landed", verdict.Reason);
+    }
+
+    /// <summary>
+    /// 🚨 The rule is "different from the UNLOADABLE generation's", literally — the identity of the
+    /// generation that RUNS is not consulted. The registry going back to serving the previous
+    /// build is a build that loads, and landing it costs one download for a module that then
+    /// boots off its newest generation again instead of its fallback.
+    /// </summary>
+    [Fact]
+    public void InFallback_SameVersion_TheRunningGenerationsOwnBuild_StillLands()
+    {
+        var verdict = Decide("1.1.0", InFallback("1.1.0", OldFramework, NewFramework), OldFramework);
+
+        Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
+    }
+
+    /// <summary>The same asymmetry as outside fallback: an unstated served identity is no
+    /// evidence of a new build, so nothing lands — but the verdict still names the fallback,
+    /// never "up to date".</summary>
+    [Fact]
+    public void InFallback_SameVersion_ServedIdentityUnknown_SkipsAsUnloadable()
+    {
+        var verdict = Decide(
+            "1.1.0", InFallback("1.1.0", OldFramework, NewFramework), bundleFrameworkMvid: null);
+
+        Assert.Equal(ModuleUpdateAction.SkipUnloadable, verdict.Action);
+        Assert.Contains("states no framework identity", verdict.Reason);
+        Assert.Contains("could not be loaded", verdict.Reason);
+    }
+
+    /// <summary>A blank marker is no marker: the ordinary identity rule decides, exactly as for
+    /// an entry written before the field existed.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void ABlankFallbackMarker_ReadsAsNotInFallback(string? marker)
+    {
+        var entry = Landed("1.1.0", OldFramework) with { UnloadableFrameworkMvid = marker };
+
+        Assert.Equal(ModuleUpdateAction.SkipUpToDate, Decide("1.1.0", entry, OldFramework).Action);
+        Assert.Equal(ModuleUpdateAction.Land, Decide("1.1.0", entry, NewFramework).Action);
+    }
+
+    /// <summary>Ordering: absent bytes are still the more actionable diagnosis, fallback or not.</summary>
+    [Fact]
+    public void InFallback_AbsentBytes_AreStillReportedAsAbsent()
+    {
+        var verdict = Decide(
+            "1.1.0", InFallback("1.1.0", OldFramework, NewFramework), RebuiltFramework, BytesGone);
+
+        Assert.Equal(ModuleUpdateAction.Land, verdict.Action);
+        Assert.Contains("ABSENT", verdict.Reason);
+    }
+
+    /// <summary>An operator's uninstall still wins over everything, fallback included.</summary>
+    [Fact]
+    public void InFallback_AnUninstalledModule_StaysUninstalled()
+    {
+        var verdict = Decide(
+            "1.1.0", InFallback("1.1.0", OldFramework, NewFramework, enabled: false), RebuiltFramework);
+
+        Assert.Equal(ModuleUpdateAction.SkipUninstalled, verdict.Action);
+    }
+
+    /// <summary>A newer version lands as before; the fallback rule lives inside the same-version
+    /// branch and never widens or narrows the version comparison.</summary>
+    [Fact]
+    public void InFallback_ANewerVersion_LandsAsBefore_AndAnOlderOneIsNeverRolledBack()
+    {
+        var entry = InFallback("1.1.0", OldFramework, NewFramework);
+
+        Assert.Equal(ModuleUpdateAction.Land, Decide("1.2.0", entry, NewFramework).Action);
+        Assert.Equal(ModuleUpdateAction.SkipOlder, Decide("1.0.0", entry, RebuiltFramework).Action);
     }
 
     /// <summary>
