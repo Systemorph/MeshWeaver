@@ -56,8 +56,31 @@ that was answered; and it is below the 8 s disposal stall budget, so a stall ver
 what produced the answer. The bad one, unstated: it also raced **the owner's entire teardown**,
 which the paragraphs above say is unbounded.
 
-It flaked in MeshWeaver.Plugins CI — run 34195323935, shard 2, 2026-09-08. The evidence is
-entirely **negative**, and that is the tell:
+### The rate, and why the asymmetry is the finding
+
+| repo / suite | failures | executions examined | window | rate |
+|---|---|---|---|---|
+| MeshWeaver.Plugins, `src/MeshWeaver.Hosting.Monolith.Test` slice #2 | **5** | **138** | 2026-09-07T15:19Z → 2026-09-08T07:12Z | **3.6% — 1 in 28** |
+| MeshWeaver (core), `test/MeshWeaver.Graph.Test` twin | **0** | **796** runs | 2026-09-05T15:24Z → 2026-09-08T07:23Z | 0% |
+
+Same test body — they are twins, held in step by Plugins' `TeardownTwinParityTest` — and the same
+framework. What differs is the size of the mesh being torn down, and therefore how long the owner's
+teardown takes. A flat 6 s is comfortable in core's fixture and marginal in the portal's, which is
+exactly what "asserting a bound the framework does not provide" looks like from the outside: it
+tracks mesh size, not correctness.
+
+Two measurement notes worth keeping, because both would have understated it:
+
+* **Filter on JOB conclusion, not run conclusion.** Two of the five failures sit in runs whose *run*
+  conclusion is `cancelled` — the test failed, then a newer push cancelled the run. Filtering on run
+  conclusion finds 3 of 5.
+* **One of the five was on `main`** (run `34176831015`, 2026-09-08T01:45Z). This reddens the trunk,
+  not only pull requests.
+
+### The failing run in detail
+
+Run 34195323935, `Portal hosts (shard 2)`, 2026-09-08. The evidence is entirely **negative**, and
+that is the tell:
 
 | signal | present? | what its absence rules out |
 |---|---|---|
