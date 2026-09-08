@@ -136,6 +136,46 @@ public static class SetupPage
             $"<input id=reg name=\"identity.registry\" type=text value=\"{Escape(submitted?.RegistryUrl ?? defaultRegistry)}\" spellcheck=false>");
         html.Append($"<p class=help>{Escape(strings.RegistryHelp)}</p>");
         html.Append("</div>");
+        html.Append("</section>");
+
+        // ── Ownership ───────────────────────────────────────────────────────────────────────
+        // Collected BEFORE the register call: "collect the ownership, then get the id and
+        // credentials" is the order the requirement states, and an id is claimed permanently.
+        html.Append($"<section><h2>{Escape(strings.OwnershipHeading)}</h2>");
+        html.Append($"<p class=help>{Escape(strings.OwnershipHelp)}</p>");
+        html.Append("<div class=field>");
+        html.Append($"<label for=company>{Escape(strings.CompanyLabel)}</label>");
+        html.Append(
+            $"<input id=company name=\"identity.company\" type=text required "
+            + $"value=\"{Escape(submitted?.Company)}\">");
+        html.Append("</div><div class=field>");
+        html.Append($"<label for=ownerName>{Escape(strings.OwnerNameLabel)}</label>");
+        html.Append(
+            $"<input id=ownerName name=\"identity.ownerName\" type=text required "
+            + $"value=\"{Escape(submitted?.OwnerName)}\" autocomplete=name>");
+        html.Append("</div><div class=field>");
+        html.Append($"<label for=ownerEmail>{Escape(strings.OwnerEmailLabel)}</label>");
+        html.Append(
+            $"<input id=ownerEmail name=\"identity.ownerEmail\" type=email required "
+            + $"value=\"{Escape(submitted?.OwnerEmail)}\" autocomplete=email>");
+        html.Append($"<p class=help>{Escape(strings.OwnerEmailHelp)}</p>");
+        html.Append("</div>");
+
+        // The consent tick is deliberately NOT carried back on a re-render: an acceptance the
+        // person did not make on THIS submission is not an acceptance.
+        html.Append("<label class=choice>");
+        html.Append("<input type=checkbox name=\"identity.consent\" value=on required>");
+        html.Append($"<span>{Escape(strings.ConsentLabel)} ");
+        html.Append(
+            $"<a href=\"{Escape(SetupConsentDocuments.PrivacyStatementUrl)}\" target=_blank rel=noopener>"
+            + $"{Escape(strings.PrivacyStatement)}</a> · ");
+        html.Append(
+            $"<a href=\"{Escape(SetupConsentDocuments.TermsUrl)}\" target=_blank rel=noopener>"
+            + $"{Escape(strings.PlatformTerms)}</a></span></label>");
+        html.Append($"<p class=help>{Escape(strings.ConsentHelp)}</p>");
+        html.Append("</section>");
+
+        html.Append($"<section><h2>{Escape(strings.RegistryHeading)}</h2>");
         html.Append("<div class=field>");
         html.Append($"<label for=bkey>{Escape(strings.BootstrapKeyLabel)}</label>");
         html.Append($"<input id=bkey name=\"identity.key\" type=password value=\"\" spellcheck=false>");

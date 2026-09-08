@@ -56,7 +56,21 @@ public sealed record SetupAnswers
 /// <param name="RegistryUrl">The registry to register with.</param>
 /// <param name="BootstrapKey">A registration key, or blank for an open (free-plan) registration.</param>
 public sealed record IdentityAnswers(
-    string? Name, string? Id, string? RegistryUrl, string? BootstrapKey);
+    string? Name, string? Id, string? RegistryUrl, string? BootstrapKey)
+{
+    /// <summary>The organisation this instance belongs to. Required by the wizard.</summary>
+    public string? Company { get; init; }
+
+    /// <summary>The name of the person setting it up. Required by the wizard.</summary>
+    public string? OwnerName { get; init; }
+
+    /// <summary>Their email. Required by the wizard.</summary>
+    public string? OwnerEmail { get; init; }
+
+    /// <summary>Whether they accepted the privacy statement and the platform terms. Required — the
+    /// wizard registers by calling the endpoint directly, which does not enforce consent itself.</summary>
+    public bool ConsentAccepted { get; init; }
+}
 
 /// <summary>One external sign-in provider's answers.</summary>
 /// <param name="Name">The scheme name.</param>

@@ -138,7 +138,13 @@ public static class SetupEndpoints
         var strings = StringsFor(ctx);
         var answers = new IdentityAnswers(
             Blank(form["identity.name"]), Blank(form["identity.id"]),
-            Blank(form["identity.registry"]), Blank(form["identity.key"]));
+            Blank(form["identity.registry"]), Blank(form["identity.key"]))
+        {
+            Company = Blank(form["identity.company"]),
+            OwnerName = Blank(form["identity.ownerName"]),
+            OwnerEmail = Blank(form["identity.ownerEmail"]),
+            ConsentAccepted = form.ContainsKey("identity.consent"),
+        };
 
         if (!token.Matches(form["token"]))
             return Html(SetupPage.RenderIdentity(
@@ -148,6 +154,18 @@ public static class SetupEndpoints
         var problems = ImmutableList.CreateBuilder<string>();
         if (string.IsNullOrWhiteSpace(answers.Name))
             problems.Add(strings.ProblemNoInstanceName);
+        // 🚨 Ownership and consent are checked BEFORE the registry call, like the name: an id
+        // claimed for a submission that was going to be refused anyway is an id burnt for nothing,
+        // and ids are never re-issued. "Collect the ownership, THEN get the id and credentials" is
+        // the order the requirement states, and this is where that order is enforced.
+        if (string.IsNullOrWhiteSpace(answers.Company))
+            problems.Add(strings.ProblemNoCompany);
+        if (string.IsNullOrWhiteSpace(answers.OwnerName))
+            problems.Add(strings.ProblemNoOwnerName);
+        if (!LooksLikeAnEmail(answers.OwnerEmail))
+            problems.Add(strings.ProblemNoOwnerEmail);
+        if (!answers.ConsentAccepted)
+            problems.Add(strings.ProblemNoConsent);
         // The id is minted by us and rendered read-only, so a malformed one means the form was
         // hand-crafted. Refuse rather than claim something the registry's alphabet rejects.
         var id = string.IsNullOrWhiteSpace(answers.Id) ? MintInstanceId() : answers.Id.Trim();
@@ -168,13 +186,28 @@ public static class SetupEndpoints
         var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(SetupEndpoints));
 
+        var ownership = new InstanceOwnershipSelection
+        {
+            Company = answers.Company!.Trim(),
+            OwnerName = answers.OwnerName!.Trim(),
+            OwnerEmail = answers.OwnerEmail!.Trim(),
+        };
+        // The documents the operator was shown, by hash — "someone ticked a box" is not evidence.
+        var consent = new InstanceConsentSelection
+        {
+            AcceptedAt = DateTimeOffset.UtcNow,
+            PrivacyStatementHash = SetupConsentDocuments.PrivacyStatementHash,
+            TermsHash = SetupConsentDocuments.TermsHash,
+        };
+
         InstanceRegistrationPayloads.Response registration;
         try
         {
             var client = ctx.RequestServices.GetRequiredService<SetupRegistryClient>();
             registration = await client.RegisterAsync(
                 registry, id, answers.Name!.Trim(), answers.BootstrapKey,
-                homeUrl: $"{ctx.Request.Scheme}://{ctx.Request.Host}", ctx.RequestAborted);
+                homeUrl: $"{ctx.Request.Scheme}://{ctx.Request.Host}",
+                ownership: ownership, consent: consent, cancellationToken: ctx.RequestAborted);
         }
         catch (SetupRegistryException ex)
         {
@@ -218,6 +251,8 @@ public static class SetupEndpoints
                 RegistryUrl = registry,
                 InstanceKey = protectedKey,
                 Plan = registration.Plan,
+                Ownership = ownership,
+                Consent = consent,
             },
         };
         manifest.Write(root);
@@ -226,6 +261,23 @@ public static class SetupEndpoints
             id, manifest.Identity!.Name, registry, registration.Plan ?? "(unstated)");
 
         return Results.Redirect($"{Path}?token={Uri.EscapeDataString(form["token"].ToString())}");
+    }
+
+    /// <summary>
+    /// Whether a value is plausibly an email address.
+    ///
+    /// <para>Deliberately shallow — one <c>@</c> with something either side and a dot in the domain.
+    /// The registry is what actually reaches the owner, so a stricter local rule would only refuse
+    /// addresses that work; this catches the typo and the empty box, which is what it is for.</para>
+    /// </summary>
+    private static bool LooksLikeAnEmail(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var at = value.Trim().IndexOf('@');
+        if (at <= 0 || at == value.Trim().Length - 1) return false;
+        var domain = value.Trim()[(at + 1)..];
+        return domain.Contains('.') && !domain.StartsWith('.') && !domain.EndsWith('.')
+            && !value.Trim()[..at].Contains('@') && !domain.Contains('@');
     }
 
     /// <summary>The identity this instance has already registered, or null.</summary>

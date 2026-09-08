@@ -42,6 +42,15 @@ public static class InstanceManifestProjection
     /// know who this instance is and which key it fetches with.</summary>
     public const string PluginCatalogSection = "PluginCatalog";
 
+    /// <summary>The section carrying the container-registry credential derived from the instance
+    /// key.</summary>
+    public const string ContainerRegistrySection = "ContainerRegistry";
+
+    /// <summary>
+    /// The fleet's OCI registry, which authenticates an instance as Basic <c>instance:&lt;key&gt;</c>.
+    /// </summary>
+    public const string ContainerRegistryHost = "cr.meshweaver.cloud";
+
     /// <summary>
     /// The tenant value a blank Microsoft tenant must become.
     ///
@@ -103,6 +112,14 @@ public static class InstanceManifestProjection
         entries[$"{PluginCatalogSection}:RegistryUrl"] = identity.RegistryUrl;
         entries[$"{PluginCatalogSection}:InstanceId"] = identity.Id;
         entries[$"{PluginCatalogSection}:RegistryToken"] = key;
+
+        // 🚨 The SAME key, in the shape a container runtime reads. The fleet's OCI registry
+        // (cr.meshweaver.cloud) authenticates an instance as Basic `instance:<key>` — so an install
+        // that must pull images and, in time, plugin bundles from it needs a docker config, and the
+        // only credential it has is this one. Deriving it HERE rather than in the CLI is what keeps
+        // it one credential written once: memex-local, a self-hosted install and the portal itself
+        // all read the same manifest value, and nothing has to be kept in step by hand.
+        entries[$"{ContainerRegistrySection}:DockerConfigJson"] = DockerConfigJson(key);
     }
 
     private static void ProjectStorage(
@@ -201,6 +218,26 @@ public static class InstanceManifestProjection
             entries[$"{EmbeddingSection}:Dimensions"] = dimensions.ToString();
         if (Reveal(embeddings.ApiKey, protector) is { } embedKey)
             entries[$"{EmbeddingSection}:ApiKey"] = embedKey;
+    }
+
+    /// <summary>
+    /// A docker <c>config.json</c> carrying this instance's key for the fleet registry.
+    ///
+    /// <para>The username is the literal <c>instance</c> and the password is the instance key — the
+    /// registry's docker_auth resolves the key to the instance's grants, so the id does not need to
+    /// be in the credential. Base64 of <c>user:password</c> is the auth field's defined shape; it is
+    /// an ENCODING, not encryption, which is exactly why this value only ever appears in
+    /// configuration derived from an already-decrypted key and never in the manifest on disk.</para>
+    /// </summary>
+    /// <param name="instanceKey">The decrypted instance key.</param>
+    private static string DockerConfigJson(string instanceKey)
+    {
+        var auth = Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes($"instance:{instanceKey}"));
+        // Hand-built rather than serialized: the shape is two nested objects and a string, and a
+        // serializer here would pull a dependency into a contract assembly for no benefit. The only
+        // interpolated value is base64, which cannot contain a quote or a backslash.
+        return $"{{\"auths\":{{\"{ContainerRegistryHost}\":{{\"auth\":\"{auth}\"}}}}}}";
     }
 
     /// <summary>
