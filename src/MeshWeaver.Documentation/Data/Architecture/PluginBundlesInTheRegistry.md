@@ -49,6 +49,13 @@ on the tag); a partially pushed publication is invisible, because the tag moves 
 Layers are content-addressed, so two identities that share a bundle's bytes share the blob, and a
 `.zip` that did not change between publications is uploaded once.
 
+🚨 **Content addressing does not merge two bakes of one commit.** A compile is not
+byte-reproducible: two publications of the same source commit at the same identity differ in
+most payload files (measured: 40 of 45), so they are two complete indexes with two digests. The
+tag records which one won; both stay resident by digest; a reader holding a digest finishes with
+the set it started with, and a reader of the tag gets a complete set either way. Nothing may
+assume "same commit ⇒ same digest".
+
 ## Who pulls what, and with which credential
 
 | consumer | pulls | credential | how |
