@@ -64,7 +64,22 @@ the rest read `system-security`. Every one is the import's to retire; none is au
 🚨 **But fixing the rule cannot retire what is already there**, and that is the whole reason this
 page exists. The 10:15Z run stamped `import-0ff4e895224bfde0` **Succeeded**. Every later trigger
 reads that marker and answers `Skipped` before the prune phase — where `IsHumanEdit` lives — is ever
-reached. A portal rolled onto the corrected predicate would have skipped those three files for ever.
+reached, and the webhook does not even get that far: `GitHubWebhookProcessor.SkipReason` answers
+*"already at this commit"* because the `Skipped` outcome had advanced the pointer.
+
+**One route does reach the importer, and its coverage is exactly the measure of the gap.**
+`SealedPublicationSyncReconciler` (core#3727) re-imports with the content-skip bypassed
+(`ImportConflictPolicy.Reconcile`) — but only when all three of: the repository has a publication
+**sealed for this instance's framework identity**, the config sits **at** that sealed commit, and at
+least one NodeType under the Space was **declined on its source fingerprint** in that sweep. That is
+the *bundle-refusal* case, which `Crm` is; it is a symptom-driven trigger, not the mechanism.
+
+**`Edu/Course` is the case it does not reach, and it has had 53 days of boots to prove it.** Deleted
+upstream on 2026-07-17, its partition reads `lastSyncOutcome: Skipped`, nothing about it declines a
+bundle, and it is still Active — recompiled every boot at `compilationStatus: Error` with
+`Matched Code nodes (0)`. No seal fires for it, so nothing reaches the prune, so the ownership test
+never runs. **A partition converges only when something makes the importer read it, and until now
+the only things that did were a new repository commit or a declined bundle.**
 
 ### 2. The marker — the reason the residue is permanent
 
