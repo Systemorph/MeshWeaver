@@ -42,13 +42,18 @@ public static class UpdateChannelPattern
     /// pattern admits NOTHING — the caller decides what "no pattern" means (for the update policy:
     /// clean releases only), never this matcher, so an absent pattern can never widen a channel.
     /// </summary>
-    public static bool Matches(string? pattern, string tag)
-    {
-        var normalized = Normalize(pattern);
-        if (normalized is null || string.IsNullOrEmpty(tag))
-            return false;
-        return Regex.IsMatch(tag, ToRegex(normalized), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    }
+    public static bool Matches(string? pattern, string tag) =>
+        Compile(pattern) is { } regex && !string.IsNullOrEmpty(tag) && regex.IsMatch(tag);
+
+    /// <summary>
+    /// The matcher for <paramref name="pattern"/>, compiled ONCE — a listing walks hundreds of tags
+    /// (memex-cloud measured 1268), so the caller filtering a listing holds this and tests each tag
+    /// against it rather than re-translating the glob per tag. Null for no pattern.
+    /// </summary>
+    public static Regex? Compile(string? pattern) =>
+        Normalize(pattern) is { } normalized
+            ? new Regex(ToRegex(normalized), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            : null;
 
     /// <summary>The anchored regular expression <paramref name="glob"/> denotes — exposed so a
     /// test can pin the translation rather than infer it from matches.</summary>

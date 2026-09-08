@@ -205,8 +205,9 @@ public static class VersionSelect
         if (policy == UpdatePolicyKind.Stable)
             parsed = parsed.Where(x => !x.ver.IsPrerelease);
 
-        if (UpdateChannelPattern.Normalize(pattern) is { } glob)
-            parsed = parsed.Where(x => UpdateChannelPattern.Matches(glob, x.tag));
+        // Compiled once per listing, not once per tag (Copilot review on #3723).
+        if (UpdateChannelPattern.Compile(pattern) is { } glob)
+            parsed = parsed.Where(x => glob.IsMatch(x.tag));
 
         // CI-green gate: the verified channel (continuous delivery, which builds+pushes ONLY when the
         // test workflow is green) never carries the `edge` pre-release label. An unverified "edge"
