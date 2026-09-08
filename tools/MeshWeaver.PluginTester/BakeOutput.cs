@@ -78,6 +78,31 @@ public static class BakeOutput
     public const string FrameworkMvidFile = "framework-mvid.txt";
 
     /// <summary>
+    /// 🚨 The file beside the bundles carrying the PLATFORM's type surface (#3651) —
+    /// <see cref="ModulePlatformSurface.PublishedFileName"/>, written by every bake beside
+    /// <see cref="FrameworkMvidFile"/> and uploaded beside <c>_complete</c> by
+    /// <c>publish-bake-bundles.sh</c>. The bake runs INSIDE the platform image, so it is the one
+    /// process that can say what that platform carries; the release gate reads it back to link a
+    /// landed module against a platform that is not running anywhere it can reach. Same shape as
+    /// the boot probe's surface, so the gate's verdict and boot's verdict cannot differ.
+    /// </summary>
+    public const string PlatformSurfaceFile = ModulePlatformSurface.PublishedFileName;
+
+    /// <summary>
+    /// Writes <see cref="PlatformSurfaceFile"/> into <paramref name="outputDirectory"/> from
+    /// <paramref name="surface"/>, keyed to <paramref name="frameworkIdentity"/>. One writer for
+    /// both bake verbs, so the document's shape has one producer.
+    /// </summary>
+    public static void WritePlatformSurface(
+        string outputDirectory, string frameworkIdentity, ModulePlatformSurface surface)
+    {
+        ArgumentNullException.ThrowIfNull(surface);
+        Directory.CreateDirectory(outputDirectory);
+        File.WriteAllText(
+            Path.Combine(outputDirectory, PlatformSurfaceFile), surface.ToJson(frameworkIdentity));
+    }
+
+    /// <summary>
     /// Persists the run's compiled assemblies into <see cref="GateOptions.BakeOutputDirectory"/>
     /// (no-op when unset or when the run died before producing a verdict), then emits the report
     /// unchanged. Cold; a persist fault propagates so the caller's Catch turns it into a
@@ -147,9 +172,15 @@ public static class BakeOutput
             {
                 Directory.CreateDirectory(outputDirectory);
                 File.WriteAllText(Path.Combine(outputDirectory, FrameworkMvidFile), frameworkMvid);
+                // 🚨 The gate's process IS the platform host (--app verifies it), so the surface
+                // the portal's boot probe would measure is this process's own (#3651).
+                WritePlatformSurface(
+                    outputDirectory, frameworkMvid,
+                    ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory));
                 options.Output.WriteLine(
                     $"bake: framework={frameworkMvid} source={sourceSha} "
-                    + $"packages={counts.Count(c => c > 0)} assemblies={counts.Sum()} → {outputDirectory}");
+                    + $"packages={counts.Count(c => c > 0)} assemblies={counts.Sum()} "
+                    + $"surface={PlatformSurfaceFile} → {outputDirectory}");
                 return report;
             }));
     }

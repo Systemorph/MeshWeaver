@@ -97,8 +97,13 @@ SHOW_QUERY = "[[metadata.digest || '-', metadata.publication || '-']]"
 
 BUNDLES = ["Chess.zip", "Edu.zip", "Store.zip"]
 MODULES = ["MeshWeaver.AI.module.nupkg", "MeshWeaver.Maps.module.nupkg"]
-# bundles + modules + modules/_index + source-commit.txt + architecture.txt + repository.txt
-EXPECTED_FILES = len(BUNDLES) + len(MODULES) + 4
+# The platform surface the bake writes beside framework-mvid.txt (MeshWeaver#3651) — published
+# beside _complete like the other markers, and OPTIONAL: a bake taken with an image that predates
+# it publishes none, with a warning, and the gate reports the link check as undetermined.
+SURFACE = "platform-surface.json"
+# bundles + modules + modules/_index + source-commit.txt + platform-surface.json + architecture.txt
+# + repository.txt
+EXPECTED_FILES = len(BUNDLES) + len(MODULES) + 5
 
 
 # ────────────────────────────── the stub `az` ──────────────────────────────
@@ -288,7 +293,7 @@ die("unmodelled file action %r" % action)
 class Bake:
     """One producer's bake directory — every byte in it names the bake that made it."""
 
-    def __init__(self, root: Path, name: str, source_sha: str):
+    def __init__(self, root: Path, name: str, source_sha: str, surface: bool = True):
         self.name = name
         self.source_sha = source_sha
         self.dir = root / f"bake-{name}"
@@ -298,6 +303,11 @@ class Bake:
             (self.dir / b).write_text(f"{b} produced by bake {name} at {source_sha}\n")
         for m in MODULES:
             (self.dir / "modules" / m).write_text(f"{m} produced by bake {name} at {source_sha}\n")
+        if surface:
+            # The real document is JSON; the harness reads bytes, not shape, so the fixture line
+            # names its producer like every other file — a mix is then a fact about the shelf.
+            (self.dir / SURFACE).write_text(
+                f"{SURFACE} produced by bake {name} at {source_sha}\n")
 
 
 class Shelf:
@@ -482,6 +492,48 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
     check("the same content is skipped, not republished",
           r.returncode == 0 and s.sealed() and "already published; skipping" in r.stdout,
           f"rc={r.returncode}, {denominator(s)}")
+
+    # ── THE PLATFORM SURFACE rides the publication, and its absence is loud, not fatal. #3651 ──
+    #
+    # The release gate links a landed module against platform-surface.json to answer "would it load
+    # on the target"; a bake from an image that predates #3651 writes none. The script must publish
+    # the file when the bake carries it (verified like every other file), and must still SEAL when
+    # it does not — a satellite on an older tester pin must not lose its publication over a check
+    # its consumer already reports as undetermined. Both arms are asserted so neither can rot into
+    # "always skipped" or "always required".
+    print("\nthe platform surface is published when the bake carries it, and its absence warns:")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1801")
+    s = h.shelf()
+    if expect_defect:
+        check("PRE-FIX: the surface is not published at all",
+              SURFACE not in s.files(), denominator(s))
+    else:
+        check("a bake carrying the surface publishes it beside _complete",
+              r.returncode == 0 and s.sealed() and SURFACE in s.files()
+              and s.files()[SURFACE].startswith(f"{SURFACE} produced by bake core-cd"),
+              denominator(s))
+        check("the surface is verified with the rest of the publication",
+              f"{EXPECTED_FILES}/{EXPECTED_FILES} file(s) hold this run's bytes" in r.stdout,
+              "it is in the manifest, so it is read back before the seal")
+    h.reset()
+    legacy = Bake(work, "legacy-image", "dddddddddddddddddddddddddddddddddddddddd", surface=False)
+    r = h.publish(legacy, "Systemorph/MeshWeaver.Plugins", "1802")
+    s = h.shelf()
+    if expect_defect:
+        check("PRE-FIX: a bake without a surface seals identically",
+              r.returncode == 0 and s.sealed(), denominator(s))
+    else:
+        check("a bake WITHOUT a surface still seals — one file fewer, never a refusal",
+              r.returncode == 0 and s.sealed() and SURFACE not in s.files()
+              and len(s.files()) == EXPECTED_FILES - 1,
+              denominator(s))
+        check("…and says so, naming what the gate will not be able to measure",
+              "::warning::" in r.stdout and SURFACE in r.stdout and "MeshWeaver#3651" in r.stdout,
+              "the absence is loud, not silent")
+        check("the verification denominator shrinks with it",
+              f"{EXPECTED_FILES - 1}/{EXPECTED_FILES - 1} file(s) hold this run's bytes" in r.stdout,
+              "expected/verified both printed for the smaller publication")
 
     # ── ATTRIBUTION: repository.txt records the CONTENT repository, not the LANE. #3583 ────────
     #
@@ -697,7 +749,7 @@ def main() -> int:
 
     print(f"publish-bake overlap harness — executing {args.script}")
     print(f"  identity {IDENTITY}, source '{SOURCE}', {EXPECTED_FILES} file(s) per publication "
-          f"({len(BUNDLES)} bundle(s), {len(MODULES)} module(s), 4 marker/index file(s))")
+          f"({len(BUNDLES)} bundle(s), {len(MODULES)} module(s), 5 marker/index/surface file(s))")
     with tempfile.TemporaryDirectory(prefix="publish-bake-overlap-") as tmp:
         run_cases(args.script, Path(tmp), args.expect_defect)
 
