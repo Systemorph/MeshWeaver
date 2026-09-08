@@ -252,13 +252,41 @@ asymmetry, the seam and the deterministic reproduction are in
 
 ### What a hub still discards, and why that is an Error too
 
-Two things a disposing hub cannot carry across: deliveries **deferred** behind an initialization
-gate that never opened, and turns still **queued** when `messageService.Dispose()` stops the pump.
-Both were accepted; neither ran. The first is answered `ShuttingDown` (transient, so the sender
-retries against the fresh activation — the #2176 hang was the silent version); both are logged at
-**Error** (`[DISPOSE-DISCARD]`, events 7301/7302) with the message type, id, sender, the gates it
-sat behind and the run level. A hub that disposes with its gates still shut is the defect those
-lines point at.
+**One** thing a disposing hub cannot carry across: deliveries **deferred** behind an initialization
+gate that never opened. They were accepted and never ran, so each is answered `ShuttingDown`
+(transient, so the sender retries against the fresh activation — the #2176 hang was the silent
+version) and logged at **Error** (`[DISPOSE-DISCARD]`, event 7301) with the message type, id,
+sender, the gates it sat behind and the run level. A hub that disposes with its gates still shut is
+the defect that line points at.
+
+🚨 **There used to be a second, and it was not real.** Event 7302 reported the turns still in the
+MAIN queue when `messageService.Dispose()` ran, at Error, claiming *"the pump stops with this
+call"*. **The pump does not stop with that call and cannot**: `Dispose()` is invoked from inside the
+hub's own `ShutdownRequest` turn, so `DrainLoop` is one frame below on the same stack and takes the
+next turn the moment that turn returns. Measured on the unfixed tree, 3 ms after the Error, on the
+same hub: `Hub victim/… is disposing. Not processing DisposeRequest (id=…)` — the pump had dequeued
+the very delivery the Error called unprocessed, and the disposing seam in `RunHandler` had dealt
+with it (a transient `ShuttingDown` NACK for anything a sender awaits, a silent drop for
+`[CanBeIgnored]` traffic nobody awaits). Nothing was left waiting; the drain contract held. The
+Error was the defect — it opened [#3647](https://github.com/Systemorph/MeshWeaver/issues/3647) about
+a hub that had done exactly what this page says it must.
+
+Two changes, both at the cause rather than at the report:
+
+* **The gate no longer creates the state.** Teardown's own traffic was exempt from the intake gate
+  *at every run level*, so a `DisposeRequest` arriving after the hub had begun disposing was
+  admitted into a window where `HandleDispose` is a proven no-op (`IsShuttingDown` is already set,
+  so no recycle announcement; `MessageHub.Dispose()` returns on its first line). It could do nothing
+  but occupy a turn slot. The exemption is now bounded by the phase that can still use it —
+  `ShutdownRequest` until `ShutDown`, `DisposeRequest` until `Quiescing` — which is what its own
+  comment always said. Pinned by `ShutdownWindowAdmissionTest`, with a control arm proving the
+  same message one phase earlier still recycles the hub.
+* **The verdict measures instead of narrating.** 7302 now fires only when `drainsInFlight == 0` —
+  nothing is running the loop, so nobody will take those turns — which is the one state in which
+  "queued and unprocessed" is true. Anything else is a Debug `[DISPOSE-DRAIN]` line. Both name the
+  queued deliveries by **type, id and sender**: the queues carry `QueuedTurn` rather than a bare
+  closure precisely so a report about the queue can say what is in it. #3647 could not be diagnosed
+  past *"a late post beat the pump by milliseconds"* because the old line had only a count.
 
 ---
 

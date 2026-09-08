@@ -94,10 +94,35 @@ public class MessageService : IMessageService
     // until the last gate opens. Exactly one turn drains at a time (the actor's single
     // logical thread); each turn is (re)scheduled on turnScheduler and awaited before
     // the next — the MaxDegreeOfParallelism=1 ActionBlock semantics, minus Dataflow.
-    private readonly Queue<Func<IObservable<IMessageDelivery>>> mainQueue = new();
-    private readonly Queue<Func<IObservable<IMessageDelivery>>> deferredQueue = new();
+    private readonly Queue<QueuedTurn> mainQueue = new();
+    private readonly Queue<QueuedTurn> deferredQueue = new();
     private readonly Lock turnGate = new();
     private bool draining;
+
+    /// <summary>
+    /// One queued turn, carrying the delivery it will run alongside the thunk that runs it.
+    ///
+    /// <para>🚨 The delivery is here so a report about the QUEUE can name what is in it. The
+    /// queues used to hold a bare <c>Func&lt;IObservable&lt;IMessageDelivery&gt;&gt;</c> — a closure
+    /// over the delivery, opaque from outside — so <see cref="Dispose"/>'s report on the turns
+    /// still queued could say only how MANY there were. That is precisely what left #3647
+    /// undiagnosable: one production line, a count of 1, and nothing at all about which message it
+    /// was or who sent it, so the investigation could get no further than "a late post beat the
+    /// pump by milliseconds".</para>
+    ///
+    /// <para>A struct over the already-allocated delivery and the closure the caller was building
+    /// anyway: the queue stores it inline and nothing new is allocated per message.</para>
+    /// </summary>
+    /// <param name="Delivery">The delivery this turn will hand to the pipeline.</param>
+    /// <param name="Run">The turn itself.</param>
+    private readonly record struct QueuedTurn(
+        IMessageDelivery Delivery,
+        Func<IObservable<IMessageDelivery>> Run)
+    {
+        /// <summary>Names the delivery for a diagnostic — type, id and sender, never its body.</summary>
+        public string Describe() =>
+            $"{Delivery.Message?.GetType().Name ?? "<null>"} (id={Delivery.Id}, from {Delivery.Sender})";
+    }
 
     /// <summary>
     /// Per-message deferral timeout. A message that sits in <see cref="deferredQueue"/>
@@ -361,7 +386,7 @@ public class MessageService : IMessageService
                             {
                                 // Rebuild as deferred-then-waiting. Both runs keep their own order,
                                 // so the result is total arrival order across the two queues.
-                                var reordered = new Queue<Func<IObservable<IMessageDelivery>>>(
+                                var reordered = new Queue<QueuedTurn>(
                                     deferredQueue.Count + mainQueue.Count);
                                 while (deferredQueue.Count > 0)
                                     reordered.Enqueue(deferredQueue.Dequeue());
@@ -504,7 +529,8 @@ public class MessageService : IMessageService
     ///
     /// <para><b>Tier 2 — <see cref="MessageHubRunLevel.DisposeHostedHubs"/> and beyond</b> (the
     /// historical gate). Routing is over and the hosted hubs are going away, so nothing but
-    /// teardown's own <c>ShutdownRequest</c> / <c>DisposeRequest</c> gets in.</para>
+    /// teardown's own <c>ShutdownRequest</c> gets in — and only while a phase is left for it to
+    /// advance (see the two exemption bounds in the body, and #3647).</para>
     ///
     /// <para><b>Tier 1 — <see cref="MessageHubRunLevel.Quiescing"/></b> (issue #3506). Disposal has
     /// STARTED and the hub is spending a FIXED budget draining the callbacks it already owes. A
@@ -550,9 +576,41 @@ public class MessageService : IMessageService
         if (runLevel < MessageHubRunLevel.Quiescing)
             return false;
 
-        // Teardown's OWN traffic gets in at every level — it is what advances the phases at all.
-        if (delivery.Message is ShutdownRequest or DisposeRequest)
-            return false;
+        // Teardown's OWN traffic gets in — but only while there is a phase left for it to advance,
+        // which is the REASON the exemption exists and was not the rule it was written as. It read
+        // `is ShutdownRequest or DisposeRequest → let in`, at every level, forever.
+        //
+        // 🚨 An exemption that outlives its reason MANUFACTURES the state the disposal report then
+        // files as a defect (#3647). The admitted delivery cannot advance anything; all it can do
+        // is occupy a turn slot, and `Dispose()` — which runs a few statements later, inside this
+        // hub's own ShutdownRequest turn — then finds it in the queue. One production line, one
+        // turn, `RunLevel=ShutDown`, `last turn executing: ShutdownRequest`: that is this gate
+        // letting a message in one phase after the last one that could use it.
+        //
+        // The two exemptions have DIFFERENT bounds because they advance different things:
+        if (delivery.Message is ShutdownRequest)
+            // It drives the phase machine itself, so it is exempt until the machine reaches its
+            // TERMINAL phase. From ShutDown on there is no phase left to advance and the request
+            // can only RE-ENTER one the hub has already run — and since each phase's idempotency
+            // guard tests `RunLevel == <its own phase>` rather than `>=`, one handled after
+            // `RunLevel = Dead` would move the run level BACKWARD out of its terminal state. That
+            // state is exactly what Doc/Architecture/TeardownVerdictsAreCausal tells every caller
+            // and every test to read as "the owner has had its chance to answer", so keeping it
+            // monotone is not housekeeping. (No producer outside this process can mint one —
+            // `ShutdownRequest` is `internal` and is not in the `TypeRegistry` — but a gate is what
+            // makes that a property rather than an accident of who happens to post.)
+            return runLevel >= MessageHubRunLevel.ShutDown;
+
+        if (delivery.Message is DisposeRequest)
+            // It asks the hub to BEGIN disposing, and `runLevel >= Quiescing` (established above)
+            // means it already has: `MessageHub.Dispose()` is the only thing that moves the run
+            // level off Started, and it is idempotent. So from Quiescing on `HandleDispose` is a
+            // PROVEN no-op turn — `IsShuttingDown` is already set, so there is no recycle
+            // announcement to make, and `Dispose()` returns on its first line. It is
+            // `[CanBeIgnored]` fire-and-forget, so refusing it leaves nobody waiting: this is a
+            // refusal that costs a caller nothing and a turn slot that costs a teardown a false
+            // report.
+            return true;
 
         if (runLevel >= MessageHubRunLevel.DisposeHostedHubs)
             return true;
@@ -971,8 +1029,9 @@ public class MessageService : IMessageService
         fate?.Add($"RECEIVED runLevel={hub.RunLevel}", Address);
 
         // The TEARDOWN INTAKE GATE. See RefusesIntake for the two tiers and why the second one
-        // (#3506) is narrower than the first. Only ShutdownRequest / DisposeRequest are exempt at
-        // every level; everything else is dropped once the gate closes, to prevent endless cascades.
+        // (#3506) is narrower than the first. Teardown's own traffic is exempt only while a phase
+        // is left for it to advance (#3647); everything else is dropped once the gate closes, to
+        // prevent endless cascades.
         if (RefusesIntake(delivery))
         {
             if (logger.IsEnabled(LogLevel.Debug))
@@ -1124,7 +1183,7 @@ public class MessageService : IMessageService
         // was enqueued and processed, and a reorder between two deliveries is indistinguishable
         // from a reorder between two queues. See ProcessDeferredMessage / OpenGate for the
         // matching stamps: every transition a delivery can make now carries both depths.
-        var mainDepthAtEnqueue = EnqueueTurn(() => NotifyAsync(delivery, cancellationToken));
+        var mainDepthAtEnqueue = EnqueueTurn(delivery, () => NotifyAsync(delivery, cancellationToken));
         MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} ENQUEUED");
         // 🚨 The stage token stays EXACTLY "ENQUEUED" — it is a matched CONTRACT, not a log line.
         // Stages render as `{stage}@{hub}`, and two suites wait on that literal substring
@@ -1152,12 +1211,12 @@ public class MessageService : IMessageService
     /// attributed once you know which queue each delivery entered and how many turns were ahead of
     /// it, and this hub has two queues that deliveries move between at turn time.
     /// </returns>
-    private int EnqueueTurn(Func<IObservable<IMessageDelivery>> turn)
+    private int EnqueueTurn(IMessageDelivery delivery, Func<IObservable<IMessageDelivery>> turn)
     {
         int depth;
         lock (turnGate)
         {
-            mainQueue.Enqueue(turn);
+            mainQueue.Enqueue(new QueuedTurn(delivery, turn));
             depth = mainQueue.Count;
         }
         KickDrain();
@@ -1204,7 +1263,7 @@ public class MessageService : IMessageService
     {
         while (true)
         {
-            Func<IObservable<IMessageDelivery>>? turn;
+            QueuedTurn queued;
             lock (turnGate)
             {
                 if (mainQueue.Count == 0)
@@ -1212,7 +1271,7 @@ public class MessageService : IMessageService
                     draining = false;
                     return;
                 }
-                turn = mainQueue.Dequeue();
+                queued = mainQueue.Dequeue();
             }
             // The DEQUEUE stamp. Incremented here rather than at handler completion so a turn that
             // never reaches a handler still moves it — that gap is what makes a pump that never
@@ -1246,7 +1305,7 @@ public class MessageService : IMessageService
             }
             try
             {
-                turn().Subscribe(
+                queued.Run().Subscribe(
                     _ => { },
                     ex => { LogPumpError(ex); Terminal(); },
                     Terminal);
@@ -1494,7 +1553,8 @@ public class MessageService : IMessageService
                             ScheduleDeferralTimeout(delivery);
                             lock (turnGate)
                             {
-                                deferredQueue.Enqueue(() => ProcessDeferredMessage(delivery, cancellationToken));
+                                deferredQueue.Enqueue(new QueuedTurn(delivery,
+                                    () => ProcessDeferredMessage(delivery, cancellationToken)));
                                 deferredPosition = deferredQueue.Count;
                                 mainDepthAtDefer = mainQueue.Count;
                             }
@@ -2349,17 +2409,65 @@ public class MessageService : IMessageService
         logger.LogDebug("[DISPOSE-TRACE] {address}: turn queues (mainCount={bufferCount}, deferredCount={deferredCount})",
             Address, mainQueue.Count, deferredQueue.Count);
         // The ShutDown request is FIFO behind everything accepted before it, so by the time this
-        // runs the main queue holds only what arrived in the shutdown window and is about to be
-        // left unprocessed once the pump stops. Anything at all here is the same discard as above.
+        // runs the main queue holds only what arrived in the shutdown window.
+        //
+        // 🚨 That is NOT the same thing as a discard, and this site used to say it was — "still
+        // queued and unprocessed (the pump stops with this call)", at Error, which is the line the
+        // red-log pipeline opened #3647 on.
+        //
+        // The pump does not stop with this call and cannot: `Dispose()` runs INSIDE the
+        // ShutdownRequest turn (`MessageHub.HandleShutdownCore`'s ShutDown case calls it), so
+        // `DrainLoop` is one frame below on this very stack and its `while (true)` takes the next
+        // turn the instant this turn returns. MEASURED on the unfixed tree, with
+        // `ShutdownWindowAdmissionTest`'s fixture reproducing the production line byte for byte —
+        // 3 ms after that Error, on the same hub: `Hub victim/… is disposing. Not processing
+        // DisposeRequest (id=…)`. The pump had dequeued the very delivery this line called
+        // unprocessed and the disposing seam in `RunHandler` had ANSWERED it — a transient
+        // `ShuttingDown` NACK for anything a sender awaits, a silent drop for `[CanBeIgnored]`
+        // traffic nobody awaits. Nothing was left waiting; the drain contract held.
+        //
+        // An Error that names work as lost while the same loop is about to finish it is a FALSE
+        // verdict, and a false verdict costs more than no verdict: it sends the reader hunting for
+        // a producer that did nothing wrong. So the level now follows the FACT, and the fact is
+        // measured rather than narrated — `drainsInFlight` counts drain bodies actually executing
+        // (#3593), so "somebody is going to take these" is read off the pump, not asserted about
+        // it. Only the state where nothing is draining strands a turn, and that is what stays an
+        // Error.
+        //
+        // And it NAMES them. The one thing #3647 needed and could not get was which message it
+        // was: the queues held bare closures, so the line could report a count and nothing else.
+        // See QueuedTurn.
+        // 🚨 The names are rendered ONLY if a line will actually be written. A method argument is
+        // evaluated before the call whatever the log level, and this file already carries the scar
+        // of that on this exact path (#3044/#3056, the serialize-on-every-drop line a few hundred
+        // lines up): the counting read is cheap and unconditional, the rendering is not.
         int leftBehind;
         lock (turnGate) leftBehind = mainQueue.Count;
-        if (leftBehind > 0)
-            logger.LogError(DisposalDiscardedQueuedDelivery,
-                "[DISPOSE-DISCARD] Hub {Address} is disposing with {Count} turn(s) still queued and "
-                + "unprocessed (the pump stops with this call). RunLevel={RunLevel}; {Discarded} deferred "
-                + "delivery(ies) already answered ShuttingDown; last turn executing: {Executing}. Accepted work "
-                + "must be drained before a hub goes down — find what posted into the shutdown window.",
-                Address, leftBehind, hub.RunLevel, discarded, currentlyExecutingMessageType ?? "(idle)");
+        var pumpIsRunning = Volatile.Read(ref drainsInFlight) > 0;
+        if (leftBehind > 0 && (!pumpIsRunning || logger.IsEnabled(LogLevel.Debug)))
+        {
+            QueuedTurn[] stillQueued;
+            lock (turnGate) stillQueued = mainQueue.ToArray();
+            var queued = string.Join("; ", stillQueued.Select(t => t.Describe()));
+            if (pumpIsRunning)
+                logger.LogDebug(
+                    "[DISPOSE-DRAIN] Hub {Address} reached its ShutDown phase with {Count} turn(s) still "
+                    + "queued: {Queued}. RunLevel={RunLevel}; {Discarded} deferred delivery(ies) answered "
+                    + "ShuttingDown; last turn executing: {Executing}. The pump is running this very call, "
+                    + "so it drains them next and the disposing seam answers each one — this is the drain "
+                    + "contract holding, not a discard.",
+                    Address, stillQueued.Length, queued, hub.RunLevel, discarded,
+                    currentlyExecutingMessageType ?? "(idle)");
+            else
+                logger.LogError(DisposalDiscardedQueuedDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with {Count} turn(s) still queued and "
+                    + "NOTHING DRAINING (drainsInFlight=0), so nobody will take them: {Queued}. "
+                    + "RunLevel={RunLevel}; {Discarded} deferred delivery(ies) already answered "
+                    + "ShuttingDown; last turn executing: {Executing}. Accepted work must be drained before "
+                    + "a hub goes down — find why this hub's pump is not turning.",
+                    Address, stillQueued.Length, queued, hub.RunLevel, discarded,
+                    currentlyExecutingMessageType ?? "(idle)");
+        }
 
         // Don't wait on deliveryAction.Completion. Handler execution now runs INLINE
         // on this same block (executionBuffer/executionBlock were collapsed away), so
