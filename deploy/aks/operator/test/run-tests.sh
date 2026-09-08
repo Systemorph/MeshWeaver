@@ -60,6 +60,24 @@ emits() {
   case "$out" in *"$line"*) ok "$what" ;; *) bad "$what" "no '${line}' in: ${out}" ;; esac
 }
 
+# ── hosting::do keeps the DATA channel clean ────────────────────────────────────────────────────
+# A wrapped mutation can feed a pipe (hosting-deploy: `hosting::do kubectl create namespace …
+# -o yaml | kubectl apply -f -`). Its narration must therefore never share stdout with the
+# command's output. Measured 2026-09-08 on memex: the narration became line 1 of the manifest and
+# kubectl refused it ("yaml: line 2: mapping values are not allowed in this context"), stopping the
+# Reconcile at step 1/3 — and a Provision at the same line. Asserted BYTE-FOR-BYTE, not "contains":
+# a leading narration line would still contain the manifest.
+_manifest=$'apiVersion: v1\nkind: Namespace'
+_piped="$(bash -c 'source "$1"; hosting::do printf "%s\n" "$2"' _ "$BIN/_common.sh" "$_manifest" 2>/dev/null)"
+if [ "$_piped" = "$_manifest" ]; then ok "hosting::do narrates on stderr — a piped consumer gets only the command's stdout"
+else bad "hosting::do narrates on stderr — a piped consumer gets only the command's stdout" "stdout carried: ${_piped}"; fi
+_dry="$(HOSTING_DRY_RUN=true bash -c 'source "$1"; hosting::do printf "%s\n" "$2"' _ "$BIN/_common.sh" "$_manifest" 2>/dev/null)"
+if [ -z "$_dry" ]; then ok "hosting::do under DRY-RUN writes nothing to stdout either"
+else bad "hosting::do under DRY-RUN writes nothing to stdout either" "stdout carried: ${_dry}"; fi
+_narrated="$(bash -c 'source "$1"; hosting::do true' _ "$BIN/_common.sh" 2>&1 >/dev/null)"
+case "$_narrated" in *"+ true"*) ok "hosting::do still narrates the command (on stderr)" ;;
+  *) bad "hosting::do still narrates the command (on stderr)" "stderr was: ${_narrated}" ;; esac
+
 # Assert a command did NOT stop at a specific guard. It may still fail for want of az/kubectl —
 # what matters is that the named refusal is not the reason, i.e. execution got past that guard.
 not_refused_by_guard() {
