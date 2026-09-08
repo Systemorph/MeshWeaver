@@ -386,6 +386,27 @@ public sealed class ModuleLandingService : IDisposable
     /// </summary>
     public IObservable<Unit> ActivationChanged => activationChanged;
 
+    private readonly Subject<ModuleSet> moduleSetProposed = new();
+    private readonly ISubject<ModuleSet> announceProposed;
+
+    /// <summary>
+    /// Fires once each time THIS process ENDS a landing wave by proposing a module set that
+    /// differs from the one already proposed (<see cref="ProposeModuleSet"/> returned a set) — the
+    /// signal that "the mesh's module set moved, and a restart is what adopts it" (#3650).
+    ///
+    /// <para>Distinct from <see cref="ActivationChanged"/> on purpose. That one fires per module,
+    /// mid-wave; a restart taken on it would boot the replicas onto the set proposed BEFORE the
+    /// wave (a landed-but-unproposed entry is deferred by
+    /// <see cref="ModuleActivationBoot.ProjectOntoMeshSet"/>, #3395) and the wave's own proposal
+    /// would then wait for the next unrelated restart. The self-updater treats this signal as a
+    /// roll of the running image, subject to the same pacing floor as any other roll.</para>
+    ///
+    /// <para>Never fires for an idempotent proposal (a wave that changed nothing), so a boot
+    /// reconcile against an up-to-date registry restarts nobody. Emitted AFTER the pool work item
+    /// completes, like <see cref="ActivationChanged"/>, through a synchronized façade.</para>
+    /// </summary>
+    public IObservable<ModuleSet> ModuleSetProposed => moduleSetProposed;
+
     /// <summary>Creates the service.</summary>
     /// <param name="logger">Diagnostics — every landing, refusal and removal is logged.</param>
     /// <param name="baseDirectory">Seam for tests: the deployment root the <c>modules/</c>
@@ -397,6 +418,7 @@ public sealed class ModuleLandingService : IDisposable
         this.logger = logger;
         this.baseDirectory = baseDirectory ?? AppContext.BaseDirectory;
         announce = Subject.Synchronize(activationChanged);
+        announceProposed = Subject.Synchronize(moduleSetProposed);
     }
 
     /// <summary>The deployment root the <c>modules/</c> tree lives under — exposed so the serving
@@ -556,6 +578,13 @@ public sealed class ModuleLandingService : IDisposable
                     + "('{Id}', {Count} module(s)). Replicas adopt it as they restart.",
                     proposed.Sequence, proposed.Id, proposed.Generations.Count);
             return proposed;
+        })
+        // Off the pool work item (cap-1: a subscriber that asked this service to read would queue
+        // behind the very item that notified it) — and only for a set that actually moved.
+        .Do(proposed =>
+        {
+            if (proposed is not null)
+                AnnounceModuleSetProposed(proposed);
         });
 
     /// <summary>
@@ -914,11 +943,36 @@ public sealed class ModuleLandingService : IDisposable
 
     private void AnnounceActivationChanged() => Announce(subject => subject.OnNext(Unit.Default));
 
+    /// <summary>The <see cref="ModuleSetProposed"/> emission, contained exactly like
+    /// <see cref="Announce"/>: a faulting subscriber never turns a proposal that landed into a
+    /// reported failure.</summary>
+    private void AnnounceModuleSetProposed(ModuleSet proposed)
+    {
+        try
+        {
+            announceProposed.OnNext(proposed);
+        }
+        catch (Exception exception)
+        {
+            logger?.LogWarning(exception,
+                "A subscriber to ModuleSetProposed faulted; the module set was proposed regardless.");
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
         Announce(subject => subject.OnCompleted());
+        try
+        {
+            announceProposed.OnCompleted();
+        }
+        catch (Exception exception)
+        {
+            logger?.LogWarning(exception, "A subscriber to ModuleSetProposed faulted on completion.");
+        }
         activationChanged.Dispose();
+        moduleSetProposed.Dispose();
         pool.Dispose();
     }
 }

@@ -636,6 +636,15 @@ public static class PluginBundleEndpoints
                         plugin, accepted.Module);
                 }
 
+                // 🚨 #3650 — the bytes are on the shelf: tell every consumer NOW, so the one that
+                // installed this package reconciles it within minutes instead of at its next boot
+                // (rule R3 of Doc/Architecture/ModuleAdoptionPolicy). Detached from this response
+                // on purpose: the publisher is a CI job, and a slow or unreachable consumer must
+                // hold neither it nor the publish's own verdict — the broadcaster absorbs every
+                // per-consumer failure into a logged outcome, and a consumer the broadcast never
+                // reaches is caught by its own safety net.
+                BroadcastPublished(http, plugin, accepted, logger);
+
                 // held/holdReason let the publisher tell "shelved, will serve" apart from
                 // "activated here"; pendingRestart is honest for the held case — a restart of
                 // THIS instance would not load a held module, so nothing is pending on one.
@@ -651,6 +660,44 @@ public static class PluginBundleEndpoints
                 });
             })
             .AllowAnonymous();
+    }
+
+    /// <summary>
+    /// Fires the module-published broadcast for one accepted publish (#3650), subscribed detached
+    /// from the request: the registry names itself by its configured public URL
+    /// (<c>PluginCatalog:HomeUrl</c>) when it has one, else by the host this publish arrived on —
+    /// which is what consumers matched their <c>PluginCatalog:Registries:N:Url</c> against.
+    /// </summary>
+    private static void BroadcastPublished(
+        HttpContext http, string plugin, ModulePublish.Accepted accepted, ILogger? logger)
+    {
+        // Request services first, then the mesh's — the same two-step resolution the landing
+        // service above uses, and OPTIONAL at both steps: a host (or a test) that wires the
+        // landing service without a mesh publishes fine and simply tells nobody.
+        var rootHub = http.RequestServices.GetService<IMessageHub>();
+        var broadcaster = http.RequestServices.GetService<ModulePublishedBroadcaster>()
+                          ?? rootHub?.ServiceProvider.GetService<ModulePublishedBroadcaster>();
+        if (broadcaster is null)
+            return;
+        var configuredHome = (http.RequestServices.GetService<PluginCatalogOptions>()
+                              ?? rootHub?.ServiceProvider.GetService<PluginCatalogOptions>())?.HomeUrl;
+        var registryUrl = string.IsNullOrWhiteSpace(configuredHome)
+            ? $"{http.Request.Scheme}://{http.Request.Host}"
+            : configuredHome.Trim();
+        broadcaster.Broadcast(new ModulePublished
+            {
+                Registry = registryUrl,
+                Package = plugin,
+                Module = accepted.Module,
+                Version = accepted.Version,
+                FrameworkMvid = accepted.FrameworkMvid,
+                PublishedAt = DateTimeOffset.UtcNow,
+            })
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "Module publish for {Plugin}: the module-published broadcast faulted — consumers "
+                    + "reconcile on their safety net and at boot", plugin));
     }
 
     /// <summary>
