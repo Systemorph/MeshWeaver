@@ -49,6 +49,30 @@ public sealed record ModuleActivationEntry
     /// </summary>
     public string? Directory { get; init; }
 
+    /// <summary>
+    /// The generation this module ran BEFORE <see cref="Directory"/> was landed — the one boot
+    /// falls back to when <see cref="Directory"/> cannot load on this platform (#3649, rule R1 of
+    /// the module adoption policy: <i>an installation runs the newest generation that LOADS, and
+    /// keeps the one it has until a newer one does</i>).
+    ///
+    /// <para>Set by <see cref="ModuleLandingService"/> from the entry a landing displaces, whenever
+    /// a NEW generation lands for a module that already had one. Referenced by the modules GC
+    /// exactly like <see cref="Directory"/>, so the generation that loads is never reclaimed while
+    /// the one that does not is the entry's head — which is what a shelved landing built for a
+    /// newer platform used to do to a Store-only module: overwrite the only reference to its
+    /// loadable bytes, and the next GC pass took them away. Cleared by an uninstall together with
+    /// <see cref="Directory"/>. Absent = no previous generation is held.</para>
+    /// </summary>
+    public string? PreviousDirectory { get; init; }
+
+    /// <summary>The package version <see cref="PreviousDirectory"/> was landed at, so a status
+    /// row can say "runs v1.2.3; v1.3.0 landed but does not load here". Null when unrecorded.</summary>
+    public string? PreviousVersion { get; init; }
+
+    /// <summary>The framework MVID <see cref="PreviousDirectory"/> was built against — diagnostic,
+    /// like <see cref="FrameworkMvid"/>.</summary>
+    public string? PreviousFrameworkMvid { get; init; }
+
     /// <summary>The framework MVID (MeshWeaver.Graph's ModuleVersionId) the landed assemblies
     /// were built against, as the producer recorded it — DIAGNOSTIC metadata only: it names the
     /// exact build behind the bytes when something needs debugging, but it is never a gate.
@@ -478,6 +502,9 @@ public static class ModuleActivationBoot
     ///     GENERATION — the legacy fixed <c>modules/&lt;name&gt;/</c> folder, which
     ///     <see cref="ModuleSetStore.GenerationsOf"/> excludes by design because there is nothing
     ///     to pin; deferring it would silently disable it.</item>
+    ///   <item>The entry's <see cref="ModuleActivationEntry.PreviousDirectory"/> — the generation
+    ///     boot falls back to when the head one does not load here (#3649) — travels with it onto
+    ///     the set's generation, and is dropped only when it names that very generation.</item>
     /// </list>
     ///
     /// <para>A null <paramref name="meshSet"/> — a deployment on which no landing wave has ever
@@ -545,7 +572,17 @@ public static class ModuleActivationBoot
                     continue;
                 }
 
-                var onSet = entry with { Directory = generation };
+                // 🚨 #3649 — the fallback pointer travels WITH the entry onto the set's generation,
+                // and is dropped only when it names that very generation (the common mid-wave
+                // shape: the entry moved to D with PreviousDirectory = the set's G, so G is the
+                // head now and needs no fallback to itself). Where it names an OLDER generation
+                // than the set's — a landing that carried its fallback forward because the
+                // displaced generation was measured unloadable — that older one is exactly what
+                // boot must fall back to if the set's generation does not load here either.
+                var previous = string.Equals(entry.PreviousDirectory, generation, StringComparison.Ordinal)
+                    ? entry with { PreviousDirectory = null, PreviousVersion = null, PreviousFrameworkMvid = null }
+                    : entry;
+                var onSet = previous with { Directory = generation };
                 if (landedDllExists is null || landedDllExists(onSet))
                 {
                     projected.Add(onSet);
@@ -758,6 +795,42 @@ public static class ModuleActivationBoot
     /// </summary>
     public static bool LandedModuleDllExists(string baseDirectory, ModuleActivationEntry entry) =>
         File.Exists(LandedDllPath(baseDirectory, entry));
+
+    /// <summary>
+    /// The PREVIOUS generation of <paramref name="entry"/> as an entry of its own — the same name,
+    /// with <see cref="ModuleActivationEntry.Directory"/>, <see cref="ModuleActivationEntry.Version"/>
+    /// and <see cref="ModuleActivationEntry.FrameworkMvid"/> taken from the <c>Previous*</c>
+    /// fields and no previous of its own — or null when the entry holds none (#3649).
+    ///
+    /// <para>One derivation, so every reader of the fallback (the boot loader pinning it, the GC
+    /// referencing it, the landing carrying it forward, the existence check) resolves it through
+    /// the SAME rule <see cref="LandedDllPath"/> applies to the head generation. Re-deriving the
+    /// path per caller is how the gate and the loader came to disagree in #1949.</para>
+    /// </summary>
+    public static ModuleActivationEntry? PreviousGeneration(ModuleActivationEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        if (string.IsNullOrWhiteSpace(entry.PreviousDirectory)
+            || string.Equals(entry.PreviousDirectory, entry.Directory, StringComparison.Ordinal))
+            return null;
+        return entry with
+        {
+            Directory = entry.PreviousDirectory,
+            Version = entry.PreviousVersion,
+            FrameworkMvid = entry.PreviousFrameworkMvid,
+            PreviousDirectory = null,
+            PreviousVersion = null,
+            PreviousFrameworkMvid = null,
+        };
+    }
+
+    /// <summary>
+    /// Whether the entry holds a previous generation whose entry DLL is on the volume — the
+    /// generation boot can fall back to when the head one does not load here (#3649). False for
+    /// an entry with no previous generation, and for one whose previous bytes are gone.
+    /// </summary>
+    public static bool PreviousLandedModuleDllExists(string baseDirectory, ModuleActivationEntry entry) =>
+        PreviousGeneration(entry) is { } previous && LandedModuleDllExists(baseDirectory, previous);
 
     /// <summary>
     /// The file the boot loader loads for one <see cref="EffectiveModule"/> — the SAME resolution

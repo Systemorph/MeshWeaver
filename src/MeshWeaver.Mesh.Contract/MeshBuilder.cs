@@ -143,12 +143,46 @@ public record MeshBuilder
     }
 
     /// <summary>
-    /// Installs mesh nodes from the specified assembly locations.
+    /// Installs mesh nodes from the specified assembly locations — each path is one generation
+    /// with no fallback, which is every baseline entry and every caller that installs a module by
+    /// hand. The boot path that also knows a module's PREVIOUS generation calls
+    /// <see cref="InstallModules"/> instead.
     /// </summary>
     /// <param name="assemblyLocations">Paths to assemblies containing MeshNodeProviderAttribute definitions.</param>
     /// <returns>The builder for method chaining.</returns>
-    public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
+    public MeshBuilder InstallAssemblies(params string[] assemblyLocations) =>
+        InstallModules([.. assemblyLocations.Select(location => new ModuleInstallCandidate(location))]);
+
+    /// <summary>
+    /// Installs mesh nodes from the given module candidates — the newest generation of each, or,
+    /// when that one cannot load on this platform and the candidate names a previous generation,
+    /// the previous one (#3649).
+    ///
+    /// <para>🚨 <b>A distinct name, deliberately not an overload of <see cref="InstallAssemblies"/>.</b>
+    /// Dependent repositories carry <c>&lt;see cref="MeshBuilder.InstallAssemblies"/&gt;</c> in
+    /// their own doc comments; an added overload turns every one of those into a CS0419 under
+    /// <c>-warnaserror</c>, on pull requests that did not make the change (see
+    /// <see cref="IncompatibleModule.FromLinkRefusal"/> for the same rule). The string form stays
+    /// byte-for-byte what it was and forwards here.</para>
+    ///
+    /// <para><b>The fallback rule.</b> A candidate's <see cref="ModuleInstallCandidate.Location"/>
+    /// is measured by the link probe and then loaded. If it is refused BEFORE loading, or
+    /// <c>Assembly.LoadFrom</c> itself throws, and the candidate resolves a
+    /// <see cref="ModuleInstallCandidate.Previous"/> generation, that generation goes through the
+    /// same probe and load; when it succeeds the module is installed from it and recorded as a
+    /// <see cref="FallbackModule"/> — present, running, and behind — with one
+    /// <c>[MeshWeaver.Mesh.FallbackModule]</c> line on stderr naming both generations and why.
+    /// Only when neither loads is the module an <see cref="IncompatibleModule"/>, exactly as
+    /// before. 🚨 A generation whose assembly LOADED and whose registration then threw (#2234's
+    /// shape) is never swapped for the previous one: two assemblies of one simple name cannot
+    /// coexist in the default load context, so the fallback exists only for a newest generation
+    /// that never made it into the process — which is the link probe's case, the whole of #3649.</para>
+    /// </summary>
+    /// <param name="modules">The candidates, in install order.</param>
+    /// <returns>The builder for method chaining.</returns>
+    public MeshBuilder InstallModules(IReadOnlyList<ModuleInstallCandidate> modules)
     {
+        ArgumentNullException.ThrowIfNull(modules);
         // A module's NATIVE payload is unreachable without this (#1728): Assembly.LoadFrom never
         // consults the module's deps.json, so nothing probes modules/<Name>/runtimes/<rid>/native/.
         // Subscribed here — before anything from a module folder is loaded — and idempotent.
@@ -168,6 +202,7 @@ public record MeshBuilder
         // equally hazardous step, isolated per module just below.
         var pending = new List<PendingModuleInstall>();
         var incompatible = new List<IncompatibleModule>();
+        var fallbacks = new List<FallbackModule>();
         // 🚨 #3538 — THE LINK PROBE, before a single Assembly.LoadFrom. Per-module isolation above
         // catches a module that THROWS while installing; it cannot catch one that installs cleanly
         // and is linked against types this platform does not have, because nothing touches those
@@ -189,42 +224,64 @@ public record MeshBuilder
         // against /app alone would report that sibling as an absent platform assembly and
         // quarantine a module that is perfectly fine. The runtime's resolution surface is what has
         // to be measured, and at boot that is exactly these directories.
-        var surface = assemblyLocations is { Length: > 0 }
-            ? ModulePlatformSurface.OfRunningProcess([
-                AppContext.BaseDirectory,
-                .. assemblyLocations
-                    .Select(location => Path.GetDirectoryName(Path.GetFullPath(location)))
-                    .Where(directory => !string.IsNullOrEmpty(directory))
-                    .Select(directory => directory!)
-                    .Distinct(StringComparer.OrdinalIgnoreCase),
-            ])
+        var probeDirectories = modules
+            .Select(module => Path.GetDirectoryName(Path.GetFullPath(module.Location)))
+            .Where(directory => !string.IsNullOrEmpty(directory))
+            .Select(directory => directory!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var surface = modules.Count > 0
+            ? ModulePlatformSurface.OfRunningProcess([AppContext.BaseDirectory, .. probeDirectories])
             : null;
-        foreach (var location in assemblyLocations)
+        foreach (var module in modules)
         {
-            // Fail CLOSED on Indeterminate: MayLoad is true for Linkable and nothing else, so a
-            // check that could not be made can never be read as a check that passed.
-            if (surface is not null && ModulePlatformLink.Check(location, surface) is { MayLoad: false } verdict)
+            var newest = TryLoad(module.Location, surface);
+            if (newest.Loaded is not null)
             {
-                incompatible.Add(ReportIncompatible(location, verdict));
+                pending.Add(newest.Loaded);
                 continue;
             }
 
-            try
+            // 🚨 #3649 — the newest generation never made it into the process. Before this the
+            // module was simply ABSENT from here on (unless the image shipped a baseline copy),
+            // and the generation that DID load last time was unreferenced and reclaimed by the
+            // next GC pass. Rule R1: an installation runs the newest generation that LOADS, and
+            // keeps the one it has until a newer one does.
+            var previous = newest.NeverLoaded ? ResolvePrevious(module) : null;
+            if (previous is not null)
             {
-                var assembly = Assembly.LoadFrom(location);
-                var moduleAttributes = assembly.GetCustomAttributes<MeshNodeProviderAttribute>().ToArray();
-                pending.Add(new PendingModuleInstall(
-                    assembly,
-                    moduleAttributes.SelectMany(a => a.Nodes).ToArray(),
-                    moduleAttributes.SelectMany(a => a.AddressTypes).ToArray(),
-                    moduleAttributes.SelectMany(a => a.HubConfigurations).ToArray(),
-                    moduleAttributes.SelectMany(a => a.DefaultNodeHubConfigurations).ToArray(),
-                    moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray()));
+                // The previous generation lives in its own directory, which the surface above
+                // does not carry: a fresh one for the retry, so a sibling module it references is
+                // measured as present rather than as an absent platform assembly.
+                var previousDirectory = Path.GetDirectoryName(Path.GetFullPath(previous));
+                var retry = TryLoad(previous, ModulePlatformSurface.OfRunningProcess([
+                    AppContext.BaseDirectory,
+                    .. probeDirectories,
+                    .. string.IsNullOrEmpty(previousDirectory) ? [] : new[] { previousDirectory },
+                ]));
+                if (retry.Loaded is not null)
+                {
+                    pending.Add(retry.Loaded);
+                    var fallback = new FallbackModule(
+                        newest.Refused!.Name, module.Location, previous, newest.Refused.Error)
+                    {
+                        Version = module.Version,
+                        PreviousVersion = module.PreviousVersion,
+                    };
+                    // stderr, once per boot: the logging pipeline does not exist yet (see
+                    // ReportIncompatible). The portal re-logs it as a Warning once it does.
+                    Console.Error.WriteLine($"[MeshWeaver.Mesh.FallbackModule] {fallback.Report()}");
+                    fallbacks.Add(fallback);
+                    continue;
+                }
+
+                Console.Error.WriteLine(
+                    $"[MeshWeaver.Mesh.FallbackModule] '{newest.Refused!.Name}': the previous "
+                    + $"generation '{previous}' cannot load here either ({retry.Refused!.Error}) — "
+                    + "no generation of this module loads on this platform, so it is absent.");
             }
-            catch (Exception exception)
-            {
-                incompatible.Add(ReportIncompatible(location, exception));
-            }
+
+            incompatible.Add(Report(newest.Refused!));
         }
 
         // 🚨 A node's GlobalServiceConfigurations delegate is invoked IMMEDIATELY by
@@ -327,11 +384,16 @@ public record MeshBuilder
         // dropped, so /health and RequiredModuleStatus would report a replica missing that module's
         // features as healthy: the exact invisible-skip this record exists to prevent, reintroduced
         // one code path over.
-        if (incompatible.Count > 0)
+        if (incompatible.Count > 0 || fallbacks.Count > 0)
         {
             result.ConfigureServices(services =>
             {
                 foreach (var module in incompatible)
+                    services.AddSingleton(module);
+                // A fallback is registered as its own record, never as an IncompatibleModule: it
+                // is running, and the surfaces that read the incompatible set (the readiness
+                // probe, the package card's "not running here") must not read it as degraded.
+                foreach (var module in fallbacks)
                     services.AddSingleton(module);
                 return services;
             });
@@ -351,31 +413,105 @@ public record MeshBuilder
         IReadOnlyCollection<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations);
 
     /// <summary>
-    /// Records a module that could not install, and writes it to stderr.
+    /// The outcome of probing and loading ONE generation: what was materialised, or why not.
+    /// </summary>
+    /// <param name="Loaded">The module's contributions, when the generation loaded and
+    /// materialised cleanly.</param>
+    /// <param name="Refused">The record of the failure, otherwise.</param>
+    /// <param name="NeverLoaded">True when the generation's assembly never entered the process —
+    /// refused by the link probe, or <c>Assembly.LoadFrom</c> threw — which is the ONLY state a
+    /// previous generation can be tried from: an assembly that loaded and then failed to
+    /// materialise holds its simple name in the default load context, and a second assembly of
+    /// that name cannot be loaded beside it.</param>
+    private sealed record LoadAttempt(
+        PendingModuleInstall? Loaded, IncompatibleModule? Refused, bool NeverLoaded);
+
+    /// <summary>
+    /// Probes one generation against <paramref name="surface"/> and loads it. Records a failure
+    /// without reporting it — the caller decides whether the failure is a fault (nothing else
+    /// loads) or a fallback (the previous generation does), and the two are reported differently.
+    /// </summary>
+    private static LoadAttempt TryLoad(string location, ModulePlatformSurface? surface)
+    {
+        // Fail CLOSED on Indeterminate: MayLoad is true for Linkable and nothing else, so a
+        // check that could not be made can never be read as a check that passed.
+        if (surface is not null && ModulePlatformLink.Check(location, surface) is { MayLoad: false } verdict)
+            return new LoadAttempt(null, IncompatibleModule.FromLinkRefusal(location, verdict), NeverLoaded: true);
+
+        Assembly assembly;
+        try
+        {
+            assembly = Assembly.LoadFrom(location);
+        }
+        catch (Exception exception)
+        {
+            return new LoadAttempt(null, IncompatibleModule.From(location, exception), NeverLoaded: true);
+        }
+
+        try
+        {
+            var moduleAttributes = assembly.GetCustomAttributes<MeshNodeProviderAttribute>().ToArray();
+            return new LoadAttempt(
+                new PendingModuleInstall(
+                    assembly,
+                    moduleAttributes.SelectMany(a => a.Nodes).ToArray(),
+                    moduleAttributes.SelectMany(a => a.AddressTypes).ToArray(),
+                    moduleAttributes.SelectMany(a => a.HubConfigurations).ToArray(),
+                    moduleAttributes.SelectMany(a => a.DefaultNodeHubConfigurations).ToArray(),
+                    moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray()),
+                null,
+                NeverLoaded: false);
+        }
+        catch (Exception exception)
+        {
+            return new LoadAttempt(null, IncompatibleModule.From(location, exception), NeverLoaded: false);
+        }
+    }
+
+    /// <summary>
+    /// The previous generation's entry DLL for a candidate whose newest generation never loaded,
+    /// or null when there is none to try. A resolver that throws is "none", said on stderr: the
+    /// fallback is protection for the module, never a new way to take the boot down.
+    /// </summary>
+    private static string? ResolvePrevious(ModuleInstallCandidate module)
+    {
+        if (module.Previous is null)
+            return null;
+        try
+        {
+            var previous = module.Previous();
+            return string.IsNullOrWhiteSpace(previous) || !File.Exists(previous) ? null : previous;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(
+                $"[MeshWeaver.Mesh.FallbackModule] '{Path.GetFileNameWithoutExtension(module.Location)}': "
+                + $"resolving the previous generation threw ({exception.GetType().Name}: "
+                + $"{exception.Message}) — no fallback is attempted.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Writes a module that could not install to stderr and hands it back for registration.
     ///
     /// <para>🚨 stderr, not a logger: this runs BEFORE the logging pipeline exists, which is
     /// exactly why #2234's crash left a container log containing only the createdump DSO listing
     /// and cost most of a day to diagnose. The one channel that works at this point is the one the
     /// container captures.</para>
     /// </summary>
-    private static IncompatibleModule ReportIncompatible(string entry, Exception exception)
+    private static IncompatibleModule Report(IncompatibleModule module)
     {
-        var module = IncompatibleModule.From(entry, exception);
         Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {module.Report()}");
         return module;
     }
 
     /// <summary>
-    /// Records a module the LINK PROBE refused (#3538) — never loaded, so nothing of it ran — and
-    /// writes it to the same stderr channel, for the same reason: this runs before the logging
-    /// pipeline exists.
+    /// Records a module that could not install, and writes it to stderr — see
+    /// <see cref="Report(IncompatibleModule)"/>.
     /// </summary>
-    private static IncompatibleModule ReportIncompatible(string entry, ModuleLinkVerdict verdict)
-    {
-        var module = IncompatibleModule.FromLinkRefusal(entry, verdict);
-        Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {module.Report()}");
-        return module;
-    }
+    private static IncompatibleModule ReportIncompatible(string entry, Exception exception) =>
+        Report(IncompatibleModule.From(entry, exception));
 
     private IEnumerable<MeshNode> InstallServices(IEnumerable<MeshNode> nodes)
     {

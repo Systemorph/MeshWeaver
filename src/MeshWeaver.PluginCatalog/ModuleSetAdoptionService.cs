@@ -124,11 +124,28 @@ public static class ModuleSetAdoptionServiceExtensions
         this IServiceCollection services, string describe, Action record)
     {
         ArgumentNullException.ThrowIfNull(record);
+        return services.AddModuleSetAdoption(describe, _ => record());
+    }
+
+    /// <summary>
+    /// As <see cref="AddModuleSetAdoption(IServiceCollection, string, Action)"/>, handing the write
+    /// the mesh's service provider — so it can record what the loader ACTUALLY installed (#3649:
+    /// the <see cref="MeshWeaver.Mesh.FallbackModule"/> records, registered by
+    /// <c>MeshBuilder.InstallModules</c> and unknowable at the point boot registers this service).
+    /// An overload, not a changed parameter: the <see cref="Action"/> form is binary API.
+    /// </summary>
+    /// <param name="services">The mesh's service collection.</param>
+    /// <param name="describe">What is being adopted, for the log lines.</param>
+    /// <param name="record">The adoption write itself, given the built container.</param>
+    public static IServiceCollection AddModuleSetAdoption(
+        this IServiceCollection services, string describe, Action<IServiceProvider> record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
         return services.AddSingleton<IHostedService>(sp => new ModuleSetAdoptionService(
             describe,
             () =>
             {
-                record();
+                record(sp);
                 return Unit.Default;
             },
             sp.GetService<MeshPublicationGate>(),

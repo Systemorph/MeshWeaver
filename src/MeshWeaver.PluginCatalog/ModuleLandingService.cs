@@ -42,6 +42,14 @@ namespace MeshWeaver.PluginCatalog;
 /// platform that lacks their types… which for the adopt path is the point of the install, so a
 /// hold there would be a package whose binary half silently never arrives.</para>
 ///
+/// <para><b>The generation a landing displaces is KEPT, as the new entry's fallback (#3649).</b>
+/// <see cref="ModuleActivationEntry.PreviousDirectory"/> names it, the GC references it, and boot
+/// loads it when the head generation does not load on the running platform — so a shelved landing
+/// built for a newer platform leaves the module RUNNING its previous version instead of absent,
+/// and the next GC pass no longer reclaims the only bytes that load. Carried forward past a
+/// displaced generation that is itself measured unloadable here, so two unloadable landings in a
+/// row cannot push the loadable one out of reach. Cleared by an uninstall.</para>
+///
 /// <para><b>The same-identity trap-door is refused too.</b> <c>MeshBuilder.ResolveModulePath</c>
 /// resolves <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c> BEFORE the app folder, so landing a
 /// module named after an APP-CLOSURE assembly (e.g. <c>MeshWeaver.Graph</c>) would silently
@@ -203,6 +211,14 @@ public sealed class ModuleLandingService : IDisposable
             .Where(e => !string.IsNullOrWhiteSpace(e.Directory))
             .Select(e => e.Directory!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // 🚨 #3649: an entry's PREVIOUS generation is referenced exactly like its head one. It is
+        // the generation boot falls back to when the head does not load on this platform — for a
+        // Store-only module the ONLY generation that runs — and reclaiming it is precisely how a
+        // shelved landing built for a newer platform used to take a working module away.
+        foreach (var previous in activation.Entries
+                     .Where(e => !string.IsNullOrWhiteSpace(e.PreviousDirectory))
+                     .Select(e => e.PreviousDirectory!))
+            referenced.Add(previous);
         // 🚨 #3395: the activation entries are NOT the whole reference set any more. The mesh's
         // module set deliberately pins an OLDER generation than the entry while a wave's landings
         // wait to be proposed — and that older generation is what every running replica LOADED. A
@@ -615,6 +631,12 @@ public sealed class ModuleLandingService : IDisposable
                 + "advisory (#3648), the link probe decides at placement: {Advisory}",
                 name, minMeshVersion, ModulePlatformFloor.RunningVersion ?? "(unknown)", advisory);
 
+        // Read ONCE: the surface below is measured against the landed set, and the previous
+        // generation (#3649) is taken from the same read, so the two cannot disagree about which
+        // generation this module currently has.
+        var landedBefore = ModuleActivationSidecar.Read(baseDirectory,
+            msg => logger?.LogWarning("{Message}", msg));
+        var surface = PlatformSurface(landedBefore);
         var held = LinkHoldReason();
         if (held is not null && !holdUnloadable)
         {
@@ -631,8 +653,36 @@ public sealed class ModuleLandingService : IDisposable
             var closure = assemblies
                 .Select(a => Path.GetFileNameWithoutExtension(a.FileName))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var verdict = ModulePlatformLink.Check(entryBytes, name, closure, PlatformSurface());
+            var verdict = ModulePlatformLink.Check(entryBytes, name, closure, surface);
             return verdict.MayLoad ? null : verdict.Report();
+        }
+
+        // 🚨 #3649 — THE PREVIOUS GENERATION IS KEPT, never overwritten. The entry this landing
+        // displaces becomes the new entry's fallback: boot loads the head generation, and when
+        // that one cannot load on the running platform it loads this one instead and says so.
+        // Until now the pointer simply moved, the displaced generation was unreferenced, and the
+        // next GC pass reclaimed it — so a shelved landing built for a newer platform took a
+        // working Store-only module away for good (rule R1 of the module adoption policy).
+        //
+        // Carried FORWARD when the displaced generation is itself measured unloadable here and
+        // holds a fallback of its own: two unloadable landings in a row must not push the one
+        // generation that loads out of reach. Measured on the bytes, like every other decision
+        // point — a persisted "held" flag would go stale the moment the platform moved.
+        var displaced = landedBefore.Entries.FirstOrDefault(e =>
+            e.Enabled
+            && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(e.Directory));
+        var previous = displaced is null ? null : PreviousToKeep(displaced);
+
+        ModuleActivationEntry PreviousToKeep(ModuleActivationEntry current)
+        {
+            var older = ModuleActivationBoot.PreviousGeneration(current);
+            if (older is null || !ModuleActivationBoot.LandedModuleDllExists(baseDirectory, older))
+                return current;
+            var currentDll = ModuleActivationBoot.LandedDllPath(baseDirectory, current);
+            if (!File.Exists(currentDll))
+                return older; // the displaced bytes are gone; its own fallback is what is left
+            return ModulePlatformLink.Check(currentDll, surface).MayLoad ? current : older;
         }
 
         // 🚨 The same-identity trap-door: modules/<name>/<name>.dll wins over the app folder in
@@ -697,6 +747,9 @@ public sealed class ModuleLandingService : IDisposable
             MinMeshVersion = minMeshVersion,
             Enabled = true,
             Directory = generation,
+            PreviousDirectory = previous?.Directory,
+            PreviousVersion = previous?.Version,
+            PreviousFrameworkMvid = previous?.FrameworkMvid,
         };
         // 🚨 THIS MODULE'S OWN FILE, and nothing else (#2090). The landing used to read the whole
         // shared activation index, append to it and rename the result over the live file — a
@@ -718,17 +771,18 @@ public sealed class ModuleLandingService : IDisposable
             logger?.LogInformation(
                 "Module '{Name}' LANDED into modules/{Generation}/ ({Count} assemblies, declared "
                 + "floor {MinMeshVersion} — advisory, platform {Running}; built against framework "
-                + "MVID {FrameworkMvid} — diagnostic) — activation recorded, RESTART REQUIRED to "
-                + "load it",
+                + "MVID {FrameworkMvid} — diagnostic; previous generation {Previous} kept as the "
+                + "fallback) — activation recorded, RESTART REQUIRED to load it",
                 name, generation, assemblies.Count, minMeshVersion ?? "(none)",
-                ModulePlatformFloor.RunningVersion ?? "(unknown)", frameworkMvid ?? "(unrecorded)");
+                ModulePlatformFloor.RunningVersion ?? "(unknown)", frameworkMvid ?? "(unrecorded)",
+                previous?.Directory ?? "(none)");
         else
             logger?.LogInformation(
                 "Module '{Name}' SHELVED into modules/{Generation}/ ({Count} assemblies) but HELD "
                 + "from local activation: {Reason}. It SERVES to consumers from here; this "
-                + "process's boot parks it until a platform update carries the types it links "
-                + "against, and that same boot then loads it",
-                name, generation, assemblies.Count, held);
+                + "process's boot runs the previous generation {Previous} until a platform update "
+                + "carries the types it links against, and that same boot then loads it",
+                name, generation, assemblies.Count, held, previous?.Directory ?? "(none)");
 
         return new ModuleLandingOutcome(Held: held is not null, HoldReason: held);
     }
@@ -746,21 +800,30 @@ public sealed class ModuleLandingService : IDisposable
                 $"Module '{name}' was not landed by the store lane (no activation entry) — "
                 + "publish-laid-out module folders are managed by the deployment, not uninstall.");
 
-        // The generation pointer is CLEARED on uninstall — a disabled entry must not keep its
-        // directory 'referenced', or the GC pass could never reclaim it. Written to THIS module's own
-        // file, never through the shared index (#2090): an uninstall racing another module's
-        // landing used to drop whichever entry lost.
+        // BOTH generation pointers are CLEARED on uninstall — a disabled entry must not keep its
+        // directory (or its fallback's, #3649) 'referenced', or the GC pass could never reclaim
+        // them. Written to THIS module's own file, never through the shared index (#2090): an
+        // uninstall racing another module's landing used to drop whichever entry lost.
         ModuleActivationSidecar.WriteEntry(baseDirectory,
-            existing with { Enabled = false, Directory = null });
+            existing with
+            {
+                Enabled = false,
+                Directory = null,
+                PreviousDirectory = null,
+                PreviousVersion = null,
+                PreviousFrameworkMvid = null,
+            });
         ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
         // Best-effort immediate delete: on a shared volume the files of a LOADED module refuse
-        // deletion (SMB keeps them open) — that is fine, the cleared pointer above makes the
+        // deletion (SMB keeps them open) — that is fine, the cleared pointers above make the
         // next GC pass (ModuleGenerationsGcHostedService, after a pod's ApplicationStarted)
-        // reclaim the generation once no pod holds it.
+        // reclaim the generations once no pod holds them.
         var targets = new List<string> { Path.Combine(baseDirectory, "modules", name) };
         if (!string.IsNullOrWhiteSpace(existing.Directory))
             targets.Add(Path.Combine(baseDirectory, "modules", existing.Directory!));
+        if (!string.IsNullOrWhiteSpace(existing.PreviousDirectory))
+            targets.Add(Path.Combine(baseDirectory, "modules", existing.PreviousDirectory!));
         foreach (var target in targets.Where(Directory.Exists))
         {
             try
@@ -805,10 +868,9 @@ public sealed class ModuleLandingService : IDisposable
     /// legitimately lack a type its successor has; measuring against whichever directory an
     /// unordered listing happened to yield first would make the verdict depend on the filesystem.</para>
     /// </summary>
-    private ModulePlatformSurface PlatformSurface()
+    private ModulePlatformSurface PlatformSurface(ModuleActivationList activation)
     {
-        var landed = ModuleActivationSidecar.Read(baseDirectory,
-                msg => logger?.LogWarning("{Message}", msg))
+        var landed = activation
             .Entries
             .Where(entry => entry.Enabled && !string.IsNullOrWhiteSpace(entry.Name))
             .Select(entry => ModuleDirectoryFor(baseDirectory, entry.Name, entry))

@@ -89,6 +89,9 @@ public static class MemexConfiguration
                 .Select(m => m.Name)
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+            // #3649 — the modules it loaded from their PREVIOUS generation: present, one version
+            // behind, and never "restart required".
+            FallbackModules = [.. app.Services.GetServices<FallbackModule>()],
         }.Read();
 
         if (report.IsUndetermined)
@@ -121,6 +124,12 @@ public static class MemexConfiguration
                 "{Count} activated module(s) are landed but not loaded in this process — whatever "
                 + "they contribute (endpoints included) is absent until a restart: {Detail}",
                 report.Pending.Count, ModuleActivationStatus.Describe(report.Pending));
+
+        // 🚨 #3649 — once per boot, on the logger: the loader already said it on stderr before the
+        // pipeline was up, and this is the line an operator's log query finds. A Warning, not an
+        // Error: the module is running, one version behind, and nothing here is broken.
+        foreach (var fallback in app.Services.GetServices<FallbackModule>())
+            logger.LogWarning("[MeshWeaver.Mesh.FallbackModule] {Report}", fallback.Report());
     }
 
     /// <summary>
@@ -304,6 +313,7 @@ public static class MemexConfiguration
             // both: skip, say so on stderr, and boot. A module that is genuinely required makes
             // itself known as a missing FEATURE, which is diagnosable — a portal that will not
             // start is not.
+            void WarnPin(string msg) => Console.Error.WriteLine($"[ModuleActivation] {msg}");
             var loadableModules = effectiveModules
                 // 🚨 ONE resolution, shared with the existence gate above
                 // (ModuleActivationBoot.ResolveLoadPath): a store-landed module resolves to the
@@ -319,12 +329,24 @@ public static class MemexConfiguration
                 // still lazily loads dependency DLLs from it (first chat after that was
                 // FileNotFoundException 'OpenAI' — the 2026-08-27 outage). Baseline entries stay
                 // un-pinned: they resolve into the image's own immutable closure.
+                //
+                // 🚨 #3649: a store-landed entry that still holds its PREVIOUS generation hands
+                // the loader a way back — resolved (and pinned) LAZILY, only when the head
+                // generation is refused before loading or fails to load. Pinning every previous
+                // generation up front would double the per-boot copy for a path taken only when
+                // something is wrong. The loader then runs the previous generation, records a
+                // FallbackModule, and says so on stderr; the module is present, one version
+                // behind, instead of absent.
                 .Select(module => (
                     Module: module,
                     Path: module.Landed is not null
-                        ? ModuleGenerationPin.PinnedLoadPath(moduleRoot, module.Landed,
-                            onWarn: msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"))
-                        : ModuleActivationBoot.ResolveLoadPath(moduleRoot, module)))
+                        ? ModuleGenerationPin.PinnedLoadPath(moduleRoot, module.Landed, onWarn: WarnPin)
+                        : ModuleActivationBoot.ResolveLoadPath(moduleRoot, module),
+                    Previous: module.Landed is { } landed
+                              && ModuleActivationBoot.PreviousGeneration(landed) is { } previous
+                              && ModuleActivationBoot.LandedModuleDllExists(moduleRoot, previous)
+                        ? previous
+                        : null))
                 .Where(candidate =>
                 {
                     if (File.Exists(candidate.Path))
@@ -337,7 +359,16 @@ public static class MemexConfiguration
                     return false;
                 })
                 .ToArray();
-            var resolvedModules = loadableModules.Select(candidate => candidate.Path).ToArray();
+            var resolvedModules = loadableModules
+                .Select(candidate => new ModuleInstallCandidate(candidate.Path)
+                {
+                    Version = candidate.Module.Landed?.Version,
+                    PreviousVersion = candidate.Previous?.Version,
+                    Previous = candidate.Previous is { } previous
+                        ? () => ModuleGenerationPin.PinnedLoadPath(moduleRoot, previous, onWarn: WarnPin)
+                        : null,
+                })
+                .ToArray();
 
             // 🚨 #2223 — SAY WHICH COPY IS BEING LOADED. A view-pack fix can merge, build, land in
             // the module store and still not run, because a baseline Modules:Assemblies entry
@@ -348,7 +379,8 @@ public static class MemexConfiguration
             // and boots: a pod that refuses to start cannot be given the fix for what is wrong
             // with it.
             ModuleLoadReport.Write(
-                ModuleLoadReport.Describe(moduleRoot, loadableModules),
+                ModuleLoadReport.Describe(moduleRoot,
+                    loadableModules.Select(candidate => (candidate.Module, candidate.Path))),
                 Console.WriteLine,
                 Console.Error.WriteLine);
 
@@ -364,7 +396,7 @@ public static class MemexConfiguration
             // Configuration must mean "the deployment supplied nothing", never "the host forgot".
             builder.WithConfiguration(configuration);
             if (resolvedModules.Length > 0)
-                builder.InstallAssemblies(resolvedModules);
+                builder.InstallModules(resolvedModules);
 
             // 🚨 #3395 — say, once and durably, that a replica came up on the mesh's set. Deferred
             // to a hosted service rather than written here, because the claim is "this set is
@@ -379,10 +411,15 @@ public static class MemexConfiguration
             // later in boot than it did here. Create-if-absent, so the second and every later
             // replica writes nothing, and best-effort — a read-only volume costs the mesh-level
             // signal and nothing else.
+            // 🚨 #3649 — the adoption records what this process ACTUALLY LOADED per module: the
+            // set's generation where it loaded, the previous one where the loader fell back. Read
+            // off the container, because the FallbackModule records exist only after
+            // InstallModules ran; so the mesh's records say what runs, and the GC references it.
             if (meshModuleSets.Proposed is { } adoptedSet)
                 builder.ConfigureServices(services => services.AddModuleSetAdoption(
                     $"module set {adoptedSet.Sequence} ('{adoptedSet.Id}')",
-                    () => ModuleSetStore.RecordAdoption(moduleRoot, adoptedSet,
+                    sp => ModuleSetStore.RecordAdoption(moduleRoot, adoptedSet,
+                        ModuleSetStore.RunningGenerationsOf(adoptedSet, sp.GetServices<FallbackModule>()),
                         adoptedBy: Environment.MachineName,
                         onWarn: msg => Console.Error.WriteLine($"[ModuleSet] {msg}"))));
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —

@@ -142,6 +142,21 @@ never reach disk), and a refusal of any module whose entry DLL name collides wit
 assembly — `ResolveModulePath` probes `modules/<name>/` first, so such a module would silently
 shadow the platform's own binary at the next boot.
 
+**The fallback rule (MeshWeaver#3649).** A landed generation that does not load on the running
+platform — refused by the [link probe](../ModulePlatformLinkGate) before loading, or faulting in
+`Assembly.LoadFrom` — no longer leaves the module absent. Every landing records the entry it
+displaces as `PreviousDirectory` (with `PreviousVersion` / `PreviousFrameworkMvid`); boot hands
+`MeshBuilder.InstallModules` both generations and the loader runs the previous one when the head
+one cannot load here, registering a `FallbackModule` — present, running, one version behind — and
+saying so on stderr and, once the pipeline is up, as a Warning. The GC references the previous
+generation like the head one; the mesh-set adoption records the generation that actually loaded;
+the status row reads *"runs v1.2.3 (gen A); v1.3.0 (gen B) landed but does not load here: …"*, the
+readiness probe stays Healthy, and nothing says "restart required" (a restart falls back again).
+Only when no generation loads is the module incompatible, as before; an uninstall clears both
+pointers. This is rule R1 of the [Module Adoption Policy](../ModuleAdoptionPolicy): *an
+installation runs the newest generation of every module that loads, and keeps the one it has until
+a newer one does.*
+
 ### 🚨 "Keeps loading across ordinary platform updates" is a promise the PLATFORM owes (#2370)
 
 The semver floor above is not a weaker gate than MVID equality — it is a **different contract**, and

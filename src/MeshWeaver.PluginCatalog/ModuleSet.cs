@@ -73,7 +73,20 @@ public sealed record ModuleSetAdoption(
     long Sequence,
     string Id,
     DateTime AdoptedAtUtc,
-    string? AdoptedBy = null);
+    string? AdoptedBy = null)
+{
+    /// <summary>
+    /// Module simple name → the generation the adopting replica ACTUALLY LOADED (#3649): the
+    /// set's own generation for every module that loaded as proposed, and the PREVIOUS generation
+    /// for every module that fell back because the set's one does not load on this platform. So
+    /// a reader of the set records learns what the mesh RUNS, not only what it proposed — and the
+    /// GC references what runs. Null on a record written before this field existed, which reads
+    /// as "the set's generations, as far as anyone recorded". An init-only property, not a fifth
+    /// positional parameter: replacing a public record's constructor signature is a binary break
+    /// for a host compiled against the previous platform.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string>? Generations { get; init; }
+}
 
 /// <summary>
 /// Everything the <c>modules/sets/</c> directory says, read in one pass: which set the mesh has
@@ -95,6 +108,30 @@ public sealed record ModuleSetIndex(
 {
     /// <summary>An empty deployment's index — no proposal, no adoption, no conflict.</summary>
     public static readonly ModuleSetIndex Empty = new(null, null, []);
+
+    /// <summary>
+    /// Module simple name → the generation the replica that adopted <see cref="Current"/>
+    /// actually loaded (#3649) — <see cref="ModuleSet.Generations"/> of the current set for every
+    /// module that loaded as proposed, the previous generation for every module that fell back.
+    /// Empty when no set is current, or when the adoption record predates the field. What the
+    /// mesh RUNS, as opposed to what it proposed; an init-only property, for binary compatibility
+    /// with hosts compiled against the three-argument record.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string> RunningGenerations { get; init; } =
+        ImmutableSortedDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The modules of <see cref="Current"/> that RUN A PREVIOUS GENERATION on the adopting replica
+    /// (#3649): name → the generation loaded, for every module whose running generation differs
+    /// from the set's. Empty when every module loaded as proposed.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string> FallbackGenerations =>
+        Current is null
+            ? ImmutableSortedDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase)
+            : RunningGenerations
+                .Where(kv => Current.Generations.TryGetValue(kv.Key, out var proposed)
+                             && !string.Equals(proposed, kv.Value, StringComparison.Ordinal))
+                .ToImmutableSortedDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// True while the mesh has declared a set that NO replica has booted onto yet — the
@@ -207,7 +244,7 @@ public static class ModuleSetStore
         }
 
         var proposals = new List<ModuleSet>();
-        var adopted = new HashSet<string>(StringComparer.Ordinal);
+        var adopted = new Dictionary<string, ModuleSetAdoption>(StringComparer.Ordinal);
         foreach (var file in files)
         {
             if (file.EndsWith(ProposedSuffix, StringComparison.Ordinal))
@@ -228,7 +265,12 @@ public static class ModuleSetStore
             else if (file.EndsWith(AdoptedSuffix, StringComparison.Ordinal)
                      && TryRead<ModuleSetAdoption>(file, onCorrupt) is { } adoption)
             {
-                adopted.Add(Key(adoption.Sequence, adoption.Id));
+                // Create-if-absent means one record per set, so a second file for the same key
+                // is the same bytes; first read wins and nothing is lost.
+                adopted.TryAdd(Key(adoption.Sequence, adoption.Id), adoption with
+                {
+                    Generations = adoption.Generations?.WithComparers(StringComparer.OrdinalIgnoreCase),
+                });
             }
         }
 
@@ -259,10 +301,15 @@ public static class ModuleSetStore
 
         var newest = bySequence.Values.OrderByDescending(p => p.Sequence).First();
         var current = bySequence.Values
-            .Where(p => adopted.Contains(Key(p.Sequence, p.Id)))
+            .Where(p => adopted.ContainsKey(Key(p.Sequence, p.Id)))
             .OrderByDescending(p => p.Sequence)
             .FirstOrDefault();
-        return new ModuleSetIndex(newest, current, conflicts);
+        // #3649 — what the adopting replica RAN. An adoption written before the field existed
+        // carries no generations, and then the set's own are the best anyone recorded.
+        var running = current is null
+            ? ImmutableSortedDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase)
+            : adopted[Key(current.Sequence, current.Id)].Generations ?? current.Generations;
+        return new ModuleSetIndex(newest, current, conflicts) { RunningGenerations = running };
     }
 
     /// <summary>
@@ -322,6 +369,26 @@ public static class ModuleSetStore
         ModuleSet set,
         string? adoptedBy = null,
         Action<string>? onWarn = null)
+        => RecordAdoption(baseDirectory, set, runningGenerations: null, adoptedBy, onWarn);
+
+    /// <summary>
+    /// As the four-argument form, recording what this process ACTUALLY LOADED per module (#3649)
+    /// — the set's generation where it loaded, the previous generation where boot fell back — so
+    /// the mesh's records say what runs and the GC references it. An overload, not a new optional
+    /// parameter: the four-argument signature is binary API for hosts compiled against it.
+    /// </summary>
+    /// <param name="baseDirectory">The deployment root.</param>
+    /// <param name="set">The set this process loaded.</param>
+    /// <param name="runningGenerations">Module simple name → the generation loaded, as
+    /// <see cref="RunningGenerationsOf"/> derives it; null records the set's own generations.</param>
+    /// <param name="adoptedBy">Diagnostics — which process.</param>
+    /// <param name="onWarn">The loud channel for a failed record.</param>
+    public static void RecordAdoption(
+        string baseDirectory,
+        ModuleSet set,
+        IReadOnlyDictionary<string, string>? runningGenerations,
+        string? adoptedBy = null,
+        Action<string>? onWarn = null)
     {
         ArgumentNullException.ThrowIfNull(set);
         var path = PathOf(baseDirectory, set.Sequence, set.Id, AdoptedSuffix);
@@ -329,8 +396,13 @@ public static class ModuleSetStore
         {
             if (File.Exists(path))
                 return;
+            var generations = (runningGenerations ?? set.Generations)
+                .ToImmutableSortedDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
             WriteOnce(path, JsonSerializer.Serialize(
-                new ModuleSetAdoption(set.Sequence, set.Id, DateTime.UtcNow, adoptedBy), Json));
+                new ModuleSetAdoption(set.Sequence, set.Id, DateTime.UtcNow, adoptedBy)
+                {
+                    Generations = generations,
+                }, Json));
         }
         catch (Exception ex)
         {
@@ -358,7 +430,35 @@ public static class ModuleSetStore
             foreach (var generation in set?.Generations.Values ?? Enumerable.Empty<string>())
                 if (!string.IsNullOrWhiteSpace(generation))
                     referenced.Add(generation);
+        // #3649 — and what the adopting replica actually RUNS, which for a module that fell back
+        // is a generation neither retained set names.
+        foreach (var generation in index?.RunningGenerations.Values ?? Enumerable.Empty<string>())
+            if (!string.IsNullOrWhiteSpace(generation))
+                referenced.Add(generation);
         return referenced;
+    }
+
+    /// <summary>
+    /// What a process that installed <paramref name="set"/> actually runs (#3649): the set's own
+    /// generation for every module, overridden by the generation that LOADED for every module in
+    /// <paramref name="fallbacks"/> — the records <c>MeshBuilder.InstallModules</c> registered for
+    /// the modules whose head generation did not load here. The one derivation, shared by the
+    /// boot path that records the adoption and the tests that read it back.
+    /// </summary>
+    /// <param name="set">The set the process booted onto.</param>
+    /// <param name="fallbacks">The fallback records the loader registered.</param>
+    public static ImmutableSortedDictionary<string, string> RunningGenerationsOf(
+        ModuleSet set, IEnumerable<MeshWeaver.Mesh.FallbackModule> fallbacks)
+    {
+        ArgumentNullException.ThrowIfNull(set);
+        ArgumentNullException.ThrowIfNull(fallbacks);
+        var running = set.Generations.ToBuilder();
+        running.KeyComparer = StringComparer.OrdinalIgnoreCase;
+        foreach (var fallback in fallbacks)
+            if (running.ContainsKey(fallback.Name)
+                && !string.IsNullOrWhiteSpace(fallback.PreviousGeneration))
+                running[fallback.Name] = fallback.PreviousGeneration;
+        return running.ToImmutable();
     }
 
     /// <summary>
@@ -414,7 +514,16 @@ public static class ModuleSetStore
                   + $"{proposed.Generations.Count} module(s)) and NO replica has booted onto it yet "
                   + $"— it was proposed at {proposed.ProposedAtUtc:O}"
                 : $"the mesh is on module set {proposed.Sequence} ('{proposed.Id}', "
-                  + $"{proposed.Generations.Count} module(s))";
+                  + $"{proposed.Generations.Count} module(s))"
+                  + DescribeFallbacks(index.FallbackGenerations);
+
+    /// <summary>The "; N module(s) run a previous generation: …" suffix, or nothing (#3649).</summary>
+    private static string DescribeFallbacks(ImmutableSortedDictionary<string, string> fallbacks) =>
+        fallbacks.Count == 0
+            ? string.Empty
+            : $"; {fallbacks.Count} module(s) run a PREVIOUS generation because the set's does not "
+              + "load on this platform: "
+              + string.Join(", ", fallbacks.Select(kv => $"{kv.Key} ({kv.Value})"));
 
     private static string Key(long sequence, string? id) => $"{sequence}:{id}";
 

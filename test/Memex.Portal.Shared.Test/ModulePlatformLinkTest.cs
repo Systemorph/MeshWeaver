@@ -392,6 +392,50 @@ public class ModulePlatformLinkTest : IDisposable
         Assert.Equal("MeshWeaver.Test.ParkedViewPack", stalls.Name);
     }
 
+    /// <summary>
+    /// 🚨 #3649 — a REQUIRED module running its PREVIOUS generation is <c>Present</c>. The loader
+    /// registers a <see cref="FallbackModule"/> for it, never an <see cref="IncompatibleModule"/>:
+    /// its assembly is loaded and its features work, so the readiness probe stays Healthy and a
+    /// rollout is not stalled on a module that is merely one version behind.
+    /// </summary>
+    [Fact]
+    public void ARequiredModuleRunningItsPreviousGeneration_IsPresent_NeverIncompatible()
+    {
+        var fallback = new FallbackModule(
+            "MeshWeaver.Test.FallbackPack",
+            "/data/modules/MeshWeaver.Test.FallbackPack@b/MeshWeaver.Test.FallbackPack.dll",
+            "/data/modules/MeshWeaver.Test.FallbackPack@a/MeshWeaver.Test.FallbackPack.dll",
+            "it references " + FutureType)
+        {
+            Version = "1.3.0",
+            PreviousVersion = "1.2.3",
+        };
+        Assert.Equal("MeshWeaver.Test.FallbackPack@b", fallback.Generation);
+        Assert.Equal("MeshWeaver.Test.FallbackPack@a", fallback.PreviousGeneration);
+        Assert.StartsWith(
+            "runs v1.2.3 (MeshWeaver.Test.FallbackPack@a); v1.3.0 (MeshWeaver.Test.FallbackPack@b) "
+            + "landed but does not load here:", fallback.Describe(), StringComparison.Ordinal);
+
+        // What the loader hands the probe for such a module: the name IS loaded, and the
+        // incompatible set does NOT carry it.
+        var verdicts = RequiredModuleStatus.Classify(
+            requiredEntries: ["MeshWeaver.Test.FallbackPack.dll"],
+            baselineEntries: [],
+            loadedAssemblyNames: new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "MeshWeaver.Test.FallbackPack" },
+            resolvesFromDeployment: _ => false,
+            activation: null,
+            landedDllExists: _ => true,
+            platformGate: _ => null,
+            incompatibleModules: []);
+
+        var verdict = Assert.Single(verdicts);
+        Assert.Equal("MeshWeaver.Test.FallbackPack", verdict.Name);
+        Assert.Equal(RequiredModuleState.Present, verdict.State);
+        Assert.Empty(RequiredModuleStatus.Incompatible(verdicts));
+        Assert.Empty(RequiredModuleStatus.ExpectedLater(verdicts));
+    }
+
     // ───────────────────────────────────────────────────────────── harness
 
     /// <summary>
