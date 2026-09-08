@@ -27,37 +27,59 @@ anyway — pinned at `compilationStatus: "Error"` by a failure nobody authored.
 | Artifact | Where | Removed by |
 |---|---|---|
 | `{Type}/Source/*.cs`, `{Type}/Test/*.cs` | the package / node repo | the import's prune |
-| `{Type}.json` — the `NodeTypeDefinition` | the package / node repo | the import's prune — **except see below** |
+| `{Type}.json` — the `NodeTypeDefinition` | the package / node repo | the import's prune — **see below: this was broken until 2026-09-08** |
 | Instances (`nodeType:{Type}`) | anywhere on the mesh, incl. user partitions | nothing automatic |
 | `{Type}/Release/**` | mesh-minted | nothing — `IsMeshMintedRelease` spares it by design |
 
 Only the first row is reliable. The rest need a decision.
 
-## 🚨 The prune cannot reach the definition — but reaches its sources
+## 🚨 The prune used to reach the sources and not the definition — FIXED 2026-09-08
+
+**This section describes a defect that is repaired. It is kept because the shape it left behind is
+still findable on any mesh that has not re-imported since.**
 
 The importer's prune is guarded by a **sync baseline**. `ImportConflictPolicy.PreservesFromPruneOf`
 (`src/MeshWeaver.Graph/StaticRepoImporter.cs`) keeps any node the repo no longer carries when it was
-changed on the server since the last sync:
+changed on the server since the last sync — and until 2026-09-08 that was the whole rule:
 
 ```csharp
+// BEFORE — timestamp only
 public bool PreservesFromPruneOf(MeshNode? target) =>
     (PreserveServerNewer || PreserveServerAdditions) && !Force && Since is { } since
     && target is not null && target.LastModified > since;
 ```
 
-That guard exists for a good reason — a node someone *added* on the server is a local addition to be
+The guard exists for a good reason — a node someone *added* on the server is a local addition to be
 committed back, not a stale extra (see [Static Repo Import](/Doc/Architecture/StaticRepoImport)). But
-it reads `LastModified`, and `LastModified` does not distinguish an author from the framework:
+`LastModified` does not distinguish an author from the framework:
 
 - **A NodeType definition is written by the framework on every compile.** `compilationStatus`,
   `lastCompileStartedAt`, `lastCompileSucceededAt`, `latestReleasePath`, `latestAssemblyMvid`,
   `compiledSources`, `requestedReleaseAt` all live on the definition's content and are stamped by
   `system-security`. Its `LastModified` therefore sits *after* any sync baseline.
-- **Its `Source`/`Test` Code nodes are written only by real edits.** Nothing framework-generated
-  touches them, so their `LastModified` stays where the last human edit left it — *before* the
-  baseline.
+- **Its `Source`/`Test` Code nodes were assumed to be written only by real edits** — so their
+  `LastModified` would stay where the last human edit left it, *before* the baseline.
 
-So on the import that drops the type, the prune deletes the sources and keeps the definition:
+That second assumption is false, which is why the asymmetry was never the whole story: an IMPORT
+writes those Code nodes too, and the horizon is held while anything is preserved, so the importer
+ended up preserving its own output from itself. Measured on `memex.systemorph.com` 2026-09-08, three
+`Crm/Source/Mail*` nodes deleted upstream on 09-06 were kept on exactly this rule.
+
+**The rule now asks WHO wrote it** (`ImportConflictPolicy.IsHumanEdit`): only a write carrying a real
+user id is a server edit. A definition stamped `system-security` by the compile pipeline is
+therefore pruned along with its sources — the asymmetry below is gone — and a node a *person* edited
+is preserved exactly as before. 🚨 Pruning the definition is intended, and it still strands live
+instances: `NodeTypeInstanceProbe` raises the ⚠, which is why step 1 of the runbook below has always
+been "establish the instance count is zero".
+
+🚨 **And a partition already in this state does not repair itself just because the rule changed** —
+the run that preserved those nodes stamped a green content-addressed marker, so every later trigger
+answered `Skipped` before the prune was reached. That half is
+[The Import Marker Records Convergence](/Doc/Architecture/ImportMarkerRecordsConvergence).
+
+### What it looked like
+
+On the import that dropped the type, the prune deleted the sources and kept the definition:
 
 ```
 ↩ Kept Edu/Course (added on the server — commit to sync it back).
