@@ -110,8 +110,10 @@ simultaneous memex-cloud stall did not involve this gate at all.
 > `ShippedPrebuiltBundles: bundle Doc.zip: adopted 4/4 prebuilt assembly(ies)` at 00:31:08 — ten
 > seconds before the sweep enumerated `204 of 209 … need building — 5 already on the share` and set
 > about recompiling them. Adoption seeding and the sweep's own store probe disagreeing on a cold
-> boot is what put those four types on the compile path at all; it is a separate seam and it is not
-> fixed here.
+> boot is what put those four types on the compile path at all; it is a separate seam, it is **not
+> fixed here**, and it is tracked as **issue #3703** — which carries both log lines, the control that
+> makes it a disagreement rather than a cold-store fact (a boot with `77 already current` sees 189
+> baked; this boot, with `78 adopted now`, saw 5), and the measurement that would name the mechanism.
 
 ### Why it lasted three hours, and why that is the dangerous part
 
@@ -160,7 +162,9 @@ signal available to the reader, and a chunk gap wider than it silently truncates
 suspect boot ran its discovery 14 seconds after a 35-second burst of bundle seeding onto the shared
 volume, which is exactly the kind of contention that widens a gap.
 
-**That is a hypothesis, and it has not been measured.** What would settle it: instrument `RunQuery`
+**That is a hypothesis, and it has not been measured. It is tracked as issue #3704**, which carries
+this section's content plus the ruling-out below, so the next reader starts from the instrument
+rather than rebuilding it. What would settle it: instrument `RunQuery`
 to record, per query, the number of change events folded and the largest inter-chunk gap, then
 compare a short pass against a complete one on the same portal. A pass whose largest gap approaches
 `QueryQuietWindow` names the completion rule; one whose gaps are all small says the shortfall is
