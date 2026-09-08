@@ -542,6 +542,41 @@ direction (a *deleted-address* NACK must NOT contain any of those markers, or a 
 degrades back into "retry shortly"). Pinned by
 `TimeoutMessageNamesTheCallersOwnStateTest.TheTimeoutMessage_KeepsTheMarkerThatClassifiesItAsTransient`.
 
+## 🚨 `Executing(T, N ms)` is a LIFETIME, not an occupancy — `buffer=N` is the occupancy
+
+A hub dump's turn-loop clause reads like a statement about the pump. It is not:
+
+```
+portal/nodeops-… RunLevel=Started Queue(buffer=45,deferred=0,drainsInFlight=1,openGates=0,draining=True) Executing(CreateNodeRequest, 24888ms)
+```
+
+`currentlyExecutingMessageType` is cleared in the `.Finally` of the handler's returned
+**observable**, which fires when that whole chain COMPLETES — not when the pump is released. A
+handler that correctly detaches (returns `Processed()` in a millisecond and lets its chain run on
+the IO pool) keeps the field set, with a growing elapsed, for as long as the work is in flight
+**anywhere**.
+
+So the clause says *"T's handler chain has been in flight N ms"*. It does **not** say a turn held
+the block for N ms, and a non-null `Executing(` does not mean the block is busy. `drainsInFlight`
+carries the same ambiguity: it counts a drain body that is in flight, which is not the same as a
+thread sitting on the block.
+
+**Measured (2026-09-08, #2543):** with a create parked in its validator on a hub whose pump was
+demonstrably free, this read `Executing(CreateNodeResponse, 36001ms)` — and the number tracked the
+observer's own sampling window, because the park *was* the handler's lifetime. Read as block time it
+says a turn was wedged for 36 s; nothing was.
+
+**What to read instead:**
+
+| question | read |
+|---|---|
+| Is the pump occupied? | `buffer=N` — a message queued and not draining IS occupancy. In the dump above, `buffer=45` was the real signal; the `24888ms` was not. |
+| Is *this* hub still answering? | Post an independent request to it and see whether it is answered. Behavioural, and the only reading that cannot be misinterpreted. |
+| Which handler is in flight? | `Executing(T, …)` — it names T correctly. Only its DURATION is misleading. |
+
+A behavioural probe needs a **positive control** — the same request with nothing blocking — or "it
+did not complete" cannot distinguish a held pump from a probe that never completes anyway.
+
 ## The Golden Rule
 
 > **Run once. Grep the trace. Fix the root cause.**

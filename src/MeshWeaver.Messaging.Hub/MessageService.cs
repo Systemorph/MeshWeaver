@@ -913,7 +913,24 @@ public class MessageService : IMessageService
 
     // Tracks what message is currently executing so the disposal diagnostic snapshot
     // can name *which* handler is wedged. Updated atomically around each handler
-    // invocation in ScheduleExecution. Null means the action block is idle.
+    // invocation in ScheduleExecution.
+    //
+    // 🚨 THIS IS A LIFETIME, NOT AN OCCUPANCY. It is cleared in the `.Finally` of the handler's
+    // returned OBSERVABLE, which fires when that whole chain COMPLETES — not when the pump is
+    // released. A handler that correctly detaches (returns `Processed()` in a millisecond and lets
+    // its chain run on the IO pool) therefore keeps this field set, and its elapsed keeps growing,
+    // for as long as the work is in flight ANYWHERE. So `Executing(T, N ms)` means "T's handler
+    // chain has been in flight N ms"; it does NOT mean "a turn has held the block for N ms", and a
+    // non-null value does NOT mean the block is busy.
+    //
+    // Measured (#2543, 2026-09-08): with a create parked in its validator on a hub whose pump was
+    // free, this read `Executing(CreateNodeResponse, 36001ms)` and tracked the observer's own
+    // sampling window. #2543's headline `Executing(CreateNodeRequest, 24888ms)` is the same
+    // reading, so it never established that the block was held — the `buffer=45` beside it did.
+    //
+    // 🚨 To ask whether the PUMP is occupied, read `mainQueue.Count` (a message queued and not
+    // draining is occupancy) or measure it behaviourally: post an independent request to the hub
+    // and see whether it is answered. See Doc/Architecture/BakeSealNodeOpsSaturation.
     private volatile string? currentlyExecutingMessageType;
     private long currentlyExecutingStartedTicks;
     // Turns the pump has finished since this service was built. The disposal stall detector reads
