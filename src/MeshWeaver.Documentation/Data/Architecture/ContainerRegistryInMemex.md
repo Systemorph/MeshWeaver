@@ -113,8 +113,12 @@ on every pull request: `deploy/helm/values.registry.example.yaml`.
    falls through to the second way.
 2. **Any other account name, with a MeshWeaver instance key as the password.** docker_auth's
    `ext_auth` hook (`validate.sh`, a ConfigMap) presents the password as `Authorization: Bearer`
-   to `registry.validationUrl` — by default the portal's plugin catalog,
-   `https://memex.meshweaver.cloud/api/plugins?ref=HEAD`. `200` authenticates, `401`/`403` denies,
+   in a `POST` with an empty JSON body to `registry.validationUrl` — by default the portal's
+   key→token exchange, `https://memex.meshweaver.cloud/api/instances/token` (the
+   `SyncTokenPayloads` contract; an empty body is a valid request). The plugin catalog is not the
+   validator because it renders in full — measured 2026-09-08 against `memex.meshweaver.cloud`,
+   14–18 s for a valid key against the validator's 10 s cap, while the exchange answers a valid
+   key in 0.2 s and a bad one in 0.1 s. `200` authenticates, `401`/`403` denies,
    and **anything else is exit 3, an ERROR, never a pass** — a DNS failure, a timeout or a 5xx
    refuses the login and is logged by docker_auth as such, so an outage of the validator reads as
    an outage, not as "wrong key". Every authenticated account may `pull` anything.
@@ -145,9 +149,11 @@ validator — and a real `docker login`/`push`/`pull`):
 
 * `docker login` as the publisher with the `$2y$` hash → accepted; `push` → accepted; wrong
   password → refused without reaching the validator.
-* `docker login` as `instance` with the known key → accepted (the stub saw the bearer); `pull` →
-  accepted; `push` → **denied by the ACL**; a bad key → refused; the validator stopped → refused,
-  logged `bad return code from command: 3`; anonymous `pull` → refused.
+* `docker login` as `instance` with the known key → accepted (the stub saw the bearer on a `POST`
+  with `Content-Type: application/json`; the stub answers `405` to a `GET`, so a validator that
+  still fetched would not have logged in); `pull` → accepted; `push` → **denied by the ACL**; a
+  bad key → refused; the validator stopped → refused, logged `bad return code from command: 3`;
+  anonymous `pull` → refused.
 * Every registry event reached the stub carrying the Authorization header from the vault
   (`pull` and `push` actions observed).
 * 🚨 **docker_auth 1.13.0 cannot pair with distribution 3 at all.** distribution 3 keys its

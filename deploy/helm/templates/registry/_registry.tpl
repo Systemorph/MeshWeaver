@@ -8,7 +8,7 @@ built from two off-the-shelf images and zero registry code of ours:
   * docker_auth    cesanta/docker_auth — the token server. ONE static publisher account (its
                    bcrypt hash is the only credential in values, and a hash is committable) plus an
                    `ext_auth` hook that validates ANY other password as a MeshWeaver instance key
-                   by asking the portal's plugin catalog (`registry.validationUrl`).
+                   by presenting it to the portal's key→token exchange (`registry.validationUrl`).
 
 Both share the one host through ONE Ingress: `/auth` → docker_auth, everything else → distribution.
 Design: Doc/Architecture/ContainerRegistryInMemex → "The registry as a separate service".
@@ -69,7 +69,7 @@ start. The one exception is deliberate and safe: `publisher.passwordBcrypt` is a
       "notificationSecretObject" $notificationSecretObject
       "publisherUsername" ($publisher.username | default "publisher")
       "publisherPasswordBcrypt" $passwordBcrypt
-      "validationUrl" ($r.validationUrl | default "https://memex.meshweaver.cloud/api/plugins?ref=HEAD")
+      "validationUrl" ($r.validationUrl | default "https://memex.meshweaver.cloud/api/instances/token")
       "notificationUrl" $notificationUrl
       "ingressClassName" ($ingress.className | default "nginx")
       "clusterIssuer" ($ingress.clusterIssuer | default "")
