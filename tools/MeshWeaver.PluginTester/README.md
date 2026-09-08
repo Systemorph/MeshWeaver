@@ -6,12 +6,12 @@ content (#1707). It stages content from a git checkout, compiles NodeTypes with 
 `--bake-output` — emits prebuilt-assembly bundles keyed by the framework build identity, so
 portals adopt instead of recompiling.
 
-Distributed two ways, same binary:
-
-- **dotnet tool** — `dotnet tool install -g MeshWeaver.Compiler.Cli` (command: `mw-compiler`; use
-  `--tool-path`/`--local` for CI-scoped installs), for satellite content repos' CI lanes: install
-  the version matching your platform, run the bake, no platform-repo artifact download.
-- **container image** — the `mw-plugin-test` image the plugin gates run.
+**Distributed as a container image, and only as an image** — the `mw-plugin-test` image the plugin
+gates run. It was also packed as the `MeshWeaver.Compiler.Cli` dotnet tool until 2026-09-07; that
+half never acquired a consumer (every lane in both repositories runs the image) and two
+distributions of one binary is a drift trap, so it was retired along with the rest of the package
+set ([NuGet Package Retirement](../../src/MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md)).
+Invoke it as the image's entrypoint at a pinned digest.
 
 Useful entry points:
 

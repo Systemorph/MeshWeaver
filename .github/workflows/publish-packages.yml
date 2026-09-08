@@ -1,0 +1,260 @@
+name: Publish the surviving NuGet packages
+
+# ═══════════════════ TWO PACKAGES SURVIVE, AND THIS IS WHERE THEY GO ═══════════════════
+#
+# Maintainer, 2026-09-07: "we retire most nuget packages completely … we leave the dotnet new
+# package and the aspire integration". Everything else under the MeshWeaver prefix is retired and
+# unlisted (Doc/Architecture/NuGetPackageRetirement; scripts/orphaned-nuget-packages.py).
+#
+#   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)  ← published here
+#   MeshWeaver.MemexTemplate          tools/MeshWeaver.MemexTemplate.Pack (MeshWeaver.Plugins)
+#
+# 🚨 ONLY THE FIRST IS PUBLISHED BY THIS LANE, and that is deliberate — see "the template is
+# blocked" below. Both survive the retirement; only one can ship without a product decision.
+#
+# Both are ENTRY POINTS, not platform bytes: one is the `dotnet new` template that writes a portal
+# solution, the other is the AppHost-side Aspire integration whose `builder.AddMemex()` names the
+# published GHCR images. Neither is loaded into a portal, neither carries a framework assembly, and
+# neither participates in the NodeType bake identity — which is what makes packing them at the tag
+# harmless (see "why pack rather than promote" below).
+#
+# ───────────────────────────── WHY THE RELEASE TAG, NOT EVERY MERGE ─────────────────────────────
+# The platform ships CONTINUOUSLY as images (3.0.0-ci.<n> per green merge) and a release is a
+# PROMOTION of one sealed set (Doc/Architecture/ReleaseProcess). These two packages cannot follow
+# that model, for one measured reason: nuget.org orders by SemVer, and `-ci.<n>` does NOT sort the
+# way the fleet's self-updater ranks it. Publishing the continuous stream to nuget.org would
+# reproduce the rc line's defect exactly — `rc9` sat above `rc13` on nuget.org for a whole run — and
+# would put hundreds of throwaway versions in front of consumers whose only question is "what is the
+# current one". So: the clean X.Y.Z on the release tag, and nothing in between.
+#
+# 🚨 WHY PACK RATHER THAN PROMOTE. release.yml promotes because the bytes already exist in a
+# registry; no nupkg is ever built by main-cd, so there is nothing to retag and these two are packed
+# here. That reintroduces "built at the tag" — the thing release.yml exists to avoid — for exactly
+# these two projects, and it is safe only because neither is a platform assembly: the adapter
+# compiles against Aspire.Hosting alone and the template is content-only (IncludeBuildOutput=false).
+# The moment either grows a dependency on a MeshWeaver framework assembly, this lane is wrong and
+# must take its bytes from a sealed set instead.
+#
+# ──────────────────── THE TEMPLATE IS BLOCKED ON A PRODUCT DECISION, NOT ON WIRING ────────────────
+# MeshWeaver.MemexTemplate is a survivor by decision but is NOT published here yet, because
+# publishing it today would publish PRIVATE SOURCE to public nuget.org. Measured 2026-09-07:
+#
+#   • generate-memex-template.cs REFUSES to generate without `--with-gui`: the two shipped hosts
+#     reference Memex.Portal.Gui unconditionally, so a template without it cannot build.
+#   • Memex.Portal.Gui lives ONLY in Systemorph/MeshWeaver.Plugins, which is PRIVATE. Core holds
+#     zero .razor files and no MeshWeaver.Blazor* project — the GUI has fully left the public repo.
+#   • The published 3.0.0-rc7 template contains NO Memex.Portal.Gui, so shipping it now would be a
+#     NEW public exposure, not a restoration of prior behaviour.
+#   • A nupkg cannot be recalled. Unlisting hides a version from search; it stays downloadable by
+#     exact version for ever (verified against this very registry).
+#
+# There IS a standing decision to include the GUI (2026-08-26) but its stated premise — "the UI is
+# public in core today" — has since expired with the move. So the template's publish step is
+# deliberately absent rather than written and disabled: a step that exists but never runs is the
+# skip-trapdoor this repository forbids, and one that runs would ship the source.
+#
+# 🚨 DO NOT add the template here until the GUI question is answered (issue #3653). When it is, the step needs:
+# a Plugins checkout with a MINTED App token (never a stored PAT — the predecessor
+# publish-github.yml carried secrets.GH_PAT and is deleted), `-p:Version=X.Y.Z` (that project
+# inherits no props and would otherwise stamp 1.0.0), `-p:MeshWeaverRoot=` (the generator copies
+# two projects and three assets from core and can run in NEITHER repo alone), and an answer to
+# WHICH Plugins commit a core tag pairs with — no pairing artefact exists, so record the resolved
+# sha in the summary at minimum.
+#
+# 🛡️ NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"): `preflight` asserts every
+# secret and fails RED naming what to provision; `publish` needs it and runs unconditionally. There
+# is no `continue-on-error` and no `if: secrets.X != ''`. Every job carries a literal timeout ≤ 45.
+#
+# 🚨 nuget.org has no App-token equivalent — an API key is the only credential it accepts — so
+# `secrets.NUGET_PAT` stays, exactly as unlist-orphaned-packages.yml uses it. The App token replaces
+# the stored GitHub PAT, which is the one this repository could actually stop storing.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 3.0.0). Required on a dispatch; the tag supplies it otherwise."
+        type: string
+        default: ""
+      dry-run:
+        description: "Pack and verify, but do not push to nuget.org"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-packages
+  cancel-in-progress: false
+
+jobs:
+  # ──────────────────────────── EVERY INPUT, ASSERTED RED ────────────────────────────
+  preflight:
+    name: Publish inputs are provisioned
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Every secret this lane consumes exists
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_PAT }}
+        run: |
+          set -euo pipefail
+          # Only what this lane actually consumes. The App credential that would read
+          # MeshWeaver.Plugins for the template belongs here the day the template's step does —
+          # asserting an input nothing uses teaches a reader the wrong thing about what runs.
+          missing=()
+          [ -n "${NUGET_API_KEY:-}" ] || missing+=("secrets.NUGET_PAT — the nuget.org API key with push rights for the MeshWeaver prefix (Settings → Secrets → Actions)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the surviving packages cannot be published — provision:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "every publish input is present"
+
+      - name: A dispatch must name the version
+        if: github.event_name == 'workflow_dispatch' && inputs.version == ''
+        run: |
+          echo "::error::workflow_dispatch needs a version input (e.g. 3.0.0) — there is no tag to read it from."
+          exit 1
+
+  publish:
+    name: Pack + push the two survivors
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout MeshWeaver (the platform, and the Aspire adapter)
+        uses: actions/checkout@v7
+        with:
+          path: meshweaver
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.x'
+
+      # The clean X.Y.Z. A tag pushes `refs/tags/v3.0.0`; a dispatch names it outright. The rc line
+      # is closed and `-ci.<n>` never reaches nuget.org, so anything but three numbers is refused
+      # rather than silently published under a label that sorts unpredictably.
+      - name: Resolve the version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF#refs/tags/v}"
+          fi
+          case "$version" in
+            *[!0-9.]*|*..*|.*|*.) echo "::error::'$version' is not a clean X.Y.Z version. The rc line is closed and -ci.<n> builds are never published to nuget.org."; exit 1 ;;
+          esac
+          [ "$(echo "$version" | tr -cd '.' | wc -c)" -eq 2 ] || { echo "::error::'$version' is not X.Y.Z"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publishing version $version"
+
+      - name: Say what is being published
+        run: |
+          {
+            echo "### Publishing MeshWeaver ${{ steps.version.outputs.version }}"
+            echo "- core: \`${GITHUB_SHA}\`"
+            echo "- \`MeshWeaver.MemexTemplate\` is NOT published by this lane — see the header."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # PublicRelease=true is what makes $(Version) the clean $(PlatformVersion) rather than
+      # $(PlatformVersion)-ci.<run> (Directory.Build.props §2). PlatformVersion is passed too so a
+      # tag can never publish a version the props does not agree with.
+      - name: Pack the Aspire integration
+        run: |
+          set -euo pipefail
+          dotnet pack meshweaver/memex/aspire/Memex.Aspire.Hosting/Memex.Aspire.Hosting.csproj \
+            -c Release \
+            -p:PublicRelease=true \
+            -p:PlatformVersion=${{ steps.version.outputs.version }} \
+            --output "$RUNNER_TEMP/nupkgs"
+
+      # 🚨 A POSITIVE, SPECIFIC signal: the id, at this exact version, and nothing else. `dotnet
+      # pack` exiting 0 having produced no package (or one under a version nobody asked for) is
+      # precisely the shape of false pass this repository has paid for. The count also catches a
+      # project silently regaining packability, which Directory.Build.props defaults to false.
+      - name: The package exists, at this version, and it is the only one
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          ls -1 "$RUNNER_TEMP/nupkgs"
+          [ -f "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" ] \
+            || { echo "::error::MeshWeaver.Aspire.Hosting.Memex.$V.nupkg was not produced"; exit 1; }
+          count="$(find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' | wc -l | tr -d ' ')"
+          [ "$count" -eq 1 ] || { echo "::error::expected exactly 1 package, found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
+          echo "1 package at $V"
+
+      - name: Push to nuget.org
+        if: ${{ !inputs.dry-run }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_PAT }}
+        run: |
+          set -euo pipefail
+          dotnet nuget push "$RUNNER_TEMP/nupkgs/*.nupkg" \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate
+
+      # 🚨 THE ONLY EVIDENCE A PUBLISH HAPPENED is nuget.org saying the version is listed. A zero
+      # exit from `dotnet nuget push` reports that the call was made, not the resulting state —
+      # scripts/orphaned-nuget-packages.py carries the same lesson from the other direction, where
+      # fifty-five "unlisted" lines were printed over versions that still read listed=true.
+      # Registration blobs rebuild asynchronously, so a not-yet-listed reading is inconclusive and
+      # is polled, never reported as either outcome.
+      - name: Verify both versions read as LISTED on nuget.org
+        if: ${{ !inputs.dry-run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import gzip, json, os, sys, time, urllib.request
+
+          version = os.environ["VERSION"]
+          pending = ["MeshWeaver.Aspire.Hosting.Memex"]
+
+          def listed(package_id: str) -> bool | None:
+              url = ("https://api.nuget.org/v3/registration5-gz-semver2/"
+                     f"{package_id.lower()}/{version.lower()}.json")
+              request = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})
+              try:
+                  with urllib.request.urlopen(request, timeout=45) as response:
+                      raw = response.read()
+                      if response.headers.get("Content-Encoding") == "gzip":
+                          raw = gzip.decompress(raw)
+                      return bool(json.loads(raw).get("listed"))
+              except Exception:
+                  return None
+
+          for attempt in range(1, 9):
+              pending = [p for p in pending if listed(p) is not True]
+              if not pending:
+                  print(f"VERIFIED on attempt {attempt}: the package reads as listed at {version}")
+                  sys.exit(0)
+              print(f"attempt {attempt}: {', '.join(pending)} not listed yet — waiting 60s")
+              time.sleep(60)
+
+          print(f"::error::{', '.join(pending)} still do not read as listed at {version} after 8 "
+                f"checks. The push reported success, so this is either a slower registration "
+                f"rebuild than expected or an API key without push rights for that id. Do NOT "
+                f"record this as published until a later check reads true.")
+          sys.exit(1)
+          PY
+
+      - name: Say what shipped
+        if: ${{ !inputs.dry-run }}
+        run: |
+          {
+            echo "### Published to nuget.org"
+            echo "- \`MeshWeaver.Aspire.Hosting.Memex\` ${{ steps.version.outputs.version }}"
+            echo ""
+            echo "\`MeshWeaver.MemexTemplate\` was NOT published — it is blocked on the GUI"
+            echo "decision recorded in Doc/Architecture/NuGetPackageRetirement."
+          } >> "$GITHUB_STEP_SUMMARY"

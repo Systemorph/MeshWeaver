@@ -2015,6 +2015,17 @@ jobs:
     - name: "Every PR-reachable secret is asserted by a preflight"
       run: python3 .github/scripts/check-pr-secret-preflight.py --root .
 
+    # 🚨 THE TWO SCRIPTS THAT DECIDE WHAT A SATELLITE'S PULL REQUEST DOES *NOT* REBUILD, proven
+    # here because core is the repo that OWNS them — every satellite gets them fetched at its
+    # `platform-ref`, so a break shipped from here reaches five repos' cost model at once.
+    # `node-repo-scope.py --self-test` is also run inside its own `select` job on every satellite
+    # run; running it here as well is what makes a core PR that breaks the narrowing red on the
+    # core PR, rather than on the next satellite to bump its pin.
+    - name: "The build-scope selector can say no, and every fallback still falls back (self-test)"
+      run: python3 .github/scripts/node-repo-scope.py --self-test
+    - name: "A satellite's no-op set stays comparable to ours — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-noop-scope-parity.py --self-test
+
     # 🚨 The fleet pins platform images BY DIGEST, and ACR retention deletes what is pinned
     # (MeshWeaver#3438: three satellite repos dead at `manifest unknown` at once, Education's own
     # nightly among them). pinned-digests.yml sweeps the live registry on a schedule; that lane

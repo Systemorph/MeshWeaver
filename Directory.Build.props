@@ -9,6 +9,29 @@
     <Authors>Systemorph</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
+    <!-- 🚨 NOTHING IN THIS REPOSITORY IS A NUGET PACKAGE UNLESS IT SAYS SO. Exactly ONE project
+         opts back in — memex/aspire/Memex.Aspire.Hosting (MeshWeaver.Aspire.Hosting.Memex) — and
+         the only other survivor, MeshWeaver.MemexTemplate, lives in MeshWeaver.Plugins. Everything
+         else under the MeshWeaver prefix is retired (maintainer, 2026-09-07: "we retire most nuget
+         packages completely… we leave the dotnet new package and the aspire integration").
+
+         This is a DEFAULT, not a ban: it exists so that adding a project cannot silently add a
+         package. The delivery vehicle is the platform IMAGE — in-mesh source compiles against it,
+         module bundles carry their own closures, satellites build inside mw-plugin-test — so a
+         library package here would be shipped, listed and never consumed
+         (Doc/Architecture/NuGetPackageRetirement, Doc/Architecture/ReleaseProcess §5).
+
+         🚨 It is also load-bearing for the RETIREMENT TOOL. scripts/orphaned-nuget-packages.py
+         derives "orphaned" as (published under the prefix) MINUS (what this tree packs), and it
+         reads a project WITHOUT IsPackable=false as packable. So a project that quietly regains
+         packability silently SPARES its published package from retirement — the subtraction fails
+         toward leaving a dead package listed. Opting a project back in means intending to publish
+         it, and means adding it to .github/workflows/publish-packages.yml. -->
+    <IsPackable>false</IsPackable>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <!-- `dotnet pack` over the solution warns NU5128-style once per non-packable project; with the
+         default now false that is every project, and the warnings are noise, not signal. -->
+    <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
     <!-- Suppress only doc-COMPLETENESS (CS1591 missing member doc, CS1573 missing param doc, CS1712
          missing typeparam doc) — filling those is opportunistic, thousands of members. Doc-QUALITY
          warnings (broken/ambiguous crefs, bad paramrefs, malformed XML) are real bugs and are fixed,

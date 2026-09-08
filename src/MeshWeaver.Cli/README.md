@@ -2,11 +2,18 @@
 
 Command-line interface for MeshWeaver / Memex. Operates a portal's mesh over the REST API — read, search, mutate, compile, and mirror mesh nodes from the shell or from scripts.
 
-## Install
+## Run it
+
+`MeshWeaver.Cli` is **not** published as a dotnet tool — MeshWeaver publishes two NuGet packages and
+this is not one of them ([NuGet Package Retirement](../MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md)).
+Run it from a checkout:
 
 ```bash
-dotnet tool install -g MeshWeaver.Cli
+dotnet run --project src/MeshWeaver.Cli -- <command>
 ```
+
+In CI the same verbs come from the `mw-plugin-test` container image: every lane in this repository
+and in every satellite invokes the image's entrypoint directly, so nothing installs the CLI.
 
 ## Log in
 
@@ -24,9 +31,8 @@ The whole CI contract for a plugin repo, in three lines:
 
 ```yaml
 - uses: actions/checkout@v7
-- run: dotnet tool install -g MeshWeaver.Cli
 - run: |
-    memex build plugin . \
+    dotnet run --project "$MESHWEAVER/src/MeshWeaver.Cli" -- build plugin . \
       --image meshweaver.azurecr.io/mw-plugin-test@${{ vars.MW_IMAGE_DIGEST }} \
       --platform-image meshweaver.azurecr.io/memex-portal-ai@${{ vars.MW_PORTAL_IMAGE_DIGEST }}
 ```
