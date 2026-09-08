@@ -264,6 +264,28 @@ public static class ContainerImageEndpoints
             statusCode: StatusCodes.Status401Unauthorized);
     }
 
+    /// <summary>
+    /// The caller's query string, forwarded on the <c>tags/list</c> route ONLY.
+    ///
+    /// <para><c>tags/list</c> is the one pull route the Distribution API paginates: a registry
+    /// answers the first page and names the next in a RELATIVE <c>Link</c> header
+    /// (<c>&lt;/v2/{name}/tags/list?n=100&amp;last=…&gt;; rel="next"</c>), and ACR pages at 100 tags
+    /// sorted lexically — so a mirror that dropped <c>?n=</c>/<c>?last=</c> answered every request
+    /// with the OLDEST hundred tags and could never be walked past them. The self-updater lists
+    /// tags through this route (#3353); against a repository with 500 builds it would have found
+    /// nothing newer than what it runs, forever, and printed the up-to-date sentence. The
+    /// <c>Link</c> header is forwarded by <see cref="UpstreamPassthroughResult"/> and, being
+    /// relative, resolves against the mirror's own host.</para>
+    ///
+    /// <para>A manifest or blob route never carries a query the upstream would honour, so nothing
+    /// is forwarded there: a query is not part of a content address and must not reach a cache
+    /// key or an allowlist check by the back door.</para>
+    /// </summary>
+    private static string TagsQuery(HttpContext http, RegistryRoute route) =>
+        route.Kind == "tags" && http.Request.QueryString.HasValue
+            ? http.Request.QueryString.Value ?? string.Empty
+            : string.Empty;
+
     private static async Task<IResult> Serve(HttpContext http, CancellationToken ct)
     {
         var client = http.RequestServices.GetRequiredService<UpstreamRegistryClient>();
@@ -338,8 +360,8 @@ public static class ContainerImageEndpoints
         try
         {
             upstream = await client.OpenAsync(
-                isHead ? HttpMethod.Head : HttpMethod.Get, route.Repository, "/v2/" + rest,
-                range, ct);
+                isHead ? HttpMethod.Head : HttpMethod.Get, route.Repository,
+                "/v2/" + rest + TagsQuery(http, route), range, ct);
         }
         catch (UpstreamUnreachableException ex)
         {

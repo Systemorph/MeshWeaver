@@ -24,8 +24,10 @@ registry, and consumers present a registry token.
 | `/v2/{name}/tags/list` | `GET` `HEAD` | |
 
 **Pull only.** No push, no upload, no delete — those keep going to the upstream, so this can be
-switched off without a migration. Also NOT implemented: `/v2/_catalog`, the referrers API,
-`tags/list` pagination, and serving a `Range` from the cache.
+switched off without a migration. Also NOT implemented: `/v2/_catalog`, the referrers API, and
+serving a `Range` from the cache. `tags/list` pagination IS forwarded (`?n=`/`?last=` up, the
+relative `Link` continuation back) — a self-updating installation lists its releases through this
+route, and ACR pages at 100 tags in lexical order.
 
 ## The read-through cache
 

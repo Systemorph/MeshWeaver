@@ -48,6 +48,17 @@ spec:
       # The in-pod self-updater patches this deployment via the Kubernetes API using this SA's
       # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.
       serviceAccountName: "memex-portal-sa"
+{{- /* The pull credential for the platform images when they come from the MIRROR rather than ACR
+       (MeshWeaver#3353). A Secret NAME, rendered only when set: absent ⇒ no imagePullSecrets, and
+       the kubelet's AcrPull keeps pulling from ACR exactly as before. The self-updater's PATCH
+       changes containers[].image only — a strategic merge leaves this list in place — so a pull
+       secret set once here survives every automatic roll. The same block is on the migration
+       Job's pod spec: both pods pull a platform image, and one without the secret is a Job stuck
+       in ImagePullBackOff while the portal rolls. */}}
+{{- if (.Values.portal).imagePullSecret }}
+      imagePullSecrets:
+        - name: "{{ .Values.portal.imagePullSecret }}"
+{{- end }}
       # Graceful drain budget: the host's ShutdownTimeout is 90s (Memex.Portal.Distributed
       # Program.cs) and the preStop below waits for this pod's SESSIONS to end — the k8s default
       # of 30s SIGKILLed the portal mid-drain on every rollout (circuits and the Orleans silo torn

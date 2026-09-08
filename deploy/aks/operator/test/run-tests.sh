@@ -84,6 +84,11 @@ refuses "redirect needs a mode"            "must be 'suspend' or 'restore'"     
 refuses "deploy needs --release"           "missing required flag --release"    hosting-deploy --namespace n --database d
 refuses "verify needs --host"              "missing required flag --host"       hosting-verify
 refuses "unknown flags are not ignored"    "unknown argument"                   hosting-verify --host h --nope 1
+refuses "pull-secret needs --namespace"    "missing required flag --namespace"  hosting-pull-secret --registry r.example.test --vault V --secret S
+refuses "pull-secret needs --registry"     "missing required flag --registry"   hosting-pull-secret --namespace n --vault V --secret S
+refuses "pull-secret needs --vault"        "missing required flag --vault"      hosting-pull-secret --namespace n --registry r.example.test --secret S
+refuses "pull-secret needs --secret"       "missing required flag --secret"     hosting-pull-secret --namespace n --registry r.example.test --vault V
+refuses "pull-secret rejects unknown flags" "unknown argument"                  hosting-pull-secret --namespace n --registry r.example.test --vault V --secret S --nope 1
 
 echo
 echo "── the refusals that stand in front of something destructive ─────"
@@ -170,6 +175,82 @@ refuses_hard "host with a space"                    "is not a hostname" \
   hosting-verify --host 'a.example.com b'
 refuses_hard "store-uri host with a semicolon"      "is not a plain name" \
   env HOSTING_DRY_RUN=true hosting-backup --database 'd;id' --server s --store-uri https://x/y/z --object o
+refuses_hard "pull-secret namespace with a metacharacter" "is not a plain name" \
+  hosting-pull-secret --namespace 'n; rm -rf /' --registry cr.meshweaver.cloud --vault V --secret S
+refuses_hard "pull-secret registry with a space"     "is not a hostname" \
+  hosting-pull-secret --namespace n --registry 'cr.meshweaver.cloud x' --vault V --secret S
+refuses_hard "pull-secret name with a backtick"      "is not a plain name" \
+  hosting-pull-secret --namespace n --registry cr.meshweaver.cloud --vault V --secret S --name 'p`whoami`'
+
+echo
+echo "── hosting-pull-secret: the namespace first, the key never ──────"
+# The plan runs this BEFORE hosting-deploy (Provision) and as the FIRST step of Roll / Reconcile
+# (MeshWeaver.Plugins#1514), so the namespace may not exist yet and the command must ensure it —
+# idempotently — before it applies anything into it. The stubs record every invocation in order
+# and keep the applied manifest, so the read-backs the script verifies with come from what it
+# actually applied: a script that applied nothing cannot pass its own verification.
+PS_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/pull-secret" && pwd)"
+_ps_dir="$(mktemp -d)"; _ps_log="$_ps_dir/calls.log"; : > "$_ps_log"
+_ps_out="$(env PATH="$PS_STUBS:$PATH" HOSTING_PULL_SECRET_STUB_LOG="$_ps_log" HOSTING_PULL_SECRET_STUB_DIR="$_ps_dir" \
+  hosting-pull-secret --namespace acme --registry cr.meshweaver.cloud --vault Systemorph --secret acme-PluginCatalog-RegistryToken --name registry-pull 2>&1)"; _ps_rc=$?
+[ "$_ps_rc" -eq 0 ] && ok "pull-secret succeeds against the stubbed estate" || bad "pull-secret succeeds against the stubbed estate" "exited ${_ps_rc}: ${_ps_out}"
+# 🚨 THE property: the key never leaves the process. The stub answers a sentinel `mwi_` key; its
+# presence anywhere in the output — a `+ command` echo, a fact, an error — is the leak.
+case "$_ps_out" in
+  *mwi_*) bad "pull-secret never prints the key" "a 'mwi_' token appeared in its output: ${_ps_out}" ;;
+  *)      ok  "pull-secret never prints the key" ;;
+esac
+# …and the key never travels on a kubectl COMMAND LINE either (argv is readable by every process
+# in the pod). The stub logs every invocation verbatim; only an apply's STDIN may carry it.
+if grep -v '^  <stdin>' "$_ps_log" | grep -q 'mwi_'; then
+  bad "pull-secret never puts the key on a command line" "$(grep -v '^  <stdin>' "$_ps_log" | grep mwi_)"
+else
+  ok "pull-secret never puts the key on a command line"
+fi
+# Ordering: the namespace is ensured (create --dry-run | apply) BEFORE the Secret is applied.
+_ns_line="$(grep -n 'kubectl create namespace acme --dry-run=client' "$_ps_log" | head -1 | cut -d: -f1)"
+_sec_line="$(grep -n 'kubectl -n acme create secret generic registry-pull' "$_ps_log" | head -1 | cut -d: -f1)"
+if [ -n "$_ns_line" ] && [ -n "$_sec_line" ] && [ "$_ns_line" -lt "$_sec_line" ]; then
+  ok "pull-secret ensures the namespace before it applies the Secret"
+else
+  bad "pull-secret ensures the namespace before it applies the Secret" "namespace at line '${_ns_line}', secret at '${_sec_line}' in: $(cat "$_ps_log")"
+fi
+grep -q 'kubectl apply -f -' "$_ps_log" && ok "the namespace manifest is APPLIED, not only rendered" \
+  || bad "the namespace manifest is APPLIED" "no 'kubectl apply -f -' in: $(cat "$_ps_log")"
+# Content: the applied Secret is a dockerconfigjson for the registry, with the default username.
+if [ -f "$_ps_dir/applied-secret.yaml" ] \
+   && grep -q '^type: kubernetes.io/dockerconfigjson' "$_ps_dir/applied-secret.yaml" \
+   && sed -n 's/^  .dockerconfigjson: //p' "$_ps_dir/applied-secret.yaml" | base64 -d | grep -q '"cr.meshweaver.cloud":{"username":"instance"'; then
+  ok "the applied Secret is a dockerconfigjson for the registry, user 'instance'"
+else
+  bad "the applied Secret is a dockerconfigjson for the registry" "applied: $(cat "$_ps_dir/applied-secret.yaml" 2>/dev/null)"
+fi
+case "$_ps_out" in *"::hosting:: pull_secret=registry-pull"*) ok "pull-secret reports the Secret NAME the record must carry" ;;
+  *) bad "pull-secret reports the Secret name" "said: ${_ps_out}" ;; esac
+case "$_ps_out" in *"::hosting:: pull_secret_verify=true"*) ok "pull-secret reports verified=true only after reading the Secret back" ;;
+  *) bad "pull-secret reports verified=true" "said: ${_ps_out}" ;; esac
+rm -rf "$_ps_dir"
+
+# The refusals a stubbed estate can reach: an absent vault object, and a pre-existing Secret of
+# another type (which the kubelet would silently not use).
+_ps_dir="$(mktemp -d)"; _ps_log="$_ps_dir/calls.log"; : > "$_ps_log"
+refuses "pull-secret refuses when the vault object is absent" "could not read" \
+  env PATH="$PS_STUBS:$PATH" HOSTING_PULL_SECRET_STUB_LOG="$_ps_log" HOSTING_PULL_SECRET_STUB_DIR="$_ps_dir" HOSTING_PULL_SECRET_STUB_AZ_FAIL=1 \
+  hosting-pull-secret --namespace acme --registry cr.meshweaver.cloud --vault Systemorph --secret acme-PluginCatalog-RegistryToken
+refuses "pull-secret refuses a Secret of another type" "not kubernetes.io/dockerconfigjson" \
+  env PATH="$PS_STUBS:$PATH" HOSTING_PULL_SECRET_STUB_LOG="$_ps_log" HOSTING_PULL_SECRET_STUB_DIR="$_ps_dir" HOSTING_PULL_SECRET_STUB_WRONG_TYPE=1 \
+  hosting-pull-secret --namespace acme --registry cr.meshweaver.cloud --vault Systemorph --secret acme-PluginCatalog-RegistryToken
+refuses "pull-secret refuses a key that is not a plain token" "is not a plain token" \
+  env PATH="$PS_STUBS:$PATH" HOSTING_PULL_SECRET_STUB_LOG="$_ps_log" HOSTING_PULL_SECRET_STUB_DIR="$_ps_dir" HOSTING_PULL_SECRET_STUB_KEY='mwi_has a space' \
+  hosting-pull-secret --namespace acme --registry cr.meshweaver.cloud --vault Systemorph --secret acme-PluginCatalog-RegistryToken
+rm -rf "$_ps_dir"
+# A dry run reads nothing, applies nothing, and still reports the name — never verified=true.
+_ps_out="$(env HOSTING_DRY_RUN=true hosting-pull-secret --namespace acme --registry cr.meshweaver.cloud --vault Systemorph --secret S 2>&1)"; _ps_rc=$?
+[ "$_ps_rc" -eq 0 ] && ok "a dry-run pull-secret needs no az and no cluster" || bad "a dry-run pull-secret needs no az and no cluster" "exited ${_ps_rc}: ${_ps_out}"
+case "$_ps_out" in *"pull_secret_verify=true"*) bad "a dry-run pull-secret never claims verified" "it did: ${_ps_out}" ;;
+  *"::hosting:: pull_secret_verify=dry-run"*) ok "a dry-run pull-secret never claims verified" ;;
+  *) bad "a dry-run pull-secret reports its verify state" "said: ${_ps_out}" ;; esac
+unset _ps_out _ps_rc _ps_dir _ps_log _ns_line _sec_line
 
 echo
 echo "── the ::hosting:: contract the mesh parses ──────────────────────"

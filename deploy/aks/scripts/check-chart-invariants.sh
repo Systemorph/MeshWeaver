@@ -86,6 +86,11 @@ COMBOS=(
   "self-host (neutral chart defaults)|deploy/helm/values.yaml"
   "AKS overlay (the layer every AKS install shares)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml"
   "memex-local (Colima k3s)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml"
+  # A record-driven Provision of a MIRROR-CONSUMING instance (MeshWeaver#3353): the only combination
+  # that switches on the pull secret, SelfUpdate__Registry and the chart-created PVCs. A fixture, not
+  # an environment — without it those template branches render on nothing in this repo and a
+  # regression in any of them is invisible until a real Provision fails.
+  "mirror consumer (record-driven provision fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.mirror-consumer.yaml"
 )
 
 WORK="$(mktemp -d)"

@@ -47,3 +47,40 @@ config:
 
 🚨 **Only on the control instance.** `Hosting:Operator:Enabled` on a tenant portal would give that
 tenant's pod the ability to start a job that can delete any namespace on the cluster.
+
+## The image is published on every push to `main`
+
+`meshweaver.azurecr.io/hosting-operator:<short sha>` (immutable — what a deployment record pins)
+and `:main` (moving) are built and pushed by `.github/workflows/hosting-operator.yml`'s `publish`
+job, on `push` to `main` only, behind a preflight that fails red naming a missing OIDC secret.
+Until MeshWeaver#3353 the image was built by hand (last on 2026-08-22) and nothing republished it,
+so every script fix shipped to the repository and never to a Job.
+
+## `hosting-pull-secret` — the platform images come from the mirror
+
+Every installation **except** the one serving the read-through mirror (`cr.meshweaver.cloud`,
+[A Container Registry in Memex](../../../src/MeshWeaver.Documentation/Data/Architecture/ContainerRegistryInMemex.md))
+pulls `memex-portal-ai` and `memex-migration` from that mirror instead of ACR, and lists tags there
+when it self-updates. Its pods therefore need a pull credential for the mirror host — and the
+credential is the instance's **own plugin-registry key**, the vault object `hosting-kv-ensure`
+lists as REQUIRED. Nothing new is minted.
+
+```
+hosting-pull-secret --namespace <ns> --registry cr.meshweaver.cloud \
+                    --vault <vault> --secret <prefix>PluginCatalog-RegistryToken \
+                    [--name registry-pull] [--username instance]
+```
+
+In order, each step idempotent: **ensures the namespace exists** (the plan runs this *before*
+`hosting-deploy` on Provision, and first on Roll and Reconcile, so the namespace may not exist
+yet); reads the key from Key Vault; creates-or-updates a `kubernetes.io/dockerconfigjson` Secret
+named `--name` for `--registry`; **reads it back** and refuses a Secret of another type or one
+naming another registry. It reports `::hosting:: pull_secret=<name>` — the value the deployment
+record's `portal.imagePullSecret` must equal — and `pull_secret_registry=<host>`, which
+`selfUpdate.registry` must equal. 🚨 **It never prints the key**: not in a command echo (the key
+travels on stdin, never argv), not on failure, not in a fact; `test/run-tests.sh` asserts it.
+
+The chart's half: `portal.imagePullSecret` renders `imagePullSecrets` on the portal Deployment
+**and** the migration Job; `selfUpdate.registry` renders `SelfUpdate__Registry`, which makes the
+self-updater list tags over the OCI Distribution API with the same key. Neither is set on the
+mirror instance itself — it cannot serve the image that boots it.

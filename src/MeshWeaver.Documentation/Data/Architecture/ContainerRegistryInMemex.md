@@ -33,7 +33,51 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > **Not built:** no push or upload, no `/v2/_catalog`, no referrers API, no delete, no
 > pin-protected retention, and no **/app assembly** closure — see "What v1 records" below for
 > exactly where that line falls, and "The pull surface, exactly" for the endpoint-by-endpoint list.
-> The boot image comes from the upstream, permanently. Container images live in Azure Container
+> The boot image comes from the upstream, permanently.
+>
+> **CONSUMED (2026-09-08, maintainer directive):** every installation EXCEPT the one serving the
+> mirror pulls its platform images from the mirror — when it is created AND when it self-updates.
+> The consumption order is fixed by the bootstrap constraint below: **the mirror instance
+> (`memex.meshweaver.cloud`, serving the mirror at `cr.meshweaver.cloud`) stays on ACR, permanently;
+> every other instance moves.** What this increment adds, per repo:
+>
+> * **Chart** (`deploy/helm`, this repo): `selfUpdate.registry` → `SelfUpdate__Registry`
+>   (rendered only when set — blank would be a roll to `/memex-portal-ai:<tag>`, not inert);
+>   `portal.imagePullSecret` → `imagePullSecrets` on the portal Deployment AND the migration Job
+>   (invariant 11 of `check-chart-invariants` holds the two equal); `containerImages:` →
+>   `ContainerImages__Upstream/__Username/__ImageRoot/__CacheDirectory/__CacheMaxBytes` and
+>   `ContainerImages__Repositories__<i>`, rendered only when `upstream` is set, `Password` arriving
+>   through the Key Vault CSI mapping like every other secret; and `persistence.<name>.create: true`
+>   rendering the PersistentVolumeClaim itself (`size` and `storageClass` required, kept on
+>   uninstall) so a record-driven Provision has storage — `create` defaults to absent because the
+>   existing environments' claims are unmanaged by helm.
+> * **Self-update** (`Memex.Portal.Shared`, this repo): a `Registry` that is not `*.azurecr.io`
+>   is listed by `OciTagLister` through `/v2/{repo}/tags/list` — the standard bearer handshake,
+>   `Basic user:key` at the realm the challenge names, every page followed by the relative
+>   `Link` — with the installation's own plugin-registry instance key (resolved through
+>   `RegistryTokenResolver`; the plugin registry whose host equals the container registry host is
+>   the one whose key is presented — no second secret). A refused credential is an ERROR, never an
+>   empty listing. The ACR path is byte-identical. 🚨 The mirror had to learn to forward the
+>   `tags/list` query string and the `Link` header for this: ACR pages at 100 tags in lexical
+>   order, so a mirror that dropped `?last=` served the OLDEST hundred to every caller and a lister
+>   through it would have printed "nothing newer" forever.
+> * **Operator** (`deploy/aks/operator`, this repo): `hosting-pull-secret` turns the instance key
+>   in Key Vault into the namespace's `kubernetes.io/dockerconfigjson` Secret — ensuring the
+>   namespace first (it runs before `hosting-deploy` on Provision, first on Roll/Reconcile), reading
+>   the Secret back before reporting, never printing the key. The image is now PUBLISHED on every
+>   push to `main` (`hosting-operator:<short sha>` + `:main`); it had been built by hand on
+>   2026-08-22 and republished by nothing since.
+> * **Plugins** (MeshWeaver.Plugins#1514, in parallel): the portal host wires the mirror
+>   (`IContainerImageAuthenticator` bound to the instance-key authenticator), the Hosting
+>   deployment record grows the consumer fields and renders exactly the values above, and the
+>   Provision/Roll/Reconcile plans emit `hosting-pull-secret`. 🚨 The migration Job the
+>   self-updater MINTS (`KubernetesDeploymentUpdater.RunMigrationAsync`) must carry the same
+>   `imagePullSecrets` as the portal pod — it builds its pod spec from scratch, and a Job without
+>   the credential is ImagePullBackOff on a mirror-consuming instance while the portal rolls.
+>
+> **Still not measured: pull latency through the mirror against ACR directly** — the paragraph at
+> the end of this page stands. The directive moves the consumers anyway; the measurement is now
+> something every consuming instance produces for free, and should be read. Container images live in Azure Container
 > Registry (`meshweaver.azurecr.io`), named by `ACR:` in `main-cd.yml` and referenced by eight
 > workflows. This page exists so the decision is a decision rather than a recurring conversation.
 
@@ -196,7 +240,10 @@ half-working:
   catalog would be a second, drifting answer to the same question.
 * **the referrers API** (`/v2/<name>/referrers/<digest>`) — signatures and attestations. Nothing in
   the fleet consumes it through the mirror yet.
-* **pagination on `tags/list`** (`?n=`/`?last=`) — the query string is not forwarded.
+* ~~**pagination on `tags/list`**~~ — the query string IS forwarded on the tags route, and the
+  relative `Link` continuation is passed back, since the self-updater lists through the mirror
+  (2026-09-08). A manifest or blob route still carries no query: a query is not part of a
+  content address and must not reach a cache key by the back door.
 * **serving a `Range` FROM the cache.** A range request bypasses the cache entirely: a partial body
   cannot be verified against the whole body's digest, and an unverified entry is worse than none.
   It is proxied, and resumable, but not accelerated.
