@@ -304,6 +304,114 @@ public class ConfiguredModuleActivationTest
     }
 
     /// <summary>
+    /// 🚨 <b>#3650, the whole chain.</b> #3665 keeps the previous generation running but writes
+    /// nothing the update reconcile reads, so a deployment in fallback answered "already landed"
+    /// for exactly the build that would have got it off its previous generation. This walks the
+    /// seam end to end, through the REAL landing, the REAL boot composition and the REAL decision:
+    /// a build for a newer platform is shelved over a loadable one ⇒ the boot refuses it, runs the
+    /// previous generation, and WRITES THE MARKER (the head's generation and identity) ⇒ the entry
+    /// reads back in fallback ⇒ an index entry with the SAME version and a DIFFERENT identity than
+    /// the refused build is <c>Land</c>, the refused build itself is <c>SkipUnloadable</c> ⇒ a
+    /// build that loads lands (the marker for the old head is inert at once, without a write) ⇒
+    /// the boot loads it and CLEARS the marker ⇒ the same served identity is <c>SkipUpToDate</c>.
+    /// </summary>
+    [Fact]
+    public async Task TheBootThatFallsBack_WritesTheMarkerTheReconcileReExamines_AndTheBootThatLoads_ClearsIt()
+    {
+        const string Loadable = "s1111111111111111111111111111111a";
+        const string Future = "s2222222222222222222222222222222b";
+        const string Rebuilt = "s3333333333333333333333333333333c";
+        const string Version = "1.4.0";
+        using var deployment = new Deployment();
+        string? Gate(string? floor) => ModulePlatformFloor.DeclineReason(floor, "3.2.0");
+        bool Present(ModuleActivationEntry e) => ModuleActivationBoot.LandedModuleDllExists(deployment.Root, e);
+        ModuleUpdateVerdict Decide(string served) => ModuleUpdateDecision.Decide(
+            Version, bundleMinMeshVersion: null, Gate, Entry(deployment), policyDecline: null, Present, served);
+        // 🚨 ONE assembly for both loadable generations. This process boots the deployment three
+        // times, and its load context can hold ONE assembly per simple name: a second, different
+        // build of the same name is refused with "Assembly with same name is already loaded" — a
+        // constraint of the test process (every real boot is a fresh one), not of the loader. The
+        // identity the reconcile compares is the string the REGISTRY advertises, recorded on the
+        // entry at landing (Loadable / Rebuilt below), not the bytes' MVID — so the same bytes
+        // landed under a different advertised identity walk the chain faithfully.
+        var loadable = ModuleBuiltAgainstThisPlatform(deployment.Module);
+
+        // ── 1. A loadable generation runs; nothing is marked ───────────────────────────────────
+        var a = await Land(deployment, loadable, Version, Loadable);
+        Boot(deployment);
+        Assert.Null(Entry(deployment).UnloadableFrameworkMvid);
+        Assert.False(File.Exists(ModuleActivationSidecar.UnloadableMarkerPath(deployment.Root, deployment.Module)));
+        Assert.Equal(ModuleUpdateAction.SkipUpToDate, Decide(Loadable).Action);
+
+        // ── 2. The same version, rebuilt for a NEWER platform, is shelved over it ──────────────
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), Version, Future);
+        var (services, _) = Boot(deployment);
+        var fallback = Assert.Single(services.GetServices<FallbackModule>());
+        Assert.Equal(b, fallback.Generation);
+        Assert.Equal(a, fallback.PreviousGeneration);
+
+        // The boot WROTE the marker: the head's generation and identity, and why.
+        var marker = ModuleActivationSidecar.ReadUnloadable(deployment.Root, deployment.Module);
+        Assert.NotNull(marker);
+        Assert.Equal(b, marker!.Generation);
+        Assert.Equal(Future, marker.FrameworkMvid);
+        Assert.Contains(FutureType, marker.Reason, StringComparison.Ordinal);
+
+        // …and the entry reads back IN FALLBACK — which is what the decision consumes.
+        var inFallback = Entry(deployment);
+        Assert.Equal(b, inFallback.Directory);
+        Assert.Equal(Future, inFallback.UnloadableFrameworkMvid);
+
+        // ── 3. The decision: a different build of this version lands; the refused one does not ─
+        var lands = Decide(Rebuilt);
+        Assert.Equal(ModuleUpdateAction.Land, lands.Action);
+        Assert.Contains(Future, lands.Reason);
+        Assert.Contains(Rebuilt, lands.Reason);
+        var stays = Decide(Future);
+        Assert.Equal(ModuleUpdateAction.SkipUnloadable, stays.Action);
+        Assert.DoesNotContain("already landed", stays.Reason);
+
+        // ── 4. The build for this platform lands (what the reconcile now does) ─────────────────
+        var c = await Land(deployment, loadable, Version, Rebuilt);
+        Assert.NotEqual(b, c);
+        // Before any boot the old marker still exists — and is INERT: it measured b, the head is c.
+        Assert.NotNull(ModuleActivationSidecar.ReadUnloadable(deployment.Root, deployment.Module));
+        Assert.Null(Entry(deployment).UnloadableFrameworkMvid);
+        Assert.Equal(ModuleUpdateAction.SkipUpToDate, Decide(Rebuilt).Action);
+
+        // ── 5. The boot loads the new head and CLEARS the marker ───────────────────────────────
+        var (afterwards, _) = Boot(deployment);
+        Assert.Empty(afterwards.GetServices<FallbackModule>());
+        Assert.Empty(afterwards.GetServices<IncompatibleModule>());
+        Assert.Null(ModuleActivationSidecar.ReadUnloadable(deployment.Root, deployment.Module));
+        Assert.Null(Entry(deployment).UnloadableFrameworkMvid);
+        Assert.Equal(ModuleUpdateAction.SkipUpToDate, Decide(Rebuilt).Action);
+        // The ordinary identity rule is back in charge: yet another build still lands.
+        Assert.Equal(ModuleUpdateAction.Land, Decide(Loadable).Action);
+    }
+
+    /// <summary>
+    /// When NO generation loads, the head is unloadable too — and the marker says so, so a build
+    /// for this platform still lands the moment one ships (the module is parked, not forgotten).
+    /// </summary>
+    [Fact]
+    public async Task WhenNoGenerationLoadsHere_TheHeadIsStillMarkedUnloadable()
+    {
+        const string Future = "s4444444444444444444444444444444d";
+        using var deployment = new Deployment();
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        var head = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0", Future);
+
+        var (services, _) = Boot(deployment);
+
+        Assert.Single(services.GetServices<IncompatibleModule>());
+        var marker = ModuleActivationSidecar.ReadUnloadable(deployment.Root, deployment.Module);
+        Assert.NotNull(marker);
+        Assert.Equal(head, marker!.Generation);
+        Assert.Equal(Future, Entry(deployment).UnloadableFrameworkMvid);
+    }
+
+    /// <summary>
     /// The other half of "as today": when NO generation loads here, the module is incompatible
     /// exactly as it was before #3649 — named, refused before load, contributing nothing.
     /// </summary>
@@ -589,12 +697,14 @@ public class ConfiguredModuleActivationTest
             .Single(e => string.Equals(e.Name, deployment.Module, StringComparison.Ordinal));
 
     /// <summary>Lands a generation on the ADOPT path (refuses what cannot load) and returns its
-    /// generation directory leaf.</summary>
-    private static async Task<string> Land(Deployment deployment, byte[] bytes, string version)
+    /// generation directory leaf. <paramref name="frameworkMvid"/> is the identity the registry
+    /// would advertise for these bytes — what the update reconcile compares (#3650).</summary>
+    private static async Task<string> Land(
+        Deployment deployment, byte[] bytes, string version, string? frameworkMvid = null)
     {
         await deployment.Landing.LandModule(
                 deployment.Module, [(deployment.Module + ".dll", bytes)],
-                packagePath: PackagePath, version: version)
+                frameworkMvid: frameworkMvid, packagePath: PackagePath, version: version)
             .Timeout(TestTimeouts.Convergence).Await();
         return Entry(deployment).Directory!;
     }
@@ -602,11 +712,12 @@ public class ConfiguredModuleActivationTest
     /// <summary>Lands a generation on the SHELF path (holds what cannot load) and returns its
     /// generation directory leaf. Asserts it was held — every shelved generation here is one
     /// built for a newer platform.</summary>
-    private static async Task<string> Shelve(Deployment deployment, byte[] bytes, string version)
+    private static async Task<string> Shelve(
+        Deployment deployment, byte[] bytes, string version, string? frameworkMvid = null)
     {
         var outcome = await deployment.Landing.ShelveModule(
                 deployment.Module, [(deployment.Module + ".dll", bytes)],
-                packagePath: PackagePath, version: version)
+                frameworkMvid: frameworkMvid, packagePath: PackagePath, version: version)
             .Timeout(TestTimeouts.Convergence).Await();
         Assert.True(outcome.Held, "the shelved generation was expected to be unloadable here");
         return Entry(deployment).Directory!;
@@ -663,6 +774,14 @@ public class ConfiguredModuleActivationTest
             ModuleSetStore.RecordAdoption(root, adopted,
                 ModuleSetStore.RunningGenerationsOf(adopted, provider.GetServices<FallbackModule>()),
                 adoptedBy: "replica");
+        // #3650 — the boot that falls back writes the marker the reconcile re-examines: the same
+        // call ModuleLoadabilityRecorder makes on the portal, off the same records, for the same
+        // entries the loader was handed.
+        ModuleActivationBoot.RecordMeasuredLoadability(
+            root,
+            effective.Select(module => module.Landed!),
+            provider.GetServices<FallbackModule>(),
+            provider.GetServices<IncompatibleModule>());
         return (provider, sets);
     }
 

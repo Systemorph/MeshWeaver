@@ -99,10 +99,10 @@ public sealed record ModuleActivationEntry
     public string? Version { get; init; }
 
     /// <summary>
-    /// 🚨 The framework identity of the NEWEST landed generation when boot could not load it and
-    /// fell back to the previous one (#3649 supplies that fallback: <c>PreviousDirectory</c> and
-    /// its siblings, the boot's link probe deciding). Null when the newest generation loads, or
-    /// was never probed — the ordinary state.
+    /// 🚨 The framework identity of the HEAD generation (<see cref="Directory"/>) when the boot
+    /// MEASURED it unloadable on this platform — the link probe refused it, or the load threw —
+    /// and fell back to the previous one (#3649) or parked the module. Null when the head loads,
+    /// or was never measured: the ordinary state.
     ///
     /// <para>This is the one fact the update reconcile needs to honour rule R3 of
     /// <c>Doc/Architecture/ModuleAdoptionPolicy</c> (#3650): an entry in fallback is
@@ -110,10 +110,22 @@ public sealed record ModuleActivationEntry
     /// DIFFERENT identity than this one is a build for this platform that appeared — it lands.
     /// Without it the same-version branch of <see cref="ModuleUpdateDecision"/> could only compare
     /// against <see cref="FrameworkMvid"/>, and a deployment running its previous generation would
-    /// answer "already landed" for exactly the build that would have got it off the fallback.
-    /// Written by the boot that falls back, cleared by the boot that loads the newest generation;
-    /// the reconcile never writes it.</para>
+    /// answer "already landed" for exactly the build that would have got it off the fallback.</para>
+    ///
+    /// <para>🚨 <b>Derived at read time from the sidecar's MARKER file, never stored in the entry
+    /// file</b> (<see cref="ModuleActivationSidecar.UnloadableMarkerPath"/>,
+    /// <c>activation.d/&lt;Name&gt;.unloadable</c>). The boot that measures the head writes the
+    /// marker (unloadable) or deletes it (loaded) — a create and a delete, never a read-modify-write
+    /// of the entry a landing on another replica may be replacing at that moment (#2090). The marker
+    /// names the generation it measured, and <see cref="ModuleActivationSidecar.Read"/> attaches it
+    /// here ONLY while <see cref="Directory"/> is still that generation: a landing that moves the
+    /// head on makes a stale marker inert without touching it, and the next boot re-measures. It is
+    /// deliberately the boot's measurement and not the module set's adoption record
+    /// (<c>ModuleSetIndex.FallbackGenerations</c>): that record is written once per set by the
+    /// first replica to adopt it and survives a platform roll unchanged, so it can report a fallback
+    /// the image now running no longer takes; every boot rewrites this.</para>
     /// </summary>
+    [JsonIgnore]
     public string? UnloadableFrameworkMvid { get; init; }
 
     /// <summary>False = uninstalled (the record is kept for history/idempotence; the folder is
@@ -258,11 +270,117 @@ public static class ModuleActivationSidecar
 
         return new ModuleActivationList
         {
-            Entries = [.. order.Select(name => byName[name])],
+            // #3650 — the boot's measurement of each head generation rides along, from the
+            // per-module marker file, only while the head is still the generation it measured.
+            Entries = [.. order.Select(name => WithUnloadableMarker(baseDirectory, byName[name]))],
             // The marker is authoritative; the legacy flag is honoured once, for a deployment
             // upgrading with the flag still set. Boot clears both.
             PendingRestart = File.Exists(PendingRestartMarkerPath(baseDirectory)) || legacy.PendingRestart,
         };
+    }
+
+    // ── the unloadable-head marker (#3650) ──────────────────────────────────
+
+    /// <summary>The per-module marker's file suffix inside <see cref="EntriesDirectoryName"/> —
+    /// deliberately NOT <c>.json</c>, so <see cref="Read"/>'s entry enumeration never parses a
+    /// marker as an entry and the bulk <see cref="Write"/> never sweeps one.</summary>
+    public const string UnloadableMarkerSuffix = ".unloadable";
+
+    /// <summary>The marker file recording that a module's head generation was measured unloadable
+    /// on this platform: <c>modules/activation.d/&lt;Name&gt;.unloadable</c>.</summary>
+    public static string UnloadableMarkerPath(string baseDirectory, string moduleName) =>
+        Path.Combine(EntriesDirectory(baseDirectory), moduleName + UnloadableMarkerSuffix);
+
+    /// <summary>
+    /// What the boot measured about one module's head generation (#3650): the generation it
+    /// tried, the framework identity that generation was recorded with, why it did not load, and
+    /// when. The generation is what keeps the marker honest across a landing — a marker for a
+    /// generation the entry no longer heads is inert.
+    /// </summary>
+    /// <param name="Generation">The generation directory leaf the boot measured (<c>&lt;name&gt;@&lt;id&gt;</c>).</param>
+    /// <param name="FrameworkMvid">That generation's recorded framework identity, or null when unrecorded.</param>
+    /// <param name="Reason">Why it did not load — the link probe's report or the load exception.</param>
+    /// <param name="MeasuredAt">When the boot measured it.</param>
+    public sealed record UnloadableGeneration(
+        string Generation, string? FrameworkMvid, string? Reason, DateTimeOffset MeasuredAt);
+
+    /// <summary>
+    /// Records that <paramref name="generation"/> of <paramref name="moduleName"/> was measured
+    /// unloadable on this platform — an atomic replace of that module's own marker file, which
+    /// only boots write and which no landing ever reads or modifies. Idempotent.
+    /// </summary>
+    public static void SetUnloadable(
+        string baseDirectory, string moduleName, string generation, string? frameworkMvid, string? reason)
+    {
+        ValidateModuleName(moduleName);
+        if (string.IsNullOrWhiteSpace(generation))
+            throw new ArgumentException("the measured generation is required", nameof(generation));
+        WriteAtomic(UnloadableMarkerPath(baseDirectory, moduleName), JsonSerializer.Serialize(
+            new UnloadableGeneration(generation, frameworkMvid, reason, DateTimeOffset.UtcNow), Json));
+    }
+
+    /// <summary>Removes the module's marker — the boot loaded its head generation, or the module
+    /// was uninstalled. A delete, tolerant of an absent file and of a volume that is momentarily
+    /// read-only: the marker is a measurement, and activation never depends on it.</summary>
+    public static void ClearUnloadable(string baseDirectory, string moduleName)
+    {
+        ValidateModuleName(moduleName);
+        try
+        {
+            File.Delete(UnloadableMarkerPath(baseDirectory, moduleName));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Another replica clearing the same marker, or a read-only volume; the next boot
+            // measures again.
+        }
+    }
+
+    /// <summary>
+    /// The module's marker as written, or null when there is none — or when it cannot be read or
+    /// parsed. Silent on purpose: the marker is a hint the boot rewrites, and a read that opens
+    /// into another replica's atomic replace (#2189's shape) must cost nothing but that one
+    /// reading, never a false "corrupt sidecar".
+    /// </summary>
+    public static UnloadableGeneration? ReadUnloadable(string baseDirectory, string moduleName)
+    {
+        if (string.IsNullOrWhiteSpace(moduleName))
+            return null;
+        try
+        {
+            var text = TryReadAllText(UnloadableMarkerPath(baseDirectory, moduleName));
+            return text is null ? null : JsonSerializer.Deserialize<UnloadableGeneration>(text, Json);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Attaches the marker's identity to <paramref name="entry"/> when — and only when —
+    /// the marker measured the generation the entry currently heads.</summary>
+    private static ModuleActivationEntry WithUnloadableMarker(string baseDirectory, ModuleActivationEntry entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.Directory))
+            return entry;
+        var marker = ReadUnloadable(baseDirectory, entry.Name);
+        if (marker is null
+            || !string.Equals(marker.Generation, entry.Directory, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(marker.FrameworkMvid))
+            return entry;
+        return entry with { UnloadableFrameworkMvid = marker.FrameworkMvid };
+    }
+
+    /// <summary>The same rule <see cref="WriteEntry"/> applies: the name BECOMES a path.</summary>
+    private static void ValidateModuleName(string? moduleName)
+    {
+        if (string.IsNullOrWhiteSpace(moduleName)
+            || moduleName is "." or ".."
+            || moduleName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || moduleName.Contains('/') || moduleName.Contains('\\'))
+            throw new ArgumentException(
+                $"'{moduleName}' is not a valid module name — a marker is a file named after its module.",
+                nameof(moduleName));
     }
 
     /// <summary>
@@ -840,6 +958,129 @@ public static class ModuleActivationBoot
             PreviousVersion = null,
             PreviousFrameworkMvid = null,
         };
+    }
+
+    // ── what the boot measured, written where the reconcile reads it (#3650) ─────────────
+
+    /// <summary>
+    /// The boot's verdict on one module's head generation: what the loader was handed
+    /// (<paramref name="Generation"/>, the entry's <see cref="ModuleActivationEntry.Directory"/>
+    /// as projected onto the mesh's set) and whether it loaded.
+    /// </summary>
+    /// <param name="Name">The module's simple name.</param>
+    /// <param name="Generation">The generation the loader tried.</param>
+    /// <param name="FrameworkMvid">That generation's recorded framework identity, or null.</param>
+    /// <param name="Unloadable">True when the loader could not load it — it fell back to the
+    /// previous generation (<see cref="FallbackModule"/>) or parked the module
+    /// (<see cref="IncompatibleModule"/>).</param>
+    /// <param name="Reason">Why, when unloadable.</param>
+    public sealed record MeasuredLoadability(
+        string Name, string Generation, string? FrameworkMvid, bool Unloadable, string? Reason);
+
+    /// <summary>
+    /// Reads the loader's records back onto the entries it was handed (#3650): for every enabled
+    /// store entry in <paramref name="tried"/> — the union AFTER
+    /// <see cref="ProjectOntoMeshSet"/>, i.e. with <see cref="ModuleActivationEntry.Directory"/>
+    /// naming the generation the loader actually tried — a <see cref="FallbackModule"/> or an
+    /// <see cref="IncompatibleModule"/> whose generation IS that directory says the head did not
+    /// load; the absence of both says it did. A record naming another generation of the same
+    /// module says nothing about this one. Pure.
+    /// </summary>
+    public static ImmutableList<MeasuredLoadability> MeasureLoadability(
+        IEnumerable<ModuleActivationEntry> tried,
+        IEnumerable<FallbackModule> fallbacks,
+        IEnumerable<IncompatibleModule> incompatible)
+    {
+        ArgumentNullException.ThrowIfNull(tried);
+        var fellBack = fallbacks.ToArray();
+        var parked = incompatible.ToArray();
+        var verdicts = ImmutableList.CreateBuilder<MeasuredLoadability>();
+        foreach (var entry in tried)
+        {
+            if (entry is not { Enabled: true } || string.IsNullOrWhiteSpace(entry.Name)
+                || string.IsNullOrWhiteSpace(entry.Directory))
+                continue;
+            var fallback = fellBack.FirstOrDefault(f =>
+                string.Equals(f.Name, entry.Name, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(f.Generation, entry.Directory, StringComparison.Ordinal));
+            var refused = fallback is null
+                ? parked.FirstOrDefault(m =>
+                    string.Equals(m.Name, entry.Name, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(GenerationOf(m.Entry), entry.Directory, StringComparison.Ordinal))
+                : null;
+            verdicts.Add(new MeasuredLoadability(
+                entry.Name, entry.Directory!, entry.FrameworkMvid,
+                Unloadable: fallback is not null || refused is not null,
+                Reason: fallback?.Reason ?? refused?.Error));
+        }
+        return verdicts.ToImmutable();
+    }
+
+    /// <summary>
+    /// Writes the boot's measurement where the reconcile reads it: the marker
+    /// (<see cref="ModuleActivationSidecar.SetUnloadable"/>) for every head generation that did
+    /// not load, cleared (<see cref="ModuleActivationSidecar.ClearUnloadable"/>) for every one
+    /// that did — touching only markers whose content CHANGES, so a steady state costs no writes
+    /// and two replicas booting together write the same bytes or nothing. Best-effort per module:
+    /// a marker that cannot be written is reported through <paramref name="onReport"/> and the
+    /// next boot tries again; nothing here can fail a boot.
+    /// </summary>
+    /// <returns>The transitions this boot made — a marker written or cleared — for the log.</returns>
+    public static ImmutableList<MeasuredLoadability> RecordMeasuredLoadability(
+        string baseDirectory,
+        IEnumerable<ModuleActivationEntry> tried,
+        IEnumerable<FallbackModule> fallbacks,
+        IEnumerable<IncompatibleModule> incompatible,
+        Action<string>? onReport = null)
+    {
+        var transitions = ImmutableList.CreateBuilder<MeasuredLoadability>();
+        foreach (var verdict in MeasureLoadability(tried, fallbacks, incompatible))
+        {
+            var current = ModuleActivationSidecar.ReadUnloadable(baseDirectory, verdict.Name);
+            try
+            {
+                if (verdict.Unloadable)
+                {
+                    if (current is not null
+                        && string.Equals(current.Generation, verdict.Generation, StringComparison.Ordinal)
+                        && string.Equals(current.FrameworkMvid, verdict.FrameworkMvid, StringComparison.Ordinal))
+                        continue;
+                    ModuleActivationSidecar.SetUnloadable(
+                        baseDirectory, verdict.Name, verdict.Generation, verdict.FrameworkMvid, verdict.Reason);
+                    onReport?.Invoke(
+                        $"module '{verdict.Name}': generation '{verdict.Generation}' (framework "
+                        + $"{verdict.FrameworkMvid ?? "(unrecorded)"}) measured UNLOADABLE here — recorded, "
+                        + "so the update reconcile re-examines every new build of its version: "
+                        + verdict.Reason);
+                }
+                else
+                {
+                    if (current is null)
+                        continue;
+                    ModuleActivationSidecar.ClearUnloadable(baseDirectory, verdict.Name);
+                    onReport?.Invoke(
+                        $"module '{verdict.Name}': generation '{verdict.Generation}' loaded — the "
+                        + $"unloadable marker (for '{current.Generation}') is cleared.");
+                }
+                transitions.Add(verdict);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                onReport?.Invoke(
+                    $"module '{verdict.Name}': could not record its measured loadability "
+                    + $"({ex.GetType().Name}: {ex.Message}) — the next boot measures again; until then the "
+                    + "update reconcile compares identities without knowing the head did not load.");
+            }
+        }
+        return transitions.ToImmutable();
+    }
+
+    /// <summary>The generation directory leaf of a loader's entry path — the same derivation
+    /// <see cref="FallbackModule.Generation"/> uses, so the two agree by construction.</summary>
+    private static string GenerationOf(string entry)
+    {
+        var directory = Path.GetDirectoryName(entry);
+        return string.IsNullOrEmpty(directory) ? entry : Path.GetFileName(directory);
     }
 
     /// <summary>

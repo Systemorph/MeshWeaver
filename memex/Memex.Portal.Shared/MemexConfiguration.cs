@@ -422,6 +422,24 @@ public static class MemexConfiguration
                         ModuleSetStore.RunningGenerationsOf(adoptedSet, sp.GetServices<FallbackModule>()),
                         adoptedBy: Environment.MachineName,
                         onWarn: msg => Console.Error.WriteLine($"[ModuleSet] {msg}"))));
+            // 🚨 #3650 — the boot that falls back WRITES THE MARKER the update reconcile reads:
+            // for every store entry the loader was handed (the union above, so its Directory is
+            // the generation actually tried), the FallbackModule / IncompatibleModule records say
+            // whether that generation loaded here, and the verdict lands on that module's own
+            // sidecar marker (activation.d/<Name>.unloadable). Without it the reconcile's
+            // fallback branch (ModuleUpdateDecision, an entry in fallback re-examining every new
+            // build of its version) could never fire — #3665 records what RUNS on the module set's
+            // adoption, once per set, which survives a platform roll unchanged; this is re-measured
+            // by every boot. Unconditional, unlike the adoption: a deployment with no proposed set
+            // yet still measures its heads.
+            var triedEntries = loadableModules
+                .Select(candidate => candidate.Module.Landed)
+                .Where(landed => landed is not null)
+                .Select(landed => landed!)
+                .ToArray();
+            if (triedEntries.Length > 0)
+                builder.ConfigureServices(services =>
+                    services.AddModuleLoadabilityRecord(moduleRoot, triedEntries));
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
             // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.
