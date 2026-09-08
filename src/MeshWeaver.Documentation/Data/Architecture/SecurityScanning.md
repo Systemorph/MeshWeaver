@@ -208,9 +208,12 @@ scanner named, and the only asset the JavaScript-only import map could never hav
 all five workers `getWorkerUrl` names (`editor`, `json`, `css`, `html`, `ts`) — all under
 `_content/MeshWeaver.Blazor/`, none under BlazorMonaco. `jsInterop.js` is byte-identical across the
 two sets. 🚨 **That is an asset-level check, not a rendered editor.** No test in either repository
-executes the editor's JavaScript: `MonacoBundleGuard` asserts file contents, and the bUnit suites
-render the component tree without a browser. A dead editor caused by a missing static asset would be
-caught by neither, and the last time one was verified end to end was the manual headless check on
+executes this shell's editor JavaScript — measured, not assumed: `MonacoBundleGuard` and
+`MonacoEditorContainerSizingGuard` both read files and match regexes, the remaining Monaco-touching
+suites render the component tree without a browser, and the fleet's only Playwright project
+(`clients/portal-next/e2e`) drives the separate Next.js client, which serves no
+`_content/BlazorMonaco` at all. A dead editor caused by a missing static asset would be caught by
+none of them; the last end-to-end verification on record is the manual headless check reported on
 MeshWeaver.Plugins#1393.
 
 Three method notes, each of which was needed to reach that verdict:
