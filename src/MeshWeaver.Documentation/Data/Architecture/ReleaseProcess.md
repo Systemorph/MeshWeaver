@@ -231,6 +231,34 @@ the *compiled attributes* is what makes a promotion possible at all:
 
 ---
 
+### The moving pointers: `<major>-latest`, `<major.minor>-latest`, `<major.minor.patch>-latest`
+
+**Maintainer, 2026-09-08:** *"platform will be anyway self-updating ⇒ should point to latest image
+to start"*, *"let's offer all variants ⇒ we fix 1 digit, 2 digits, or even 3 digits"*, and for the
+adapter's default *"3 latest and 4 latest — I am for the latter"*.
+
+Every sealed set moves three pointers on `memex-portal-ai` and `memex-migration`, in ACR and in
+GHCR, derived from the set's version (`3.0.0-ci.8059` → `3.0.0`):
+
+| pointer | moves to | never touched by |
+|---|---|---|
+| `3-latest` | every sealed set of major 3, across minors | any 4.x seal |
+| `3.0-latest` | every sealed set of 3.0.x | 3.1.0-ci |
+| `3.0.0-latest` | every sealed set of the 3.0.0 line (the `3.0.0-ci.*` builds) | 3.0.1 |
+
+CD writes them in **Phase D, after the arming PUT** (`memex-portal-ai:<version>`, CD's last write
+before this), so a fresh install that resolves a pointer never sees a set whose migration exists
+and whose portal does not. `release.yml` moves the same three when it promotes a sealed set to a
+clean version. The self-updater ignores them — it selects on `^\d+\.\d+\.\d+` tags — so a
+pointer is only ever a **first-start** address.
+
+**The rule this makes clear:** a package of major N names `N-latest` and is otherwise independent
+of the image. `MeshWeaver.Aspire.Hosting.Memex` defaults `ImageTag` to `<its own major>-latest`,
+derived from its assembly version rather than typed, so a 4.x adapter cannot ship still naming
+`3-latest`; a consumer that wants a narrower line passes `WithImage(tag: "3.0-latest")` or an
+exact version. The package version moves only when the adapter's surface does — 3.0.x for fixes,
+3.1.0 when the API grows — never per image.
+
 ## 3. Commands
 
 ```bash

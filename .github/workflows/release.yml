@@ -273,6 +273,12 @@ jobs:
           done
           echo "→ memex-portal-ai: $VERSION  (arming Stable self-updaters)"
           docker buildx imagetools create --tag "$ACR/memex-portal-ai:$VERSION" "$ACR/memex-portal-ai:$SHORT"
+          # The line pointers move with an official release too — same rule as CD's Phase D.
+          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          for repo in memex-migration memex-portal-ai; do
+            args=(); for t in $(line_tags "$VERSION"); do args+=(--tag "$ACR/$repo:$t"); done
+            docker buildx imagetools create "${args[@]}" "$ACR/$repo:$SHORT"
+          done
           {
             echo "### Released \`$VERSION\` = \`$SHORT\` (continuous ${{ steps.set.outputs.ci_version }})"
             echo "- memex-portal-ai, memex-migration, mw-plugin-test retagged \`$VERSION\` in ACR"
@@ -294,13 +300,17 @@ jobs:
         run: |
           set -euo pipefail
           NS=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
           for repo in memex-migration mw-plugin-test memex-portal-ai; do
+            extra=()
+            case "$repo" in memex-migration|memex-portal-ai) for t in $(line_tags "$VERSION"); do extra+=(--tag "ghcr.io/$NS/$repo:$t"); done;; esac
             docker buildx imagetools create \
               --tag "ghcr.io/$NS/$repo:$VERSION" \
               --tag "ghcr.io/$NS/$repo:latest" \
+              "${extra[@]}" \
               "$ACR/$repo:$SHORT"
           done
-          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ latest)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ latest; portal + migration also $(line_tags "$VERSION"))" >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Publish the GitHub Release from the committed notes"
         env:
