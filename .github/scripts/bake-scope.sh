@@ -72,23 +72,27 @@ if [ "${1:-}" = "--self-test" ]; then
   mkdir -p "$ST_TMP/bin"
   cat > "$ST_TMP/bin/az" <<'AZ'
 #!/usr/bin/env bash
+group="$2"          # file | directory
 verb=""
 for a in "$@"; do case "$a" in exists|download) verb="$a"; break;; esac; done
-account=""; share=""; path=""; dest=""
+account=""; share=""; path=""; dest=""; name=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --account-name) account="$2"; shift 2;;
     --share-name)   share="$2";   shift 2;;
     --path)         path="$2";    shift 2;;
     --dest)         dest="$2";    shift 2;;
+    --name)         name="$2";    shift 2;;
     *) shift;;
   esac
 done
 file="$MOCK_AZ_ROOT/$account/$share/$path"
-case "$verb" in
-  exists)   { [ -f "$file" ] && echo true; } || echo false;;
-  download) [ -f "$file" ] || exit 1; mkdir -p "$(dirname "$dest")"; cp "$file" "$dest";;
-  *) exit 1;;
+dir="$MOCK_AZ_ROOT/$account/$share/$name"
+case "$group/$verb" in
+  directory/exists) { [ -d "$dir" ] && echo true; } || echo false;;
+  file/exists)      { [ -f "$file" ] && echo true; } || echo false;;
+  file/download)    [ -f "$file" ] || exit 1; mkdir -p "$(dirname "$dest")"; cp "$file" "$dest";;
+  *) echo "stub-az: unmodelled '$group $verb' — teach the stub rather than letting the script fall back" >&2; exit 64;;
 esac
 AZ
   chmod +x "$ST_TMP/bin/az"
@@ -127,6 +131,19 @@ AZ
     mkdir -p "$dir"
     printf '%s\n' "$sha" > "$dir/source-commit.txt"
     printf '%s\n' "$@" > "$dir/_complete"
+  }
+
+  # A publication under a GENERATION directory, with the pointer naming it (MeshWeaver#3461).
+  seal_generation() {  # <account/share[/base]> <generation> <source-sha> <bundle…>
+    local target="$1" gen="$2" sha="$3"; shift 3
+    local account="${target%%/*}" rest="${target#*/}"
+    local share="${rest%%/*}" base=""
+    case "$rest" in */*) base="${rest#*/}";; esac
+    local prefix="$ST_TMP/remote/$account/$share/${base:+$base/}prebuilt-bundles/ID1/plugins"
+    mkdir -p "$prefix/$gen"
+    printf '%s\n' "$sha" > "$prefix/$gen/source-commit.txt"
+    printf '%s\n' "$@" > "$prefix/$gen/_complete"
+    printf '%s\n' "$gen" > "$prefix/_current"
   }
 
   run_case() {  # <event> <targets> [<head-sha>]
@@ -205,6 +222,30 @@ AZ
   write_selector 0 '{"runAll": false, "mount": [], "affected": [], "skipped": ["Store","Edu"], "support": []}'
   expect "a diff that reaches no module at all (docs/, e2e/, .claude/)" none "$(run_case push acct/share)"
 
+  # ── THE POINTER. The flat copy and the generation deliberately record DIFFERENT baselines, so
+  # ── the verdict says which one was read: a diverged baseline forces `full`, an ancestor one
+  # ── narrows. A resolver that ignored the pointer would read the flat copy and answer `full`.
+  echo "the publication pointer (MeshWeaver#3461) — read the generation, not the prefix:"
+  rm -rf "$ST_TMP/state"; write_selector 0 "$OK_JSON"
+  seal gen/share "$OTHER_SHA" Store.zip Edu.zip Chess.zip
+  seal_generation gen/share Systemorph-MeshWeaver-42-1 "$BASE_SHA" Store.zip Edu.zip Chess.zip
+  OUT=$(run_case push gen/share)
+  expect "the baseline comes from the generation _current names, not the flat copy beside it" \
+    narrowed "$OUT"
+  expect_line "…and it is that generation's recorded commit" baseline "$BASE_SHA" "$OUT"
+  # The control, one variable apart: the same fixture with a pointer nothing backs must fall back
+  # to the flat copy — and say so, so a silent fallback cannot be mistaken for a resolution.
+  rm -rf "$ST_TMP/state"
+  printf '%s\n' "Systemorph-MeshWeaver-9999-1" > "$ST_TMP/remote/gen/share/prebuilt-bundles/ID1/plugins/_current"
+  OUT=$(run_case push gen/share)
+  expect "a pointer naming a generation that is not there falls back to the flat copy" full "$OUT"
+  if printf '%s\n' "$OUT" | grep -q "is not on the share"; then
+    printf '  OK   %s\n' "…and names the dangling pointer rather than falling back in silence"
+  else
+    printf '  FAIL %s\n' "the dangling-pointer fallback said nothing"
+    FAILED=$((FAILED + 1))
+  fi
+
   echo "narrowed:"
   rm -rf "$ST_TMP/state"; write_selector 0 "$OK_JSON"
   OUT=$(run_case push acct/share)
@@ -226,7 +267,7 @@ AZ
     exit 1
   fi
   echo ""
-  echo "bake-scope self-test: 12 full-bake fallbacks, 2 verified nothing-to-do verdicts, 4 narrowed assertions — all green."
+  echo "bake-scope self-test: 12 full-bake fallbacks, 2 verified nothing-to-do verdicts, 4 pointer-resolution assertions, 4 narrowed assertions — all green."
   exit 0
 fi
 
@@ -240,6 +281,57 @@ fi
 
 SENTINEL="_complete"
 SOURCE_MARKER="source-commit.txt"
+
+# ══════════════ THE PUBLICATION POINTER (MeshWeaver#3461) ══════════════
+#
+# A source directory MAY hold `_current`: one line naming the SUBDIRECTORY that holds the
+# publication which currently applies. Absent, it IS its own publication directory — the flat
+# layout, and the only one anything has written until a caller opts in to `publication-layout:
+# generation`.
+#
+# 🚨 THE RULES ARE THE READER'S, EXACTLY (ShippedPrebuiltBundles.PublicationDirectoryOf, and the
+# resolver in publish-bake-bundles.sh). This file, bake-scope.sh and publish-bake-bundles.sh are
+# fetched at ONE `platform-ref`, so no pin can carry half of them — but they must also AGREE, or
+# this lane would read what portals do not serve. Absent, blank, unreadable, not a single path
+# segment, or naming a directory that is not there ⇒ the source directory. A pointer is a NAME: it
+# must never be able to address bytes outside its own source directory.
+POINTER="_current"
+RESOLVED_DIR=""
+resolve_publication_dir() { # <account> <share> <source-dir>
+  _rp_account="$1"; _rp_share="$2"; _rp_source="$3"
+  RESOLVED_DIR="$_rp_source"
+  _rp_exists=$(az storage file exists --account-name "$_rp_account" --share-name "$_rp_share" \
+    --path "$_rp_source/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  [ "$_rp_exists" = "true" ] || return 0
+  _rp_local="$(mktemp)"
+  if ! az storage file download --account-name "$_rp_account" --share-name "$_rp_share" \
+      --path "$_rp_source/$POINTER" --dest "$_rp_local" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+    rm -f "$_rp_local"
+    return 0
+  fi
+  _rp_named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$_rp_local" | grep -m1 '[^[:space:]]' || true)
+  rm -f "$_rp_local"
+  [ -n "$_rp_named" ] || return 0
+  case "$_rp_named" in
+    # A rooted name always contains a '/', so `*/*` already covers it — shellcheck SC2222 is
+    # right that a separate `/*` arm can never match anything this one does not.
+    .|..|*/*|*\\*)
+      echo "::warning::$_rp_source/$POINTER names '$_rp_named', which is not a single directory name — reading $_rp_source as its own publication directory."
+      return 0 ;;
+  esac
+  _rp_exists=$(az storage directory exists --account-name "$_rp_account" --share-name "$_rp_share" \
+    --name "$_rp_source/$_rp_named" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$_rp_exists" != "true" ]; then
+    echo "::warning::$_rp_source/$POINTER names generation '$_rp_named', which is not on the share (exists=$_rp_exists) — reading $_rp_source as its own publication directory."
+    return 0
+  fi
+  RESOLVED_DIR="$_rp_source/$_rp_named"
+  return 0
+}
+
 mkdir -p "$STATE_DIR"
 
 SCOPE="full"
@@ -310,7 +402,13 @@ for target in $BAKE_PUBLISH_TARGETS; do
   if [ -z "$account" ] || [ -z "$share" ] || [ "$account" = "$target" ]; then
     full "malformed BAKE_PUBLISH_TARGETS entry '$target' — cannot read its publication, so the bake cannot be narrowed. (publish-bake-bundles.sh fails on this too.)"
   fi
-  dest="${base:+$base/}prebuilt-bundles/$IDENTITY/$SOURCE"
+  prefix="${base:+$base/}prebuilt-bundles/$IDENTITY/$SOURCE"
+  # The publication that currently applies — the generation the pointer names, or the prefix itself
+  # when there is none. Reading the prefix under the generation layout would take the baseline off
+  # the flat COMPATIBILITY copy while portals served the generation, and a narrowed bake would then
+  # diff against a publication nobody serves.
+  resolve_publication_dir "$account" "$share" "$prefix"
+  dest="$RESOLVED_DIR"
 
   complete=$(az storage file exists --account-name "$account" --share-name "$share" \
     --path "$dest/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \

@@ -814,6 +814,9 @@ this. **That is the next discriminator, and it is not settled here.**
 - **The scope line "`FutuRe.Test` only" is stale.** `MeshWeaver.GitSync.Test` took the same
   `exit=139` on Plugins#1191, run `34013024540`, 2026-09-06 — a second suite, and one that also
   serializes node types heavily. Re-measure the base rate against the LCG workload, not the project.
+  ⚠️ **Superseded in part by sightings #11/#12 below**: the fault returned to `background_sweep` on
+  a dedicated BGC thread the next day, so "the LCG workload" describes *this* sighting, not the
+  family's boundary. The base rate was re-measured there.
 
 #### Reproducing this read
 
@@ -823,6 +826,281 @@ Symbols by build-id, no `dotnet-symbol` needed:
 The whole read is `struct.unpack` over the ELF core plus one `llvm-objdump` — no container, no DAC.
 🚨 Index symbols by **vaddr** and bytes by **file offset**, and convert between them with the
 `PT_LOAD` table; do not assume they are equal.
+
+### 2026-09-07 / 2026-09-08: sightings #11 and #12 — two dumps, two frames, two `si_addr`s, **one** fingerprint
+
+Two occurrences from the same sweep were read end to end. Together they are the cleanest
+demonstration yet that the *frame* carries no information and the *zeroed MethodTable word* is the
+whole fingerprint — because they disagree on every incidental and agree on the invariant.
+
+| | **#11** `MeshWeaver.GitS-37600.dmp` | **#12** `MeshWeaver.Futu-50607.dmp` |
+|---|---|---|
+| run / job | [`34069990582`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34069990582) / `101585455000` | [`34210183539`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34210183539) / `102009955282` |
+| when / branch | 2026-09-07 00:29Z, **`main`** | 2026-09-08 09:28Z, `fix/1390-teardown-resolve-guard` |
+| suite | `MeshWeaver.GitSync.Test` | `MeshWeaver.FutuRe.Test` |
+| `si_signo` / `si_code` | 11 / 1 (`SEGV_MAPERR`) | 11 / 1 (`SEGV_MAPERR`) |
+| **`si_addr` / `CR2`** | **`0x4`** | **`0x0`** |
+| `TRAPNO` / `ERR` | 14 / `0x4` | 14 / `0x4` |
+| faulting RVA | `0x373887` | `0x5cb171` |
+| **frame** | **`LCGMethodResolver::GetCodeInfo(…)+0x1f7`** | **`WKS::gc_heap::background_sweep()+0xa61`** |
+| thread | **mutator**, inside the JIT | dedicated **background-GC** thread, no managed frame |
+| MethodTable field read | `m_BaseSize` (offset 4) | `m_dwFlags` (offset 0) |
+| the word at `[R15]` | **reads zero** (16 bytes read) | **reads zero** (32 bytes read) |
+| runtime / build-id | `10.0.11` / `989b56df…` | `10.0.11` / `989b56df…` |
+
+Both faults are the same read of a MethodTable word that is zero, differing only in which field the
+caller went on to want:
+
+```
+#11  0x373884: 49 8b 07     mov  (%r15),%rax      ; MethodTable word -> 0
+     0x373887: 8b 70 04     mov  0x4(%rax),%esi   ; <-- FAULT at 0x4   (MT->m_BaseSize)
+
+#12  0x5cb16a: 49 8b 07     mov  (%r15),%rax      ; MethodTable word -> 0
+     0x5cb16d: 48 83 e0 f8  and  $-8,%rax         ; strip GC mark bits
+     0x5cb171: 8b 08        mov  (%rax),%ecx      ; <-- FAULT at 0x0   (MT->m_dwFlags)
+```
+
+**In both, the null is confirmed at its source rather than inferred from `RAX`:** the bytes at `R15`
+in each core read zero.
+
+#### Why this pair settles two things a single dump cannot
+
+- **`si_addr` is definitively not part of the fingerprint.** `0x4` and `0x0` here are the offsets of
+  `m_BaseSize` and `m_dwFlags` — the same corruption seen through two different field reads, 33 hours
+  apart, against the same runtime binary. Sighting #10 already corrected this; #11/#12 make it a
+  measurement rather than an argument.
+- **The frame does not progress, it revisits.** `0x5cb171` is *not* a new RVA: the table in sighting
+  #9 already lists it as `background_sweep()+0xa61`, first seen 2026-08-18. So after `plan_phase`,
+  `find_first_object`, `background_mark_simple1` and `GetCodeInfo`, the fault has returned to a frame
+  already on the list. Reading #10's move out of `gc_heap` as the family *migrating* toward the
+  LCG/serialization workload would have been over-reading a sample of one. **The sharpened scope in
+  #10 describes that sighting's workload, not the family's boundary.**
+- **Culprit vs victim, from two directions at once.** #12's faulting thread is a dedicated BGC thread
+  with no managed frame on it (`CPalThread::ThreadEntry → CreateSuspendableThread::$_0::__invoke →
+  bgc_thread_stub → bgc_thread_function+0xdc → gc1+0xf6 → background_sweep+0xa61`). #11's is a
+  mutator inside the JIT (`MethodDesc::JitCompileCode+0x262 → JitCompileCodeLockedEventWrapper+0x3eb
+  → JitCompileCodeLocked+0xfa → UnsafeJitFunction+0x180 → CEECodeGenInfo::CEECodeGenInfo+0x11b →
+  CEEInfo::getMethodInfoWorker+0x133 → GetCodeInfo+0x1f7`). A defect in either path would not produce
+  the other; a heap whose object headers can read as zero produces both, wherever the next reader is.
+
+#### Disposal was clean in both, and both records are provably complete
+
+`_meshweaver-test-trace.log` in each artifact has its `FAULT-BUDGET` suppression lines on a
+*different* pid (`2828` for #11's `37600`, `2791` for #12's `50607`), so neither crashing process's
+record has gaps — the precondition this page insists on.
+
+| | #11 (pid 37600) | #12 (pid 50607) |
+|---|---|---|
+| `DISPOSE_DONE` / of which `teardown clean` | 61 / **61** | 30 / **30** |
+| `DISPOSE_QUIESCE_LEAK`, `DISPOSE_DIRTY_TEARDOWN`, `leakedIoLeaves>0` | **0** | **0** |
+| `TEST_START` − `TEST_END` | **1** — died in `GitHubSyncSettingsTabTest.GitHubSyncTab_Content_RendersPullRequestSection` | **1** — died in `FutuReAnalysisTest.Group_KeyMetrics_ShouldHaveNonZeroData` |
+| `alc` / `asm` at the last `INIT_MEM` | **1** / 133 | **1** / 133 |
+
+**`alc=1` in both is worth stating**: only the default `AssemblyLoadContext` was live, so there was no
+collectible context to be unloaded out from under anything. Neither job log contains an
+`Unwind: exception type` line, so the managed-exception route through `createdump` is ruled out
+rather than assumed away.
+
+#### Base rate, re-measured 2026-09-06 → 2026-09-08
+
+`Plugin Catalog CI`, **600 runs** listed over `2026-09-06T06:08Z … 2026-09-08T09:52Z`. Ten runs are
+excluded from *both* numerator and denominator because their job listing could not be read. The
+**denominator is 343** — runs in which at least one `Portal hosts (shard N)` job reached a terminal
+conclusion, i.e. the shard actually executed suites. The other **257** had none reach a verdict:
+overwhelmingly runs cancelled before the shard finished (311 of the 600 are `cancelled` — the
+merge-cadence pattern), plus 12 still in progress and 2 `startup_failure`. All **59** failed
+`Portal hosts` jobs in the window (at sweep time; 61 by the time the truncation control below ran)
+had their check-run annotations read, and none of those reads failed.
+
+🚨 **The annotation read was checked for truncation, because a paginated read that silently drops
+page 2 would undercount the numerator and look identical to a clean sweep.** Re-reading every failed
+`Portal hosts` job with `per_page=100`: **the largest annotation set on any one job is 15** — below
+even the endpoint's 30-item default, so nothing was cut off, on any job, in either pass.
+
+**4 occurrences, all on `Portal hosts (shard 1)` — 1.17 %:**
+
+| when | run | branch | suite | dump read? |
+|---|---|---|---|---|
+| 2026-09-06 17:14Z | `34047985756` | **`main`** | `MeshWeaver.FutuRe.Test` | no |
+| 2026-09-06 20:15Z | `34057413159` | `fix/edu-union-wait-measures-behaviour` | `MeshWeaver.FutuRe.Test` | no |
+| 2026-09-07 00:29Z | `34069990582` | **`main`** | `MeshWeaver.GitSync.Test` | **yes — #11** |
+| 2026-09-08 09:28Z | `34210183539` | `fix/1390-teardown-resolve-guard` | `MeshWeaver.FutuRe.Test` | **yes — #12** |
+
+All three occurrences before this read were previously unrecorded anywhere. The two undissected ones
+are listed as *occurrences*, not as sightings — their dumps were still in retention when this was
+written, so a later reader can add them if a third data point is wanted.
+
+🚨 **The two rates on this page are not directly comparable, and the difference is not a trend.**
+The 2026-08-29 → 09-03 measurement (0.74 %) used *non-cancelled runs* as its denominator; this one
+uses *runs whose portal-host shard reached a verdict*. What they agree on is the shape: a
+low-single-digit-percent, `Portal hosts (shard 1)`-only rate that **has not gone away**, with `main`
+among the affected branches in both windows.
+
+#### Controls run on this read
+
+The symbolization slip that produced #10's impossible frame was checked for explicitly, on #12:
+
+- **RVA vs file offset.** `libcoreclr.so`'s `PT_LOAD` table maps vaddr `0x1c9680+` at file offset
+  `0x1c8680+`, so RVA `0x5cb171` lives at **file offset `0x5ca171`** — the `0x1000` difference,
+  exactly the trap. Symbols were indexed by vaddr, bytes read by file offset.
+- **Instruction boundary.** The sequence starts at `0x5cb16a`, so `0x5cb171` is where
+  `mov (%rax),%ecx` begins. `RIP` is a boundary — `0x372887` in #10's first read was not.
+- **Bytes agree across two independent sources**: the core at `RIP`, and the stock `10.0.11`
+  `libcoreclr.so` at the corresponding file offset.
+- **The symbols are the crashed binary's.** The build-id read out of libcoreclr *as mapped in each
+  crashed process* is `989b56dfb2782aa230f822ee4c520e2ccfea71b7` in both, equal to the build-id of
+  the `.debug` the RVAs were resolved against.
+- **Each `ucontext` is unique.** Scanning every `PT_LOAD` for a `gregs[]` block with `TRAPNO=14`, a
+  `RIP` inside libcoreclr's mapping and `CR2 == si_addr` yields **exactly one** match per core.
+
+#### Scope note for the next reader
+
+`MeshWeaver.FutuRe.Test` has **no** `ProjectReference` to `MeshWeaver.AI`, directly or through
+`MeshWeaver.Hosting.Monolith.TestBase` — so teardown or disposed-scope work in the AI engine cannot
+reach this suite, and a fix there will not move this rate. Neither will the platform-pin staleness
+that reds Plugins PRs independently: the only failure annotations on `Portal hosts (shard 1)` in run
+`34210183539` are the SIGSEGV verdict and the generic `exit code 1`.
+
+### 2026-09-08: sightings #13 and #14 — two CONSECUTIVE `main` runs, a sixth frame, and the disposal chain walked end to end
+
+Two `Portal hosts (shard 1)` jobs on `main`, started one minute apart, both killed `MeshWeaver.FutuRe.Test`
+with exit 139. Both dumps were read the same way as #11/#12 (`struct.unpack` over the ELF core, the
+`rbp` chain unwound by hand, RVAs resolved against the `.debug` for the build-id read out of the
+crashed process's own `libcoreclr` mapping). The maintainer's standing hypothesis was a use-after-dispose
+in the teardown chain, so this read also carries the audit of that chain — what it found, and why it
+is not what killed these two hosts. Filed as
+[MeshWeaver.Plugins#1527](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1527).
+
+| | **#13** `MeshWeaver.Futu-50673.dmp` | **#14** `MeshWeaver.Futu-50573.dmp` |
+|---|---|---|
+| run / job | [`34222933802`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34222933802) / `102063244677` | [`34222981863`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34222981863) / `102050283390` |
+| head / event | `669b09a9`, `repository_dispatch` (framework released) | `d9e23446`, `push` to **`main`** |
+| `[FATAL ERROR]` | 12:50:37Z | 12:07:55Z |
+| `si_signo` / `si_code` / `si_addr` | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** |
+| `TRAPNO` / `ERR` | 14 / `0x4` | 14 / `0x4` |
+| faulting RVA | `0x5cb171` — **the same RVA as #12** | `0x5eb67a` — **a sixth frame** |
+| frame | `WKS::gc_heap::background_sweep()+0xa61` | `WKS::gc_heap::revisit_written_page(…)+0x1aa` |
+| chain (rbp) | `gc1+0xf6 ← bgc_thread_function+0xdc ← CreateSuspendableThread::$_0::__invoke+0x74 ← CPalThread::ThreadEntry+0x1e9` | `revisit_written_pages+0x4de ← background_mark_phase+0x401 ← gc1+0xf1 ← bgc_thread_function+0xdc ← …ThreadEntry+0x1e9` |
+| thread | dedicated **background-GC** thread, no managed frame | dedicated **background-GC** thread, no managed frame |
+| instruction | `49 8b 07 / 48 83 e0 f8 / 8b 08` — `mov (%r15),%rax ; and $-8,%rax ; mov (%rax),%ecx`, `RAX = 0` | `4c 89 e8 / 48 83 e0 f8 / 8b 08` — `mov %r13,%rax ; and $-8,%rax ; mov (%rax),%ecx`, `R13 = 0` |
+| the word at the source | `[R15]` reads 16 zero bytes | `[R15]` (page-aligned `0x7f59b4ddc000`) reads 32 zero bytes |
+| runtime / build-id | `10.0.11` / `989b56df…` | `10.0.11` / `989b56df…` |
+| `Unwind: exception type` in the job log | none | none |
+
+Same fingerprint, third register (`rax` in #4–#8, `r8`/`rcx` in #9, `r15`→`rax` in #12/#13, `r13` here),
+sixth frame. `revisit_written_page` is the background mark phase re-walking pages the write-watch
+flagged as dirty — it reads the header of whatever object sits at `R15`, and that header is zero.
+
+#### What the trace log says — and #14 died INSIDE a teardown
+
+| | #13 (pid 50673) | #14 (pid 50573) |
+|---|---|---|
+| `DISPOSE_DONE` / of which `teardown clean` | 30 / **30** | 15 / **15** |
+| `DISPOSE_DIRTY_TEARDOWN`, `DISPOSE_QUIESCE_LEAK`, `leakedIoLeaves>0` | **0** | **0** |
+| phase at death | inside `Group_KeyMetrics_ShouldHaveNonZeroData` (`TEST_START`, no `TEST_END`) | **a teardown**: 16 `TEST_START` / 16 `TEST_END`, but 16 `DISPOSE_INVOKED` / 15 `DISPOSE_DONE` — between `DISPOSE_INVOKED` 12:06:51.170 of `AnnualReport_EmbeddedCharts_ShouldRenderViaPathResolution` and a `DISPOSE_IOPOOL_DRAIN_START` that never came |
+| `alc` / `asm` at every checkpoint | **1** / 126–130 | **1** / 106–131 |
+| `FAULT-BUDGET` on this pid | none in the whole shard | none (the shard's two budget lines are pid 2749) |
+| `[FAULT]` records | 6 × `JsonSynchronizationStream … resubscribe failed` at 12:49:25 (12 s earlier) | 2 × `MeshDataSource: Could not lease the NodeType assembly context for FutuRe` at 12:06:51.173/.180 and 2 × `Failed-verdict re-drive: own-stream subscription faulted for FutuRe` at .228 — **3–58 ms after `DISPOSE_INVOKED`** |
+| teardown-straggler capture | 2 first-chance `ObjectDisposedException` — `MeshNodeStreamCache.GetQueryRaw` → `GetWorkspace()` on a disposed Autofac scope, 12:49:31.772/.775, **4 ms after** the previous test's `DISPOSE_DONE` and 5.5 s before death | **none** |
+
+Two facts about the fixture that matter for reading the rest: `FutuReAnalysisTest` declares
+`ShareMeshAcrossTests => true`, but no `DISPOSE_SHARED_SKIP` was ever written — the cluster kill-switch
+had sharing off, so **every `[Fact]` built and disposed its own mesh** (30 full teardowns in 47 s in #13).
+And `alc=1` at every checkpoint — each `INIT_MEM`/`DISPOSE_MEM` line is written after a forced full
+GC — means **no collectible `AssemblyLoadContext` survived any teardown** in either process. It does
+NOT mean none existed: `asm` moves 127 → 129 → 127 → 128 → 130 → 131 → 128 → 130 → 129 … → 133 across
+#13's checkpoints, so contexts (the per-node `DynamicNode_*` / `node-config-script:*` ones) were being
+created inside tests and fully reclaimed by the next checkpoint. Unloads therefore DO happen in this
+process, and what excludes an unload race is the fingerprint, not the count: a freed
+`LoaderAllocator` yields a non-null **unmapped** pointer (`AccessViolation`/SIGABRT, #613) or a #GP on
+a non-canonical one — never a zero word at a page-aligned, still-mapped address read by the collector
+itself — and in #14 the death preceded the `MeshTeardownSignal` every teardown-time unload waits on.
+
+#### The teardown chain, phase by phase — where a later phase can touch what an earlier one released
+
+Walked on the code the crashed runs ran (Plugins `669b09a9`/`d9e23446` on core pin `73d94b55`; the
+disposal-relevant files are unchanged to `main` at the time of writing). The non-shared path of
+`MonolithMeshTestBase.DisposeAsync` (Plugins, `src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs:1364`):
+
+1. **Clients** — `DisposeTestClientsAsync` (`:1285`): each client hub `DisposeAndJoinAsync`, joined
+   sequentially on `DisposalCompleted`. ✔ waits on the signal.
+2. **Hosted services** — reverse start order, `StopAsync` under a `DisposeTimeout` CTS (`:1460`). ✔
+3. **`Mesh.Dispose()`** (`:1488`) → `MessageHub.Dispose` (`src/MeshWeaver.Messaging.Hub/MessageHub.cs:1878`):
+   `hostedHubs.CloseCreation()` + `SignalShuttingDown()` FIRST, then `Post(ShutdownRequest(Quiescing))`.
+   The state machine is `Quiescing → DisposeHostedHubs → ShutDown → Dead`, each phase entered only on
+   the previous phase's own signal (`OnQuiesceComplete`; `hostedHubs.DisposalCompleted`, `:2214`); every
+   hosted hub's `DisposeImpl` (`:2251`) fires its `RegisterForDisposal` callbacks and reactive dispose
+   actions, and `SignalDisposalCompleted` (`:1833`) completes the `ReplaySubject`. ✔ reactive end to end.
+   **This is where `MeshNodeStreamCache.Dispose()` runs** — registered on the cache hub
+   (`src/MeshWeaver.Hosting/MeshNodeStreamCache.cs:616`), so it executes in the mesh's
+   `DisposeHostedHubs` phase, strictly before the mesh signals.
+4. **Wait** — `WaitWithProgressAsync` (`:1693`): `Mesh.DisposalCompleted.ObserveCompletion(…)`, no
+   `.ToTask()`, error arm attached, `ConfigureAwait(false)`. ✔ a subscription, not a timer race.
+5. **`IoPoolRegistry.DrainAll()`** (`:1518`; `src/MeshWeaver.Mesh.Contract/Threading/IoPoolRegistry.cs:169`):
+   cancel + join of every `IIoPool` leaf. ✔ `leakedIoLeaves=0` in all 45 teardowns across both runs.
+6. **`AsyncDisposeQueue.DrainAsync`** (`:1525`). ✔ `clean=True` throughout.
+7. **`MeshTeardownSignal.SignalCompleted(report)`** (`:1533`) — and only NOW do the hosted hubs' Autofac
+   scopes close: `HostedHubsCollection.CloseScopeWhenDisposed` (`:239`) subscribes each child's
+   `DisposalCompleted.Take(1)` and hands the close to `TeardownOrderedScopeDisposal.CloseWhenDrained`
+   (`src/MeshWeaver.Mesh.Contract/Threading/TeardownOrderedScopeDisposal.cs:41`), which on a disposing
+   mesh defers it to `signal.Completed`. ✔ pinned by `HubScopeClosesAfterTeardownDrainsTest`.
+8. **`base.DisposeAsync()`** (`FileOutput`), then the root `ServiceProvider.Dispose()` (`:1610`,
+   `DisposeServiceProviderOnTeardown` defaults to `true`), then `DISPOSE_MEM` with a forced GC.
+
+Every phase waits on a completion signal, none on a timer, nothing blocks in a `Dispose()`, and no
+`Cancel()` is issued from the teardown thread except the bounded `StopAsync` budget in step 2. The
+collectible-ALC unload (`MeshDataSource.cs:995`, `UnloadNodeAssemblyContexts`) and the lease release
+(`:1017`, `ReleaseNodeTypeLease`) are both gated on `teardownSignal` — which in #14 had not fired when
+the host died (no `DISPOSE_IOPOOL_DRAIN_START`, let alone `DISPOSE_DONE`), and in #13 had fired 5.5 s
+earlier with a forced GC after it that left `alc=1`.
+
+**The one place a later phase touches what an earlier phase released — and it is in core, not in the
+fixture.** `MeshNodeStreamCache.Dispose()` (`:784`) detached the per-path read streams (step 1), the
+update queues (2), the probe cache (3), the in-flight writes (4), the storm-breaker windows (5) and the
+pending self-writes (6) — and never touched `_queries`. Each synced query is
+`Defer(…).SubscribeOn(TaskPoolScheduler.Default).Replay(1).AutoConnect(1)` (`GetQueryRaw`), and
+`AutoConnect` keeps the handle its `Connect()` returns to itself: the cache had no way to release a
+chain even had it tried. A first subscriber's `Connect()` only **queues** the upstream subscribe on
+the pool, and nothing in steps 3–8 joins a pool-queued Rx subscribe (`DisposalCompleted` covers the
+action blocks, `DrainAll` covers `IIoPool` leaves, the queue covers enqueued cleanup). So the item ran
+whenever the pool reached it — in #13, 4 ms after step 8 — and resolved `cacheHub.GetWorkspace()`
+from a scope step 7 had closed. **All 11 disposed-scope stragglers captured in run `34222933802`'s
+shard-1 artifact are that one `Defer`** — FutuRe 2, Blazor.Views 5 (one of them the inner
+`SyncedQueryMeshNodes.BuildReadStreamCore`), ContentCollections.Indexing.Graph 4 — on `.NET TP Worker`
+threads, every one caught by the Defer and forwarded to `OnError`. Fixed in the same change as this
+entry: the connection is registered with the cache (`AutoConnect(1, onConnect)`), released in
+`Dispose()` (a still-queued connect is cancelled before the pool dequeues it; a late registration is
+disposed as it is added), and a query opened after teardown terminates with `ObjectDisposedException`
+instead of parking on a `Replay(1)` nothing will feed. Pinned by
+`test/MeshWeaver.Hosting.Test/QueryConnectionsReleasedOnTeardownTest.cs`, whose control arm proves the
+registry sees the live connection before asserting it was released.
+
+The two `[FAULT]` records in #14's teardown window are the error arms of `RegisterForDisposal`'d
+own-stream subscriptions (`MeshDataSource.cs:1034`, `NodeTypeCompilationHelpers.cs:1036`) reporting the
+own stream ending in error as the hub shuts down — the documented "incoming streams error" contract
+of [HubDisposalModel](../HubDisposalModel), handled by the arm that logged them, not a resolve from a
+disposed scope.
+
+#### Why the audit finding is real and is still not the killer
+
+- It produces a **managed** `ObjectDisposedException`, caught by `Observable.Defer` and forwarded to
+  `OnError`. Nothing on that path writes to an object header, and a managed exception cannot zero
+  one. Its escalation shape, when a subscriber has no error arm, is Rx's `Stubs.Throw` →
+  `AppDomain.UnhandledException` → xUnit's `Catastrophic failure … Failed: 0, exit 1` (Plugins#870,
+  #1390) — **exit 1, not 139**.
+- #14 crashed with **no straggler at all**, and #13's stragglers were 5.5 s and one whole clean
+  teardown before the death.
+- Both faulting threads are the background-GC thread with no managed frame; both `si_addr` are the
+  MethodTable field offset, both source words read zero at their source.
+
+#### #1507 does not reach this suite
+
+Plugins #1507 (`fix/1390-teardown-resolve-guard`, merged 13:13Z) converts 22 Rx call sites in
+`src/MeshWeaver.AI/*` to `TeardownSafeCallback`. `MeshWeaver.FutuRe.Test` references neither
+`MeshWeaver.AI` nor anything that does (checked: its own `.csproj` and
+`MeshWeaver.Hosting.Monolith.TestBase.csproj`), and neither crashed sha contains #1507. `Portal hosts
+(shard 1)` passing on the 13:13 push run `34230683846` is one green sample at a low-single-digit-percent
+rate — the reading the base-rate section above already warns against — not the fix working.
 
 ## Reading the result honestly
 

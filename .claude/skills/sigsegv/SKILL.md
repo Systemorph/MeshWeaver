@@ -118,8 +118,16 @@ function name: the frame moved across `background_sweep` → `plan_phase` → `f
 left `gc_heap` entirely** — `LCGMethodResolver::GetCodeInfo+0x1f7`, `si_addr = 0x4` because the null
 MethodTable is read at offset `+4` — so a `gc_heap` frame is a *symptom* of the family, never its
 definition. The portable fingerprint is **a MethodTable word that reads exactly zero**, whoever
-dereferences it. Measured base rate on Plugins CI over
-1,197 runs: **0.74 %**, `MeshWeaver.FutuRe.Test` only, `main` included. Full table:
+dereferences it. 🚨 **And the frame REVISITS — it is not a progression.** Sightings #11/#12
+(2026-09-07/08) were read as a pair: one is `GetCodeInfo+0x1f7` with `si_addr = 0x4` on a mutator
+inside the JIT, the other is back in `background_sweep()+0xa61` with `si_addr = 0x0` on a dedicated
+BGC thread — same runtime binary, 33 hours apart, `[R15]` reading zero in both. So do not read #10's
+move out of `gc_heap` as the family migrating toward the LCG/serialization workload; that was a
+sample of one. Measured base rate on Plugins CI: **0.74 %** over 1,197 runs (2026-08-29 → 09-03,
+denominator = non-cancelled runs) and **1.17 %** over 343 runs (2026-09-06 → 09-08, denominator =
+runs whose portal-host shard reached a verdict) — **different denominators, so not a trend**; both
+are `Portal hosts (shard 1)` only, `main` included, and the affected suites are
+`MeshWeaver.FutuRe.Test` **and `MeshWeaver.GitSync.Test`**. Full table:
 DebuggingNativeCrashes.md.
 
 🚨 **One more non-ours case, specific to test hosts:** `exit=139` in a process where **ClrMD** runs

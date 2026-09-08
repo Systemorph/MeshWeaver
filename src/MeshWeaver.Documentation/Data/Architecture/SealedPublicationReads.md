@@ -200,8 +200,8 @@ buckets, and the buckets are the verdict:
 
 - **foreign = 0** → seal. The directory is byte-for-byte this publication.
 - **ours = 0, foreign > 0** → *superseded*. Nothing distinguishing survived; the shelf is another
-  publication, whole. **Leave its seal alone** and go red — a run reporting "published" having
-  shipped nothing is the silent-nothing outcome this script exists to prevent.
+  publication, whole. **Leave its seal alone.** Whether that is red depends on WHOSE publication it
+  is — see "Superseded is not always a failure" below.
 - **ours > 0, foreign > 0** → a **mix**. Refuse, and delete any sentinel over it, because a
   publisher can finish and seal inside a gap in our uploads: refusing to write *our* sentinel is not
   enough when the one already there covers a directory we have since partly overwritten.
@@ -218,10 +218,94 @@ asymmetry: whoever stamps *last* re-reads its own marker and seals happily over 
 The loser detects the winner; the winner detects nothing. No arrangement of a single marker fixes
 that, because a marker records who wrote last, not whose bytes are on the shelf.
 
+### Superseded is not always a failure — the convergence verdict
+
+🚨 **The postcondition and the sealed-skip answer the same question and used to disagree,
+and the disagreement is what made core CD fail.** The skip at the top of `publish_to_target` says a
+sealed directory is already-published when the framework identity *and* the source commit match —
+the publication key is **content × framework**, and a different run's bytes for the same key are
+explicitly acceptable. The postcondition can only ask *"are these MY bytes"*. So a run that finds the
+shelf unsealed, uploads, and is then overwritten by a sibling publishing the **same content** was
+told it had shipped nothing, when in fact the publication it was asked to make was on the shelf,
+whole and sealed.
+
+**Measured — 2026-09-08, the incident that made it loud.** Core CD runs `34205409381` and
+`34206854855` both published `plugins` at source `cfac152ef023bc8e16203511aa60b50f581d3161` for
+identity `s057b1e7785fba6c6ba079e9d84a0c00d`. `BAKE_PUBLISH_TARGETS` holds two shares; each run won
+one and each went red on the other, with the same verdict: *40 of 45 file(s) were overwritten … the
+remaining 5 are byte-identical*. The **40** are bundle zips and module packages — the compile is not
+reproducible byte-for-byte. The **5** are `source-commit.txt`, `repository.txt`, `architecture.txt`,
+`modules/_index` and `platform-surface.json`, byte-identical *because it is the same content*. Both
+shares ended sealed with exactly the right bytes; both CD runs failed; the run produced no sealed set
+and the platform pin behind it did not move.
+
+So `ours = 0, foreign > 0` now converges instead of failing, on **positive byte-level proof of all
+three** — nothing inferred, nothing waited for:
+
+1. every **non-payload** file is byte-identical to this bake's (foreign markers `0`, *and* the
+   neutral-marker count reaches `MARKER_COUNT` — the denominator, so it cannot pass having checked
+   nothing);
+2. every foreign file names **one** publication, and that publication is stamped — an unstamped file
+   can never satisfy it, because `<unstamped>` is not a legal token;
+3. `_complete` is on the shelf, its digest is the SHA-256 of **this bake's own listing** (so the
+   sealed bundle *set* is ours, name for name — a same-content sibling with a wider set is refused)
+   and it carries that same publication token (so the seal belongs to the bytes under it, not to an
+   earlier publication a third writer left behind).
+
+Anything less is the superseded **red**, unchanged, with the reason printed beside it. Convergence
+never touches the **mix** verdict, never seals, never deletes, and never reports a publication that
+is not there — it reports that *somebody else made the exact one this run was asked for*, names
+them, and counts it as `targets-converged` rather than `targets-published` so no summary claims a
+seal this run did not write.
+
+🚨 **What it does not cover, stated so nobody re-derives it:** a sibling that has **not sealed
+yet** when this run's sweep ends. In the incident that was 21 seconds on one target and −0.24
+seconds on the other — so of those two reds, one converges and one does not. Closing that gap by
+looking again later would be a retry, and by looking more slowly would be a bound; the fix is the
+generation layout, where the two runs never share a directory and neither has to lose.
+
 The same two stamps close the carry-forward (below): `carry-forward-bundles.sh` verifies each
 bundle it downloads against the digest the publication records, and refuses when the carried set
 names more than one `publication` — which is what "the publication was replaced while I was reading
 it" looks like from inside a narrowed bake.
+
+## The seal triggers the sync — the publication and the sources are ONE unit
+
+A sealed publication is bytes compiled from **one commit** of the producing repository
+(`source-commit.txt`). The instance's SOURCES for that repository live in the mesh and advance only
+through the git sync. They must be the same commit, or every bundle is — correctly — declined on its
+source fingerprint (#2813) and the instance compiles every type from whatever it holds.
+
+Measured on memex.systemorph.com, 2026-09-08, two ways they were NOT the same commit:
+
+1. **The hook fires before the seal.** The `workflow_run` green-build hook arrives when the
+   repository's build goes green, which is BEFORE its publish-bake job seals the bundles for this
+   identity. `SealedSyncGate` held the source — "not sealed for this instance; it advances when it
+   is" — correctly. Nothing re-fired when the seal landed minutes later, so *when it is* was never.
+2. **"At the commit" was a claim, not a fact.** The config recorded `lastSyncCommitSha = 76cdb553b`
+   with outcome `Skipped`: the importer's content marker matched, so it never read the partition.
+   Three `Crm/Source/Mail*` files a commit had deleted (Crm#54) were still in the mesh — kept from
+   the prune because the conflict horizon was frozen and, judged by timestamp alone, the previous
+   import's own writes read as "newer on the server". 25 live sources against a bake of 22; no bake
+   of that repository could ever match again.
+
+What closes both, in one seam (`IPublicationSyncReconciler`, implemented by the git-sync layer as
+`SealedPublicationSyncReconciler`, invoked by `ShippedPrebuiltBundles.SeedPublishedRoot` after every
+publication sweep with what it sealed and what it declined):
+
+- a source **behind** the seal is imported at the sealed commit — the seal IS the evidence the gate
+  was waiting for (`SealedSyncReconcile.Action.ImportAtSealedCommit`);
+- a source **at** the sealed commit whose types were nevertheless declined on their source
+  fingerprint is re-imported at that commit with the content-skip bypassed
+  (`ImportConflictPolicy.Reconcile` → `GitHubSyncService.ReconcileAtCommit`) — every conflict
+  protection stays armed;
+- and **only a person's write is a server edit** (`ImportConflictPolicy.IsHumanEdit`): a node the
+  import itself wrote (system identity, or no author) is never preserved from the prune, however
+  new its clock. That is what lets a repository's deletion reach an instance whose horizon is held.
+
+A hold is written onto the config (`GitHubSyncConfig.LastSyncNote`, outcome `Held`) and logged at
+Warning **once per reason**, never per delivery. The pure decisions are pinned in
+`SealedSyncReconcileTest` and `ImportConflictPolicyTest`.
 
 ## What is NOT closed
 
@@ -234,16 +318,21 @@ Stated plainly, because a page that only lists what works is how the next sessio
   a generation directory plus an atomic pointer swap removes republication in place entirely, and
   is the shape the read side already pins.
 
-  **That layout is now designed and its reader half is landed**:
+  **That layout is now designed, and BOTH its reader half and its writer half are landed**:
   [Sealed Publication Generations](../SealedPublicationGenerations) carries the directory shape, the
   resolution rules, the retention rule, and — the part that decides the order — why a *new* writer
   and an *old* writer on one prefix is the half-migration to avoid: the pointer-following reader
   would keep serving its generation and never see the flat writer's newer publication, a stale serve
-  with nothing red anywhere. Phase 1 (every reader tolerates a pointer) is in; the writer is not, so
-  **everything on this page still describes what is live**. The ORDER that gets there was re-measured
-  on 2026-09-07 and corrected on that page: `plugins` is the only prefix with two producers, core CD
-  pins nothing (so an unconditional writer would flip it the day it merged), and the writer therefore
-  lands behind a per-caller layout selector defaulting to flat.
+  with nothing red anywhere. The writer is behind a per-caller `publication-layout` selector that
+  **defaults to `flat`**, so nothing anywhere writes a generation until a caller opts in and
+  **everything on this page still describes what is live**. What remains is each producer's pin
+  reaching the writer, then flipping — `plugins` in ONE change set, because it is the only prefix
+  with two producers.
+
+  🚨 That page also records what an **OCI registry** does and does not close, since the fleet is
+  moving plugin bundles into one: content-addressed blobs make a mix unrepresentable, but a **tag**
+  is a mutable last-writer-wins reference and simply moves the defect unless the seal names
+  **digests** — the rule already in force for images via `MW_IMAGE_DIGEST`.
 - **A refused publication leaves the prefix unsealed**, which every consumer skips — correct, and
   it means an overlap now costs a red lane and a re-run rather than a portal that renders nothing.
   It is not free: the identity serves nothing until either publisher runs again.
@@ -253,9 +342,26 @@ Stated plainly, because a page that only lists what works is how the next sessio
   not have before, and it is the correct number: the alternative is four sealed mixes a day, which
   is what the fleet actually had. Whoever is holding the loser's re-run should not "fix" it by
   loosening the check.
+- **How often it bites, with the denominator it needs — measured 2026-09-08.** 30 core-CD runs
+  examined; 3 had not reached the bake job, 16 were cancelled before it and 2 decided not to
+  publish, leaving **9 core-CD bake jobs that actually executed**. Counting every publication of
+  either lane that had a same-identity run overlapping it in time — 4 core-CD plus 5 satellite
+  `publish-bake` — the corrected rate is **2 failures / 9 overlapping publications (22%)**, and both
+  failures are the two halves of the single mutual supersession above. 🚨 **All 9 overlaps were
+  same-lane; zero were cross-lane**, which reproduces the 2026-09-06 finding on a different day and
+  is the second independent measurement saying that "one owner per prefix" addresses none of this.
+  The convergence verdict takes that 2 to 1; the layout takes it to 0.
 - **The window itself remains.** In this layout it cannot be removed — in-place replacement means
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
+- 🚨 **Two Azure-direct readers still address the PREFIX rather than the publication.**
+  `compose-sealed-modules.sh` and `node-repo-gate.yml`'s inline `download-batch` compose their paths
+  under `prebuilt-bundles/<identity>/<source>/` directly, so they read the flat copy whatever the
+  pointer says. Inert while nothing writes a generation, and correct at phase 4 in the ordinary case
+  — but a run whose flat copy is refused leaves them on the previous publication, and phase 5 breaks
+  them outright. They are named as phase 3's precondition on
+  [Sealed Publication Generations](../SealedPublicationGenerations); the publish lane's own two
+  readers (`bake-scope.sh`, `carry-forward-bundles.sh`) already resolve it.
 - **The Azure-direct read path carries no generation.** `az storage file download-batch` against the
   share has no server to ask, so `--storage-target` consumers still do unpinned N+1 reads. The lanes
   all pass `--registry-url`; the storage path is the OIDC fallback.
@@ -277,12 +383,17 @@ the pin is removed:
 - `.github/scripts/test-publish-bake-overlap.py` — runs the REAL `publish-bake-bundles.sh` **twice,
   interleaved**, against a stub share, and reads the verdict off the BYTES rather than off the
   script's own log: each fixture bundle names the bake that produced it, so "the sealed directory
-  holds two bakes" is a fact about the shelf. Twenty-one assertions over eight cases — three
-  controls that must PASS (settled publish, republish of new content, already-published skip), the
-  other lane in flight, the other lane completing inside a gap, a full supersession, an unreadable
-  read-back, an unstamped incumbent, and two concurrent runs of ONE repo. `--expect-defect` runs
-  the same cases against the pre-fix script and asserts the opposite; on `main` before the fix,
-  every overlap case sealed a mix.
+  holds two bakes" is a fact about the shelf. **47 assertions over eleven cases** — three controls
+  that must PASS (settled publish, republish of new content, already-published skip), the other lane
+  in flight, the other lane completing inside a gap, a full supersession, an unreadable read-back, an
+  unstamped incumbent, two concurrent runs of ONE repo, and the three convergence arms (a sibling
+  publishing the SAME content and sealing it → success; the same sibling **not** sealing → still red;
+  the same sibling sealing a **different bundle set** → still red). The convergence fixture pins
+  `platform-surface.json` to the platform rather than to the bake, because that is what the incident
+  measured — a fixture that made it differ per bake could not reproduce a convergence and the case
+  would pass having tested the wrong thing. `--expect-defect` runs the same cases against the pre-fix
+  script and asserts the opposite; run against `main`'s script with the ordinary arms, 5 of the 47
+  fail, which is the negative control for the convergence verdict.
 - `carry-forward-bundles.sh --self-test` — eleven cases, now executed by CI for the first time
   (this script runs only inside a node repo's publish lane, so the first execution of an edit used
   to be a production publish). It covers the shrink refusals it has always owed plus the

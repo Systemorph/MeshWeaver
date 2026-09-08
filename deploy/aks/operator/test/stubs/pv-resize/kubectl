@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for test/run-tests.sh — answers hosting-pv-resize's read/patch shapes from
+# a fixture directory ($HOSTING_PV_FIXTURE) and records every invocation in $HOSTING_PV_STATE/log.
+# Not a mock of kubectl: what is asserted is the command's DECISIONS — refuse to shrink, refuse a
+# class that cannot expand, patch exactly once, read the capacity BACK — not what kubectl does.
+#
+#   kubectl -n <ns> get pvc <claim> -o json    → $FIXTURE/pvc.json; after a patch, pvc.after.json
+#                                                 when it exists (the provisioner's answer);
+#                                                 no pvc.json → NotFound on stderr, exit 1
+#   kubectl get storageclass <c> -o jsonpath=… → allowVolumeExpansion from $FIXTURE/storageclass.json
+#   kubectl -n <ns> patch pvc <claim> …         → records the patch, marks $STATE/patched
+set -uo pipefail
+fixture="${HOSTING_PV_FIXTURE:?the pv-resize kubectl stub needs HOSTING_PV_FIXTURE}"
+state="${HOSTING_PV_STATE:?the pv-resize kubectl stub needs HOSTING_PV_STATE}"
+printf '%s\n' "kubectl $*" >> "$state/log"
+case "$*" in
+  *" get pvc "*)
+    if [ -f "$state/patched" ] && [ -f "$fixture/pvc.after.json" ]; then cat "$fixture/pvc.after.json"; exit 0; fi
+    if [ -f "$fixture/pvc.json" ]; then cat "$fixture/pvc.json"; exit 0; fi
+    echo 'Error from server (NotFound): persistentvolumeclaims "memex-data" not found' >&2
+    exit 1 ;;
+  *"get storageclass "*)
+    [ -f "$fixture/storageclass.json" ] || { echo 'Error from server (NotFound): storageclasses.storage.k8s.io not found' >&2; exit 1; }
+    jq -r '.allowVolumeExpansion // ""' "$fixture/storageclass.json" ;;
+  *" patch pvc "*)
+    touch "$state/patched"
+    echo "persistentvolumeclaim/memex-data patched" ;;
+  *) echo "kubectl stub (pv-resize): unexpected invocation: $*" >&2; exit 1 ;;
+esac

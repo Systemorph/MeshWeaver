@@ -119,6 +119,20 @@ the release is sitting there looking newer.
 The RECOVERY path (§3) deliberately drops the line rule: an install that cannot start a pod at all
 takes the best image that EXISTS, and the verdict says `RECOVERY` so the departure is visible.
 
+### 🚦 …and only the builds its PATTERN admits (2026-09-08)
+
+**Maintainer decision, 2026-09-08.** The default channel is the clean release: *"by default we will
+not upgrade as long as no version without `-ci…` is labelled."* A continuous build is eligible only
+when the policy record's `pattern` — a glob over the tag, `3.0.1-ci*` — admits it, so
+`SelectCandidates` resolves the CHANNEL first (`VersionSelect.ResolveChannel`): `Continuous` with a
+pattern lists that pattern's tags, `Continuous` without one **is `Stable`** and the poller logs the
+advisory once. The order under a pattern is unchanged — still `BuildOrdinal`, still the promotion
+band last — and the three `-latest` pointers CD moves are dropped by the structural filter before any
+policy is applied. `PickTargets` keeps its LISTING semantics for the availability service, which
+enumerates publications under `Continuous` regardless of what an install would apply. Rule, record
+shapes and the fleet's current `3.0.0-ci*`:
+[Release Process & Versioning](/Doc/Architecture/ReleaseProcess) → "Which build an install takes".
+
 ## 3. "I am current" is not "my tag no longer exists"
 
 The second defect is the same code being unable to tell two opposite states apart.

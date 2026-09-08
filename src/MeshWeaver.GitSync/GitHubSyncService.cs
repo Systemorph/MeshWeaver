@@ -356,6 +356,25 @@ public sealed class GitHubSyncService
     public IObservable<StaticRepoImportResult> ReimportAtCommit(
         string spacePath, string commitish, string userId, string? sourceId = null,
         Action<string, LogLevel>? progress = null, bool force = false)
+        => ReimportAtCommitCore(spacePath, commitish, userId, sourceId, progress, force, reconcile: false);
+
+    /// <summary>
+    /// <see cref="ReimportAtCommit"/> with the RECONCILE switch
+    /// (<see cref="ImportConflictPolicy.Reconcile"/>): the import re-evaluates the partition even
+    /// when its content fingerprint matches a prior import, while every conflict protection stays
+    /// armed. For the sealed-publication reconciler, which has measured that the live sources
+    /// disagree with the bytes baked from this very commit. A DISTINCT name, not an overload: an
+    /// added overload makes every dependent's <c>cref</c> to the original ambiguous (CS0419 under
+    /// warnings-as-errors — the shape that bit MeshWeaver.SocialMedia on 2026-09-04).
+    /// </summary>
+    public IObservable<StaticRepoImportResult> ReconcileAtCommit(
+        string spacePath, string commitish, string userId, string? sourceId = null,
+        Action<string, LogLevel>? progress = null)
+        => ReimportAtCommitCore(spacePath, commitish, userId, sourceId, progress, force: false, reconcile: true);
+
+    private IObservable<StaticRepoImportResult> ReimportAtCommitCore(
+        string spacePath, string commitish, string userId, string? sourceId,
+        Action<string, LogLevel>? progress, bool force, bool reconcile)
     {
         return ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
         {
@@ -374,7 +393,10 @@ public sealed class GitHubSyncService
             // server since the last sync and not yet committed to the branch is NOT a stale extra to
             // mirror away. One-directional import (repo → mesh mirror) keeps FullReplace semantics.
             var policy = new ImportConflictPolicy(config.TwoWay, config.LastSyncedAt, force,
-                PreserveServerAdditions: config.Direction == SyncDirection.Bidirectional);
+                PreserveServerAdditions: config.Direction == SyncDirection.Bidirectional)
+            {
+                Reconcile = reconcile,
+            };
             return ResolveAuth(userId).SelectMany(auth =>
             {
                 var token = auth.Token;
@@ -950,7 +972,7 @@ public sealed class GitHubSyncService
     /// <param name="sourceId">The sync source (null = the primary).</param>
     private IObservable<MeshNode> RecordSyncResult(
         string spacePath, string outcome, string? seenCommitSha, bool advanceHorizon,
-        string? sourceId = null)
+        string? sourceId = null, string? note = null)
     {
         var now = DateTimeOffset.UtcNow;
         return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
@@ -964,10 +986,26 @@ public sealed class GitHubSyncService
                     LastSyncOutcome = outcome,
                     LastSyncCommitSha = seenCommitSha ?? cur.LastSyncCommitSha,
                     LastSyncedAt = advanceHorizon ? now : cur.LastSyncedAt,
+                    // A hold's reason, or cleared by an attempt that ran: the note describes the
+                    // LAST attempt only, never an older one.
+                    LastSyncNote = note,
                 },
             };
         });
     }
+
+    /// <summary>The outcome literal recorded when a source is held back from a commit (by the
+    /// sealed-publication gate, or the reconciler) rather than attempted.</summary>
+    public const string HeldOutcome = "Held";
+
+    /// <summary>
+    /// Records that this source was HELD from advancing, and why — onto the config, so the reason
+    /// is visible where the outcome is (2026-09-08: a source held for hours showed only
+    /// <c>Skipped</c>). Moves nothing else: not the commit, not the horizon. Cold.
+    /// </summary>
+    public IObservable<MeshNode> RecordHold(string spacePath, string? sourceId, string reason)
+        => RecordSyncResult(spacePath, HeldOutcome, seenCommitSha: null, advanceHorizon: false,
+            sourceId, note: reason);
 
     /// <summary>Writes the FULL config (no read) — used by <see cref="SaveConfig"/> (a programmatic
     /// / test API). The GUI does NOT use this: it edits the node through the standard

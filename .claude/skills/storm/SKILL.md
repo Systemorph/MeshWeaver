@@ -59,6 +59,13 @@ The portal hung silently while wedged (a deadlocked/starved process stops loggin
 shutdown emits a **mass-disposal storm** that can rotate the pre-hang logs out of the buffer. Work
 the timeline:
 
+> 🚨 **Break-glass reads.** Restart counts, pod events and the previous container's log are exactly
+> the three questions the control instance's Hosting API does not answer yet (measured 2026-09-08:
+> `Hosting/DeploymentStatus` and `Hosting/LogEntry` exist as types with zero instances). Take them
+> read-only through `az aks command invoke`, name them as break-glass in what you write down, and
+> never turn the cure into a `kubectl` write — a restart is a `Restart` `Hosting/InstanceAction`.
+> Policy: [OperatingFromThePortal.md](../../../src/MeshWeaver.Documentation/Data/Architecture/OperatingFromThePortal.md).
+
 ```bash
 # 1. Did the pod restart, and how? exit 137 + "failed liveness probe" = wedge (not OOMKilled).
 az aks command invoke -g <rg> -n <cluster> --command \

@@ -44,7 +44,10 @@ The rest of this page is the mechanism, and applies to any installation.
 ## Versioning — how to read the live version
 
 Each instance runs the ACR image tag its in-pod self-updater last rolled to — the CI build number
-`ci.<N>`. To see what a namespace is actually running:
+`ci.<N>`. To see what a namespace is actually running, open the Fleet Console (`/Hosting/Console`
+on the control instance): it shows the RUNNING version per instance next to the newest the
+self-updater has seen. The cluster read is the break-glass form
+([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)):
 
 ```bash
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
@@ -61,8 +64,9 @@ rolls. No manual step per instance. This is why **a red `main` blocks the rollou
 instance, and why the merge gate requires green CI. Full model:
 [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy).
 
-A manual code push to one instance (bypassing self-update) is the `kubectl set image` + rollout
-sequence in [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS).
+A manual code push to one instance (bypassing self-update) is a `Roll` `Hosting/InstanceAction`
+with the tag on the control instance; the operator runs the `kubectl set image` + rollout sequence
+of [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) for you.
 
 ## Instance lifecycle — creating and deleting instances
 

@@ -288,7 +288,11 @@ There are **three** sides to chart drift, not two:
 | **M** | the last-deployed release manifest | `helm get manifest <release> -n <ns>` |
 
 Everything above this section is **D vs L**. `hosting-audit` (`deploy/aks/operator/bin`) computes
-**M vs L**. The deletion hazard is in **neither**: it is **D vs M**.
+**M vs L** — plus ONE record-vs-live comparison the manifest cannot carry: a PersistentVolumeClaim
+whose live capacity is below the `size` the Deployment record declares (the record's `volumes[]`
+reach helm as the release's `persistence` values), because on this fleet the portal's claims are
+not helm-managed and a bigger size changes nothing until `hosting-pv-resize` applies it. The
+deletion hazard is in **neither**: it is **D vs M**.
 
 "A `helm upgrade` does not delete cluster-only settings" is the measured rule, and it is right about
 the *mechanism* — helm removes only what it **previously owned**. But a key can be cluster-only

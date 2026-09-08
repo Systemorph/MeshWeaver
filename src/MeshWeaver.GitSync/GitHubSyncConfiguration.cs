@@ -79,6 +79,12 @@ public static class GitHubSyncConfiguration
             sp.GetService<TimeProvider>(),
             sp.GetService<ILogger<GitHubRepoIdentityResolver>>()));
         services.AddSingleton<GitHubWebhookProcessor>();
+        // The seal-triggered sync (2026-09-08): the hosting layer's publication sweep hands what
+        // the registry sealed for this identity — and which types it declined — to this seam, and
+        // the sources of those repositories are brought onto the sealed commit. Registered here
+        // because only the sync layer knows the configs; an instance without git sync keeps the
+        // hosting default (no reconciler ⇒ the sweep proceeds as before).
+        services.TryAddSingleton<Hosting.IPublicationSyncReconciler, SealedPublicationSyncReconciler>();
         // Surfaces the per-space GitHub sync sources on the partition administration page
         // (PartitionSyncAdminLayoutArea resolves all IPartitionSyncSourceProvider from DI).
         // ONE provider instance, TWO seams: the administration GUI's rich one and the compile

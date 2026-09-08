@@ -65,6 +65,11 @@ public class SelfUpdateHostedService : IHostedService
     /// </summary>
     private int _policyEstablished;
 
+    /// <summary>Whether the "Continuous without a pattern is Stable" advisory has been logged —
+    /// once per process, so a record written before the pattern existed is named on the first check
+    /// and not on every one.</summary>
+    private int _channelAdvisoryLogged;
+
     public SelfUpdateHostedService(
         IMessageHub hub,
         IAcrTagLister acr,
@@ -154,7 +159,10 @@ public class SelfUpdateHostedService : IHostedService
                 BuildCompletionTicks().Do(_ => Interlocked.Increment(ref _buildEventsSeen)),
                 SafetyNetTicks(),
                 ModuleSetProposedTicks(),
-                policy.DistinctUntilChanged(content => content.Policy).Skip(1)
+                // The pattern is part of the channel (Continuous + `3.0.1-ci*`), so editing it is a
+                // policy change and re-drives a check exactly like flipping the enum.
+                policy.DistinctUntilChanged(content => (content.Policy, UpdateChannelPattern.Normalize(content.Pattern)))
+                    .Skip(1)
                     .Select(_ => SelfUpdateTrigger.PolicyChange)))
             // 🚨 Read the CURRENT policy at decision time — never WithLatestFrom. That operator only
             // pairs once its secondary has produced, and the startup trigger fires synchronously on
@@ -445,7 +453,8 @@ public class SelfUpdateHostedService : IHostedService
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         return Observable
-            .Defer(() => UpdatePolicyNodeType.EnsureExists(_hub, accessService, _options.DefaultPolicy, _logger))
+            .Defer(() => UpdatePolicyNodeType.EnsureExists(
+                _hub, accessService, _options.DefaultPolicy, _logger, _options.DefaultPattern))
             .RetryWhen(ResubscribeAfterRetryInterval("policy-node seeding"))
             .Take(1)
             .SelectMany(_ => Observable
@@ -615,6 +624,16 @@ public class SelfUpdateHostedService : IHostedService
         if (policy.Policy == UpdatePolicyKind.None)
             return Observable.Return(SelfUpdateVerdict.UpdatesDisabled());
 
+        // 🚨 The CHANNEL, resolved once per check (maintainer, 2026-09-08): a continuous build is
+        // eligible only when the record's version pattern admits it, so `Continuous` with no
+        // pattern IS `Stable`. That is a real change for a record written before the pattern
+        // existed, so it is said — once per process, at Warning, naming the record and the pattern
+        // to set — rather than applied silently; SelectCandidates below applies the same
+        // resolution, so the log and the decision cannot disagree.
+        var channel = VersionSelect.ResolveChannel(policy.Policy, policy.Pattern);
+        if (channel.Advisory is { } advisory && Interlocked.Exchange(ref _channelAdvisoryLogged, 1) == 0)
+            _logger?.LogWarning("[SelfUpdate] {Advisory}", advisory);
+
         return ListTags()
             // 🚨 The BEST ROLLABLE release, not merely the newest one. A target is only rollable if a
             // sealed content bake exists for the identity that exact image resolves to, and picking
@@ -637,7 +656,8 @@ public class SelfUpdateHostedService : IHostedService
             // backwards if need be. Both AKS portals sat in that state on 2026-09-07 printing the
             // up-to-date sentence, and an operator had to move them by hand.
             .Select(tags => VersionSelect.SelectCandidates(
-                tags, ShippedReleaseSeed.InstalledPlatformVersion, policy.Policy, policy.RequireCiGreen))
+                tags, ShippedReleaseSeed.InstalledPlatformVersion, policy.Policy, policy.RequireCiGreen,
+                policy.Pattern))
             .SelectMany(selection => selection.Candidates.Length == 0
                 // 🚨 "We asked and the answer was no" — the OTHER formerly-silent exit, and the one
                 // that made a stalled install unfalsifiable from outside. This is the normal, happy

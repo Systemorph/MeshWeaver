@@ -47,6 +47,14 @@ So dropping `<id>` alone can leave `<id>@<domain>` behind. Drop **both**.
 
 ## 3. Reach Postgres
 
+> 🚨 **This whole procedure is break-glass by construction** (maintainer, 2026-09-08: operations go
+> through the control instance's Hosting API, not the cluster). There is no `Hosting/InstanceAction`
+> kind for removing a user, so the schema drop below is a cluster write with no record and no
+> audit — do it only on an explicit order, write it up as break-glass, and file the missing
+> action against the Hosting package. The restart in step 5 IS an action kind: file a `Restart`
+> `Hosting/InstanceAction` rather than the `kubectl rollout restart` shown.
+> Policy: [OperatingFromThePortal.md](../../../src/MeshWeaver.Documentation/Data/Architecture/OperatingFromThePortal.md).
+
 The private AKS cluster: `kubectl` only via `az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command "…"`.
 
 **The DB password is inline in the portal's `ConnectionStrings__memex` env — NOT the `POSTGRES_PASSWORD` secret** (that secret is a *different, unused* value; using it gives `password authentication failed`). Parse the real one out of the portal env and hand it to a `postgres:16` client pod (the invoke shell has **no `sed`/`tr`/`python3`** — use bash parameter expansion only). Pass SQL to the pod **base64-encoded** to dodge four levels of quoting.

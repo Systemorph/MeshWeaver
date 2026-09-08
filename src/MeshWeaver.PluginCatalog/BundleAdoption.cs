@@ -37,6 +37,12 @@ public enum BundleAdoptionKind
 
     /// <summary>The bundle arrived and carried no assemblies.</summary>
     NoAssemblies,
+
+    /// <summary>🚨 The bytes the OCI registry served for the artifact's digest did not hash to it
+    /// (<see cref="OciDigestMismatchException"/>) — refused, nothing landed, no HTTP fallback. A
+    /// registry serving the wrong bytes under a sealed digest is an integrity failure, never a
+    /// transient one.</summary>
+    ArtifactRefused,
 }
 
 /// <summary>

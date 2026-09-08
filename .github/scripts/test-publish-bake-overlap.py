@@ -85,6 +85,8 @@ SHARE = "memex-data"
 TARGET = f"{ACCOUNT}/{SHARE}"
 DEST = f"prebuilt-bundles/{IDENTITY}/{SOURCE}"
 SENTINEL = "_complete"
+# Must match ShippedPrebuiltBundles.PublicationPointerFileName and the POINTER in the script.
+POINTER = "_current"
 
 # 🚨 THE ONE `file show` QUERY, and its exact shape is load-bearing. knack's `format_tsv` renders a
 # TOP-LEVEL list as ROWS, so `--query "[a, b]" -o tsv` prints TWO LINES rather than two columns; a
@@ -293,21 +295,35 @@ die("unmodelled file action %r" % action)
 class Bake:
     """One producer's bake directory — every byte in it names the bake that made it."""
 
-    def __init__(self, root: Path, name: str, source_sha: str, surface: bool = True):
+    def __init__(self, root: Path, name: str, source_sha: str, surface: bool = True,
+                 surface_shared: bool = False, extra_bundles: tuple[str, ...] = ()):
         self.name = name
         self.source_sha = source_sha
+        self.bundles = list(BUNDLES) + list(extra_bundles)
         self.dir = root / f"bake-{name}"
         (self.dir / "modules").mkdir(parents=True, exist_ok=True)
         (self.dir / "framework-mvid.txt").write_text(IDENTITY + "\n")
-        for b in BUNDLES:
+        for b in self.bundles:
             (self.dir / b).write_text(f"{b} produced by bake {name} at {source_sha}\n")
         for m in MODULES:
             (self.dir / "modules" / m).write_text(f"{m} produced by bake {name} at {source_sha}\n")
         if surface:
-            # The real document is JSON; the harness reads bytes, not shape, so the fixture line
-            # names its producer like every other file — a mix is then a fact about the shelf.
-            (self.dir / SURFACE).write_text(
-                f"{SURFACE} produced by bake {name} at {source_sha}\n")
+            if surface_shared:
+                # 🚨 THE REAL DOCUMENT IS A PROPERTY OF THE PLATFORM IMAGE, NOT OF THE BAKE RUN, so
+                # two bakes taken with one image write it byte-identically — measured on the
+                # 2026-09-08 incident, where source-commit.txt, repository.txt, architecture.txt,
+                # modules/_index AND platform-surface.json were all byte-identical between the two
+                # racing publications and only the compiled zips differed. A fixture that made it
+                # differ per bake could never reproduce a convergence, and the case below would
+                # pass having tested the wrong thing. It carries no "produced by bake" phrase, so
+                # the shelf reader counts it as a marker rather than as a second bake's bytes.
+                (self.dir / SURFACE).write_text(
+                    f"{SURFACE} for the platform image behind {IDENTITY}\n")
+            else:
+                # The harness reads bytes, not shape, so the fixture line names its producer like
+                # every other file — a mix is then a fact about the shelf.
+                (self.dir / SURFACE).write_text(
+                    f"{SURFACE} produced by bake {name} at {source_sha}\n")
 
 
 class Shelf:
@@ -320,14 +336,47 @@ class Shelf:
     def sealed(self) -> bool:
         return (self.dest / SENTINEL).is_file()
 
+    def under(self, sub: str) -> "Shelf":
+        """The same share, read at a SUBDIRECTORY of the source dir — i.e. one generation."""
+        s = Shelf(self.root)
+        s.dest = self.dest / sub
+        return s
+
+    def generations(self) -> list[str]:
+        """Every publication directory under the source dir (the pointer and markers excluded)."""
+        if not self.dest.is_dir():
+            return []
+        return sorted(d.name for d in self.dest.iterdir()
+                      if d.is_dir() and d.name != "modules")
+
+    def pointer(self) -> str:
+        f = self.dest / POINTER
+        return f.read_text().strip() if f.is_file() else ""
+
+    def stamp(self, rel: str) -> dict:
+        """The metadata the publisher wrote on one file — `digest` and `publication`."""
+        mp = self.root / ".meta" / ACCOUNT / SHARE / DEST / (rel + ".json")
+        return json.loads(mp.read_text()) if mp.is_file() else {}
+
     def files(self) -> dict[str, str]:
-        """path-under-dest → content, for every published file (the sentinel excluded)."""
+        """path-under-dest -> content, for every published file of THIS publication.
+
+        The sentinel and the pointer are excluded (neither is published content), and so is
+        anything under a GENERATION directory: a generation is its own publication, read through
+        `under()`. Without that exclusion a flat-copy assertion would silently count the
+        generations' files too and pass on a number that means nothing.
+        """
         out: dict[str, str] = {}
         if not self.dest.is_dir():
             return out
+        skip = set(self.generations())
         for p in sorted(self.dest.rglob("*")):
-            if p.is_file() and p.name != SENTINEL:
-                out[str(p.relative_to(self.dest))] = p.read_text()
+            if not p.is_file() or p.name in (SENTINEL, POINTER):
+                continue
+            rel = p.relative_to(self.dest)
+            if rel.parts[0] in skip:
+                continue
+            out[str(rel)] = p.read_text()
         return out
 
     def bakes_present(self) -> dict[str, int]:
@@ -641,6 +690,262 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         check("the superseded publisher goes RED rather than claiming it published",
               r.returncode != 0 and "entirely superseded" in r.stdout,
               f"rc={r.returncode}")
+        check("…and says the shelf describes DIFFERENT content, so it did not converge",
+              "describes DIFFERENT content" in r.stdout,
+              "a different source sha is what separates this from the convergence case below")
+
+    # ── CONVERGENCE: superseded by a publication of THE SAME CONTENT. #3461, 2026-09-08 ───────
+    #
+    # The shape that actually bit, and the one the postcondition used to call a failure. Core CD
+    # runs 34205409381 and 34206854855 both published `plugins` at source cfac152ef… for identity
+    # s057b1e77…; each won one of the two storage targets and each went RED on the other, with the
+    # same verdict — "40 of 45 file(s) were overwritten … the remaining 5 are byte-identical".
+    # The 40 are bundle zips and module packages (the compile is not reproducible byte-for-byte);
+    # the 5 are the markers, the module index and the platform surface, byte-identical BECAUSE it
+    # is the same content. Both targets ended sealed with exactly the right bytes, and both CD runs
+    # failed — a false red that produced no sealed set and blocked the platform pin behind it.
+    #
+    # The publication key the sealed-skip uses is CONTENT × FRAMEWORK, so a sibling that published
+    # this content and sealed it has made the publication this run was asked for. Reporting that is
+    # the same statement the skip makes a minute earlier; refusing was the two ends of one script
+    # disagreeing.
+    print("\nconvergence — a sibling publishes THE SAME CONTENT and seals it while we are in flight:")
+    same_sha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    mine = Bake(work, "run-a", same_sha, surface_shared=True)
+    sibling = Bake(work, "run-b", same_sha, surface_shared=True)
+    h.reset()
+    inner = h.publish_command(sibling, "Systemorph/MeshWeaver", "1902")
+    r = h.publish(mine, "Systemorph/MeshWeaver", "1901", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "after",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-converged",
+        "MOCK_AZ_HOOK_CMD": inner,
+    })
+    s = h.shelf()
+    theirs_only = set(s.bakes_present()) - {"<marker>"} == {"run-b"}
+    check("the fixture really did leave the sibling's publication whole (not vacuous)",
+          theirs_only and len(s.files()) == EXPECTED_FILES and s.sealed(), denominator(s))
+    check("…and this run really did publish first, so it had bytes to lose (not vacuous)",
+          f"publication Systemorph-MeshWeaver-1901-1: {EXPECTED_FILES} file(s)" in r.stdout
+          and f"→ {TARGET}: {DEST}" in r.stdout,
+          "it uploaded a full publication before the sibling overwrote it")
+    if expect_defect:
+        check("PRE-FIX: the superseded run seals its own sentinel over their bytes",
+              s.sealed() and r.returncode == 0, f"rc={r.returncode}, {denominator(s)}")
+    else:
+        check("a run superseded by an equivalent publication SUCCEEDS",
+              r.returncode == 0 and "Superseded by an equivalent publication" in r.stdout,
+              f"rc={r.returncode}")
+        check("…naming the publication that made it",
+              "Systemorph-MeshWeaver-1902-1" in r.stdout)
+        check("…and counting it apart from a seal this run did not write",
+              "targets-published=0 targets-converged=1" in r.stdout,
+              "the summary never claims a publication it did not make")
+        check("the sibling's seal is left exactly as it is",
+              s.stamp(SENTINEL).get("publication") == "Systemorph-MeshWeaver-1902-1",
+              f"_complete is stamped {s.stamp(SENTINEL).get('publication')!r}")
+        check("nothing of this run's is on the shelf under their seal",
+              theirs_only, denominator(s))
+
+    # The SAME fixture, one variable apart: the sibling never seals. Convergence is a positive
+    # proof that the publication EXISTS, so an unsealed directory must stay RED — a run reporting
+    # a publication that is not there is the silent-nothing outcome, whoever would have made it.
+    print("\n…but an unsealed sibling is not a publication:")
+    h.reset()
+    counter = work / "counter-unsealed"
+    inner = h.publish_command(sibling, "Systemorph/MeshWeaver", "1912",
+                              {"MOCK_AZ_UPLOAD_COUNTER": counter,
+                               "MOCK_AZ_FAIL_UPLOADS_AFTER": EXPECTED_FILES})
+    r = h.publish(mine, "Systemorph/MeshWeaver", "1911", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "after",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-unsealed",
+        "MOCK_AZ_HOOK_CMD": inner,
+    })
+    s = h.shelf()
+    check("the fixture really did overwrite everything without sealing (not vacuous)",
+          set(s.bakes_present()) - {"<marker>"} == {"run-b"} and not s.sealed(), denominator(s))
+    if not expect_defect:
+        check("an unsealed sibling does NOT converge — the run stays red",
+              r.returncode != 0 and "entirely superseded" in r.stdout
+              and "has not sealed" in r.stdout, f"rc={r.returncode}")
+
+    # And one variable the other way: the sibling seals the same CONTENT but a different bundle
+    # SET. `source-commit.txt` cannot see that, so the sealed listing's digest is what does — the
+    # reason the check reads `_complete` rather than trusting the content marker alone.
+    print("\n…and an equivalent-looking sibling with a DIFFERENT bundle set is refused:")
+    h.reset()
+    bigger = Bake(work, "run-c", same_sha, surface_shared=True, extra_bundles=("Extra.zip",))
+    inner = h.publish_command(bigger, "Systemorph/MeshWeaver", "1922")
+    r = h.publish(mine, "Systemorph/MeshWeaver", "1921", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "after",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-widerset",
+        "MOCK_AZ_HOOK_CMD": inner,
+    })
+    s = h.shelf()
+    check("the fixture really did seal a WIDER set (not vacuous)",
+          s.sealed() and len(s.files()) == EXPECTED_FILES + 1, denominator(s))
+    if not expect_defect:
+        check("a sibling sealing a different bundle set does NOT converge",
+              r.returncode != 0 and "entirely superseded" in r.stdout
+              and "lists a different bundle set" in r.stdout, f"rc={r.returncode}")
+
+    # ── THE GENERATION LAYOUT: two interleaved publishers cannot write one directory. #3461 ───
+    #
+    # Phase 2 of Doc/Architecture/SealedPublicationGenerations. The postcondition above turns an
+    # overlap from a silent mix into a loud refusal; it is a postcondition, not mutual exclusion,
+    # and it leaves the interval between its last read and the seal. This layout removes the shared
+    # directory instead: each publication is written under its own run-unique token, so there is
+    # nothing to interleave, and a one-line `_current` pointer says which one applies.
+    #
+    # 🚨 The selector defaults to `flat`, and the three CONTROL cases at the top of this file are
+    # the regression suite for that: they run the same script with no BAKE_PUBLICATION_LAYOUT set
+    # and must keep passing byte for byte. These cases opt in explicitly.
+    gen = {"BAKE_PUBLICATION_LAYOUT": "generation"}
+
+    print("\ngeneration layout — one publisher, on an empty prefix:")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "3001", gen)
+    s = h.shelf()
+    tok_a = "Systemorph-MeshWeaver-3001-1"
+    ga = s.under(tok_a)
+    if expect_defect:
+        check("PRE-FIX: the layout selector does not exist, so nothing is written under a token",
+              s.generations() == [], f"generations={s.generations()}")
+    else:
+        check("the publication is written into its own generation directory, and sealed there",
+              r.returncode == 0 and ga.sealed() and len(ga.files()) == EXPECTED_FILES,
+              f"rc={r.returncode}, generation {tok_a}: {denominator(ga)}")
+        check("the pointer names it",
+              s.pointer() == tok_a, f"_current={s.pointer()!r}")
+        check("the flat compatibility copy is written too, for readers that cannot follow a pointer",
+              s.sealed() and len(s.files()) == EXPECTED_FILES
+              and set(s.bakes_present()) - {"<marker>"} == {"core-cd"},
+              denominator(s))
+        check("the pointer is NOT stamped — it is written after the postcondition, by construction",
+              s.stamp(POINTER) == {}, f"stamp={s.stamp(POINTER)!r}")
+
+    # 🚨 THE ORDER, OBSERVED RATHER THAN READ OFF THE CODE. The pointer moves once the generation is
+    # sealed and BEFORE the flat compatibility copy — deliberately, so that an overlap on the flat
+    # copy (which still races) costs that copy rather than a publication which is already whole and
+    # disjoint. Nothing in the finished state records the order, so this hooks the flat copy's first
+    # upload and asks whether the pointer is already there. Without it the ordering lived only in a
+    # comment, and a comment is what drifted: the announcement line described the opposite order for
+    # one review cycle.
+    print("\ngeneration layout — the pointer moves BEFORE the flat compatibility copy:")
+    h.reset()
+    witness = work / "pointer-at-flat-copy"
+    r = h.publish(core, "Systemorph/MeshWeaver", "3501", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/{BUNDLES[0]}",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-order",
+        "MOCK_AZ_HOOK_CMD":
+            f'if [ -f "{h.shelf_root}/{ACCOUNT}/{SHARE}/{DEST}/{POINTER}" ]; '
+            f'then echo present > "{witness}"; else echo absent > "{witness}"; fi',
+        **gen,
+    })
+    s = h.shelf()
+    check("the hook really did fire on the flat copy's first upload (not vacuous)",
+          witness.is_file(), f"witness={witness.read_text().strip() if witness.is_file() else '<none>'}")
+    if not expect_defect:
+        check("the pointer is already live when the flat compatibility copy starts being written",
+              witness.is_file() and witness.read_text().strip() == "present"
+              and r.returncode == 0 and s.pointer() == "Systemorph-MeshWeaver-3501-1",
+              f"rc={r.returncode}, at the flat copy's first upload {POINTER} was "
+              f"{witness.read_text().strip() if witness.is_file() else '<unobserved>'}")
+        check("…and the announcement says that order, so an incident log matches the code",
+              r.stdout.index(f"then {POINTER}") < r.stdout.index("then the flat compatibility copy")
+              if (f"then {POINTER}" in r.stdout and "then the flat compatibility copy" in r.stdout)
+              else False,
+              "the generation-layout line names the pointer before the flat copy")
+
+    # ── THE HEADLINE: interleave two publishers and neither directory can hold the other's bytes.
+    print("\ngeneration layout — two publishers interleaved on one prefix:")
+    h.reset()
+    inner = h.publish_command(sat, "Systemorph/MeshWeaver.Plugins", "3102", gen)
+    r = h.publish(core, "Systemorph/MeshWeaver", "3101", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/Systemorph-MeshWeaver-3101-1/{BUNDLES[1]}",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-gen-overlap",
+        "MOCK_AZ_HOOK_CMD": inner,
+        **gen,
+    })
+    s = h.shelf()
+    tok_core, tok_sat = "Systemorph-MeshWeaver-3101-1", "Systemorph-MeshWeaver.Plugins-3102-1"
+    gc, gs = s.under(tok_core), s.under(tok_sat)
+    check("the fixture really did interleave them (both generations exist — not vacuous)",
+          sorted(s.generations()) == sorted([tok_core, tok_sat]),
+          f"generations={s.generations()}")
+    if not expect_defect:
+        check("each publisher sealed its OWN generation",
+              gc.sealed() and gs.sealed(),
+              f"{tok_core}: {denominator(gc)} | {tok_sat}: {denominator(gs)}")
+        check("neither generation holds a byte of the other — a mix is UNREPRESENTABLE",
+              set(gc.bakes_present()) - {"<marker>"} == {"core-cd"}
+              and set(gs.bakes_present()) - {"<marker>"} == {"satellite"},
+              f"{tok_core} by bake {gc.bakes_present()}, {tok_sat} by bake {gs.bakes_present()}")
+        check("both generations are COMPLETE, so whichever the pointer names is whole",
+              len(gc.files()) == EXPECTED_FILES and len(gs.files()) == EXPECTED_FILES,
+              f"{len(gc.files())} and {len(gs.files())} of {EXPECTED_FILES}")
+        check("the pointer names exactly ONE of them, and it is one that exists",
+              s.pointer() in (tok_core, tok_sat), f"_current={s.pointer()!r}")
+        # The flat compatibility copy is the part that still races — the postcondition covers it
+        # exactly as today, and the run that loses it goes red. Asserted so nobody reads phase 4 as
+        # "the window is closed": it is closed for pointer-following readers only.
+        check("the flat copy still races, and is never sealed over a mix",
+              not s.sealed_mix(),
+              f"flat: {denominator(s)} — the compatibility copy is the phase-5 remainder")
+        check("…and the generation the pointer names is served whole regardless of what the flat copy holds",
+              s.under(s.pointer()).sealed()
+              and len(s.under(s.pointer()).files()) == EXPECTED_FILES,
+              f"_current={s.pointer()!r}: {denominator(s.under(s.pointer()))}")
+
+    # ── The writer must decide "already published" from the POINTED-TO directory, not the prefix.
+    # Getting this wrong is the silent one: the writer would read the flat compatibility copy while
+    # portals served the generation, and republish (or skip) against a publication nobody serves.
+    print("\ngeneration layout — 'already published' is read from the generation the pointer names:")
+    h.reset()
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3201", gen)
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3202", gen)
+    s = h.shelf()
+    check("the fixture really did publish once (not vacuous)",
+          s.pointer() == "Systemorph-MeshWeaver.Plugins-3201-1", f"_current={s.pointer()!r}")
+    if not expect_defect:
+        check("the same content is skipped — resolved through the pointer, not off the prefix",
+              r.returncode == 0 and "already published; skipping" in r.stdout
+              and "Systemorph-MeshWeaver.Plugins-3201-1" in r.stdout,
+              f"rc={r.returncode}, generations={s.generations()}")
+        check("…and nothing new was written",
+              s.generations() == ["Systemorph-MeshWeaver.Plugins-3201-1"],
+              f"generations={s.generations()}")
+
+    # ── A pointer this writer will not follow must degrade to the flat layout, exactly as the
+    # reader does. The escape shapes are the ones that must never be followed at all.
+    print("\ngeneration layout — an unusable pointer degrades to the prefix, never to bytes outside it:")
+    for label, value in (("an escaping pointer", "../../etc"),
+                         ("a rooted pointer", "/etc"),
+                         ("a dot pointer", ".."),
+                         ("a blank pointer", "   "),
+                         ("a dangling pointer", "Systemorph-MeshWeaver-9999-1")):
+        h.reset()
+        h.publish(core, "Systemorph/MeshWeaver", "3301")          # a flat publication to fall back to
+        (h.shelf().dest / POINTER).write_text(value + "\n")
+        r = h.publish(core, "Systemorph/MeshWeaver", "3302")
+        if not expect_defect:
+            check(f"{label} reads the prefix as its own publication",
+                  r.returncode == 0 and "already published; skipping" in r.stdout,
+                  f"rc={r.returncode}, pointer={value!r}")
+
+    # ── An unknown layout is refused, not silently treated as flat: the value decides where a
+    # publication is written and which directory every reader resolves.
+    print("\ngeneration layout — an unrecognised selector is refused:")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "3401", {"BAKE_PUBLICATION_LAYOUT": "generations"})
+    if not expect_defect:
+        check("a typo'd layout fails loudly and publishes nothing",
+              r.returncode != 0 and "is not a known publication layout" in r.stdout
+              and not h.shelf().sealed(), f"rc={r.returncode}")
 
     # ── FAIL CLOSED: a file that cannot be read back is refused, not assumed unchanged. ────────
     print("\nfail-closed (an unreadable answer is not a permissive one):")

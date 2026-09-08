@@ -9,11 +9,13 @@ Icon: Cloud
 
 This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `<aks-cluster>`** (resource group `<aks-resource-group>`, region swedencentral) — the `memex` namespace, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
 
-> **The cluster is private.** `kubectl` is not reachable directly — every command runs through `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`, which executes inside the cluster's API-server-side runner.
+> 🚨 **This runbook is the bootstrap / break-glass form of a `Roll`.** Since 2026-09-08 the rule is that operations go through the control instance's Hosting API: the instance is a `Deployments/<name>` record, its image pin is the roll, and a `Roll` (or `Restart`, `Suspend`, `Audit`, `Reconcile`) `Hosting/InstanceAction` is what the in-cluster operator executes — running exactly the commands below for you. Read them as what happens, not as what you type. Policy, and what the API does not answer yet: [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).
+>
+> **The cluster is private.** `kubectl` is not reachable directly — where a break-glass command is unavoidable it runs through `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`, which executes inside the cluster's API-server-side runner.
 
 A **code update** is three steps: build the images, point the Deployments at the new tag, restart. It is **not** `tools/deploy.sh` and **not** `aspire deploy` — those are the Container Apps route.
 
-> **Steady state is self-update, not this runbook.** Once an environment runs, it rolls *itself* to new images per `Admin/UpdatePolicy` (default Continuous) — the portal patches its own Deployment from inside the pod. This manual runbook is the **bootstrap / break-glass** path (first install, or to force a specific tag). See [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy), which also covers the one-time RBAC + workload-identity (AcrPull) setup the in-pod updater needs.
+> **Steady state is self-update, not this runbook.** Once an environment runs, it rolls *itself* to new images per `Admin/UpdatePolicy` (default Stable — clean releases; `Continuous` + a `pattern` such as `3.0.0-ci*` follows a line's continuous builds) — the portal patches its own Deployment from inside the pod. This manual runbook is the **bootstrap / break-glass** path (first install, or to force a specific tag). See [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy), which also covers the one-time RBAC + workload-identity (AcrPull) setup the in-pod updater needs.
 
 ## 1. Build + push the images
 
@@ -218,6 +220,38 @@ Helm's three-way merge removes only what Helm owns), so nothing on that list res
 [Chart Drift — what a deploy actually does](/Doc/Architecture/ChartDriftSemantics) has the
 measurement and the per-class triage.
 
+### Volume capacity is a record property — `volumes[].size`, applied by the operator
+
+🚨 **Never `kubectl patch pvc … storage` on a live portal.** The size of every persistent volume
+is `volumes[].size` on the instance's `Hosting/Deployment` record, and the operator applies it:
+
+| you want | you do | what runs |
+|---|---|---|
+| a bigger share (`/data` full, content growing) | edit `volumes[].size` on the record (`128Gi`), then `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` — or a `Provision`, which carries the same step | `hosting-pv-resize --namespace <ns> --claim <claimName> --size <size>` once per declared claim, ordered FIRST in a Reconcile: a full `/data` blocks the rollout the re-apply then waits on |
+| to know whether the cluster has caught up | `{ "requestedAction": "Audit" }` | the report's `volumeCapacityBelowRecord` — the claim, the declared size and the live capacity |
+
+What the command does, and refuses, is the whole contract (`deploy/aks/operator/bin/hosting-pv-resize`):
+
+- it **grows** one claim to the declared size and reports the capacity it **read back** from the
+  claim's `status`, never the request (`::hosting:: pv_capacity=<quantity>`, `pv_resized=0|1`);
+- it **never shrinks** — a record that declares LESS than the claim holds is a wrong record, and the
+  refusal says to correct the record to the measured capacity;
+- it **never creates** — an absent claim is the chart's job (`persistence.<name>.create` on a
+  record-driven Provision), so the refusal names the claim rather than provisioning one on a guess;
+- it refuses a storage class without `allowVolumeExpansion` BEFORE writing anything (a patch on
+  such a class sits in Pending forever). `azurefile-memex` allows it, and Azure Files expands
+  **online** — no pod restart. A block volume whose filesystem resize waits for a pod re-mount is
+  reported as `::hosting:: pv_resize=filesystem-pending`, and the rollout that follows completes
+  it;
+- a claim already at size is a **successful no-op**, so the step is idempotent from the top.
+
+Why this exists: on this fleet the portal's claims are NOT helm-managed (they were applied by hand
+once from `portal-pvcs.yaml`; `helm upgrade` never touches an object it does not own), so a bigger
+`size` on the record re-rendered a bigger number into the values file and changed nothing on the
+cluster. Measured 2026-09-08 13:51Z: `memex-data` in namespace `memex` was **16Gi with 3 MiB
+free** while memex-cloud's ran 128Gi. The `portal-pvcs.yaml` captures in the config repo are
+descriptive; the record is what the operator applies.
+
 ### The chart must also agree with ITSELF — `check-chart-invariants.sh`
 
 Drift is only half of it. The `memex-cloud` outage above needed no cluster to detect: the chart
@@ -265,8 +299,8 @@ Operational facts about the in-pod updater (learned the hard way — each cost a
   judges it newer, and **patches the Deployment off your image**. Manual rolls therefore only stick with
   CI-built `ci.<N>` tags — ship code via a merged PR, or pause the updater first.
 - **Pause switch** = the `Admin/UpdatePolicy` node: patch `content.policy` to `None`
-  (`Continuous`/`Stable`/`None`). BUT a **freshly booted pod races the policy read**: `CreatePolicySource`
-  emits the configured default (`Continuous`) via `StartWith` *before* the node's live value arrives, and
+  (`Continuous`+`pattern`/`Stable`/`None`). BUT a **freshly booted pod races the policy read**: `CreatePolicySource`
+  emits the configured default (`Stable` since 2026-09-08) via `StartWith` *before* the node's live value arrives, and
   the poll timer fires immediately (`StartWith(-1L)`). The live `None` then switches the poller off, but a
   check may already have fired. `None` alone therefore does not reliably protect a roll that restarts the
   pod.
@@ -544,7 +578,26 @@ Only the reference env `deploy/aks/envs/example/` is in this repo; per-tenant en
 
 Note the tension with §2: because the chart's migration is a Job created per Helm revision, `helm upgrade` is also the *only* in-repo path that runs a migration. A schema change consequently needs this script (or a bare `helm upgrade`) even though a plain code update must not use it.
 
-## Diagnostics (private cluster)
+## Diagnostics — through the memex API first
+
+🚨 **Maintainer directive, 2026-09-08: operations and diagnostics go through the memex API, not
+through `az`/`kubectl`.** The control instance's `Hosting` module answers the two everyday
+questions as nodes, with no cluster credential on the caller:
+
+| question | `Hosting/InstanceAction` (`content.deployment: "Deployments/<id>"`) | answer |
+|---|---|---|
+| what is `<id>` running — per replica: image, ready, restarts, started, the pod's own `/health` and its detail | `{ "requestedAction": "Sample" }` | `Ops/Status/<id>` — `replicas[]`, `warnings[]` (what the sample could NOT see; unknown is never zero) |
+| what did it log | `{ "requestedAction": "Logs", "query": "<regex or \| pipeline>", "sinceMinutes": 60, "limit": 300, "pod": "<optional>" }` | `logQl`, `entryCount`, `truncated` on the run; `Hosting/LogEntry` nodes under `Ops/Logs`, the Deployment page's Logs area |
+| what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
+| roll it | pin `pinnedImageTag` on the record → `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` | the run's phases; then a `Sample` |
+| grow a full share | set `volumes[].size` on the record → the same `Reconcile` | the run's `Ensure volume capacity: <volume>` phase, `pv_capacity=` read back from the claim — see "Volume capacity is a record property" above |
+
+Both observations read the cluster's monitoring stack (kube-state-metrics via Prometheus, Loki)
+from inside the cluster, where it is credential-free; the roll runs as the in-cluster operator Job.
+The fleet guide (`get @Hosting/Guide`, "Roll, restart, observe") carries the full table. What
+follows is the break-glass form, for when the control plane itself is what is broken.
+
+## Diagnostics (private cluster — break glass)
 
 - Logs: `az aks command invoke … --command "kubectl -n <NS> logs deployment/memex-portal-deployment --tail=120"`. Note: the Azure CLI can crash on non-ASCII (`→`) in log output on Windows (cp1252) — pipe through `tr -cd '\11\12\15\40-\176'` **inside** the `--command` so az only receives printable text.
 - **Intermittent hangs while most requests succeed** (portal recently synced or baked): suspect a

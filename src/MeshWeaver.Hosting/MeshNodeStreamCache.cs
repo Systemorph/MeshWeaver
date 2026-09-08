@@ -217,6 +217,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // JsonElement; this registry lets the two degrade seams below re-type it on the
     // already-degraded path. Resolved once from the process-shared root provider.
     private readonly MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry;
+    // What this cache could not TYPE, kept for /health (2026-09-08) — see ContentDegradationRegistry.
+    private readonly ContentDegradationRegistry? degradations;
 
     // 🚨 Lazy<Entry> wraps the factory because ConcurrentDictionary.GetOrAdd
     // is NOT threadsafe for compound operations: under contention the factory
@@ -511,6 +513,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         this.meshHub = meshHub;
         this.logger = logger;
         contentTypeRegistry = meshHub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshContentTypeRegistry>();
+        degradations = meshHub.ServiceProvider.GetService<ContentDegradationRegistry>();
         var opts = options ?? new MeshNodeStreamCacheOptions();
         readStreamIdleExpiration = opts.ReadStreamIdleExpiration;
         readStreamSweepInterval = opts.ReadStreamSweepInterval;
@@ -827,6 +830,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             }
         }
         _streams.Clear();
+
+        // 1b. Synced-query chains — the read side's OTHER upstream. Disposing the registry
+        //     unsubscribes every connected SyncedQueryMeshNodes (releasing its provider and
+        //     change-feed subscriptions on the cache hub's workspace) and CANCELS every connect
+        //     still queued on the pool scheduler, so no Defer can run against this hub's scope
+        //     after this point; a connect registered later is disposed as it is added. The
+        //     dictionaries are reset so a straggling GetQuery cannot be handed a dead chain —
+        //     it is refused at the disposed-cache guard instead.
+        try { _queryConnections.Dispose(); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error releasing synced-query connections");
+        }
+        _queries = System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry>.Empty;
+        _optionsWrappedQueries.Clear();
 
         // 2. Per-path update queues: Clear() fires every entry's
         //    post-eviction callback (ConcatSubscription.Dispose +
@@ -2164,7 +2182,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <see cref="IMeshNodeStreamCache.GetStream(string, JsonSerializerOptions)"/>.
     /// </summary>
     public IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options) =>
-        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry));
+        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry, degradations));
 
     /// <summary>
     /// Caller-typed write: deserialises the current MeshNode's <c>Content</c>
@@ -2181,7 +2199,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         Func<MeshNode, MeshNode> wrapped = node =>
         {
-            var typed = ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry);
+            var typed = ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry, degradations);
             var updated = update(typed);
             return ConvertContentTypedToJsonElement(updated, options);
         };
@@ -2256,7 +2274,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // against a shape the product no longer has (#3625).
     internal static MeshNode ConvertContentJsonElementToTyped(
         MeshNode node, JsonSerializerOptions options, ILogger logger,
-        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry,
+        ContentDegradationRegistry? degradations = null)
     {
         // Only convert when the cache emitted a raw JsonElement (the cache hub
         // doesn't know domain types, so Content lands here as JsonElement). If
@@ -2280,7 +2299,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // through to the loud warning below.
                 var recovered = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, degraded, options);
                 if (recovered is not null)
+                {
+                    degradations?.Clear(node.NodeType);
                     return node with { Content = recovered };
+                }
 
                 // 🚨 The EXCEPTION ARGUMENT is load-bearing and is not decoration (#3625). A CI
                 // shard's authoritative sink takes a record if and only if
@@ -2291,6 +2313,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // to fire at all. The job log is not an equivalent sink: it carries only the output
                 // of tests that FAILED, and a degradation is overwhelmingly logged under a test
                 // that passes. Reaching the sink is a property of the CALL, not of the wording.
+                degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetStream");
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
@@ -2413,6 +2436,33 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry> _queries =
         System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry>.Empty;
 
+    // 🚨 Every synced-query chain's CONNECTION, so that Dispose() can release them — they were the
+    // one thing this cache started that its teardown could not reach. `AutoConnect(1)` keeps the
+    // handle `Connect()` returns to itself, and the connect it performs is NOT synchronous: the
+    // chain is `Defer(…).SubscribeOn(TaskPoolScheduler.Default)`, so the first subscriber only
+    // QUEUES the upstream subscribe on the pool. Nothing in the teardown joins that queue item —
+    // `DisposalCompleted` covers the action blocks, `IoPoolRegistry.DrainAll` covers IIoPool leaves,
+    // the AsyncDisposeQueue covers enqueued cleanup — so it ran whenever the pool got to it, and
+    // when that was after the cache hub's scope had closed, the Defer resolved
+    // `cacheHub.GetWorkspace()` from a disposed Autofac scope. Measured on Plugins run 34222933802
+    // (2026-09-08): 11 of the 11 disposed-scope stragglers captured across three suites are this one
+    // Defer (`GetQueryRaw` → `GetWorkspace` / `SyncedQueryMeshNodes.BuildReadStreamCore`), the FutuRe
+    // pair landing 4 ms after the mesh had reported `DISPOSE_DONE … teardown clean`.
+    //
+    // A `CompositeDisposable` rather than a bag: once it is disposed, an `Add` disposes the handle
+    // on the spot, which is precisely the connect-after-teardown race — a Connect() that queued its
+    // subscribe an instant before Dispose() ran is cancelled before the pool dequeues it (Rx's
+    // scheduled work item checks its cancellation before invoking). The Defer's own guard below
+    // covers the sliver in which the pool has already started it.
+    private readonly System.Reactive.Disposables.CompositeDisposable _queryConnections = new();
+
+    /// <summary>Test probe: synced-query upstream connections this cache currently holds.</summary>
+    internal int LiveQueryConnections => _queryConnections.Count;
+
+    /// <summary>Test probe: <c>true</c> once <see cref="Dispose"/> has released every synced-query
+    /// connection — from then on a late connect is cancelled the instant it is registered.</summary>
+    internal bool QueryConnectionsReleased => _queryConnections.IsDisposed;
+
     /// <summary>
     /// The identity of a query SET. Order- and duplicate-insensitive, because the synced
     /// collection is the UNION of its queries — two callers that ask for the same set written in
@@ -2458,6 +2508,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             throw new ArgumentException("At least one query string is required.", nameof(queries));
 
         var signature = QuerySetSignature(queries);
+
+        // DISPOSED-CACHE GUARD (query side) — the same rule UpdateRaw applies on the write side. A
+        // query opened after teardown has begun must TERMINATE, never park: its connect would be
+        // cancelled by the disposed _queryConnections below, so without this the subscriber would
+        // wait on a Replay(1) that nothing will ever feed (the "burst then silence" shape).
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            return (Observable.Throw<IEnumerable<MeshNode>>(
+                new ObjectDisposedException(nameof(MeshNodeStreamCache))), signature);
+
         while (true)
         {
             var current = _queries;
@@ -2470,8 +2529,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // first subscriber's thread (TaskPoolScheduler thanks to
             // SubscribeOn), constructs the SyncedQueryMeshNodes, and the
             // Replay(1) caches its emissions for all later subscribers.
+            // The upstream connection AutoConnect hands back — captured so the fault arm below can
+            // release exactly this chain's connection, and so Dispose() can release them all.
+            IDisposable? connection = null;
             var stream = Observable.Defer(() =>
                 {
+                    // 🚨 This factory runs on the POOL, whenever the pool gets to it — so it is the
+                    // one place that can observe the cache's teardown having happened in between.
+                    // Refuse here rather than resolve `cacheHub.GetWorkspace()` from a scope that
+                    // Dispose() has since closed: that resolve is what every disposed-scope straggler
+                    // in the 2026-09-08 CI captures was (Plugins run 34222933802).
+                    if (System.Threading.Volatile.Read(ref _disposed) != 0)
+                        return Observable.Throw<IEnumerable<MeshNode>>(
+                            new ObjectDisposedException(nameof(MeshNodeStreamCache)));
                     var typeSource = new global::MeshWeaver.Graph.SyncedQueryMeshNodes(
                         cacheHub.GetWorkspace(), id, queries);
                     var updates = typeSource.StreamUpdates();
@@ -2524,7 +2594,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // Take(1) / FirstAsync after a runtime AccessAssignment
                 // write sees the STALE cached snapshot. AutoConnect(1)
                 // keeps the upstream connected forever once first subscribed.
-                .AutoConnect(1);
+                //
+                // 🚨 The connection is REGISTERED, not dropped (see _queryConnections): AutoConnect
+                // itself never disposes it, and the connect it triggers is a pool-queued subscribe
+                // that no teardown phase joins. Registering it after the cache's Dispose() disposes
+                // it on the spot — the late-connect race resolved by construction.
+                .AutoConnect(1, c =>
+                {
+                    connection = c;
+                    _queryConnections.Add(c);
+                });
                 // ReplaySubject (backing Replay(1)) already serialises
                 // OnNext/Subscribe internally — no .Synchronize() needed.
                 // Adding it would route every emission through an additional
@@ -2562,7 +2641,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // fails against a sibling set's chain, so the poisoned one is replayed forever —
             // #1316 undone) or OVER-EVICT (drop a healthy set that merely shares the id).
             var connected = stream;
-            stream = connected.Do(_ => { }, ex => EvictFaultedQuery(id, signature, stream, ex));
+            stream = connected.Do(_ => { }, ex =>
+            {
+                EvictFaultedQuery(id, signature, stream, ex);
+                // A terminal chain's connection has nothing left to hold — release it so the
+                // registry tracks LIVE connections only (a faulted-then-rebuilt query would
+                // otherwise accumulate one dead handle per fault for the life of the process).
+                ReleaseQueryConnection(connection);
+            });
 
             // Index the new stream under its SIGNATURE and make it the id's latest. Existing
             // signatures are preserved, so a caller still holding the previous declaration keeps
@@ -2630,6 +2716,26 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     }
 
     /// <summary>
+    /// Releases one synced-query chain's upstream connection and drops it from
+    /// <see cref="_queryConnections"/>. <c>Remove</c> disposes a registered handle; a handle the
+    /// registry no longer holds (the registry was disposed first, which already disposed it) is
+    /// disposed again harmlessly — Rx disposables are idempotent.
+    /// </summary>
+    private void ReleaseQueryConnection(IDisposable? connection)
+    {
+        if (connection is null) return;
+        try
+        {
+            if (!_queryConnections.Remove(connection))
+                connection.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error releasing a synced-query connection");
+        }
+    }
+
+    /// <summary>
     /// Lookup-only: the most recently REGISTERED query set for this id. Normally there is exactly
     /// one; there is more than one only after a caller's declared query set changed (a NodeType's
     /// Sources edit — see <see cref="QueryCacheEntry"/>), and then the newest declaration is what
@@ -2672,11 +2778,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // been evicted (its own GetQueryRaw would have returned the replacement).
         return _optionsWrappedQueries.AddOrUpdate(
             (id, signature, options),
-            static (_, state) => (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry)),
+            static (_, state) => (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry, state.degradations)),
             static (_, existing, state) => ReferenceEquals(existing.Raw, state.raw)
                 ? existing
-                : (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry)),
-            (raw, options, logger, registry: contentTypeRegistry)).Wrapper;
+                : (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry, state.degradations)),
+            (raw, options, logger, registry: contentTypeRegistry, degradations)).Wrapper;
     }
 
     /// <summary>
@@ -2687,14 +2793,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         IObservable<IEnumerable<MeshNode>> raw,
         JsonSerializerOptions options,
         ILogger logger,
-        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? registry)
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? registry,
+        ContentDegradationRegistry? degradations = null)
         => System.Reactive.Linq.Observable.Select(raw, items =>
-            (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options, logger, registry)).ToArray());
+            (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options, logger, registry, degradations)).ToArray());
 
     // internal for the same reason as ConvertContentJsonElementToTyped above (#3625).
     internal static MeshNode DeserializeContent(
         MeshNode node, JsonSerializerOptions options, ILogger logger,
-        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry,
+        ContentDegradationRegistry? degradations = null)
     {
         // Untyped JSON content arrives in TWO shapes: a JsonElement (storage read) or a JsonNode
         // (the AS-WRITTEN shape — application code builds content as JsonObject, and a change
@@ -2726,11 +2834,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // this domain-agnostic hub's frozen options can't resolve (reimport-renders-empty).
                 var recovered = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, degraded, options);
                 if (recovered is not null)
+                {
+                    degradations?.Clear(node.NodeType);
                     return node with { Content = recovered };
+                }
 
                 // 🚨 Carries the exception for the same reason the GetStream seam does — see there.
                 // A record with no exception object cannot reach the trace log, which is the only
                 // sink the untyped-content shard gate scans (#3625).
+                degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText)),
@@ -2754,6 +2866,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // never match it either. Keying the gate on the exception TYPE rather than on prose is
             // what closes that third blind spot; `ex` rides along as the inner exception, so the
             // deserialization stack is still in the record.
+            degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
             logger.LogWarning(
                 new MeshNodeContentDegradedException(
                     "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText), ex),
