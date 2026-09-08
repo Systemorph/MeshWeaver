@@ -29,7 +29,7 @@ registry:
   publisher:
     username: "publisher"
     passwordBcrypt: "$2y$05$lBf8Wat1qrnRJAZaknsvL.4okJYxEJ4OsCOGXVCelcQ8bwIe0Y3B6"
-  validationUrl: "https://memex.meshweaver.cloud/api/plugins?ref=HEAD"
+  validationUrl: "https://memex.meshweaver.cloud/api/instances/token"
   notifications:
     url: "https://memex.meshweaver.cloud/api/registry/events"
   ingress:

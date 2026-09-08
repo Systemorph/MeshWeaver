@@ -20,7 +20,8 @@ and a home-grown one would make every bug in it a fleet-wide pull failure.
 
 Who may do what is deliberately simple. One publisher account, used by CI, may push, pull and
 delete. Every other login presents a MeshWeaver instance key as its password; the token server
-asks the portal whether that key is valid, and a valid key may pull anything. A login the portal
+exchanges that key for a portal token — the same exchange an installation already performs, which
+answers in a fraction of a second — and a valid key may pull anything. A login the portal
 cannot vouch for is refused — and if the portal cannot be reached at all, the login is refused and
 logged as an error rather than quietly passed.
 

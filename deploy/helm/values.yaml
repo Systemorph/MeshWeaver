@@ -739,9 +739,11 @@ registry:
   publisher:
     username: "publisher"
     passwordBcrypt: ""            # (required) bcrypt HASH — `htpasswd -nB publisher`
-  # Where an instance key is validated: any 200 authenticates, 401/403 denies, anything else is
-  # an error (never a pass). The default is the public portal's plugin catalog.
-  validationUrl: "https://memex.meshweaver.cloud/api/plugins?ref=HEAD"
+  # Where an instance key is validated — a POST with an empty JSON body and the key as a bearer:
+  # any 200 authenticates, 401/403 denies, anything else is an error (never a pass). The default
+  # is the public portal's key→token exchange, which answers in ~0.2 s; the plugin catalog is not
+  # a validator (it renders in full, measured 14–18 s, past the validator's 10 s cap).
+  validationUrl: "https://memex.meshweaver.cloud/api/instances/token"
   notifications:
     url: ""                       # registry events are POSTed here when set
   ingress:
