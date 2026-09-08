@@ -257,6 +257,11 @@ public static class MemexConfiguration
             // file-system IIoPool — then recurring daily. Inert without PreWarm:PrebuiltBundleRoot.
             // The rule is PrebuiltBundleStore's: prune what nothing references, never by age alone.
             builder.ConfigureServices(services => services.AddPrebuiltBundleRetention(configuration));
+            // On a control instance the Deployment records' pins and the registered instances'
+            // reports are references too: a remote instance pulls exactly its own identity's seal
+            // over the HTTP prebuilt surface, however old that build is (pearl on 3.0.0-ci.8080).
+            builder.ConfigureServices(services => services.AddSingleton<PinnedPlatformReferenceSource>(
+                sp => DeploymentPinnedReferences.SourceFor(sp)));
             var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
 
