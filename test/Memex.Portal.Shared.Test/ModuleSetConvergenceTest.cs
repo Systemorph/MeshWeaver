@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -228,6 +229,157 @@ public class ModuleSetConvergenceTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 <b>THE repro of #3656.</b> Two replicas that both decide to land the SAME published
+    /// bundle — the normal shape of a reconcile wave, because every replica reconciles the same
+    /// feed at boot and on every <c>ModulePublished</c> broadcast — must land ONE generation and
+    /// derive ONE set. The second one's proposal is then the no-op it should always have been, and
+    /// no conflicting record is ever written.
+    ///
+    /// <para>Before the fix the generation leaf was <c>name@&lt;8 random hex&gt;</c>, so the two
+    /// identical landings wrote the identical bytes into two DIFFERENT directories; the set each
+    /// derived from the activation record named a different generation for that module, both were
+    /// proposed at the same sequence, and the loser's record then sat at the mesh's newest sequence
+    /// being re-read and re-reported by every pod's sweep on every boot — forever, because
+    /// <see cref="ModuleSetStore.Prune"/> only reaches BELOW the current set. Measured on
+    /// memex-cloud 2026-09-08: 100 duplicate sequences, 687 set records, 843 generation
+    /// directories.</para>
+    ///
+    /// <para><see cref="TwoReplicasLandingDifferentBuilds_StillDeriveTwoGenerations"/> is the
+    /// control that keeps every assertion here honest: the single-generation and no-conflict claims
+    /// FAIL there, so neither can pass by nothing ever landing.</para>
+    /// </summary>
+    [Fact]
+    public async Task TwoReplicasLandingOneBundle_LandOneGenerationAndProposeOneSet()
+    {
+        var build = await Land(ModuleA);            // replica 1's wave lands the published bundle
+        var afterFirst = await ProposeWave();
+        Assert.NotNull(afterFirst);
+
+        // Replica 2 read the same feed and decided to land the same bundle: identical bytes.
+        await LandBuild(ModuleA, build);
+        var afterSecond = await ProposeWave();
+
+        Assert.Null(afterSecond);                    // the set did not move — there was nothing new
+        Assert.Equal(
+            Path.GetFileName(Assert.Single(GenerationDirectories(ModuleA))),
+            ModuleSetStore.Read(root).Proposed!.Generations[ModuleA]);
+        var index = ModuleSetStore.Read(root);
+        Assert.Empty(index.ConflictingSequences);
+        Assert.Equal(afterFirst!.Id, index.Proposed!.Id);
+        Assert.Equal(afterFirst.Sequence, index.Proposed.Sequence);
+        // …and the entry did not record a fallback to ITSELF: nothing was displaced.
+        Assert.Null(ModuleActivationSidecar.Read(root).Entries
+            .Single(e => e.Name == ModuleA).PreviousDirectory);
+    }
+
+    /// <summary>
+    /// The control for <see cref="TwoReplicasLandingOneBundle_LandOneGenerationAndProposeOneSet"/>
+    /// — and the half of #3656 that must NOT change. Two replicas landing DIFFERENT content is a
+    /// genuine divergence: two generations, two sets, and the conflict the design exists to resolve
+    /// and report. Without this, "one generation, no conflict" would pass on a harness where
+    /// nothing ever lands twice.
+    /// </summary>
+    [Fact]
+    public async Task TwoReplicasLandingDifferentBuilds_StillDeriveTwoGenerations()
+    {
+        await Land(ModuleA);
+        var first = await ProposeWave();
+        Assert.NotNull(first);
+
+        await Land(ModuleA);                         // a DIFFERENT build of the same module
+        var second = await ProposeWave();
+
+        Assert.NotNull(second);
+        Assert.NotEqual(first!.Id, second!.Id);
+        Assert.Equal(2, GenerationDirectories(ModuleA).Count);
+        Assert.NotEqual(
+            first.Generations[ModuleA], ModuleSetStore.Read(root).Proposed!.Generations[ModuleA]);
+    }
+
+    /// <summary>
+    /// 🚨 The other half of #3656: a duplicate that HAS been produced must be reported once and
+    /// then retired, never re-read and re-reported by every pod's sweep on every boot. The loser is
+    /// housekeeping the moment the conflict is decided — every reader resolves to the same winner,
+    /// and the next proposal is derived from the ACTIVATION RECORD, so the loser's landings ride the
+    /// following wave whether its record survives or not.
+    ///
+    /// <para>The first read is the POSITIVE CONTROL: it proves the notice can fire on this volume,
+    /// so the silence after the sweep is the retirement and not an assertion that could never have
+    /// been made. The winner is asserted UNCHANGED across the retirement — the one thing this must
+    /// never do is remove the record the mesh resolves to.</para>
+    /// </summary>
+    [Fact]
+    public async Task ADecidedDuplicate_IsRetiredSoNoLaterSweepCanReReportIt()
+    {
+        await LandWave(ModuleA);
+        BootReplica();                                     // sequence 1 is adopted
+        var landed = ModuleActivationSidecar.Read(root);
+        await Land(ModuleB);
+        var rival = ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), "replica-2")!;
+        WriteRivalProposalAtSameSequence(rival.Sequence, landed);
+        BootReplica();
+
+        // Positive control: with both records on the volume the conflict IS reported.
+        var before = new List<string>();
+        var winner = ModuleSetStore.Read(root, onCorrupt: null, before.Add).Proposed!;
+        Assert.Contains(before, m => m.Contains("proposed by more than one replica"));
+        Assert.Equal(2, ProposalIds(rival.Sequence).Count);
+
+        var retired = new List<string>();
+        var removed = ModuleSetStore.PruneDuplicateProposals(root, retired.Add);
+
+        Assert.Equal(1, removed);
+        Assert.Contains(retired, m => m.Contains("decided") && m.Contains(winner.Id));
+        // One record left, the SAME winner, and nothing left for a later sweep to re-report.
+        var after = new List<string>();
+        var index = ModuleSetStore.Read(root, onCorrupt: null, after.Add);
+        Assert.Empty(after);
+        Assert.Empty(index.ConflictingSequences);
+        Assert.Equal(winner.Id, index.Proposed!.Id);
+        Assert.Equal([winner.Id], ProposalIds(rival.Sequence));
+    }
+
+    /// <summary>
+    /// 🚨 Fail closed, the #2509 rule: a proposal record whose id cannot be READ makes the winner
+    /// unknown, so nothing at that sequence is retired. The one thing this pass must never do is
+    /// delete the record the mesh resolves to.
+    /// </summary>
+    [Fact]
+    public async Task ADuplicateWithAnUnreadableRecord_RetiresNothing()
+    {
+        await LandWave(ModuleA);
+        var landed = ModuleActivationSidecar.Read(root);
+        await Land(ModuleB);
+        var rival = ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), "replica-2")!;
+        WriteRivalProposalAtSameSequence(rival.Sequence, landed);
+        Assert.Equal(2, ProposalIds(rival.Sequence).Count);
+
+        // A THIRD record at the same sequence that cannot be read at all.
+        File.WriteAllText(
+            Path.Combine(ModuleSetStore.SetsDirectory(root),
+                $"{rival.Sequence:D9}-garbage000000000.proposed.json"),
+            "{ not json");
+
+        var warnings = new List<string>();
+        Assert.Equal(0, ModuleSetStore.PruneDuplicateProposals(root, onWarn: warnings.Add));
+
+        Assert.Contains(warnings, m => m.Contains("garbage000000000"));
+        Assert.Equal(3, ProposalFileCount(rival.Sequence));
+    }
+
+    /// <summary>Every generation directory on the volume for one module.</summary>
+    private IReadOnlyList<string> GenerationDirectories(string name) =>
+        [.. Directory.EnumerateDirectories(Path.Combine(root, "modules"),
+            name + "@*", SearchOption.TopDirectoryOnly)];
+
+    /// <summary>How many proposal records sit at one sequence — counted from the NAMES, so a
+    /// record that cannot be parsed still counts.</summary>
+    private int ProposalFileCount(long sequence) =>
+        Directory.EnumerateFiles(ModuleSetStore.SetsDirectory(root), "*.proposed.json")
+            .Count(f => Path.GetFileName(f)
+                .StartsWith(sequence.ToString("D9") + "-", StringComparison.Ordinal));
+
+    /// <summary>
     /// 🚨 #3675: a sequence two replicas proposed is a decided outcome, not a record that could not
     /// be read. The three-argument <see cref="ModuleSetStore.Read(string, Action{string}, Action{string})"/>
     /// keeps the two apart — the notice never reaches the fault channel — while the two-argument
@@ -298,7 +450,10 @@ public class ModuleSetConvergenceTest : IDisposable
 
         Assert.False(Directory.Exists(orphan), "an unreferenced generation survived a pass that had nothing unreadable to fail closed on");
         Assert.Empty(SetRecordsBelow(current));
-        Assert.Equal(2, ProposalIds(current).Count);   // the duplicate pair itself is never the one removed
+        // 🚨 #3656: the duplicate pair is DECIDED, so the same pass retires the loser — one record
+        // is left at the sequence and it is the winner every reader resolves to. Before #3656 both
+        // survived, and every pod's next sweep re-read and re-reported the same decided conflict.
+        Assert.Equal([ModuleSetStore.Read(root).Proposed!.Id], ProposalIds(current));
 
         // #2509 still holds: one record that cannot be read, and the pass reclaims nothing.
         Directory.CreateDirectory(orphan);
@@ -428,8 +583,35 @@ public class ModuleSetConvergenceTest : IDisposable
 
     // ───────────────────────────────────────────────────────────── harness
 
-    /// <summary>Lands one module through the REAL landing service — a fresh generation plus the
-    /// activation entry, exactly as an auto-update or an install does.</summary>
+    /// <summary>Lands a NEW BUILD of one module through the REAL landing service — a fresh
+    /// generation plus the activation entry, exactly as an auto-update or an install does. Returns
+    /// the build number, so a test can hand the SAME build to <see cref="LandBuild"/> and model the
+    /// second replica landing the bundle the first one just landed.</summary>
+    /// <remarks>
+    /// 🚨 Every call lands DIFFERENT bytes, and that is load-bearing since #3656. The generation
+    /// leaf is now the CONTENT ADDRESS of the landing, so re-landing identical bytes resolves to
+    /// the generation that is already there — correctly, and deliberately. A helper that landed one
+    /// fixed byte array over and over would therefore model a RE-LAND, not an update, and every
+    /// "the wave moved the mesh's set" assertion below would silently be asserting the opposite of
+    /// what it says. Before #3656 the random leaf hid the difference: identical bytes still minted
+    /// a new generation, which is precisely the defect (two replicas landing one bundle produced
+    /// two generations, two sets and a permanent conflict record).
+    /// </remarks>
+    private async Task<int> Land(string name)
+    {
+        var build = ++landings;
+        await LandBuild(name, build);
+        return build;
+    }
+
+    /// <summary>The number of builds this test has landed — the content differentiator.</summary>
+    private int landings;
+
+    /// <summary>
+    /// Lands ONE identified build of a module. The build number rides in a static asset, so two
+    /// calls with the same number write byte-identical bundles — what two replicas adopting one
+    /// published bundle actually do — and two calls with different numbers write different ones.
+    /// </summary>
     /// <remarks>
     /// 🚨 REAL assembly bytes, not a three-byte MZ stand-in. Since #3538 the landing MEASURES the
     /// module's link requirements against this platform's surface, so bytes that are not a managed
@@ -437,8 +619,12 @@ public class ModuleSetConvergenceTest : IDisposable
     /// Any assembly whose references this process carries works; the packaging assembly is the
     /// same one <c>ServedModuleBytesTest</c> uses for the same reason.
     /// </remarks>
-    private async Task Land(string name) =>
-        await landing.LandModule(name, [(name + ".dll", RealAssemblyBytes)])
+    private async Task LandBuild(string name, int build) =>
+        await landing.LandModule(
+                name,
+                [(name + ".dll", RealAssemblyBytes)],
+                version: $"1.0.{build}",
+                staticAssets: [("wwwroot/build.txt", Encoding.UTF8.GetBytes($"build {build}"))])
             .Timeout(TestTimeouts.Convergence).Await();
 
     /// <summary>A real, loadable managed assembly's bytes — see <see cref="Land"/>.</summary>
