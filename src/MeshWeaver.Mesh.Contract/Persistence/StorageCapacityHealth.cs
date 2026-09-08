@@ -52,11 +52,12 @@ public static class StorageCapacityHealth
         var floorMiB = minimumFreeBytes / (1024 * 1024);
         return c.FreeBytes < minimumFreeBytes
             ? (true,
-                $"storage volume at '{path}' below {floorMiB:N0} MiB free ({c.FreeMiB:N0} MiB of "
-                + $"{c.TotalMiB:N0} MiB free) — a compile or a module landing writes into it and a "
-                + "write on a full volume lands short; free space on the volume")
+                $"storage volume at '{path}' is below the {floorMiB:N0} MiB free-space floor: "
+                + $"{c.FreeMiB:N0} MiB free of {c.TotalMiB:N0} MiB total. NodeType compiles and module "
+                + "landings write into this volume, and a write on a full volume lands short and is "
+                + "refused. Free space on the volume, then recompile any type that reports the refusal.")
             : (false,
-                $"storage volume at '{path}' has {c.FreeMiB:N0} MiB of {c.TotalMiB:N0} MiB free "
+                $"storage volume at '{path}' has {c.FreeMiB:N0} MiB free of {c.TotalMiB:N0} MiB total "
                 + $"(floor {floorMiB:N0} MiB)");
     }
 }
