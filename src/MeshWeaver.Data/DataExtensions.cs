@@ -1437,6 +1437,15 @@ public static class DataExtensions
     ///     <c>FLUSH_OUTLIVED_BOUND</c>; a fault the flush raises after that ack is logged as
     ///     <c>FLUSH_FAULTED_AFTER_ACK</c> (the sampler is then the writer of record).</item>
     ///   <item><b>Either stream faults</b> (the flush inside its bound) → NACK with the classified code.</item>
+    ///   <item>🚨 <b>The flush's BUILD or its <c>Subscribe</c> PARKS on the echo thread</b> — a package
+    ///     root recycling under the owner takes the partition hub away, so the routed storage write has
+    ///     no live target and its prologue (which runs on the subscribing thread) never returns → the
+    ///     bound answers it, because the bound is armed BEFORE the flush is built (#3510). Arming it
+    ///     after left a window in which the verdict was owed by NOBODY: the trail read
+    ///     <c>PATCH_MERGE_STAMPED → PATCH_ECHO_SEEN → (nothing)</c> — no stage, no ack, no NACK, no
+    ///     owner disposal — and the writer burned its whole 31 s bound and reported
+    ///     <see cref="MeshNodeErrorCode.OwnerUnreachable"/> for a merge that had committed. Seven
+    ///     occurrences; ~30 stranded writes per CD bake gate run.</item>
     /// </list>
     /// </summary>
     internal static IDisposable ArmPatchAckWatcher<TEcho>(
@@ -1467,10 +1476,70 @@ public static class DataExtensions
             .Subscribe(
                 committed =>
                 {
+                    // 🚨 ARM THE BOUND FIRST — before the flush is BUILT, let alone subscribed
+                    // (issue #3510, seventh occurrence; CD 8078, bake job 101955088724).
+                    //
+                    // The echo has arrived, so the merge has COMMITTED: from this instant a verdict is
+                    // OWED, and the only question left is who mints it. Arming the bound after the
+                    // flush was built and subscribed left a window in which the answer was NOBODY. In
+                    // that window two things run on the echo thread and both can park rather than
+                    // throw: BUILDING the flush (`RoutingProxyAdapter.Write` resolves the partition
+                    // address EAGERLY — `PartitionStorageRouter.AddressFor` → `GetHostedHub` →
+                    // `HostedHubsCollection`'s per-address creation `Lazy`, which BLOCKS a second
+                    // caller for that address), and SUBSCRIBING to it
+                    // (`PersistenceService.TryWriteFrom`'s sequential `Defer` chain, whose prologue
+                    // runs on the subscribing thread). Under `PackageInstaller`'s root recycle the
+                    // partition hub is being disposed and re-activated, so that work has no live
+                    // target: it parks, no bound exists to fault it, and the writer sees
+                    // ADVANCE_WITHOUT_HANDOFF at 5 s and "OwnerUnreachable … no verdict within 31s"
+                    // at 31 s.
+                    //
+                    // Measured (#3510's seventh occurrence, CD 8078 vs the sealed control 8076):
+                    // ~120 root recycles per bake gate run, ~30 stranded writes in ~6 roots in EVERY
+                    // run, and the seal reds whenever one of them is the idempotence re-install's
+                    // own. All fifteen trails were identical: PATCH_MERGE_STAMPED → PATCH_ECHO_SEEN →
+                    // nothing at all — no PATCH_FLUSH_SUBSCRIBED, no PATCH_FLUSH_FAULTED_SYNC, no
+                    // nack=OwnerDisposing (the OWNER was never disposed; the ROOT under it was, which
+                    // is why #3603's create-leg disposal NACK cannot reach this).
+                    //
+                    // Arming first makes that window empty by construction: the timer runs on
+                    // flushBoundScheduler (the pool), never on the echo thread, so a parked echo
+                    // thread cannot suppress it. Widening 5 s / 10 s / 31 s would change nothing —
+                    // the parked write has no target — and the bound is not a fate: the commit is
+                    // (#3112).
+                    var verdictClaimed = 0;
+                    bool ClaimVerdict() => System.Threading.Interlocked.Exchange(ref verdictClaimed, 1) == 0;
+                    var bound = new SingleAssignmentDisposable();
+                    // Set once the flush's Subscribe RETURNS, and read by the bound so an expiry can
+                    // say WHICH of the two it outlived: a flush that is genuinely slow (subscribed,
+                    // storage behind) or a prologue that never got that far. Seven occurrences of
+                    // #3510 could not tell those apart from the log alone.
+                    var flushSubscribed = 0;
+                    bound.Disposable = Observable
+                        .Timer(flushTimeout, flushBoundScheduler ?? System.Reactive.Concurrency.Scheduler.Default)
+                        .Subscribe(_ =>
+                        {
+                            // The bound's scheduler ran the callback; a trail ending at BOUND_ARMED without
+                            // this stage names a scheduler that never ran it (arm 2: a starved pool).
+                            noteStage?.Invoke("PATCH_FLUSH_BOUND_FIRED");
+                            if (!ClaimVerdict()) return;
+                            logger?.LogWarning(
+                                "[PatchAck] FLUSH_OUTLIVED_BOUND path={Path} bound={BoundMs}ms subscribed={Subscribed} "
+                                + "— the merge committed and is acked as such; the durable flush is still in flight "
+                                + "(subscribed=True: storage behind; subscribed=False: its build or Subscribe parked on "
+                                + "the echo thread — #3510's root-recycle arm), and keeps running",
+                                hubPath, flushTimeout.TotalMilliseconds,
+                                System.Threading.Volatile.Read(ref flushSubscribed) == 1);
+                            ackOnce(true, null);
+                        });
+                    // The verdict is owed from HERE ON — by the flush, or by the bound's scheduler,
+                    // never by nothing. Everything below may park without stranding the writer.
+                    noteStage?.Invoke("PATCH_FLUSH_BOUND_ARMED");
+
                     // 🚨 Nothing may ESCAPE this arm. An exception thrown here propagates out of the
                     // commit-echo subscription's onNext — Rx does not route it into onError — and the
-                    // verdict is then never produced: no stage, no ack, no bound, and the writer waits
-                    // out its bound in silence. Measured on CD 7937's bake host (MeshWeaver#2543): 13
+                    // verdict is then never produced: no stage, no ack, and the writer waits out its
+                    // bound in silence. Measured on CD 7937's bake host (MeshWeaver#2543): 13
                     // stalls, every trail ending at PATCH_ECHO_SEEN, zero PATCH_FLUSH_SUBSCRIBED, pool
                     // idle — the only code between those two stages is this arm. A synchronous fault
                     // is a NACK with the classified error (the same verdict the async fault arm posts),
@@ -1487,19 +1556,25 @@ public static class DataExtensions
                             "[PatchAck] FLUSH_FAULTED_SYNC path={Path} — building the durable flush threw on "
                             + "the echo thread; NACKing so the writer retries instead of waiting out its bound",
                             hubPath);
-                        ackOnce(false, ClassifyPatchException(ex, hubPath));
+                        // The bound is armed by now, so both routes exist and the claim decides which
+                        // posts; the bound is then released, because a fault IS the verdict, not a wait.
+                        if (ClaimVerdict())
+                            ackOnce(false, ClassifyPatchException(ex, hubPath));
+                        bound.Dispose();
                         return;
                     }
                     if (durable is null)
                     {
-                        ackOnce(true, null);
+                        if (ClaimVerdict())
+                            ackOnce(true, null);
+                        bound.Dispose();
                         return;
                     }
                     // 🚨 The COMMIT is the verdict; the flush is durability (#3112). Reaching this arm
                     // means the owner's reduced stream emitted the echo that CONTAINS this write: the
                     // merge landed, the Version advanced, every mirror is already receiving the new
                     // state. What follows only decides WHEN the ack is posted, never WHETHER the write
-                    // applied — so the flush bound below is a wait bound on the ack, not a fate.
+                    // applied — so the flush bound above is a wait bound on the ack, not a fate.
                     //
                     // This used to be `durable.Take(1).Timeout(flushTimeout)` feeding the fault arm,
                     // which on expiry NACKed `Unknown` + "TimeoutException" — read by the writer as
@@ -1525,10 +1600,7 @@ public static class DataExtensions
                     //
                     // The watcher itself posts at most ONE verdict for the flush leg — the bound and
                     // the flush's terminal race only inside the millisecond the bound expires, and the
-                    // claim below decides it, so the caller's latch is never what keeps the count at one.
-                    var verdictClaimed = 0;
-                    bool ClaimVerdict() => System.Threading.Interlocked.Exchange(ref verdictClaimed, 1) == 0;
-                    var bound = new SingleAssignmentDisposable();
+                    // claim above decides it, so the caller's latch is never what keeps the count at one.
                     var flushSub = durable
                         .Take(1)
                         .Finally(bound.Dispose)
@@ -1557,30 +1629,15 @@ public static class DataExtensions
                     // (A raw IObservable whose Subscribe throws is not a case: `Take(1)` subscribes through
                     // Rx's SubscribeSafe, which forwards that throw into the fault arm above — measured.)
                     // The Subscribe above returned: the storage write chain did not block the thread the
-                    // echo arrived on. A trail that ends at PATCH_ECHO_SEEN without this stage names a
-                    // flush whose Subscribe never returned (MeshWeaver#2543, arm 1). A synchronous flush
-                    // has already acked by now, so PATCH_ACK may legitimately precede this stage.
+                    // echo arrived on. A trail that ends at PATCH_FLUSH_BOUND_ARMED without this stage
+                    // names a flush whose build or Subscribe never returned (MeshWeaver#2543 arm 1,
+                    // #3510's root recycle) — which the bound above now ANSWERS instead of stranding the
+                    // writer. A synchronous flush has already acked by now, so PATCH_ACK may
+                    // legitimately precede this stage.
+                    System.Threading.Volatile.Write(ref flushSubscribed, 1);
                     noteStage?.Invoke("PATCH_FLUSH_SUBSCRIBED");
-                    bound.Disposable = Observable
-                        .Timer(flushTimeout, flushBoundScheduler ?? System.Reactive.Concurrency.Scheduler.Default)
-                        .Subscribe(_ =>
-                        {
-                            // The bound's scheduler ran the callback; a trail ending at BOUND_ARMED without
-                            // this stage names a scheduler that never ran it (arm 2: a starved pool).
-                            noteStage?.Invoke("PATCH_FLUSH_BOUND_FIRED");
-                            if (!ClaimVerdict()) return;
-                            logger?.LogWarning(
-                                "[PatchAck] FLUSH_OUTLIVED_BOUND path={Path} bound={BoundMs}ms — the merge "
-                                + "committed and is acked as such; the durable flush is still in flight "
-                                + "(storage behind), and keeps running",
-                                hubPath, flushTimeout.TotalMilliseconds);
-                            ackOnce(true, null);
-                        });
                     // ONE registration for the leg, as before: the flush subscription and the bound
                     // timer live and die together with the owner hub.
-                    // The bound timer exists from here on; if the flush is still in flight, the verdict
-                    // is now owed by the flush OR by the bound's scheduler — never by nothing.
-                    noteStage?.Invoke("PATCH_FLUSH_BOUND_ARMED");
                     registerForDisposal(new CompositeDisposable(flushSub, bound));
                 },
                 ex => ackOnce(false, ClassifyPatchException(ex, hubPath)));

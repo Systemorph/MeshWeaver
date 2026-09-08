@@ -315,6 +315,53 @@ hanging — merged 2026-09-07T14:20:56Z, after the last bake in this population)
 bake on a commit descended from #3603 is the first that can measure it**, and it must be counted
 separately from the `PATCH_ECHO_SEEN` half, which #3603 does not touch.
 
+### 🚨 Arm 1 is closed by ORDER, not by another stage (#3510, arm 4 — CD 8078)
+
+The discriminator above was never needed. CD 8078 (`4fedf4549`, bake job 101955088724) carried
+fifteen of these trails against a sealed control on the same core commit (8076), and every one of
+them opened on the same line:
+
+```
+[PackageInstaller] recycling root Chess now that its in-package NodeType has a loadable build …
+```
+
+`PackageInstaller` recycles a package's ROOT partition hub the moment its in-package NodeType has a
+loadable build. A patch already committed at its per-node OWNER under that root then flushes durably
+through a **routed** write to the partition being recycled — and the routed write has no live target,
+so the work parks. Whether it parks in the DI resolve, in `AddressFor`'s
+`GetHostedHub` → per-address creation `Lazy` (which blocks a second caller for that address), or in
+`PersistenceService.TryWriteFrom`'s deferred prologue is a distinction with no difference: all three
+run on the owner's echo thread, and the bound that would have answered was armed **after** them.
+That is the defect — not which of the three it was.
+
+So the fix is the ORDER, and it needs no new stage. `ArmPatchAckWatcher` now arms the flush bound as
+the first thing the echo arm does — before `flush(committed)` is called, let alone subscribed:
+
+```
+PATCH_ECHO_SEEN → PATCH_FLUSH_BOUND_ARMED → (build, subscribe) → PATCH_FLUSH_SUBSCRIBED
+```
+
+The timer runs on the flush-bound scheduler (the pool), never on the echo thread, so a parked echo
+thread cannot suppress it. From `PATCH_FLUSH_BOUND_ARMED` on, the verdict is owed by the flush **or**
+by the bound's scheduler — never by nobody. What the bound says is unchanged and still #3112's rule:
+the commit IS the verdict, so it acks `true` and lets the flush run on. `FLUSH_OUTLIVED_BOUND` now
+also carries `subscribed=`, which separates the two cases the seven occurrences could not:
+`subscribed=True` is a genuinely slow flush (storage behind), `subscribed=False` is this arm.
+
+**Denominator, so the effect is readable on the next seal.** ~120 root recycles per bake gate run;
+~30 writes missed the 5 s handoff in ~6 roots in BOTH the failed run and the sealed control, so the
+race was always present and the seal reddened only when one stranded write happened to be the
+idempotence re-install's own (`Chess/_Policy` on 8078). Those `ADVANCE_WITHOUT_HANDOFF` lines are the
+5 s handoff warning and can persist; what must not recur is a `[UpdateQueue] FAILED …
+OwnerUnreachable … within 31s` whose trail ends at `PATCH_ECHO_SEEN`.
+
+**What this is not.** No bound moved — not the 5 s handoff, not the 10 s flush bound, not the 31 s
+`WriteVerdictBound`; widening any of them changes nothing, because a parked write has no target. No
+retry, no watchdog, no drain added to the recycle: the recycle is by design and a package install is
+supposed to survive its own root recycling (see below). The only change is that a window in which
+nobody owed the verdict no longer exists.
+
+
 ### The rule
 
 > **A disposal fault is the OWNER going away, not a verdict about the write.**
