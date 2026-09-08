@@ -714,6 +714,96 @@ username/password secrets, and it bakes **two** trees against **two** known-debt
 bake directory, where the reusable workflow bakes one mount. Both run the identical publish script,
 which is the part that must never drift.
 
+## Retention: the published store is pruned by REFERENCE, never by age alone
+
+> Maintainer directive, 2026-09-08: *"please also set up a recurring process in memex.systemorph.com
+> to clean up these shares from old releases. typically when final release is out, we can remove all
+> -CI"* — *"let's maybe leave last 10 -CI"*.
+
+Every CI build that publishes a bake adds one `<root>/<identity>/` directory to the store, and until
+this pass nothing ever removed one. Measured 2026-09-08 on memex.systemorph.com through the memex
+API: the `/data` share (16384 MiB) had **3 MiB free**; `prebuilt-bundles` held **13398 MiB in 482
+identity directories**, `modules` 2269 MiB, `assembly-cache` 704 MiB. A full share truncates writes
+silently and reports the failure far from the cause — every runtime NodeType recompile landed as
+`Bad IL format`, and CD's bake read-back got `ResourceNotFound` for 39 of 45 files.
+
+### The rule, stated once for two stores
+
+The same predicate governs this store and the container registry's pinned digests
+([Pinned Image Retention](../PinnedImageRetention), #3438):
+
+> **An artifact that anything pins, names, runs or may adopt is kept — regardless of age and
+> regardless of how many newer ones exist. Only an artifact NOTHING references is collected, and an
+> artifact whose references cannot be READ counts as referenced.**
+
+For the registry the references are CI pins; for this store they are the following, each a KEEP,
+ORed together (`PrebuiltBundleStore.Plan`, `MeshWeaver.Hosting`):
+
+| # | an identity directory is kept when… | why that is a reference |
+|---|---|---|
+| 1 | it is the framework identity **this process runs** | its own boot and every install-time adoption read it |
+| 2 | a **clean release marker** `_releases/X.Y.Z` names it | a release line stays adoptable forever and is the rollback target |
+| 3 | a NodeType record's **adoption stamp** (`CompiledFrameworkVersion`, written by `PrebuiltAssemblySeeder` and by every local compile) names it | a record was built under it; a re-seed may ask for it again |
+| 4 | it holds, for some source, the **newest sealed publication on the running major line** | exactly what `Modules:VersionStrictness=Family` adopts ([Module Versioning](../ModuleVersioning)) |
+| 5 | a pre-release marker of an **open line** names it and it is among the newest **N** (`KeepNewestPerSource`, default **10**) such identities for some source, by version | the maintainer's "leave the last 10 -CI"; once the clean `X.Y.Z` marker exists the line is CLOSED and this rule keeps none of its `X.Y.Z-ci.<n>` identities |
+| 6 | **no marker names it** and it is among the newest N for some source **by seal time** | nothing can place an unnamed identity on a line, so recency is the only signal it has — such identities are pruned by recency, not by line |
+| 7 | a source under it is **unsealed and younger than the grace** (`UnsealedGrace`, default 2 h) | the publisher writes bundles first and `_complete` last: a young unsealed directory is a seal in flight. A bounded grace is a reference-like signal; an age cutoff on a *sealed* directory would not be, and there is none |
+| 8 | its seal **cannot be read** | unreadable is never unreferenced (the modules GC's #2509 rule) |
+
+Everything else is collected **oldest first, one identity at a time**, each removal logged with the
+bytes reclaimed. The sentinel of every source is deleted before the directory, so a reader that
+lists mid-removal sees "unsealed" and backs off rather than a sealed listing whose bundles are
+vanishing. The `-ci` **markers** of a removed identity — and of an identity already gone for longer
+than the grace — are removed with it, so `_releases/` does not grow forever; a clean release marker
+is never removed. The release gates read the same directory
+([Release Availability Gates](../ReleaseGates)), so a retired `-ci` version simply reads as
+"published no bake" there, which is the truth once its bundles are gone.
+
+**Fail closed, the way `ModuleSetStore.Prune` does.** A store that cannot be listed, or a release
+marker that cannot be read, aborts the pass with nothing collected — which identity an unreadable
+marker names is unknown, so no identity can be called unreferenced. The NodeType stamps are read
+from the mesh on every pass (system-scoped, mesh-wide — the pre-warmer's own enumeration); an
+enumeration that cannot be taken aborts that pass too. A removal that fails is counted and the
+rest proceeds; a half-removed identity reads as unsealed to every reader and the next pass plans
+it again.
+
+**Scope.** This sweep is **identity-level**. The per-source generation retention that follows a
+pointer swap (`_current`) is the publisher's, at the end of its own run —
+[Sealed Publication Generations](../SealedPublicationGenerations) § Retention — and this pass
+never reaches inside a kept identity.
+
+### Where it runs
+
+`PrebuiltBundleRetentionHostedService`, registered by `ConfigureMemexMesh` beside the modules GC
+(`AddModuleGenerationsGc`) — the two are sibling collectors of the same volume and run the same way:
+registered at boot, never run there; kicked from `ApplicationStarted`, behind `PreWarmCompletion`
+so a listing of thousands of files on a network share never shares a window with the boot compiles;
+blocking filesystem work on the file-system `IIoPool`, never a hub. Then **recurring**, every
+`Interval` (default daily); passes never overlap. Inert without `PreWarm:PrebuiltBundleRoot`.
+
+| key | default | meaning |
+|---|---|---|
+| `PreWarm:PrebuiltBundleRetention:Delete` | `true` | `false` measures and reports only |
+| `PreWarm:PrebuiltBundleRetention:KeepNewestPerSource` | `10` | rules 5 and 6 |
+| `PreWarm:PrebuiltBundleRetention:UnsealedGrace` | `02:00:00` | rule 7 |
+| `PreWarm:PrebuiltBundleRetention:Interval` | `1.00:00:00` | the recurrence |
+
+Every pass appends to the ledger `<root>/_retention/ledger.txt` — one line per pass (kept / would
+collect / collected, with bytes) and one per removed identity and retired marker — and records its
+last result on `PrebuiltBundleRetentionStatus` (a mesh-scoped singleton). There is no on-demand
+operator surface in core: the `assembly-cache-prune` Job is a chart object in the private `Memex`
+repository, not a wire message, and none is invented here; a pass on demand is a pod restart.
+
+### The free-space signal
+
+`/health` now carries **`data_volume_free_space`** (`DataVolumeHealthCheck`,
+`Memex.Portal.ServiceDefaults`, evaluated by `DataVolumeFreeSpace` in `MeshWeaver.Hosting`):
+**Degraded** — never Unhealthy, pulling the pod frees nothing — when the volume any configured
+store root sits on (`PreWarm:PrebuiltBundleRoot`, `Modules:Root`, plus any `DataVolume:Paths`) has
+less than `DataVolume:MinimumFreeBytes` free (default 1 GiB), naming the path, the used and total
+bytes; Degraded too when a configured path cannot be measured; Healthy with nothing configured. The
+retention above is what keeps it green.
+
 ## Node repos run the same lane — as reusable workflows
 
 Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
