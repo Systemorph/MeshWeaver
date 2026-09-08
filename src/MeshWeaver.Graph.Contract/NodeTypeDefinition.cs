@@ -341,6 +341,24 @@ public record NodeTypeDefinition
     public string? LastCompilationActivityPath { get; init; }
 
     /// <summary>
+    /// 🚨 <b>The source that owns this type no longer carries it, and the mesh is holding it ONLY
+    /// for its remaining instances.</b> Stamped by a repository-driven import (a git sync, a
+    /// sealed-publication import, a node-repo package update) when the repository has RETIRED the
+    /// type while <c>nodeType:{Type}</c> still matches live nodes — the prune of the definition is
+    /// refused, because a definition that goes away takes its instances' per-node hub with it and
+    /// leaves them reading <c>Unavailable</c> (a client record went dark exactly this way on
+    /// <c>memex.systemorph.com</c>, 2026-09-08). The text names who retired it and which instances
+    /// keep it alive; <c>null</c> for every type its source still carries.
+    ///
+    /// <para>Two readers act on it. The import re-asks the instance question on every later run,
+    /// so the retirement COMPLETES on the first sync after the instances are retyped or deleted —
+    /// nothing else has to remember. And the bake gate reads a compile failure on a stamped type as
+    /// <c>Retired</c>, a content verdict that must not hold a rollout: the repository withdrew the
+    /// type's sources on purpose, so its compile status is no longer evidence about an image.</para>
+    /// </summary>
+    public string? PendingRetirement { get; init; }
+
+    /// <summary>
     /// Path of the latest <c>Release</c> MeshNode at <c>{nodeTypePath}/Release/{version}</c>
     /// — the active compiled artefact for this NodeType. Set by the compile watcher
     /// after a successful compile + Release node creation; preserves the previous value

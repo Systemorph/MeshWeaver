@@ -93,6 +93,32 @@ public enum PreWarmStatus
     /// worth nothing if the identical condition gates through the dependents.
     /// </summary>
     UpstreamContentBroken,
+    /// <summary>
+    /// The compile settled at Error on a type its REPOSITORY HAS RETIRED — the definition carries
+    /// <see cref="NodeTypeDefinition.PendingRetirement"/>: the source that owns it no longer ships
+    /// it, and the import kept it only because the mesh still holds instances that have not been
+    /// retyped (see <c>NodeTypeInstanceProbe</c>). Its sources were withdrawn on purpose, so
+    /// whether it still compiles is no longer evidence about an image. A CONTENT verdict, like
+    /// <see cref="NoSources"/>: dependents inherit <see cref="UpstreamContentBroken"/>, and the
+    /// gate files it under <c>NodeTypeBakeGateState.Retired</c> without stalling anything.
+    /// </summary>
+    Retired,
+    /// <summary>
+    /// 🚨 The type's definition node NO LONGER EXISTS — it was pruned by its repository (a
+    /// completed retirement), and this sweep, which enumerated it before the prune landed, then
+    /// measured a "failure" against a node that was gone. Measured on memex.systemorph.com
+    /// 2026-09-08: <c>Crm/Mail</c> pruned at 20:29:14Z, its compile failed at 20:29:52Z with
+    /// <c>No node found at 'Crm/Mail'</c>, recorded as a CompileError regression on a healthy
+    /// baseline, and at 20:31:12Z the pod refused readiness on it — with a recovery watch
+    /// subscribed to a node that did not exist, so nothing could ever retract it. A deliberate
+    /// retirement must not hold every rollout on every instance for ever.
+    ///
+    /// <para>Established by a LISTING that came back and did not name the node — never by a
+    /// point read, which on an absent node terminates with a routing NotFound and opens the
+    /// storm-breaker on that path — and never by the shape of the failure message. A faulted
+    /// listing leaves the original verdict standing: absence is asserted, not assumed.</para>
+    /// </summary>
+    Removed,
     /// <summary>The warm subscription faulted (best-effort — the lazy path still works).</summary>
     Faulted
 }
@@ -744,16 +770,25 @@ public static class DynamicTypePreWarmer
                     return warm
                         .DelaySubscription(
                             i == 0 || batchSources is not null ? TimeSpan.Zero : pacing)
+                        // 🚨 A verdict against a node that NO LONGER EXISTS is not a verdict about
+                        // the image. The definitions were enumerated once, at the start of the
+                        // sweep; a repository sync can prune a retired type at any moment after
+                        // that, and the compile of the pruned type then fails with the routing's
+                        // "No node found" — which is exactly what memex.systemorph.com recorded
+                        // as a gating CompileError on 2026-09-08. Asked only for an image verdict.
+                        .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
                         .Do(o =>
                         {
                             // A timeout is not a verdict — route it to `unevaluated` so its
-                            // dependents inherit "no answer", not "it broke". Deleted sources are
-                            // a CONTENT verdict — dependents inherit content-broken, never gating.
-                            // Everything else that missed a usable build (CompileError, Faulted)
-                            // is an image verdict.
+                            // dependents inherit "no answer", not "it broke". Deleted sources, a
+                            // retired type and a removed type are CONTENT verdicts — dependents
+                            // inherit content-broken, never gating. Everything else that missed a
+                            // usable build (CompileError, Faulted) is an image verdict.
                             if (o.Status is PreWarmStatus.TimedOut)
                                 unevaluated.Add(p);
-                            else if (o.Status is PreWarmStatus.NoSources)
+                            else if (o.Status is PreWarmStatus.NoSources
+                                     or PreWarmStatus.Retired
+                                     or PreWarmStatus.Removed)
                                 contentBroken.Add(p);
                             else if (!o.ReachedUsableBuild)
                                 verdictFailed.Add(p);
@@ -1025,9 +1060,91 @@ public static class DynamicTypePreWarmer
     /// <c>ClassifyCompileFailure_MatchedSources_StaysCompileError</c>.</para>
     /// </summary>
     public static PreWarmStatus ClassifyCompileFailure(NodeTypeDefinition d) =>
-        d.CurrentSourceVersions is { Count: 0 } && d.LastCompileSucceededAt is not null
+        // A type its repository has retired (held for its remaining instances) is a content
+        // verdict before anything else is asked: its sources were withdrawn on purpose.
+        d.PendingRetirement is { Length: > 0 }
+            ? PreWarmStatus.Retired
+        : d.CurrentSourceVersions is { Count: 0 } && d.LastCompileSucceededAt is not null
             ? PreWarmStatus.NoSources
             : PreWarmStatus.CompileError;
+
+    /// <summary>
+    /// The outcome once the type node's EXISTENCE is known. An image verdict
+    /// (<see cref="PreWarmStatus.CompileError"/> / <see cref="PreWarmStatus.Faulted"/>) measured
+    /// against a node that no longer exists is reclassified <see cref="PreWarmStatus.Removed"/> —
+    /// the repository retired the type while (or before) this sweep ran, and no image caused
+    /// that. Everything else is returned unchanged: an existing node keeps its verdict, and a
+    /// non-verdict (a timeout, a usable build) is not touched. Pure — pinned by
+    /// <c>ARetiredNodeTypeIsNotARegressionTest</c>.
+    /// </summary>
+    /// <param name="outcome">The outcome as measured.</param>
+    /// <param name="nodeExists">Whether a listing still names the type's definition node.</param>
+    public static PreWarmOutcome ReclassifyAbsent(PreWarmOutcome outcome, bool nodeExists) =>
+        nodeExists || !IsImageVerdict(outcome)
+            ? outcome
+            : outcome with
+            {
+                Status = PreWarmStatus.Removed,
+                Detail = "the NodeType definition no longer exists in the mesh — retired by its "
+                    + $"repository, not broken by this image (was {outcome.Status}: "
+                    + $"{outcome.Detail ?? "(no detail)"})",
+            };
+
+    private static bool IsImageVerdict(PreWarmOutcome outcome) =>
+        outcome.Status is PreWarmStatus.CompileError or PreWarmStatus.Faulted;
+
+    /// <summary>
+    /// <see cref="ReclassifyAbsent"/> with the existence question actually asked — only for an
+    /// image verdict, so the overwhelming majority of outcomes cost nothing.
+    /// </summary>
+    private static IObservable<PreWarmOutcome> ReclassifyIfRemoved(
+        IMessageHub mesh, PreWarmOutcome outcome, ILogger? logger)
+    {
+        if (!IsImageVerdict(outcome))
+            return Observable.Return(outcome);
+        return TypeNodeExists(mesh, outcome.TypePath, logger)
+            .Select(exists => ReclassifyAbsent(outcome, exists))
+            .Do(o =>
+            {
+                if (o.Status is PreWarmStatus.Removed)
+                    logger?.LogWarning(
+                        "DynamicTypePreWarmer: {TypePath} → {Status} — the definition node is gone "
+                        + "(pruned by its repository during or before this sweep); the failure "
+                        + "measured against it is not evidence against this image. {Detail}",
+                        o.TypePath, o.Status, o.Detail);
+            });
+    }
+
+    /// <summary>
+    /// Whether the type's definition node still exists — by LISTING (<c>path:</c>, the same
+    /// existence idiom the importer uses for its marker), never by a point read: a point read of
+    /// an absent node terminates with a routing NotFound and opens the storm-breaker on that path.
+    /// System-scoped — a NodeType record may live in a partition this process's viewer cannot
+    /// read, and "cannot see" must not read as "gone".
+    ///
+    /// <para>🚨 A listing that FAULTS answers <c>true</c>: absence is asserted only by a listing that
+    /// came back and did not name the node. The direction matters — a false "gone" would launder
+    /// a real regression, a false "present" merely keeps the verdict that already stood.</para>
+    /// </summary>
+    internal static IObservable<bool> TypeNodeExists(IMessageHub mesh, string typePath, ILogger? logger)
+    {
+        var meshService = mesh.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(true);
+        return meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}").AsSystem())
+            .Take(1)
+            .Select(change => change.Items.Any(n =>
+                string.Equals(n.Path, typePath, StringComparison.OrdinalIgnoreCase)))
+            .Catch<bool, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: could not establish whether NodeType {TypePath} still "
+                    + "exists — treated as present, so its verdict stands unchanged.",
+                    typePath);
+                return Observable.Return(true);
+            });
+    }
 
     /// <summary>
     /// Whether the type's SOURCES MOVED while this compile was running — at least one entry of
@@ -1103,6 +1220,7 @@ public static class DynamicTypePreWarmer
     public static IDisposable WatchForRecovery(
         IMessageHub mesh, NodeTypeBakeGateState gate, string typePath, ILogger? logger)
     {
+        const string RemovedWitness = "the NodeType definition no longer exists";
         var workspace = mesh.GetWorkspace();
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
         // 🚨 #3478 — THE SECOND WITNESS, and the reason gating publication does not break #1214.
@@ -1150,11 +1268,42 @@ public static class DynamicTypePreWarmer
                                     .Where(p => string.Equals(
                                         p, typePath, StringComparison.OrdinalIgnoreCase))
                                     .Select(_ => "this process compiled it successfully"))
-                            .Take(1));
+                            .Take(1))
+                        // 🚨 THE WATCH'S SUBJECT CAN CEASE TO EXIST. A regression recorded on a type
+                        // its repository then prunes (a completed retirement) has lost its subject:
+                        // the node stream terminates with the routing's NotFound, and "a watch that
+                        // cannot observe a recovery must never be read as one" became "a rollout
+                        // that can never proceed" (memex.systemorph.com, 2026-09-08 20:31:12Z, on a
+                        // node pruned two minutes earlier). So a faulted watch asks ONE more
+                        // question — does the node still exist, by listing — and only an absent
+                        // node yields the removal witness; an existing node re-throws, and the
+                        // regression stands exactly as before.
+                        .Catch<string, Exception>(ex => TypeNodeExists(mesh, typePath, logger)
+                            .SelectMany(exists => exists
+                                ? Observable.Throw<string>(ex)
+                                : Observable.Return(RemovedWitness)));
                 })
             .Subscribe(
                 witness =>
                 {
+                    if (string.Equals(witness, RemovedWitness, StringComparison.Ordinal))
+                    {
+                        if (gate.RetireRegression(
+                                typePath,
+                                "the NodeType definition no longer exists — pruned by its repository "
+                                + "(a completed retirement), so there is nothing left for this image "
+                                + "to have broken"))
+                        {
+                            mesh.ServiceProvider.GetService<MeshPublicationGate>()?.Reconsider();
+                            logger?.LogWarning(
+                                "DynamicTypePreWarmer: WITHDRAWING the regression recorded for "
+                                + "{TypePath} — its definition node no longer exists (retired by its "
+                                + "repository), so the earlier failure was measured against nothing "
+                                + "and is not evidence against the image. Gate now: {Detail}",
+                                typePath, gate.Detail);
+                        }
+                        return;
+                    }
                     if (gate.RetractRegression(
                             typePath,
                             $"rebuilt to a usable build on this image after the bake ({witness})"))

@@ -699,8 +699,13 @@ internal static class NodeTypeBatchBake
                 // which must keep gating (and must keep cascading UpstreamFailed to its dependents).
                 // See ClassifyCompileFailure for the full reasoning; the two paths must agree,
                 // because the status vocabulary may not depend on WHICH driver ran the compile.
+                // …and a type its REPOSITORY HAS RETIRED (held only for its remaining instances,
+                // NodeTypeDefinition.PendingRetirement) is a content verdict before any of that:
+                // its sources were withdrawn on purpose. Same first branch as ClassifyCompileFailure.
                 var def = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions);
-                var status = def is not null
+                var status = def?.PendingRetirement is { Length: > 0 }
+                    ? PreWarmStatus.Retired
+                    : def is not null
                         && sources.Count == 0
                         && def.CurrentSourceVersions is { Count: 0 }
                         && def.LastCompileSucceededAt is not null
