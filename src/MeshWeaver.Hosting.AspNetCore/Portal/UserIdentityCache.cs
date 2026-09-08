@@ -178,8 +178,11 @@ public sealed class UserIdentityCache : IDisposable
 
     private readonly ConcurrentDictionary<string, MeshNode> _byEmail =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly IDisposable _subscription;
-    private readonly IDisposable _faultWatch;
+    // The directory query's connection and its fault watcher. Registered with the hub (released in
+    // its ShutDown phase, strictly before any scope closes — the index cannot fill from a dead
+    // container) AND disposed by this singleton's own Dispose(), whichever the container reaches
+    // first; both are idempotent.
+    private readonly CompositeDisposable _connections = new();
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly ILogger<UserIdentityCache> _logger;
 
@@ -297,7 +300,8 @@ public sealed class UserIdentityCache : IDisposable
             })
             .Publish();
         IndexChanged = applied;
-        _faultWatch = applied.Subscribe(
+        hub.RegisterForDisposal(_connections);
+        _connections.Add(applied.Subscribe(
             _ => { },
             ex =>
             {
@@ -307,11 +311,12 @@ public sealed class UserIdentityCache : IDisposable
                 Volatile.Write(ref _subscriptionFailure,
                     $"user index subscription failed: {ex.GetType().Name}: {ex.Message}");
                 _logger.LogWarning(ex, "UserIdentityCache subscription failed");
-            });
+            }));
         // Connect LAST: the fault watcher is already attached, and Publish's subject replays its
         // terminal notification to late subscribers, so a waiter that arrives after a failure is
-        // told the index is dead instead of waiting on it forever.
-        _subscription = applied.Connect();
+        // told the index is dead instead of waiting on it forever. The connection is OWNED
+        // (ConnectOwnedBy) — released with _connections, never left to the chain itself.
+        applied.ConnectOwnedBy(_connections);
     }
 
     private void Apply(QueryResultChange<MeshNode> change)
@@ -456,9 +461,5 @@ public sealed class UserIdentityCache : IDisposable
         UserIdentityLookup.UntilDetermined(IndexChanged, () => Lookup(email));
 
     /// <summary>Disposes the underlying query subscription, stopping further cache updates.</summary>
-    public void Dispose()
-    {
-        _subscription.Dispose();
-        _faultWatch.Dispose();
-    }
+    public void Dispose() => _connections.Dispose();
 }

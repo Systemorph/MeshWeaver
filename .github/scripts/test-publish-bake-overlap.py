@@ -36,22 +36,35 @@ HOW IT STAYS HONEST
   the stub cannot drift apart silently: change the script's query and this harness goes red until
   the stub is taught the new one.
 
+TWO I/O EDGES, TWO STUBS
+------------------------
+Since 2026-09-08 the script publishes and reads back through `publish-bake-files.py` — ONE process
+per phase per target on the Azure SDK, replacing 46 + 46 CLI launches per target — and keeps `az`
+only for the per-target decisions (does the sentinel exist, what does a marker say) and the rare
+paths (unseal, release marker, architecture backfill). So the harness substitutes BOTH edges over
+ONE filesystem share: the stub `az` on PATH, and a fake share backend the helper loads from
+`PUBLISH_BAKE_FAKE_SHARE_BACKEND`. They read and write the same files and the same per-file
+metadata, so a file the helper uploads is the file the stub's `exists`/`download` answers about.
+The second-publisher hooks moved to the fake backend's `upload`, and the harness runs the upload
+pool ONE wide so the plan order is the upload order and "hook onto architecture.txt" means what it
+always meant; one control case runs the default pool width so the parallel path is exercised too.
+
 WHAT THIS HARNESS CANNOT PROVE
 ------------------------------
-The stub is not Azure Files. It reproduces the parts the script depends on — an extensionless
-`--path` naming a directory, per-file metadata, the sentinel written last — and nothing else. In
-particular the exact JSON shape of the real `az storage file show` is taken from the CLI's own
-transformer (`transform_file_show_result` puts the file's metadata at the TOP level), and asserted
-only there. What the harness CAN prove about the real CLI it does: the fidelity case runs the read-
-back query through the real `jmespath` engine azure-cli evaluates `--query` with, and asserts the
-shape knack then renders as ONE tab-separated row. That case exists because the first draft of this
-change used a flat `[a, b]` — which knack prints as TWO LINES, so `$2` would have read empty for
-every file and the postcondition would have refused every publication in the fleet. The stub said
-nothing, because the stub was written to match the draft.
+The fake is not Azure Files. It reproduces the parts the script depends on — per-file metadata,
+directories, the sentinel written last — and nothing else. Two things are asserted against the REAL
+pieces instead: `sdk-check` imports the PINNED SDK the script installs and constructs the clients
+the helper uses (no network), so an SDK surface move is red here and not in a production publish;
+and the helper's TSV rendering — five fields, `-` for an absent stamp, `absent`/`error` never
+disguised as "no digest" — is pinned by running the helper itself against the fake, because that
+rendering is what the bash parse asserts a field count on. The lesson behind that case is older
+than the helper: the first draft of the CLI-based read used a `--query` shape that knack rendered as
+two LINES instead of two columns, so `$2` would have read empty for every file and the
+postcondition would have refused every publication in the fleet — and the stub of the day said
+nothing, because it was written to match the draft.
 
-Beyond that the script fails CLOSED on an unreadable, empty or unexpectedly-shaped answer, so a CLI
-change is a RED publish rather than a silent one — the only protection available against a shape
-this harness cannot run.
+Beyond that the script fails CLOSED on an unreadable, empty or unexpectedly-shaped answer, so a
+rendering change is a RED publish rather than a silent one.
 """
 
 from __future__ import annotations
@@ -60,23 +73,17 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
-
-try:
-    import jmespath
-except ImportError:  # pragma: no cover — the CI step installs it; locally `pip install jmespath`
-    print("::error::test-publish-bake-overlap.py needs jmespath (the engine azure-cli evaluates "
-          "--query with) to assert how the publish script's read-back query renders. Refusing "
-          "rather than skipping that case: it is the one thing this harness's stub cannot prove "
-          "about the real CLI.")
-    raise SystemExit(1) from None
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_SCRIPT = HERE / "publish-bake-bundles.sh"
+HELPER = HERE / "publish-bake-files.py"
 
 IDENTITY = "s0123456789abcdef0123456789abcdef"
 SOURCE = "plugins"
@@ -87,15 +94,6 @@ DEST = f"prebuilt-bundles/{IDENTITY}/{SOURCE}"
 SENTINEL = "_complete"
 # Must match ShippedPrebuiltBundles.PublicationPointerFileName and the POINTER in the script.
 POINTER = "_current"
-
-# 🚨 THE ONE `file show` QUERY, and its exact shape is load-bearing. knack's `format_tsv` renders a
-# TOP-LEVEL list as ROWS, so `--query "[a, b]" -o tsv` prints TWO LINES rather than two columns; a
-# script parsing `$2` would then read EMPTY for every file, count `ours` as zero on every publish,
-# and refuse every publication in the fleet as "superseded". A list-of-ONE-ROW renders one
-# tab-separated line. And a null field renders as the LITERAL 'None', which is why both fields
-# carry a `|| '-'` guard. Measured against azure-cli 2.90.0's own jmespath + knack formatter; the
-# fidelity case below re-asserts it with the real jmespath engine on every run.
-SHOW_QUERY = "[[metadata.digest || '-', metadata.publication || '-']]"
 
 BUNDLES = ["Chess.zip", "Edu.zip", "Store.zip"]
 MODULES = ["MeshWeaver.AI.module.nupkg", "MeshWeaver.Maps.module.nupkg"]
@@ -159,25 +157,6 @@ def meta_path(p):
 def emit(v):
     sys.stdout.write(v + "\n")
 
-def run_hook(when, rel):
-    on = os.environ.get("MOCK_AZ_HOOK_ON")
-    if not on or on != rel:
-        return
-    if os.environ.get("MOCK_AZ_HOOK_WHEN", "before") != when:
-        return
-    once = os.environ.get("MOCK_AZ_HOOK_ONCE")
-    if once:
-        marker = Path(once)
-        if marker.exists():
-            return
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("fired")
-    cmd = os.environ["MOCK_AZ_HOOK_CMD"]
-    env = dict(os.environ)
-    for k in ("MOCK_AZ_HOOK_ON", "MOCK_AZ_HOOK_CMD", "MOCK_AZ_HOOK_ONCE", "MOCK_AZ_HOOK_WHEN"):
-        env.pop(k, None)
-    subprocess.run(["bash", "-c", cmd], env=env, check=False)
-
 if group == "storage" and verb == "":
     die("no verb: " + raw)
 
@@ -205,38 +184,27 @@ if action == "exists":
     emit("true" if (share_root() / path).is_file() else "false"); sys.exit(0)
 
 if action == "upload":
+    # Only the architecture BACKFILL still uploads through the CLI (unstamped, onto a sealed
+    # incumbent); the publication itself goes through the helper and the fake backend below.
     src = Path(flag("--source"))
     dest_dir = share_root() / path
     # 🚨 The real CLI silently treats an EXTENSIONLESS --path as a DIRECTORY and appends the
-    # source basename; the script relies on that for _complete, modules/_index and the two
-    # markers. Model it by the same rule the script documents: an existing directory wins.
+    # source basename; the script relies on that for the markers it still uploads this way.
+    # Model it by the same rule the script documents: an existing directory wins.
     if dest_dir.is_dir():
         target = dest_dir / src.name
     else:
         target = share_root() / path
     rel = str(target.relative_to(share_root()))
-    run_hook("before", rel)
-    n = int(os.environ.get("MOCK_AZ_UPLOADS_SO_FAR_FILE_COUNT", "0"))
-    counter = os.environ.get("MOCK_AZ_UPLOAD_COUNTER")
-    if counter:
-        c = Path(counter)
-        n = (int(c.read_text()) if c.exists() else 0) + 1
-        c.write_text(str(n))
-        cap = os.environ.get("MOCK_AZ_FAIL_UPLOADS_AFTER")
-        if cap and n > int(cap):
-            sys.stderr.write("stub-az: simulated upload failure (#%d)\n" % n)
-            sys.exit(1)
+    if opts.get("--metadata"):
+        die("a stamped upload through the CLI — the publication's files go through "
+            "publish-bake-files.py now; this stub models only the unstamped backfill: " + raw)
     if not target.parent.is_dir():
         sys.stderr.write("stub-az: ParentNotFound for %s\n" % target); sys.exit(1)
     target.write_bytes(src.read_bytes())
-    md = {}
-    for kv in opts.get("--metadata", []):
-        k, _, v = kv.partition("=")
-        md[k] = v
     mp = meta_path(rel)
-    mp.parent.mkdir(parents=True, exist_ok=True)
-    mp.write_text(json.dumps(md))
-    run_hook("after", rel)
+    if mp.exists():
+        mp.unlink()
     sys.exit(0)
 
 if action == "download":
@@ -257,37 +225,117 @@ if action == "delete":
         mp.unlink()
     sys.exit(0)
 
-if action == "show":
-    SHOW_QUERY = os.environ["MOCK_AZ_SHOW_QUERY"]
+if action == "list":
+    # The ONE listing the script takes through the CLI: the diagnostic on a read-back refusal
+    # (MeshWeaver#3461, #3731) — "what the directory holds now", from inside the job's credential.
     q = opts.get("--query", [None])[0]
-    if q != SHOW_QUERY or not out_tsv:
-        die("this stub models exactly one `file show` query, %r with -o tsv — the script asked "
-            "for %r. Teach the stub the new query (and re-measure how knack renders it) rather "
-            "than loosening it." % (SHOW_QUERY, q))
-    # Reproduces the ONE way the read-back loop can end early: a command inside a `while read`
-    # loop that consumes the loop's stdin. Without the script's `< /dev/null` (and the accounting
-    # assertion behind it), the verification would cover a PREFIX of the publication and seal.
-    if os.environ.get("MOCK_AZ_EAT_STDIN") == "1":
-        try:
-            sys.stdin.read()
-        except Exception:
-            pass
-    fails = os.environ.get("MOCK_AZ_SHOW_FAILS")
-    if fails and path.endswith(fails):
-        sys.stderr.write("stub-az: simulated read failure for %s\n" % path); sys.exit(1)
-    f = share_root() / path
-    if not f.is_file():
+    if q != "[].{name:name, bytes:properties.contentLength}" or not out_tsv:
+        die("only the refusal diagnostic's listing query is modelled for file list: " + raw)
+    d = share_root() / path
+    if not d.is_dir():
         sys.stderr.write("stub-az: ResourceNotFound %s\n" % path); sys.exit(1)
-    mp = meta_path(path)
-    md = json.loads(mp.read_text()) if mp.exists() else {}
-    # 🚨 The rendering the REAL cli produces, measured against azure-cli 2.90.0's own jmespath +
-    # knack.output.format_tsv: `[[a || '-', b || '-']]` is ONE tab-separated row, and an absent
-    # value is '-'. A flat `[a, b]` would print two LINES instead, which is the shape the script
-    # must never go back to — see the fidelity assertion in run_cases.
-    emit("%s\t%s" % (md.get("digest") or "-", md.get("publication") or "-"))
+    for p in sorted(d.iterdir()):
+        if p.is_file():
+            emit("%s\t%d" % (p.name, p.stat().st_size))
     sys.exit(0)
 
+# `show` is deliberately NOT modelled: the per-file read-back is the launch storm this harness's
+# subject retired (46 processes per target). A script that reaches for it again dies here.
 die("unmodelled file action %r" % action)
+'''
+
+
+# ────────────────────────────── the fake share backend ──────────────────────────────
+# Loaded by publish-bake-files.py from PUBLISH_BAKE_FAKE_SHARE_BACKEND, over the SAME filesystem
+# share and the SAME `.meta` sidecars the stub `az` reads and writes. Every second-publisher hook
+# lives here now, on `upload`, because that is where the publication's bytes land.
+FAKE_BACKEND = r'''
+import json, os, subprocess, sys, threading
+from pathlib import Path
+
+ROOT = Path(os.environ["MOCK_AZ_ROOT"])
+_LOCK = threading.Lock()
+
+
+def _run_hook(when, rel):
+    on = os.environ.get("MOCK_AZ_HOOK_ON")
+    if not on or on != rel:
+        return
+    if os.environ.get("MOCK_AZ_HOOK_WHEN", "before") != when:
+        return
+    once = os.environ.get("MOCK_AZ_HOOK_ONCE")
+    if once:
+        marker = Path(once)
+        if marker.exists():
+            return
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("fired")
+    cmd = os.environ["MOCK_AZ_HOOK_CMD"]
+    env = dict(os.environ)
+    for k in ("MOCK_AZ_HOOK_ON", "MOCK_AZ_HOOK_CMD", "MOCK_AZ_HOOK_ONCE", "MOCK_AZ_HOOK_WHEN"):
+        env.pop(k, None)
+    subprocess.run(["bash", "-c", cmd], env=env, check=False)
+
+
+class FakeShare:
+    def __init__(self, account, share):
+        self.root = ROOT / account / share
+        self.meta = ROOT / ".meta" / account / share
+
+    def _meta(self, path):
+        return self.meta / (path + ".json")
+
+    def ensure_directory(self, path):
+        (self.root / path).mkdir(parents=True, exist_ok=True)
+
+    def upload(self, path, local, metadata):
+        _run_hook("before", path)
+        counter = os.environ.get("MOCK_AZ_UPLOAD_COUNTER")
+        if counter:
+            with _LOCK:
+                c = Path(counter)
+                n = (int(c.read_text()) if c.exists() else 0) + 1
+                c.write_text(str(n))
+            cap = os.environ.get("MOCK_AZ_FAIL_UPLOADS_AFTER")
+            if cap and n > int(cap):
+                raise RuntimeError("simulated upload failure (#%d)" % n)
+        target = self.root / path
+        if not target.parent.is_dir():
+            raise FileNotFoundError("ParentNotFound for %s" % target)
+        target.write_bytes(Path(local).read_bytes())
+        mp = self._meta(path)
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(json.dumps(dict(metadata)))
+        _run_hook("after", path)
+
+    def list_files(self, directory):
+        d = self.root / directory
+        if not d.is_dir():
+            return {}
+        return {p.name: p.stat().st_size for p in d.iterdir() if p.is_file()}
+
+    def get_properties(self, path):
+        # Reproduces the ONE way a read-back loop could end early: a command inside a `while read`
+        # loop that consumes the loop's stdin. The helper runs OUTSIDE that loop now, and this
+        # keeps the case honest if anyone ever moves it back in.
+        if os.environ.get("MOCK_AZ_EAT_STDIN") == "1":
+            try:
+                sys.stdin.read()
+            except Exception:
+                pass
+        fails = os.environ.get("MOCK_AZ_SHOW_FAILS")
+        if fails and path.endswith(fails):
+            raise RuntimeError("simulated read failure for %s" % path)
+        f = self.root / path
+        if not f.is_file():
+            raise FileNotFoundError("ResourceNotFound %s" % path)
+        mp = self._meta(path)
+        md = json.loads(mp.read_text()) if mp.exists() else {}
+        return md, f.stat().st_size
+
+
+def make_backend(account, share):
+    return FakeShare(account, share)
 '''
 
 
@@ -409,22 +457,43 @@ class Harness:
         az = self.bin / "az"
         az.write_text(STUB_AZ)
         az.chmod(0o755)
+        self.backend = workdir / "fake_share_backend.py"
+        self.backend.write_text(FAKE_BACKEND)
+
+    def base_env(self) -> dict[str, str]:
+        return {
+            "MOCK_AZ_ROOT": str(self.shelf_root),
+            "PUBLISH_BAKE_FAKE_SHARE_BACKEND": str(self.backend),
+            # The harness's own interpreter carries the pinned SDK (CI installs it into the same
+            # venv this file runs from), so the script does not build a venv per publication —
+            # and sdk-check still holds it to the pins on every run.
+            "PUBLISH_BAKE_PYTHON": sys.executable,
+            # ONE upload at a time, so the plan order is the upload order and a hook "before
+            # Store.zip" / "after architecture.txt" means what it always meant. The parallel
+            # control case below unsets this.
+            "PUBLISH_BAKE_UPLOAD_WORKERS": "1",
+            "BAKE_PUBLISH_TARGETS": TARGET,
+            "GITHUB_RUN_ATTEMPT": "1",
+        }
 
     def publish(self, bake: Bake, publisher: str, run_id: str, env_extra: dict | None = None):
         env = dict(os.environ)
         env["PATH"] = f"{self.bin}{os.pathsep}{env['PATH']}"
-        env["MOCK_AZ_ROOT"] = str(self.shelf_root)
-        env["MOCK_AZ_SHOW_QUERY"] = SHOW_QUERY
-        env["BAKE_PUBLISH_TARGETS"] = TARGET
+        env.update(self.base_env())
         env["GITHUB_REPOSITORY"] = publisher
         env["GITHUB_RUN_ID"] = run_id
-        env["GITHUB_RUN_ATTEMPT"] = "1"
         env.pop("EXT_MODULES_DIR", None)
         env.pop("GITHUB_STEP_SUMMARY", None)
+        env.pop("RUNNER_TEMP", None)
         for k in ("MOCK_AZ_HOOK_ON", "MOCK_AZ_HOOK_CMD", "MOCK_AZ_HOOK_ONCE", "MOCK_AZ_HOOK_WHEN",
-                  "MOCK_AZ_FAIL_UPLOADS_AFTER", "MOCK_AZ_UPLOAD_COUNTER", "MOCK_AZ_SHOW_FAILS"):
+                  "MOCK_AZ_FAIL_UPLOADS_AFTER", "MOCK_AZ_UPLOAD_COUNTER", "MOCK_AZ_SHOW_FAILS",
+                  "MOCK_AZ_EAT_STDIN"):
             env.pop(k, None)
-        env.update({k: str(v) for k, v in (env_extra or {}).items()})
+        for k, v in (env_extra or {}).items():
+            if v is None:
+                env.pop(k, None)
+            else:
+                env[k] = str(v)
         return subprocess.run(
             ["bash", str(self.script), str(bake.dir), SOURCE, bake.source_sha],
             capture_output=True, text=True, env=env,
@@ -432,16 +501,13 @@ class Harness:
 
     def publish_command(self, bake: Bake, publisher: str, run_id: str,
                         env_extra: dict | None = None) -> str:
-        """The same publication, as a shell command a stub hook can run mid-upload."""
-        assigns = {
-            "PATH": f"{self.bin}:$PATH",
-            "MOCK_AZ_ROOT": str(self.shelf_root),
-            "MOCK_AZ_SHOW_QUERY": SHOW_QUERY,
-            "BAKE_PUBLISH_TARGETS": TARGET,
+        """The same publication, as a shell command a backend hook can run mid-upload."""
+        assigns = {"PATH": f"{self.bin}:$PATH"}
+        assigns.update(self.base_env())
+        assigns.update({
             "GITHUB_REPOSITORY": publisher,
             "GITHUB_RUN_ID": run_id,
-            "GITHUB_RUN_ATTEMPT": "1",
-        }
+        })
         assigns.update({k: str(v) for k, v in (env_extra or {}).items()})
         prefix = " ".join(f'{k}="{v}"' for k, v in assigns.items())
         return (f'{prefix} bash "{self.script}" "{bake.dir}" {SOURCE} {bake.source_sha}'
@@ -477,42 +543,111 @@ def denominator(shelf: Shelf) -> str:
 
 
 # ────────────────────────────── the cases ──────────────────────────────
-def check_query_fidelity(script: Path) -> None:
-    """The one thing the stub cannot prove: how the REAL cli renders this script's read-back query.
+def script_code_lines(script: Path) -> str:
+    """The script minus its comments — the launch storm is named in a comment as history."""
+    return "\n".join(l for l in script.read_text().splitlines() if not l.lstrip().startswith("#"))
 
-    knack.output.format_tsv does `result if isinstance(result, list) else [result]` and then dumps
-    each element as a ROW. So a flat two-element list is two LINES, and only a list-of-one-list is
-    one row of two tab-separated columns. Asserted here with the engine azure-cli itself uses.
+
+def check_helper_shape(script: Path, h: "Harness") -> None:
+    """Pin the two things the fake cannot stand in for: the helper's rendering, and the real SDK.
+
+    The bash parse asserts a FIELD COUNT on every row and reads `-` as "no stamp"; a rendering
+    change on the helper's side is therefore a fleet-wide false verdict unless it is pinned here.
+    And the fake backend never imports the SDK, so `sdk-check` — the same call the script makes
+    after its pinned install — is run against the real one: a moved client surface goes red in
+    this harness instead of in a production publish.
     """
-    print("\nquery fidelity (the stub cannot prove this; the real jmespath engine can):")
-    text = script.read_text()
-    check("the script asks for exactly the query this harness models",
-          SHOW_QUERY in text, f"{SHOW_QUERY!r}")
+    print("\nthe bulk helper (the fake cannot prove these; the helper and the real SDK can):")
+    code = script_code_lines(script)
+    check("the script publishes and reads back through publish-bake-files.py",
+          "publish-bake-files.py" in code and code.count('"$PYTHON" "$HELPER"') >= 4,
+          "upload, verify, stamp and sdk-check are all routed through the helper")
+    check("the script no longer launches a CLI process per file",
+          "az storage file show" not in code and "--metadata" not in code,
+          "no `az storage file show`, no stamped `az storage file upload` outside comments")
+    pins = re.search(r'SDK_PINS=\((.*?)\)', code)
+    check("the script pins the SDK it installs", bool(pins) and "==" in (pins.group(1) if pins else ""),
+          pins.group(1) if pins else "no SDK_PINS=( … ) in the script")
+    if pins:
+        pin_list = " ".join(p.strip('"') for p in pins.group(1).split())
+        r = subprocess.run([sys.executable, str(HELPER), "sdk-check", "--pins", pin_list],
+                           capture_output=True, text=True)
+        check("sdk-check passes against the REAL, pinned SDK (clients construct, no network)",
+              r.returncode == 0 and "token_intent=backup" in r.stderr,
+              f"rc={r.returncode}: {(r.stderr or r.stdout).strip().splitlines()[-1:] }")
 
-    rows = jmespath.compile(SHOW_QUERY).search(
-        {"name": "a.zip", "metadata": {"digest": "abc", "publication": "Systemorph-MW-1-1"}})
-    check("the query yields ONE row of TWO columns, not two rows",
-          isinstance(rows, list) and len(rows) == 1
-          and isinstance(rows[0], list) and len(rows[0]) == 2,
-          f"jmespath -> {rows!r}; knack would render {chr(9).join(rows[0])!r} on one line"
-          if isinstance(rows, list) and rows and isinstance(rows[0], list) else f"jmespath -> {rows!r}")
-
-    # A null field renders as the literal string 'None' unless it is guarded, and 'None' is not
-    # empty — so the script's fail-closed "no digest recorded" branch would never fire.
-    for label, doc in (("no metadata key", {"name": "a.zip"}),
-                       ("empty metadata", {"name": "a.zip", "metadata": {}}),
-                       ("null metadata", {"name": "a.zip", "metadata": None})):
-        got = jmespath.compile(SHOW_QUERY).search(doc)
-        check(f"an absent value is rendered '-' rather than a null ({label})",
-              got == [["-", "-"]], f"jmespath -> {got!r}")
+    # The rendering, pinned by running the helper against the fake: four states of one shelf.
+    h.reset()
+    shelf = h.shelf_root / ACCOUNT / SHARE / DEST
+    meta = h.shelf_root / ".meta" / ACCOUNT / SHARE / DEST
+    (shelf / "modules").mkdir(parents=True)
+    meta.mkdir(parents=True)
+    (shelf / "stamped.zip").write_bytes(b"12345")
+    (meta / "stamped.zip.json").write_text(json.dumps({"digest": "d1", "publication": "P-1-1"}))
+    (shelf / "unstamped.zip").write_bytes(b"")
+    (meta / "unstamped.zip.json").write_text(json.dumps({}))
+    (shelf / "modules" / "half.nupkg").write_bytes(b"xy")
+    (meta / "modules").mkdir()
+    (meta / "modules" / "half.nupkg.json").write_text(json.dumps({"digest": "", "publication": "P-2-1"}))
+    (shelf / "stray.zip").write_bytes(b"not in the manifest")
+    manifest = h.work / "shape-manifest"
+    manifest.write_text("stamped.zip\td1\nunstamped.zip\td2\nmodules/half.nupkg\td3\n"
+                        "missing.zip\td4\nbroken.zip\td5\n")
+    (shelf / "broken.zip").write_bytes(b"?")
+    env = dict(os.environ, **h.base_env(), MOCK_AZ_SHOW_FAILS="broken.zip")
+    r = subprocess.run([sys.executable, str(HELPER), "verify", "--account", ACCOUNT, "--share", SHARE,
+                        "--dest", DEST, "--manifest", str(manifest)],
+                       capture_output=True, text=True, env=env)
+    rows = [l.split("\t") for l in r.stdout.splitlines() if l]
+    check("verify answers ONE row per manifest line, in manifest order, and exits 0",
+          r.returncode == 0 and [row[0] for row in rows] == [
+              f"{DEST}/stamped.zip", f"{DEST}/unstamped.zip", f"{DEST}/modules/half.nupkg",
+              f"{DEST}/missing.zip", f"{DEST}/broken.zip"],
+          f"rc={r.returncode}, rows={[row[0] for row in rows]}")
+    check("every row has exactly FIVE tab-separated fields",
+          bool(rows) and all(len(row) == 5 for row in rows),
+          f"field counts {[len(row) for row in rows]}")
+    by_name = {row[0].rsplit("/", 1)[-1]: row for row in rows}
+    check("a stamped file reads ok with both stamps and its length",
+          by_name.get("stamped.zip") == [f"{DEST}/stamped.zip", "ok", "d1", "P-1-1", "5"],
+          repr(by_name.get("stamped.zip")))
+    check("an absent stamp renders '-' — never empty, never 'None'",
+          by_name.get("unstamped.zip", [None] * 5)[1:4] == ["ok", "-", "-"]
+          and by_name.get("half.nupkg", [None] * 5)[1:4] == ["ok", "-", "P-2-1"],
+          f"{by_name.get('unstamped.zip')!r} / {by_name.get('half.nupkg')!r}")
+    check("a file the listing does not contain is 'absent', not 'no digest'",
+          by_name.get("missing.zip") == [f"{DEST}/missing.zip", "absent", "-", "-", "-"],
+          repr(by_name.get("missing.zip")))
+    check("a file whose read FAILS is 'error', named on stderr, and the sweep still completes",
+          by_name.get("broken.zip") == [f"{DEST}/broken.zip", "error", "-", "-", "-"]
+          and "::error::" in r.stderr and "broken.zip" in r.stderr,
+          repr(by_name.get("broken.zip")))
+    check("the sweep names its cost and its denominator",
+          re.search(r"verified 5 file\(s\) under .* in [0-9.]+s: 3 read, 1 absent, 1 unreadable "
+                    r"\(5 listed in 2 listing call\(s\)", r.stderr) is not None,
+          next((l for l in r.stderr.splitlines() if l.startswith("verified ")), "<no 'verified' line>"))
+    check("a file on the shelf that is not in the publication is noted, not read",
+          "stray.zip" in r.stderr and not any(row[0].endswith("stray.zip") for row in rows))
+    r = subprocess.run([sys.executable, str(HELPER), "stamp", "--account", ACCOUNT, "--share", SHARE,
+                        "--path", f"{DEST}/stamped.zip"], capture_output=True, text=True, env=env)
+    check("stamp answers the same row shape for one file",
+          r.returncode == 0 and r.stdout.strip().split("\t") == [f"{DEST}/stamped.zip", "ok", "d1", "P-1-1", "5"],
+          repr(r.stdout.strip()))
+    # An EMPTY manifest must not verify nothing and exit 0.
+    empty = h.work / "empty-manifest"
+    empty.write_text("\n")
+    r = subprocess.run([sys.executable, str(HELPER), "verify", "--account", ACCOUNT, "--share", SHARE,
+                        "--dest", DEST, "--manifest", str(empty)], capture_output=True, text=True, env=env)
+    check("an empty manifest is refused, never verified into a green",
+          r.returncode != 0 and "EMPTY" in r.stderr, f"rc={r.returncode}")
 
 
 def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
-    # The pre-fix script reads nothing back, so it has no query to be faithful about. Every OTHER
-    # run asserts it — including `--script` pointed at a copy of the current one.
-    if not expect_defect:
-        check_query_fidelity(script)
     h = Harness(script, work)
+    # The pre-fix script has no helper to be faithful about. Every OTHER run asserts it —
+    # including `--script` pointed at a copy of the current one.
+    if not expect_defect:
+        check_helper_shape(script, h)
     core = Bake(work, "core-cd", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     sat = Bake(work, "satellite", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
@@ -528,7 +663,29 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
           len(s.files()) > 0 and set(s.bakes_present()) - {"<marker>"} == {"core-cd"},
           denominator(s))
 
+    if not expect_defect:
+        check("…and it was one upload process and one read-back process, not one per file",
+              r.stderr.count("uploaded ") == 2 and r.stderr.count("verified ") == 1
+              and f"uploaded {EXPECTED_FILES} file(s)" in r.stderr and "one process" in r.stderr,
+              "one `uploaded N file(s)` line for the publication, one for the sentinel, one sweep")
+
+    # ── CONTROL 1b: the same publication with the DEFAULT pool width (the production shape). ───
+    # Every other case runs the pool one wide so the hooks are deterministic; this one exercises
+    # the parallel path the fleet actually runs, on a fresh shelf with nothing to interleave.
+    h.reset()
+    started = time.monotonic()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1002", {"PUBLISH_BAKE_UPLOAD_WORKERS": None})
+    s = h.shelf()
+    if not expect_defect:
+        check("a settled publication with the default (parallel) pool seals and verifies every file",
+              r.returncode == 0 and s.sealed() and len(s.files()) == EXPECTED_FILES
+              and f"{EXPECTED_FILES}/{EXPECTED_FILES} file(s) hold this run's bytes" in r.stdout
+              and "12 worker(s)" in r.stderr,
+              f"rc={r.returncode}, {denominator(s)}, {time.monotonic() - started:.1f}s")
+
     # ── CONTROL 2: a second publication of DIFFERENT content reseals cleanly. ──────────────────
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "1001")
     r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "2001")
     s = h.shelf()
     check("a republication of new content reseals",
@@ -961,6 +1118,13 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               and "could not be read back" in r.stdout, f"rc={r.returncode}, {denominator(s)}")
         check("an undecidable verdict does NOT remove a sentinel",
               f"removed {DEST}/{SENTINEL}" not in r.stdout)
+        # #3731: the refusal lists what the directory actually holds, from inside the job. The
+        # listing is a CLI call after the bulk sweep, so it is a second witness with a second
+        # client — asserted so the diagnostic cannot rot into its own "the listing itself failed".
+        check("the refusal lists what the directory holds (#3731), and the listing succeeded",
+              f"what {TARGET}/{DEST} holds now" in r.stdout
+              and f"{BUNDLES[0]}\t" in r.stdout and "the listing itself failed" not in r.stdout,
+              "the diagnostic group names the refused file with its byte count")
 
     # ── UNSTAMPED: a publisher that writes no digest is not one of ours. ───────────────────────
     print("\nan incumbent written by a publisher that stamps no digest:")
@@ -997,7 +1161,8 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               "expected/verified are both printed")
 
     # ── The read-back loop is fed by a redirect. A command inside it that ate stdin would end it
-    # ── early, and a verification covering a PREFIX would report no foreign bytes and SEAL.
+    # ── early, and a verification covering a PREFIX would report no foreign bytes and SEAL. The
+    # ── helper runs OUTSIDE that loop now; this keeps the case honest if it is ever moved back.
     print("\nthe read-back loop cannot be truncated by something eating its stdin:")
     h.reset()
     r = h.publish(core, "Systemorph/MeshWeaver", "1701", {"MOCK_AZ_EAT_STDIN": "1"})

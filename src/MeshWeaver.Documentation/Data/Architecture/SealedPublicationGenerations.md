@@ -397,13 +397,23 @@ was ever visible instead of silently shipping a mixed set.
   job — the postcondition covering it is unchanged. What the flip buys immediately is that the
   *publication* survives an overlap intact and pointed-to instead of being lost. The reds go when the
   flat copy does (phase 5), or when the publication moves to digest-addressed artifacts.
+- **What the postcondition costs in TIME, and the 2026-09-08 change to it.** The sweep used to be
+  one `az storage file show` process per file on top of one `az storage file upload` process per
+  file — **184 CLI launches for two targets**, 5–10 minutes of every bake. It is now one process per
+  phase per target on the Azure SDK (`publish-bake-files.py`), with the verdict logic untouched;
+  the table and the measurement are in
+  [Sealed Publication Reads](../SealedPublicationReads) → "What the postcondition costs". This
+  changes the *duration* of the in-place window (the interval between the last verification read
+  and the seal, and the interval a sibling can overwrite inside), not its existence — the layout
+  above is still what closes it.
 - The reds the postcondition produces are the correct number and must not be loosened away — see
   [Sealed Publication Reads](../SealedPublicationReads) → "What is NOT closed".
 
 ## Verification
 
-- `.github/scripts/test-publish-bake-overlap.py` — **67 assertions**, executing the REAL publish
-  script against a stub share and reading every verdict off the BYTES. The writer half is covered by
+- `.github/scripts/test-publish-bake-overlap.py` — **82 assertions**, executing the REAL publish
+  script against a stub share (the stub `az` for the per-target decisions, a fake share backend for
+  the bulk helper's uploads and read-back) and reading every verdict off the BYTES. The writer half is covered by
   five generation cases: one publisher writes and seals under its own token and the pointer names it;
   **two interleaved publishers each seal their OWN generation, neither directory holds a byte of the
   other, both are complete, and `_current` names exactly one of them**; "already published" is

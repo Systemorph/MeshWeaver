@@ -3,6 +3,7 @@
     <ProjectGuid>{99c0d432-37b8-4c2c-92a5-1b0d980b7480}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Reactive.Testing" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
   </ItemGroup>
 </Project>

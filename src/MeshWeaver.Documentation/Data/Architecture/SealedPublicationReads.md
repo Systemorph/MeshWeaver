@@ -218,6 +218,46 @@ asymmetry: whoever stamps *last* re-reads its own marker and seals happily over 
 The loser detects the winner; the winner detects nothing. No arrangement of a single marker fixes
 that, because a marker records who wrote last, not whose bytes are on the shelf.
 
+### What the postcondition costs — one process per phase, not one per file
+
+Every file is read back, never a sample — a sample is a guard that passes on the files nobody
+overwrote. What changed on 2026-09-08 is how that is paid. Until then the script published with one
+`az storage file upload` **process per file** and verified with one `az storage file show` process
+per file: for the ~46-file publication the lanes produce that was **184 CLI launches for two
+targets**, each paying the CLI's start-up, a token lookup and a fresh connection for one request, at
+1–3 s apiece — so "Publish bundles to every portal target" took **5–10 minutes** of a bake whose
+compile is ~7. The maintainer's directive, after asking why the bake queue ran so slowly: *"how many
+are there? this must be one bulk query"*.
+
+It is now `publish-bake-files.py` beside the script, **one process per phase per target** on the
+Azure SDK with the same CLI identity (`AzureCliCredential` + `token_intent=backup`, the SDK's form of
+`--auth-mode login --backup-intent`):
+
+| phase | before | after |
+|---|---|---|
+| upload | 46 processes per target, sequential | 1 process: parent directories ensured, then every file through a 12-wide thread pool, stamped `digest` + `publication` |
+| read-back | 46 processes per target, sequential | 1 process: the destination and `modules/` **listed once**, then every manifest file's properties over one connection pool, one TSV row per file |
+| seal | 1 process | 1 process (a one-line plan through the same uploader) |
+| per target | ~93 launches | 3 launches + a handful of `az` decisions (sentinel present? marker content?) |
+
+🚨 **The listing cannot carry the stamps.** Azure Files' *List Directories and Files* returns names
+and sizes, never metadata, so the per-file `get_file_properties` inside one process **is** the bulk
+read; the helper prints `verified N file(s) … in S s (L listed in K listing call(s))` so the cost
+stays measured rather than assumed. The verdict logic did not move: bash still sorts every row into
+*ours* / *neutral* / *foreign* / *unreadable*, asserts the denominator, and refuses exactly as above
+— only the **input source** of the sweep changed. A row is five tab-separated fields (path, state,
+digest, publication, length) with `-` for an absent stamp and `absent` / `error` as states in their
+own right, so a transient fault can never read as "no digest recorded"; the parse asserts the field
+count and refuses on any other shape. The SDK is installed **by the script**, pinned, followed by
+`sdk-check` as the positive signal — a satellite fetches the script at `platform-ref` and runs the
+lane at its `uses:` pin, and the two move independently, so a workflow-side install would leave the
+newer script without its dependency.
+
+Measured locally against the overlap harness's fake share: the whole suite — about twenty-five full
+publications (upload, read-back, seal, plus `sdk-check` each, the generation-layout cases writing
+two directories apiece) — in 25 s wall; under a second per publication, where the CLI shape spent
+minutes per target.
+
 ### Superseded is not always a failure — the convergence verdict
 
 🚨 **The postcondition and the sealed-skip answer the same question and used to disagree,
@@ -383,7 +423,13 @@ the pin is removed:
 - `.github/scripts/test-publish-bake-overlap.py` — runs the REAL `publish-bake-bundles.sh` **twice,
   interleaved**, against a stub share, and reads the verdict off the BYTES rather than off the
   script's own log: each fixture bundle names the bake that produced it, so "the sealed directory
-  holds two bakes" is a fact about the shelf. **47 assertions over eleven cases** — three controls
+  holds two bakes" is a fact about the shelf. Both I/O edges are substituted over ONE filesystem
+  share — the stub `az` on PATH for the per-target decisions, and a fake share backend the bulk
+  helper loads from `PUBLISH_BAKE_FAKE_SHARE_BACKEND` for the uploads and the read-back — with the
+  upload pool one wide so the second-publisher hooks fire at a named file; one control runs the
+  default (parallel) pool. The helper's row rendering is pinned by running the helper itself, and
+  `sdk-check` runs against the REAL pinned SDK. **82 assertions** (the generation-layout cases
+  included — see [Sealed Publication Generations](../SealedPublicationGenerations)) — three controls
   that must PASS (settled publish, republish of new content, already-published skip), the other lane
   in flight, the other lane completing inside a gap, a full supersession, an unreadable read-back, an
   unstamped incumbent, two concurrent runs of ONE repo, and the three convergence arms (a sibling
