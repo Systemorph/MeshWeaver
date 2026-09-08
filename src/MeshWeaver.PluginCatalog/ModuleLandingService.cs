@@ -226,12 +226,18 @@ public sealed class ModuleLandingService : IDisposable
         // the 2026-08-27 outage from the other side. Both retained sets count (the one the mesh is
         // on and the one it has proposed), and a set directory that cannot be read counts as a read
         // fault for the same fail-closed reason the entries do.
+        // 🚨 #3675: a record that could not be READ is a fault; a sequence that two replicas
+        // proposed is a NOTICE — decided deterministically, nothing lost. The store used to deliver
+        // both through one callback, so a single duplicate pair on the volume made this pass fail
+        // closed forever (memex-cloud, 2026-09-08: 100 such sequences, 687 records, 843 generation
+        // directories, never one reclaimed). Only the fault channel counts here.
         var setIndex = ModuleSetStore.Read(baseDirectory,
-            msg =>
+            onCorrupt: msg =>
             {
                 readFaults++;
                 logger?.LogError("{Message}", msg);
-            });
+            },
+            onNotice: msg => logger?.LogInformation("Modules GC: {Message}", msg));
         foreach (var generation in ModuleSetStore.ReferencedGenerations(setIndex))
             referenced.Add(generation);
         // Superseded set records are housekeeping like the rest of this pass — and only ever below
@@ -277,10 +283,10 @@ public sealed class ModuleLandingService : IDisposable
             {
                 if (!reportedUnreliable)
                     logger?.LogWarning(
-                        "Modules GC: {Faults} activation entry file(s) could not be read, so the "
-                        + "reference set is incomplete — SKIPPING every generation delete this pass "
-                        + "(unreadable is never unreferenced, #2509). A later pass re-reads and "
-                        + "sweeps.", readFaults);
+                        "Modules GC: {Faults} activation entry or set record file(s) could not be "
+                        + "read, so the reference set is incomplete — SKIPPING every generation "
+                        + "delete this pass (unreadable is never unreferenced, #2509). A later pass "
+                        + "re-reads and sweeps.", readFaults);
                 reportedUnreliable = true;
                 continue;
             }

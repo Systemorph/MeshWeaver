@@ -234,8 +234,31 @@ public static class ModuleSetStore
     /// conflict report likewise names only the sequences that were actually decided on.</para>
     /// </summary>
     /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under.</param>
-    /// <param name="onCorrupt">The loud channel — one call per record that could not be read.</param>
-    public static ModuleSetIndex Read(string baseDirectory, Action<string>? onCorrupt = null)
+    /// <param name="onCorrupt">The loud channel — one call per record that could not be read. This
+    /// overload also routes the duplicate-proposal NOTICE here, which is what every caller saw
+    /// before #3675; a caller that must tell the two apart passes <c>onNotice</c> on the
+    /// three-argument overload.</param>
+    public static ModuleSetIndex Read(string baseDirectory, Action<string>? onCorrupt = null) =>
+        Read(baseDirectory, onCorrupt, onNotice: onCorrupt);
+
+    /// <summary>
+    /// <see cref="Read(string, Action{string})"/> with the NOTICE channel separate from the FAULT
+    /// channel (#3675). "Sequence N was proposed by more than one replica" is a decided outcome —
+    /// the ordinally smallest id wins, every reader picks the same one, nothing is lost — and not a
+    /// record that could not be read. Delivering it through <paramref name="onCorrupt"/> made the
+    /// modules GC count it as a read fault and fail closed on EVERY pass for as long as one such pair
+    /// existed on the volume: measured on memex-cloud 2026-09-08 — 100 duplicate sequences, 687 set
+    /// records and 843 generation directories that no pass ever reclaimed, and a <c>/health</c>
+    /// probe reading all 687 records in 9–10 s on Azure Files (over its 5 s timeout), which is what
+    /// kept every new pod from passing its startup probe.
+    /// </summary>
+    /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under.</param>
+    /// <param name="onCorrupt">The loud channel — one call per record (or the directory) that could
+    /// not be read. A caller that fails closed on incomplete knowledge counts THESE.</param>
+    /// <param name="onNotice">The informational channel — one call per sequence that more than one
+    /// replica proposed, naming the winner. Never a reason to distrust the index.</param>
+    public static ModuleSetIndex Read(
+        string baseDirectory, Action<string>? onCorrupt, Action<string>? onNotice)
     {
         var directory = SetsDirectory(baseDirectory);
         string[] files;
@@ -371,7 +394,7 @@ public static class ModuleSetStore
             .OrderBy(x => x)
             .ToImmutableList();
         foreach (var sequence in conflicts)
-            onCorrupt?.Invoke(
+            onNotice?.Invoke(
                 $"Module set sequence {sequence} was proposed by more than one replica — the "
                 + $"ordinally smallest id wins ('{WinnerAt(proposals, sequence)!.Id}'), and the next landing "
                 + "wave folds every landing back in. No module is lost; the mesh runs one set.");
@@ -530,7 +553,7 @@ public static class ModuleSetStore
     /// while a wave's landings wait to be proposed, so that generation is unreferenced by the
     /// entries alone — and GC would reclaim the very bytes every replica is running.</para>
     /// </summary>
-    /// <param name="index">The set index, as <see cref="Read"/> answered it.</param>
+    /// <param name="index">The set index, as <see cref="Read(string, Action{string})"/> answered it.</param>
     public static IReadOnlySet<string> ReferencedGenerations(ModuleSetIndex? index)
     {
         var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -572,7 +595,7 @@ public static class ModuleSetStore
     /// <summary>
     /// Removes set records the mesh has moved past — everything below <paramref name="keepFrom"/>.
     /// One tiny file per record, but a deployment that lands weekly for a year accumulates
-    /// hundreds, and <see cref="Read"/> is on the BOOT path.
+    /// hundreds, and <see cref="Read(string, Action{string})"/> is on the BOOT path.
     ///
     /// <para>🚨 A record below the CURRENT set references generations nothing the mesh runs
     /// resolves against — and a process still on one of them loaded from its own pinned copy
