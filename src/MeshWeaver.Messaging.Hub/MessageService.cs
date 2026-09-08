@@ -352,8 +352,11 @@ public class MessageService : IMessageService
                         // The old comment claimed this preserved FIFO. It only did so against
                         // messages arriving AFTER the open — the easy half.
                         logger.LogDebug("Draining deferred queue to the front of the main queue for hub {Address}", Address);
+                        int drainedDeferred, drainedBehind;
                         lock (turnGate)
                         {
+                            drainedDeferred = deferredQueue.Count;
+                            drainedBehind = mainQueue.Count;
                             if (deferredQueue.Count > 0)
                             {
                                 // Rebuild as deferred-then-waiting. Both runs keep their own order,
@@ -368,6 +371,14 @@ public class MessageService : IMessageService
                                     mainQueue.Enqueue(reordered.Dequeue());
                             }
                         }
+                        // 🚨 The RESTORE point, stamped (Plugins#1394). This is where total arrival
+                        // order is supposed to be re-established, so a reorder investigation needs
+                        // to know it happened at all, and what it moved: `deferred=0` here means
+                        // there was nothing to restore, which — paired with a delivery whose fate
+                        // says it WAS deferred — proves the deferral landed after this drain and
+                        // has to wait for a later one. That pairing is not derivable from either
+                        // stamp alone, and it is the discrimination the permutations turn on.
+                        MessageTrace.Write($"hub={Address} GATE_DRAIN gate={name} deferred={drainedDeferred} behind={drainedBehind}");
                         // Gate opened + drained — the hub is no longer stuck, so re-arm the one-shot
                         // gate-stuck logger for any future episode.
                         Interlocked.Exchange(ref _deferralOverflowLogged, 0);
@@ -1105,9 +1116,24 @@ public class MessageService : IMessageService
 
         // Always buffer to the main buffer - deferral logic will be handled in NotifyAsync
         // based on whether the message is actually targeted at this hub
-        EnqueueTurn(() => NotifyAsync(delivery, cancellationToken));
+        //
+        // 🚨 The DEPTH is recorded, not just the fact (Plugins#1394). A hub has TWO queues —
+        // mainQueue and deferredQueue — and a delivery moves between them at TURN time, so
+        // "which queue was it in, and how many turns were ahead of it" is the only thing that
+        // reconstructs a total order after the fact. Without the depth the trail says a message
+        // was enqueued and processed, and a reorder between two deliveries is indistinguishable
+        // from a reorder between two queues. See ProcessDeferredMessage / OpenGate for the
+        // matching stamps: every transition a delivery can make now carries both depths.
+        var mainDepthAtEnqueue = EnqueueTurn(() => NotifyAsync(delivery, cancellationToken));
         MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} ENQUEUED");
+        // 🚨 The stage token stays EXACTLY "ENQUEUED" — it is a matched CONTRACT, not a log line.
+        // Stages render as `{stage}@{hub}`, and two suites wait on that literal substring
+        // (DisposalRaceNackTest, SubscribeDuringRecycleTest: `trail.Contains($"ENQUEUED@{addr}")`).
+        // Appending detail inside the token deletes `ENQUEUED@…` and their precondition wait never
+        // fires — measured 0/5 on DisposalRaceNackTest, 5/5 once the token was restored. So the
+        // depth goes in its OWN stage, which is additive and cannot break a `Contains` matcher.
         fate?.Add("ENQUEUED", Address);
+        fate?.Add($"QUEUED queue=main depth={mainDepthAtEnqueue}", Address);
 
         return delivery.Forwarded();
     }
@@ -1118,10 +1144,24 @@ public class MessageService : IMessageService
     // the hub's configured scheduler) and awaited before the next is scheduled —
     // strict FIFO, MaxDegreeOfParallelism=1. A handler that Posts to its own hub
     // enqueues behind the current turn; shutdown re-queues the same way.
-    private void EnqueueTurn(Func<IObservable<IMessageDelivery>> turn)
+    /// <returns>
+    /// The depth of <c>mainQueue</c> AFTER this turn was appended — i.e. this turn's 1-based
+    /// position in the queue at the moment it joined it. Read under the same <c>turnGate</c> that
+    /// performs the enqueue, so the number is the queue's actual state at that instant rather than
+    /// a racy re-read. Recorded on the delivery's fate trail (Plugins#1394): a reorder can only be
+    /// attributed once you know which queue each delivery entered and how many turns were ahead of
+    /// it, and this hub has two queues that deliveries move between at turn time.
+    /// </returns>
+    private int EnqueueTurn(Func<IObservable<IMessageDelivery>> turn)
     {
-        lock (turnGate) mainQueue.Enqueue(turn);
+        int depth;
+        lock (turnGate)
+        {
+            mainQueue.Enqueue(turn);
+            depth = mainQueue.Count;
+        }
         KickDrain();
+        return depth;
     }
 
     private void KickDrain()
@@ -1440,11 +1480,29 @@ public class MessageService : IMessageService
                             }
                             logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
                                 delivery.Message.GetType().Name, delivery.Id, Address);
-                            MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DEFERRED gates=[{string.Join(",", gates.Keys)}]");
-                            fate?.Add($"DEFERRED gates=[{string.Join(",", gates.Keys)}]", Address);
+                            // 🚨 Both depths, captured in the SAME turnGate as the enqueue
+                            // (Plugins#1394). This is the moment a delivery LEAVES mainQueue for
+                            // deferredQueue, and it is the only place the two queues can be
+                            // observed together. `mainDepth` is what was still waiting behind this
+                            // delivery when it stepped out of line — the messages that can now
+                            // overtake it — and `deferredDepth` is its position among the parked.
+                            // A trail with only "DEFERRED" cannot distinguish a delivery that was
+                            // parked in front of an empty queue from one parked in front of two
+                            // messages that then ran, which is exactly the discrimination the
+                            // B,A,C / B,C,A / C,A,B permutations need.
+                            int mainDepthAtDefer, deferredPosition;
                             ScheduleDeferralTimeout(delivery);
                             lock (turnGate)
+                            {
                                 deferredQueue.Enqueue(() => ProcessDeferredMessage(delivery, cancellationToken));
+                                deferredPosition = deferredQueue.Count;
+                                mainDepthAtDefer = mainQueue.Count;
+                            }
+                            MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} DEFERRED gates=[{string.Join(",", gates.Keys)}] deferredPos={deferredPosition} mainBehind={mainDepthAtDefer}");
+                            // Existing token verbatim (RequestFateLedger matches StartsWith("DEFERRED")),
+                            // then the depths as a separate additive stage — see the ENQUEUED note above.
+                            fate?.Add($"DEFERRED gates=[{string.Join(",", gates.Keys)}]", Address);
+                            fate?.Add($"QUEUED queue=deferred pos={deferredPosition} mainBehind={mainDepthAtDefer}", Address);
                             return Observable.Return(delivery.Forwarded());
                         }
                     }
@@ -1591,7 +1649,13 @@ public class MessageService : IMessageService
             return Observable.Return(delivery.Ignored());
         }
 
+        // 🚨 Paired with the DEFERRED stamp's `mainBehind` (Plugins#1394): comparing the two says
+        // whether the messages that were queued behind this delivery when it stepped out of line
+        // are still waiting, or already ran. Same-turn depth, read under turnGate.
+        int mainDepthAtDrain;
+        lock (turnGate) mainDepthAtDrain = mainQueue.Count;
         requestFates?.Find(delivery.Id)?.Add("DEFERRED_DRAINED", Address);
+        requestFates?.Find(delivery.Id)?.Add($"QUEUED queue=main depth={mainDepthAtDrain}", Address);
 
         logger.LogDebug("Processing deferred message {MessageType} (ID: {MessageId}) in {Address}",
             delivery.Message.GetType().Name, delivery.Id, Address);
