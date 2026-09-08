@@ -55,6 +55,16 @@ tried, the module "contributed nothing", and every skinned control on the portal
 its fallback HTML. The probe was not the gap; the fallback order was, and this section is what
 closes it.
 
+🚨 **This is the CONSUMER half, and it masks the producer's defect rather than removing it.** A
+portal that falls back to the image copy renders correctly while its publication still carries two
+builds of one assembly name, so *"does it render"* is not evidence a bundle is clean. The producer
+half — a module bundle never carrying a `MeshWeaver.*` copy the platform already ships, measured off
+the image rather than declared in a list — is
+[The Platform-Shipped Witness](../PlatformShippedWitness), and it probes the same two locations
+`MeshBuilder.ResolveModulePath` does, on purpose. Two things this fallback cannot reach: a riding
+copy that *does* load shadows the image copy, so the fallback never runs; and the sealed-set
+conflict below still HOLDS the roll for the whole fleet whatever one process does at boot.
+
 ## What the platform roll gates on
 
 The self-updater and the CD post-promote gate select **the newest release on which no installed module is unloadable**. Concretely, per installed package: a build published for the target identity exists (it will be adopted), *or* the landed generation links against the target's surface, *or* neither can be shown — which is reported as *indeterminate*, never as clearance and never as a hold. Declared floors do not enter. A missing content bake does not enter (it is reported as "would compile at boot: …"). The sealed-set consistency check (#3175/#3221) stays: two builds of one platform assembly in one identity is a torn publication, and torn publications are refused whole.

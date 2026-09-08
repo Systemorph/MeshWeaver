@@ -66,6 +66,25 @@ public sealed record PlatformShippedAssembly(string Name, PlatformShipping How, 
 ///     witness that reads only <c>/app</c> answers "not shipped" for every seeded module.</item>
 /// </list>
 ///
+/// <para>🚨 <b>Readings (1) and (3) are the RUNTIME's own two probe locations, in the runtime's own
+/// order</b> — <c>MeshBuilder.ResolveModulePath</c> tries <c>&lt;app&gt;/modules/&lt;name&gt;/&lt;name&gt;.dll</c>
+/// and then <c>&lt;app&gt;/&lt;name&gt;.dll</c>. So "the platform ships this" means here exactly what it
+/// means to the loader that will bind it, and #3735/#3748's image-baseline fallback resolves a
+/// module through that same call. The correspondence is pinned by
+/// <c>PlatformShippedAssembliesTest.TheWitnessProbesTheSamePlacesTheRuntimeResolverDoes</c> rather
+/// than left to coincidence: if the resolver ever grows a third location, that guard goes red here.
+/// Reading (2) has no runtime counterpart by design — it is a compile-time fact about the host, and
+/// a manifest name is in the app closure by construction.</para>
+///
+/// <para>🚨 <b>#3748 recovers from this condition; it does not remove it — and it MASKS the
+/// symptom.</b> When no landed generation of a module loads, the portal now falls back to the
+/// image-shipped copy, so a portal can render correctly while its publication still carries two
+/// builds of one name. Never read "the controls render" as evidence a bundle is clean. Two things
+/// the fallback cannot reach: a riding copy that DOES load shadows the image copy and the fallback
+/// never runs; and <c>PublishedBundleCatalogue</c>'s two-builds conflict still answers
+/// <c>SealedSetInconsistent</c>, which HOLDS the roll for the whole fleet regardless of what any
+/// one process does at boot.</para>
+///
 /// <para><b>It refuses rather than answering nothing.</b> A directory with no surface manifest and
 /// no <c>MeshWeaver.*</c> assembly at its root is not a platform application directory, and
 /// answering "ships nothing" for one would make every caller's strip a no-op that reads exactly

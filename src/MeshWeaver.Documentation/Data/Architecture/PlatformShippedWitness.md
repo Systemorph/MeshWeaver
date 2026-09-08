@@ -76,6 +76,41 @@ seeded module, which is precisely the 27 slots above.
 returns each name with the **provenance and the evidence path** that answered, so a strip decision
 in a pack log names a file rather than an opinion.
 
+### Readings 1 and 3 are the LOADER's own two probe locations
+
+This is not a parallel definition of "the platform ships it" — it is the runtime's.
+`MeshBuilder.ResolveModulePath` answers *where does this deployment's copy of module X live* by
+probing `<app>/modules/<name>/<name>.dll` first and `<app>/<name>.dll` second, which are readings
+(3) and (1) in the resolver's own order. So the packer that strips a riding copy and the loader that
+would otherwise have had to choose between two of them mean the same thing by the same test — and it
+is the very call [#3735/#3748's image-baseline fallback](../ModuleAdoptionPolicy) resolves through.
+
+`PlatformShippedAssembliesTest.TheWitnessProbesTheSamePlacesTheRuntimeResolverDoes` pins the
+correspondence: a resolver that grows a third probe location, or reorders the two, fails there and
+names the reading the witness is missing. Reading (2) has no runtime counterpart by design — it is a
+compile-time fact about the host, and a manifest name is in the app closure by construction.
+
+### 🚨 #3748 recovers from this condition; it does not remove it — and it masks the symptom
+
+The image-baseline fallback (#3735, merged as #3748) makes a portal *survive* the condition: when no
+landed generation of a module loads, it falls back to the copy the image ships, and the module runs.
+That is the right behaviour and it is why memex.systemorph.com's controls render again.
+
+**It does not make shipping two builds correct, and three things follow:**
+
+* **"Does it render" is never the test for this defect.** A portal can render perfectly while its
+  publication still carries two builds of one assembly name. Every assertion here is on the
+  bundle's own bytes — the manifest's declared closure and the archive's entries — which is upstream
+  of the load side entirely.
+* **The fallback only fires when NOTHING loads.** A riding copy that *does* load shadows the image
+  copy, wins the process by arrival order, and the fallback never runs. That is the case the strip
+  prevents, and it is the common one.
+* **The roll is still held.** `PublishedBundleCatalogue`'s two-builds conflict answers
+  `SealedSetInconsistent` for every package binding the name, and `ReleaseAvailability.IsUpdatable`
+  turns that into a HOLD for the whole fleet — independent of what any single process does at boot.
+  #3748 touches neither type. See [Module-Owned Siblings Ride](../ModuleOwnedSiblingsRide) → "The
+  invariant that replaces it".
+
 ### It refuses rather than answering nothing
 
 A directory with no surface manifest and no `MeshWeaver.*` assembly at its root is **not** a platform
