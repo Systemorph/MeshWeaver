@@ -1322,6 +1322,59 @@ public sealed class MessageHub : IMessageHub
     /// hub-impersonation), and any post made from the Subscribe callback inherits the wrong
     /// identity — surfaces as <c>Access denied: user '&lt;cell-hub-path&gt;' lacks ...</c>.
     /// </summary>
+    /// <summary>
+    /// Restores the fault boundary the action block used to provide, now that the continuation no
+    /// longer runs on it.
+    ///
+    /// <para>🚨 <b>This is not a swallow — it is where a continuation fault went BEFORE the hop.</b>
+    /// A subscriber's exception used to be thrown inside <c>HandleMessageAsync</c>'s chain, on the
+    /// block, where <c>MessageService</c>'s catch arm logged it and called <c>ReportFailure</c>: a
+    /// reported failure, never a crash. Off the block there is nothing above it — Rx rethrows on the
+    /// scheduler thread, it is unhandled, and the PROCESS dies. Measured on #3759's first CI runs:
+    /// <c>Memex.Portal.Shared.Test</c> ran 1156 tests with ZERO failures and the host then exited 2,
+    /// with 7 <c>[FATAL ERROR]</c>s. So this restores the previous disposition of the exception; it
+    /// does not decide a new one.</para>
+    ///
+    /// <para>The dominant case is a continuation that outlives its hub: it resolves a service from a
+    /// scope that teardown has already disposed. That is a RACE, not a defect — the same shape
+    /// <c>LayoutAreaHost</c> already reports as "render raced a hub disposal — transient" — so it is
+    /// logged at Debug once this hub is shutting down and as an error while it is still serving,
+    /// where it means real application code threw.</para>
+    /// </summary>
+    /// <param name="source">The response observable, already hopped off the block.</param>
+    /// <returns>The same sequence, with observer faults routed instead of escaping.</returns>
+    private IObservable<IMessageDelivery> GuardContinuationFaults(IObservable<IMessageDelivery> source)
+        => Observable.Create<IMessageDelivery>(observer => source.Subscribe(
+            value => Guarded(() => observer.OnNext(value)),
+            error => Guarded(() => observer.OnError(error)),
+            () => Guarded(observer.OnCompleted)));
+
+    /// <summary>Runs one observer callback, routing anything it throws. See
+    /// <see cref="GuardContinuationFaults"/> for why this is the block's boundary and not a
+    /// swallow.</summary>
+    /// <param name="deliver">The observer callback to run.</param>
+    private void Guarded(Action deliver)
+    {
+        try
+        {
+            deliver();
+        }
+        catch (Exception ex)
+        {
+            if (RunLevel >= MessageHubRunLevel.ShutDown)
+                logger.LogDebug(ex,
+                    "{Address}: a response continuation raced this hub's teardown — transient. The "
+                    + "continuation runs off the action block, so it can outlive the scope it "
+                    + "resolves from; the caller's subscription is already going away.", Address);
+            else
+                logger.LogError(ex,
+                    "{Address}: a response continuation threw. It runs off the action block, so "
+                    + "this did not fault a turn — it would otherwise have gone unhandled on a "
+                    + "scheduler thread and killed the process. The throw is in the code that "
+                    + "subscribed to hub.Observe(...), not in the hub.", Address);
+        }
+    }
+
     private IObservable<IMessageDelivery> ContinueOffBlockRestoringUserContext(
         IObservable<IMessageDelivery> source, AccessContext? capturedCtx)
     {
@@ -1345,7 +1398,7 @@ public sealed class MessageHub : IMessageHub
         //
         // The hop is placed BEFORE the identity restore below on purpose: `.Do(SetContext)` must
         // run on the thread that will run the continuation, or the chain resumes unauthenticated.
-        source = source.ObserveOn(System.Reactive.Concurrency.DefaultScheduler.Instance);
+        source = GuardContinuationFaults(source.ObserveOn(PooledContinuationScheduler.Instance));
 
         if (capturedCtx is null)
             return source;
