@@ -18,6 +18,17 @@ the roll when the answer was no. It nonetheless let the fleet roll onto releases
 content was not baked, and it did so while reporting a clean pass. This page is why, and what the
 rule is now.
 
+> 🚨 **What the denominator DECIDES changed in MeshWeaver#3651; what it SEES did not.** Since the
+> maintainer's rule of 2026-09-07 (the Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`)) a course with
+> no bake for the target is a **cost the verdict names** — *"would recompile at boot on …:
+> AgenticPrimer, …"* (`UpdatabilityVerdict.BootCompiles`) — and the roll proceeds; the compile is
+> the code path every pull request of that content already proved green, and holding on it is what
+> would have kept every portal on the morning build a second day. The hold survives only under the
+> opt-in `Modules:RequirePrebuilt`, where the seeder refuses a boot compile and the type would park.
+> Everything below about *where the expected set comes from* is unchanged and still load-bearing:
+> a denominator that erodes names nothing, and "0 expected, 0 named" is the same vacuity whether the
+> verdict then holds or proceeds.
+
 ## A completeness gate is only as good as its denominator
 
 Every completeness check is a comparison of two sets: what was **expected**, and what was
@@ -168,12 +179,12 @@ and one module-only package that has never produced a bundle.
 Both denominators are computed **on the same fixture, in the same test**, so the negative control
 is a measurement rather than a claim:
 
-| Denominator | Verdict | Blockers |
-|---|---|---|
-| **Old** — sealed under the live identity | `IsUpdatable = true` — the roll proceeds | 0 |
-| **New** — ever sealed under any identity | `IsUpdatable = false` | 9, each `ContentBakeMissing`, naming the nine courses |
-| **New**, after Education re-bakes for the target | `IsUpdatable = true` | 0, over 13 content-bearing of 14 installed |
-| **New**, Education seals 4 of 9 | `IsUpdatable = false` | 5 — exactly the unsealed courses |
+| Denominator | Verdict (default) | Named as the boot compile | Under `Modules:RequirePrebuilt` |
+|---|---|---|---|
+| **Old** — sealed under the live identity | `IsUpdatable = true` — the roll proceeds **saying nothing** | 0 | proceeds, saying nothing |
+| **New** — ever sealed under any identity | `IsUpdatable = true` — proceeds | 9, each `ContentBakeMissing` + `IsAdvisory`, naming the nine courses | `IsUpdatable = false`, 9 blockers |
+| **New**, after Education re-bakes for the target | `IsUpdatable = true` | 0, over 13 content-bearing of 14 installed | proceeds |
+| **New**, Education seals 4 of 9 | `IsUpdatable = true` | 5 — exactly the unsealed courses | 5 blockers |
 
 A sixth test pins the declaration reading from both sides: a publication that keeps its seal but
 loses a bundle's bytes still counts toward the denominator, while the same source contributes
@@ -189,15 +200,16 @@ Naming the blind spot is worth more than overclaiming the coverage.
   it is the only thing standing between this gate and a permanently frozen environment — but it
   means a package whose bake has been broken *since before this root ever published* is invisible
   here. The bake lane, not the roll gate, is where that is caught.
-- 🚨 **A package that legitimately STOPS shipping content will hold, and keep holding.** Monotone
-  cuts both ways: once a package has sealed a bundle, dropping its last NodeType means it produces
-  no bundle for the target identity and the gate reads that as the regression it is designed to
-  catch. Uninstalling the package clears it (the outer set is the environment's install records,
-  so a removed package leaves the denominator with it); re-baking does not. This is a deliberate
+- 🚨 **A package that legitimately STOPS shipping content will be NAMED as a boot compile on every
+  verdict, and keep being named.** Monotone cuts both ways: once a package has sealed a bundle,
+  dropping its last NodeType means it produces no bundle for the target identity and the gate reads
+  that as the regression it is designed to catch. Uninstalling the package clears it (the outer set
+  is the environment's install records, so a removed package leaves the denominator with it);
+  re-baking does not. Under `Modules:RequirePrebuilt` that naming is a hold. This is a deliberate
   trade against the erosion bug, and the direction is chosen on purpose: the old failure was
   **silent** — rolling onto content that was not there — while this one is **loud**, named on the
-  policy node, and re-evaluated every tick. A gate that is visibly wrong can be acted on; one that
-  is invisibly wrong cannot.
+  policy node and the Updates tab, and re-evaluated every tick. A gate that is visibly wrong can be
+  acted on; one that is invisibly wrong cannot.
 - **It gates the ROLL, not the BAKE.** It cannot make a bake complete; it can only refuse to roll
   onto an incomplete one. A satellite whose bake is torn still publishes nothing and still needs
   fixing at the source.
@@ -222,4 +234,5 @@ Naming the blind spot is worth more than overclaiming the coverage.
 - [Reading CI Signals](../ReadingCiSignals) — the same vacuity trap on the CI side
 - [Roll Selection](../RollSelection) — the same vacuity trap one level up, where an empty
   denominator would make every release complete and turn the selector back into "take the newest"
+- The Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`, MeshWeaver#3652) — why a missing bake is a cost and not a hold
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — the publication this gate reads

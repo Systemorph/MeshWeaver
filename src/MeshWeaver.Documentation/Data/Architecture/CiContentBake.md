@@ -46,6 +46,11 @@ persists:
   **dependency record**, which the consumer validates against ITS environment before adopting and
   stamps on adopt) plus each compiled assembly and its symbols;
 - `framework-mvid.txt` — the framework identity every bundle in the directory is keyed to.
+- `platform-surface.json` — the platform's TYPE SURFACE (MeshWeaver#3651): every assembly the bake
+  compiled against and the full type names each exports, keyed to the same identity. The bake runs
+  inside the platform image, so it is the one process that can write what that platform carries;
+  the release gate reads it back to link an instance's landed modules against a release that is not
+  running anywhere it can reach — see [The Module Platform Link Gate](/Doc/Architecture/ModulePlatformLinkGate).
 
 Only types that reached `CompilationStatus.Ok` contribute. A type the gate's known-debt allowlist
 tolerates simply has no entry — the consumer compiles it as it would have anyway. A type that
@@ -654,8 +659,8 @@ lose that. `PlatformBakeLaneGuard` pins both halves — `--bake-output` (the mes
 banned in that job, `--seed` is required, and the bake must come first. The job then copies the
 resulting bundles to the portals'
 shared storage (`.github/scripts/publish-bake-bundles.sh`), laid out
-`prebuilt-bundles/<identity>/<source>/<bundle>.zip`, sealed by a `_complete` sentinel written
-strictly LAST. Each booting pod seeds ONLY its own identity's SEALED source directories
+`prebuilt-bundles/<identity>/<source>/<bundle>.zip` with `platform-surface.json` beside them,
+sealed by a `_complete` sentinel written strictly LAST. Each booting pod seeds ONLY its own identity's SEALED source directories
 (`ShippedPrebuiltBundles.SeedPublishedRoot`, config `PreWarm:PrebuiltBundleRoot`) before its
 sweep — an unsealed or torn publication (a publish that died mid-way) is refused loudly and the
 sweep compiles instead. "Rebuild only when we need to" applies to the publish too: when the

@@ -116,7 +116,7 @@ A safe target clears all three of these, each **measured**, none inferable from 
 |---|---|---|
 | 1 | It carries the code fix you need | **By ancestry** — is the fix's merge commit an ancestor of the tag's build commit? Tag ordering is not ancestry, and a higher `ci.<N>` is not evidence |
 | 2 | `memex-migration` exists at the **same** tag | `helm-release.yml`'s own `--set` block insists on it, in its own words: *a migration from a different build than the code that will run against it is how a schema lands half-applied* |
-| 3 | `Plugins: bake + seal the publication for this identity` is **GREEN** on that tag's CD run | The seal is what publishes the plugin modules for the platform identity. Its absence is invisible in the registry |
+| 3 | `Plugins: bake + seal the publication for this identity` is **GREEN** on that tag's CD run | The seal is what publishes the plugin modules for the platform identity — the builds the roll adopts — and, since MeshWeaver#3651, the `platform-surface.json` the release gate links every *other* landed module against. Its absence is invisible in the registry. (An unsealed **content** bake is no longer a reason the gate holds: the instance compiles at boot and the tab says so — but a seal that is missing its *module* builds leaves the instance on its landed generations, and whether those load is what the surface decides) |
 
 Condition 3 is the one that gets skipped, because two other checks sound like it and are green
 without it. On 2026-09-03, CD runs `33746020109` (`ci.7669`) and `33749847612` (`ci.7674`) both

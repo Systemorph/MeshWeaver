@@ -53,16 +53,30 @@ passed between workflows, or a rebuilt `bin/`. The registry is where a release b
 exists for anyone other than the run that produced it — one credential model, one entitlement
 check, one set of bytes. See [Plugin Registry](../PluginRegistry).
 
-## "Available" has exactly two forms
+## 🚨 What holds a roll: a module that provably cannot load there — and nothing declared
 
-| Kind | Gate | Why this one |
+> **Maintainer, 2026-09-07** (the Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`), implemented by
+> MeshWeaver#3648 and MeshWeaver#3651): *if no plugin version is shipped, we use the old one. We
+> make it load despite a newer dependency on the platform or on another module. As soon as a new
+> module version ships, we start using it.*
+
+On that day every production portal sat on its morning build (`3.0.0-ci.8009`) for the whole day.
+Two rules held it, one after the other, and both were about something *declared* rather than
+*measured*: the installed modules' `minMeshVersion` floors declined all eleven candidates ("77
+plugins required … every one declined"), and behind them the satellites' bakes for the new identity
+did not exist yet — although a boot compile of those courses succeeds on every pull request and every
+candidate would have loaded. The predicate is now:
+
+| Lane | What decides | What is reported, never decided |
 |---|---|---|
-| **Content package** | a SEALED bake under the target's framework identity — `prebuilt-bundles/<identity>/<source>/` with its `_complete` sentinel | Absent, the instance Roslyn-compiles that content at boot: the regression the [CI content bake](../CiContentBake) exists to prevent, and a type that fails to compile parks its hub for the whole activation budget |
-| **Compiled module** | its `MinMeshVersion` FLOOR, satisfied by the target version | A module binds by simple name and its contract is API compatibility, so the floor expresses it. MVID has been diagnostic-only for modules since the bundle lane landed — see [Modules](../Modules) |
+| **Compiled module** | **Measured.** A module the target publishes a build of will be adopted at the roll — nothing to check. A module with no such build keeps its LANDED generation across the roll, so that generation's bytes are linked against the target's type surface — `platform-surface.json`, written by the bake inside the target image, read by [the link gate](../ModulePlatformLinkGate). **`Unlinkable` ⇒ `ModuleUnloadable`, THE hold**, naming the module and the missing type | `Linkable` clears. `Indeterminate` — no surface published, unreadable bytes — is an advisory: *"whether its landed module … loads could not be determined"*. The declared `MinMeshVersion` floor is an advisory too (MeshWeaver#3648) |
+| **Content package** | Nothing, by default. A missing sealed bake under the target's identity means the instance Roslyn-compiles that content at boot — the same code path every pull request of it already proved green | `ContentBakeMissing` is a COST: *"would recompile at boot on …: education, crm"* (`UpdatabilityVerdict.BootCompiles`). `Modules:RequirePrebuilt` — the opt-in strict mode in which the seeder refuses a boot compile — keeps it the hold it used to be |
+| **The sealed SET** | Still a hold: two builds of one module under one identity, or a bundle built against a build the identity does not carry (`SealedSetInconsistent`, MeshWeaver#3175). A torn publication is refused whole | — |
 
 The strict-MVID rule stays where it belongs, on content bundles, in
 `PrebuiltAssemblySeeder.DeclineReason`. Applying it to modules would forbid every ex-post Store
-install across platform versions.
+install across platform versions — and the roll gate does not apply it to modules either: it asks
+whether the *bytes* link, which is the question MVID equality only approximates.
 
 ## The release marker — how a release's identity becomes knowable at all
 
@@ -93,37 +107,48 @@ Two properties are load-bearing:
 
 > 🚨 "Cannot determine" is not "clear to proceed."
 
-`PackageAvailabilityKind` keeps the three answers apart on purpose:
+`PackageAvailabilityKind` keeps the answers apart on purpose:
 
-- `ContentBakeMissing` / `ModuleFloorExceedsTarget` — we looked, and this package cannot survive the
-  release. Actionable: re-bake, or fix the floor.
-- `Indeterminate` — we could **not** look: the catalogue was unreachable, or the release has no
-  resolvable identity. An availability failure is never dressed up as a compatibility verdict; an
-  operator must be able to tell an outage from an incompatible release.
+- `ModuleUnloadable` / `SealedSetInconsistent` — we looked, and this package cannot survive the
+  release. Actionable: publish a build of the module for this platform (or uninstall it); re-seal
+  the torn set.
+- `ContentBakeMissing` — we looked, and the instance will compile this package at boot. A cost the
+  verdict names (`PackageAvailability.IsAdvisory`), not a hold — except under
+  `Modules:RequirePrebuilt`, where it is one.
+- `ModuleFloorExceedsTarget` — retired (MeshWeaver#3648). Nothing produces it; the declared floor
+  is an advisory line beside the verdict.
+- `Indeterminate` — we could **not** look at the STORE: the catalogue was unreachable, or the
+  release has no resolvable identity. An availability failure is never dressed up as a
+  compatibility verdict; an operator must be able to tell an outage from an incompatible release.
+  🚨 The one indeterminate that does NOT hold is the *link check's* own — a release with no
+  `platform-surface.json` is a publication that predates MeshWeaver#3651, and holding every roll on
+  it would freeze the fleet exactly as the floors did. It is reported on the advisories instead.
 - `UpdatabilityVerdict.NotEnforced` — the gate does not **apply**: this deployment consumes no CI
   bakes at all, so it already compiles at every boot and holding it could only freeze it forever.
   Deliberately not the same as passing — it carries a reason the caller logs and surfaces, so
   "nothing is gating this environment" is visible rather than inferred from a green tick.
 
-## Both halves are REGRESSION checks, not absolute ones
+## Both halves ask "would this roll take away something that works today"
 
 A gate that holds an environment forever is a worse outage than the one it prevents. So neither
-half asks "is this package perfect for the target"; both ask "would this roll take away something
-that works today".
+half asks "is this package perfect for the target"; both ask whether the roll would take away
+something that works today — and since MeshWeaver#3651 only the module half can answer "yes".
 
 - **Content**: a package is treated as content-bearing exactly when it has **ever** been sealed
   under **any** framework identity the published root holds. A package with no compilable NodeTypes
-  produces no bundle ever, so demanding one would hold its environment forever — but the evidence
-  must not come from the artifact store the gate is about to judge. 🚨 It once did (it asked the
-  identity running *now*), and that made the denominator erode exactly where the gate was needed:
-  a package whose bake broke left the set of packages the gate asks about, so every later roll was
-  green about precisely the package that had regressed. See
-  [The Release Gate's Denominator](../ReleaseGateDenominator).
-- **Modules**: a floor is passed to the predicate only when the running platform already satisfies
-  it. SemVer puts `3.0.0-rc4.ci.4049` **below** `3.0.0`, so a module declaring `minMeshVersion:
-  3.0.0` is below floor on every `-rc` platform, including the one prod runs. Judged absolutely it
-  would block every release; judged as a regression it fires exactly where it should — on a
-  rollback below a module's declared floor.
+  produces no bundle ever, so naming one would be a lie — but the evidence must not come from the
+  artifact store the gate is about to judge. 🚨 It once did (it asked the identity running *now*),
+  and that made the denominator erode exactly where the gate was needed: a package whose bake broke
+  left the set of packages the gate asks about, so every later roll was silent about precisely the
+  package that had regressed. See [The Release Gate's Denominator](../ReleaseGateDenominator). What
+  the denominator produces is the **named cost** on every verdict; what it used to produce was the
+  hold, which `Modules:RequirePrebuilt` alone still asks for.
+- **Modules**: the landed generation is linked against the target's published surface. A module
+  that links keeps working; a module the target publishes a build of will be adopted; a module that
+  does not link would throw `TypeLoadException` on its first render there — *that* is the roll
+  taking away something that works today, and it is the one thing this gate holds on. The declared
+  floor is not consulted: SemVer puts `3.0.0-ci.8009` **below** `3.0.0-rc8`, so every `rc` floor
+  held every `ci` candidate on 2026-09-07 while every one of them would have loaded (MeshWeaver#3648).
 
 ## The verdict as a service
 
@@ -138,14 +163,24 @@ Authorization: Bearer mwi_…
 
 ```json
 {
-  "version": "3.0.0-rc4.ci.4049",
+  "version": "3.0.0-ci.8100",
   "isUpdatable": false,
   "enforced": true,
   "indeterminate": false,
-  "holdReason": "Store: no sealed content bake for framework identity s3779… …",
-  "packages": [ { "package": "Store", "status": "ContentBakeMissing", "reason": "…" } ]
+  "holdReason": "SocialMedia: its landed module MeshWeaver.Social cannot load on 3.0.0-ci.8100 (framework identity s5b8b…): … references MeshWeaver.Mesh.CodeOutputCurrency (MeshWeaver.Mesh.Contract), which the target does not carry …",
+  "advisories": [ "would recompile at boot on 3.0.0-ci.8100 (no sealed content bake for framework identity s5b8b…): AgenticPrimer, Crm" ],
+  "bootCompiles": [ "AgenticPrimer", "Crm" ],
+  "packages": [
+    { "package": "SocialMedia", "status": "ModuleUnloadable", "reason": "…", "advisory": false },
+    { "package": "AgenticPrimer", "status": "ContentBakeMissing", "reason": "…", "advisory": true }
+  ]
 }
 ```
+
+`advisory: true` marks a status that names a cost the roll accepts rather than a hold;
+`advisories` and `bootCompiles` carry what the verdict said without deciding on it
+(MeshWeaver#3651), and the roll-target endpoint carries the same two fields for the release it
+selected.
 
 Auth is the instance key — the same `mwi_` gate as the bundle routes, failing closed, because the
 response is deployment inventory.
@@ -180,7 +215,12 @@ and a user already look at:
   build must not look like one that is about to take it.
 - **Updates tab** (platform admin): the held tag, the reason naming the package, and when it was
   held — plus a different sentence when the hold is `Indeterminate`, because "we could not check"
-  and "this package cannot survive the release" have different fixes.
+  and "this package cannot survive the release" have different fixes. And, held or not, **what
+  the gate reported about the tag without holding it** (`Admin/UpdatePolicy` → `AdvisoriesTag` /
+  `Advisories`, MeshWeaver#3651): the packages the roll recompiles at boot, a landed module whose
+  loadability there could not be measured, a declared floor the target does not rank above. A roll
+  that compiles content at boot is a state an operator can see on the tab, not a fact that lives
+  only in a pod log.
 
 ### The hold is re-evaluated every tick, never persisted as a decision
 
@@ -580,4 +620,6 @@ pinned by SHA, so nothing changes for a repo until it bumps.
 - [CI Content Bake](../CiContentBake) — where the sealed bundles and the framework identity come from
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — the publication this gate reads
 - [Release & Self-Update Strategy](../ReleaseStrategy) — the poll, the policy node, the roll
-- [Modules](../Modules) — the `MinMeshVersion` floor and why modules are not MVID-gated
+- The Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`, MeshWeaver#3652) — the rule: run the newest thing that loads, keep what you have until then, never let a string decide
+- [The Module Platform Link Gate](../ModulePlatformLinkGate) — the measurement, and the surface document that lets the roll gate make it
+- [Modules](../Modules) — the `MinMeshVersion` floor (advisory since MeshWeaver#3648) and why modules are not MVID-gated
