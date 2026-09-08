@@ -116,9 +116,12 @@ FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
   (`var require = { paths: { vs: … } }`) and never resolves it. Measured either side of the filter —
   `MeshWeaver.Blazor`'s manifest carries 122 BlazorMonaco assets on `main` and 1 after; a minimal
   app publishes 366 files under `_content/BlazorMonaco` without it and 3 with it — and then measured
-  again on the shipped image and on the wire, 2026-09-08, below. Read the general rule
-  the other way round too: **a bundle a page stops loading does not leave the origin**, so an
-  inventory taken from `App.razor` is not an inventory of what is served.
+  again on the shipped image and on the wire, 2026-09-08, below. 🚨 **That verification stops at the
+  asset boundary**: it proves the retired files are neither published nor served and that every file
+  the editor loads still answers 200, but nothing in either repository drives the editor's JavaScript,
+  so a dead editor is not something a green build or that measurement would have caught. Read the
+  general rule the other way round too: **a bundle a page stops loading does not leave the origin**,
+  so an inventory taken from `App.razor` is not an inventory of what is served.
 
 ## Findings by release
 
