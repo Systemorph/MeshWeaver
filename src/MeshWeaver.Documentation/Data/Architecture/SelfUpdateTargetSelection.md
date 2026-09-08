@@ -7,6 +7,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Self-Update Target Selection
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** The floor table below stops mattering: `ModulePlatformFloor.DeclineReason` becomes advisory at every runtime decision point, and "declared floors are not going away, so do not design as if they were" is superseded — they stay as pack-time authoring lint only. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) lands; this page is rewritten by that change.
+
 **A version string is a LABEL a human maintains. The CD run number is the ORDER a machine
 produced. The self-updater must rank candidates by the second, because the first can be wrong —
 and when it is wrong, SemVer makes the mistake permanent.**

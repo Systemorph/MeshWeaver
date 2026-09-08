@@ -8,6 +8,8 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # Release Availability Gates
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** The module floor is no longer a release gate, as a regression check or otherwise; a missing content bake is reported as a boot compile, not held; the only module-lane hold is measured loadability on the target. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+
 A release is not safe to act on just because its version is newer. Two questions have the same
 answer, and until they were asked, both were answered by hand:
 

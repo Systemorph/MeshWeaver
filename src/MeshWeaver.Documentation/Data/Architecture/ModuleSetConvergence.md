@@ -5,6 +5,8 @@ Description: One module set per mesh at a time — how a landing wave proposes t
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><path d="M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M19.1 4.9l-2.8 2.8M7.7 16.3l-2.8 2.8"/></svg>
 ---
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A HELD module is no longer skipped at boot by a floor; the set records the generation that actually loaded, including a fallback to the previous one. The mechanism described below is what runs until [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649) lands; this page is rewritten by that change.
+
 Replicas of one deployment used to run **different module sets**, indefinitely, and nothing made
 them converge. This page is the design that ends it: a mesh runs **one module set at a time**, a
 landing wave is what moves it, and boot adopts what the mesh declares instead of reading a record
