@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using MeshWeaver.Compiler;
+using MeshWeaver.Mesh;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -27,6 +28,17 @@ public class PlatformShippedAssembliesTest : IDisposable
         {
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
+            // The resolver-agreement guard seeds a probe under the TEST HOST's own base directory —
+            // the one directory MeshBuilder.ResolveModulePath treats as "the app" — so it is removed
+            // here rather than left behind for the next run's witness to read as a shipped module.
+            // 🚨 The probe's own folder ONLY. An empty `modules/` beside the app is inert (the
+            // witness enumerates its subdirectories and finds none, the resolver falls through to
+            // the app closure), and deleting it would delete a layout a build may legitimately have
+            // produced — the module-closure lane writes exactly that folder for a real host.
+            var probe = Path.Combine(
+                AppContext.BaseDirectory, PlatformShippedAssemblies.SeededModulesFolder, ProbeName);
+            if (Directory.Exists(probe))
+                Directory.Delete(probe, recursive: true);
         }
         catch
         {
@@ -159,6 +171,60 @@ public class PlatformShippedAssembliesTest : IDisposable
         Assert.Null(shipped);
         Assert.Contains("does not exist", problem!, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// 🚨 <b>THE WITNESS AND THE LOADER PROBE THE SAME TWO PLACES, IN THE SAME ORDER — pinned, not
+    /// assumed.</b> <c>MeshBuilder.ResolveModulePath</c> is the runtime's own answer to "where does
+    /// this deployment's copy of module X live": <c>&lt;app&gt;/modules/&lt;name&gt;/&lt;name&gt;.dll</c>
+    /// first, then <c>&lt;app&gt;/&lt;name&gt;.dll</c>. Those are readings (3) and (1) of the witness,
+    /// which is what makes "the platform ships this" mean the same thing to the packer that strips a
+    /// riding copy and to the loader that would have had to choose between two of them — and it is
+    /// the very call #3735/#3748's image-baseline fallback resolves through.
+    ///
+    /// <para>Without this guard the agreement is a coincidence of two files written days apart. With
+    /// it, a resolver that grows a third probe location — or reorders the two — fails HERE, naming
+    /// the reading the witness is missing, instead of silently letting a bundle carry a copy of
+    /// something the loader would have found on its own.</para>
+    ///
+    /// <para>Run against <see cref="AppContext.BaseDirectory"/>, because that is the one directory
+    /// the resolver treats as "the app" — it reads it from <c>AppContext</c>, not from an argument.
+    /// The probe name is unique to this test so a parallel class cannot collide with it, and the
+    /// seeded folder is removed in <see cref="Dispose"/>.</para>
+    /// </summary>
+    [Fact]
+    public void TheWitnessProbesTheSamePlacesTheRuntimeResolverDoes()
+    {
+        var app = AppContext.BaseDirectory;
+        var entry = ProbeName + ".dll";
+
+        // (1) the app closure — the resolver's LAST resort, and what it returns when nothing is
+        //     seeded. The witness records exactly this path as ApplicationClosure evidence.
+        Assert.Equal(
+            Path.Combine(app, entry),
+            MeshBuilder.ResolveModulePath(entry));
+
+        // (3) the seeded-module lane — the resolver's FIRST choice once the file is there, and the
+        //     path the witness records as SeededModule evidence.
+        var seeded = Path.Combine(app, PlatformShippedAssemblies.SeededModulesFolder, ProbeName);
+        Directory.CreateDirectory(seeded);
+        File.WriteAllText(Path.Combine(seeded, entry), "probe");
+        Assert.Equal(
+            Path.Combine(seeded, entry),
+            MeshBuilder.ResolveModulePath(entry));
+
+        // And the witness reads that very file, at that very path, as the reason the name is shipped.
+        var (shipped, problem) = PlatformShippedAssemblies.Read(app);
+        Assert.Null(problem);
+        Assert.True(shipped!.ContainsKey(ProbeName),
+            "the witness must see what the resolver just resolved — otherwise a bundle would carry a "
+            + "copy of an assembly the loader finds on its own");
+        Assert.Equal(PlatformShipping.SeededModule, shipped[ProbeName].How);
+        Assert.Equal(MeshBuilder.ResolveModulePath(entry), shipped[ProbeName].Evidence);
+    }
+
+    /// <summary>A name no real assembly carries, so the probe cannot collide with a parallel test
+    /// class or with anything the test host genuinely ships.</summary>
+    private const string ProbeName = "MeshWeaver.ResolverAgreementProbe";
 
     [Theory]
     [InlineData("MeshWeaver", true)]
