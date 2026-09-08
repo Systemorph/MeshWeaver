@@ -75,8 +75,24 @@ namespace MeshWeaver.Graph.Test;
 /// lost those two seconds (run 33847949620). That force-teardown no longer exists: a hub whose turn
 /// is parked stays honestly pending and reports the turn (<c>DisposalStallWatchdogTest</c>). So the
 /// parked turn here is what accepted work is supposed to be — it observes the owner's
-/// <c>IsShuttingDown</c> and finishes its job — and the assertion bound is now well inside the
-/// 8 s stall budget, which is also what proves no watchdog took part.</para>
+/// <c>IsShuttingDown</c> and finishes its job.</para>
+///
+/// <para><b>🚨 Why the assertion waits for the owner to be Dead instead of budgeting the
+/// verdict.</b> The successor to that 10 s bound was a flat 6 s from <c>Mesh.Dispose()</c>, and it
+/// repeated the same error one layer up: it raced the OWNER'S WHOLE TEARDOWN, which the framework
+/// deliberately does not bound. Measured in MeshWeaver.Plugins CI (run 34195323935, 2026-09-08):
+/// the test timed out with not one framework warning in the window — no
+/// <c>LATE_NACK_REENQUEUE</c>, no "reached no route", no <c>VERDICT_EXPIRED</c>, no
+/// <c>QUIESCE-WAIT</c>, no <c>DISPOSE-WEDGE</c>, and the memory watchdog ticking on schedule.
+/// Nothing had gone wrong; the owner had simply not reached its ShutDown phase yet, and nothing
+/// promised it would. <c>DisposeHubsReactive</c> dropped its flat <c>Timeout(5s)</c> in #1317
+/// because "a join must not out-run the answers it is joining", and the stall detector that
+/// replaced it re-arms on any progress — so a large teardown that keeps moving has no duration
+/// bound at all. The assertion is now CAUSAL: <c>RunLevel == Dead</c> is set strictly after
+/// <c>DisposeImpl()</c> has run the disposal registrants, so it is the exact instant at which
+/// "the owner has had its chance to answer" becomes true. With the #2778 defect present the owner
+/// reaches Dead just as fast with the watch still armed, so the test fails SOONER than the 6 s
+/// version did, and for the right reason. See Doc/Architecture/TeardownVerdictsAreCausal.</para>
 /// </summary>
 public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -153,7 +169,15 @@ public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
             await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .Where(_ => registry.ArmedCount > 0)
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-            Output.WriteLine($"[fence] caller is armed on the late watch (ArmedCount={registry.ArmedCount})");
+            // 🚨 The watch this test is about is THIS ONE, named. `ArmedCount` is the whole
+            // registry, and the framework legitimately arms a SECOND entry microseconds after the
+            // first is consumed: dispatching the NACK runs the caller's LATE_NACK_REENQUEUE, which
+            // posts a fresh PatchDataRequest and arms a watch for it. So "the count is back to
+            // zero" is not the fact this test wants and cannot even be relied on to occur — it
+            // held only because that re-attempt is refused quickly. `ArmedRequestIds` exists for
+            // exactly this (see its remarks); the id is the correlation the NACK has to land on.
+            var armedId = registry.ArmedRequestIds.Single();
+            Output.WriteLine($"[fence] caller is armed on the late watch (request={armedId})");
 
             // 🚨 The scenario. Dispose the MESH, not the node hub: the owner's disposal action then
             // runs with its parent already past DisposeHostedHubs — the exact window in which the
@@ -161,23 +185,76 @@ public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
             Mesh.Dispose();
             Output.WriteLine("[dispose] mesh disposal invoked — parent is past DisposeHostedHubs");
 
-            // 🚨 The assertion: the armed watch is CONSUMED. Dispatch removes the entry, so
-            // ArmedCount returning to zero is the observable fact "the owner's verdict reached the
-            // waiter". The bound is deliberately far below LateResponseWatchBound (30 s), because
-            // an entry that merely EXPIRES would also end at zero — waiting that long is
-            // indistinguishable from the defect, so a generous bound would pass on it. It is ALSO
-            // below the 8 s disposal stall budget: the verdict has to come from the ordinary
-            // teardown, never from a stall verdict on a parked hub.
-            await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-                .Where(_ => registry.ArmedCount == 0)
-                .FirstAsync().Timeout(6.Seconds()).Await(ct);
+            // 🚨 Wait for the OWNER to be terminally down — the causal precondition — and only
+            // then assert. This is NOT a duration budget for the verdict, and that distinction is
+            // the whole point.
+            //
+            // <para>The NACK is a ShutDown-phase disposal registrant, and the ordering inside
+            // <c>HandleShutdownCore</c> is fixed: <c>DisposeImpl()</c> runs
+            // <c>disposables.Dispose()</c> — which IS the registrant that mints and dispatches this
+            // verdict — strictly before <c>RunLevel = Dead</c> and <c>SignalDisposalCompleted()</c>.
+            // So <c>Dead</c> is the exact instant at which "the owner has had its chance to answer"
+            // becomes true. Reading the registry there is a decision, not a race: with the #2778
+            // defect present the owner reaches Dead just as fast and the entry is STILL armed, so
+            // this fails at the first instant rather than six seconds later.</para>
+            //
+            // <para>🚨 It replaces a flat 6 s race against the whole teardown, which is what made
+            // this test flaky in MeshWeaver.Plugins CI (run 34195323935, 2026-09-08): the failure
+            // carried a bare TimeoutException and NOT ONE framework warning — no
+            // LATE_NACK_REENQUEUE, no `reached no route`, no VERDICT_EXPIRED, no QUIESCE-WAIT, no
+            // DISPOSE-WEDGE — i.e. the owner simply had not reached ShutDown yet. Nothing promises
+            // it will. <c>DisposeHubsReactive</c> deliberately dropped its flat <c>Timeout(5s)</c>
+            // in #1317 precisely because "a join must not out-run the answers it is joining", and
+            // the disposal watchdog that replaced it is a STALL detector re-armed on any progress —
+            // so a big teardown that keeps moving is unbounded BY DESIGN. Asserting a 6 s bound on
+            // it was asserting a guarantee the framework does not make, and it is the same flat-cap
+            // mistake #1317 removed one layer down. See Doc/Architecture/TeardownVerdictsAreCausal.
+            // </para>
+            //
+            // <para>The bound below is a liveness guard on that PRECONDITION, named as such: it
+            // must leave the watch admissible (below <see cref="LatePatchResponseRegistry.LateResponseWatchBound"/>),
+            // because a question asked after the entry has expired cannot be answered either way.
+            // Derived from that constant rather than restated as a second literal
+            // (Doc/Architecture/BoundsMustBeOrdered), and it sits ABOVE the 8 s disposal stall
+            // budget on purpose: if the teardown genuinely wedges, the stall detector reaches its
+            // verdict FIRST and names the hub and the turn, and this reports that verdict instead
+            // of hiding it behind an anonymous timeout — which is what the old 6 s bound did, by
+            // firing two seconds before the detector could speak.</para>
+            //
+            // <para>🚨 It therefore FALLS BACK rather than throwing: a bare
+            // <c>TimeoutException</c> from a `.Timeout(...)` names a line number and nothing else,
+            // and that is precisely the failure this whole change exists to stop producing.</para>
+            var ownerDownBound = LatePatchResponseRegistry.LateResponseWatchBound - 10.Seconds();
+            var ownerIsDown = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Where(_ => owner.RunLevel == MessageHubRunLevel.Dead)
+                .Select(_ => true)
+                .FirstAsync()
+                .Timeout(ownerDownBound, Observable.Return(false))
+                .Await(ct);
+            ownerIsDown.Should().BeTrue(
+                $"the owner's verdict cannot be judged until the owner has finished disposing, and "
+                + $"{owner.Address} is still at RunLevel={owner.RunLevel} after "
+                + $"{ownerDownBound.TotalSeconds:F0}s. That is a WEDGED TEARDOWN, a different defect "
+                + $"from the one this test is about. Disposal stall verdicts seen so far: "
+                + (verdicts.Entries.IsEmpty ? "<none>" : string.Join(" | ", verdicts.Entries)));
+            Output.WriteLine($"[owner] {owner.Address} is Dead — its disposal registrants have run");
 
-            registry.ArmedCount.Should().Be(0,
+            registry.ArmedRequestIds.Should().NotContain(armedId,
                 "the owner minted an OwnerDisposing NACK for this patch, and a caller was armed and "
                 + "waiting for it; the verdict must reach that watch even though the parent is past "
-                + "DisposeHostedHubs. Leaving the watch armed is the #2778 defect — the caller then "
-                + "hears nothing and burns the whole 31 s verdict budget for an answer that had "
-                + "already been minted");
+                + "DisposeHostedHubs. The owner is now terminally Dead, so its ShutDown-phase "
+                + "registrant has already run — a watch still armed here is the #2778 defect, and "
+                + "the caller then hears nothing and burns the whole 31 s verdict budget for an "
+                + "answer that had already been minted");
+
+            // 🚨 CONSUMED, not merely gone. This is what the old 6 s bound was standing in for:
+            // an entry that EXPIRES also stops being armed, so "not armed" alone would pass on the
+            // defect. The registry counts that case itself (#3197 made an expired verdict a
+            // reported fact rather than silence), so the distinction is now OBSERVED instead of
+            // inferred from a stopwatch — and the observation holds however long the teardown took.
+            registry.ExpiredVerdicts.Should().Be(0,
+                "the watch must have been CONSUMED by the owner's dispatch, not have lapsed past "
+                + "LateResponseWatchBound and been reported as a verdict that arrived too late");
 
             // Diagnostics only — under a full mesh teardown the caller's own subscription is going
             // down too, so whether its callback still runs is not this test's subject (see the
