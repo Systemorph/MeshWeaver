@@ -591,6 +591,7 @@
   "ui.requiresGlobalAdmin": "Erfordert Global Admin",
   "ui.restartRequiredToActivate": "Neustart erforderlich, um dieses Paket vollständig zu aktivieren",
   "ui.moduleBuiltForNewerPlatform": "Hier nicht aktiv: Diese Version wurde für eine neuere Plattform gebaut. Sie wird aktiv, sobald diese Installation aktualisiert wird.",
+  "ui.moduleRunsPreviousVersion": "Läuft mit der vorherigen Version {0}: Version {1} ist installiert, lädt aber auf dieser Plattform nicht. Sie wird aktiv, sobald ein hier ladbarer Build erscheint.",
   "ui.moduleDeclaresNewerPlatform": "Deklariert Plattform ≥ {0}; diese Installation läuft mit {1}. Nur ein Hinweis — ob es lädt, wird gemessen, nicht deklariert.",
   "ui.orphanedInstallRecords": "Verwaiste Installationseinträge",
   "ui.requestAccess": "Zugriff anfragen",

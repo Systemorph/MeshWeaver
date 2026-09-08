@@ -79,6 +79,13 @@ public sealed record RequiredModuleVerdict(
 /// here" verdict is the measured one — the link probe's refusal, which arrives as
 /// <see cref="Mesh.IncompatibleModule"/>.</para>
 ///
+/// <para>🚨 <b>A module running its PREVIOUS generation is <see cref="RequiredModuleState.Present"/>
+/// (#3649).</b> When the generation the mesh's set activates does not load here, boot loads the
+/// previous one and records a <see cref="Mesh.FallbackModule"/> — never an
+/// <see cref="Mesh.IncompatibleModule"/>: the assembly IS loaded and its features work, so the
+/// loaded-names check answers Present and a readiness probe stays Healthy. What it is not is
+/// current, and that is the status row's business, not the probe's.</para>
+///
 /// <para>Pure and total — the caller supplies configuration, the loaded set, the activation record,
 /// the existence check and the floor's wording — so the whole contract is testable with no
 /// filesystem and no host.</para>

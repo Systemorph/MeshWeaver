@@ -232,6 +232,13 @@ public static class ModuleActivationStatus
     /// generation it loaded that module from, and the two differ. Unknown is never a mismatch — see
     /// the note on the five-argument <see cref="NotYetLoaded(ModuleActivationList, IReadOnlySet{string},
     /// IReadOnlyDictionary{string, string}, Func{string, string}, Func{ModuleActivationEntry, bool})"/>.</para>
+    ///
+    /// <para>🚨 A module running its PREVIOUS generation (#3649) is such an entry BY CONSTRUCTION:
+    /// the set activates the head generation, the loader refused it and loaded the previous one.
+    /// This derivation cannot tell that apart from an ordinary update, and does not try — the
+    /// loader's <see cref="Mesh.FallbackModule"/> records can, and
+    /// <see cref="PendingModuleActivations"/> subtracts them, so the row reads "runs the previous
+    /// generation" and never "restart required" (a restart would fall back again).</para>
     /// </summary>
     private static bool RunsAnOlderGeneration(
         ModuleActivationEntry entry,

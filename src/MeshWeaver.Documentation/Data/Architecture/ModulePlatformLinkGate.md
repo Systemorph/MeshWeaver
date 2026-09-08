@@ -149,6 +149,49 @@ host to surface, and classified `RequiredModuleState.Incompatible` so a module d
 The blast radius is the point. One module that cannot link costs **that module's contribution and
 nothing else** — never every other module, never the portal, never every render on it.
 
+### The previous generation runs when the newest cannot (MeshWeaver#3649)
+
+Refusing a generation is not the same as losing the module. Until #3649 it was, for every module
+the image did not also ship: the refused generation was the activation entry's only pointer, the
+generation that had loaded last time was unreferenced, and the next GC pass reclaimed it. A shelved
+landing built for a newer platform therefore took a working Store-only module away for good. Rule
+R1 of the [Module Adoption Policy](../ModuleAdoptionPolicy) is the opposite: **an installation runs
+the newest generation of every module that loads, and keeps the one it has until a newer one does.**
+
+- **The landing keeps what it displaces.** `ModuleLandingService.LandCore` records the entry it
+  replaces as `ModuleActivationEntry.PreviousDirectory` (with `PreviousVersion` and
+  `PreviousFrameworkMvid`). When the displaced generation is itself measured unloadable here and
+  holds a fallback of its own, that fallback carries forward — two unloadable landings in a row
+  cannot push the loadable generation out of reach. Measured on the bytes, like every other
+  decision point; there is no persisted "held" flag to go stale.
+- **The loader falls back.** Boot hands `MeshBuilder.InstallModules` a `ModuleInstallCandidate`
+  per module: the newest generation, and a *lazy* resolver for the previous one (the portal pins
+  a generation to process-local storage before loading it, and pinning every previous generation
+  up front would double that copy for a path taken only when something is wrong). When the newest
+  is refused before loading or `Assembly.LoadFrom` throws, the previous generation goes through
+  the same probe and load; when it succeeds the module is installed from it and a `FallbackModule`
+  is registered — never an `IncompatibleModule` — with one
+  `[MeshWeaver.Mesh.FallbackModule] '<name>' runs its previous generation v1.2.3 (gen A) because
+  v1.3.0 (gen B) cannot load here: …` line on stderr, re-logged as a Warning once the pipeline is
+  up. Only when neither loads is the module incompatible, exactly as before. A generation whose
+  assembly *loaded* and whose registration then threw (#2234's shape) is never swapped: two
+  assemblies of one simple name cannot coexist in the default load context.
+- **The GC keeps it.** `CollectGarbage` references `PreviousDirectory` exactly like `Directory`,
+  and the running generations the adoption records (below).
+- **The set records what runs.** The wave still proposes the head generation; the adoption
+  (`ModuleSetStore.RecordAdoption` with `RunningGenerationsOf(set, fallbacks)`) records the
+  generation each module actually loaded, `ModuleSetIndex.RunningGenerations` /
+  `FallbackGenerations` read it back, and `ModuleSetStore.Describe` names the modules that run a
+  previous generation.
+- **Uninstall clears both** pointers and deletes both directories.
+
+The fallback is **present, not incompatible**: `Modules:Required` classifies it `Present`, the
+readiness probe stays Healthy, and the package card says which version runs. It is also **not
+pending**: a restart re-measures the same bytes and falls back again, so `PendingModuleActivations`
+subtracts a fallback whose refused generation is still the one the set activates — and counts it
+pending again the moment the set moves on to a generation other than the refused one, which a
+restart genuinely tries. What makes that restart happen is MeshWeaver#3650 (rule R3).
+
 🚨 **The surface is the application closure PLUS every directory the boot is loading from.** A
 store-landed module lives in its own generation directory and may legitimately reference another
 module landed beside it; measuring against `/app` alone would report that sibling as an absent
@@ -177,6 +220,7 @@ one of these states was previously mis-rendered as "restart required":
 | `Unresolvable` | activated, but its bytes are gone | re-install the package |
 | `Deferred` | landed, but in no proposed module set | the landing wave must complete |
 | **`Quarantined`** | **refused: its bytes need a platform this deployment is not running** | **a platform update — which is itself the restart that loads it** |
+| **`Fallbacks`** (MeshWeaver#3649) | **present and running its PREVIOUS generation; the newest one landed but does not load here** | **none — a build that loads here, or a platform update, takes over by itself** |
 
 A quarantined module must never be reported as pending. Its assembly genuinely is not loaded, so
 the pending derivation finds it — and a restart re-runs the same measurement on the same bytes and
@@ -207,6 +251,15 @@ missing type — and lands it through the real `ModuleLandingService`.
 | `AModuleReferencingASiblingModuleLandedMomentsEarlier_IsNotRefused` | the FALSE-refusal direction: a sibling module is not an absent platform assembly |
 | `AnUnloadableModule_IsParked_AndTheOthersStillInstall` | the blast radius: one module, not the portal |
 | `AParkedModule_ReadsAsQuarantined_NeverAsRestartRequired` | the false-promise rule |
+| `ARequiredModuleRunningItsPreviousGeneration_IsPresent_NeverIncompatible` | a fallback (MeshWeaver#3649) is `Present` — the probe stays Healthy |
+
+The fallback itself is proven end-to-end in
+`test/MeshWeaver.Compiler.Pipeline.Test/ConfiguredModuleActivationTest.cs` (the `#3649` section):
+a loadable generation is landed, a generation built for a newer platform is shelved over it, and a
+boot composed as the portal composes it runs the previous one and reports it; both generations
+unloadable stays incompatible; the GC keeps the fallback and reclaims it after an uninstall; the
+adoption records what loaded; the projection onto the mesh's set carries the pointer; the
+activation report names the row and never calls it "restart required".
 
 ## Related
 

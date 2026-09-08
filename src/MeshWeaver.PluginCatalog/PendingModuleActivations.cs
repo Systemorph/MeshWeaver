@@ -88,6 +88,32 @@ public sealed record ModuleActivationReport(
     public bool HasFloorAdvisories => !IsUndetermined && !FloorAdvisories.IsEmpty;
 
     /// <summary>
+    /// 🚨 The modules that RUN THEIR PREVIOUS GENERATION here because the one the mesh's set
+    /// activates does not load on this platform (#3649) — a FIFTH state, and the first one that
+    /// is not a fault: the module is present and working, one version behind. Not folded into
+    /// <see cref="Pending"/> (a restart re-runs the same measurement and falls back again, so
+    /// "restart required" would be a prompt no restart clears) and not into
+    /// <see cref="Quarantined"/> (that one contributes nothing; this one contributes everything
+    /// its previous version did). Each row names both generations and why. Init-only, for the
+    /// same binary-compatibility reason as the properties above.
+    /// </summary>
+    public ImmutableList<ModuleFallback> Fallbacks { get; init; } = [];
+
+    /// <summary>True when the state is KNOWN and a module runs its previous generation.</summary>
+    public bool HasFallbacks => !IsUndetermined && !Fallbacks.IsEmpty;
+
+    /// <summary>
+    /// The fallback row for the module the install record at <paramref name="packagePath"/>
+    /// landed, or null when that module runs the generation the set activates (or the state is
+    /// undetermined). Blank matches nothing — never a wildcard.
+    /// </summary>
+    public ModuleFallback? FallbackForPackage(string? packagePath) =>
+        IsUndetermined || string.IsNullOrWhiteSpace(packagePath)
+            ? null
+            : Fallbacks.FirstOrDefault(f => string.Equals(
+                f.PackagePath?.Trim('/'), packagePath.Trim('/'), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// The declared-floor advisory for the module the install record at
     /// <paramref name="packagePath"/> landed, or null when it declares none above the running
     /// platform (or the state is undetermined). Blank matches nothing — never a wildcard.
@@ -158,7 +184,34 @@ public sealed record ModuleActivationReport(
                 : ModuleActivationStatus.Describe(Pending))
               + (HasDeferred ? "; " + DescribeDeferred(Deferred) : string.Empty)
               + (HasQuarantined ? "; " + DescribeQuarantined(Quarantined) : string.Empty)
+              + (HasFallbacks ? "; " + DescribeFallbacks(Fallbacks) : string.Empty)
               + (HasFloorAdvisories ? "; " + DescribeFloorAdvisories(FloorAdvisories) : string.Empty);
+
+    /// <summary>
+    /// One human-readable line naming the modules that run their PREVIOUS generation (#3649) —
+    /// one named row per module, "X runs v1.2.3 (gen A); v1.3.0 (gen B) landed but does not load
+    /// here: …" — kept apart from every other line because it asks for nothing of the operator:
+    /// the module works, and the newest generation starts running by itself when a build of it
+    /// that loads here ships or the platform moves.
+    /// </summary>
+    /// <param name="fallbacks">The fallback rows.</param>
+    /// <param name="maxNamed">How many are named before the line truncates.</param>
+    public static string DescribeFallbacks(
+        IReadOnlyCollection<ModuleFallback> fallbacks, int maxNamed = 10)
+    {
+        ArgumentNullException.ThrowIfNull(fallbacks);
+        if (fallbacks.Count == 0)
+            return "no module runs a previous generation";
+        var rows = fallbacks
+            .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(f => $"{f.Name} {f.Reason}")
+            .ToArray();
+        return $"{rows.Length} module(s) run a PREVIOUS generation because the one the mesh's set "
+            + "activates does not load on this platform — present and working, one version "
+            + "behind; no restart changes that, a build that loads here does: "
+            + string.Join("; ", rows.Take(Math.Max(1, maxNamed)))
+            + (rows.Length > maxNamed ? $"; …(+{rows.Length - maxNamed})" : string.Empty);
+    }
 
     /// <summary>
     /// One human-readable line naming the modules that DECLARE a platform above the one running
@@ -250,6 +303,27 @@ public sealed record ModuleFloorAdvisory(
     string Name, string? PackagePath, string DeclaredFloor, string? RunningVersion, string Reason);
 
 /// <summary>
+/// One module that runs its PREVIOUS generation on this replica (#3649): which generation runs,
+/// which one landed and does not load here, and why — the row every status surface renders.
+/// </summary>
+/// <param name="Name">The module's assembly simple name, as the activation entry records it.</param>
+/// <param name="PackagePath">The mesh path of the install record that landed it, when recorded.</param>
+/// <param name="Version">The package version of the generation that does NOT load here, when recorded.</param>
+/// <param name="Generation">The generation directory leaf that does NOT load here.</param>
+/// <param name="PreviousVersion">The package version of the generation that runs, when recorded.</param>
+/// <param name="PreviousGeneration">The generation directory leaf that runs.</param>
+/// <param name="Reason">The row's sentence (<see cref="MeshWeaver.Mesh.FallbackModule.Describe"/>):
+/// "runs v1.2.3 (gen A); v1.3.0 (gen B) landed but does not load here: …".</param>
+public sealed record ModuleFallback(
+    string Name,
+    string? PackagePath,
+    string? Version,
+    string Generation,
+    string? PreviousVersion,
+    string PreviousGeneration,
+    string Reason);
+
+/// <summary>
 /// Reads the restart-as-activation state for THIS process: the persisted activation sidecar
 /// compared against the assemblies actually loaded here (#1979).
 ///
@@ -284,6 +358,20 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// </summary>
     public IReadOnlySet<string> QuarantinedModules { get; init; } =
         ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The modules this process installed from their PREVIOUS generation (#3649) — production
+    /// passes the registered <see cref="Mesh.FallbackModule"/> set, which is what
+    /// <c>MeshBuilder.InstallModules</c> recorded for every module whose head generation did not
+    /// load here and whose previous one did.
+    ///
+    /// <para>🚨 Without it such a module reads as PENDING: the generation the set activates is
+    /// not the one loaded here, which is the update half of "not loaded" (#3395) — and the
+    /// surface would promise a restart that re-runs the same measurement and falls back again.
+    /// It is pending only when the set has since moved to a generation OTHER than the one the
+    /// loader refused, which a restart genuinely tries. Init-only, for binary compatibility.</para>
+    /// </summary>
+    public IReadOnlyCollection<Mesh.FallbackModule> FallbackModules { get; init; } = [];
 
     /// <summary>
     /// The current report. Recomputed per call — the state changes underneath a running process
@@ -394,6 +482,31 @@ public sealed class PendingModuleActivations(string moduleRoot)
             ? []
             : [.. notYetLoaded.Where(p => QuarantinedModules.Contains(p.Name))];
 
+        // 🚨 #3649 — a module running its PREVIOUS generation is not pending either: its entry on
+        // the mesh's set names the generation the loader REFUSED, so a restart measures the same
+        // bytes and falls back again. It becomes pending again only when the set moves on to a
+        // generation other than the refused one — that is what a restart would genuinely try,
+        // and R3 (#3650) is what makes that restart happen. The row is derived from the entry the
+        // set activates, so it carries the install record's path for the package card.
+        var fallbackRows = ImmutableList.CreateBuilder<ModuleFallback>();
+        var settledFallbacks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fallback in FallbackModules)
+        {
+            var entry = onMeshSet.Entries.FirstOrDefault(e =>
+                e.Enabled && string.Equals(e.Name, fallback.Name, StringComparison.OrdinalIgnoreCase));
+            if (entry is null)
+                continue;
+            fallbackRows.Add(new ModuleFallback(
+                fallback.Name, entry.PackagePath,
+                fallback.Version ?? entry.Version, fallback.Generation,
+                fallback.PreviousVersion ?? entry.PreviousVersion, fallback.PreviousGeneration,
+                fallback.Describe()));
+            if (string.Equals(entry.Directory, fallback.Generation, StringComparison.Ordinal))
+                settledFallbacks.Add(fallback.Name);
+        }
+        if (settledFallbacks.Count > 0)
+            notYetLoaded = [.. notYetLoaded.Where(p => !settledFallbacks.Contains(p.Name))];
+
         // 🚨 #3648 — the declared floor is ADVISORY, so it is a LINE, never a bucket. Every enabled
         // entry the mesh's set activates whose recorded minMeshVersion ranks above the running
         // platform is listed here — loaded or not — so the status row and the health payload can
@@ -420,6 +533,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
         {
             Deferred = deferred.ToImmutable(),
             Quarantined = quarantined,
+            Fallbacks = fallbackRows.ToImmutable(),
             FloorAdvisories = floorAdvisories,
             MeshModuleSet = ModuleSetStore.Describe(sets)
                 + (setNotes.Count > 0 ? " — " + string.Join("; ", setNotes) : string.Empty),

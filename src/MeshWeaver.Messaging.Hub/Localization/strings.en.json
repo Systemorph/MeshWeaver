@@ -592,6 +592,7 @@
   "ui.restartRequiredToActivate": "Restart required to finish activating this package",
   "ui.moduleBuiltForNewerPlatform": "Not running here: this version was built for a newer platform. It activates when this installation updates.",
   "ui.moduleDeclaresNewerPlatform": "Declares platform ≥ {0}; this installation runs {1}. Advisory only — whether it loads is measured, not declared.",
+  "ui.moduleRunsPreviousVersion": "Running the previous version {0}: version {1} is installed but does not load on this platform. It activates once a build that loads here ships.",
   "ui.orphanedInstallRecords": "Orphaned install records",
   "ui.requestAccess": "Request Access",
   "ui.resetToDefault": "Reset to default",
