@@ -524,13 +524,18 @@ public static class PluginGateRunner
             .Select(f => f.RelativePath[..f.RelativePath.IndexOf("/Source/", StringComparison.Ordinal)])
             .ToImmutableHashSet(StringComparer.Ordinal);
 
+        // The installer's own registry shape (#3659): the file→node rule now also asks whether any
+        // parser claims the extension, so this discovery must hold one. JSON options are supplied
+        // because .json is exactly what this loop discovers — a registry built without them
+        // registers no JSON parser and would discover nothing.
+        var parsers = new FileFormatParserRegistry(new JsonSerializerOptions(JsonSerializerDefaults.Web));
         var types = new List<NodeTypeUnderTest>();
         foreach (var file in files)
         {
             if (!file.RelativePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                 continue;
             // The installer's own rule — null means "this file is not a node at all".
-            if (PackageInstaller.NodePathForFile(file.RelativePath) is not { Length: > 0 } path)
+            if (PackageInstaller.NodePathForFile(file.RelativePath, parsers) is not { Length: > 0 } path)
                 continue;
             string? configuration;
             try

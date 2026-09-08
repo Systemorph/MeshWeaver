@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -244,12 +245,19 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             .Concat([PackageInstaller.InstalledPartition])
             .ToImmutableHashSet(StringComparer.Ordinal);
 
+        // 🚨 The INSTALL's own parser registry (#3659). The declared population is "the files the
+        // installer would have written as nodes", and which extensions those are is DI-dependent —
+        // a module contributes parsers. Deriving it from half the rule is what made every
+        // carry-along asset (a `.tsx` view, a `.png`, an extension-less LICENSE) count as a node
+        // the install owed the mesh and be reported ABSENT at Error on every boot, forever.
+        var parsers = new FileFormatParserRegistry(
+            hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
         var perRecord = records.Count == 0
             ? Observable.Empty<InstallCompletenessVerdict>()
             : records
                 .Select(record => InstallCompleteness.Observe(
                     persistence, hub.JsonSerializerOptions,
-                    record.PackageId, record.Partition, record.Manifest))
+                    record.PackageId, record.Partition, record.Manifest, parsers))
                 .ToObservable()
                 .Concat();
 
@@ -263,12 +271,13 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                 foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.Incomplete))
                     logger?.LogError(
                         "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
-                        + "declared node(s) are ABSENT. Missing: [{Paths}]. The install record says "
-                        + "this package is up to date; the mesh disagrees. Reinstalling it now "
-                        + "repairs it — the up-to-date gate no longer skips an incomplete install "
-                        + "(MeshWeaver#3485).",
+                        + "declared node(s) are ABSENT. Missing: [{Paths}]. Counted over: "
+                        + "{Population}. The install record says this package is up to date; the "
+                        + "mesh disagrees. Reinstalling it now repairs it — the up-to-date gate no "
+                        + "longer skips an incomplete install (MeshWeaver#3485).",
                         verdict.PackageId, verdict.Partition, verdict.Missing.Count,
-                        verdict.Declared, string.Join(", ", verdict.Missing.Take(20)));
+                        verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
+                        verdict.Population);
 
                 foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.RootWithoutRecord))
                     logger?.LogError(
@@ -284,8 +293,10 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                                  or InstallCompletenessKind.Undeclared))
                     logger?.LogWarning(
                         "[InstallCompleteness] {Package} → '{Partition}': NOT VERIFIED ({Kind}) — "
-                        + "{Because}. This is not a clean bill of health; it is an absence of one.",
-                        verdict.PackageId, verdict.Partition, verdict.Kind, verdict.Because);
+                        + "{Because}. Counted over: {Population}. This is not a clean bill of "
+                        + "health; it is an absence of one.",
+                        verdict.PackageId, verdict.Partition, verdict.Kind, verdict.Because,
+                        verdict.Population);
 
                 var summary = InstallCompleteness.Summarize(verdicts);
                 logger?.LogInformation(

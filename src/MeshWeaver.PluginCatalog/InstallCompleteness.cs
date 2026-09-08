@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -37,26 +38,53 @@ public static class InstallCompleteness
 {
     /// <summary>
     /// The node paths an install record DECLARES must be present, derived from the per-file hash map
-    /// the installer stamped on it (<see cref="PackageManifest.InstalledFiles"/>) through the same
-    /// file→node mapping the incremental update path uses
-    /// (<see cref="PackageInstaller.NodePathForFile"/>).
+    /// the installer stamped on it (<see cref="PackageManifest.InstalledFiles"/>) through
+    /// <see cref="PackageInstaller.NodePathForFile(string, FileFormatParserRegistry)"/> — the
+    /// installer's OWN file→node rule, not a second implementation of part of it.
     ///
-    /// <para>Non-node files — <c>README.md</c>, the <c>manifest.lock</c> sidecar, <c>content/**</c>
-    /// assets — map to <c>null</c> and are excluded: a content asset is not a node and its absence
-    /// is a different question.</para>
+    /// <para>🚨 <b>The population is the whole point, and getting it wrong is #3659.</b> This used
+    /// to apply only the by-design exclusions (<c>README.md</c>, the <c>manifest.lock</c> sidecar,
+    /// <c>content/**</c>) while the installer ALSO skipped every file whose extension no registered
+    /// parser claims. So a package's ordinary carry-along files counted as nodes the install owed
+    /// the mesh: <c>Chess</c> ships <c>Chess/gui/rn/chess.tsx</c>, nothing ever wrote it, and the
+    /// sweep reported <c>Chess/gui/rn/chess</c> ABSENT at Error on every pod boot — indefinitely,
+    /// and spelled exactly like the genuinely lost source node the sweep exists to find. A count
+    /// over the wrong population reads exactly like a correct one, which is why
+    /// <see cref="InstallCompletenessVerdict.DeclaredFiles"/> and
+    /// <see cref="InstallCompletenessVerdict.NonNodeFiles"/> now travel with every verdict and are
+    /// printed: a wrong population is visible rather than silent.</para>
     /// </summary>
     /// <param name="record">The install record's manifest, as stamped by the installer.</param>
+    /// <param name="parsers">The parser registry the INSTALL would use. Required — the claimed
+    /// extensions are DI-dependent, so a hard-coded list here would be exactly the second
+    /// implementation this parameter exists to remove.</param>
     /// <returns>The declared node paths, ordinal-sorted and distinct; empty when nothing is declared.</returns>
-    public static ImmutableSortedSet<string> DeclaredNodePaths(PackageManifest? record)
+    public static ImmutableSortedSet<string> DeclaredNodePaths(
+        PackageManifest? record, FileFormatParserRegistry parsers)
     {
+        ArgumentNullException.ThrowIfNull(parsers);
         if (record?.InstalledFiles is not { Count: > 0 } files)
             return ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
         return files.Keys
-            .Select(PackageInstaller.NodePathForFile)
+            .Select(f => PackageInstaller.NodePathForFile(f, parsers))
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .Select(p => p!)
             .ToImmutableSortedSet(StringComparer.Ordinal);
     }
+
+    /// <summary>
+    /// <see cref="DeclaredNodePaths(PackageManifest, FileFormatParserRegistry)"/> against the
+    /// BUILT-IN parser set alone.
+    ///
+    /// <para>🚨 A caller with a hub must pass that hub's registry: which extensions become nodes is
+    /// DI-dependent, and this overload cannot see a module's contributed parser. It exists so the
+    /// public surface of this change is purely ADDITIVE — removing a public member reds a plugin
+    /// repo's trunk on pull requests that did not make the change (#2689) — and every caller inside
+    /// the install and completeness paths passes a real registry.</para>
+    /// </summary>
+    /// <param name="record">The install record's manifest, as stamped by the installer.</param>
+    public static ImmutableSortedSet<string> DeclaredNodePaths(PackageManifest? record) =>
+        DeclaredNodePaths(record, PackageInstaller.BuiltInParsers);
 
     /// <summary>
     /// The verdict, computed purely — no mesh, no hub, so the falsification tests can drive every
@@ -74,22 +102,39 @@ public static class InstallCompleteness
         string packageId,
         string partition,
         PackageManifest? record,
-        IReadOnlySet<string>? present)
+        IReadOnlySet<string>? present,
+        FileFormatParserRegistry parsers)
     {
+        ArgumentNullException.ThrowIfNull(parsers);
         if (record is null)
             return new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.Undeclared, 0, 0,
                 ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
                 "no install record exists, so nothing declares what this partition should hold");
 
-        var declared = DeclaredNodePaths(record);
+        var declared = DeclaredNodePaths(record, parsers);
+        // 🚨 The POPULATION, carried on every verdict (#3659): how many files the record holds and
+        // how many of them are not node candidates at all. Without these two the count of "declared
+        // nodes" is a bare number that reads identically whether it was taken over the right set or
+        // the wrong one — which is exactly how a `.tsx` asset was reported as a missing node on
+        // every boot for as long as the sweep existed.
+        var declaredFiles = record.InstalledFiles?.Count ?? 0;
+        var nonNodeFiles = declaredFiles - (record.InstalledFiles?.Keys
+            .Count(f => PackageInstaller.NodePathForFile(f, parsers) is not null) ?? 0);
+        InstallCompletenessVerdict WithPopulation(InstallCompletenessVerdict verdict) =>
+            verdict with { DeclaredFiles = declaredFiles, NonNodeFiles = nonNodeFiles };
         if (declared.Count == 0)
-            return new InstallCompletenessVerdict(
+            return WithPopulation(new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.Undeclared, 0, 0,
                 ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-                "the install record carries no file map (installedFiles), so what it should hold is "
-                + "not declared anywhere — it was installed before the file map was stamped, or by "
-                + "a lane that does not stamp one. The next real install writes one.");
+                declaredFiles == 0
+                    ? "the install record carries no file map (installedFiles), so what it should "
+                      + "hold is not declared anywhere — it was installed before the file map was "
+                      + "stamped, or by a lane that does not stamp one. The next real install "
+                      + "writes one."
+                    : $"all {declaredFiles} file(s) the record declares are non-node files (a "
+                      + "README, the manifest sidecar, a content/** asset, or an extension no "
+                      + "parser claims), so this package declares no node to compare against"));
 
         // 🚨 A file map that does not map ONTO this partition cannot be compared against it, and
         // guessing a rebase would manufacture a shortfall out of a naming difference. Say so
@@ -98,24 +143,24 @@ public static class InstallCompleteness
             .Where(p => !IsUnder(p, partition))
             .ToImmutableSortedSet(StringComparer.Ordinal);
         if (offPartition.Count > 0)
-            return new InstallCompletenessVerdict(
+            return WithPopulation(new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.Undeclared, declared.Count, 0,
                 offPartition,
                 $"{offPartition.Count} of {declared.Count} declared file(s) map outside the target "
                 + $"partition '{partition}' (e.g. '{offPartition[0]}'), so the record cannot be "
-                + "compared against it");
+                + "compared against it"));
 
         if (present is null)
-            return new InstallCompletenessVerdict(
+            return WithPopulation(new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.NotObserved, declared.Count, 0,
                 ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-                "the mesh could not be read, so completeness was NOT checked — this is not a pass");
+                "the mesh could not be read, so completeness was NOT checked — this is not a pass"));
 
         var missing = declared
             .Where(p => !present.Contains(p))
             .ToImmutableSortedSet(StringComparer.Ordinal);
         var found = declared.Count - missing.Count;
-        return missing.Count == 0
+        return WithPopulation(missing.Count == 0
             ? new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.Complete, declared.Count, found,
                 ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
@@ -123,8 +168,26 @@ public static class InstallCompleteness
             : new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.Incomplete, declared.Count, found,
                 missing,
-                $"{missing.Count} of {declared.Count} declared node(s) are ABSENT from the mesh");
+                $"{missing.Count} of {declared.Count} declared node(s) are ABSENT from the mesh"));
     }
+
+    /// <summary>
+    /// <see cref="Compare(string, string, PackageManifest, IReadOnlySet{string}, FileFormatParserRegistry)"/>
+    /// against the BUILT-IN parser set alone — see the remarks on
+    /// <see cref="DeclaredNodePaths(PackageManifest)"/> for why this overload exists and when it is
+    /// the wrong one to call.
+    /// </summary>
+    /// <param name="packageId">The package the record belongs to.</param>
+    /// <param name="partition">The partition the package installed into.</param>
+    /// <param name="record">The install record's manifest, or null when no record exists.</param>
+    /// <param name="present">The node paths OBSERVED in the mesh; null means the read did not
+    /// happen.</param>
+    public static InstallCompletenessVerdict Compare(
+        string packageId,
+        string partition,
+        PackageManifest? record,
+        IReadOnlySet<string>? present) =>
+        Compare(packageId, partition, record, present, PackageInstaller.BuiltInParsers);
 
     /// <summary>
     /// The reactive half: read back exactly the paths the record declares and compare.
@@ -146,33 +209,59 @@ public static class InstallCompleteness
         JsonSerializerOptions options,
         string packageId,
         string partition,
-        PackageManifest? record)
+        PackageManifest? record,
+        FileFormatParserRegistry parsers)
     {
-        var declared = DeclaredNodePaths(record);
+        ArgumentNullException.ThrowIfNull(parsers);
+        var declared = DeclaredNodePaths(record, parsers);
+        var files = record?.InstalledFiles?.Count ?? 0;
+        var nonNode = files - (record?.InstalledFiles?.Keys
+            .Count(f => PackageInstaller.NodePathForFile(f, parsers) is not null) ?? 0);
         if (persistence is null)
             return Observable.Return(new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.NotObserved, declared.Count, 0,
                 ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-                "this host registers no storage adapter, so the mesh was NOT read"));
+                "this host registers no storage adapter, so the mesh was NOT read")
+            { DeclaredFiles = files, NonNodeFiles = nonNode });
         // Nothing declared ⇒ nothing to read. Compare against an EMPTY observation rather than a
         // null one: the verdict is Undeclared either way, and reading the mesh to learn that would
         // be a round-trip that cannot change the answer.
         if (declared.Count == 0)
             return Observable.Return(
-                Compare(packageId, partition, record, ImmutableHashSet<string>.Empty));
+                Compare(packageId, partition, record, ImmutableHashSet<string>.Empty, parsers));
 
         return persistence.ReadMany(declared, options)
             .Select(n => n.Path)
             .ToList()
             .Select(paths => Compare(packageId, partition, record,
-                paths.ToImmutableHashSet(StringComparer.Ordinal)))
+                paths.ToImmutableHashSet(StringComparer.Ordinal), parsers))
             .Catch<InstallCompletenessVerdict, Exception>(ex => Observable.Return(
                 new InstallCompletenessVerdict(
                     packageId, partition, InstallCompletenessKind.NotObserved, declared.Count, 0,
                     ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
                     $"reading the mesh failed, so completeness was NOT checked — this is not a "
-                    + $"pass. Cause: {ex.Message}")));
+                    + $"pass. Cause: {ex.Message}")
+                { DeclaredFiles = files, NonNodeFiles = nonNode }));
     }
+
+    /// <summary>
+    /// <see cref="Observe(IStorageAdapter, JsonSerializerOptions, string, string, PackageManifest, FileFormatParserRegistry)"/>
+    /// against the BUILT-IN parser set alone — see the remarks on
+    /// <see cref="DeclaredNodePaths(PackageManifest)"/> for why this overload exists and when it is
+    /// the wrong one to call.
+    /// </summary>
+    /// <param name="persistence">The storage adapter; <c>null</c> yields <c>NotObserved</c>.</param>
+    /// <param name="options">Serializer options for the read.</param>
+    /// <param name="packageId">The package id.</param>
+    /// <param name="partition">The package's target partition.</param>
+    /// <param name="record">The install record's manifest.</param>
+    public static IObservable<InstallCompletenessVerdict> Observe(
+        IStorageAdapter? persistence,
+        JsonSerializerOptions options,
+        string packageId,
+        string partition,
+        PackageManifest? record) =>
+        Observe(persistence, options, packageId, partition, record, PackageInstaller.BuiltInParsers);
 
     /// <summary>
     /// The OTHER half of the same question, and the one the record-driven arm cannot ask: a
@@ -412,9 +501,37 @@ public sealed record InstallCompletenessVerdict(
     /// <summary>🚨 True ONLY for <see cref="InstallCompletenessKind.Complete"/>. "Not checked" is not "clean".</summary>
     public bool IsComplete => Kind is InstallCompletenessKind.Complete;
 
+    /// <summary>
+    /// How many FILES the install record declares — the population <see cref="Declared"/> was taken
+    /// over. 🚨 Carried and printed because a count over the WRONG population reads exactly like a
+    /// correct one (#3659): the sweep counted every carry-along asset as a node the install owed
+    /// the mesh and reported it absent on every boot, and nothing in the output said which set had
+    /// been counted. Zero on a record with no file map, and on a verdict built by a caller
+    /// compiled before this field existed — an init-only property, not a positional parameter, so
+    /// such a caller keeps binding.
+    /// </summary>
+    public int DeclaredFiles { get; init; }
+
+    /// <summary>
+    /// How many of <see cref="DeclaredFiles"/> are NOT node candidates — a README, the
+    /// <c>manifest.lock</c> sidecar, a <c>content/**</c> asset, or a file whose extension no
+    /// registered parser claims. <see cref="Declared"/> is the DISTINCT node paths the rest map to,
+    /// so <c>DeclaredFiles - NonNodeFiles</c> exceeds it exactly when two files fold onto one node
+    /// (the <c>X.json</c> → <c>X/index.json</c> layout move) — which is why all three are printed
+    /// rather than two and a subtraction.
+    /// </summary>
+    public int NonNodeFiles { get; init; }
+
+    /// <summary>What this verdict counted, and over what — one clause, on every line that reports
+    /// a verdict, so a wrong population is visible instead of silent.</summary>
+    public string Population =>
+        $"{DeclaredFiles} file(s) declared, {NonNodeFiles} of them not node files "
+        + $"(README/manifest/content assets, or an extension no parser claims) → {Declared} "
+        + "distinct node path(s) compared";
+
     /// <inheritdoc />
     public override string ToString() =>
-        $"{PackageId} [{Kind}] {Present}/{Declared} present"
+        $"{PackageId} [{Kind}] {Present}/{Declared} present ({Population})"
         + (Missing.Count == 0 ? "" : $" — missing: {string.Join(", ", Missing.Take(10))}"
                                      + (Missing.Count > 10 ? $" (+{Missing.Count - 10} more)" : ""));
 }
