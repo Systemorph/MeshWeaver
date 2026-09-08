@@ -200,6 +200,54 @@ Read it by what is **missing**:
 | `HANDLER_EXIT state=Processed` and **no** `RESPONSE_POSTED` | A handler ran and produced no reply for this correlation — the caller will wait forever |
 | `RESPONSE_POSTED` but the callback is still pending | The reply was posted and lost on the way home — chase the response delivery, not the handler |
 
+### Reading an ORDER defect: the queue-and-depth stamps
+
+🚨 **A hub has TWO queues, and a delivery moves between them at TURN time.** `mainQueue` holds turns
+in arrival order; a turn that is dequeued and found on-target with an initialization gate closed is
+pushed onto `deferredQueue` — so it **leaves** `mainQueue` — and `OpenGate` later drains the deferred
+run back to the **front** (MeshWeaver#3408). Any question of the form *"why did B run before A?"* is
+therefore a question about which queue each delivery was in and how many turns were ahead of it, and
+a trail that records only `ENQUEUED` / `DEFERRED` cannot answer it: a delivery parked in front of an
+empty queue and one parked in front of two messages that then ran look identical.
+
+Every transition consequently carries both depths:
+
+| Stage | Means |
+|---|---|
+| `ENQUEUED` → `QUEUED queue=main depth=N` | Joined `mainQueue` with `N-1` turns ahead of it. Read under the same `turnGate` as the enqueue, so it is the queue's real state at that instant |
+| `DEFERRED gates=[…]` → `QUEUED queue=deferred pos=P mainBehind=M` | It **left** `mainQueue` for `deferredQueue` at position `P`. 🚨 `M` is the count still waiting behind it — precisely the messages that can now overtake it |
+| `DEFERRED_DRAINED` → `QUEUED queue=main depth=N` | Its deferred turn is running. Compare with the `mainBehind` above: if `N` has dropped, those messages already ran and this delivery is now out of order |
+| `GATE_DRAIN gate=… deferred=D behind=B` *(hub-level, `MessageTrace`)* | The restore point. 🚨 `deferred=0` here, paired with a delivery whose fate says it **was** deferred, proves the deferral landed *after* its drain and must wait for a later one — the one conclusion neither stamp shows alone |
+
+🚨 **The depth is a SEPARATE `QUEUED` stage, and that is not cosmetic — a stage token is a matched
+CONTRACT.** Stages render as `{stage}@{hub}`, and suites wait on that literal substring:
+
+```csharp
+// DisposalRaceNackTest, SubscribeDuringRecycleTest
+.Where(trail => trail.Contains($"ENQUEUED@{victimAddress}", StringComparison.Ordinal))
+```
+
+Writing the depth *inside* the token — `ENQUEUED queue=main depth=1` — deletes `ENQUEUED@…`, those
+waits never fire, and the suites time out looking like routing stalls that have nothing to do with
+the change. Measured while adding these stamps: **0/5 with the token altered, 5/5 with it restored.**
+So **append new stages; never edit an existing token.** `MessageTrace` lines are free-form, but a
+fate stage's leading token is API.
+
+**Why this exists** (Plugins#1394). `ActivationBacklogFifoTest` has produced **four** different
+permutations — `A, C, B`, `B, C, A`, `C, A, B` and `B, A, C` — for one address and, in the captured
+case, `Distinct probe-hub instances: 1`. A structural read of `RoutingServiceBase` →
+`MonolithRoutingService.RouteImpl` → `MessageService` says every one of them is unreachable: the
+per-address `ActivationSerializer` is `inbox.Select(RouteOne).Concat()`, so a later message's routing
+begins only after the earlier one's `hub.DeliverMessage` has run; the defer decision and the
+`deferredQueue.Enqueue` are inside the same `lock (gateStateLock)` that `OpenGate` also takes; and
+`DeferredTurnsResumeAheadOfLaterArrivalsTest` pins the restore ordering deterministically. When the
+code says a reorder cannot happen and it keeps happening, the missing evidence is *where each
+delivery waited* — not more reading.
+
+🚨 **A permutation does not name a mechanism.** Four distinct ones from one test is itself evidence
+that this is not a single fixed swap, and triaging from the permutation alone has already sent two
+investigations to the wrong subsystem.
+
 Three things to know before trusting it:
 
 - **It only covers awaited requests.** Entries exist for exactly the ids with a live `Observe`
