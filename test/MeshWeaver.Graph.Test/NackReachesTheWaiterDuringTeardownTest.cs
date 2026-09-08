@@ -214,13 +214,29 @@ public class NackReachesTheWaiterDuringTeardownTest(ITestOutputHelper output)
             // <para>The bound below is a liveness guard on that PRECONDITION, named as such: it
             // must leave the watch admissible (below <see cref="LatePatchResponseRegistry.LateResponseWatchBound"/>),
             // because a question asked after the entry has expired cannot be answered either way.
-            // If it ever trips, the failure says "the owner never finished disposing", which is a
-            // different defect with a different investigation — and the stall-verdict assertion
-            // below names it.</para>
+            // Derived from that constant rather than restated as a second literal
+            // (Doc/Architecture/BoundsMustBeOrdered), and it sits ABOVE the 8 s disposal stall
+            // budget on purpose: if the teardown genuinely wedges, the stall detector reaches its
+            // verdict FIRST and names the hub and the turn, and this reports that verdict instead
+            // of hiding it behind an anonymous timeout — which is what the old 6 s bound did, by
+            // firing two seconds before the detector could speak.</para>
+            //
+            // <para>🚨 It therefore FALLS BACK rather than throwing: a bare
+            // <c>TimeoutException</c> from a `.Timeout(...)` names a line number and nothing else,
+            // and that is precisely the failure this whole change exists to stop producing.</para>
             var ownerDownBound = LatePatchResponseRegistry.LateResponseWatchBound - 10.Seconds();
-            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            var ownerIsDown = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .Where(_ => owner.RunLevel == MessageHubRunLevel.Dead)
-                .FirstAsync().Timeout(ownerDownBound).Await(ct);
+                .Select(_ => true)
+                .FirstAsync()
+                .Timeout(ownerDownBound, Observable.Return(false))
+                .Await(ct);
+            ownerIsDown.Should().BeTrue(
+                $"the owner's verdict cannot be judged until the owner has finished disposing, and "
+                + $"{owner.Address} is still at RunLevel={owner.RunLevel} after "
+                + $"{ownerDownBound.TotalSeconds:F0}s. That is a WEDGED TEARDOWN, a different defect "
+                + $"from the one this test is about. Disposal stall verdicts seen so far: "
+                + (verdicts.Entries.IsEmpty ? "<none>" : string.Join(" | ", verdicts.Entries)));
             Output.WriteLine($"[owner] {owner.Address} is Dead — its disposal registrants have run");
 
             registry.ArmedRequestIds.Should().NotContain(armedId,
