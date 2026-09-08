@@ -452,7 +452,7 @@ public static class ModuleActivationBoot
 {
     /// <summary>
     /// Rewrites the activation list onto THE module set the mesh runs (#3395) — the convergence
-    /// step, applied before <see cref="ComputeEffectiveModuleEntries"/> so the union it computes is
+    /// step, applied before <see cref="ComputeEffectiveModuleEntries(IReadOnlyList{string}, ModuleActivationList, Func{string, string}, Func{ModuleActivationEntry, bool}, Action{string, string}, Action{string, string})"/> so the union it computes is
     /// the mesh's set rather than this process's own snapshot of a moving record.
     ///
     /// <para>🚨 <b>Why the raw record is not what a boot should load.</b> Landing moves each
@@ -574,6 +574,21 @@ public static class ModuleActivationBoot
 
         return landed with { Entries = projected.ToImmutable() };
     }
+
+    /// <summary>
+    /// The pre-#3648 shape, kept as a real overload so a host or module compiled against the
+    /// previous platform still binds (an optional parameter is a compile-time default, not a
+    /// binary one: dropping the five-argument method would surface as MissingMethodException at
+    /// the caller's first boot). Forwards with no advisory channel.
+    /// </summary>
+    public static ImmutableList<EffectiveModule> ComputeEffectiveModuleEntries(
+        IReadOnlyList<string>? baselineEntries,
+        ModuleActivationList? persisted,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedModuleDllExists,
+        Action<string, string>? onSkipped) =>
+        ComputeEffectiveModuleEntries(baselineEntries, persisted, platformGate, landedModuleDllExists,
+            onSkipped, onAdvisory: null);
 
     /// <summary>
     /// Computes the effective module list the boot loader feeds to
