@@ -10,7 +10,7 @@
 registry:
   enabled: true
   host: "cr.meshweaver.cloud"
-  image: "ghcr.io/distribution/distribution:3.0.0@sha256:4ba3adf47f5c866e9a29288c758c5328ef03396cb8f5f6454463655fa8bc83e2"
+  image: "ghcr.io/distribution/distribution:3.1.1@sha256:bca24727f4002e51f959c18c42e816e4d1078198081a9837e16b8b7d7e43ebf8"
   authImage: "cesanta/docker_auth:1.14.0@sha256:98e0307e0d2dcbafe10098814a97d248143b78ca478693f78c3c0d67fe776ab4"
   issuer: "memex-registry"
   replicas: 1
