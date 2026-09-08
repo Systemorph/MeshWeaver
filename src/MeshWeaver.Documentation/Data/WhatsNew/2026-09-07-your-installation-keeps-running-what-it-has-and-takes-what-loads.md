@@ -1,6 +1,6 @@
 ---
 Name: Your installation keeps running what it has, and takes what loads
-Category: Change
+Category: Feature
 Description: A new rule for add-ons — if no newer version ships for the platform you run, the one you have keeps running; a version string an add-on declares no longer decides whether it loads, a measurement does; and the moment a newer version that loads is published, you get it. Set on 2026-09-07 after every production portal spent a day held on a morning build by a version string.
 Icon: Box
 Order: -20260907
