@@ -99,6 +99,20 @@ without coordinating: **the ordinally smallest `Id` wins**, and the conflict is 
 lost — a proposal is derived from the activation record, never from the previous proposal, so the
 next wave's sequence N+2 carries everything both replicas landed.
 
+**The reader decides from the NAMES and opens only what the decision needs.** Every record's name
+carries its sequence and set id (`<sequence:D9>-<id16>.proposed|adopted.json`), so one directory
+listing determines the newest proposal and the newest adopted set; `ModuleSetStore.Read` then opens
+the proposal files of those two sequences and the one adoption record — nothing else. 🚨 Measured
+on memex-cloud, 2026-09-08: 687 records had accumulated under `modules/sets` (the GC that prunes
+them had been fail-closing — see [GC must see the set](#gc-must-see-the-set)), the previous reader
+opened every one on every call, and on Azure Files that took 10 s — inside
+`pending_module_activation`, the health check the startup probe asks every 10 s with a 5 s
+timeout. No new pod could pass the probe; the 8059 rollout sat for hours on two ageing replicas and
+KEDA could add nothing. A record no decision depends on is neither read nor reported: a corrupt
+superseded record is `Prune`'s to remove, not the reader's to announce on every probe, and the
+conflict notice names only the sequences that were actually decided on (the historical
+"proposed by more than one replica" lines that used to repeat on every boot are gone).
+
 ## Boot — converge, don't serve your own
 
 `MemexConfiguration.ConfigureMemexMesh`, in order:
