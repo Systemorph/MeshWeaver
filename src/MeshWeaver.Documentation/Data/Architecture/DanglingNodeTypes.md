@@ -120,12 +120,52 @@ Pruning a retired NodeType is **intended, shipped behaviour** — the What's New
 *"Retired plugin nodes are pruned on update"* (2026-08-28) says so in as many words, and
 [Retiring a NodeType](../RetiringANodeType) documents the opposite failure: a definition the prune
 *cannot* reach is a type parked at `compilationStatus: "Error"` that no re-import can clear. So
-refusing the prune would strand the definition instead of its instances — a trade, not a fix.
+refusing the prune *outright* would strand the definition instead of its instances — a trade, not a
+fix.
 
-### Decision — prune, and report
+### Decision — hold while instances exist, then prune (revised 2026-09-08)
 
-**The deletion proceeds; the instances it stranded are named.** Two things already existed and were
-not wired together, and that is the whole of the fix:
+**The first decision (2026-08-28) was "prune, and report": the deletion proceeded and the instances
+it stranded were named.** It was revised on 2026-09-08 after it did exactly that on
+`memex.systemorph.com`:
+
+```
+20:29:14Z [StaticRepoImport] Crm: ⚠ Pruned 1 NodeType(s) that still have instances — those instances
+          are now STRANDED … 'Crm/Mail' (1): PartnerRe/Esl/DueDiligenceMail.
+```
+
+The Crm repository had retired `Crm/Mail` two days earlier — deliberately, with its one live record
+meant to be retyped on the portal *before* the deploy. That portal's Crm sync had been `Skipped`
+since 08-30 ([The Import Marker Records Convergence](../ImportMarkerRecordsConvergence)), so the
+retirement arrived late and before the retype; the probe found the instance, the report named it,
+and the prune ran in the same breath. A client's record was left with no per-node hub, and the bake
+gate then refused readiness on the "regression" of a type whose node no longer existed (see
+[The bake gate](#the-bake-gate-a-retirement-is-not-a-regression) below). A warning that cannot be
+acted on before the deletion protects nothing.
+
+**Now: a NodeType that still has instances is HELD, not pruned.** `NodeTypeInstanceProbe` asks the
+same question as before — *are there instances?* — but its answer is a decision:
+
+- The definition stays, together with its own `{Type}/Source/**` and `{Type}/Test/**` (its default
+  sources — pruning those while keeping the definition is the orphan shape
+  [Retiring a NodeType](../RetiringANodeType) describes). Sources it draws from elsewhere
+  (`shared=@Other/Source`) are the repository's to retire and are pruned as directed; the held type
+  keeps serving its last usable build.
+- The definition is stamped `NodeTypeDefinition.PendingRetirement` — who retired it, when, and which
+  instances keep it alive. The stamp is what the bake gate reads.
+- The run counts the hold as **preserved**, so it is not converged and the next sync asks the instance
+  question again. Once the instances are retyped or deleted, that sync prunes the type exactly as any
+  other retired node. **A retirement is a wait for the instances, never a veto**; a type with no
+  instances is pruned on the first pass, as it always was.
+- In `Additive` mode the held paths stay in the import manifest under their last token, so they
+  remain prune candidates — dropping them would file the type as user-added and leak it for ever.
+- A probe that **faults** holds too: the deletion is irreversible, the read is not.
+
+The same rule applies to `PackageInstaller.PruneRemovedNodes` (a node-repo package update), which
+now reads every candidate, probes, and deletes only what is not held.
+
+Two things already existed and were not wired together, and that remains the whole of the
+mechanism:
 
 - **The detector** — `nodeType:{name}`, which lived only as the hidden query behind the Search
   layout area.
@@ -141,12 +181,33 @@ the same question the operator is told to ask:
 - One query **per NodeType actually being deleted** — zero for the overwhelming majority of imports.
 - Read **as System and mesh-wide**, because instances of a package's type live in user partitions the
   importer's own viewer cannot see. A report that missed them would read as a clean bill of health.
-- Delivered three ways: a ⚠ line in the import activity, the terminal summary, and
-  `StaticRepoImportResult.StrandedNodeTypePaths` for callers. The activity's terminal status becomes
-  **Warning** — self-clearing, since the pruned type is gone from `existing` next pass and can never
-  be a prune candidate again.
-- A faulted probe is logged and skipped. The prune is the operation; the report is the diagnosis, and
-  a diagnosis that fails must not take the operation down with it.
+- Delivered four ways: a ⏸ line in the import activity naming the type and the instances, the
+  terminal summary, `StaticRepoImportResult.HeldNodeTypePaths` for callers, and — for a GitHub sync
+  source — `GitHubSyncConfig.LastSyncNote`, so the settings tab and the status surface say *"in-mesh
+  content the repository does not hold"* without anyone reading a log. The activity's terminal
+  status is **Warning** until the retirement completes.
+
+### The bake gate: a retirement is not a regression
+
+The second half of the 2026-09-08 incident was downstream of the prune. The readiness sweep
+(`DynamicTypePreWarmer`) had enumerated `Crm/Mail` before the sync pruned it; its compile then failed
+with the routing's `No node found at 'Crm/Mail'`, was filed as a `CompileError` on a healthy baseline
+— a regression — and the pod refused readiness. The recovery watch subscribed to the missing node,
+faulted, and stood by its rule *"a watch that cannot observe a recovery must never be read as one"*:
+right for an existing node whose read faults, permanent for a node that is gone.
+
+Two classifications close it, both **content verdicts** like `NoSources` (they never gate, and
+dependents inherit `UpstreamContentBroken`), filed under `NodeTypeBakeGateState.Retired` and named in
+the `/health` payload:
+
+| Status | When | Established by |
+|---|---|---|
+| `Retired` | the definition carries `PendingRetirement` (held for instances) | the stamp — `ClassifyCompileFailure`, both drivers |
+| `Removed` | the definition node no longer exists | a `path:` **listing** that came back and did not name it — never a point read (NotFound + storm-breaker), never the failure text; a listing that faults answers *present* |
+
+And a regression already recorded on a type whose node then disappears is **withdrawn** into the
+same bucket (`RetireRegression`), cascading to its derived verdicts exactly like a retraction — it is
+not laundered into a recovery. Pinned by `ARetiredNodeTypeIsNotARegressionTest`.
 
 ## The repair path both decisions had to leave open
 

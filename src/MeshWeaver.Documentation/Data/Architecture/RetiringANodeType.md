@@ -1,7 +1,7 @@
 ---
 Name: Retiring a NodeType
 Category: Architecture
-Description: How to withdraw an in-mesh NodeType, and the prune asymmetry that strands its definition on every two-way-synced partition — the source nodes are deleted, the definition is kept, and the type is parked at compilationStatus Error forever.
+Description: How to withdraw an in-mesh NodeType — what a retirement has to remove, why the import HOLDS a type that still has instances instead of pruning it (pending retirement), how the bake gate reads a retired type, and the orphan shape older partitions still carry.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
 ---
 
@@ -27,8 +27,8 @@ anyway — pinned at `compilationStatus: "Error"` by a failure nobody authored.
 | Artifact | Where | Removed by |
 |---|---|---|
 | `{Type}/Source/*.cs`, `{Type}/Test/*.cs` | the package / node repo | the import's prune |
-| `{Type}.json` — the `NodeTypeDefinition` | the package / node repo | the import's prune — **see below: this was broken until 2026-09-08** |
-| Instances (`nodeType:{Type}`) | anywhere on the mesh, incl. user partitions | nothing automatic |
+| `{Type}.json` — the `NodeTypeDefinition` | the package / node repo | the import's prune — **once the instances are gone** (see *A type with instances is held*, below); broken in the other direction until 2026-09-08 |
+| Instances (`nodeType:{Type}`) | anywhere on the mesh, incl. user partitions | nothing automatic — and **while any exist, the definition is HELD, not pruned** |
 | `{Type}/Release/**` | mesh-minted | nothing — `IsMeshMintedRelease` spares it by design |
 
 Only the first row is reliable. The rest need a decision.
@@ -68,9 +68,40 @@ ended up preserving its own output from itself. Measured on `memex.systemorph.co
 **The rule now asks WHO wrote it** (`ImportConflictPolicy.IsHumanEdit`): only a write carrying a real
 user id is a server edit. A definition stamped `system-security` by the compile pipeline is
 therefore pruned along with its sources — the asymmetry below is gone — and a node a *person* edited
-is preserved exactly as before. 🚨 Pruning the definition is intended, and it still strands live
-instances: `NodeTypeInstanceProbe` raises the ⚠, which is why step 1 of the runbook below has always
-been "establish the instance count is zero".
+is preserved exactly as before.
+
+## 🚨 A type with instances is HELD, not pruned — since 2026-09-08
+
+The ownership rule above made the definition prunable. The same day showed what pruning it under
+live instances costs: on `memex.systemorph.com` at 20:29:14Z the Crm sync — `Skipped` since 08-30,
+so two days behind — delivered the retirement of `Crm/Mail` (Crm `ef12089`, *"retire Crm/Mail into
+Essentials/Email"*, whose message says the one live record is retyped on the portal *before* the
+deploy) before that retype had happened here. `NodeTypeInstanceProbe` found the instance, said so
+(*"Pruned 1 NodeType(s) that still have instances — STRANDED"*), and the prune ran anyway. The record
+`PartnerRe/Esl/DueDiligenceMail` had no per-node hub, and the bake gate refused every rollout on a
+"regression" of a node that no longer existed.
+
+**Now the probe's answer is a decision.** A repository-driven prune — the git sync, the
+seal-triggered import, a node-repo package update — never deletes a NodeType definition that still
+has instances:
+
+- The definition and its own `{Type}/Source/**` / `{Type}/Test/**` stay. Sources it draws from
+  elsewhere (`shared=@Other/Source`) belong to the partition's other types and are pruned as the
+  repository directs; the held type keeps serving its last usable build.
+- The definition is stamped `pendingRetirement` — *"Retired by Crm import … at …; held for 1
+  instance(s): PartnerRe/Esl/DueDiligenceMail. Retype or delete them and the next sync removes the
+  type."* The activity carries the same as a ⏸ line, and a GitHub sync source writes it to its
+  `lastSyncNote`, so the settings tab reads *in-mesh content the repository does not hold*.
+- The run counts the hold as **preserved**, so it is not converged: no marker licences the next
+  trigger to skip, and every later sync asks the instance question again. **Once the instances are
+  retyped or deleted, the next sync prunes the type** — a retirement is a wait, never a veto. A type
+  with no instances is pruned on the first pass, as it always was.
+- The bake gate reads a compile failure on a stamped type as `Retired` and a failure against a node
+  that no longer exists as `Removed` — both content verdicts that never hold a rollout. See
+  [Dangling NodeTypes](../DanglingNodeTypes) → *The bake gate: a retirement is not a regression*.
+
+So step 1 of the runbook below — *establish the instance count is zero* — is now asked by the
+machine, and answered by waiting. What it still needs from a person is the migration itself.
 
 🚨 **And a partition already in this state does not repair itself just because the rule changed** —
 the run that preserved those nodes stamped a green content-addressed marker, so every later trigger
@@ -146,7 +177,8 @@ diff against the original is worse than leaving the node alone.
 
 1. **Establish the instance count is zero** (`search nodeType:{Type}`). If it is not, the instances
    must be migrated to the replacement type first — retiring a type under live instances leaves
-   pages with no renderer.
+   pages with no renderer, which is exactly why the import refuses to do it and holds the type
+   (`pendingRetirement`) until you have.
 2. **Delete the definition subtree** — `delete {Type}` is recursive and takes the mesh-minted
    `Release/**` with it.
 3. **The delete needs a human identity.** Node types live in package-managed partitions whose

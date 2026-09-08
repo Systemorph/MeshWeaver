@@ -18,8 +18,8 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The two import-side halves of issue #2993, and — more importantly — the two COUNTERPARTIES that
-/// make each of them a decision rather than a patch.
+/// The two import-side halves of issue #2993, and the COUNTERPARTIES that make each of them a
+/// decision rather than a patch.
 ///
 /// <list type="number">
 ///   <item><b>Hole A's counterparty.</b> The update path now refuses a <c>NodeType</c> that
@@ -27,19 +27,25 @@ namespace MeshWeaver.Graph.Test;
 ///     that is the ordering escape hatch for the cases <c>ImportWriteOrder</c> cannot sequence (a
 ///     cycle, a type carried by no source). So the import must STILL land such a write, through the
 ///     named bypass, and must SAY it did.</item>
-///   <item><b>Hole B's counterparty.</b> Pruning a retired NodeType is intended, shipped behaviour
-///     (<c>WhatsNew/2026-08-28-retired-node-prune</c>). So the prune must STILL prune — and now
-///     also name the instances it stranded.</item>
+///   <item><b>Hole B — the prune of a NodeType that still has instances is REFUSED</b> (since
+///     2026-09-08; until then it was reported and done anyway). Its counterparty is that a
+///     retirement must still COMPLETE: the type is held only while instances exist, the run is not
+///     converged so the next sync asks again, and once the instances are gone the type is pruned
+///     exactly as any other retired node. A type with no instances is never held.</item>
 /// </list>
 ///
-/// <para>Without the counterparty halves this file would trade a known hole for an unknown
-/// regression: a refusal on the update path freezes a repo's git baseline (#2556's non-convergent
-/// loop), and a refusal on the prune path leaves the DEFINITION standing with no source to compile
-/// against (<c>Doc/Architecture/RetiringANodeType</c>).</para>
+/// <para><b>Why hole B flipped from "report" to "refuse".</b> Measured on
+/// <c>memex.systemorph.com</c> 2026-09-08 20:29:14Z: the Crm repository had retired
+/// <c>Crm/Mail</c> on 09-06 with the one live record meant to be retyped on the portal before the
+/// deploy; memex's Crm sync had been <c>Skipped</c> since 08-30, so the retirement arrived two days
+/// late and before the retype; the import probed, found the instance, logged
+/// <i>"Pruned 1 NodeType(s) that still have instances — STRANDED"</i>, and pruned. A client's record
+/// then had no per-node hub, and the bake gate refused every rollout on the "regression". A warning
+/// that arrives in the same breath as the deletion protects nothing.</para>
 /// </summary>
 public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    // ——— pure: what the probe selects, and what it says ———————————————————————————————
+    // ——— pure: what the probe selects, what it keeps, and what it says ———————————————
 
     [Fact(Timeout = 60000)]
     public void TheProbe_SelectsOnlyNodeTypeDefinitions()
@@ -57,18 +63,55 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact(Timeout = 60000)]
-    public void TheReport_NamesTheTypeAndThePaths()
+    public void TheHold_KeepsTheDefinitionAndItsOwnSubtree_AndNothingElse()
     {
-        var text = NodeTypeInstanceProbe.Describe(
-        [
-            new NodeTypeInstanceProbe.StrandedInstances(
-                "Pkg/Widget", ["TestData/a", "TestData/b"], 2, Truncated: false),
-        ]);
+        var candidates = new[]
+        {
+            TypeNode("Pkg", "Widget"),
+            Code("Pkg/Widget/Source", "Widget.cs"),
+            Code("Pkg/Widget/Test", "WidgetTests.cs"),
+            // A SHARED source in the partition's common folder is the repository's to retire —
+            // keeping it would compile the retired code into every consumer for as long as one
+            // instance existed, the exact state #3727 removed.
+            Code("Pkg/Source", "WidgetView.cs"),
+            Page("Pkg", "Doc"),
+            // A sibling whose id merely STARTS with the held id is not under it.
+            TypeNode("Pkg", "WidgetLegacy"),
+        };
+
+        var kept = NodeTypeInstanceProbe.WithoutHeld(candidates, ["Pkg/Widget"]);
+
+        // The hold spares the definition and its default Source/Test subtree, nothing more.
+        kept.Select(n => n.Path).Should().BeEquivalentTo(
+            new[] { "Pkg/Source/WidgetView.cs", "Pkg/Doc", "Pkg/WidgetLegacy" },
+            JsonSerializerOptions.Default);
+        NodeTypeInstanceProbe.WithoutHeld(candidates, []).Should().HaveCount(candidates.Length,
+            "with nothing held the prune set is untouched — the hold must not be a general filter");
+    }
+
+    [Fact(Timeout = 60000)]
+    public void TheReport_NamesTheTypeAndThePaths_AndSaysItWasNotPruned()
+    {
+        var held = new NodeTypeInstanceProbe.StrandedInstances(
+            "Pkg/Widget", ["TestData/a", "TestData/b"], 2, Truncated: false);
+
+        var text = NodeTypeInstanceProbe.Describe([held]);
 
         text.Should().NotBeNull();
         text.Should().Contain("Pkg/Widget").And.Contain("TestData/a").And.Contain("TestData/b");
+        text.Should().Contain("NOT pruned",
+            "the line is read by the person who has to act — it must say the type is still there");
+        text.Should().NotContain("STRANDED",
+            "nothing is stranded any more; the old wording would send an operator to restore a "
+            + "type that was never deleted");
         NodeTypeInstanceProbe.Describe([]).Should().BeNull(
             "a healthy prune must add no noise at all — a report that always fires is ignored");
+
+        var stamp = NodeTypeInstanceProbe.PendingRetirementOf(
+            held, "Pkg import abc123", new DateTimeOffset(2026, 9, 8, 20, 29, 14, TimeSpan.Zero));
+        stamp.Should().StartWith("Retired by Pkg import abc123 ")
+            .And.Contain("TestData/a")
+            .And.Contain("2 instance(s)");
     }
 
     // ——— hole A's counterparty: the ordering escape hatch still lands, and says so ————
@@ -128,19 +171,24 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
             "and the type that is missing, or an operator cannot act on it");
     }
 
-    // ——— hole B: the prune still prunes, and now names what it stranded ———————————————
+    // ——— hole B: a type with instances is HELD; the retirement completes once they are gone ———
 
     /// <summary>
-    /// 🚨 THE ONE THAT MATTERS. A source drops a NodeType while the mesh still holds instances of
+    /// 🚨 THE ONE THAT MATTERS. A source drops a NodeType while the mesh still holds an instance of
     /// it — in ANOTHER partition, which is the realistic shape (a package's type, a user's data).
     ///
-    /// <para>Both halves are asserted together on purpose: the prune must still DELETE the
-    /// definition (refusing would contradict the shipped retired-node prune and would strand the
-    /// definition instead), and it must now REPORT the instances it stranded (they have no
-    /// per-node hub — they read as Unavailable and render empty, with nothing naming why).</para>
+    /// <para>Three things are asserted in sequence, and the sequence is the contract:</para>
+    /// <list type="number">
+    ///   <item>The prune is REFUSED: the definition stays, stamped <c>PendingRetirement</c>; the
+    ///     instance stays readable; the result names the type as held, not pruned, and is not
+    ///     converged (so no marker licences the next run to skip the question).</item>
+    ///   <item>The activity says so, naming the type AND the instance — the actionable half.</item>
+    ///   <item>Once the instance is deleted, the SAME source content prunes the type — a deliberate
+    ///     retirement still lands; the hold was a wait, not a veto.</item>
+    /// </list>
     /// </summary>
     [Fact(Timeout = 300000)]
-    public async Task Prune_OfANodeTypeWithLiveInstances_StillPrunes_AndNamesTheStranded()
+    public async Task Prune_OfANodeTypeWithLiveInstances_IsRefused_UntilTheInstancesAreGone()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var partition = "Pr" + Guid.NewGuid().ToString("N")[..8];
@@ -162,19 +210,93 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
         //    what a package retirement cannot see and must not silently break.
         await meshService.CreateNode(Instance(TestPartition, instanceId, typePath))
             .Take(1).Should().Within(60.Seconds()).Emit("the instance must exist before the prune");
-
-        // The probe reads the eventually-consistent index, so wait for the index to have seen the
-        // instance before pruning — otherwise the test measures index lag, not the report.
-        await Observable.Interval(200.Milliseconds()).StartWith(0L)
-            .SelectMany(_ => meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{typePath}").AsSystem())
-                .Take(1))
-            .Where(c => c.Items.Any(n => string.Equals(n.Path, instancePath, StringComparison.OrdinalIgnoreCase)))
-            .FirstAsync().Timeout(120.Seconds()).Await();
+        await WaitForInstanceListing(typePath, instancePath, present: true);
 
         var attemptsBefore = await AttemptPaths(partition);
 
-        // 3. The source retires the type. FullReplace (the default) prunes it.
+        // 3. The source retires the type. FullReplace (the default) would prune it — and must not.
+        var retired = new FakeRepoSource(partition)
+        {
+            Root = Space(partition),
+            Nodes = [Page(partition, "Doc")],
+        };
+        var second = await StaticRepoImporter.ImportSource(Mesh, retired)
+            .FirstAsync().Timeout(180.Seconds()).Await();
+
+        Output.WriteLine(
+            $"outcome={second.Outcome} pruned=[{string.Join(", ", second.PrunedPaths)}] "
+            + $"held=[{string.Join(", ", second.HeldNodeTypePaths)}] preserved={second.Preserved}");
+
+        second.PrunedPaths.Should().NotContain(typePath,
+            "a NodeType that still has instances is never pruned by a repository-driven import — "
+            + "deleting it takes the instances' per-node hub away (memex.systemorph.com, 2026-09-08)");
+        second.HeldNodeTypePaths.Should().Contain(typePath,
+            "the refusal reaches the caller as a fact it can act on, not only as a log line");
+        second.Preserved.Should().BeGreaterThan(0,
+            "a held type leaves the mesh AHEAD of the repo, and only a converged run may stamp a "
+            + "green marker — otherwise the next trigger would skip the instance question for ever");
+        second.Converged.Should().BeFalse();
+
+        // The definition is still there, and it now says why.
+        var definition = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.PendingRetirement
+                is { Length: > 0 })
+            .FirstAsync().Timeout(60.Seconds()).Await();
+        var stamp = definition.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.PendingRetirement!;
+        Output.WriteLine($"PendingRetirement = {stamp}");
+        stamp.Should().Contain(instancePath,
+            "the stamp names what keeps the type alive, so the node itself explains its state");
+
+        // The instance is still readable — it was the point.
+        var instance = await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
+            .Take(1).Timeout(60.Seconds()).Await();
+        instance.NodeType.Should().Be(typePath);
+
+        var report = await TerminalSummary(partition, attemptsBefore);
+        report.Should().Contain(typePath);
+        report.Should().Contain(instancePath,
+            "naming the TYPE alone leaves an operator with the same manual `search nodeType:{Type}` "
+            + "they had before — the instances are the actionable half");
+        report.Should().NotContain("STRANDED");
+
+        // 4. The instance is retyped/deleted — here, deleted — and the SAME content completes the
+        //    retirement on the next run. The prior run's marker was not green, so nothing skips.
+        await meshService.DeleteNode(instancePath)
+            .Take(1).Should().Within(60.Seconds()).Emit("the instance must be gone before the re-run");
+        await WaitForInstanceListing(typePath, instancePath, present: false);
+
+        var third = await StaticRepoImporter.ImportSource(Mesh, retired)
+            .FirstAsync().Timeout(180.Seconds()).Await();
+        Output.WriteLine(
+            $"outcome={third.Outcome} pruned=[{string.Join(", ", third.PrunedPaths)}] "
+            + $"held=[{string.Join(", ", third.HeldNodeTypePaths)}]");
+
+        third.HeldNodeTypePaths.Should().BeEmpty("with no instances left there is nothing to hold for");
+        third.PrunedPaths.Should().Contain(typePath,
+            "a retirement is a WAIT for the instances, never a veto — once they are gone the "
+            + "repository's deletion lands exactly as for any other retired node");
+    }
+
+    /// <summary>
+    /// The negative control for the hold: a retired NodeType WITHOUT instances is pruned on the
+    /// first pass, as it always was. Without this the hold could quietly become "types are never
+    /// pruned", which is the leak the retirement runbook exists to prevent.
+    /// </summary>
+    [Fact(Timeout = 300000)]
+    public async Task Prune_OfANodeTypeWithoutInstances_Prunes()
+    {
+        var partition = "Pn" + Guid.NewGuid().ToString("N")[..8];
+        var typePath = $"{partition}/Widget";
+
+        var first = await StaticRepoImporter
+            .ImportSource(Mesh, new FakeRepoSource(partition)
+            {
+                Root = Space(partition),
+                Nodes = [TypeNode(partition, "Widget"), Page(partition, "Doc")],
+            })
+            .FirstAsync().Timeout(180.Seconds()).Await();
+        first.Failed.Should().Be(0);
+
         var second = await StaticRepoImporter
             .ImportSource(Mesh, new FakeRepoSource(partition)
             {
@@ -185,28 +307,32 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
 
         Output.WriteLine(
             $"outcome={second.Outcome} pruned=[{string.Join(", ", second.PrunedPaths)}] "
-            + $"stranded=[{string.Join(", ", second.StrandedNodeTypePaths)}]");
+            + $"held=[{string.Join(", ", second.HeldNodeTypePaths)}]");
 
-        // 🚨 COUNTERPARTY: a retired NodeType must STILL be pruned. Refusing would contradict the
-        // shipped behaviour and leave a definition with no source to compile against — a type
-        // parked at compilationStatus Error that no re-import can clear.
+        second.HeldNodeTypePaths.Should().BeEmpty("nothing keeps an instance-less type alive");
         second.PrunedPaths.Should().Contain(typePath,
-            "pruning a retired NodeType is intended, shipped behaviour — the report must not have "
-            + "turned into a veto");
-
-        // 🚨 THE REPORT: loud, specific, and naming what to act on.
-        second.StrandedNodeTypePaths.Should().Contain(typePath,
-            "the deletion took the renderer away from live instances — that must reach the caller, "
-            + "not just a debug line");
-
-        var report = await TerminalSummary(partition, attemptsBefore);
-        report.Should().Contain(typePath);
-        report.Should().Contain(instancePath,
-            "naming the TYPE alone leaves an operator with the same manual `search nodeType:{Type}` "
-            + "they had before — the instances are the actionable half");
+            "pruning a retired NodeType with no instances is the shipped contract and must stay so");
+        second.Preserved.Should().Be(0);
     }
 
     // ——— helpers ————————————————————————————————————————————————————————————————————
+
+    /// <summary>
+    /// The probe reads the eventually-consistent index, so a test that changes the instance set
+    /// waits for the index to reflect it before importing — otherwise it measures index lag, not
+    /// the decision.
+    /// </summary>
+    private async Task WaitForInstanceListing(string typePath, string instancePath, bool present)
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await Observable.Interval(200.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(typePath)).AsSystem())
+                .Take(1))
+            .Where(c => c.Items.Any(n =>
+                string.Equals(n.Path, instancePath, StringComparison.OrdinalIgnoreCase)) == present)
+            .FirstAsync().Timeout(120.Seconds()).Await();
+    }
 
     /// <summary>The terminal summary line of the newest import attempt for the partition.</summary>
     private async Task<string> TerminalSummary(string partition, IReadOnlyCollection<string> before)
@@ -247,6 +373,12 @@ public class ImportDanglingNodeTypeTest(ITestOutputHelper output) : MonolithMesh
     {
         NodeType = "Markdown", Name = id, State = MeshNodeState.Active,
         Content = new MarkdownContent { Content = $"# {id}\n\npage" },
+    };
+
+    private static MeshNode Code(string ns, string id) => new(id, ns)
+    {
+        NodeType = "Code", Name = id, State = MeshNodeState.Active,
+        Content = new MarkdownContent { Content = "// code" },
     };
 
     private static MeshNode Instance(string partition, string id, string typePath) => new(id, partition)

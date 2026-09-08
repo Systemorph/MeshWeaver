@@ -42,20 +42,21 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> PrunedPaths { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
-    /// The NodeType definition paths this import pruned <b>while the mesh still held instances of
-    /// them</b> — issue #2993's hole B. Those instances are now STRANDED: an instance whose type
-    /// resolves to nothing has no per-node hub, so it reads as <c>Unavailable</c> on a timeout,
-    /// renders empty, and never reaches a verdict.
+    /// 🚨 The NodeType definition paths the source no longer carries that this import <b>refused to
+    /// prune because the mesh still holds instances of them</b> — the retirement is PENDING, not
+    /// done. Each is kept (with its own <c>Source/</c>/<c>Test/</c> subtree), stamped
+    /// <see cref="NodeTypeDefinition.PendingRetirement"/>, named on the activity's ⏸ line, and
+    /// counted as <see cref="Preserved"/> so the run is not <see cref="Converged"/>: the next sync
+    /// asks the instance question again and completes the retirement once the instances are
+    /// retyped or deleted.
     ///
-    /// <para>🚨 The prune is NOT refused — pruning a retired NodeType is intended and shipped
-    /// behaviour (<c>WhatsNew/2026-08-28-retired-node-prune</c>), and refusing it would strand the
-    /// definition instead. What was missing is the ANSWER to the question
-    /// <c>Doc/Architecture/RetiringANodeType</c> already tells an operator to ask by hand as step 1
-    /// of every retirement ("establish the instance count is zero"). The activity carries a ⚠ line
-    /// naming the type and the instance paths, the activity's terminal status is Warning, and this
-    /// list is the same fact in a form a caller can act on. See <see cref="NodeTypeInstanceProbe"/>.</para>
+    /// <para>Until 2026-09-08 this list named the types the import had pruned ANYWAY
+    /// (<c>StrandedNodeTypePaths</c>), the instances left with no per-node hub. That is the sequence
+    /// that took a client's record dark on <c>memex.systemorph.com</c> when a two-day-stale Crm sync
+    /// finally delivered a retirement whose retype step had not happened on this portal. See
+    /// <see cref="NodeTypeInstanceProbe"/> for the rule and its reasons.</para>
     /// </summary>
-    public ImmutableList<string> StrandedNodeTypePaths { get; init; } = ImmutableList<string>.Empty;
+    public ImmutableList<string> HeldNodeTypePaths { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
     /// How many source nodes this import could NOT land — the per-file failures the
@@ -1703,53 +1704,70 @@ public static class StaticRepoImporter
                     // as auditable as the "⚠ Failed to import …" lines already are. It is named ONCE
                     // PER PHASE, not once per node: the pruned paths are collected here and appended
                     // in a single Update below (a per-node append is O(n²) — see the upsert phase).
-                    var pruned = toPrune.Count == 0
-                        ? Observable.Return(ImmutableList<string>.Empty)
-                        : toPrune
-                            .Select(t => AsSystem(hub, () => meshService.DeleteNode(t.Path))
-                                .Select(_ =>
-                                {
-                                    logger?.LogInformation(
-                                        "[StaticRepoImport] {Partition}: pruned {Path} (absent from the source).",
-                                        source.Partition, t.Path);
-                                    return (string?)t.Path;
-                                })
-                                .Catch<string?, Exception>(ex =>
-                                {
-                                    logger?.LogWarning(ex,
-                                        "[StaticRepoImport] {Partition}: prune of {Path} failed (continuing).",
-                                        source.Partition, t.Path);
-                                    return Observable.Return<string?>(null);
-                                }))
-                            .ToObservable()
-                            .Merge(BatchSize)
-                            .Where(p => p is not null)
-                            .Select(p => p!)
-                            .ToList()
-                            .Select(list => list.ToImmutableList());
-
-                    // 🚨 A PRUNED NODETYPE TAKES ITS INSTANCES' RENDERER WITH IT (#2993, hole B).
-                    // ComputePrunableNodes has five guards and none of them is type-aware: a NodeType
-                    // definition is pruned exactly like a Markdown node, recursively, and the instances
-                    // that name it are left with no per-node hub — they do not error, they read as
-                    // Unavailable and render empty, with nothing anywhere naming the type that went
-                    // away. The prune still happens (retiring a type by dropping it from the repo is
-                    // the shipped contract, and refusing would strand the DEFINITION instead) — but it
-                    // is no longer silent. Probed BEFORE the deletes, so the answer describes the state
-                    // the deletion is about to destroy. Costs one query per NodeType actually being
-                    // deleted, i.e. nothing at all for the overwhelming majority of imports.
-                    var pruneWithReport = NodeTypeInstanceProbe.Probe(hub, toPrune, logger)
-                        .SelectMany(stranded => pruned
-                            .Select(paths => (Stranded: stranded, PrunedPaths: paths)));
-
-                    return pruneWithReport.SelectMany(pruneOutcome =>
+                    // 🚨 A PRUNED NODETYPE TAKES ITS INSTANCES' RENDERER WITH IT — SO A NODETYPE WITH
+                    // INSTANCES IS NOT PRUNED (#2993 hole B; refused, not merely reported, since
+                    // 2026-09-08). ComputePrunableNodes has five guards and none of them is
+                    // type-aware: a NodeType definition is pruned exactly like a Markdown node, and
+                    // the instances that name it are left with no per-node hub — they do not error,
+                    // they read as Unavailable and render empty. Until today the probe only REPORTED
+                    // that and the delete went ahead; on memex.systemorph.com at 20:29Z the report
+                    // named the one instance of Crm/Mail, the type was pruned in the same breath, a
+                    // client's record went dark and the bake gate refused every rollout on the
+                    // "regression". The retirement was deliberate upstream (Crm ef12089 retypes the
+                    // record on the portal BEFORE the deploy) — it was the two-day-stale sync that
+                    // delivered it before the retype had happened here. So: a type with instances is
+                    // HELD (kept, with its own Source/Test subtree; stamped PendingRetirement; named
+                    // on the activity; counted Preserved so the run is not Converged), and the next
+                    // sync completes the retirement by itself once the instances are gone. Probed
+                    // BEFORE the deletes, as System and mesh-wide, one query per NodeType candidate —
+                    // nothing at all for the overwhelming majority of imports. A probe that cannot
+                    // answer holds too: the deletion is irreversible, the read is not.
+                    return NodeTypeInstanceProbe.Probe(hub, toPrune, logger).SelectMany(heldTypes =>
                     {
-                        var prunedPaths = pruneOutcome.PrunedPaths;
-                        var stranded = pruneOutcome.Stranded;
-                        var strandedReport = NodeTypeInstanceProbe.Describe(stranded);
-                        if (strandedReport is not null)
-                            logger?.LogWarning(
-                                "[StaticRepoImport] {Partition}: {Report}", source.Partition, strandedReport);
+                        var heldPaths = heldTypes.Select(h => h.NodeTypePath).ToImmutableList();
+                        var toPruneAfterHold = NodeTypeInstanceProbe.WithoutHeld(toPrune, heldPaths);
+                        // Says it on the process log at Warning AND yields the keyed activity line.
+                        var heldReport = NodeTypeInstanceProbe.Report(heldTypes, logger);
+                        var stamped = NodeTypeInstanceProbe.Hold(
+                            hub, heldTypes, $"{source.Partition} import {fingerprint}", logger);
+
+                        // Collect the actually-pruned PATHS (not just a count): a pruned Source/Test
+                        // node affects its owning NodeType exactly like a written one, so the recompile
+                        // derivation downstream needs to see it. A failed prune contributes nothing.
+                        // 🚨 EVERY successful prune names its path — server log AND activity log (issue
+                        // #604): a prune is a destructive act on user data, and an aggregate count alone
+                        // made a deleted node indistinguishable from a bug ("my page vanished and nothing
+                        // says why"). The activity log is the diagnosis surface, so the deletion must be
+                        // as auditable as the "⚠ Failed to import …" lines already are. It is named ONCE
+                        // PER PHASE, not once per node: the pruned paths are collected here and appended
+                        // in a single Update below (a per-node append is O(n²) — see the upsert phase).
+                        var pruned = toPruneAfterHold.Count == 0
+                            ? Observable.Return(ImmutableList<string>.Empty)
+                            : toPruneAfterHold
+                                .Select(t => AsSystem(hub, () => meshService.DeleteNode(t.Path))
+                                    .Select(_ =>
+                                    {
+                                        logger?.LogInformation(
+                                            "[StaticRepoImport] {Partition}: pruned {Path} (absent from the source).",
+                                            source.Partition, t.Path);
+                                        return (string?)t.Path;
+                                    })
+                                    .Catch<string?, Exception>(ex =>
+                                    {
+                                        logger?.LogWarning(ex,
+                                            "[StaticRepoImport] {Partition}: prune of {Path} failed (continuing).",
+                                            source.Partition, t.Path);
+                                        return Observable.Return<string?>(null);
+                                    }))
+                                .ToObservable()
+                                .Merge(BatchSize)
+                                .Where(p => p is not null)
+                                .Select(p => p!)
+                                .ToList()
+                                .Select(list => list.ToImmutableList());
+
+                    return stamped.SelectMany(_ => pruned).SelectMany(prunedPaths =>
+                    {
 
                         // 🚨 THE REFUSAL IS SAID OUT LOUD, and it names WHICH read came back
                         // indeterminate (issue #3589). "Pruned N" is only ever emitted for N > 0, so
@@ -1791,9 +1809,9 @@ public static class StaticRepoImporter
                                     $"🗑 Pruned {p} (absent from the repo).",
                                     Microsoft.Extensions.Logging.LogLevel.Information)
                                     .WithKey("activity.import.pruned", ("path", p))))
-                                .Concat(strandedReport is null
+                                .Concat(heldReport is null
                                     ? Array.Empty<LogMessage>()
-                                    : [new LogMessage(strandedReport, Microsoft.Extensions.Logging.LogLevel.Warning)])
+                                    : [heldReport])
                                 .ToArray(),
                             logger!);
 
@@ -1819,7 +1837,7 @@ public static class StaticRepoImporter
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteContentSyncLedgers(hub, source.Partition, content, logger)
                             .SelectMany(_ => WriteManifest(hub, source.Partition, nodes, manifest, changedNodePaths,
-                            hub.JsonSerializerOptions, logger)).Select(_ =>
+                            heldPaths, hub.JsonSerializerOptions, logger)).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -1856,13 +1874,16 @@ public static class StaticRepoImporter
                             // and no boot can change that. Succeeded at this fingerprint IS the durable
                             // short-circuit, so stamping it froze a Space's assets out of the mesh
                             // permanently and invisibly — the content-layer twin of #2211.
-                            var status = failed > 0 || blockedCreates.Count > 0 || stranded.Count > 0
+                            var status = failed > 0 || blockedCreates.Count > 0 || heldTypes.Count > 0
                                              || refusedContent.Count > 0
                                 ? ActivityStatus.Warning
                                 : ActivityStatus.Succeeded;
-                            // Two-way preserved local changes: kept-not-overwritten (upsert conflicts) PLUS
-                            // kept-not-pruned (server additions). Both leave the mesh ahead of the repo.
-                            var preserved = count.Preserved + keptFromPrune.Length;
+                            // Preserved local state: kept-not-overwritten (upsert conflicts) PLUS
+                            // kept-not-pruned (server additions) PLUS held NodeTypes (pending
+                            // retirement). All three leave the mesh ahead of the repo, and a run that
+                            // leaves the mesh ahead is not Converged — the marker must not licence the
+                            // next trigger to skip the instance question the hold depends on.
+                            var preserved = count.Preserved + keptFromPrune.Length + heldTypes.Count;
                             var preservedNote = preserved > 0 ? $", kept {preserved} local change(s)" : "";
                             // The claimed-skip count is stated whenever it is non-zero — "nothing seeded"
                             // must be greppable rather than silent, whatever the terminal status.
@@ -1915,13 +1936,13 @@ public static class StaticRepoImporter
                                 : sourceListingIsComplete
                                     ? "pruned 0"
                                     : "pruned 0 (REFUSED — the source listing was incomplete)";
-                            // The stranding report rides on the terminal summary too, not only on the
-                            // ⚠ line above: the summary is what a reader sees first, and "pruned 3"
-                            // reads as routine housekeeping unless it says what the prune broke.
-                            var strandedNote = strandedReport is null ? "" : " " + strandedReport;
+                            // The hold rides on the terminal summary too, not only on the ⏸ line
+                            // above: the summary is what a reader sees first, and "pruned 0" reads as
+                            // routine housekeeping unless it says what the prune refused and why.
+                            var heldNote = heldReport is null ? "" : " " + heldReport.Message;
                             var summary = failed > 0
-                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{refusedNote}{strandedNote}"
-                                : $"Imported {count.Imported} node(s){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{refusedNote}{strandedNote}";
+                                ? $"Imported {count.Imported} node(s), {failed} FAILED (see ⚠ above){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{refusedNote}{heldNote}"
+                                : $"Imported {count.Imported} node(s){preservedNote}{claimedNote}, {prunedNote}, synced {contentCount} content file(s).{blockedNote}{refusedNote}{heldNote}";
                             NodeTypeCompilationActivity.Complete(hub, activityPath, status,
                                 new[]
                                 {
@@ -1970,9 +1991,7 @@ public static class StaticRepoImporter
                             {
                                 WrittenPaths = count.Written,
                                 PrunedPaths = prunedPaths,
-                                StrandedNodeTypePaths = stranded
-                                    .Select(x => x.NodeTypePath)
-                                    .ToImmutableList(),
+                                HeldNodeTypePaths = heldPaths,
                                 // 🚨 Carried to the CALLER, not just to the activity's ⚠ lines: the
                                 // last-sync guard has to know a node did not land, or it advances
                                 // the baseline past it and the miss is permanent (#2229 item C).
@@ -1992,6 +2011,7 @@ public static class StaticRepoImporter
                             };
                         });
                         }));
+                    });
                     });
                 });
                 });
@@ -2827,6 +2847,7 @@ public static class StaticRepoImporter
     private static IObservable<int> WriteManifest(
         IMessageHub hub, string partition, IReadOnlyList<MeshNode> nodes,
         IReadOnlyDictionary<string, string> previous, IReadOnlySet<string>? evaluatedPaths,
+        IReadOnlyCollection<string> heldNodeTypePaths,
         JsonSerializerOptions opts, ILogger? logger)
     {
         var map = nodes
@@ -2836,6 +2857,27 @@ public static class StaticRepoImporter
                 g => g.Key,
                 g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), opts),
                 StringComparer.OrdinalIgnoreCase);
+
+        // 🚨 A HELD NodeType (pending retirement — the source no longer carries it, the mesh still
+        // has instances) stays in the manifest under whatever the last run that carried it
+        // recorded, together with everything under it. The manifest is what Additive mode reads
+        // as "previously owned": drop the held paths from it and the very next run would file the
+        // type as user-added, never a prune candidate again, and the retirement would never
+        // complete — a silent leak instead of a pending migration.
+        if (heldNodeTypePaths.Count > 0)
+        {
+            var builder = map.ToBuilder();
+            foreach (var (path, token) in previous)
+            {
+                if (builder.ContainsKey(path))
+                    continue;
+                if (heldNodeTypePaths.Any(held =>
+                        string.Equals(path, held, StringComparison.OrdinalIgnoreCase)
+                        || path.StartsWith(held + "/", StringComparison.OrdinalIgnoreCase)))
+                    builder[path] = token;
+            }
+            map = builder.ToImmutable();
+        }
 
         if (evaluatedPaths is not null)
         {

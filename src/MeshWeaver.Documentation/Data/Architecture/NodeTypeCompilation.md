@@ -375,6 +375,7 @@ just a list:
 |---|---|---|
 | Established, non-empty | every query answered, here are the sources | compile |
 | Established, **empty** | every query answered and matched nothing (sources deleted, or a configuration-only type) | compile — a failure then classifies `NoSources`, which does not gate a rollout |
+| Any, on a type its repository **retired** | the definition carries `pendingRetirement` (held for its remaining instances), or the definition node no longer exists | a failure classifies `Retired` / `Removed` — content verdicts that never gate; see [Dangling NodeTypes](../DanglingNodeTypes) → *The bake gate* |
 | **Unestablished** | at least one query errored or never answered | **refuse**: throw `SourceDiscoveryUnavailableException`, stamp `CompilationStatus.Unavailable` |
 
 A failed leg used to be swallowed (`.Catch(_ => empty)`), so the surviving legs' **partial** set
