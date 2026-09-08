@@ -133,6 +133,29 @@ non-zero, so the capture reads `000000` — a six-digit status nobody can look u
 the situation where the error message is all the reader has. `code=$(curl …) || code=000` assigns
 once. Worth grepping for wherever a status code is captured.
 
+## Which half is wrong: the assertion, or the environment?
+
+Every instance of this class looks the same from the outside — *a check is red because the thing it
+names is not there* — and the two possible repairs are opposites. Fixing the wrong half is how a
+monitor gets quietly weakened.
+
+**The discriminator is whether the thing asserted is guaranteed by construction, and by what.**
+
+- `AgenticPrimer` on the staff portal was guaranteed by **nothing**. No mechanism produces it there;
+  it is an install decision somebody may or may not have made, and this repository cannot see which.
+  The assertion was the wrong half — hence this page.
+- Compare #3670, filed the same night: the bake preflight refused because
+  `memex-portal-ai:latest` **resolved to no digest**. That tag *is* guaranteed — the promotion is
+  supposed to produce it, and the sibling `mw-plugin-test:latest` did. So there the *environment* is
+  the wrong half, and the gate refusing rather than falling back to the pin is it working correctly
+  (its own comment: *"Refusing to fall back to the pin, which would republish an already-published
+  identity and leave instances held"*).
+
+So before repointing a red assertion, name the mechanism that was supposed to make it true. If you
+can name one, the red is a finding and repointing destroys it. If you cannot, the assertion was a
+guess and repointing is the fix — but then point it at something a mechanism *does* guarantee, or
+you have only moved the guess.
+
 ## What this file may never contain again
 
 The workflow's matrix names **hosts**. It may not name a package, a space, or a course. Anything
