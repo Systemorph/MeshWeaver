@@ -37,9 +37,9 @@ namespace MeshWeaver.Plugin.Packaging;
 /// <para>🚨 <b><see cref="Compare"/> is PAIRWISE and is deliberately NOT an
 /// <see cref="IComparer{T}"/>.</b> Over a mixed set the relation is not transitive — a slip tag beats
 /// a promotion beats a sealed tag beats the slip tag — and an intransitive comparer hands a sort an
-/// arbitrary answer. A caller that must ORDER a heterogeneous set bands by
-/// <see cref="BuildOrdinal"/><c>.HasValue</c> first and only then compares within a band;
-/// <c>VersionSelect.PickTargets</c> is the reference implementation.</para>
+/// arbitrary answer. A caller that must ORDER a heterogeneous set uses <see cref="Newest"/>, which
+/// bands by <see cref="BuildOrdinal"/><c>.HasValue</c> first and only then compares within a band.
+/// </para>
 /// </summary>
 public static class PlatformReleaseOrder
 {
@@ -119,6 +119,56 @@ public static class PlatformReleaseOrder
     /// on a comparison nobody could make.
     /// </summary>
     public static bool IsNewer(string? candidate, string? current) => Compare(candidate, current) > 0;
+
+    /// <summary>
+    /// 🚨 <b>The ONE total order over a set of platform versions — ASCENDING, so "newest first" is
+    /// <c>OrderByDescending(x, PlatformReleaseOrder.Newest)</c>.</b> Every caller that has to RANK
+    /// platform builds against each other uses this and nothing else (#3542).
+    ///
+    /// <para><b>Why it is not <see cref="Compare"/>.</b> Compare answers a PAIRWISE question and
+    /// falls back to SemVer whenever one side carries no run number — correct for two versions, and
+    /// intransitive over a SET: the slip tag <c>3.1.0-ci.7841</c> beats the promotion <c>3.0.0</c>
+    /// (SemVer), the promotion beats the sealed <c>3.0.0-ci.8130</c> (SemVer), and the sealed tag
+    /// beats the slip tag (run number). A sort handed a cycle produces an arbitrary answer, which is
+    /// how a "fixed" ordering silently keeps picking the wrong build.</para>
+    ///
+    /// <para><b>The order, and why it is total.</b> Three keys, lexicographically, each a total
+    /// order on its own:</para>
+    /// <list type="number">
+    /// <item><b>the band</b> — a version carrying a <see cref="BuildOrdinal"/> outranks one that does
+    /// not. A build the machine published outranks a string nobody can place;</item>
+    /// <item><b>the run number</b>, within the lineage band. The version LINE in front of it is
+    /// ignored, which is precisely what makes a mislabelled line lose;</item>
+    /// <item><b>SemVer</b> (<see cref="NuGetVersionComparer"/>) — the tie-break inside the lineage
+    /// band, and the whole of the order in the promotion band, where the version string is the only
+    /// key the members share and a deliberately cut release makes it a trustworthy one.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>This is an ORDER, never a THRESHOLD.</b> "Is the platform at least X" — a declared
+    /// <c>minMeshVersion</c> floor — is a different predicate over the same key and must not be
+    /// answered with this comparer: for an updater the clean <c>3.0.0</c> must outrank
+    /// <c>3.0.0-ci.7977</c> (or a Stable install can never reach the release it waits for), while a
+    /// <c>3.0.0</c> FLOOR must be SATISFIED by <c>3.0.0-ci.7977</c>. Same two strings, opposite
+    /// required answers. See <c>Doc/Architecture/SelfUpdateTargetSelection</c> §4.</para>
+    /// </summary>
+    public static IComparer<string> Newest { get; } = new TotalOrder();
+
+    private sealed class TotalOrder : IComparer<string>
+    {
+        public int Compare(string? left, string? right)
+        {
+            var leftOrdinal = BuildOrdinal(left);
+            var rightOrdinal = BuildOrdinal(right);
+
+            if (leftOrdinal.HasValue != rightOrdinal.HasValue)
+                return leftOrdinal.HasValue ? 1 : -1;
+
+            if (leftOrdinal is { } l && rightOrdinal is { } r && l != r)
+                return l.CompareTo(r);
+
+            return Math.Sign(NuGetVersionComparer.Instance.Compare(left, right));
+        }
+    }
 
     /// <summary>
     /// A platform version is a NUMERIC dotted core (1–4 components, matching what a .NET assembly
