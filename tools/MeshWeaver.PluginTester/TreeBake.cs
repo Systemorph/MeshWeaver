@@ -492,16 +492,28 @@ public static class TreeBake
         }
 
         var bundles = WriteBundles(
-            options, packages, snapshot, frameworkIdentity, entriesByPackage);
+            options, packages, snapshot, frameworkIdentity, entriesByPackage, host.Surface);
         return new Report(frameworkIdentity, results.ToImmutable(), bundles);
     }
 
+    /// <summary>
+    /// Writes the bundles, the identity file and — when <paramref name="surface"/> is given — the
+    /// host's <see cref="BakeOutput.PlatformSurfaceFile"/> (#3651) into the output directory.
+    /// </summary>
+    /// <param name="options">Where to, and provenance.</param>
+    /// <param name="packages">The packages baked.</param>
+    /// <param name="snapshot">The tree the bake ran over.</param>
+    /// <param name="frameworkIdentity">The HOST's identity every bundle is keyed to.</param>
+    /// <param name="entriesByPackage">The compiled assemblies, per package.</param>
+    /// <param name="surface">The host's type surface (<see cref="BakeHost.Surface"/>), or null for
+    /// a caller that has no host in hand.</param>
     internal static ImmutableArray<string> WriteBundles(
         Options options,
         IReadOnlyList<PackageManifest> packages,
         RepoSnapshot snapshot,
         string frameworkIdentity,
-        Dictionary<string, List<BundleWriter.AssemblyEntry>> entriesByPackage)
+        Dictionary<string, List<BundleWriter.AssemblyEntry>> entriesByPackage,
+        Func<ModulePlatformSurface>? surface = null)
     {
         Directory.CreateDirectory(options.OutputDirectory);
         var manifestsById = packages.ToDictionary(p => p.Id, StringComparer.OrdinalIgnoreCase);
@@ -534,9 +546,15 @@ public static class TreeBake
 
         File.WriteAllText(
             Path.Combine(options.OutputDirectory, FrameworkMvidFile), frameworkIdentity);
+        // 🚨 The HOST's surface, not this process's (#3651): with --app the bake is addressed to a
+        // platform this process is not, and the surface must describe what THAT platform binds a
+        // module to. BakeHost resolved both from the same directory.
+        if (surface is not null)
+            BakeOutput.WritePlatformSurface(options.OutputDirectory, frameworkIdentity, surface());
         options.Output.WriteLine(
             $"bake: framework={frameworkIdentity} source={sourceSha} "
             + $"packages={written.Count} assemblies={entriesByPackage.Values.Sum(e => e.Count)} "
+            + (surface is null ? string.Empty : $"surface={BakeOutput.PlatformSurfaceFile} ")
             + $"→ {options.OutputDirectory}");
         return written.ToImmutable();
     }
