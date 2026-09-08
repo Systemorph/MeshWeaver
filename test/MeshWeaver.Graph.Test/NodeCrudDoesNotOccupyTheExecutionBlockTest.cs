@@ -56,15 +56,44 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
     private const string ParkedNodeId = "TurnStateParkedWrite";
     private const string ParkedNodePath = $"{TestPartition}/{ParkedNodeId}";
 
+    /// <summary>The INDEPENDENT second operation: never parked, so only a held pump delays it.</summary>
+    private const string ProbeNodeId = "TurnStateProbeWrite";
+
+    /// <summary>The control's node — created with nothing parked, so it measures the probe itself.</summary>
+    private const string ControlNodeId = "TurnStateControlWrite";
+
+    /// <summary>Bound for the probe. Deliberately WELL under the parked validator's own
+    /// <c>TestTimeouts.Convergence</c> spin, so the park cannot expire first and hand the probe a
+    /// pass that says nothing about whether the pump was free.</summary>
+    private static readonly TimeSpan ProbeBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>The two nodes parked SIMULTANEOUSLY by the parallelism test below.</summary>
+    private const string ParallelANodeId = "TurnStateParallelA";
+
+    private const string ParallelBNodeId = "TurnStateParallelB";
+
+    private const string ParallelAPath = $"{TestPartition}/{ParallelANodeId}";
+
+    private const string ParallelBPath = $"{TestPartition}/{ParallelBNodeId}";
+
     /// <summary>Producer → test: the parking validator completes this once its turn is running.</summary>
     private readonly AsyncSubject<Unit> _parked = new();
+
+    private readonly AsyncSubject<Unit> _parkedA = new();
+
+    private readonly AsyncSubject<Unit> _parkedB = new();
 
     private ParkTheNodeCrudBlock? _park;
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        _park = new ParkTheNodeCrudBlock(ParkedNodePath, _parked);
+        _park = new ParkTheNodeCrudBlock(new Dictionary<string, AsyncSubject<Unit>>
+        {
+            [ParkedNodePath] = _parked,
+            [ParallelAPath] = _parkedA,
+            [ParallelBPath] = _parkedB,
+        });
         return base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddSingleton<INodeValidator>(_park));
     }
@@ -95,14 +124,47 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
                 Name = "Turn State Parked Write",
                 NodeType = "Markdown",
             }));
-        string snapshot;
+        // 🚨 THE BLOCK IS MEASURED BY WHAT IT CAN STILL DO, NOT BY GetTurnLoopSnapshot().
+        //
+        // The snapshot's `Executing(...)` clause CANNOT answer this question, and the first version
+        // of this test failed because it asked. `currentlyExecutingMessageType` is cleared in the
+        // `.Finally(...)` of the handler's returned OBSERVABLE (MessageService), so it stays set for
+        // as long as the handler's chain is in flight — including every pooled hop the chain has
+        // already left the block for. Its elapsed is therefore the handler's lifetime, not the time
+        // the pump was occupied: with the create parked here, one run read
+        // `Executing(CreateNodeResponse, 36001ms)` while the pump was idle throughout, and the
+        // number tracked the park window exactly because the park IS the handler's lifetime.
+        // `drainsInFlight`/`draining` read 1/True for the same reason.
+        //
+        // That is also why #2543's `Executing(CreateNodeRequest, 24888ms)` does not by itself say
+        // the block was held for 24.9 s — the same field, the same ambiguity.
+        //
+        // So the claim is measured behaviourally: with a create provably parked, post an INDEPENDENT
+        // node operation to the same hub and require it to complete. A pump held by the parked
+        // create cannot answer it; a pump that answers is free by demonstration, whatever the
+        // snapshot says.
         try
         {
             await _parked.Should().Within(TestTimeouts.Convergence)
                 .Emit("the create must actually be in flight and blocked, or this test describes an "
                     + "idle mesh and proves nothing");
 
-            snapshot = NodeOperationHub.GetTurnLoopSnapshot();
+            var probe = ObserveNodeOperation(new CreateNodeRequest(
+                new MeshNode(ProbeNodeId, TestPartition)
+                {
+                    Name = "Turn State Probe Write",
+                    NodeType = "Markdown",
+                }));
+
+            await probe.Should().Within(ProbeBudget)
+                .Emit("the node-CRUD execution hub must still process a SECOND node operation while "
+                    + "the first is parked inside its validator: the create pipeline leaves the "
+                    + "action block at its first pooled storage hop, so it is a pool thread that is "
+                    + "parked, not the pump. If this times out the block IS held for the duration of "
+                    + "a create, every node CRUD in the mesh serialises behind it, and #2543's "
+                    + "24.9 s capture is routine rather than anomalous. Turn-loop snapshot at this "
+                    + "moment (diagnostic only, see above — it cannot decide this): "
+                    + NodeOperationHub.GetTurnLoopSnapshot());
         }
         finally
         {
@@ -111,18 +173,70 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
             _park!.Release();
         }
 
-        snapshot.Should().NotContain("Executing(",
-            "the create pipeline left the action block at its first pooled storage hop, so no "
-            + "handler is on the block while the create is blocked downstream — a create that DID "
-            + "hold the block would make #2543's 24.9 s capture routine instead of anomalous");
-        snapshot.Should().Contain("drainsInFlight=0",
-            "no drain body is executing: the parked work is on a pool thread, not on the pump");
-        snapshot.Should().Contain("buffer=0",
-            "and nothing is queued behind it — node CRUD in flight does not back up this hub");
-
         await write.Should().Within(TestTimeouts.Convergence)
             .Emit("the parked write must complete once released — a stranded create would leak into "
                 + "the next test");
+    }
+
+    /// <summary>
+    /// 🚨 THE POSITIVE CONTROL for the measurement above, and it is not optional. The probe there
+    /// is read as "the pump is held" when it does not complete — a reading that is only valid if
+    /// the very same operation DOES complete when nothing is parked. Without this, a probe that
+    /// never completes for its own reasons looks exactly like a held pump, and the conclusion
+    /// would be drawn from an instrument that cannot answer.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheProbeOperation_CompletesPromptly_WhenNothingIsParked()
+    {
+        var probe = ObserveNodeOperation(new CreateNodeRequest(
+            new MeshNode(ControlNodeId, TestPartition)
+            {
+                Name = "Turn State Control Write",
+                NodeType = "Markdown",
+            }));
+
+        await probe.Should().Within(ProbeBudget)
+            .Emit("an unparked node create must complete well inside the budget the probe above "
+                + "uses — that budget is only meaningful if this passes");
+    }
+
+    /// <summary>
+    /// 🚨 <b>Node CRUD runs in PARALLEL</b> — the property the decoupling in
+    /// <c>MessageHub.ContinueOffBlockRestoringUserContext</c> exists to give, asserted without a
+    /// stopwatch.
+    ///
+    /// <para>Two creates are parked in their validators AT THE SAME TIME. Both validators must be
+    /// entered before either is released, which can only happen if two creates are in flight
+    /// concurrently. When every response continuation ran on <c>portal/nodeops</c>'s action block,
+    /// the second create could not even be DEQUEUED while the first was parked — it sat at
+    /// <c>Queue(buffer=1,…)</c> and its validator never ran, so this test could not pass by
+    /// timing luck. It is a structural assertion, not a benchmark.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TwoCreates_AreInFlightSimultaneously()
+    {
+        var a = ObserveNodeOperation(new CreateNodeRequest(
+            new MeshNode(ParallelANodeId, TestPartition) { Name = "Parallel A", NodeType = "Markdown" }));
+        var b = ObserveNodeOperation(new CreateNodeRequest(
+            new MeshNode(ParallelBNodeId, TestPartition) { Name = "Parallel B", NodeType = "Markdown" }));
+
+        try
+        {
+            await _parkedA.Should().Within(TestTimeouts.Convergence)
+                .Emit("the first create must reach its validator");
+            await _parkedB.Should().Within(ProbeBudget)
+                .Emit("the SECOND create must reach its validator while the first is still parked "
+                    + "there — two node writes genuinely in flight at once. A hub that runs "
+                    + "continuations on its own action block cannot get here: the second create "
+                    + "would still be queued behind the first, unstarted");
+        }
+        finally
+        {
+            _park!.Release();
+        }
+
+        await a.Should().Within(TestTimeouts.Convergence).Emit("the first create must complete");
+        await b.Should().Within(TestTimeouts.Convergence).Emit("the second create must complete");
     }
 
     /// <summary>
@@ -136,7 +250,8 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
     /// so nothing else in the mesh is slowed down. (Same harness as
     /// <c>ContentReadIsNotQueuedBehindNodeCrudTest</c>.)</para>
     /// </summary>
-    private sealed class ParkTheNodeCrudBlock(string parkPath, AsyncSubject<Unit> parked) : INodeValidator
+    private sealed class ParkTheNodeCrudBlock(
+        IReadOnlyDictionary<string, AsyncSubject<Unit>> parkPoints) : INodeValidator
     {
         private int _released;
 
@@ -146,7 +261,7 @@ public class NodeCrudDoesNotOccupyTheExecutionBlockTest(ITestOutputHelper output
         public void Release() => Interlocked.Exchange(ref _released, 1);
 
         public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
-            => string.Equals(context.Node.Path, parkPath, StringComparison.Ordinal)
+            => parkPoints.TryGetValue(context.Node.Path, out var parked)
                 ? Observable.Defer(() =>
                 {
                     parked.OnNext(Unit.Default);

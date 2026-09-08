@@ -391,6 +391,55 @@ hop. The first draft of that test asserted the opposite and failed. **So a creat
 block for 24.9 s is doing something this path does not normally do**, and "the create pipeline is
 expensive" is not the answer.
 
+## 🚨 CORRECTION (2026-09-08): half of the paragraph above is wrong, and the fix is one line
+
+Everything above about the *request turn* holds. Two inferences drawn from it do not, and both were
+falsified by measurement rather than by re-reading the code.
+
+**Correction 1 — `Executing(T, N ms)` does NOT measure time on the block.** The mechanism is stated
+correctly earlier in this page (`currentlyExecutingMessageType` is cleared in the handler
+observable's `.Finally`) and then read the wrong way round. `.Finally` fires when the handler's
+**observable completes** — i.e. when the whole detached chain finishes — not when the pump is
+released. So the field measures the handler's in-flight LIFETIME, including every pooled hop the
+chain has already left the block for. Demonstrated: with a create parked in its validator, that
+counter read `Executing(CreateNodeResponse, 36001ms)` and tracked the observer's sampling window
+exactly. **Therefore #2543's `Executing(CreateNodeRequest, 24888ms)` never established that the
+block was held for 24.9 s** — the `buffer=45` beside it is the part that was real. The
+`drainsInFlight` table above inherits this error and reads `> 0` as "a thread is inside the
+handler"; it is "a chain is still in flight", which is not the same claim.
+
+**Correction 2 — the create pipeline DID hold the block, via its continuation.** The request turn
+is genuinely free (`HANDLER_EXIT state=Processed` at +1 ms, confirmed on the fate trail). But the
+detached chain does a partition bootstrap, whose nested response comes back to the SAME hub as a NEW
+turn — and the rest of the pipeline, validators included, ran inline inside that response's turn.
+The earlier reading of an idle hub was taken at a single instant before that turn began, and in
+isolation the path differs; under load the test caught it at 0–1 ms and the assertion read it as
+noise.
+
+**How it was settled — behaviourally, because the snapshot fields cannot decide it.** With a create
+parked, post an INDEPENDENT node create to the same hub:
+
+| | result |
+|---|---|
+| probe alone, nothing parked (**positive control**) | completes promptly |
+| same probe, while a create is parked | never runs — `Queue(buffer=1,…)` for the whole budget |
+
+The control is what makes the second row mean "the pump is held" rather than "this probe never
+completes anyway".
+
+**The fix, and it is not in the node-CRUD path at all.** A response subject is signalled from inside
+the turn that handled the response, and Rx runs a continuation on the thread that signalled it — so
+*every* `hub.Observe(x).SelectMany(…)` chain in the framework ran its remainder on that hub's action
+block, inside that turn. `MessageHub.ContinueOffBlockRestoringUserContext` now hops the continuation
+off the block (`ObserveOn`) before restoring the caller's identity — the hop must precede the
+identity restore, or the chain resumes unauthenticated. Create, delete, move and copy are fixed by
+the same line because they all await nested node ops the same way.
+
+`NodeCrudDoesNotOccupyTheExecutionBlockTest` carries the three tests: the probe, its positive
+control, and `TwoCreates_AreInFlightSimultaneously`, which parks two creates at once and requires
+both validators to be entered before either is released. With the hop removed the first and third
+fail and the control still passes; that pairing is the evidence, not the green.
+
 Two shapes remain, and the `drainsInFlight` table above picks between them:
 
 - **A blocking construct in the composition prologue.** Exactly one exists on the path:

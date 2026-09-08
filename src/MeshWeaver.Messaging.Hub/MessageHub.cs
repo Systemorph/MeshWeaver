@@ -1174,7 +1174,7 @@ public sealed class MessageHub : IMessageHub
         // registration would read as "nothing was ever posted" — the opposite of the truth (#981).
         requestFates.Find(delivery.Id)?.Add(
             "REGISTERED_AFTER_POST (Observe(delivery) overload — earlier stages not recorded)", Address);
-        return RestoreUserContextOnEmission(observable, delivery.AccessContext);
+        return ContinueOffBlockRestoringUserContext(observable, delivery.AccessContext);
     }
 
     /// <summary>
@@ -1218,7 +1218,7 @@ public sealed class MessageHub : IMessageHub
             requestFates.Find(messageId)?.Add($"POST_THREW {postEx.GetType().Name}: {postEx.Message}", Address);
             throw;
         }
-        return RestoreUserContextOnEmission(
+        return ContinueOffBlockRestoringUserContext(
             WrapWithCancelOnDispose(
                 ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
                 messageId, subject),
@@ -1263,7 +1263,7 @@ public sealed class MessageHub : IMessageHub
             }
             return null;
         }
-        return RestoreUserContextOnEmission(
+        return ContinueOffBlockRestoringUserContext(
             WrapWithCancelOnDispose(
                 ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
                 messageId, subject),
@@ -1322,9 +1322,31 @@ public sealed class MessageHub : IMessageHub
     /// hub-impersonation), and any post made from the Subscribe callback inherits the wrong
     /// identity — surfaces as <c>Access denied: user '&lt;cell-hub-path&gt;' lacks ...</c>.
     /// </summary>
-    private IObservable<IMessageDelivery> RestoreUserContextOnEmission(
+    private IObservable<IMessageDelivery> ContinueOffBlockRestoringUserContext(
         IObservable<IMessageDelivery> source, AccessContext? capturedCtx)
     {
+        // 🚨 THE CONTINUATION LEAVES THE RESPONDING HUB'S ACTION BLOCK HERE — and this one hop is
+        // why node CRUD is not a single global queue any more.
+        //
+        // A response subject is signalled from INSIDE the turn that handled the response (see the
+        // identity comment on Observe). Rx runs a continuation on whichever thread signalled it, so
+        // without this hop EVERY `hub.Observe(x).SelectMany(...)` chain in the framework executes
+        // its whole remainder ON that hub's action block, inside that turn. The turn cannot end
+        // until the chain does, and one hub processes one turn at a time.
+        //
+        // Measured on `portal/nodeops` — the mesh's ONE node-CRUD execution hub (#2543). A create
+        // correctly returns `Processed()` in ~1 ms and detaches its pipeline; the pipeline then
+        // does a partition bootstrap, whose nested response comes back to the SAME hub, and the
+        // rest of the create — validators, save, change feed — ran inline in that response's turn.
+        // With a create parked in its validator, a second, unrelated create posted to the same hub
+        // sat unprocessed at `Queue(buffer=1,…) Executing(CreateNodeResponse, …)` for the whole
+        // budget: every node write in the mesh serialised behind one create's continuation.
+        // Delete, move and copy inherit it identically — they await nested node ops the same way.
+        //
+        // The hop is placed BEFORE the identity restore below on purpose: `.Do(SetContext)` must
+        // run on the thread that will run the continuation, or the chain resumes unauthenticated.
+        source = source.ObserveOn(System.Reactive.Concurrency.DefaultScheduler.Instance);
+
         if (capturedCtx is null)
             return source;
         // Restore-on-Finally pattern (2026-05-22): set Context during the
