@@ -394,6 +394,106 @@ for _pvc in by_kind("PersistentVolumeClaim"):
             "— the two halves of one entry disagree, and the storage is provisioned for nobody.",
         )
 
+# ---------------------------------------------------------------------------
+# 13. The bundle-fetch init container fills the shelf the portal reads, with the pod's credential.
+#
+# Doc/Architecture/PluginBundlesInTheRegistry: when `bundles.registry` is set, an init container
+# pulls the sealed publications into `PreWarm__PrebuiltBundleRoot` before the portal starts. Four
+# things must agree for that to do anything, and a template edit can silently break each:
+#   * the init container and the portal container mount the SAME volume at the SAME path, and
+#     that path IS the ConfigMap's PreWarm__PrebuiltBundleRoot — a fetch that lands where the
+#     pre-warm does not look is an init container that exits 0 having achieved nothing;
+#   * BUNDLES_ROOT (what the script writes under) equals that path;
+#   * the projected docker config comes from the Secret named in the pod's imagePullSecrets —
+#     the design's "one credential" is a fact about the render, not a comment;
+#   * the script ConfigMap it mounts is rendered, and the pod template hashes it.
+# Absent init container = the feature is off for this combination, which is legal; the checks
+# run only when it is rendered, and the combination list guarantees one render has it.
+# ---------------------------------------------------------------------------
+checks += 1
+_fetch = next((c for c in (pod.get("initContainers") or []) if c.get("name") == "bundle-fetch"), None)
+if _fetch is not None:
+    _root_cfg = str(cfg_data.get("PreWarm__PrebuiltBundleRoot", "")).strip()
+    _env = {e.get("name"): e.get("value") for e in (_fetch.get("env") or [])}
+    _fetch_mounts = {m.get("mountPath"): m.get("name") for m in (_fetch.get("volumeMounts") or [])}
+    _portal_mounts = {m.get("mountPath"): m.get("name") for m in (portal.get("volumeMounts") or [])}
+    _root_env = _env.get("BUNDLES_ROOT")
+    if not _root_cfg:
+        finding(
+            "a bundle-fetch init container is rendered but PreWarm__PrebuiltBundleRoot is blank",
+            "the init container fills a directory the pre-warm never reads. bundles.root defaults "
+            "to that key; one of them must name the shelf.",
+        )
+    elif _root_env != _root_cfg:
+        finding(
+            f"bundle-fetch writes under BUNDLES_ROOT={_root_env!r} but the portal reads "
+            f"PreWarm__PrebuiltBundleRoot={_root_cfg!r}",
+            "the two must be one path, or the fetch lands where nothing looks.",
+        )
+    else:
+        if _fetch_mounts.get(_root_cfg) != "memex-bundles":
+            finding(
+                f"bundle-fetch does not mount the 'memex-bundles' volume at {_root_cfg}",
+                f"it mounts {sorted(_fetch_mounts.items())}; the shelf must be the volume the "
+                f"portal reads at the same path, or the fetch is lost with the container.",
+            )
+        if _portal_mounts.get(_root_cfg) != "memex-bundles":
+            finding(
+                f"the portal container does not mount the 'memex-bundles' volume at {_root_cfg}",
+                f"it mounts {sorted(_portal_mounts.items())}; the init container's fetch is "
+                f"invisible to the pre-warm.",
+            )
+    _pull_names = {s.get("name") for s in (pod.get("imagePullSecrets") or [])}
+    _volumes = {v.get("name"): v for v in (pod.get("volumes") or [])}
+    _cred = ((_volumes.get("registry-pull-config") or {}).get("secret") or {})
+    if _cred.get("secretName") not in _pull_names:
+        finding(
+            f"bundle-fetch's registry credential comes from Secret {_cred.get('secretName')!r}, "
+            f"which is not among the pod's imagePullSecrets {sorted(_pull_names) or 'none'}",
+            "the design is ONE credential: the Secret that pulls the platform image is the one "
+            "that pulls the bundles. A different Secret is a second credential to provision and "
+            "rotate, and a missing one is an init container that cannot authenticate.",
+        )
+    _items = {i.get("key"): i.get("path") for i in (_cred.get("items") or [])}
+    if _items.get(".dockerconfigjson") != "config.json":
+        finding(
+            "the projected pull secret does not map '.dockerconfigjson' to 'config.json'",
+            "ORAS reads a docker config.json; the kubernetes.io/dockerconfigjson Secret keeps it "
+            "under the '.dockerconfigjson' key, so without the item mapping the file is not there.",
+        )
+    if _env.get("BUNDLES_REGISTRY_CONFIG", "").rsplit("/", 1)[0] not in _fetch_mounts \
+            or _fetch_mounts.get(_env.get("BUNDLES_REGISTRY_CONFIG", "").rsplit("/", 1)[0]) != "registry-pull-config":
+        finding(
+            f"BUNDLES_REGISTRY_CONFIG={_env.get('BUNDLES_REGISTRY_CONFIG')!r} is not inside the "
+            f"'registry-pull-config' mount",
+            f"the script would look for the credential where nothing is mounted "
+            f"(mounts: {sorted(_fetch_mounts.items())}).",
+        )
+    if not _env.get("BUNDLES_IDENTITY") and not _env.get("BUNDLES_IDENTITY_FILE"):
+        finding(
+            "bundle-fetch has neither BUNDLES_IDENTITY nor BUNDLES_IDENTITY_FILE",
+            "the publication is addressed by framework identity; without one the script exits 1 "
+            "on every boot.",
+        )
+    if not (_env.get("BUNDLES_SOURCES") or "").strip():
+        finding(
+            "bundle-fetch has an empty BUNDLES_SOURCES",
+            "an init container that fetches nothing and exits 0 is the skip-trapdoor shape.",
+        )
+    _script = next(iter(by_kind("ConfigMap", "memex-bundle-fetch")), None)
+    if _script is None or not ((_script.get("data") or {}).get("bundle-fetch.sh") or "").strip():
+        finding(
+            "the memex-bundle-fetch ConfigMap is absent or carries no bundle-fetch.sh",
+            "the init container mounts it; without it the pod never leaves ContainerCreating.",
+        )
+    _annotations = ((spec.get("template") or {}).get("metadata") or {}).get("annotations") or {}
+    if not _annotations.get("checksum/bundle-fetch"):
+        finding(
+            "the pod template carries no checksum/bundle-fetch annotation",
+            "an edit to the fetch script would then roll nothing — the same shape checksum/config "
+            "exists to prevent.",
+        )
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(

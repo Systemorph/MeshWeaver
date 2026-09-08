@@ -96,6 +96,11 @@ COMBOS=(
   # pull request and surfaces as a failed `helm upgrade` in the deployment repo. The example
   # overlay sets every required key (object NAMES and a bcrypt HASH, no credential).
   "AKS overlay + the fleet registry (cr.meshweaver.cloud)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/helm/values.registry.example.yaml"
+  # A mirror consumer that ALSO materialises its plugin bundles from the fleet registry before the
+  # portal starts (bundles.*, Doc/Architecture/PluginBundlesInTheRegistry): the only combination
+  # that renders the `bundle-fetch` init container, its shelf, its script and the projected pull
+  # secret. Invariant 13 asserts the shelf is the pre-warm's root and the credential is the pod's.
+  "mirror consumer + bundles from the fleet registry (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.mirror-consumer.yaml:deploy/aks/scripts/testdata/values.bundle-fetch.yaml"
 )
 
 WORK="$(mktemp -d)"

@@ -1,0 +1,20 @@
+# A mirror-consuming instance that ALSO materialises its plugin bundles from the fleet registry
+# (Doc/Architecture/PluginBundlesInTheRegistry) — layered on values.yaml and
+# values.mirror-consumer.yaml by check-chart-invariants.sh as its sixth combination.
+#
+# 🚨 A FIXTURE, not a deployment. Its job is to switch on the `bundle-fetch` init container and
+# everything it renders — the emptyDir shelf at the pre-warm's root, the script ConfigMap, the pull
+# secret projected as a docker config — so the render gate can assert them (invariant 13). The
+# chart leaves all of it dark by default, and without this combination a regression in any of it is
+# invisible until a real pod boots with no bundles.
+#
+# What a consumer sets, and nothing else: the registry host, the sources, the identity of the
+# image it runs, and the pre-warm root the init container fills (the AKS overlay sets the root;
+# this fixture layers on the neutral values, so it names it here).
+bundles:
+  registry: "cr.example.test"
+  sources: ["plugins", "education"]
+  identity: "s0123456789abcdef0123456789abcdef"
+config:
+  memex_portal:
+    PreWarm__PrebuiltBundleRoot: "/data/prebuilt-bundles"

@@ -544,6 +544,35 @@ portal:
   # process then dying abruptly. Raise drainSeconds if sessions that long are expected; do not
   # shrink this below the host's ShutdownTimeout.
   shutdownMarginSeconds: 120
+# ---- Plugin bundles from the fleet registry (Doc/Architecture/PluginBundlesInTheRegistry) -------
+# The `bundle-fetch` init container: before the portal starts, it pulls the sealed publication
+# of every source below for THIS image's framework identity from the fleet registry
+# (`<registry>/plugins/<source>:<identity>`, an OCI image index) with ORAS and lays it out under
+# the directory the pre-warm reads — `<root>/<identity>/<source>/…`, `_complete` gating each
+# source — exactly as CI's share copy is laid out, so the portal keeps reading a filesystem and
+# needs no registry client to seed. Off by default (registry empty ⇒ nothing renders). When on,
+# every key below is asserted by templates/memex-portal/_bundles.tpl, and portal.imagePullSecret
+# must be set: the init container authenticates with that Secret's docker config, so the key
+# that pulls the platform image pulls the bundles and there is no second credential.
+#
+# A source whose tag is absent for the identity is UNSEALED: the init container logs it, writes
+# nothing for that source and exits 0 — the pre-warm compiles that source as it does today. Any
+# other failure (a denied pull, a network error, a torn publication) exits 1 and holds the pod.
+bundles:
+  registry: ""                    # e.g. cr.meshweaver.cloud — set ⇒ the init container renders
+  sources: []                     # source names as the publisher named them, e.g. [plugins]
+  # The framework identity to pull — the identity of portal.image (the bake lane prints it as
+  # `baked identity:`, and the publication it registered carries it). A roll that changes the
+  # image without a `helm upgrade` leaves this stale: the pre-warm then finds no directory for
+  # its own identity and compiles — inert, never wrong. Either this or identityFile.
+  identity: ""
+  identityFile: ""                # a file INSIDE the init container (under /data) holding it
+  # ORAS, pinned by digest. Resolved 2026-09-08 with `crane digest` (multi-arch index digest).
+  image: "ghcr.io/oras-project/oras:v1.3.4@sha256:f7bc056d54d97baa399414ed5048ecc67c3371b750d4bbce1d871827a5758179"
+  root: ""                        # defaults to config.memex_portal.PreWarm__PrebuiltBundleRoot
+  resources:
+    requests: {cpu: "50m", memory: "64Mi"}
+    limits: {memory: "256Mi"}
 migration:
   image: "ghcr.io/systemorph/memex-migration:latest"
   # The migration run's wall-clock BUDGET in minutes — every versioned repair and every always-on
