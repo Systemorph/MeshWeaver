@@ -47,13 +47,43 @@ unblock it. With `enforce_admins: true` there is no override, and the repo is we
 edits protection again. Under a ruleset the same step costs nothing, because absent counts as
 satisfied; there it is the cleanest route and needs no shim.
 
-**Measure the mechanism before choosing.** `branches/main/protection` answering `404` means look at
-`rulesets`, never that the branch is unprotected:
+**Measure the mechanism before choosing.** `branches/main/protection` answering `404` — or answering
+with an EMPTY `contexts` list — means look at `rulesets`, never that the branch is unprotected:
 
 ```bash
 gh api repos/<owner>/<repo>/branches/main/protection --jq '.required_status_checks'
 gh api repos/<owner>/<repo>/rulesets --jq '.[]|"\(.id) \(.name) \(.enforcement)"'
+gh api repos/<owner>/<repo>/rulesets/<id> \
+  --jq '.rules[]|select(.type=="required_status_checks").parameters.required_status_checks[]?.context'
 ```
+
+### The fleet, measured 2026-09-08
+
+The split is not what "core uses rulesets, satellites use classic" would suggest — **Education is a
+ruleset and every other satellite is classic**, so the safe route genuinely differs per repo:
+
+| repo | mechanism | required contexts | `enforce_admins` |
+|---|---|---:|---|
+| MeshWeaver (core) | **ruleset** `2128472` | 1 | — |
+| MeshWeaver.Education | **ruleset** `19153714` | 4 | — |
+| MeshWeaver.Plugins | classic | 5 | **true** |
+| MeshWeaver.Crm | classic | 5 | **true** |
+| MeshWeaver.Reinsurance | classic | 6 | false |
+| MeshWeaver.Manufacturing | classic | 6 | false |
+| MeshWeaver.SocialMedia | classic | 5 | false |
+
+🚨 **Re-measure rather than reading this table.** Protection is per-repo, editable, and it has
+flipped before (`strict` on MeshWeaver.Plugins was `true` until 2026-08-29 and `false` by
+2026-09-02). The table records what the fleet looked like on one day; the commands above record how
+to find out on yours. `enforce_admins: true` matters because it removes the escape hatch: on
+Plugins and Crm an admin cannot merge past a deadlocked required context.
+
+Note also that **five of the six satellites already carry the prefixed name** `validate / Validate
+node repos` — Reinsurance, SocialMedia, Manufacturing, Crm and Education have all been through this
+rename. Four of those five also require `compile-check / Compile every NodeType (vs core)`;
+Education is the exception, requiring its own course and e2e gates instead. **MeshWeaver.Plugins is
+the sole outlier still requiring a bare name**, which is why it is the repo this page was written
+from.
 
 ## The measured case
 
