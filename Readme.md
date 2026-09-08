@@ -114,4 +114,4 @@ The forty-three `MeshWeaver.*` library packages published up to `3.0.0-rc13` are
 
 ## Community
 
-Join our [Discord](https://discord.gg/wMTug8qtvc) to discuss features, report issues, or get help. Licensed under [MIT](LICENSE).
+Licensed under [MIT](LICENSE).

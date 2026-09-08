@@ -248,9 +248,17 @@ dotnet tools (`MeshWeaver.Cli`, `MeshWeaver.Compiler.Cli`, `MeshWeaver.Thumbnail
 `MeshWeaver.Reactive.Assertions`, whose only out-of-repo consumer references it by **project**
 against `$(MeshWeaverRoot)`.
 
-### 🚦 nuget.org rate-limits the unlist endpoint, so this takes several runs
+### ✅ Applied and verified (2026-09-08) — and why it took several runs
 
-**The retirement is applied in batches, not in one pass.** Measured on the first apply run
+**The retirement is complete.** Apply run
+[34173649521](https://github.com/Systemorph/MeshWeaver/actions/runs/34173649521) (2026-09-08
+00:32Z) skipped 29 versions that were already unlisted, unlisted the rest, and ended with
+`VERIFIED on attempt 4: every version now reads as unlisted` — the verification reads the
+registration blobs, not search. Re-dispatching the same lane with `apply` is the standing
+re-verification: it skips everything already unlisted and re-verifies, so it is safe to run at any
+time and costs almost no quota. What follows is the record of why one pass was never enough.
+
+**The retirement was applied in batches, not in one pass.** Measured on the first apply run
 (2026-09-07, 760 versions across the 43 ids):
 
 | Elapsed | Deletes accepted | Refused `403 (Quota Exceeded)` |
@@ -289,7 +297,36 @@ Three consequences are built into `orphaned-nuget-packages.py` rather than remem
 
 ---
 
-## 6. See also
+## 6. Ownership — what still has to move to Systemorph
+
+Unlisting does not touch ownership, and nuget.org exposes **no API for owner management** — every
+step below is a web action by the current owner, so this section is the checklist. Measured
+2026-09-08 09:4xZ against the nuget.org search service and profiles:
+
+| Fact | Consequence |
+|---|---|
+| `MeshWeaver.Aspire.Hosting.Memex` — owners: **`rbuergi`** only, 12 listed versions | the surviving package is personally owned |
+| `MeshWeaver.MemexTemplate` and every retired id — fully unlisted, ownership unchanged | still `rbuergi`'s; an owner can re-list any version |
+| `verified: false` on the survivor | the **`MeshWeaver.*` ID prefix is not reserved** — anyone can publish a new `MeshWeaver.X` |
+| nuget.org profile `Systemorph` exists | the organisation account to transfer to is there |
+| `publish-packages.yml` pushes with `secrets.NUGET_PAT` | the key is the owner's, not the organisation's |
+
+The transfer, in the order that keeps publishing working throughout:
+
+1. **Add the organisation as owner** of each id — survivors first, then the retired ids, so nothing
+   under the prefix stays personally owned (a retired version stays downloadable by exact version
+   for ever, and re-listing is an owner's act). nuget.org → package → *Manage owners* → add
+   `Systemorph`; the organisation accepts the invitation.
+2. **Reserve the `MeshWeaver.*` ID prefix for `Systemorph`** (nuget.org's ID-prefix reservation
+   request). Until then the `verified` badge stays off and the prefix is open.
+3. **Rotate `secrets.NUGET_PAT`** to an API key minted under the `Systemorph` organisation, scoped
+   to push `MeshWeaver.*`. The lane's preflight names that secret and goes red naming it if absent,
+   so a missing rotation is loud, not silent.
+4. **Remove `rbuergi` as owner** only after step 3 has published once from the organisation's key.
+
+---
+
+## 7. See also
 
 - [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) — the one version number, the two
   channels, and §5 on why NuGet stopped being a delivery vehicle.
