@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.RegularExpressions;
+using MeshWeaver.Deployment;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -56,19 +57,25 @@ public class DeploymentPathsSupplyStorageTest
         // The Azure Container Apps lane, which does not use the chart at all — so the chart guard
         // above says nothing about it. It was the ACA portals that made this worth checking:
         // they configure the portal purely through environment variables.
+        //
+        // Since the Deployment record became the ONE input (2026-09-08), the adapter states no key
+        // itself: every portal key is DERIVED from the record by the contract's
+        // DeploymentPortalConfig.PortalConfig — the same derivation the Helm chart renders. So the
+        // guard has two halves, each with its subject: the adapter must still route through that
+        // derivation, and the derivation must state the storage type for a record that says
+        // NOTHING about storage (a bare AddMemex(name) is exactly that record).
         var hosting = Path.Combine(RepoRoot().FullName, "memex", "aspire",
             "Memex.Aspire.Hosting", "MemexHostingExtensions.cs");
         Assert.True(File.Exists(hosting), $"the Aspire hosting extensions are not at {hosting}");
+        Assert.Contains("DeploymentPortalConfig.PortalConfig(", File.ReadAllText(hosting));
 
-        var text = File.ReadAllText(hosting);
-        var match = Regex.Match(text,
-            @"WithEnvironment\(\s*""Graph__Storage__Type""\s*,\s*""(?<v>[^""]*)""");
+        var config = DeploymentPortalConfig.PortalConfig(new DeploymentContent(), PortalConfigOptions.Aspire(mcpBaseUrl: null));
 
-        Assert.True(match.Success,
-            $"{hosting} no longer sets Graph__Storage__Type. The deployed image carries no default, "
-            + "so an Aspire/ACA portal would boot into the first-run SETUP WIZARD rather than "
-            + "serving its data.");
-        Assert.False(string.IsNullOrWhiteSpace(match.Groups["v"].Value),
-            "Graph__Storage__Type is set to an EMPTY value, which reads as 'not configured'.");
+        Assert.True(config.TryGetValue("Graph__Storage__Type", out var type),
+            "the record's portal-config derivation no longer emits Graph__Storage__Type for a record "
+            + "that states no storage layout. The deployed image carries no default, so an Aspire/ACA "
+            + "portal would boot into the first-run SETUP WIZARD rather than serving its data.");
+        Assert.False(string.IsNullOrWhiteSpace(type),
+            "Graph__Storage__Type derives to an EMPTY value, which reads as 'not configured'.");
     }
 }

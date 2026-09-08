@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Deployment record contract: real fleet records round-trip through it without losing a
+       field, the record binds from configuration the way the portal reads it (Deployment:Record),
+       the fluent builder is a set of pure transforms, and the parity table in
+       Doc/Architecture/ConfiguringAnInstanceFromAspire IS the contract between the fluent surface,
+       the record's fields and the keys both renderers emit (RendererParityTest reads the page). -->
+  <PropertyGroup>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Deployment.Contract\MeshWeaver.Deployment.Contract.csproj" />
+    <!-- ConfigurationBuilder + AddInMemoryCollection (Microsoft.Extensions.Configuration rides in). -->
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Three Hosting/Deployment records as the control instance holds them (Systemorph/Memex,
+         main, 2026-09-08): memex (40 content keys), pearl (35), memex-cloud (44). -->
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

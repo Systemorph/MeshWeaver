@@ -76,6 +76,13 @@ When you change code in `Memex.Portal.Distributed` (or any project it references
 
 ## Starting Aspire
 
+> The image-based AppHost (`deploy/aspire/Memex.Deploy.AppHost`, and any customer AppHost on the
+> published `MeshWeaver.Aspire.Hosting.Memex` package) declares its instance as a **Deployment
+> record** — `builder.AddMemex("memex").WithImage(…).WithPluginRepo(…)…` — the same record the
+> Helm chart renders from and the portal binds at boot (`Deployment:Record`). `--record-out
+> <path>` writes the final record for the setup wizard or a `Provision` action.
+> [ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire).
+
 Three modes — pick by whether you want to hold a terminal and whether you need a build:
 
 ```bash

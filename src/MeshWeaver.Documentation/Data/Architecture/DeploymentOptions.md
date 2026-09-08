@@ -137,5 +137,6 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
 
 ## Related
 
+- [Configuring an instance from Aspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire) — the Deployment record is the ONE input: every option on this page that is a value the portal reads is a field on the record (or an `extraPortalConfig` key), rendered by Helm and by Aspire alike
 - [Setting Up Model Providers](/Doc/AI/ModelProviderSetup) — the node model + which query goes where
 - [AI Provider Configuration](/Doc/AI/ProviderConfiguration) — credential/endpoint wiring + factory routing

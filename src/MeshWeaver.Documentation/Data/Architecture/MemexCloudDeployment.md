@@ -160,7 +160,7 @@ The Postgres connection uses the **server FQDN + password + SSL** (`Host=<pg-ser
 5. Patches the portal to 1 replica (the Azure Files mounts render from the chart itself — `persistence:` in `values.aks.yaml` — so there is no volume patch any more).
 6. **Patches the connection-string secret** to the external Postgres.
 
-> **Known chart-generation gaps** (fix at the AddMemex generator):
+> **Known chart gaps** (the chart renders from the Deployment record — [ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire); it is not generated from Aspire, that direction is retired):
 > - The chart's `secrets.yaml` hardcodes the in-cluster Postgres connection string → `deploy.sh` patches it post-install.
 > - `deploy.sh` used to carry TWO commands against a `memex-migration-deployment` — a `set image` and a `rollout restart` — and only the first was guarded with `|| true`; the second printed an error on every documented deploy. Both are gone (#1788): the chart renders the migration as a run-once **Job** (`memex-migration-<Release.Revision>`), so there is no such Deployment. The migration runs from the `helm upgrade` in step 2; override its image through the chart (`--set migration.image=…`), never with `kubectl set image`.
 
@@ -187,7 +187,7 @@ To expose another private tool publicly (e.g. Grafana), create a second `Ingress
 
 ## 6. External Sign-In (OAuth)
 
-Deploy parameters flow through `AddMemex` → `MemexOptions` → portal environment variables (`Authentication__<Provider>__ClientId/Secret/TenantId`, `Social__LinkedIn__*`). A provider is offered in the sign-in UI only when its `ClientId` is set.
+Sign-in is the record's `signIn` block (`AddMemex(…).WithSignIn(microsoftClientId: …, googleClientId: …)`), rendered as the portal keys `Authentication__<Provider>__ClientId/TenantId` and `Social__LinkedIn__ClientId` by Helm and by Aspire alike; the client SECRETS are Key Vault names on the record (`keyVaultSecrets`) or `WithSecret(…)` under Aspire — never record fields ([ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire)). A provider is offered in the sign-in UI only when its `ClientId` is set.
 
 **Microsoft / Entra**
 Register an app (`<entra-app-client-id>`) in your tenant (`<tenant-guid>`). Use single-tenant (`AzureADMyOrg`) for an internal portal. Set the redirect URI to `https://<your-domain>/signin-microsoft`. Also set `Authentication__Provider=Custom` and `Authentication__EnableDevLogin=false`.
@@ -219,7 +219,7 @@ curl -sS "https://<your-domain>/bootstrap/first-admin?secret=<bootstrap-secret>&
 `deploy/aks/scripts/install-observability.sh` installs the `grafana/loki-stack` chart (Grafana + Loki + Promtail + Prometheus) into the `monitoring` namespace.
 
 - **Promtail** scrapes every pod's stdout into Loki — no portal-side configuration needed.
-- **OTLP traces/metrics:** `AddMemex`'s `OtlpEndpoint` option wires `OTEL_EXPORTER_OTLP_ENDPOINT` (not needed for logs).
+- **OTLP traces/metrics:** the record's `telemetry` block (`WithTelemetry(otlpEndpoint)`) renders `OTEL_EXPORTER_OTLP_ENDPOINT` (not needed for logs).
 - **Grafana** defaults to ClusterIP (private). Reach it via the VPN (§9) + port-forward, or expose it publicly behind its own login (§5).
 
 The observability stack is folded into the standard deploy: export `GRAFANA_PW` alongside `MEMEX_PG_CONN` and `deploy.sh` brings it up automatically.
@@ -339,7 +339,7 @@ Visiting an auth-flow route (`/onboarding`, `/login`, `/welcome`) can create a s
 If a static node provider seeds a User for the admin email, a fresh `CreateUser` fails with "Node already exists" and the interactive form shows "user exists" even with 0 DB users. Remove the seed so real onboarding can persist the partition root.
 
 **Secrets in Key Vault (done)**
-The master key, PG connection string, Microsoft client secret, and `Bootstrap:Secret` live in Key Vault; a `SecretProviderClass` + the AKS CSI Secrets Store add-on sync them into a k8s Secret the portal reads via `envFrom` (see §10.6). Remaining: the Grafana admin password (monitoring namespace), and folding the `SecretProviderClass` + deployment CSI volume/`envFrom` into the chart/AddMemex so a fresh deploy wires Key Vault automatically instead of requiring the current post-`deploy.sh` patch.
+The master key, PG connection string, Microsoft client secret, and `Bootstrap:Secret` live in Key Vault; a `SecretProviderClass` + the AKS CSI Secrets Store add-on sync them into a k8s Secret the portal reads via `envFrom` (see §10.6). The `SecretProviderClass` + CSI volume/`envFrom` are the record's `keyVaultSecrets` / `keyVaultSecretClasses` / `vaultValuesKeys` (rendered by the chart from the record — [ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire)), so a fresh deploy wires Key Vault from the record. Remaining: the Grafana admin password (monitoring namespace).
 
 **Multi-replica HA**
 Needs Orleans `AzureTables`/`AdoNet` clustering wired on the Filesystem backend.

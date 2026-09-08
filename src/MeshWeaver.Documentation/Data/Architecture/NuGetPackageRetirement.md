@@ -89,31 +89,37 @@ prebuilt image pulled from GHCR. A `PackageReference` a customer adds to their A
 add a driver to a running portal even in principle — so a fan-out of `MeshWeaver.Hosting.<driver>`
 packages would buy nothing and cost a version matrix that must agree with the image tag.
 
-What does work is already in place. `MemexOptions` is the single config surface, and every value on
-it maps 1:1 to a portal config key emitted as container environment:
+What does work is in place. The **Deployment record** (`DeploymentContent`, the assembly
+`MeshWeaver.Deployment.Contract`, bundled INSIDE the Aspire package) is the single config surface —
+the ONE input Aspire and the Helm chart both render from — and every field on it maps to a portal
+config key emitted as container environment:
 
 ```csharp
-builder.AddMemex("memex", o => o
-    .WithBackend("Filesystem")            // → Backend
-    .WithOrleansClustering("AdoNet")      // → Orleans__Clustering
-    .WithEmbeddings(endpoint, key)        // → Embedding__Endpoint / __ApiKey
-    .WithAiProviders(openAI: false));     // → Features__Ai__Providers__OpenAI
+builder.AddMemex("memex")
+    .WithStorageLayout(s => s with { Backend = "Filesystem" })   // → Deployment__Backend
+    .WithOrleansClustering("AdoNet")                             // → Deployment__Orleans__Clustering
+    .WithPluginRepo("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", gitRef: "main")
+    .PreInstall("MeshWeaver.Plugins/Hosting")                    // → PluginCatalog__* (Aspire) / the catalog file (Helm)
+    .WithRequiredModule("MeshWeaver.Hosting.Postgres")           // → Modules__Required__0
+    .WithAi(a => a.Anthropic(models, enabled: false));           // → Features__Ai__Providers__Anthropic
 ```
 
-Driver selection is already done this way — `Backend` picks Filesystem or Azure blob,
-`OrleansClustering` picks Localhost, AdoNet or Azure Tables — as **config strings the image
-interprets at startup**, not as assemblies the customer resolves. Selecting which plugins the image
-loads at startup is the same shape: a value on `MemexOptions`, a config key on the container, and
-the plugin fetched at runtime from the plugin catalog as a module bundle. Adding a startup-time
-capability means **adding an option to the adapter**, never adding a package.
+Driver selection is done this way — the storage layout picks the backend, `OrleansClustering`
+picks Localhost, AdoNet or Azure Tables — as **config strings the image interprets at startup**,
+not as assemblies the customer resolves. Selecting which plugins the image loads at startup is the
+same shape: a field on the record (`pluginRepos`, `preInstall`, `requiredModules`), a config key on
+the container, and the plugin fetched at runtime from the plugin catalog as a module bundle. Adding
+a startup-time capability means **adding a field to the record** (and its fluent method), never
+adding a package. The full surface and the parity table are
+[ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire).
 
-> 🚧 **Open direction, not yet built —
-> [#3646](https://github.com/Systemorph/MeshWeaver/issues/3646).** Two consequences of this ground
-> rule are recorded so they are not rediscovered: the adapter should grow explicit plugin selection
-> (today plugins are configured portal-side, not from the AppHost), and the hand-maintained Helm
-> chart under `deploy/helm/` duplicates keys that `MemexOptions` already owns — it should be
-> **generated** from the same surface rather than kept in parallel. Aspire's own Kubernetes/Helm
-> publisher is the mechanism.
+> ✅ **Settled, 2026-09-08 —
+> [#3646](https://github.com/Systemorph/MeshWeaver/issues/3646).** Plugin selection from the
+> AppHost is the record's `WithPluginRepo` / `PreInstall` / `WithRequiredModule`. Generating the
+> Helm chart from Aspire is **retired**: the duplication was the adapter's own second copy of the
+> record (`MemexOptions`), not the chart, and the chart's operational contract (the migration Job,
+> the Key Vault classes, KEDA, the operator, the registry, the gates) is not expressible in Aspire's
+> publisher. Aspire emits a record, never a chart; the chart is a renderer of the same record.
 
 ---
 

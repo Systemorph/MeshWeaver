@@ -79,21 +79,22 @@ Key points:
 | `Teams:AppPassword` | the bot app client secret (`MicrosoftAppPassword`) — keep in Key Vault |
 | `Teams:TenantId` | Entra tenant id for a single-tenant bot (optional; multi-tenant when empty) |
 
-Configured through the AppHost fluent API, exactly like email:
+Configured on the Deployment record's advanced rung (portal configuration keys), and the secret
+handed over separately — never on the record:
 
 ```csharp
-builder.AddMemex("memex", o => o
+builder.AddMemex("memex")
     // …
-    .WithTeams(
-        enabled: true,
-        appId: "<bot app id>",
-        appPassword: "<from Key Vault>",
-        tenantId: "<tenant>"));
+    .WithPortalConfig("Teams__Enabled", "true")
+    .WithPortalConfig("Teams__AppId", "<bot app id>")
+    .WithPortalConfig("Teams__TenantId", "<tenant>")
+    .WithSecret("Teams__AppPassword", builder.AddParameter("teams-app-password", secret: true));
 ```
 
 Deploy parameters (`Memex.Deploy.AppHost`): `teams-enabled`, `teams-app-id`, `teams-app-password`,
-`teams-tenant-id` → emitted as `Teams__*`. On AKS the secret comes from Key Vault
-(`teams-apppassword → Teams__AppPassword`), like the email client secret.
+`teams-tenant-id` → emitted as `Teams__*`. On AKS the secret comes from Key Vault through the
+record's `keyVaultSecrets` map (`teams-apppassword → Teams__AppPassword`), like the email client
+secret ([ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire)).
 
 ## Azure setup (one-time, by an admin)
 

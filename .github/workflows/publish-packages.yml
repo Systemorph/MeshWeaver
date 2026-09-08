@@ -206,7 +206,12 @@ jobs:
             || { echo "::error::MeshWeaver.Aspire.Hosting.Memex.$V.nupkg was not produced"; exit 1; }
           count="$(find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' | wc -l | tr -d ' ')"
           [ "$count" -eq 1 ] || { echo "::error::expected exactly 1 package, found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
-          echo "1 package at $V"
+          # The Deployment record assembly is BUNDLED into this package (Memex.Aspire.Hosting.csproj,
+          # PackContractAssembly) — a customer AppHost builds its record from one reference. A nupkg
+          # without it installs, compiles nothing, and cannot be recalled.
+          unzip -l "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" | grep -q 'lib/net10.0/MeshWeaver.Deployment.Contract.dll' \
+            || { echo "::error::MeshWeaver.Deployment.Contract.dll is not inside the nupkg — the PackContractAssembly target in Memex.Aspire.Hosting.csproj no longer bundles it"; exit 1; }
+          echo "1 package at $V, with the Deployment record assembly bundled"
 
       - name: Log in to nuget.org (Trusted Publishing — a short-lived key, nothing stored)
         if: ${{ !inputs.dry-run }}

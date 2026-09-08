@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- 🚨 ZERO MeshWeaver references, on purpose. This assembly is the Deployment record — the ONE
+         input the in-mesh Hosting module renders Helm from, the Aspire adapter derives a local run
+         from and emits, and the portal binds its own record from (Deployment:Record). It ships INSIDE
+         the published Aspire package: NOT as a package of its own (the maintainer retired every
+         NuGet id but two on 2026-09-07) but as a second assembly in MeshWeaver.Aspire.Hosting.Memex's
+         lib folder (that csproj's PackContractAssembly target), so it must stay free of anything
+         that is not itself published: no MeshWeaver.Messaging.Contract (its DI/Logging/ShortGuid
+         closure is not a package), no Domain, no Layout. That is also why the property labels carry
+         only the BCL [Description] — the German [Translation] texts of the in-mesh original are in
+         Doc/Architecture/ConfiguringAnInstanceFromAspire under "Labels" until the localizer reads a
+         catalog for declarations (follow-up named there). Inside the image it is referenced by
+         MeshWeaver.PluginCatalog, which puts it in the application closure the in-mesh Hosting
+         sources compile against. -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Description>The MeshWeaver Deployment record (DeploymentContent): the one declaration of an instance that Helm, the Aspire adapter and the portal itself all read. Pure records, a fluent builder, the configuration binding (Deployment:Record) and the portal-config derivation shared with the chart.</Description>
+    <ProjectGuid>{5a0f3d21-8c7e-4b6a-9d13-2e7f4c8a1b90}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+  </ItemGroup>
+</Project>
