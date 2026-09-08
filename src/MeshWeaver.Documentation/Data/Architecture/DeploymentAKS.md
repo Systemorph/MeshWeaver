@@ -220,6 +220,38 @@ Helm's three-way merge removes only what Helm owns), so nothing on that list res
 [Chart Drift — what a deploy actually does](/Doc/Architecture/ChartDriftSemantics) has the
 measurement and the per-class triage.
 
+### Volume capacity is a record property — `volumes[].size`, applied by the operator
+
+🚨 **Never `kubectl patch pvc … storage` on a live portal.** The size of every persistent volume
+is `volumes[].size` on the instance's `Hosting/Deployment` record, and the operator applies it:
+
+| you want | you do | what runs |
+|---|---|---|
+| a bigger share (`/data` full, content growing) | edit `volumes[].size` on the record (`128Gi`), then `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` — or a `Provision`, which carries the same step | `hosting-pv-resize --namespace <ns> --claim <claimName> --size <size>` once per declared claim, ordered FIRST in a Reconcile: a full `/data` blocks the rollout the re-apply then waits on |
+| to know whether the cluster has caught up | `{ "requestedAction": "Audit" }` | the report's `volumeCapacityBelowRecord` — the claim, the declared size and the live capacity |
+
+What the command does, and refuses, is the whole contract (`deploy/aks/operator/bin/hosting-pv-resize`):
+
+- it **grows** one claim to the declared size and reports the capacity it **read back** from the
+  claim's `status`, never the request (`::hosting:: pv_capacity=<quantity>`, `pv_resized=0|1`);
+- it **never shrinks** — a record that declares LESS than the claim holds is a wrong record, and the
+  refusal says to correct the record to the measured capacity;
+- it **never creates** — an absent claim is the chart's job (`persistence.<name>.create` on a
+  record-driven Provision), so the refusal names the claim rather than provisioning one on a guess;
+- it refuses a storage class without `allowVolumeExpansion` BEFORE writing anything (a patch on
+  such a class sits in Pending forever). `azurefile-memex` allows it, and Azure Files expands
+  **online** — no pod restart. A block volume whose filesystem resize waits for a pod re-mount is
+  reported as `::hosting:: pv_resize=filesystem-pending`, and the rollout that follows completes
+  it;
+- a claim already at size is a **successful no-op**, so the step is idempotent from the top.
+
+Why this exists: on this fleet the portal's claims are NOT helm-managed (they were applied by hand
+once from `portal-pvcs.yaml`; `helm upgrade` never touches an object it does not own), so a bigger
+`size` on the record re-rendered a bigger number into the values file and changed nothing on the
+cluster. Measured 2026-09-08 13:51Z: `memex-data` in namespace `memex` was **16Gi with 3 MiB
+free** while memex-cloud's ran 128Gi. The `portal-pvcs.yaml` captures in the config repo are
+descriptive; the record is what the operator applies.
+
 ### The chart must also agree with ITSELF — `check-chart-invariants.sh`
 
 Drift is only half of it. The `memex-cloud` outage above needed no cluster to detect: the chart
@@ -558,6 +590,7 @@ questions as nodes, with no cluster credential on the caller:
 | what did it log | `{ "requestedAction": "Logs", "query": "<regex or \| pipeline>", "sinceMinutes": 60, "limit": 300, "pod": "<optional>" }` | `logQl`, `entryCount`, `truncated` on the run; `Hosting/LogEntry` nodes under `Ops/Logs`, the Deployment page's Logs area |
 | what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
 | roll it | pin `pinnedImageTag` on the record → `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` | the run's phases; then a `Sample` |
+| grow a full share | set `volumes[].size` on the record → the same `Reconcile` | the run's `Ensure volume capacity: <volume>` phase, `pv_capacity=` read back from the claim — see "Volume capacity is a record property" above |
 
 Both observations read the cluster's monitoring stack (kube-state-metrics via Prometheus, Loki)
 from inside the cluster, where it is credential-free; the roll runs as the in-cluster operator Job.
