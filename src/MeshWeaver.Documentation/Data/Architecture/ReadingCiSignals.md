@@ -1101,6 +1101,18 @@ that were executing ran to their seal. Nothing was starved: the pending slot alw
 `main` for the same sha, and each completion is an arrival — no-ops that still hold the slot,
 #2490.)
 
+**The arithmetic under continuous merging.** A run holding the slot seals in roughly 50 minutes
+(#8103, 60449106f: created 09:41:58, `completed/success` 10:31:23; the next run, #8108, started its
+first job at 10:31:25 — two seconds later, off the group slot, not a runner). In the same window
+`main` merged about every seven minutes, so every arrival that landed while a run held the slot was
+evicted by the one after it (10:01, 10:06, 10:08, 10:21, 10:38, 10:43 — all `jobs=0`), and only an
+arrival that happened to be the LAST before the slot freed got through. The commit that ships is
+therefore "newest at the moment the slot frees", and a commit that lands in the middle of a burst
+is delivered only as part of a later run's superset — never as its own. **The lever is the merge
+gap**, not the workflow: a deliberate merge-quiet window when a specific commit must seal is the
+maintainer's call, and cancelling other runs to make room is not a lever at all — the run in flight
+is the one doing the delivering.
+
 **The three things a cancelled run can be, told apart from the record alone:**
 
 | cause | `jobs` | timing | corroboration |
@@ -1108,6 +1120,14 @@ that were executing ran to their seal. Nothing was starved: the pending slot alw
 | evicted from the pending slot (this shape) | **0** | `updated_at` = the next arrival's `created_at` ± 2 s | the in-flight run of the same group is untouched |
 | the org's Actions budget or job ceiling | > 0, jobs cut mid-flight | no correlation with arrivals; runs in **every** repository of the org stop in the same minutes | a billing banner on the org — and here, `MeshWeaver.Plugins` runs in the same minutes executed normally |
 | a session or a person | any | no correlation with arrivals | seven cancellations 1–2 s after seven arrivals is not a hand |
+
+🚨 **The instrument rule — decide "started nothing" from the run's OWN record, never from the list's
+`status`.** The list endpoint's `status` is not monotonic: at 10:57Z it reported #8108 and #8109
+(both 765cd55e6, created 10:30) as `queued`, which read as "waiting 40 minutes for a runner — the
+in-flight slot is starving every seal behind it, the #888 shape by another mechanism". The runs'
+own `jobs` endpoint at 11:12Z said 23 jobs, 23 started, 22 completed — 42 minutes of real work
+against a 50-minute bake, no starvation, and a retraction. `jobs.total_count`, each job's
+`started_at`, and the per-run `conclusion` are the readings; `queued` on a listing is not one.
 
 **What to do with one: nothing.** The commit it would have built is an ancestor of the commit the
 slot now holds, and the push lane builds that one next; if the push lane ever falls behind, the
