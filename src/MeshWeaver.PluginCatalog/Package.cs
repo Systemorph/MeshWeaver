@@ -181,13 +181,14 @@ public record PackageManifest
 
     /// <summary>
     /// The package's declared platform FLOOR (<c>content.minMeshVersion</c> — the field plugin
-    /// authors already write): the minimum MeshWeaver version its compiled module requires. For a
-    /// module-declaring package this is THE landing gate
-    /// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) — deliberately a semver floor,
-    /// never MVID equality, because a module is a plain assembly binding by simple name whose
-    /// contract is API compatibility. Null = no constraint (most modules need none). Carried onto
-    /// the install record and surfaced on the registry's bundle index so a consumer skips an
-    /// uninstallable bundle without downloading it.
+    /// authors already write): the minimum MeshWeaver version its author says the compiled module
+    /// requires. 🚨 ADVISORY at runtime since #3648: every decision point words it
+    /// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) onto its log line and status row
+    /// as "declares platform ≥ X; running Y" and none refuses, holds or skips on it — whether the
+    /// module loads is measured by the link probe at landing and at boot. Its one remaining gate
+    /// is at PACK time (<c>check-module-platform-floor.py</c>): a floor the build platform cannot
+    /// satisfy is an authoring error. Null = none declared (most modules need none). Carried onto
+    /// the install record and surfaced on the registry's bundle index.
     /// </summary>
     public string? MinMeshVersion { get; init; }
 

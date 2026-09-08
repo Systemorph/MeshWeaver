@@ -23,12 +23,16 @@ namespace MeshWeaver.PluginCatalog;
 /// a type that fails to compile parks its hub for the whole activation budget. The identity match
 /// is EXACT — the strict-MVID rule of <c>PrebuiltAssemblySeeder.DeclineReason</c> — and it is
 /// expressed here as "the bundle is sealed under the target's identity", never re-derived.</description></item>
-/// <item><description><b>Compiled module</b> — a build whose <c>MinMeshVersion</c> FLOOR is
-/// satisfied by the target version. Modules bind by simple name and their contract is API
-/// compatibility, so the gate is the semver floor
-/// (<see cref="ModulePlatformFloor.DeclineReason(string?, string?)"/>), never MVID equality —
-/// MVID has been diagnostic-only for modules since #1664. Applying the bundle rule here would
-/// forbid every ex-post Store install across platform versions.</description></item>
+/// <item><description><b>Compiled module</b> — 🚨 NOT gated by its declared <c>MinMeshVersion</c>
+/// floor since #3648. That floor used to be a BLOCKER (<c>ModuleFloorExceedsTarget</c>), and on
+/// 2026-09-07 it declined all 11 candidate releases on memex-cloud ("77 plugins required … every
+/// one declined") because the comparator ranks <c>ci &lt; rc &lt; clean</c> and every installed
+/// record carried an <c>rc</c> or <c>3.0.0</c> floor — while every candidate would have loaded.
+/// A floor the target does not satisfy is now an <see cref="UpdatabilityVerdict.Advisories">
+/// advisory</see> beside the verdict, never a reason in <see cref="UpdatabilityVerdict.IsUpdatable"/>;
+/// whether a module loads is measured at landing and at boot by the link probe
+/// (<c>Doc/Architecture/ModuleAdoptionPolicy</c>, rule R2). MVID equality was never the module
+/// gate either — modules bind by simple name.</description></item>
 /// </list>
 ///
 /// <para>🚨 <b>It fails SAFE.</b> "Cannot determine" is NOT "clear to proceed". When the target's
@@ -80,8 +84,23 @@ public static class ReleaseAvailability
             verdicts,
             blockers.Length == 0
                 ? null
-                : string.Join("; ", blockers.Select(b => $"{b.Package}: {b.Reason}")));
+                : string.Join("; ", blockers.Select(b => $"{b.Package}: {b.Reason}")))
+        {
+            Advisories = [.. required.Select(p => FloorAdvisory(p, target)).OfType<string>()],
+        };
     }
+
+    /// <summary>
+    /// The declared-floor ADVISORY for one package against the target (#3648): the sentence naming
+    /// both versions when the module's <see cref="RequiredPackage.MinMeshVersion"/> ranks above
+    /// <see cref="ReleaseTarget.Version"/>, or null. Reported on
+    /// <see cref="UpdatabilityVerdict.Advisories"/>, logged by the callers, and by design absent
+    /// from <see cref="UpdatabilityVerdict.IsUpdatable"/> and <see cref="UpdatabilityVerdict.Blockers"/>.
+    /// </summary>
+    private static string? FloorAdvisory(RequiredPackage package, ReleaseTarget target) =>
+        ModulePlatformFloor.DeclineReason(package.MinMeshVersion, target.Version) is { } reason
+            ? $"{package.Name}: {reason}"
+            : null;
 
     /// <summary>
     /// Why the whole observation is unusable, or null when it can be reasoned about. Kept separate
@@ -106,11 +125,12 @@ public static class ReleaseAvailability
     private static PackageAvailability Evaluate(
         RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts)
     {
-        // Modules first: a floor that EXCEEDS the target is a definite incompatibility, and saying
-        // so is more useful than "its bake is missing" even when both hold.
-        if (ModulePlatformFloor.DeclineReason(package.MinMeshVersion, target.Version) is { } floor)
-            return new PackageAvailability(
-                package.Name, PackageAvailabilityKind.ModuleFloorExceedsTarget, floor);
+        // 🚨 #3648 — no floor step. "Modules first: a floor that EXCEEDS the target is a definite
+        // incompatibility" stood here and answered ModuleFloorExceedsTarget; it was not definite,
+        // it was a string order (ci < rc < clean), and it held every production portal on
+        // 2026-09-07. The floor is reported as an advisory by IsUpdatable; this evaluation asks
+        // only what the artifact stores can answer — is the bake there, and is the sealed set
+        // consistent.
 
         if (package.HasContent && !artifacts.SealedBundles.Contains(package.BundleName))
             return new PackageAvailability(
@@ -217,8 +237,9 @@ public static class ReleaseAvailability
 
 /// <summary>
 /// The candidate release a gate is asked about: the platform version being rolled to, and the
-/// framework build identity the image resolves. Both are needed — the version gates module
-/// floors, the identity gates content bakes — and neither substitutes for the other.
+/// framework build identity the image resolves. The identity gates content bakes; the version
+/// names the release in every reason and words the declared-floor advisory (#3648) — neither
+/// substitutes for the other.
 /// </summary>
 /// <param name="Version">The platform version tag, e.g. <c>3.0.0-rc4.ci.4049</c>.</param>
 /// <param name="FrameworkIdentity">The framework build identity (<c>s&lt;hash&gt;</c> /
@@ -233,14 +254,14 @@ public sealed record ReleaseTarget(string? Version, string? FrameworkIdentity);
 /// <param name="BundleName">The bake bundle's base name — the package id the bake writes as
 /// <c>&lt;id&gt;.zip</c> and lists in the <c>_complete</c> sentinel.</param>
 /// <param name="MinMeshVersion">The compiled module's declared platform floor, or null for a
-/// content-only package — and null too when the caller has decided the floor is not a REGRESSION
-/// here. 🚨 SemVer puts <c>3.0.0-rc4.ci.4049</c> below <c>3.0.0</c>, so a floor judged absolutely
-/// can be unmet on the platform an environment already runs; holding on that would freeze it on
-/// every release forever. The caller passes a floor only when the RUNNING platform satisfies it,
-/// which makes the gate a regression check and leaves it firing exactly where it should — on a
-/// rollback below a module's floor.</param>
+/// content-only package. 🚨 ADVISORY since #3648: it is passed through as declared and worded onto
+/// <see cref="UpdatabilityVerdict.Advisories"/> when the target does not satisfy it; it never
+/// decides <see cref="UpdatabilityVerdict.IsUpdatable"/>. (It used to be passed only when the
+/// running platform satisfied it — the "regression check" reading — and even so every <c>rc</c>
+/// and <c>3.0.0</c> floor blocked every <c>ci</c> target on 2026-09-07.)</param>
 /// <param name="HasContent">Whether the package ships NodeType content that must be baked. False
-/// for a module-only package, whose whole gate is the floor.</param>
+/// for a module-only package, which this gate then has nothing to hold on — its loadability is
+/// measured at landing and at boot, not here.</param>
 public sealed record RequiredPackage(
     string Name, string BundleName, string? MinMeshVersion = null, bool HasContent = true);
 
@@ -301,8 +322,14 @@ public enum PackageAvailabilityKind
     /// instance would Roslyn-compile this package's NodeTypes at boot.</summary>
     ContentBakeMissing,
 
-    /// <summary>The compiled module declares a platform floor the target release does not
-    /// satisfy — a definite incompatibility, not an absence.</summary>
+    /// <summary>
+    /// 🚨 RETIRED by #3648 — nothing produces this any more. It meant "the compiled module declares
+    /// a platform floor the target release does not satisfy" and it BLOCKED the roll; on
+    /// 2026-09-07 that string comparison declined every candidate release on every production
+    /// portal. The declared floor is now reported on <see cref="UpdatabilityVerdict.Advisories"/>.
+    /// The member stays so every later member keeps its ordinal (a verdict serialized by an older
+    /// build still deserializes) and a caller compiled against it keeps compiling.
+    /// </summary>
     ModuleFloorExceedsTarget,
 
     /// <summary>🚨 Availability could NOT be determined. Never "clear to proceed", and never to be
@@ -314,7 +341,7 @@ public enum PackageAvailabilityKind
     /// The COMBO gate ran this module's content inside the candidate image and it did not survive
     /// — it failed to install, to compile, to render, or its Tests area went red
     /// (<see cref="ComboVerdictKind.Red"/>). A definite incompatibility, like
-    /// <see cref="ModuleFloorExceedsTarget"/> and unlike <see cref="Indeterminate"/>: the gate
+    /// <see cref="SealedSetInconsistent"/> and unlike <see cref="Indeterminate"/>: the gate
     /// looked, and the answer is about the release rather than about our ability to see it.
     ///
     /// <para>🚨 Appended, never inserted: every member before it keeps its ordinal, so a verdict
@@ -431,6 +458,20 @@ public sealed record UpdatabilityVerdict(
 
     /// <summary>The packages that block the roll.</summary>
     public IEnumerable<PackageAvailability> Blockers => Packages.Where(p => !p.IsAvailable);
+
+    /// <summary>
+    /// 🚨 What the verdict SAYS without deciding on it (#3648): one line per installed module
+    /// whose declared <c>minMeshVersion</c> floor the target release does not satisfy, naming both
+    /// versions. Logged by every caller and surfaced beside <see cref="HoldReason"/>; by
+    /// construction never a reason in <see cref="IsUpdatable"/> or a member of
+    /// <see cref="Blockers"/> — whether a module loads on the target is measured by the link
+    /// probe at landing and boot, and a version string was the wrong instrument (every production
+    /// portal held on 2026-09-07). Empty when every declared floor is satisfied or none is
+    /// declared. An init-only property, not a positional parameter: replacing a public record's
+    /// constructor signature is what <see cref="MissingMethodException"/>-aborts a host compiled
+    /// against the previous platform.
+    /// </summary>
+    public ImmutableArray<string> Advisories { get; init; } = [];
 
     /// <summary>
     /// True when the hold is an "I could not look" rather than "I looked and it is incompatible".

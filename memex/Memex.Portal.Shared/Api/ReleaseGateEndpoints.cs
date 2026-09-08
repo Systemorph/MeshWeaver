@@ -214,6 +214,12 @@ public static class ReleaseGateEndpoints
                     // 🚨 Distinguishes an availability failure from a compatibility verdict.
                     indeterminate = verdict.IsIndeterminate,
                     holdReason = verdict.HoldReason,
+                    // 🚨 #3648 — what the installed modules DECLARE about the target, beside the
+                    // verdict and never inside it: a declared floor the target does not rank
+                    // above is an advisory, not a hold.
+                    advisories = verdict.Advisories.IsDefault
+                        ? Array.Empty<string>()
+                        : verdict.Advisories.ToArray(),
                     packages = verdict.Packages
                         .Select(p => new { package = p.Package, status = p.Kind.ToString(), reason = p.Reason })
                         .ToArray(),

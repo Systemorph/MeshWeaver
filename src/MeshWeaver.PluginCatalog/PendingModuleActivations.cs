@@ -72,6 +72,33 @@ public sealed record ModuleActivationReport(
     public bool HasQuarantined => !IsUndetermined && !Quarantined.IsEmpty;
 
     /// <summary>
+    /// 🚨 The declared-floor ADVISORIES (#3648): every enabled module the mesh's set activates whose
+    /// recorded <c>minMeshVersion</c> ranks above the running platform, loaded or not. NOT a fifth
+    /// state — none of these is held, skipped or refused on the string; each is pending,
+    /// quarantined or running exactly as the other lists say, and this list merely adds what the
+    /// module CLAIMS, so a status row can read "declares platform ≥ X; running Y". Maintainer
+    /// directive 2026-09-07: whether a module loads is measured (the link probe →
+    /// <see cref="Quarantined"/>), never declared. Init-only, for the same binary-compatibility
+    /// reason as the properties above.
+    /// </summary>
+    public ImmutableList<ModuleFloorAdvisory> FloorAdvisories { get; init; } = [];
+
+    /// <summary>True when the state is KNOWN and at least one module declares a floor above the
+    /// running platform.</summary>
+    public bool HasFloorAdvisories => !IsUndetermined && !FloorAdvisories.IsEmpty;
+
+    /// <summary>
+    /// The declared-floor advisory for the module the install record at
+    /// <paramref name="packagePath"/> landed, or null when it declares none above the running
+    /// platform (or the state is undetermined). Blank matches nothing — never a wildcard.
+    /// </summary>
+    public ModuleFloorAdvisory? FloorAdvisoryForPackage(string? packagePath) =>
+        IsUndetermined || string.IsNullOrWhiteSpace(packagePath)
+            ? null
+            : FloorAdvisories.FirstOrDefault(a => string.Equals(
+                a.PackagePath?.Trim('/'), packagePath.Trim('/'), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// Whether the install record at <paramref name="packagePath"/> landed a module this process
     /// refused to load (#3538) — the per-PACKAGE question a package card asks so it can say
     /// "built for a newer platform" instead of a bare "installed" or, worse, a "restart required"
@@ -130,7 +157,33 @@ public sealed record ModuleActivationReport(
                     + (HasPending ? "; " + ModuleActivationStatus.Describe(Pending) : string.Empty)
                 : ModuleActivationStatus.Describe(Pending))
               + (HasDeferred ? "; " + DescribeDeferred(Deferred) : string.Empty)
-              + (HasQuarantined ? "; " + DescribeQuarantined(Quarantined) : string.Empty);
+              + (HasQuarantined ? "; " + DescribeQuarantined(Quarantined) : string.Empty)
+              + (HasFloorAdvisories ? "; " + DescribeFloorAdvisories(FloorAdvisories) : string.Empty);
+
+    /// <summary>
+    /// One human-readable line naming the modules that DECLARE a platform above the one running
+    /// (#3648) — an advisory, kept apart from every other line because it asks for nothing: the
+    /// module loads or not on what the link probe measured, and this only says what its author
+    /// claimed.
+    /// </summary>
+    /// <param name="advisories">The declared-floor advisories.</param>
+    /// <param name="maxNamed">How many are named before the line truncates.</param>
+    public static string DescribeFloorAdvisories(
+        IReadOnlyCollection<ModuleFloorAdvisory> advisories, int maxNamed = 10)
+    {
+        ArgumentNullException.ThrowIfNull(advisories);
+        if (advisories.Count == 0)
+            return "no module declares a platform above the one running";
+        var named = advisories
+            .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(a => $"{a.Name} (≥ {a.DeclaredFloor})")
+            .ToArray();
+        return $"{named.Length} module(s) declare a platform above the one running "
+            + $"({advisories.First().RunningVersion ?? "unknown"}) — advisory only, loadability is "
+            + "measured by the link probe, never by the declared floor: "
+            + string.Join(", ", named.Take(Math.Max(1, maxNamed)))
+            + (named.Length > maxNamed ? $", …(+{named.Length - maxNamed})" : string.Empty);
+    }
 
     /// <summary>
     /// One human-readable line naming the modules this process refused to load because their bytes
@@ -181,6 +234,20 @@ public sealed record ModuleActivationReport(
             + (names.Length > maxNamed ? $", …(+{names.Length - maxNamed})" : string.Empty);
     }
 }
+
+/// <summary>
+/// One module's declared-floor ADVISORY (#3648): what its author claimed about the platform it
+/// needs, beside what this deployment runs. Never a state — see
+/// <see cref="ModuleActivationReport.FloorAdvisories"/>.
+/// </summary>
+/// <param name="Name">The module's assembly simple name, as the activation entry records it.</param>
+/// <param name="PackagePath">The mesh path of the install record that landed it, when recorded.</param>
+/// <param name="DeclaredFloor">The recorded <c>minMeshVersion</c>.</param>
+/// <param name="RunningVersion">The platform version this process runs, or null when unstamped.</param>
+/// <param name="Reason">The sentence naming both versions
+/// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>'s text).</param>
+public sealed record ModuleFloorAdvisory(
+    string Name, string? PackagePath, string DeclaredFloor, string? RunningVersion, string Reason);
 
 /// <summary>
 /// Reads the restart-as-activation state for THIS process: the persisted activation sidecar
@@ -269,12 +336,14 @@ public sealed class PendingModuleActivations(string moduleRoot)
         if (corrupt is not null)
             return new ModuleActivationReport([], corrupt);
 
-        // 🚨 The SAME two gates boot applies, threaded here for the same reason: this report
-        // PROMISES that a restart activates what it calls pending, and only the gates boot itself
-        // uses can keep that promise. The platform floor (a HELD entry — the registry shelf,
-        // 2026-08-22) and the landed DLL's existence (#2093) each mean boot would skip the entry.
-        // The second is reported SEPARATELY rather than dropped: an activated module whose bytes
-        // are gone is a fault an operator must act on, not a quiet nothing.
+        // 🚨 The SAME existence gate boot applies, threaded here for the same reason: this report
+        // PROMISES that a restart activates what it calls pending, and only the gate boot itself
+        // uses can keep that promise. A landed DLL that is gone (#2093) means boot would skip the
+        // entry — reported SEPARATELY rather than dropped: an activated module whose bytes are gone
+        // is a fault an operator must act on, not a quiet nothing. The declared platform floor used
+        // to be the second gate here (a HELD entry — the registry shelf, 2026-08-22); since #3648
+        // boot does not skip on it and neither does this report — it is worded per entry as an
+        // advisory instead.
         bool LandedDllExists(ModuleActivationEntry entry) =>
             ModuleActivationBoot.LandedModuleDllExists(ModuleRootPath, entry);
 
@@ -325,6 +394,21 @@ public sealed class PendingModuleActivations(string moduleRoot)
             ? []
             : [.. notYetLoaded.Where(p => QuarantinedModules.Contains(p.Name))];
 
+        // 🚨 #3648 — the declared floor is ADVISORY, so it is a LINE, never a bucket. Every enabled
+        // entry the mesh's set activates whose recorded minMeshVersion ranks above the running
+        // platform is listed here — loaded or not — so the status row and the health payload can
+        // say "declares platform ≥ X; running Y" beside pending/quarantined, never instead of them.
+        var floorAdvisories = onMeshSet.Entries
+            .Where(entry => entry.Enabled
+                && !string.IsNullOrWhiteSpace(entry.Name)
+                && !string.IsNullOrWhiteSpace(entry.MinMeshVersion))
+            .Select(entry => (Entry: entry, Reason: ModulePlatformFloor.DeclineReason(entry.MinMeshVersion)))
+            .Where(pair => pair.Reason is not null)
+            .Select(pair => new ModuleFloorAdvisory(
+                pair.Entry.Name, pair.Entry.PackagePath, pair.Entry.MinMeshVersion!,
+                ModulePlatformFloor.RunningVersion, pair.Reason!))
+            .ToImmutableList();
+
         return new ModuleActivationReport(
             quarantined.IsEmpty
                 ? notYetLoaded
@@ -336,6 +420,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
         {
             Deferred = deferred.ToImmutable(),
             Quarantined = quarantined,
+            FloorAdvisories = floorAdvisories,
             MeshModuleSet = ModuleSetStore.Describe(sets)
                 + (setNotes.Count > 0 ? " — " + string.Join("; ", setNotes) : string.Empty),
         };

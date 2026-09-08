@@ -694,6 +694,17 @@ public class SelfUpdateHostedService : IHostedService
                             _logger?.LogInformation(
                                 "[SelfUpdate] release-availability gate not enforced for {Tag}: {Reason}",
                                 target, notEnforced);
+                        // 🚨 #3648 — the declared module floors are advisories beside the
+                        // verdict, never inside it. These sentences were the hold reasons on
+                        // 2026-09-07; they are logged so an operator can still read them, and the
+                        // roll proceeds on what the link probe measures at boot.
+                        if (!verdict.Advisories.IsDefaultOrEmpty)
+                            _logger?.LogInformation(
+                                "[SelfUpdate] rolling to {Tag} although {Count} installed module(s) "
+                                + "declare a platform floor it does not rank above — advisory, "
+                                + "loadability is measured at boot: {Advisories}",
+                                target, verdict.Advisories.Length,
+                                string.Join("; ", verdict.Advisories));
                         // 🚨 The availability gate answered "an artifact exists". The combo gate
                         // answers the question that artifact cannot: whether the candidate's
                         // assemblies can still serve the module content this instance has landed.
