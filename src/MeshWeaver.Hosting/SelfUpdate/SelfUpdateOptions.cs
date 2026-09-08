@@ -10,8 +10,39 @@ public record SelfUpdateOptions
     /// <summary>Configuration section this binds from (e.g. <c>SelfUpdate__RetryInterval</c>).</summary>
     public const string SectionName = "SelfUpdate";
 
-    /// <summary>The container registry login server the running install pulls from and polls.</summary>
+    /// <summary>
+    /// The container registry login server the running install pulls from and polls.
+    ///
+    /// <para>Two kinds of host are understood, told apart by <see cref="RegistryIsAzureContainerRegistry"/>:
+    /// an Azure Container Registry (<c>*.azurecr.io</c>, the default — tags are listed through
+    /// ACR's own <c>/acr/v1/{repo}/_tags</c> with Workload Identity), and ANY OTHER host, which is
+    /// read as an OCI Distribution registry — in this fleet the read-through mirror another
+    /// installation serves at <c>{portal}/v2</c> (#3353, <c>Doc/Architecture/ContainerRegistryInMemex</c>),
+    /// authenticated with this installation's own plugin-registry instance key. The chart renders
+    /// it from <c>selfUpdate.registry</c>; the images the updater rolls to
+    /// (<see cref="PortalImage"/>, <see cref="MigrationImage"/>) are named on this host, so a
+    /// mirror-consuming installation must ALSO carry the pull secret the chart's
+    /// <c>portal.imagePullSecret</c> declares, or the roll names an image its kubelet cannot pull.</para>
+    /// </summary>
     public string Registry { get; init; } = "meshweaver.azurecr.io";
+
+    /// <summary>
+    /// The username presented to a non-ACR registry's token endpoint (<c>Basic user:key</c>). The
+    /// mirror authenticates the KEY and discards the username by design (<c>RegistryCredential</c>),
+    /// so this is a placeholder there; another OCI registry may care.
+    /// </summary>
+    public string RegistryUsername { get; init; } = "instance";
+
+    /// <summary>
+    /// Whether <see cref="Registry"/> is an Azure Container Registry host — the discriminator
+    /// between the ACR tag lister (proprietary API, Workload Identity) and the OCI Distribution
+    /// lister (<c>/v2/{repo}/tags/list</c>, bearer handshake, instance key). Pure: a suffix test
+    /// on the host, case-insensitive, so <c>meshweaver.azurecr.io</c> and <c>MESHWEAVER.AZURECR.IO</c>
+    /// answer alike and <c>memex.meshweaver.cloud</c> does not.
+    /// </summary>
+    public bool RegistryIsAzureContainerRegistry =>
+        (Registry ?? string.Empty).Trim().TrimEnd('/')
+            .EndsWith(".azurecr.io", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Repository whose tags are the platform version source of truth (portal + migration
     /// share the same version, built together).</summary>

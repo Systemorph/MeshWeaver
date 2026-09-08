@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-pull-secret's behaviour tests. It records every invocation —
+# and, for an `apply -f -`, the manifest it received on stdin — so the test can assert the ORDER
+# (the namespace is ensured before the Secret is applied) and the CONTENT (the registry and the
+# username are in the applied config; the key is never in the script's OUTPUT). The read-backs the
+# script verifies with are answered from what was applied, so a script that applied nothing cannot
+# pass its own verification.
+#
+#   HOSTING_PULL_SECRET_STUB_LOG        every invocation, one line each; an apply's stdin follows it
+#   HOSTING_PULL_SECRET_STUB_DIR        where the applied Secret manifest is kept between calls
+#   HOSTING_PULL_SECRET_STUB_WRONG_TYPE=1   the read-back reports an Opaque Secret (a pre-existing
+#                                           object of another type — the refusal under test)
+set -uo pipefail
+log="${HOSTING_PULL_SECRET_STUB_LOG:?the kubectl stub needs HOSTING_PULL_SECRET_STUB_LOG}"
+dir="${HOSTING_PULL_SECRET_STUB_DIR:?the kubectl stub needs HOSTING_PULL_SECRET_STUB_DIR}"
+printf 'kubectl %s\n' "$*" >> "$log"
+
+# Strip a leading `-n <ns>` so the verb is positional whichever way the script spells it.
+ns=""
+if [ "${1:-}" = "-n" ]; then ns="${2:-}"; shift 2; fi
+
+case "${1:-}" in
+  create)
+    case "${2:-}" in
+      namespace)
+        # `create namespace X --dry-run=client -o yaml` → a manifest on stdout, as kubectl does.
+        printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n' "${3:-}" ;;
+      secret)
+        # `create secret generic NAME --type=… --from-file=.dockerconfigjson=PATH --dry-run=client -o yaml`
+        name="${3:-}"; file=""; type=""
+        for arg in "$@"; do
+          case "$arg" in
+            --from-file=.dockerconfigjson=*) file="${arg#--from-file=.dockerconfigjson=}" ;;
+            --type=*) type="${arg#--type=}" ;;
+          esac
+        done
+        [ -f "$file" ] || { echo "kubectl stub: --from-file path does not exist" >&2; exit 1; }
+        printf 'apiVersion: v1\nkind: Secret\ntype: %s\nmetadata:\n  name: %s\n  namespace: %s\ndata:\n  .dockerconfigjson: %s\n' \
+          "$type" "$name" "$ns" "$(base64 < "$file" | tr -d '\n')" ;;
+      *) echo "kubectl stub: unexpected create $2" >&2; exit 1 ;;
+    esac ;;
+  apply)
+    # Record what was applied; keep a Secret manifest for the read-backs.
+    manifest="$(cat)"
+    printf '  <stdin> %s\n' "$(printf '%s' "$manifest" | tr '\n' ' ')" >> "$log"
+    if printf '%s' "$manifest" | grep -q '^kind: Secret'; then
+      printf '%s\n' "$manifest" > "$dir/applied-secret.yaml"
+    fi
+    echo "applied" ;;
+  get)
+    # `get secret NAME -o jsonpath={.type}` / `jsonpath={.data.\.dockerconfigjson}`
+    [ "${2:-}" = "secret" ] || { echo "kubectl stub: unexpected get $2" >&2; exit 1; }
+    [ -f "$dir/applied-secret.yaml" ] || { echo "Error from server (NotFound): secrets \"${3:-}\" not found" >&2; exit 1; }
+    path=""
+    for arg in "$@"; do case "$arg" in jsonpath=*) path="${arg#jsonpath=}" ;; esac; done
+    case "$path" in
+      '{.type}')
+        if [ "${HOSTING_PULL_SECRET_STUB_WRONG_TYPE:-0}" = "1" ]; then printf 'Opaque'; else
+          sed -n 's/^type: //p' "$dir/applied-secret.yaml" | tr -d '\n'; fi ;;
+      '{.data.\.dockerconfigjson}')
+        sed -n 's/^  .dockerconfigjson: //p' "$dir/applied-secret.yaml" | tr -d '\n' ;;
+      *) echo "kubectl stub: unexpected jsonpath $path" >&2; exit 1 ;;
+    esac ;;
+  *) echo "kubectl stub: unexpected invocation: $*" >&2; exit 1 ;;
+esac

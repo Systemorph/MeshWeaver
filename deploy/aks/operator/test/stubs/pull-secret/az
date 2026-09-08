@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# A stand-in `az` for hosting-pull-secret's behaviour tests — answers the ONE read the command
+# makes (`az keyvault secret show --vault-name V --name N --query value -o tsv`) with a fake
+# instance key, and records the invocation. Not a mock of az: what is under test is that the
+# script READS the key without ever printing it, so the stub's key is a sentinel (`mwi_` prefix,
+# the scheme InstanceKeys.Generate uses) the test greps the output for.
+#
+#   HOSTING_PULL_SECRET_STUB_LOG   every invocation is appended here, one line each
+#   HOSTING_PULL_SECRET_STUB_KEY   the key to answer with (default: a plain mwi_ token)
+#   HOSTING_PULL_SECRET_STUB_AZ_FAIL=1   the read fails (the object does not exist)
+set -uo pipefail
+printf 'az %s\n' "$*" >> "${HOSTING_PULL_SECRET_STUB_LOG:?the az stub needs HOSTING_PULL_SECRET_STUB_LOG}"
+if [ "${1:-}" = "keyvault" ] && [ "${2:-}" = "secret" ] && [ "${3:-}" = "show" ]; then
+  if [ "${HOSTING_PULL_SECRET_STUB_AZ_FAIL:-0}" = "1" ]; then
+    echo "ERROR: (SecretNotFound) A secret with (name/id) x was not found in this key vault." >&2
+    exit 3
+  fi
+  printf '%s\n' "${HOSTING_PULL_SECRET_STUB_KEY-mwi_stub-key-that-must-never-print-0123456789}"
+  exit 0
+fi
+echo "az stub: unexpected invocation: $*" >&2
+exit 1
