@@ -634,6 +634,113 @@ public static class ModuleSetStore
         return removed;
     }
 
+    /// <summary>
+    /// Retires the LOSERS of a duplicate that has been DECIDED (#3656) — at every sequence more
+    /// than one replica proposed, every proposal record except the one every reader resolves to
+    /// (the ordinally smallest <see cref="ModuleSet.Id"/>, exactly as
+    /// <see cref="Read(string, Action{string}, Action{string})"/> resolves it), plus any adoption
+    /// record written against a loser.
+    ///
+    /// <para>🚨 <b>Why the loser is housekeeping and not evidence.</b> A duplicate is decided the
+    /// first time anything reads it: every reader picks the same winner without coordinating, and
+    /// nothing is lost, because the next proposal is derived from the ACTIVATION RECORD and never
+    /// from the previous proposal — so the loser's landings ride the following wave whether its
+    /// record survives or not. What the record does do while it survives is make the conflict
+    /// re-detectable: the two files sit at the mesh's newest sequence until some later wave
+    /// supersedes them (<see cref="Prune"/> only reaches BELOW the current set), so every pod's
+    /// sweep re-reads them and re-reports the same decided conflict on every boot, forever. That
+    /// is issue #3656. Retiring the loser reports the conflict ONCE — when it is decided — instead
+    /// of once per sweep per pod, and leaves one record at the sequence, which is what a decided
+    /// conflict actually is.</para>
+    ///
+    /// <para>🚨 <b>Fail closed on a record it cannot read.</b> A record whose id is unknown makes
+    /// the WINNER unknown, so nothing at that sequence is retired until it can be read — the
+    /// #2509 rule, for the same reason: the one thing this must never do is delete the record the
+    /// mesh resolves to.</para>
+    /// </summary>
+    /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under.</param>
+    /// <param name="onRetired">One call per retired record, naming the sequence, the winner and
+    /// the loser — the once-per-conflict report that replaces the once-per-sweep one.</param>
+    /// <param name="onWarn">The loud channel for a record that could not be read or removed.</param>
+    /// <returns>How many records were removed.</returns>
+    public static int PruneDuplicateProposals(
+        string baseDirectory, Action<string>? onRetired = null, Action<string>? onWarn = null)
+    {
+        var directory = SetsDirectory(baseDirectory);
+        if (!Directory.Exists(directory))
+            return 0;
+        string[] files;
+        try
+        {
+            files = [.. Directory.EnumerateFiles(directory, "*" + ProposedSuffix)];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            onWarn?.Invoke(
+                $"Module set records under '{directory}' could not be listed ({ex.GetType().Name}: "
+                + $"{ex.Message}) — no decided duplicate was retired this pass.");
+            return 0;
+        }
+
+        var bySequence = new Dictionary<long, List<string>>();
+        foreach (var file in files)
+            if (TryParseRecordName(Path.GetFileName(file), ProposedSuffix, out var sequence, out _))
+                (bySequence.TryGetValue(sequence, out var list) ? list : bySequence[sequence] = [])
+                    .Add(file);
+
+        var removed = 0;
+        foreach (var (sequence, atSequence) in bySequence.Where(kv => kv.Value.Count > 1))
+        {
+            var records = atSequence
+                .Select(file => (File: file, Set: TryRead<ModuleSet>(file, onWarn)))
+                .ToArray();
+            if (Array.Exists(records, r => r.Set is null))
+                continue;   // unknown id ⇒ unknown winner ⇒ nothing is retired here
+            var winner = records.OrderBy(r => r.Set!.Id, StringComparer.Ordinal).First();
+            foreach (var (file, set) in records)
+            {
+                if (string.Equals(set!.Id, winner.Set!.Id, StringComparison.Ordinal))
+                    continue;
+                if (!TryDelete(file, onWarn))
+                    continue;
+                removed++;
+                // The loser's adoption record, if any replica wrote one before the winner's file
+                // existed. Read() already ignores it (an adoption counts only against the winner's
+                // id); leaving it behind would leave the conflict half-visible.
+                if (TryDelete(PathOf(baseDirectory, sequence, set.Id, AdoptedSuffix), onWarn: null))
+                    removed++;
+                onRetired?.Invoke(
+                    $"Module set sequence {sequence} was proposed by more than one replica and is "
+                    + $"decided — the ordinally smallest id wins ('{winner.Set.Id}'), and the "
+                    + $"superseded proposal '{set.Id}' has been retired. No module is lost: the "
+                    + "next proposal is derived from the activation record, so every landing rides "
+                    + "the following wave.");
+            }
+        }
+        return removed;
+    }
+
+    /// <summary>Deletes one record; an absent file is success, and a refusal is reported to
+    /// <paramref name="onWarn"/> and left for a later pass.</summary>
+    private static bool TryDelete(string path, Action<string>? onWarn)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return false;
+            File.Delete(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            onWarn?.Invoke(
+                $"Module set record '{Path.GetFileName(path)}' could not be removed "
+                + $"({ex.GetType().Name}: {ex.Message}) — a later pass collects it; nothing "
+                + "resolves against it.");
+            return false;
+        }
+    }
+
     /// <summary>One human-readable line naming which set the mesh is on and whether a replica is
     /// serving it yet — shared by every surface so two of them can never report different sets.</summary>
     /// <param name="index">The set index.</param>

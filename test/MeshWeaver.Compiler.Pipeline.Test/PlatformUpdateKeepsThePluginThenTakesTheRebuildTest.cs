@@ -156,11 +156,22 @@ public class PlatformUpdateKeepsThePluginThenTakesTheRebuildTest : IDisposable
     // ───────────────────────────────────────────────────────────── harness
 
     /// <summary>Lands one version of the plugin through the REAL landing service.</summary>
+    /// <remarks>
+    /// 🚨 A rebuild carries DIFFERENT BYTES, and since #3656 that is what makes it a different
+    /// generation: the generation directory leaf is the CONTENT ADDRESS of the landing, so two
+    /// bundles whose assemblies are byte-identical resolve to one generation no matter what their
+    /// manifests say the version is — correctly, because identical bytes are identical bytes. The
+    /// version and the framework identity therefore ride a marker asset here, exactly as a real
+    /// rebuild would differ. Landing one fixed byte array under two version strings would model a
+    /// re-land, not the rebuild this test is about.
+    /// </remarks>
     private async Task Land(string version, string frameworkMvid, string minMeshVersion) =>
         await landing.LandModule(
                 Plugin, [(Plugin + ".dll", RealAssemblyBytes)],
                 frameworkMvid: frameworkMvid, packagePath: PackagePath, version: version,
-                minMeshVersion: minMeshVersion)
+                minMeshVersion: minMeshVersion,
+                staticAssets: [("wwwroot/build.txt",
+                    System.Text.Encoding.UTF8.GetBytes($"{version} {frameworkMvid}"))])
             .Timeout(TestTimeouts.Convergence).Await();
 
     /// <summary>
