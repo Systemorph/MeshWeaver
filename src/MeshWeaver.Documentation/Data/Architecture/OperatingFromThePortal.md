@@ -36,6 +36,7 @@ gives you:
 | **`Deployments/<name>`** (`Hosting/Deployment`) | the record — host, namespace, cluster, database, image repository, key-vault classes, env precedence, operator settings. The record's image pin **is** the roll. |
 | **`Hosting/InstanceAction`** kinds | `Provision`, `Teardown`, `Backup`, `Restore`, `Suspend`, `Reactivate`, `HelmRelease` (`helmAction: capture\|adopt\|deploy` — dispatches the config repo's `helm-release.yml` and follows it), `Roll` (set image to `imageTag`, else the record's pin, then WAIT for the rollout), `Restart` (rolling restart, then WAIT), `InstallAddOn`, `Audit`, `RotateRegistryKey`, `Reconcile` (converge a drifted instance back onto its record — the reconcile loop). Each run carries phases, a log, the invoker's identity and the name-the-instance confirmation. |
 | **`Hosting/DeploymentStatus`**, **`Hosting/LogEntry`**, **`Hosting/Issue`** (types) | the designed observation surfaces — one status sample per deployment (ready/desired replicas, restarts, health, RUNNING image, last activity), structured log records pulled from the logging backend, filed issues. |
+| **`Sample`** and **`Logs`** (`Hosting/InstanceAction` kinds — Systemorph/MeshWeaver.Plugins#1521, the delivery of the paragraphs below) | READ-ONLY, no operator job, no confirmation: `Sample` writes `Ops/Status/<id>` with `replicas[]` — per pod the image, ready, restarts, started, phase, terminating, generation, and what the pod's OWN `/health` says (verdict, detail, `version`, `frameworkIdentity`, `pluginCount`) — plus `generations`, `converged` and `warnings[]` (unknown is never zero); `Logs` + `query`/`sinceMinutes`/`limit`/`pod` lands a Loki window as `Hosting/LogEntry` nodes under `Ops/Logs` with the exact LogQL, the count and whether it was CUT on the run. Both read Prometheus and Loki from the control instance's own pod, where they are credential-free. |
 
 An action is one node:
 
@@ -52,24 +53,28 @@ node: `state` goes `Requested → Running → Done`, or `Failed` naming the phas
 the question you did not answer. Through MCP that is `create` / `get`; through the portal it is the
 node's own page.
 
-## What does NOT exist yet — and what that means for you
+## What did NOT exist on 2026-09-08 — and what delivers it
 
-Measured 2026-09-08 on the control instance: the `DeploymentStatus`, `LogEntry` and `Issue`
-**types exist and have ZERO instances**. Nothing samples status in-cluster, nothing answers a log
-query, and no replica reports which NodeType assemblies it can actually load. Until those writers
-land (the work is in flight; its PRs reference this page), three questions still have only a
-break-glass answer:
+Measured 2026-09-08 10:40Z on the control instance: the `DeploymentStatus`, `LogEntry` and
+`Issue` **types existed and had ZERO instances**, `Ops` itself did not exist, and the maintainer's
+own identity was refused `Create` on `Ops/Actions/…`. Nothing sampled status in-cluster, nothing
+answered a log query, and no replica reported what it could load. **The delivery is
+Systemorph/MeshWeaver.Plugins#1521** (Hosting module) — read this table as "before / after it
+lands on the control instance":
 
-| Question | Today's break-glass read | Why it is break-glass |
+| Question | Before (break-glass read) | After #1521 (one node, no credential) |
 |---|---|---|
-| *What image / how many restarts / how old is each replica?* | `az aks command invoke … kubectl -n <ns> get pods -o wide` | needs a cluster credential the API is meant to make unnecessary; the Fleet Console shows the RUNNING version from the record side, not a pod sample |
-| *What did the process log at time T?* | `az aks command invoke … curl loki.monitoring.svc.cluster.local:3100/loki/api/v1/query_range …` — and the invoke shell has `curl` but **no `sed`/`python3`** | same; see [MeasuringALivePortalReadOnly](/Doc/Architecture/MeasuringALivePortalReadOnly) for the safe, read-only shapes |
-| *Can THIS replica load NodeType X?* | `kubectl exec … ls /tmp/MeshWeaver/.mesh-cache/<Type>*` on EACH replica | a live compile is pod-local (`local` = `FileSystemAssemblyStore`); the record's pointer can be dead on one replica and live on another — see [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation) |
+| *What image / how many restarts / how old is each replica — and is an old process still a cluster member?* | `az aks command invoke … kubectl -n <ns> get pods -o wide` | `{ "requestedAction": "Sample" }` → `Ops/Status/<id>`: `replicas[]` with image, ready, restarts, started, phase, `terminating`, `generation`; `generations` and `converged` on the node. A roll (`Roll`/`Restart`/`Reconcile`/`Reactivate`) now ends with **Verify one generation** and refuses Done while a previous-generation pod is still a member — the 8059-after-8079 measurement. |
+| *What did the process log at time T?* | `az aks command invoke … curl loki.monitoring.svc.cluster.local:3100/loki/api/v1/query_range …` — the invoke shell has `curl` but **no `sed`/`python3`** | `{ "requestedAction": "Logs", "query": "…", "sinceMinutes": 60, "limit": 300 }` → `logQl`, `entryCount`, `truncated` on the run; lines under `Ops/Logs`, the Deployment page's Logs area. Zero entries WITH a `logQl` is an answer. |
+| *Can THIS replica load NodeType X?* | `kubectl exec … ls /tmp/MeshWeaver/.mesh-cache/<Type>*` on EACH replica — a live compile is pod-local (`local` = `FileSystemAssemblyStore`), see [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation) | the `Sample` keeps each pod's whole `/health` body beside its verdict, so the answer appears there the moment the portal's health detail states it (the core half, in flight beside #1521); until then a Ready process that reports **0 plugins** already degrades the sample, which is the shape that outage wore. |
+| *Who may create the first action?* | nobody — `Ops` did not exist and no grant path existed | the Hosting module provisions `Ops` and mirrors every `Admin` on `Admin/_Access` as `Admin` on `Ops/_Access` at start (`OperationalSpaceProvisioning`, on the always-activated `Hosting/PlatformBuilds` hub). |
 
-A break-glass read is fine; a break-glass **write** is half an operation. The Hosting manual's
-"Break glass — when the control plane cannot act" section says exactly which half the cluster
-command leaves undone (paywall, backup question, the record's stamp, the audit) and how to
-reconcile it in the same session. Do not re-derive that list here — read it there.
+Until #1521 is on the control instance, the "before" column is what you have; see
+[MeasuringALivePortalReadOnly](/Doc/Architecture/MeasuringALivePortalReadOnly) for the safe,
+read-only shapes. A break-glass read is fine; a break-glass **write** is half an operation. The
+Hosting manual's "Break glass — when the control plane cannot act" section says exactly which
+half the cluster command leaves undone (paywall, backup question, the record's stamp, the audit)
+and how to reconcile it in the same session. Do not re-derive that list here — read it there.
 
 ## How to read a cluster recipe in this doc tree
 
