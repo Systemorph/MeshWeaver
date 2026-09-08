@@ -143,6 +143,15 @@ locked satisfy this sweep completely while being a half-moved set — see
 [Pin Set Consistency](../PinSetConsistency), whose tag arm runs beside this one in the same workflow,
 under the same credential.
 
+🚨 **And it sees AXIS 1 only** — digests pinned in `.github/workflows`. The lock job protects both
+axes (below), but the independent *assertion* that the protection is still working covers the CI
+digests, not the deployment overlays' tag pins. That is deliberate rather than overlooked: the
+failure being watched for is the **lock job as a whole** silently stopping, and when it does, axis-1
+pins go unprotected in the same breath as axis-2 ones — so axis 1 is a sufficient canary for the
+shared cause. It is **not** sufficient for a fault confined to the axis-2 extractor, which would
+leave overlay-pinned manifests unlocked with every axis-1 pin reading `PROTECTED`. Memex#122's
+victim was pinned on axis 2, so this boundary is worth revisiting if that extractor is ever changed.
+
 ```
     repositories scanned                  8
     …declaring at least one digest pin    6
