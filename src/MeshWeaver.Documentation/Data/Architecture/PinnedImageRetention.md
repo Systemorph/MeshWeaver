@@ -102,15 +102,23 @@ the two places the schedules are actually written down:
 
 * `.github/workflows/lock-pinned-digests.yml` exists and carries a `schedule:` — a protection that
   only runs when someone remembers to dispatch it is not a protection;
-* its `cron` fires **before** every *enabled* purge step's `schedule` in
-  `.github/acr-retention/tasks.json`. A `Disabled` task deletes nothing, so only a live clock counts.
+* some lock occurrence fires **earlier the same night** than every *enabled* purge step's `schedule`
+  in `.github/acr-retention/tasks.json`. A `Disabled` task deletes nothing, so only a live clock
+  counts.
 
-Neither needs a credential, so both live in `--self-test` and run on **every pull request** in
-`dotnet-test.yml`'s workflow-shell lane, rather than only at 05:20. Falsified 2026-09-08 by editing
-the shipped files: moving the lock cron to `0 4 * * *` reds with *"the lock fires at 04:00 UTC and
-purge task 'purge-old-images' at 03:00 UTC"*; deleting the workflow reds with *"that workflow IS the
-protection"*. Two sabotages (a lock at 23:00, a lock schedule that never fires) are driven through
-the same comparison inside the self-test and must both come back non-empty.
+🚨 **"Some occurrence, the same night" — not "the day's last occurrence is earlier".** A schedule
+firing twice (`0 1,23 * * *`) satisfies the protection through its 01:00 run, and rejecting it would
+be a gate that is usually wrong, which is a gate nobody reads. Requiring the same *night* is what
+keeps a lock moved to 04:00 red: yesterday's 04:00 run does technically precede today's 03:00 purge,
+twenty-three hours earlier, and that gap **is** the defect rather than a satisfaction of it.
+
+Neither assertion needs a credential, so both live in `--self-test` and run on **every pull request**
+in `dotnet-test.yml`'s workflow-shell lane, rather than only at 05:20. Falsified 2026-09-08 by
+editing the shipped files: moving the lock cron to `0 4 * * *` reds with *"no lock fires before
+purge task 'purge-old-images' on the same night"*; deleting the workflow reds with *"that workflow IS
+the protection"*. Three cases are driven through the same comparison inside the self-test — a lock at
+23:00 and a lock that never fires must both come back non-empty, and the twice-daily `0 1,23 * * *`
+must come back **empty**, so the false-positive direction is proven too.
 
 ### PENDING-LOCK is an exemption, and it is COUNTED
 

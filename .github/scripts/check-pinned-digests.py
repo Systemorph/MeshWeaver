@@ -635,8 +635,8 @@ def ordering_problems(lock_crons: list[str], purges: list[tuple[str, str]]) -> l
     # Anchor on a fixed, ordinary UTC day rather than "now": the question is about the relation
     # between two daily clocks, and it must answer the same on every day this runs.
     end_of_day = dt.datetime(2026, 1, 7, 23, 59, tzinfo=dt.timezone.utc)   # a Wednesday, mid-month
-    lock_at = last_cron_occurrence(lock_crons, end_of_day, horizon_days=1)
-    if lock_at is None:
+    any_lock = last_cron_occurrence(lock_crons, end_of_day, horizon_days=1)
+    if any_lock is None:
         return [
             f"{LOCK_WORKFLOW}'s schedule ({', '.join(lock_crons)}) does not fire on an ordinary "
             "day. The purge runs nightly, so a lock that does not is not protection."
@@ -649,12 +649,21 @@ def ordering_problems(lock_crons: list[str], purges: list[tuple[str, str]]) -> l
                 "day — the record cannot be related to the lock's clock."
             )
             continue
-        if lock_at >= purge_at:
+        # 🚨 "SOME lock fires earlier the SAME night", not "the last lock of the day is earlier".
+        # A schedule that fires more than once (`0 1,5 * * *`) satisfies the protection through its
+        # 01:00 run; comparing only the day's last occurrence would red on it for no reason, and a
+        # gate that is usually wrong stops being read. Requiring the same DAY is what keeps the
+        # 04:00 sabotage red — yesterday's 04:00 lock does technically precede today's 03:00 purge,
+        # 23 hours earlier, which is the whole defect rather than a satisfaction of it.
+        lock_before = last_cron_occurrence(
+            lock_crons, purge_at - dt.timedelta(minutes=1), horizon_days=1
+        )
+        if lock_before is None or lock_before.date() != purge_at.date():
             problems.append(
-                f"the lock fires at {lock_at:%H:%M} UTC and purge task '{name}' at "
-                f"{purge_at:%H:%M} UTC — the lock is NOT before the purge. Every pin moved since "
-                "the previous lock run would face that purge unprotected, and both jobs would "
-                "still report success about their own work."
+                f"no lock fires before purge task '{name}' on the same night: the lock schedule is "
+                f"{', '.join(lock_crons)} and the purge runs at {purge_at:%H:%M} UTC. Every pin "
+                "moved since the previous lock run would face that purge unprotected, and both "
+                "jobs would still report success about their own work."
             )
     return problems
 
@@ -1113,6 +1122,13 @@ def self_test_schedule(repo_root: Path) -> list[str]:
             )
         if ordering_problems(lock_crons, purges) != []:
             failures.append("the shipped pair was rejected by the very check that accepted it above")
+        # …and the multi-occurrence case is ACCEPTED, so the gate does not cry wolf on a schedule
+        # that fires twice and satisfies the protection through its earlier run.
+        if ordering_problems(["0 1,23 * * *"], purges) != []:
+            failures.append(
+                "FALSE POSITIVE: a lock firing at 01:00 AND 23:00 was rejected, though its 01:00 "
+                "run precedes every purge"
+            )
 
     # A missing lock workflow is a DELETED protection, and must not read as an absent subject.
     missing_root = Path(__file__).resolve().parent / "__no_such_repo_root__"
