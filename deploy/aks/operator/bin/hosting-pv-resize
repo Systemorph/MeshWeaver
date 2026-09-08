@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# hosting-pv-resize --namespace <ns> --claim <pvc> --size <quantity>
+#
+# Grow ONE PersistentVolumeClaim to the capacity the Deployment record declares for it.
+#
+# 🚨 WHY THIS EXISTS: capacity is a property of the record (`volumes[].size` on Hosting/Deployment),
+# and on this fleet the portal's claims are NOT managed by helm — every `memex-*` claim on memex /
+# memex-cloud was applied by hand once and `helm upgrade` never touches an object it does not own.
+# So a bigger `size` on the record rendered a bigger number into the values file and changed
+# NOTHING on the cluster, and growing a share meant `kubectl patch pvc` from a laptop — exactly the
+# break-glass write the 2026-09-08 rule retires. Measured that day: memex.systemorph.com's /data
+# share (memex-data) was 16Gi with 3 MiB free at 13:51Z while its sibling ran 128Gi. This command
+# is the step the Provision / Reconcile plan runs per declared claim so that editing the record
+# and running the action IS the whole path.
+#
+# 🚨 IT NEVER SHRINKS. Kubernetes refuses a smaller request outright, but the refusal here comes
+# first and names the fix: a record that declares LESS than the claim holds is a wrong record, and
+# the honest move is to correct the record to the measured capacity, not to silently keep going.
+#
+# 🚨 IT NEVER CREATES. A claim that does not exist is the chart's job (`persistence.<name>.create`
+# on a record-driven Provision); resizing "nothing" into a new claim of the wrong class would be a
+# second, unreviewed provisioner. Absent → refusal, naming the claim.
+#
+# The storage class must carry `allowVolumeExpansion: true` (azurefile-memex does — Azure Files
+# expands ONLINE, with no pod restart). A class that does not allow it makes the patch hang in
+# `Pending` forever, so it is checked BEFORE anything is written.
+#
+# IDEMPOTENT: a claim already at (or above — see the shrink rule) the requested capacity is a
+# successful no-op that says so, so the plan step is safe on every run.
+#
+# Output contract (the ::hosting:: lines the mesh reads):
+#   pv_capacity=<quantity>   the claim's capacity after this run, read back from status
+#   pv_resized=0|1           whether a patch was written
+#   pv_resize=filesystem-pending   the volume grew but the filesystem resize waits for a pod
+#                            restart (FileSystemResizePending) — reported, not hidden
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-pv-resize"
+
+namespace="" claim="" size=""
+attempts="${HOSTING_RESIZE_ATTEMPTS:-30}" interval="${HOSTING_RESIZE_INTERVAL:-10}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    --claim)     claim="${2:-}";     shift 2 ;;
+    --size)      size="${2:-}";      shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::need_flag claim "$claim"
+hosting::need_flag size "$size"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name claim "$claim"
+
+# A Kubernetes binary quantity, whole units only. Deliberately narrower than the API allows: a
+# size reaches a JSON patch below, and "128Gi" is the only shape the record has ever carried.
+[[ "$size" =~ ^[1-9][0-9]*(Mi|Gi|Ti)$ ]] \
+  || hosting::die "size '${size}' is not a whole binary quantity (e.g. 128Gi) — refusing"
+
+command -v jq >/dev/null 2>&1 \
+  || hosting::die "jq is not installed in this image — the claim's status is JSON and cannot be read without it"
+
+# Bytes of a quantity, so two spellings compare as numbers. Decimal (k/M/G/T) and binary units
+# both occur: the API answers what the record requested, but a provisioner may round.
+quantity_bytes() {
+  local q="$1" n unit
+  [[ "$q" =~ ^([0-9]+)(Ki|Mi|Gi|Ti|Pi|k|M|G|T|P)?$ ]] || return 1
+  n="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]:-}"
+  case "$unit" in
+    "") echo "$n" ;;
+    Ki) echo $((n * 1024)) ;;
+    Mi) echo $((n * 1024 * 1024)) ;;
+    Gi) echo $((n * 1024 * 1024 * 1024)) ;;
+    Ti) echo $((n * 1024 * 1024 * 1024 * 1024)) ;;
+    Pi) echo $((n * 1024 * 1024 * 1024 * 1024 * 1024)) ;;
+    k)  echo $((n * 1000)) ;;
+    M)  echo $((n * 1000 * 1000)) ;;
+    G)  echo $((n * 1000 * 1000 * 1000)) ;;
+    T)  echo $((n * 1000 * 1000 * 1000 * 1000)) ;;
+    P)  echo $((n * 1000 * 1000 * 1000 * 1000 * 1000)) ;;
+  esac
+}
+
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+
+# ── the claim as it is ─────────────────────────────────────────────────────────────────────────
+pvc="$(hosting::read kubectl -n "$namespace" get pvc "$claim" -o json 2>"$err")" \
+  || hosting::die "no PersistentVolumeClaim '${claim}' in namespace ${namespace} ($(tr -d '\n' < "$err")). This command GROWS a claim; it never creates one — a new claim is rendered by the chart from the record (persistence.<name>.create). Check the record's claimName against 'kubectl -n ${namespace} get pvc'."
+
+phase="$(printf '%s' "$pvc" | jq -r '.status.phase // ""')"
+class="$(printf '%s' "$pvc" | jq -r '.spec.storageClassName // ""')"
+current="$(printf '%s' "$pvc" | jq -r '.status.capacity.storage // ""')"
+requested="$(printf '%s' "$pvc" | jq -r '.spec.resources.requests.storage // ""')"
+
+[ "$phase" = "Bound" ] \
+  || hosting::die "PersistentVolumeClaim ${claim} is '${phase:-<no phase>}', not Bound — only a bound claim has a volume to grow. A Pending claim has nothing behind it yet; a Lost one needs a human first."
+[ -n "$class" ] \
+  || hosting::die "PersistentVolumeClaim ${claim} names no storageClassName — the class is what decides whether a volume can expand, and a claim without one cannot be reasoned about"
+[ -n "$current" ] \
+  || hosting::die "PersistentVolumeClaim ${claim} reports no status.capacity — refusing to compare a request against a capacity the API did not state"
+
+# ── the class must allow expansion, BEFORE anything is written ────────────────────────────────
+expandable="$(hosting::read kubectl get storageclass "$class" -o jsonpath='{.allowVolumeExpansion}' 2>"$err")" \
+  || hosting::die "could not read StorageClass ${class} ($(tr -d '\n' < "$err")) — is the operator's ClusterRole missing 'storageclasses'?"
+[ "$expandable" = "true" ] \
+  || hosting::die "StorageClass ${class} does not allow volume expansion (allowVolumeExpansion='${expandable:-unset}'). A patch would sit in Pending forever; growing ${claim} means moving its data to an expandable class, which is a human's decision."
+
+current_b="$(quantity_bytes "$current")" \
+  || hosting::die "cannot read the claim's capacity '${current}' as a quantity"
+size_b="$(quantity_bytes "$size")"
+
+hosting::log "claim     ${claim} in ${namespace}: ${current} (class ${class}, requested ${requested:-?})"
+hosting::log "record    ${size}"
+
+if [ "$size_b" -lt "$current_b" ]; then
+  hosting::die "the record declares ${size} for ${claim} but the claim already holds ${current} — a volume cannot shrink, and a record that understates its instance's capacity is wrong. Correct the record's size to the measured ${current} (or larger) and re-run."
+fi
+
+if [ "$size_b" -eq "$current_b" ]; then
+  hosting::log "already at ${current} — nothing to do"
+  hosting::say pv_capacity "$current"
+  hosting::say pv_resized 0
+  exit 0
+fi
+
+# ── grow ──────────────────────────────────────────────────────────────────────────────────────
+requested_b="$(quantity_bytes "${requested:-0}" 2>/dev/null || echo 0)"
+if [ "$requested_b" -eq "$size_b" ]; then
+  # The spec already asks for it: a previous run patched and the provisioner is still working, or
+  # was waiting on a pod restart. Do not patch the same value twice; go straight to waiting.
+  hosting::log "spec already requests ${size} — a resize is in flight, waiting for it"
+  resized=0
+else
+  hosting::do kubectl -n "$namespace" patch pvc "$claim" --type merge \
+      -p "{\"spec\":{\"resources\":{\"requests\":{\"storage\":\"${size}\"}}}}" \
+    || hosting::die "could not patch PersistentVolumeClaim ${claim} to ${size}"
+  resized=1
+fi
+
+if hosting::dry; then
+  hosting::say pv_capacity "$current"
+  hosting::say pv_resized 0
+  hosting::say pv_resize dry-run
+  exit 0
+fi
+
+# ── read it back: the request is not the outcome, the capacity in status is ───────────────────
+i=0
+while :; do
+  i=$((i + 1))
+  pvc="$(hosting::read kubectl -n "$namespace" get pvc "$claim" -o json 2>"$err")" \
+    || hosting::die "lost the claim while waiting for it to grow ($(tr -d '\n' < "$err"))"
+  now="$(printf '%s' "$pvc" | jq -r '.status.capacity.storage // ""')"
+  now_b="$(quantity_bytes "${now:-0}" 2>/dev/null || echo 0)"
+  if [ "$now_b" -ge "$size_b" ]; then
+    hosting::log "grown     ${claim}: ${current} → ${now} (attempt ${i})"
+    hosting::say pv_capacity "$now"
+    hosting::say pv_resized "$resized"
+    exit 0
+  fi
+  # The volume side is done but the filesystem waits for a pod to mount it (block volumes; never
+  # Azure Files, which is why the fleet's classes expand online). Reported, not treated as done:
+  # the plan's rollout step is what completes it, and the log says so.
+  fs_pending="$(printf '%s' "$pvc" | jq -r '[.status.conditions[]? | select(.type == "FileSystemResizePending" and .status == "True")] | length')"
+  if [ "${fs_pending:-0}" -gt 0 ]; then
+    hosting::log "the volume behind ${claim} grew to ${size}; the FILESYSTEM resize is pending until a pod re-mounts it (FileSystemResizePending) — the rollout that follows completes it"
+    hosting::say pv_capacity "$now"
+    hosting::say pv_resized "$resized"
+    hosting::say pv_resize filesystem-pending
+    exit 0
+  fi
+  [ "$i" -lt "$attempts" ] || break
+  sleep "$interval"
+done
+
+hosting::die "PersistentVolumeClaim ${claim} still reports ${now:-<none>} after ${attempts} attempt(s), requested ${size} and no FileSystemResizePending condition. The provisioner did not act — read 'kubectl -n ${namespace} describe pvc ${claim}' for the controller's event before re-running; the request stays on the claim, so re-running does not patch twice."

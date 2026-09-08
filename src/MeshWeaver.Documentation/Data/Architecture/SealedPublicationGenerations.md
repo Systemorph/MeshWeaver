@@ -74,6 +74,29 @@ A source directory with **no** `_current` **is** its own publication directory. 
 today's behaviour, it stays legal for as long as any reader needs it, and it is what makes the
 migration below possible at all. Resolution is opt-in **by the writer**, never by the reader.
 
+### Why a pointer and not an atomic directory rename — measured, 2026-09-08
+
+The obvious design is to stage the publication and then **rename it over** the live one. It is not
+available on this store through this client, and that is a measurement rather than a recollection.
+
+Read off `azure-cli 2.90.0` — the same version the publisher's read-back query was measured
+against:
+
+| group | commands |
+|---|---|
+| `az storage file` | copy · hard-link · metadata · symbolic-link · delete · delete-batch · download · download-batch · exists · generate-sas · list · resize · show · update · upload · upload-batch · url |
+| `az storage directory` | create · delete · exists · list · show |
+
+There is **no `rename`** in either, `directory delete` is documented *"Delete the specified **empty**
+directory"*, and there is no `lease` command under either group — so a lease per identity is not
+reachable from this lane either. And even in the REST API, where `Rename Directory` has existed
+since API version 2021-04-10, a rename cannot **replace** an existing directory: the swap would be
+rename-away plus rename-in, two operations with a gap in which the live path does not exist at all.
+
+🚨 **So the smallest write this store actually offers is one small FILE, and that is what the
+pointer is.** A design that assumed an atomic directory rename would have reintroduced a
+partial-visibility window wearing a better story.
+
 ### What is still a window, stated honestly
 
 The pointer is one small file, and writing it is not atomic on every backend: `az storage file
@@ -190,7 +213,7 @@ Nothing writes a pointer yet, so this changes nothing observable — which is wh
 suite that *builds the generation layout by hand* and asserts the readers serve it, including the
 arm that catches the compose-under-the-source-directory mistake.
 
-### Phase 2 — the writer LEARNS the layout, selected per caller, defaulting to flat *(open — the next PR)*
+### Phase 2 — the writer LEARNS the layout, selected per caller, defaulting to flat *(landed)*
 
 `publish-bake-bundles.sh` gains generation publishing behind an explicit selector: a
 `publication-layout` input on `node-repo-publish-bake.yml`, carried into the script as an environment
@@ -220,7 +243,44 @@ upload before the postcondition, and the overlap harness hooks its second publis
 marker written after it silently stops the harness detecting overlaps while every case still reads
 green. (`repository.txt` was added under this rule and says so in place.)
 
-### Phase 3 — every producer's pin reaches phase 2 *(open)*
+#### What actually shipped, and the one deliberate deviation
+
+- The selector is `publication-layout` on `node-repo-publish-bake.yml`, defaulting to `flat`,
+  carried into the script as `BAKE_PUBLICATION_LAYOUT`. An unrecognised value is **refused**, never
+  silently read as flat: the value decides where a publication is written and which directory every
+  reader resolves.
+- `bake-scope.sh` and `carry-forward-bundles.sh` resolve the pointer in the SAME commit, by the same
+  rules, so the writer and the two readers of the publish lane cannot disagree about which
+  publication is live. `carry-forward-bundles.sh` resolves it **itself** rather than being handed the
+  directory — its caller may be pinned to a workflow copy that knows nothing about generations, and
+  the one-publication postcondition it already carries is what pins it to a single generation if the
+  pointer moves between the listing and the downloads.
+- 🚨 **TWO Azure-direct readers still read the PREFIX, and they are part of phase 3's precondition,
+  not of this change.** `compose-sealed-modules.sh` (the module-set index and each module, on the
+  OIDC fallback path) and `node-repo-gate.yml`'s inline `download-batch` both compose their paths
+  under `prebuilt-bundles/<identity>/<source>/` directly. This is harmless while nothing writes a
+  generation, and it stays harmless at phase 4 in the ordinary case — the flat compatibility copy is
+  written by the same run, from the same bytes, so reading it gives the same content the pointer
+  names. It stops being harmless in exactly two places, and both are worth knowing before flipping:
+  a run whose flat copy is REFUSED (the compatibility copy still races) leaves those two readers on
+  the previous publication while pointer-following readers have moved on; and at phase 5, when the
+  flat copy is dropped, they break outright. **Route them through the same resolution before any
+  prefix flips.** Neither is a reader the portal image carries, so neither was covered by phase 1.
+- 🚨 **The pointer moves BEFORE the flat compatibility copy, not after it.** "Last" in this page is
+  about the *generation*: a reader must never be pointed at a directory still being filled in, and
+  moving the pointer straight after the seal satisfies that exactly. The flat copy is a different
+  audience — readers that cannot follow a pointer at all — and it is the one part of a generation
+  publication another publisher can still be writing. Ordering it after the pointer means an overlap
+  on the flat copy costs the *compatibility copy* (refused, as today, and the run goes red) instead
+  of costing a publication that is already whole, sealed and disjoint. Ordering it before would let
+  a race on the OLD layout withhold a publication that is correct on the NEW one — which would make
+  flipping a prefix deliver nothing at all until the flat copy is dropped.
+- 🚨 **Retention is NOT implemented, and that is a precondition on flipping rather than a follow-up.**
+  Generations accumulate at ~45 small files each until a sweep removes the ones nothing names, and
+  that sweep DELETES from the production share — it must land as its own reviewed change, with its
+  own harness. Nothing the writer does today deletes anything it did not create.
+
+### Phase 3 — every producer's pin reaches phase 2 *(open — the next step)*
 
 Only now is the condition both satisfiable and meaningful: a producer past phase 2 *can* write
 generations and is still writing flat. Core CD needs no pin move. The four satellites move theirs the
@@ -251,11 +311,65 @@ pre-phase-1 images is unsealed, rewritten and re-sealed exactly as today, and ca
 a mix. The #3496 postcondition is what covers it, and it covers it only as a postcondition. A report
 that says "the window is closed" at phase 4 is describing the pointer-following readers only.
 
+## If the publication moves to an OCI registry
+
+The fleet now has its own registry (`cr.meshweaver.cloud`) and a program to push plugin bundles into
+it as OCI artifacts. It is worth writing down exactly what that does and does not close, because
+"content-addressed" is easy to read as "the race is gone".
+
+**What it closes by construction.** Blobs and manifests are addressed by the digest of their own
+bytes. Two publications pushing byte-identical content collide **benignly** — same digest, a no-op —
+and two publications pushing different content get *different* blobs, which cannot overwrite each
+other. A blob is immutable once pushed; there is no partial overwrite to interleave. So the **mix**
+— a set holding some of each publisher's bytes — becomes unrepresentable at the byte level, which is
+the same property the generation directory buys, obtained more cheaply.
+
+🚨 **What it does NOT close: a tag is a mutable, last-writer-wins pointer.** If the publication is
+addressed by tag, the defect simply moves from a directory prefix to a tag, and the migration
+inherits it. Three conditions close it, and they are the rule already in force for images via
+`MW_IMAGE_DIGEST`:
+
+1. **Every bundle is pushed and recorded by DIGEST**, never by tag alone.
+2. **Each publication also gets an immutable, identity-qualified tag** — so a publication can be
+   named without that name being reassignable to different bytes later.
+3. **The sealed set is a list of `(package, digest)` pairs**, so a mixed set cannot be written at
+   all: the set names exact bytes, and a publisher that did not assemble those bytes cannot produce
+   that list.
+
+🚨 **Content addressing does NOT make two bakes of one commit converge.** The bundle compile is not
+byte-reproducible — measured 2026-09-08, 40 of 45 files differed between two bakes of the same
+source commit — so two publications of one commit produce different blobs and therefore different
+manifest digests. OCI does not merge them; what it does is make each one a complete, immutable,
+self-consistent object, so the only contention left is which one the reference names. That is a
+last-writer-wins between two *correct* sets, which is a different and far weaker thing than a mix.
+
+🚨 **Two invariants the migration must carry across, or it reopens something worse than it closed:**
+
+- **The framework identity must stay in the reference.** Today the directory is keyed
+  `prebuilt-bundles/<framework-identity>/<source>/`, and that is not decoration: a bundle is only
+  adoptable by a portal that resolved the *same* identity, which is why the publisher refuses when an
+  incumbent's `architecture.txt` disagrees. A repository path of the shape
+  `plugins/<source>/<package>:<version>` carries no identity, so two platform surfaces' bakes would
+  collide on one reference and a portal would adopt bytes built against a surface it does not have —
+  `dependency record mismatch — built against mvid:…`, this issue's original symptom by another road.
+- **The release marker must survive.** `prebuilt-bundles/_releases/<version>` → `<identity>` is the
+  only way anything outside the image learns a release's framework identity, and two release gates
+  HOLD on its absence.
+
+**And the refusal must not be weakened, in either world.** On the share it reads "never seal a
+sentinel over another publication's bundles". In OCI terms it is the same sentence one level up:
+**never publish a reference to a set you did not assemble.** That refusal is the only reason this
+was ever visible instead of silently shipping a mixed set.
+
 ## Where this stands
 
 - **Phase 1 is landed** (`a4109d422`) — the readers resolve the pointer, and the fallback is the
   previous behaviour exactly.
-- **Phases 2–5 are open**, tracked on
+- **Phase 2 is landed** — the writer can publish generations, behind `publication-layout`, which
+  defaults to `flat`. Nothing anywhere writes a generation until a caller opts in, and the three
+  control cases in `test-publish-bake-overlap.py` are the regression suite proving the default path
+  is byte-identical to what it was.
+- **Phases 3–5 are open**, tracked on
   [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461). Until the writer flips, **the window
   is shrunk, not closed**: the publisher's postcondition still carries the whole load, and the
   interval between its last verification read and the seal is still live.
@@ -273,14 +387,39 @@ that says "the window is closed" at phase 4 is describing the pointer-following 
   to 1 on that incident. The **residual is a sibling that has not sealed yet when this run's sweep
   ends** (21 seconds, measured), and that is not shrinkable by any amount of checking: it is what
   phases 2–5 exist for.
-- **The next change is phase 2, and it is one PR in this repository** — the selector, the writer
-  behind it, the two Azure-direct readers, and the harness cases. It changes nothing anywhere until a
-  caller opts in, which is the property that lets it land at all.
+- **The next change is phase 3** — each producer's `platform-ref` reaches the writer commit, **and
+  the two remaining Azure-direct readers (`compose-sealed-modules.sh`, `node-repo-gate.yml`'s
+  `download-batch`) are routed through the same pointer resolution.** Only then is flipping a prefix
+  both possible and meaningful. `plugins` flips in ONE change set because
+  it is the only prefix with two producers; the rest flip one repository at a time.
+- 🚨 **Flipping `plugins` does not by itself stop the publish reds.** The flat compatibility copy is
+  still replaced in place and still races, so an overlap still costs that copy and still fails the
+  job — the postcondition covering it is unchanged. What the flip buys immediately is that the
+  *publication* survives an overlap intact and pointed-to instead of being lost. The reds go when the
+  flat copy does (phase 5), or when the publication moves to digest-addressed artifacts.
 - The reds the postcondition produces are the correct number and must not be loosened away — see
   [Sealed Publication Reads](../SealedPublicationReads) → "What is NOT closed".
 
 ## Verification
 
+- `.github/scripts/test-publish-bake-overlap.py` — **67 assertions**, executing the REAL publish
+  script against a stub share and reading every verdict off the BYTES. The writer half is covered by
+  five generation cases: one publisher writes and seals under its own token and the pointer names it;
+  **two interleaved publishers each seal their OWN generation, neither directory holds a byte of the
+  other, both are complete, and `_current` names exactly one of them**; "already published" is
+  resolved *through* the pointer rather than off the prefix; every unusable pointer shape (escaping,
+  rooted, `..`, blank, dangling) degrades to the prefix; and an unrecognised selector is refused. The
+  three flat controls are unchanged and are the regression suite for the default.
+  🚨 **Negative control:** run against the pre-change script, **16 of the 67 fail**.
+- `bake-scope.sh --self-test` — four pointer-resolution assertions, and the positive one is
+  discriminating by construction: the flat copy and the generation record *different* baselines (a
+  diverged commit versus an ancestor), so the verdict itself says which was read. A resolver that
+  ignored the pointer answers `full`; one that follows it answers `narrowed` with the generation's
+  commit. The dangling-pointer control asserts the fallback SAYS so, so silence cannot pass for
+  resolution.
+- `carry-forward-bundles.sh --self-test` — a decoy bundle is planted at the prefix under the same
+  name and different bytes, so carrying the publication's own bytes forward is only possible by
+  following the pointer.
 - `test/Memex.Portal.Shared.Test/PublicationGenerationTest.cs` — builds the generation layout on
   disk and asserts what is served. The fixtures make the flat copy and the generation differ in
   **bytes under the same file names**, so "which publication was read" is a fact off the archive

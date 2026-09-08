@@ -145,6 +145,15 @@ start*, with the per-path floor above added on top.
 
 ## 6. 🚨 What is NOT established
 
+🚨 **Partly superseded.** [The Evicted-Stream Retention](../EvictedStreamRetention) closes the
+"what holds them" half for one named mechanism, with a controlled two-arm test rather than a dump: a
+change-feed eviction parks a remote stream, and `ReclaimIfUnheld` returns without disposing whenever
+the stream carries **no lease entry at all** — so every unleased call site (including
+`LayoutExtensions.GetControlStream`, i.e. every rendered layout area) retains one stream, and two
+`sync/` hubs, per change event. It also rules out static state and timers as roots, and replaces the
+referrer walk below with two field reads on the singleton `Workspace`. What stays open is the
+magnitude, not the mechanism.
+
 - **Whether the 8 461 are garbage.** A portal with thousands of open Blazor circuits, each holding
   live layout-area streams, is *supposed* to look like this. Sections 1–5 explain the shape of the
   population, not that it is waste.
@@ -179,3 +188,5 @@ need one.
 - [MeshNode Stream Cache](../MeshNodeStreamCache) — the entry, the refcount and the idle sweep
 - [Portal Heap Is Hubs](../PortalHeapIsHubs) — the five dumps, the measurement hazard, and the ClrMD
   recipe
+- [The Evicted-Stream Retention](../EvictedStreamRetention) — the named retainer, the controlled
+  experiment that established it, and the two-field-read measurement that closes #3432

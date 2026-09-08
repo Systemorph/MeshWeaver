@@ -48,17 +48,23 @@ if [ "${1:-}" = "--self-test" ]; then
   # apart silently. Metadata lives in a sidecar named after the file.
   cat > "$ST/bin/az" <<'AZ'
 #!/usr/bin/env bash
+group="$2"          # file | directory
 action="$3"
-account=""; share=""; path=""; dest=""; query=""
+account=""; share=""; path=""; dest=""; query=""; name=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --account-name) account="$2"; shift 2;; --share-name) share="$2"; shift 2;;
-    --path) path="$2"; shift 2;; --dest) dest="$2"; shift 2;;
+    --path) path="$2"; shift 2;; --dest) dest="$2"; shift 2;; --name) name="$2"; shift 2;;
     --query) query="$2"; shift 2;; *) shift;;
   esac
 done
 file="$MOCK_AZ_ROOT/$account/$share/$path"
+if [ "$group/$action" = "directory/exists" ]; then
+  { [ -d "$MOCK_AZ_ROOT/$account/$share/$name" ] && echo true; } || echo false; exit 0
+fi
 case "$action" in
+  exists)
+    { [ -f "$file" ] && echo true; } || echo false ;;
   download)
     [ -f "$file" ] || exit 1
     mkdir -p "$(dirname "$dest")"; cp "$file" "$dest" ;;
@@ -76,7 +82,11 @@ case "$action" in
 esac
 AZ
   chmod +x "$ST/bin/az"; PATH="$ST/bin:$PATH"; export MOCK_AZ_ROOT="$ST/remote"
-  REMOTE="$ST/remote/acct/share/prebuilt-bundles/ID1/plugins"
+  PREFIX="$ST/remote/acct/share/prebuilt-bundles/ID1/plugins"
+  # Where a fixture's publication lives. The flat layout writes it AT the prefix; the generation
+  # layout writes it under a token the `_current` pointer names, and this script must follow that
+  # pointer or it would carry bundles forward from the compatibility copy instead.
+  REMOTE="$PREFIX"
   FAILED=0
   PASSED=0
   ok()   { printf '  OK   %s\n' "$1"; PASSED=$((PASSED + 1)); }
@@ -90,12 +100,23 @@ AZ
 
   setup() {  # <listing lines…> — the sealed publication holds a bundle for each, all from ONE run
     rm -rf "$ST/bake" "$ST/remote" "$ST/listing"
+    REMOTE="$PREFIX"
     mkdir -p "$ST/bake" "$REMOTE"
     for b in "$@"; do echo "published $b" > "$REMOTE/$b"; stamp "$b" "Systemorph-MeshWeaver-1-1"; done
     printf '%s\n' "$@" > "$ST/listing"
   }
+  setup_generation() {  # <generation> <listing…> — the publication lives under a pointed-to token
+    local gen="$1"; shift
+    rm -rf "$ST/bake" "$ST/remote" "$ST/listing"
+    REMOTE="$PREFIX/$gen"
+    mkdir -p "$ST/bake" "$REMOTE"
+    for b in "$@"; do echo "published $b" > "$REMOTE/$b"; stamp "$b" "Systemorph-MeshWeaver-7-1"; done
+    printf '%s\n' "$gen" > "$PREFIX/_current"
+    printf '%s\n' "$@" > "$ST/listing"
+  }
   setup_unstamped() {  # a publication sealed before the stamp existed
     rm -rf "$ST/bake" "$ST/remote" "$ST/listing"
+    REMOTE="$PREFIX"
     mkdir -p "$ST/bake" "$REMOTE"
     for b in "$@"; do echo "published $b" > "$REMOTE/$b"; done
     printf '%s\n' "$@" > "$ST/listing"
@@ -147,6 +168,20 @@ AZ
   rm -rf "$ST/bake"; setup Store.zip; rm -rf "$ST/bake"
   OUT=$(run); RC=$?
   [ "$RC" -ne 0 ] && ok "a missing bake directory is refused" || bad "missing bake dir should be fatal"
+
+  echo "the publication pointer (MeshWeaver#3461) — carry forward from the generation, not the prefix:"
+  setup_generation Systemorph-MeshWeaver-7-1 Store.zip Edu.zip
+  # A DECOY at the prefix under the same name and different bytes: if this script read the prefix
+  # it would carry the decoy forward and the digest check would say so. Only following the pointer
+  # gets the publication's own bytes.
+  echo "decoy Store.zip" > "$PREFIX/Store.zip"
+  rebuilt Edu.zip
+  OUT=$(run); RC=$?
+  if [ "$RC" -eq 0 ] && [ "$(cat "$ST/bake/Store.zip")" = "published Store.zip" ]; then
+    ok "the carried bundle comes from the generation _current names, not the decoy at the prefix"
+  else
+    bad "pointer resolution (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  fi
 
   echo "refusals (the carried set must come from ONE publication — MeshWeaver#3461):"
   setup Store.zip Edu.zip Chess.zip
@@ -233,7 +268,69 @@ REST="${TARGET#*/}"
 SHARE="${REST%%/*}"
 BASE=""
 case "$REST" in */*) BASE="${REST#*/}";; esac
-SRC_DIR="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
+
+# ══════════════ THE PUBLICATION POINTER (MeshWeaver#3461) ══════════════
+#
+# A source directory MAY hold `_current`: one line naming the SUBDIRECTORY that holds the
+# publication which currently applies. Absent, it IS its own publication directory — the flat
+# layout, and the only one anything has written until a caller opts in to `publication-layout:
+# generation`.
+#
+# 🚨 THE RULES ARE THE READER'S, EXACTLY (ShippedPrebuiltBundles.PublicationDirectoryOf, and the
+# resolver in publish-bake-bundles.sh). This file, bake-scope.sh and publish-bake-bundles.sh are
+# fetched at ONE `platform-ref`, so no pin can carry half of them — but they must also AGREE, or
+# this lane would read what portals do not serve. Absent, blank, unreadable, not a single path
+# segment, or naming a directory that is not there ⇒ the source directory. A pointer is a NAME: it
+# must never be able to address bytes outside its own source directory.
+POINTER="_current"
+RESOLVED_DIR=""
+resolve_publication_dir() { # <account> <share> <source-dir>
+  _rp_account="$1"; _rp_share="$2"; _rp_source="$3"
+  RESOLVED_DIR="$_rp_source"
+  _rp_exists=$(az storage file exists --account-name "$_rp_account" --share-name "$_rp_share" \
+    --path "$_rp_source/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  [ "$_rp_exists" = "true" ] || return 0
+  _rp_local="$(mktemp)"
+  if ! az storage file download --account-name "$_rp_account" --share-name "$_rp_share" \
+      --path "$_rp_source/$POINTER" --dest "$_rp_local" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+    rm -f "$_rp_local"
+    return 0
+  fi
+  _rp_named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$_rp_local" | grep -m1 '[^[:space:]]' || true)
+  rm -f "$_rp_local"
+  [ -n "$_rp_named" ] || return 0
+  case "$_rp_named" in
+    # A rooted name always contains a '/', so `*/*` already covers it — shellcheck SC2222 is
+    # right that a separate `/*` arm can never match anything this one does not.
+    .|..|*/*|*\\*)
+      echo "::warning::$_rp_source/$POINTER names '$_rp_named', which is not a single directory name — reading $_rp_source as its own publication directory."
+      return 0 ;;
+  esac
+  _rp_exists=$(az storage directory exists --account-name "$_rp_account" --share-name "$_rp_share" \
+    --name "$_rp_source/$_rp_named" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$_rp_exists" != "true" ]; then
+    echo "::warning::$_rp_source/$POINTER names generation '$_rp_named', which is not on the share (exists=$_rp_exists) — reading $_rp_source as its own publication directory."
+    return 0
+  fi
+  RESOLVED_DIR="$_rp_source/$_rp_named"
+  return 0
+}
+
+SRC_PREFIX="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
+# The generation the listing came from — resolved by the reader's rules, exactly as bake-scope.sh
+# resolved it to take that listing.
+#
+# 🚨 THE POINTER CAN MOVE BETWEEN THE TWO READS, and that is already covered rather than newly
+# opened: every carried bundle is verified against the digest the publication records and the
+# carried set must name ONE `publication`, so a publication replaced between the listing and the
+# downloads is REFUSED by name — the shell analogue of the reader's If-Match. Resolving here rather
+# than being handed the directory keeps this script correct when its caller is pinned to a workflow
+# copy that does not know about generations.
+resolve_publication_dir "$ACCOUNT" "$SHARE" "$SRC_PREFIX"
+SRC_DIR="$RESOLVED_DIR"
 
 # 🚨 THE CARRY-FORWARD IS AN N+1 READ OF A DIRECTORY THAT CAN BE REPLACED UNDERNEATH IT
 # (MeshWeaver#3461). The listing came from the sealed publication `bake-scope.sh` read; each

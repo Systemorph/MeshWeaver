@@ -1,7 +1,49 @@
 {
   "kind": "List",
   "items": [
-    { "apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": { "name": "memex-data", "namespace": "memex" }, "spec": {} },
-    { "apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": { "name": "memex-content", "namespace": "memex" }, "spec": {} }
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "memex-data",
+        "namespace": "memex"
+      },
+      "spec": {
+        "storageClassName": "azurefile-memex",
+        "resources": {
+          "requests": {
+            "storage": "16Gi"
+          }
+        }
+      },
+      "status": {
+        "phase": "Bound",
+        "capacity": {
+          "storage": "16Gi"
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "memex-content",
+        "namespace": "memex"
+      },
+      "spec": {
+        "storageClassName": "azurefile-memex",
+        "resources": {
+          "requests": {
+            "storage": "64Gi"
+          }
+        }
+      },
+      "status": {
+        "phase": "Bound",
+        "capacity": {
+          "storage": "64Gi"
+        }
+      }
+    }
   ]
 }
