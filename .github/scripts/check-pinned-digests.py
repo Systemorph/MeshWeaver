@@ -888,7 +888,7 @@ def run(repos: list[str], registry: str, repo_root: Path) -> int:
     emit(f"      …PROTECTED (deleteEnabled false)    {len(protected)}")
     emit(f"      …UNPROTECTED — purge can delete     {len(unprotected)}")
     emit(f"      …PENDING-LOCK (exempt: moved since  {len(pending_lock)}")
-    emit(f"        the last scheduled lock)")
+    emit("        the last scheduled lock)")
     emit(f"      …protection INDETERMINATE           {len(protection_unknown)}")
     if last_lock is not None:
         emit(f"      last scheduled lock run             {last_lock:%Y-%m-%dT%H:%M:%SZ}"
