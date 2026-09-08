@@ -897,9 +897,20 @@ public static class PackageInstaller
     /// damage is the pairing: a policy that withholds public read AND Public/Anonymous Viewer denies
     /// on the partition's children, which is the SCOPED shape
     /// (<see cref="EnsureScopedPublicRead"/>) applied with an empty declaration — every child gated,
-    /// nothing left public. Current code cannot produce that (the scoped branch requires
-    /// <c>declared.Count > 0</c>); only a pre-#902 installer could. So the heal triggers on the pair
-    /// and leaves a shipped gated policy — which carries no such denies — completely alone.</para>
+    /// nothing left public. So the heal triggers on the pair and leaves a shipped gated policy —
+    /// which carries no such denies — completely alone.</para>
+    ///
+    /// <para><b>🚨 …but the pair is NOT a reliable fingerprint on its own, so the heal is
+    /// additionally restricted to a PRE-INSTALLED partition.</b> This comment used to argue that
+    /// "current code cannot produce that (the scoped branch requires <c>declared.Count > 0</c>);
+    /// only a pre-#902 installer could" — reasoning that surveyed core's own code paths and
+    /// concluded, correctly for core and wrongly for the mesh, that nothing living writes the
+    /// shape. The Store's gating reconcile writes it on every pass, and it lives in MeshWeaver.
+    /// Plugins as IN-MESH source that compiles at runtime: no core build, no core test and no
+    /// <c>grep --include='*.cs'</c> over this repository can see it. Treating a live component's
+    /// deliberate output as legacy damage cost a CD seal (see the call site). When a heal's guard
+    /// is "no current code produces this", the survey has to cover the MESH, not the compiler's
+    /// view of one repository.</para>
     ///
     /// <para><b>Order matters: denies first, policy last.</b> The denies are what actually hide the
     /// content (an explicit deny beats <c>PublicRead</c>), and the policy node is the marker that
@@ -934,6 +945,45 @@ public static class PackageInstaller
             // A policy that withholds public read. Heal it ONLY together with the legacy denies that
             // identify it as the pre-#902 scoped gate; on their own it is a deliberate shipped
             // policy and stays untouched.
+            //
+            // 🚨 …and ONLY on a PRE-INSTALLED partition. The fingerprint below — a policy that
+            // withholds public read PLUS Public/Anonymous Viewer denies on every child — is NOT
+            // unreachable by current code, which is what this heal used to assume. The Store's
+            // gating reconcile (`PluginGate.SeedGating`, in-mesh source in MeshWeaver.Plugins, so
+            // invisible to `dotnet build` and to any grep over core's *.cs) writes EXACTLY that
+            // shape, deliberately and continuously, for every non-pre-installed plugin whose
+            // manifest declares no publicSegments — its stated model is "the cover + declared
+            // public segments are the ONLY public surface … there is no open-content tier".
+            //
+            // So on such a partition the heal is not a migration, it is one half of a ping-pong:
+            // core retires the denies and opens the policy, the gating reconcile re-denies and
+            // re-gates, and neither ever sticks. Measured on CD run 34190841613 (2026-09-08):
+            // Chess's idempotence re-install retired 26 denies, `PluginGating` logged
+            // "reconcile is NOT CONVERGING — rewrote 26 …", and the heal's own `Chess/_Policy`
+            // write starved behind the contention for 20s and faulted
+            // ("MeshNode Unknown at 'Chess/_Policy': TimeoutException") — which failed the
+            // package-install idempotence gate and left the promoted image set UNSEALED. The
+            // same fight, at a smaller amplitude, is visible in the run that passed 65 minutes
+            // earlier (9 denies retired instead of 26): identical content, different count, which
+            // is the tell that the steady state was decided by a race rather than by either rule.
+            //
+            // The #902 incident this heal exists for was about the platform BASELINE — "its 8
+            // pre-installed partitions carried 136 legacy denies while memex/systemorph —
+            // installed after #902 — were correct" — and a pre-installed partition is the one
+            // case where the two components AGREE: SeedGating's pre-installed arm retracts the
+            // very denies this sweep retires, so nothing fights and the heal sticks. Restricting
+            // it there keeps the incident's fix intact and takes core out of a contest it cannot
+            // win. A non-pre-installed partition's access model belongs to the gating reconcile;
+            // if that model is wrong, it is wrong in ONE place, which is the point.
+            if (!manifest.PreInstalled)
+            {
+                logger?.LogDebug(
+                    "[PackageInstaller] {Partition} withholds public read and is not pre-installed "
+                    + "— leaving its policy to the gating reconcile that owns it (no legacy heal)",
+                    partition);
+                return Observable.Return(Unit.Default);
+            }
+
             return ContradictingDenies(hub, partition, logger).SelectMany(stale =>
             {
                 if (stale.Count == 0)
