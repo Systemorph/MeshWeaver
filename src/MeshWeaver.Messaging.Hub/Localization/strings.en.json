@@ -660,6 +660,7 @@
   "ui.mdLoadingPrivacy": "_Loading privacy statement…_",
   "ui.mdLoadingRepoSettings": "_Loading repository settings…_",
   "ui.mdLoadingUpdatePolicy": "_Loading update policy…_",
+  "ui.mdUpdatePolicyIntro": "The platform self-updates per the strategy below. **Stable** (the default) rolls only to clean releases such as `3.0.1`. **Continuous** rolls to the continuous builds the **version pattern** admits — for example `3.0.1-ci*` — and without a pattern it behaves like Stable. **None** disables auto-update. **Only update to CI-verified (green) builds** (default on) keeps the install on builds that passed CI — turn it off to also accept unverified edge builds. On Kubernetes the portal patches its own deployment; elsewhere the latest version is surfaced for a manual update.",
   "ui.mdNoCommits": "_No commits._",
   "ui.mdNoDocumentData": "_No document data._",
   "ui.mdNoFileChanges": "_No file changes._",

@@ -660,6 +660,7 @@
   "ui.mdLoadingPrivacy": "_Datenschutzerklärung wird geladen…_",
   "ui.mdLoadingRepoSettings": "_Repository-Einstellungen werden geladen…_",
   "ui.mdLoadingUpdatePolicy": "_Update-Richtlinie wird geladen…_",
+  "ui.mdUpdatePolicyIntro": "Die Plattform aktualisiert sich selbst gemäss der Strategie unten. **Stable** (Standard) wechselt nur auf saubere Releases wie `3.0.1`. **Continuous** wechselt auf die Continuous-Builds, die das **Versionsmuster** zulässt — zum Beispiel `3.0.1-ci*` — und verhält sich ohne Muster wie Stable. **None** schaltet die automatische Aktualisierung aus. **Nur auf CI-geprüfte (grüne) Builds aktualisieren** (standardmässig an) hält die Installation auf Builds, die CI bestanden haben — ausschalten, um auch ungeprüfte Edge-Builds zu akzeptieren. Auf Kubernetes patcht das Portal sein eigenes Deployment; sonst wird die neueste Version für ein manuelles Update angezeigt.",
   "ui.mdNoCommits": "_Keine Commits._",
   "ui.mdNoDocumentData": "_Keine Dokumentdaten._",
   "ui.mdNoFileChanges": "_Keine Dateiänderungen._",

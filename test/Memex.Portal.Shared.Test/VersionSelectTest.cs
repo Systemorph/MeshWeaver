@@ -75,6 +75,181 @@ public class VersionSelectTest
     public void UpdatePolicyContent_DefaultsToRequireCiGreen()
         => Assert.True(new UpdatePolicyContent().RequireCiGreen, "green-only must be the safe default");
 
+    // ───────── 2026-09-08: clean releases by default; continuous builds by PATTERN only ─────────
+    //
+    // Maintainer: "by default we will not upgrade as long as no version without -ci... is labelled.
+    // ==> we want to have a clean label 3.0.1 to upgrade. if we want to get the -ci... we have to
+    // specify the pattern 3.0.1-ci* or something. at the moment it is 3.0.0-ci* as we have not
+    // released anything else."
+
+    /// <summary>The registry after 3.0.1 is tagged and the next line has started: the clean
+    /// release, its own ci builds, and the next line's first ci build. Run numbers are MONOTONIC
+    /// across lines, as the pipeline produces them (#3542) — `3.0.1-ci.8112` was published after
+    /// `3.0.0-ci.8059`, whatever the labels say.</summary>
+    private static readonly string[] LineRegistry =
+    [
+        "3.0.0", "3.0.0-ci.8059", "3.0.1-ci.8112", "3.0.1-ci.8130", "3.0.1", "3.0.2-ci.8140",
+        "3-latest", "3.0-latest", "3.0.1-latest",
+    ];
+
+    /// <summary>🚨 The seeded default is Stable — clean releases only — and it is the ONE default.</summary>
+    [Fact]
+    public void TheDefaultPolicy_IsCleanReleasesOnly()
+    {
+        Assert.Equal(UpdatePolicyKind.Stable, new SelfUpdateOptions().DefaultPolicy);
+        Assert.Null(new SelfUpdateOptions().DefaultPattern);
+    }
+
+    /// <summary>Clean-only ignores <c>3.0.1-ci.12</c> and picks <c>3.0.1</c> — an install that has
+    /// never opted into a pattern sees the release and nothing before it.</summary>
+    [Fact]
+    public void CleanOnly_IgnoresTheCiBuilds_AndPicksTheRelease()
+    {
+        var selection = VersionSelect.SelectCandidates(LineRegistry, "3.0.0", UpdatePolicyKind.Stable);
+        Assert.Equal(["3.0.1"], selection.Candidates);
+    }
+
+    /// <summary>🚨 The rule itself: <c>Continuous</c> WITHOUT a pattern decides exactly as
+    /// <c>Stable</c> — no pre-release is eligible on its own — and says so.</summary>
+    [Fact]
+    public void ContinuousWithoutAPattern_IsStable_AndSaysSo()
+    {
+        var channel = VersionSelect.ResolveChannel(UpdatePolicyKind.Continuous, null);
+        Assert.Equal(UpdatePolicyKind.Stable, channel.Policy);
+        Assert.Null(channel.Pattern);
+        Assert.NotNull(channel.Advisory);
+        Assert.Contains(UpdatePolicyNodeType.NodePath, channel.Advisory, StringComparison.Ordinal);
+        Assert.Contains("pattern", channel.Advisory, StringComparison.Ordinal);
+        Assert.Contains("3.0.0-ci*", channel.Advisory, StringComparison.Ordinal);
+
+        // A blank pattern is no pattern — " " must not be a third policy.
+        Assert.Equal(UpdatePolicyKind.Stable, VersionSelect.ResolveChannel(UpdatePolicyKind.Continuous, "  ").Policy);
+
+        var selection = VersionSelect.SelectCandidates(
+            LineRegistry, "3.0.0", UpdatePolicyKind.Continuous, pattern: null);
+        Assert.Equal(["3.0.1"], selection.Candidates);
+
+        // The other two policies carry no advisory: they mean what they say.
+        Assert.Null(VersionSelect.ResolveChannel(UpdatePolicyKind.Stable, null).Advisory);
+        Assert.Null(VersionSelect.ResolveChannel(UpdatePolicyKind.None, null).Advisory);
+        Assert.Null(VersionSelect.ResolveChannel(UpdatePolicyKind.Continuous, "3.0.1-ci*").Advisory);
+        Assert.Equal(UpdatePolicyKind.None, VersionSelect.ResolveChannel(UpdatePolicyKind.None, "3.0.1-ci*").Policy);
+    }
+
+    /// <summary>Pattern <c>3.0.1-ci*</c> picks the highest ci of 3.0.1 — by run number, so
+    /// <c>ci.8130</c> over <c>ci.8112</c> — and NOT <c>3.0.2-ci.8140</c>, and not the clean
+    /// <c>3.0.1</c> either: the glob names the line's continuous builds and nothing else.</summary>
+    [Fact]
+    public void APattern_AdmitsExactlyTheLineItNames()
+    {
+        var selection = VersionSelect.SelectCandidates(
+            LineRegistry, "3.0.0-ci.8059", UpdatePolicyKind.Continuous, pattern: "3.0.1-ci*");
+        Assert.Equal(["3.0.1-ci.8130", "3.0.1-ci.8112"], selection.Candidates);
+        Assert.Equal("3.0.1-ci.8130",
+            VersionSelect.PickTarget(LineRegistry, UpdatePolicyKind.Continuous, pattern: "3.0.1-ci*"));
+    }
+
+    /// <summary>🚨 The fleet's own setting today: <c>3.0.0-ci*</c> never picks <c>3.0.1</c> (nor
+    /// <c>3.0.1-ci.*</c>). Following one line's continuous builds ENDS by the pattern matching
+    /// nothing new — which is why the docs say to change it the day 3.0.1 is tagged.</summary>
+    [Fact]
+    public void TheCurrentFleetPattern_NeverCrossesToTheNextRelease()
+    {
+        Assert.Equal(["3.0.0-ci.8059"],
+            VersionSelect.PickTargets(LineRegistry, UpdatePolicyKind.Continuous, pattern: "3.0.0-ci*"));
+
+        var settled = VersionSelect.SelectCandidates(
+            LineRegistry, "3.0.0-ci.8059", UpdatePolicyKind.Continuous, pattern: "3.0.0-ci*");
+        Assert.Empty(settled.Candidates);
+        Assert.False(settled.IsRecovery);
+    }
+
+    /// <summary>Ordering under a pattern is still the lineage: <c>ci.7845 &lt; ci.8059</c> numerically,
+    /// a retired <c>rc</c> label never outranks a later run, and the clean release ranks above its
+    /// own pre-releases wherever both are admitted (a pattern wide enough to admit both).</summary>
+    [Fact]
+    public void UnderAPattern_TheOrderIsStillTheLineage()
+    {
+        string[] registry = ["3.0.0-ci.7845", "3.0.0-rc9.ci.7824", "3.0.0-ci.8059", "3.0.0"];
+
+        Assert.Equal(["3.0.0-ci.8059", "3.0.0-ci.7845"],
+            VersionSelect.PickTargets(registry, UpdatePolicyKind.Continuous, pattern: "3.0.0-ci*"));
+        // `3.0.0*` admits the rc tag and the release too: run number first, promotion last.
+        Assert.Equal(["3.0.0-ci.8059", "3.0.0-ci.7845", "3.0.0-rc9.ci.7824", "3.0.0"],
+            VersionSelect.PickTargets(registry, UpdatePolicyKind.Continuous, pattern: "3.0.0*"));
+        Assert.True(VersionSelect.IsNewer("3.0.0-ci.8059", "3.0.0-ci.7845"));
+        Assert.True(VersionSelect.IsNewer("3.0.0", "3.0.0-ci.8059"));
+    }
+
+    /// <summary>A pattern narrows <c>Stable</c> too — <c>3.0.*</c> keeps an install on one line's
+    /// clean releases while the next line's release exists.</summary>
+    [Fact]
+    public void APattern_NarrowsStable_ToOneLine()
+    {
+        string[] registry = ["3.0.1", "3.1.0", "3.1.0-ci.9000", "3.0.2"];
+        Assert.Equal(["3.0.2", "3.0.1"],
+            VersionSelect.PickTargets(registry, UpdatePolicyKind.Stable, pattern: "3.0.*"));
+    }
+
+    /// <summary>🚨 The moving image pointers (<c>3-latest</c>, <c>3.0-latest</c>, <c>3.0.1-latest</c>)
+    /// are POINTERS, not versions: never a candidate, under any policy or pattern — even a pattern
+    /// that would match them textually.</summary>
+    [Fact]
+    public void MovingPointers_AreNeverCandidates()
+    {
+        string[] registry = ["3-latest", "3.0-latest", "3.0.1-latest", "latest", "3.0.1"];
+        Assert.Equal(["3.0.1"], VersionSelect.PickTargets(registry, UpdatePolicyKind.Stable));
+        Assert.Equal(["3.0.1"], VersionSelect.PickTargets(registry, UpdatePolicyKind.Continuous));
+        Assert.Empty(VersionSelect.PickTargets(registry, UpdatePolicyKind.Continuous, pattern: "*-latest"));
+        Assert.Empty(VersionSelect.PickTargets(registry, UpdatePolicyKind.Continuous, pattern: "3-latest"));
+    }
+
+    /// <summary>The glob itself: <c>*</c> any run, <c>?</c> one character, everything else literal,
+    /// whole-tag, case-insensitive; a blank pattern admits nothing (the CALLER decides what "no
+    /// pattern" means, never the matcher).</summary>
+    [Theory]
+    [InlineData("3.0.1-ci*", "3.0.1-ci.12", true)]
+    [InlineData("3.0.1-ci*", "3.0.1-CI.12", true)]
+    [InlineData("3.0.1-ci*", "3.0.1", false)]
+    [InlineData("3.0.1-ci*", "3.0.10-ci.1", false)]
+    [InlineData("3.0.?-ci*", "3.0.7-ci.1", true)]
+    [InlineData("3.0.?-ci*", "3.0.10-ci.1", false)]
+    [InlineData("3.0.*", "3.0.1", true)]
+    [InlineData("3.0.*", "3.1.0", false)]
+    [InlineData("", "3.0.1", false)]
+    [InlineData(null, "3.0.1", false)]
+    [InlineData("   ", "3.0.1", false)]
+    public void UpdateChannelPattern_IsAWholeTagGlob(string? pattern, string tag, bool expected)
+        => Assert.Equal(expected, UpdateChannelPattern.Matches(pattern, tag));
+
+    [Fact]
+    public void UpdateChannelPattern_EscapesEverythingButTheWildcards()
+    {
+        Assert.Equal(@"^3\.0\.1-ci.*$", UpdateChannelPattern.ToRegex("3.0.1-ci*"));
+        Assert.Null(UpdateChannelPattern.Normalize("  "));
+        Assert.Equal("3.0.1-ci*", UpdateChannelPattern.Normalize(" 3.0.1-ci* "));
+    }
+
+    /// <summary>The pattern round-trips on the record as <c>pattern</c>, and its absence stays
+    /// absent (the serializer drops nulls, and null is the one "no pattern").</summary>
+    [Fact]
+    public void UpdatePolicyContent_PatternRoundTrips_AsPattern()
+    {
+        var element = JsonSerializer.SerializeToElement(
+            new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, Pattern = "3.0.0-ci*" }, Web);
+        Assert.Equal("3.0.0-ci*", element.GetProperty("pattern").GetString());
+        var parsed = UpdatePolicyNodeType.ParseContent(element, Web);
+        Assert.Equal("3.0.0-ci*", parsed.Pattern);
+        Assert.Equal(UpdatePolicyKind.Continuous, parsed.Policy);
+
+        // These Web options write nulls out (the hub's own options drop them); either way the
+        // read is "no pattern", which is the one fact the record must not lose.
+        var bare = JsonSerializer.SerializeToElement(
+            new UpdatePolicyContent { Policy = UpdatePolicyKind.Stable }, Web);
+        Assert.True(!bare.TryGetProperty("pattern", out var p) || p.ValueKind == JsonValueKind.Null);
+        Assert.Null(UpdatePolicyNodeType.ParseContent(bare, Web).Pattern);
+    }
+
     [Theory]
     [InlineData("3.1.0-ci.55", "3.0.0-ci.51", true)]  // later run on a higher base wins
     [InlineData("3.0.0-ci.51", "3.0.0-ci.40", true)]  // monotonic ci number
@@ -287,22 +462,31 @@ public class VersionSelectTest
         Assert.Equal("3.0.0-ci.7989", VersionSelect.PickTarget(registry, UpdatePolicyKind.Continuous));
 
         // 2. 🚨 Nothing newer ON the line ⇒ nothing to take. The release must NOT be the answer, and
-        //    it is exactly here that SemVer would have said it was.
+        //    it is exactly here that SemVer would have said it was. (2026-09-08: "on the line" now
+        //    needs the pattern that admits the line — see case 5.)
         var settled = VersionSelect.SelectCandidates(
-            registry, "3.0.0-ci.7989", UpdatePolicyKind.Continuous);
+            registry, "3.0.0-ci.7989", UpdatePolicyKind.Continuous, pattern: "3.0.0-ci*");
         Assert.Empty(settled.Candidates);
         Assert.False(settled.IsRecovery);
 
         // 3. A newer ci build ⇒ take it, and the release is not even a fallback the gate walk could
         //    drop through to.
         var rolling = VersionSelect.SelectCandidates(
-            registry, "3.0.0-ci.7977", UpdatePolicyKind.Continuous);
+            registry, "3.0.0-ci.7977", UpdatePolicyKind.Continuous, pattern: "3.0.0-ci*");
         Assert.Equal(["3.0.0-ci.7989"], rolling.Candidates);
 
-        // 4. An install NOT on the line is not held off it: it rejoins at the next line's ci builds.
+        // 4. An install NOT on the line is not held off it: it rejoins at the next line's ci builds
+        //    — provided its pattern admits them.
         var offTheLine = VersionSelect.SelectCandidates(
-            ["3.0.0", "3.1.0-ci.8100"], "3.0.0", UpdatePolicyKind.Continuous);
+            ["3.0.0", "3.1.0-ci.8100"], "3.0.0", UpdatePolicyKind.Continuous, pattern: "*-ci*");
         Assert.Equal(["3.1.0-ci.8100"], offTheLine.Candidates);
+
+        // 5. 🚨 2026-09-08: the SAME record with NO pattern is Stable — and Stable DOES take the
+        //    release above its pre-releases. The ci-line rule protects an install that opted into
+        //    the line; one that never wrote a pattern is waiting for exactly this clean label.
+        var noPattern = VersionSelect.SelectCandidates(
+            registry, "3.0.0-ci.7989", UpdatePolicyKind.Continuous);
+        Assert.Equal(["3.0.0"], noPattern.Candidates);
     }
 
     /// <summary>
@@ -391,7 +575,7 @@ public class VersionSelectTest
         string[] registry = ["3.0.0-ci.7000", "3.0.0-ci.7100"];
 
         var selection = VersionSelect.SelectCandidates(
-            registry, "3.1.0-ci.7841", UpdatePolicyKind.Continuous);
+            registry, "3.1.0-ci.7841", UpdatePolicyKind.Continuous, pattern: "*-ci*");
 
         Assert.True(selection.IsRecovery,
             "nothing is newer than a withdrawn tag, so 'nothing newer' cannot be the answer");
@@ -413,7 +597,8 @@ public class VersionSelectTest
         var selection = VersionSelect.SelectCandidates(
             ["3.0.0-ci.7955", "3.0.0-ci.7962", "3.0.0-ci.7977"],
             "3.1.0-ci.7841",
-            UpdatePolicyKind.Continuous);
+            UpdatePolicyKind.Continuous,
+            pattern: "*-ci*");
 
         Assert.False(selection.IsRecovery);
         Assert.Equal("3.0.0-ci.7977", selection.Candidates[0]);
@@ -454,7 +639,7 @@ public class VersionSelectTest
     public void SomethingNewer_IsAnOrdinaryUpdate_EvenWhenTheInstalledTagIsGone()
     {
         var selection = VersionSelect.SelectCandidates(
-            ["3.0.0-ci.7977"], "3.1.0-ci.7000", UpdatePolicyKind.Continuous);
+            ["3.0.0-ci.7977"], "3.1.0-ci.7000", UpdatePolicyKind.Continuous, pattern: "*-ci*");
 
         Assert.Equal(["3.0.0-ci.7977"], selection.Candidates);
         Assert.False(selection.IsRecovery);
