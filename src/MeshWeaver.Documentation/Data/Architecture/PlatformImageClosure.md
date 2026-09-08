@@ -273,6 +273,12 @@ adds the gate.
   "do NOT re-add"; they are present in both `ci.7755` and `ci.7794`. That is the same
   declaration-versus-bytes gap this page is about, one layer over, and it interacts with the
   in-flight optional-Blazor work — so it is filed as #3335 rather than folded in here.
+  🚨 **The pack lane no longer rests on that declaration** (#3732): it measures what the image ships
+  — app root, surface manifest, **and** the `modules/<Name>/` seeds the first bullet above
+  deliberately exempts from *this* gate — and drops any `MeshWeaver.*` sibling the host already has
+  from a bundle's closure. The two readings differ on purpose: a seed is not a second producer for
+  the COMPILE contract, but it very much is one for a bundle that carries a riding copy of it. See
+  [The Platform-Shipped Witness](../PlatformShippedWitness).
 - **Runtime binding.** `/app` is a runtime directory and the runtime binds by simple name, ignoring
   version — which is why the portal runs perfectly with a reference set that will not resolve. This
   gate asserts the COMPILE contract, which is the one the fleet consumes.
