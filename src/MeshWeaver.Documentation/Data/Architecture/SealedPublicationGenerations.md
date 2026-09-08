@@ -259,6 +259,20 @@ that says "the window is closed" at phase 4 is describing the pointer-following 
   [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461). Until the writer flips, **the window
   is shrunk, not closed**: the publisher's postcondition still carries the whole load, and the
   interval between its last verification read and the seal is still live.
+- 🚨 **What the postcondition costs while this is open, measured 2026-09-08.** Of 30 core-CD runs,
+  9 executed the bake job; of the 9 publications (either lane) that had a same-identity run
+  overlapping them in time, **2 failed** — 22%, and both were the two halves of ONE mutual
+  supersession: core CD runs `34205409381` and `34206854855` publishing the same content
+  (`cfac152ef…`) for the same identity, each winning one storage target and reddening on the other.
+  Both shares ended sealed with the right bytes and both CD runs failed, so the run produced no
+  sealed set and the platform pin did not move. **All 9 overlaps were same-lane; zero cross-lane** —
+  the same finding as 2026-09-06, on a different day.
+
+  The [convergence verdict](../SealedPublicationReads) removes the half of that which is a false
+  red — a supersession by a publication *proved* to be this bake's own content, sealed. It takes 2
+  to 1 on that incident. The **residual is a sibling that has not sealed yet when this run's sweep
+  ends** (21 seconds, measured), and that is not shrinkable by any amount of checking: it is what
+  phases 2–5 exist for.
 - **The next change is phase 2, and it is one PR in this repository** — the selector, the writer
   behind it, the two Azure-direct readers, and the harness cases. It changes nothing anywhere until a
   caller opts in, which is the property that lets it land at all.

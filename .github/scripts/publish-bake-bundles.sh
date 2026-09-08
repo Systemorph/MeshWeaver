@@ -342,6 +342,55 @@ sha256_of() { # <file> — hex digest, portable across the CI runner and a devel
   fi
 }
 
+# 🚨 THE RENDERING IS MEASURED, NOT ASSUMED, and getting it wrong is silent. knack's `format_tsv`
+# treats a TOP-LEVEL list as ROWS: `--query "[a, b]" -o tsv` prints a's value and b's value on TWO
+# LINES, not as two columns — so `awk '{print $2}'` would read EMPTY for every file, every owner
+# would compare unequal to $PUBLICATION, `ours` would be 0 on every publish and the postcondition
+# would refuse EVERY publication in the fleet as "superseded". Hence a list-of-ONE-ROW: `[[a, b]]`
+# renders one tab-separated line. The `|| '-'` guards exist because a null field renders as the
+# LITERAL STRING 'None', not as empty. Both measured against azure-cli 2.90.0's own jmespath +
+# knack formatter, and re-asserted with the real jmespath engine by test-publish-bake-overlap.py.
+STAMP_QUERY="[[metadata.digest || '-', metadata.publication || '-']]"
+
+# The ONE read-back, in one place. Both the per-file verification sweep and the sentinel check the
+# convergence verdict makes parse the SAME rendering, so a query change cannot leave one of them
+# reading a shape the other no longer produces. Answers through globals rather than stdout: an
+# `::error::` written inside a command substitution would be CAPTURED instead of reaching the log.
+#
+#   rc 0  STAMP_DIGEST / STAMP_OWNER hold the values ('' where az rendered '-')
+#   rc 1  unreadable — a transient fault, an expired credential, or the file is simply not there
+#   rc 2  the CLI's rendering changed; STAMP_RAW/STAMP_FIELDS say what came back
+#
+# 🚨 `< /dev/null` because the sweep below runs this INSIDE a `while read` loop fed by the
+# manifest: a command that consumed stdin would swallow the remaining lines and the loop would end
+# early, having verified a PREFIX of the publication while reporting no foreign bytes at all.
+STAMP_DIGEST=""
+STAMP_OWNER=""
+STAMP_RAW=""
+STAMP_FIELDS=0
+read_stamp() { # <account> <share> <path>
+  local account="$1" share="$2" path="$3" props fields
+  STAMP_DIGEST=""; STAMP_OWNER=""; STAMP_RAW=""; STAMP_FIELDS=0
+  if ! props=$(az storage file show --account-name "$account" --share-name "$share" \
+      --path "$path" --auth-mode login --backup-intent \
+      --query "$STAMP_QUERY" -o tsv --only-show-errors < /dev/null); then
+    return 1
+  fi
+  STAMP_RAW="$props"
+  fields=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print NF }')
+  STAMP_FIELDS="${fields:-0}"
+  # The field count is ASSERTED rather than trusted: if that rendering ever changes, this is a loud
+  # refusal on the next publish instead of a fleet-wide false verdict.
+  if [ "$STAMP_FIELDS" -ne 2 ]; then
+    return 2
+  fi
+  STAMP_DIGEST=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $1 }')
+  STAMP_OWNER=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $2 }')
+  if [ "$STAMP_DIGEST" = "-" ]; then STAMP_DIGEST=""; fi
+  if [ "$STAMP_OWNER" = "-" ]; then STAMP_OWNER=""; fi
+  return 0
+}
+
 # The publication token: unique to THIS invocation, and readable as the run that made it. Metadata
 # values are ASCII, and `-o tsv` splits on tabs, so it is restricted to [A-Za-z0-9._-] — a value
 # carrying a tab or a space would silently split into two fields and compare equal to a truncation.
@@ -380,6 +429,30 @@ if [ "${MANIFEST_COUNT:-0}" -lt 1 ]; then
 fi
 MARKER_COUNT=4
 if [ "$HAS_SURFACE" = "true" ]; then MARKER_COUNT=5; fi
+# The NON-PAYLOAD half of the manifest: the markers, the module index and the platform surface —
+# everything that describes WHAT was baked rather than the compiled bytes. Two bakes of the same
+# content produce byte-identical files here and DIFFERENT bundle zips (the compile is not
+# reproducible byte-for-byte), so this split is what lets the convergence verdict below tell "a
+# second publication of MY content beat me to it" from "somebody published something else".
+# One name per line, so the membership test cannot match a substring.
+MARKER_RELS="$SOURCE_MARKER
+$REPO_MARKER
+$ARCH_MARKER
+$MODULES_DIR_NAME/$MODULES_INDEX"
+if [ "$HAS_SURFACE" = "true" ]; then
+  MARKER_RELS="$MARKER_RELS
+$SURFACE_FILE"
+fi
+is_marker() { # <path-under-dest>
+  case "
+$MARKER_RELS
+" in
+    *"
+$1
+"*) return 0 ;;
+  esac
+  return 1
+}
 echo "publication $PUBLICATION: $MANIFEST_COUNT file(s) to publish and verify per target (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), $MARKER_COUNT marker/index file(s)$([ "$HAS_SURFACE" = "true" ] && echo ", surface published" || echo ", NO platform surface"))"
 
 # Uploads ONE file of the publication, stamped with the two metadata values the postcondition
@@ -426,6 +499,80 @@ unseal_mixed_publication() { # <account> <share> <dest>
   return 1
 }
 
+# ══════════════ THE CONVERGENCE VERDICT — the one supersession that is not a failure ══════════════
+#
+# 🚨 The postcondition below and the sealed-skip in `publish_to_target` are answering the SAME
+# question — "is the publication this run was asked to make on the shelf?" — and until this
+# function existed they disagreed, because the skip keys on CONTENT × FRAMEWORK while the
+# postcondition can only ask "are these MY bytes". A run that finds the shelf unsealed, uploads,
+# and is then overwritten by a sibling publishing the SAME content therefore went RED for a
+# publication that is present, whole and correct.
+#
+# Measured on the incident that made this loud: core CD runs 34205409381 and 34206854855 both
+# published `plugins` at source cfac152ef023bc8e16203511aa60b50f581d3161 for identity
+# s057b1e7785fba6c6ba079e9d84a0c00d on 2026-09-08. Each won one of the two targets and each went
+# red on the other, with the same verdict — `40 of 45 file(s) were overwritten … the remaining 5
+# are byte-identical`. The 40 are bundle zips and module packages (the compile is not reproducible
+# byte-for-byte); the 5 are source-commit.txt, repository.txt, architecture.txt, modules/_index and
+# platform-surface.json — byte-identical BECAUSE it is the same content. Both targets ended sealed
+# with exactly the right bytes, and both CD runs failed. That is a false red, not a caught defect.
+#
+# So a supersession converges only on POSITIVE, byte-level proof of all three:
+#
+#   1. every non-payload file is byte-identical to ours (foreign markers 0, and the neutral markers
+#      count reaches MARKER_COUNT — the denominator, so it cannot pass having checked nothing);
+#   2. every foreign file names ONE publication, and that publication is stamped (an unstamped file
+#      can never satisfy this: '<unstamped>' is not a legal token);
+#   3. `_complete` is on the shelf, its digest is the sha256 of OUR listing (so the sealed bundle
+#      SET is ours, name for name) and it was sealed by that same publication (so the seal belongs
+#      to the bytes, not to some earlier publication a third writer left behind).
+#
+# Anything less is the superseded RED, unchanged, with the reason named. 🚨 This never touches the
+# MIX verdict (ours > 0), never seals, never deletes, and never reports a publication that is not
+# there: it reports that SOMEONE ELSE made the exact one this run was asked for. The residual it
+# does NOT cover is a sibling that has not sealed yet when this run's sweep ends — 20 seconds, in
+# the incident above. Shrinking that further is a bound, not a fix; the fix is the generation
+# layout (Doc/Architecture/SealedPublicationGenerations), where the two runs never share a
+# directory and neither has to lose.
+CONVERGENCE_REASON=""
+converged_on_equivalent() { # <account> <share> <dest> <foreign-markers> <neutral-markers> <foreign-owners>
+  local account="$1" share="$2" dest="$3" fmark="$4" nmark="$5" owners="$6"
+  local distinct count owner expected rc=0
+  CONVERGENCE_REASON=""
+  if [ "$fmark" -ne 0 ] || [ "$nmark" -ne "$MARKER_COUNT" ]; then
+    CONVERGENCE_REASON="the shelf describes DIFFERENT content: $fmark of the $MARKER_COUNT marker/index file(s) differ from this bake's and only $nmark were byte-identical. source-commit.txt, modules/_index and platform-surface.json are byte-identical between two bakes of the same content, so a difference here means the publication on the shelf is not the one this run was asked to make."
+    return 1
+  fi
+  distinct=$(printf '%s\n' $owners | sed '/^[[:space:]]*$/d' | sort -u)
+  count=$(printf '%s\n' "$distinct" | grep -c '[^[:space:]]' || true)
+  if [ "${count:-0}" -ne 1 ]; then
+    CONVERGENCE_REASON="the foreign bytes name ${count:-0} publication(s) ($(printf '%s' "$distinct" | tr '\n' ' ')) — convergence needs exactly one, whole and identifiable."
+    return 1
+  fi
+  owner="$distinct"
+  case "$owner" in
+    *"<"*|*">"*)
+      CONVERGENCE_REASON="the foreign bytes carry no publication stamp, so nothing can establish that they are one publication rather than several."
+      return 1 ;;
+  esac
+  expected=$(sha256_of "$SENTINEL_LOCAL")
+  read_stamp "$account" "$share" "$dest/$SENTINEL" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    CONVERGENCE_REASON="publication '$owner' has not sealed $dest/$SENTINEL yet (or it could not be read) — an unsealed directory is not a publication, and this run must not report one that does not exist."
+    return 1
+  fi
+  if [ "$STAMP_DIGEST" != "$expected" ]; then
+    CONVERGENCE_REASON="$dest/$SENTINEL lists a different bundle set (it holds ${STAMP_DIGEST:-<no digest>}, this bake's listing hashes to $expected) — the sealed publication is not this bake's set, name for name."
+    return 1
+  fi
+  if [ "$STAMP_OWNER" != "$owner" ]; then
+    CONVERGENCE_REASON="$dest/$SENTINEL was sealed by '${STAMP_OWNER:-<unstamped>}' but the bytes under it were written by '$owner' — the seal does not belong to the publication on the shelf."
+    return 1
+  fi
+  echo "::warning title=Superseded by an equivalent publication — this content IS published::$account/$share/$dest was published by '$owner' while this run was in flight, and it is byte-for-byte the publication this run was asked to make: all $MARKER_COUNT marker/index file(s) are identical (same source ${SOURCE_SHA:-unknown}, same module set, same platform surface), the sealed listing is this bake's bundle set, and '$owner' sealed it. Only the compiled bundle bytes differ, which two bakes of one commit always do. Nothing of this run reached this target and nothing needed to (MeshWeaver#3461)."
+  return 0
+}
+
 # THE POSTCONDITION. Runs immediately before the seal. Every file is sorted into three buckets,
 # and the buckets are what decide the verdict:
 #
@@ -452,61 +599,51 @@ unseal_mixed_publication() { # <account> <share> <dest>
 # the satellite's publication whole on the shelf, `architecture.txt` alone made OURS = 1 and the
 # core lane deleted the satellite's seal.
 verify_publication() { # <account> <share> <dest>
-  local account="$1" share="$2" dest="$3" rel expected actual owner props fields ours=0 neutral=0
+  local account="$1" share="$2" dest="$3" rel expected actual owner rc ours=0 neutral=0
+  local foreign_markers=0 neutral_markers=0 foreign_owners=""
   local -a foreign=() unreadable=() overlapped=()
   while IFS=$'\t' read -r rel expected; do
     [ -n "$rel" ] || continue
     # 🚨 FAIL CLOSED. `|| echo ""` on the read would turn a transient fault, an expired credential
     # or a CLI shape change into "no digest recorded" — the one answer that is indistinguishable
     # from "another publisher wrote this", and the errors below would then name the wrong cause.
-    # An unreadable file is refused as loudly as a foreign one; it is simply refused by name.
-    # `< /dev/null` because this runs INSIDE a `while read` loop fed by the manifest: a command
-    # that consumed stdin would swallow the remaining lines, and the loop would end early having
-    # verified a PREFIX of the publication while reporting no foreign bytes at all. The accounting
-    # assertion after the loop is the belt to that brace.
-    if ! props=$(az storage file show --account-name "$account" --share-name "$share" \
-        --path "$dest/$rel" --auth-mode login --backup-intent \
-        --query "[[metadata.digest || '-', metadata.publication || '-']]" -o tsv --only-show-errors \
-        < /dev/null); then
+    # An unreadable file is refused as loudly as a foreign one; it is simply refused by name. The
+    # accounting assertion after the loop is the belt to `read_stamp`'s `< /dev/null` brace.
+    rc=0
+    read_stamp "$account" "$share" "$dest/$rel" || rc=$?
+    if [ "$rc" -eq 1 ]; then
       unreadable+=("$rel")
       continue
     fi
-    # 🚨 THE RENDERING IS MEASURED, NOT ASSUMED, and getting it wrong is silent. knack's
-    # `format_tsv` treats a TOP-LEVEL list as ROWS: `--query "[a, b]" -o tsv` prints a's value and
-    # b's value on TWO LINES, not as two columns — so `awk '{print $2}'` would read EMPTY for every
-    # file, every `owner` would compare unequal to $PUBLICATION, `ours` would be 0 on every publish
-    # and this postcondition would refuse EVERY publication in the fleet as "superseded". Hence a
-    # list-of-ONE-ROW: `[[a, b]]` renders one tab-separated line. The `|| '-'` guards exist because
-    # a null field renders as the LITERAL STRING 'None', not as empty. Both measured against
-    # azure-cli 2.90.0's own jmespath + knack formatter.
-    #
-    # The field count is ASSERTED rather than trusted: if that rendering ever changes, this is a
-    # loud refusal on the next publish instead of a fleet-wide false verdict.
-    fields=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print NF }')
-    if [ "${fields:-0}" -ne 2 ]; then
-      echo "::error::az answered '$props' for $dest/$rel — one tab-separated row of TWO fields was expected from --query \"[[metadata.digest || '-', metadata.publication || '-']]\" -o tsv. The CLI's rendering has changed; this verification cannot be trusted until the parse is updated to match."
-      unreadable+=("$rel (unexpected --query rendering: $fields field(s))")
+    if [ "$rc" -ne 0 ]; then
+      echo "::error::az answered '$STAMP_RAW' for $dest/$rel — one tab-separated row of TWO fields was expected from --query \"$STAMP_QUERY\" -o tsv. The CLI's rendering has changed; this verification cannot be trusted until the parse is updated to match."
+      unreadable+=("$rel (unexpected --query rendering: $STAMP_FIELDS field(s))")
       continue
     fi
-    actual=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $1 }')
-    owner=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $2 }')
-    if [ "$actual" = "-" ]; then actual=""; fi
-    if [ "$owner" = "-" ]; then owner=""; fi
+    actual="$STAMP_DIGEST"
+    owner="$STAMP_OWNER"
     if [ -z "$actual" ]; then
       # Present, but carrying no digest at all: written by a publisher that predates this stamp
       # (a repo still pinned to an older copy of this script) or by something else entirely.
       # Either way its bytes cannot be established, and the seal must not claim them.
       foreign+=("$rel (no digest recorded — written by a publisher that does not stamp one)")
+      # '<' and '>' can never occur in a publication token, so an unstamped file can never be
+      # counted towards "one foreign publication wrote all of this" below. Fail-closed by shape.
+      foreign_owners="$foreign_owners <unstamped>"
+      if is_marker "$rel"; then foreign_markers=$((foreign_markers + 1)); fi
       continue
     fi
     if [ "$actual" != "$expected" ]; then
       foreign+=("$rel (we uploaded $expected, the shelf holds $actual, written by publication '${owner:-<unstamped>}')")
+      foreign_owners="$foreign_owners ${owner:-<unstamped>}"
+      if is_marker "$rel"; then foreign_markers=$((foreign_markers + 1)); fi
       continue
     fi
     if [ "$owner" = "$PUBLICATION" ]; then
       ours=$((ours + 1))
     else
       neutral=$((neutral + 1))
+      if is_marker "$rel"; then neutral_markers=$((neutral_markers + 1)); fi
       overlapped+=("$rel ← '${owner:-<unstamped>}'")
     fi
   done < "$MANIFEST"
@@ -548,7 +685,15 @@ verify_publication() { # <account> <share> <dest>
 
   local entry
   if [ "$ours" -eq 0 ]; then
+    # 🚨 BEFORE the refusal, and it is the only path that can turn a supersession green: the shelf
+    # may hold the publication this run was asked to make, sealed by a sibling that raced it. That
+    # is PROVED on the bytes or not concluded at all — see converged_on_equivalent.
+    if converged_on_equivalent "$account" "$share" "$dest" \
+        "$foreign_markers" "$neutral_markers" "$foreign_owners"; then
+      return 2
+    fi
     echo "::error title=Refusing to seal — this run's publication was entirely superseded::$account/$share/$dest holds nothing that distinguishes this run: ${#foreign[@]} of $MANIFEST_COUNT file(s) were overwritten by another publication while this one was in flight, and the remaining $neutral are byte-identical in both (MeshWeaver#3461). That publication is whole, and is left exactly as it is — sealing OUR sentinel over it would claim a bundle set that is not there. Nothing of this run reached this target."
+    echo "::error::this is NOT the same publication as the one this run baked: $CONVERGENCE_REASON"
     for entry in "${foreign[@]}"; do echo "::error::superseded: $entry"; done
     echo "::error::$OVERLAP_WRITERS"
     return 1
@@ -653,7 +798,18 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   # file above is read back and must still carry THIS run's digest; a foreign publisher that
   # overwrote any of them makes this refuse, and the directory stays sentinel-less rather than
   # sealed over a mix. See the long note beside verify_publication.
-  if ! verify_publication "$account" "$share" "$dest"; then
+  #
+  # rc 2 is the CONVERGENCE verdict: a sibling published this exact content and sealed it while
+  # this run was in flight. The target is satisfied and MUST NOT be sealed again — writing our own
+  # sentinel over their files would stamp their publication with this run's token and make the
+  # next carry-forward read two publications where there is one.
+  local verdict=0
+  verify_publication "$account" "$share" "$dest" || verdict=$?
+  if [ "$verdict" -eq 2 ]; then
+    echo converged >> "$OUTCOMES"
+    return 0
+  fi
+  if [ "$verdict" -ne 0 ]; then
     exit 1
   fi
   # LAST write — the atomic completeness marker. Anything that dies before this line leaves the
@@ -663,6 +819,10 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
     --metadata "digest=$(sha256_of "$SENTINEL_LOCAL")" "publication=$PUBLICATION" \
     --auth-mode login --backup-intent --only-show-errors > /dev/null
   echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown}, platform surface: $HAS_SURFACE)"
+  # 🚨 Recorded HERE, beside the seal, and not at the call sites: since the convergence verdict
+  # returns 0 without sealing, a caller counting "publish_one_target returned" as "published"
+  # would report a publication this run did not make.
+  echo published >> "$OUTCOMES"
 }
 
 # 🚨 PER-TARGET ISOLATION (Plugins #2682, 2026-08-30). Each target is published in its OWN subshell:
@@ -794,7 +954,6 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       echo "sealed publication under $DEST carries no $MODULES_DIR_NAME/$MODULES_INDEX (exists=$module_set) — it predates module sealing; republishing WITH the module set."
       echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
       publish_one_target "$ACCOUNT" "$SHARE" "$DEST" true
-      echo published >> "$OUTCOMES"
       return 0
     fi
     if [ -n "${SOURCE_SHA:-}" ] && [ "$published_sha" = "$SOURCE_SHA" ]; then
@@ -812,7 +971,6 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
   fi
   echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
   publish_one_target "$ACCOUNT" "$SHARE" "$DEST" "$resealing"
-  echo published >> "$OUTCOMES"
 }
 
 FAILED=()
@@ -826,9 +984,14 @@ for target in $BAKE_PUBLISH_TARGETS; do
 done
 PUBLISHED=$(awk '/^published$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 MARKERS=$(awk '/^marker$/ { c++ } END { print c + 0 }' "$OUTCOMES")
+# Targets a sibling publication of THIS content had already sealed by the time this run's
+# postcondition ran (MeshWeaver#3461). Counted separately from `published` so the summary never
+# claims a seal this run did not write — and printed on every run, including zero, so the number
+# is a denominator rather than an occasional line.
+CONVERGED=$(awk '/^converged$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 if [ "${#FAILED[@]}" -gt 0 ]; then
   echo "::error::bake publication FAILED on ${#FAILED[@]} of $(printf '%s\n' $BAKE_PUBLISH_TARGETS | wc -l | tr -d ' ') target(s): ${FAILED[*]} — identity=$IDENTITY source=$SOURCE. Every OTHER target above was published and sealed; these were not. A target that no longer exists (a torn-down instance's share) belongs OUT of BAKE_PUBLISH_TARGETS — remove it, never route around it."
   exit 1
 fi
 
-echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
+echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED targets-converged=$CONVERGED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
