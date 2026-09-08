@@ -2035,7 +2035,18 @@ jobs:
     # placeholder digest is a FAILURE rather than an absence — the `check-platform-pins.py` hole,
     # where a loose `sha256:[0-9a-f]+` reads `sha256:PLACEHOLDER` as "no pin here" and passes — and
     # that a git sha and a `${{ … }}` forward stay silent. An unproven gate is no gate.
-    - name: "Every fleet image pin is extractable — the gate can fail (self-test)"
+    #
+    # 🚨 It also carries the two arms of the PROTECTION half that need no credential, so they run
+    # HERE on every pull request rather than only at 05:20: that lock-pinned-digests.yml still
+    # exists and still carries a `schedule:`, and that its cron fires BEFORE every enabled purge
+    # step recorded in .github/acr-retention/tasks.json. `acr purge` skips locked manifests and that
+    # workflow is what locks them, so the ORDER of those two clocks IS the protection — move the
+    # lock to 04:00 and every pin moved since the previous night faces the purge unprotected, with
+    # both jobs still reporting success about their own work. Two sabotages (a lock at 23:00, a lock
+    # that never fires) are driven through the same comparison and must go red, and the classifier
+    # that decides PROTECTED / UNPROTECTED / PENDING-LOCK is exercised on every branch — including
+    # the one no live run can reach without UNLOCKING a production manifest.
+    - name: "Every fleet image pin is extractable, and the lock still precedes the purge (self-test)"
       run: python3 .github/scripts/check-pinned-digests.py --self-test
 
     # 🚨 …and the OTHER question about the same pins, which existence answers nothing about:
