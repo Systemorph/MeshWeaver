@@ -726,6 +726,19 @@ Critical: nothing that process can do will serve the type. The decline's outcome
 sweep (`SeedOutcome.DeclinedStaleSources…`), which hands the declined paths to the sync reconciler —
 see [Sealed Publication Reads](../SealedPublicationReads) → "The seal triggers the sync".
 
+> 🚨 **The probe is a fact about THIS process, written onto a SHARED record.** Measured 2026-09-08:
+> no host overrides the default `IAssemblyStore`, which is rooted per PROCESS
+> (`/tmp/MeshWeaver-AssemblyStore-pid<pid>`, `PersistenceExtensions.RegisterDefaultAssemblyStore`),
+> so a build compiled on one replica is never loadable by another — the coordinates a compile stamps
+> are per-process facts on a node every replica shares (#3395's shape, for NodeType builds). This
+> rule therefore fires once per replica per sweep whenever the bundle is declined: each replica
+> clears the other's unloadable coordinates and compiles its own — bounded by sweeps (boot, install,
+> push), never per activation, and no worse than the activation-time "bytes missing" self-heal that
+> already recompiled on first access. It does not make replicas converge; whether they must — and
+> in particular option (c) of #3417's open policy, *a replica that is behind declines to write
+> NodeType compile records* — is the maintainer's decision. If (c) is chosen, this dispatch is one
+> of the writes it must suppress; the seam is `AfterStaleDecline`'s `canCompileLocally` argument.
+
 ### 🚨 An ADOPTED build must say whether it was ever checked against the source
 
 Adoption — taking a prebuilt assembly from a bundle instead of compiling — is what makes installs

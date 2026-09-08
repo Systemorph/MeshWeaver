@@ -225,6 +225,21 @@ platform unless a type they need is genuinely gone. A developer who wants the pr
 `Modules:VersionStrictness=Family` (or `Exact`) in the Monolith's configuration — a configured value
 always wins over the environment default.
 
+> 🚨 **What this setting does NOT decide: whether the replicas of one installation converge on one
+> sealed set.** [#3417](https://github.com/Systemorph/MeshWeaver/pull/3417) (fix for #3395) settled
+> the mechanism — two compiles in one process resolve one module set — and deliberately left the
+> POLICY open: whether a replica whose pinned set no longer matches should (a) restart itself,
+> (b) flip readiness so the rollout replaces it, or (c) decline to write NodeType compile records
+> while it is behind (#3417 → "Still open"; [Modules](../Modules) → "Replicas of ONE deployment can
+> run DIFFERENT module sets"). This setting inherits that gap unchanged: every replica reads the same shared storage under the same
+> rule, so two replicas of one image choose the same publication **unless a seal lands between their
+> boots** — the in-place-republish window [Sealed Publication Reads](../SealedPublicationReads)
+> describes, which `Family`/`Minimum` neither widen in kind nor close (they only admit more
+> candidate directories). A replica's adoption is written onto the SHARED NodeType record with that
+> replica's coordinates, exactly as a local compile is today. Whether replicas must converge — and
+> how — is the maintainer's decision, and it is stated here so that it is not settled as a side
+> effect of the strictness default.
+
 ## Full rebuild when the platform updates
 
 A module is built against a platform pin. **When the platform releases, the pin moves and EVERY
