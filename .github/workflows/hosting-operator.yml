@@ -27,6 +27,12 @@ on:
 permissions:
   contents: read
 
+# One live run per ref: a newer push to the same PR branch cancels the run it supersedes; main and
+# the merge queue never cancel (each main push is its own group, keyed on the commit).
+concurrency:
+  group: hosting-operator-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   scripts:
     name: Operator scripts (shellcheck + behaviour)
