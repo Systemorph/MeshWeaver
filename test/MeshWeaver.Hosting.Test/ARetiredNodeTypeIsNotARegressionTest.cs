@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -199,7 +200,7 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
         var typePath = $"{TestPartition}/{typeId}";
 
         var absent = await DynamicTypePreWarmer.TypeNodeExists(Mesh, typePath, null)
-            .FirstAsync().Timeout(30.Seconds()).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         absent.Should().BeFalse("a path nothing ever created is not in any listing");
 
         await meshService.CreateNode(new MeshNode(typeId, TestPartition)
@@ -207,13 +208,13 @@ public class ARetiredNodeTypeIsNotARegressionTest(ITestOutputHelper output) : Mo
                 NodeType = MeshNode.NodeTypePath, Name = typeId, State = MeshNodeState.Active,
                 Content = new NodeTypeDefinition { Configuration = "config => config" },
             })
-            .Take(1).Should().Within(60.Seconds()).Emit("the type must exist before it is asked about");
+            .Take(1).Should().Within(TestTimeouts.Convergence).Emit("the type must exist before it is asked about");
 
         // The listing is eventually consistent — wait for it to reflect the create, bounded.
         var present = await Observable.Interval(200.Milliseconds()).StartWith(0L)
             .SelectMany(_ => DynamicTypePreWarmer.TypeNodeExists(Mesh, typePath, null).Take(1))
             .Where(exists => exists)
-            .FirstAsync().Timeout(60.Seconds()).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         present.Should().BeTrue();
     }
 }
