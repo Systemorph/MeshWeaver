@@ -3470,7 +3470,15 @@ internal static class NodeTypeCompilationHelpers
                     return Observable.Return<string?>(null);
                 }))
             .Replay(1)
-            .AutoConnect(1);
+            // 🚨 OWNED by the NodeType hub, not a bare AutoConnect(1). The compile pipeline below
+            // subscribes on the pool (SubscribeOn), so the FIRST subscriber — the one whose
+            // Connect() runs this create against hub.ServiceProvider — can land after the hub has
+            // torn down; a bare connect would then resolve the mesh service from a closed scope,
+            // swallow the ObjectDisposedException in the Catch above and run Roslyn for a hub that
+            // no longer exists. The hub's ShutDown releases the connection instead, and a
+            // subscriber arriving after that terminates — the compile subscription's error arm
+            // logs it as the faulted compile it is.
+            .AutoConnectOwnedBy(hub, $"{nameof(RunCompile)}({hubPath})");
 
         // Flip the parent NodeType to Compiling, stamping the ACTUAL activity path (or
         // null when the create didn't land). The stamp follows the create — it is never

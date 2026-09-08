@@ -270,7 +270,14 @@ public class ContentService : IContentService
                     return Observable.Return<ContentCollection?>(null);
                 })
                 .Replay(1)
-                .AutoConnect(1));
+                // 🚨 OWNED by the hub, not a bare AutoConnect(1): the promise resolves a provider
+                // factory and a ContentCollection off this hub's scope, and its first subscriber
+                // may be a layout render that lands on the pool after the hub has torn down. The
+                // hub's ShutDown releases the connection (an in-flight creation is unsubscribed, a
+                // still-queued one is cancelled), and a GetCollection after that terminates with
+                // ObjectDisposedException instead of resolving from a closed scope or replaying a
+                // collection the hub has already disposed.
+                .AutoConnectOwnedBy(hub, nameof(ContentService)));
     }
 
     /// <inheritdoc />
