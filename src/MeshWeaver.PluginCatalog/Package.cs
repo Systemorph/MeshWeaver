@@ -130,6 +130,16 @@ public record PackageManifest
     public string? License { get; init; }
 
     /// <summary>
+    /// The digest-addressed OCI reference of this package's bundle in the fleet's registry —
+    /// <c>cr.meshweaver.cloud/plugins/&lt;source&gt;/&lt;package&gt;@sha256:…</c> — stamped by the
+    /// REGISTRY on the catalog index (<c>/api/plugins</c>) from its record of pushed publications
+    /// (<see cref="IPublicationArtifacts"/>). Null, the default, on every package the registry has
+    /// not pushed and on every catalog before the field existed; never authored on a plugin root.
+    /// Additive: a reader that predates it ignores it, and the setup wizard's listing keeps its shape.
+    /// </summary>
+    public string? Artifact { get; init; }
+
+    /// <summary>
     /// For <see cref="PackageKind.Code"/> packages only: the NodeType configuration lambda source
     /// (e.g. <c>"config =&gt; config.WithContentType&lt;Widget&gt;().AddLayout(...)"</c>). The installer
     /// synthesizes a <c>NodeType</c> node with this configuration and imports the package's
