@@ -408,7 +408,7 @@ public sealed class GitHubWebhookProcessor
 
     /// <summary>Maps a config node path (<c>{space}/_GitSync</c> or <c>{space}/_GitSync/{sourceId}</c>)
     /// to the Space + source id it configures.</summary>
-    private static PushTarget? ToPushTarget(MeshNode configNode)
+    internal static PushTarget? ToPushTarget(MeshNode configNode)
     {
         var parts = configNode.Path.Split('/');
         var idx = Array.IndexOf(parts, GitHubSyncService.ConfigId);
@@ -813,7 +813,7 @@ public sealed class GitHubWebhookProcessor
     /// <param name="incoming">The repository the delivery is FOR (payload → always the current name).</param>
     /// <param name="context">Human copy for the log line: the event, or "green build of main".</param>
     /// <returns>The classified match. Never faults — a resolution failure degrades to "no match".</returns>
-    private IObservable<RepoMatch> ConfigsTargeting(RepoIdentity incoming, string context)
+    internal IObservable<RepoMatch> ConfigsTargeting(RepoIdentity incoming, string context)
         => QueryConfigNodesAsSystem().SelectMany(c =>
         {
             var stored = c.Items
