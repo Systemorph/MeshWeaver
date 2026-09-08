@@ -675,6 +675,24 @@ verify_publication() { # <account> <share> <dest>
     echo "::error title=Refusing to seal — the publication could not be read back::$account/$share/$dest: ${#unreadable[@]} of $MANIFEST_COUNT file(s) could not be read after being uploaded, so whether this directory holds one publication or two cannot be established. Refusing rather than assuming — that assumption is what would seal a mix."
     local entry
     for entry in "${unreadable[@]}"; do echo "::error::could not read back after uploading it: $entry"; done
+    # 🚨 WHAT THE DIRECTORY ACTUALLY HOLDS, listed from inside the job. Measured 2026-09-08 on
+    # identity s96c0dfb0…: 39 of 45 files were ResourceNotFound on read-back although every upload
+    # had returned SUCCESS under `set -e`, on one share only, with NO concurrent writer (verified:
+    # nothing in this script deletes anything but the sentinel, carry-forward only downloads, and
+    # no other run was publishing in the window). That leaves "the CLI reported success without
+    # storing" and "a transient on that share", which the per-file 404s cannot separate — and
+    # NOBODY'S LAPTOP CAN ASK: both investigating identities were refused on the share, while this
+    # job's identity can read it. So the listing is taken HERE, where the credential exists.
+    #
+    # Read-only, after the refusal, and deliberately non-fatal: it must never convert a decided
+    # refusal into a different exit path. `|| true` is the one place in this file that idiom is
+    # right — a diagnostic that fails is still a refusal, and the return below is unchanged.
+    echo "::group::what $account/$share/$dest holds now (diagnostic only — the refusal above stands)"
+    az storage file list --account-name "$account" --share-name "$share" \
+      --path "$dest" --auth-mode login --backup-intent \
+      --query "[].{name:name, bytes:properties.contentLength}" -o tsv --only-show-errors \
+      < /dev/null || echo "the listing itself failed — that is itself the finding: this identity could not read the directory it had just written"
+    echo "::endgroup::"
     return 1
   fi
 
