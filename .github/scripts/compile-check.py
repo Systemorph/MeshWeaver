@@ -423,6 +423,68 @@ def discover_refs(refs_arg):
     return {n: os.path.abspath(p) for n, (p, _) in seen.items()}, search_roots
 
 
+# 🚨 THE MODULE ASSEMBLIES THAT LEFT THE PLATFORM IMAGE. These three are registry-served, so the
+# pinned image's `/app` does NOT carry them any more (MeshWeaver#2276 moved MeshWeaver.AI out,
+# #3175 made Markdown.Collaboration single-producer, and Maps followed). CI tops the reference set
+# up from THIS run's module bundles and then asserts each one is present, because the failure mode
+# is a misdirection: every NodeType binding a missing module fails with CS0246/CS0103 naming the
+# CONTENT, which reads exactly like this repo breaking.
+#
+# Nothing did that locally, so `--image` — documented as "what CI uses and what actually ships" —
+# reported 15 phantom breaks on a pristine checkout of a green `main` (AppleMaps/Gallery,
+# Collaboration/Review, Cornerstone/Pricing, Edu/PromptCell, GoogleMaps/Gallery, Hosting/Backup,
+# Hosting/Deployment, Hosting/FleetConsole, Hosting/InstanceAction, Hosting/InstanceRequest,
+# Hosting/PlatformBuildInbox, MyAi/Panel, OpenStreetMap/Gallery, Providers/ProvidersApp,
+# RolePlay/Story). A gate that is red on green main is a gate people learn to ignore.
+MODULE_REFS_NOT_IN_IMAGE = ("MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration", "MeshWeaver.Maps")
+
+
+def discover_module_refs(search_roots, include_repo_build: bool = True):
+    """Locate the MODULE assemblies that are no longer in the platform image. CI supplies them in
+       the flat `--refs` dir (unpacked from the run's module bundles); locally they come from this
+       repo's own `src/<Module>/bin/{Release,Debug}/net10.0/`, since all three are built HERE.
+       Returns {name.dll: abspath} for whatever was found — the caller decides what a miss means.
+       Prefers Release over Debug, and the newest file within a tier.
+
+       `include_repo_build=False` restricts the search to `search_roots`, so the result is a
+       function of the argument alone — what the self-test needs to prove the guard can fire on a
+       short reference set even on a machine whose src/ HAS been built."""
+    found = {}   # name -> (path, release, mtime)
+
+    def consider(dll, release):
+        n = os.path.basename(dll)
+        if os.path.splitext(n)[0] not in MODULE_REFS_NOT_IN_IMAGE:
+            return
+        try:
+            mt = os.path.getmtime(dll)
+        except OSError:
+            return
+        cur = found.get(n)
+        if cur is None or (release and not cur[1]) or (release == cur[1] and mt > cur[2]):
+            found[n] = (dll, release, mt)
+
+    # This repo's own build output first — the three projects live in src/ here.
+    if include_repo_build:
+        for name in MODULE_REFS_NOT_IN_IMAGE:
+            for cfg in ("Release", "Debug"):
+                for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / "net10.0" / f"{name}.dll")):
+                    consider(dll, cfg == "Release")
+    # …then anything the reference roots already carry (CI's flat dir, a sibling checkout's bins).
+    for root in search_roots:
+        if not root:
+            continue
+        root = Path(root)
+        for name in MODULE_REFS_NOT_IN_IMAGE:
+            for dll in glob.glob(str(root / f"{name}.dll")):
+                consider(dll, True)
+            for cfg in ("Release", "Debug"):
+                for dll in glob.glob(str(root / "**" / "bin" / cfg / "net10.0" / f"{name}.dll"),
+                                     recursive=True):
+                    consider(dll, cfg == "Release")
+    # Absolutize — these become <HintPath>s in a csproj that `dotnet build` runs from a TEMP dir.
+    return {n: os.path.abspath(p) for n, (p, _, _) in found.items()}
+
+
 def discover_ai_refs(search_roots):
     """Locate the `Microsoft.Extensions.AI*` assemblies the mesh supplies at runtime but that are
        NOT in the core `src/*/bin` set discover_refs globs (they live under the core's `test/*/bin`
@@ -755,11 +817,40 @@ def _self_test() -> int:
         if not is_reference_assembly(os.path.join(flat, "System.Text.Json.dll")):
             failures.append("  is_reference_assembly refused the real System.Text.Json.dll")
 
+    # 🚨 THE MODULE-REFS GUARD MUST BE ABLE TO FIRE. Its whole job is to refuse a run whose
+    # reference set is short, so a guard that silently finds nothing to complain about reads
+    # exactly like a complete reference set — the failure this gate exists to stop being
+    # misreported. Assert both directions against a temp tree, with no build output anywhere.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        empty = Path(tmp) / "empty"
+        empty.mkdir()
+        found = discover_module_refs([str(empty)], include_repo_build=False)
+        if found:
+            failures.append(f"  module-refs discovery found {sorted(found)} under an EMPTY root")
+        stocked = Path(tmp) / "refs"
+        stocked.mkdir()
+        for name in MODULE_REFS_NOT_IN_IMAGE:
+            (stocked / f"{name}.dll").write_bytes(b"")
+        # A decoy that is NOT one of the three must never be collected.
+        (stocked / "MeshWeaver.Layout.dll").write_bytes(b"")
+        found = discover_module_refs([str(stocked)], include_repo_build=False)
+        if sorted(found) != sorted(f"{m}.dll" for m in MODULE_REFS_NOT_IN_IMAGE):
+            failures.append(f"  module-refs discovery returned {sorted(found)}, "
+                            f"expected exactly {sorted(f'{m}.dll' for m in MODULE_REFS_NOT_IN_IMAGE)}")
+        # Every name must be absolute — a relative HintPath resolves against dotnet's temp dir and
+        # RAR drops the reference silently (the whole reason discover_refs absolutizes too).
+        if any(not os.path.isabs(v) for v in found.values()):
+            failures.append("  module-refs discovery returned a RELATIVE path")
+
+
     if failures:
         print("✗ using-directive parser self-test FAILED:")
         print("\n".join(failures))
         return 1
     print(f"✓ using-directive parser: {len(cases)} shape(s) OK")
+    print(f"✓ module-refs guard: detects a short reference set, collects exactly "
+          f"{len(MODULE_REFS_NOT_IN_IMAGE)} registry-served assemblies, absolutized")
     return 0
 
 
@@ -805,6 +896,33 @@ def main() -> int:
     # be found, ai_available stays False and those sets fall back to UNVERIFIABLE (AI-only errors).
     ai_refs = discover_ai_refs(ref_roots)
     refs.update(ai_refs)            # AI names aren't in the core src set, so this never clobbers
+    # 🚨 The registry-served modules the image no longer carries. CI unpacks them from this run's
+    # bundles into the flat --refs dir; locally they come from src/<Module>/bin. Either way they
+    # must be PRESENT, because their absence does not look like an absence — it looks like fifteen
+    # NodeTypes breaking (see MODULE_REFS_NOT_IN_IMAGE). Refuse with the real cause instead.
+    module_refs = discover_module_refs(ref_roots)
+    for name, path in module_refs.items():
+        refs.setdefault(name, path)   # never clobber a copy the reference set already carries
+    missing_modules = [m for m in MODULE_REFS_NOT_IN_IMAGE if f"{m}.dll" not in refs]
+    if missing_modules:
+        print("\nerror: the reference set is missing "
+              f"{len(missing_modules)} module assembl{'y' if len(missing_modules) == 1 else 'ies'} "
+              "that the platform image no longer ships:\n"
+              + "".join(f"    {m}.dll\n" for m in missing_modules)
+              + "  These are registry-served (MeshWeaver#2276 / #3175), so `/app` does not carry\n"
+                "  them and --image alone cannot supply them. Every NodeType that binds one fails\n"
+                "  with CS0246/CS0103 naming the CONTENT — which reads as this repo breaking when\n"
+                "  the real fault is a short reference set. Refusing to report those as breaks.\n"
+                "\n  Build them once, then re-run this command:\n"
+              + "".join(
+                  f"    dotnet build src/{m} -c Release -p:MeshWeaverRoot=$HOME/code/MeshWeaver/\n"
+                  for m in missing_modules)
+              + "  (CI needs none of this: it unpacks the same assemblies from the run's module\n"
+                "  bundles and asserts each one — .github/workflows/ci.yml, 'Compile-check every\n"
+                "  NodeType'.)")
+        return 1
+    print(f"module refs: {len(MODULE_REFS_NOT_IN_IMAGE)} registry-served assembl(ies) present "
+          + ", ".join(sorted(MODULE_REFS_NOT_IN_IMAGE)))
     ai_available = bool(ai_refs)
     ref_xml = "\n".join(
         f'    <Reference Include="{os.path.splitext(n)[0]}"><HintPath>{p}</HintPath></Reference>'
