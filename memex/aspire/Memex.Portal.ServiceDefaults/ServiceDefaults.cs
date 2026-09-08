@@ -10,6 +10,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Persistence;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -194,7 +195,12 @@ public static class ServiceDefaults
             // loaded here renders empty, and until now /health said only "Degraded". No probe
             // tag — Degraded on purpose, never a reason to pull the pod — so it reads on
             // ProbeEndpoints.Health alone, with the node types named in the detail.
-            .AddCheck<ContentTypeHealthCheck>(ContentDegradationRegistry.HealthCheckName);
+            .AddCheck<ContentTypeHealthCheck>(ContentDegradationRegistry.HealthCheckName)
+            // The volume the assembly store publishes into (2026-09-08: /data at 3 MiB free for
+            // hours, the only symptom a NodeType that would not activate). No probe tag — Degraded
+            // on purpose, never a reason to pull the pod — read on ProbeEndpoints.Health alone,
+            // with the path and the numbers in the detail.
+            .AddCheck<StorageCapacityHealthCheck>(StorageCapacityHealth.HealthCheckName);
 
         return builder;
     }
