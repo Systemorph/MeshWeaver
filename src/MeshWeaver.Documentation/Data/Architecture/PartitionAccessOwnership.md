@@ -56,8 +56,12 @@ amplitude — 9 denies retired instead of 26.** Identical content, different cou
 that differs run to run on unchanged inputs is not a steady state; it is a race, and the count is
 just how far one writer got before the other looked.
 
-Live evidence that this long predates the CD failure: `Chess/_Policy` was measured at **version
-210,801** on 2026-08-25, and `Chess/_Access/Public_Access` at **11,899** on 2026-08-09.
+`Chess/_Policy` has a longer history of write storms — measured at **version 210,801** on
+2026-08-25 and `Chess/_Access/Public_Access` at **11,899** on 2026-08-09 — but those are **not**
+this defect and should not be cited as it: `PluginGate`'s own comments attribute them to the
+reconcile writing off blind subtree snapshots, which the targeted-read `VerifiedWrite` change then
+fixed. They belong here only as evidence that these particular nodes are a contended surface with
+more than one way to loop, which is the reason to give them exactly one owner.
 
 ## The rule
 
