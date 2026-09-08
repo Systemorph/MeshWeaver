@@ -357,6 +357,13 @@ def check_script_needs_tree(root: Path) -> list[Finding]:
     the swallow check) — a path built by string concatenation can evade it, which is
     accepted: the common case is the literal path, and the evasion still has to get past
     review wearing a concatenated path for no stated reason.
+
+    One reference is NOT a tree run and is excluded: the path inside a contents-API FETCH
+    (`gh api …/contents/.github/scripts/x.py?ref=…`), which the reusable satellite lanes use to
+    pull the platform's copy of a script into `$RUNNER_TEMP` — on that runner the tree is the
+    SATELLITE's and never contains the file, so a checkout would satisfy this rule while
+    proving nothing. The excluded occurrence is exactly the one preceded by `contents/`; any
+    other `.github/scripts/` reference in the same job still fires (self-tested below).
     """
     import yaml
 
@@ -378,7 +385,7 @@ def check_script_needs_tree(root: Path) -> list[Finding]:
                     continue
                 for st in steps:
                     run_block = st.get("run") if isinstance(st, dict) else None
-                    if isinstance(run_block, str) and ".github/scripts/" in run_block:
+                    if isinstance(run_block, str) and _references_tree_script(run_block):
                         rel = str(path.relative_to(root))
                         code = f"{job_name}: " + run_block.strip().splitlines()[0]
                         findings.append(Finding(
@@ -387,6 +394,18 @@ def check_script_needs_tree(root: Path) -> list[Finding]:
                             "on the runner that file does not exist (exit 127, the #2857 Promote break)"))
                         break
     return findings
+
+
+def _references_tree_script(run_block: str) -> bool:
+    """True when the run block names `.github/scripts/` as a path on the runner's tree — i.e. any
+    occurrence NOT immediately preceded by `contents/` (a contents-API fetch of the file's bytes)."""
+    needle = ".github/scripts/"
+    start = 0
+    while (i := run_block.find(needle, start)) != -1:
+        if not run_block[:i].endswith("contents/"):
+            return True
+        start = i + len(needle)
+    return False
 
 
 def read_allow(path: Path) -> tuple[dict[str, str], list[str]]:
@@ -556,6 +575,29 @@ def self_test(root: Path) -> int:
         got = check_script_needs_tree(tmp)
         case("script-needs-tree is SILENT once the job checks out (sparse counts)",
              len(got) == 0, f"got {[f.code for f in got]}")
+
+        # A checkout-less job that FETCHES the platform's script via the contents API and runs
+        # it from $RUNNER_TEMP never touches the tree — the reusable satellite lanes' shape.
+        fetch = ('        run: |\n          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/x.py?ref=main" '
+                 '--jq .content | base64 -d > "$RUNNER_TEMP/x.py"\n'
+                 '          python3 "$RUNNER_TEMP/x.py"\n')
+        wf.write_text(
+            "name: f\non: [push]\njobs:\n  lane:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - name: fetch and run the platform's script\n" + fetch
+        )
+        got = check_script_needs_tree(tmp)
+        case("script-needs-tree is SILENT on a contents-API fetch run from $RUNNER_TEMP",
+             len(got) == 0, f"got {[f.code for f in got]}")
+
+        # …and the exemption cannot mask a real tree run sitting beside the fetch.
+        wf.write_text(
+            "name: f\non: [push]\njobs:\n  lane:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - name: fetch and run the platform's script\n" + fetch +
+            "      - name: ACR login\n        run: bash .github/scripts/acr-login.sh\n"
+        )
+        got = check_script_needs_tree(tmp)
+        case("script-needs-tree still FIRES when a tree run sits beside a fetch",
+             len(got) == 1 and "lane" in got[0].code, f"got {[f.code for f in got]}")
 
         # ── jmespath: THE fixture — a manifest list with an untagged row ────────────────
         wf.write_text(SELF_TEST_WORKFLOW)
