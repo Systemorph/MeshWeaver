@@ -164,6 +164,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             RetryInterval = TimeSpan.FromMilliseconds(500),
             EventCoalesceWindow = TimeSpan.FromMilliseconds(50),
             DefaultPolicy = UpdatePolicyKind.Continuous,
+            DefaultPattern = "*-ci*",
         };
         var service = new SeamedSelfUpdateService(
             Mesh, new AcrMustNotBeCalled(), updater, options,
@@ -338,7 +339,8 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             NodeType = UpdatePolicyNodeType.NodeType,
             Name = "Update Policy",
             State = MeshNodeState.Active,
-            Content = new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous },
+            // 2026-09-08: the newest tag is a ci build, eligible only under a pattern that admits it.
+            Content = new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, Pattern = "*-ci*" },
         };
         return Observable.Create<MeshNode>(observer =>
             {

@@ -15,7 +15,7 @@ This is **one of two deploy routes** for MeshWeaver. Use it for the shared porta
 
 A **code update** is three steps: build the images, point the Deployments at the new tag, restart. It is **not** `tools/deploy.sh` and **not** `aspire deploy` — those are the Container Apps route.
 
-> **Steady state is self-update, not this runbook.** Once an environment runs, it rolls *itself* to new images per `Admin/UpdatePolicy` (default Continuous) — the portal patches its own Deployment from inside the pod. This manual runbook is the **bootstrap / break-glass** path (first install, or to force a specific tag). See [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy), which also covers the one-time RBAC + workload-identity (AcrPull) setup the in-pod updater needs.
+> **Steady state is self-update, not this runbook.** Once an environment runs, it rolls *itself* to new images per `Admin/UpdatePolicy` (default Stable — clean releases; `Continuous` + a `pattern` such as `3.0.0-ci*` follows a line's continuous builds) — the portal patches its own Deployment from inside the pod. This manual runbook is the **bootstrap / break-glass** path (first install, or to force a specific tag). See [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy), which also covers the one-time RBAC + workload-identity (AcrPull) setup the in-pod updater needs.
 
 ## 1. Build + push the images
 
@@ -267,8 +267,8 @@ Operational facts about the in-pod updater (learned the hard way — each cost a
   judges it newer, and **patches the Deployment off your image**. Manual rolls therefore only stick with
   CI-built `ci.<N>` tags — ship code via a merged PR, or pause the updater first.
 - **Pause switch** = the `Admin/UpdatePolicy` node: patch `content.policy` to `None`
-  (`Continuous`/`Stable`/`None`). BUT a **freshly booted pod races the policy read**: `CreatePolicySource`
-  emits the configured default (`Continuous`) via `StartWith` *before* the node's live value arrives, and
+  (`Continuous`+`pattern`/`Stable`/`None`). BUT a **freshly booted pod races the policy read**: `CreatePolicySource`
+  emits the configured default (`Stable` since 2026-09-08) via `StartWith` *before* the node's live value arrives, and
   the poll timer fires immediately (`StartWith(-1L)`). The live `None` then switches the poller off, but a
   check may already have fired. `None` alone therefore does not reliably protect a roll that restarts the
   pod.

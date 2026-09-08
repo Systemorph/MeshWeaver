@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Release & Self-Update Strategy"
-Abstract: "The end-to-end production model: the merge preconditions (build green with warnings-as-errors, tests green, reviewed, comments resolved), the version scheme (current-build vs official), CI producing ALL images to ACR tagged by version, and policy-driven SELF-UPDATE — each install (AKS, local k3s, MAUI) rolls itself to the newest image per Admin/UpdatePolicy (Stable | Continuous | None, default Continuous)."
+Abstract: "The end-to-end production model: the merge preconditions (build green with warnings-as-errors, tests green, reviewed, comments resolved), the version scheme (current-build vs official), CI producing ALL images to ACR tagged by version, and policy-driven SELF-UPDATE — each install (AKS, local k3s, MAUI) rolls itself to the newest image per Admin/UpdatePolicy (Stable | Continuous + pattern | None, default Stable — clean releases only)."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#0e7490'/><path d='M12 5a7 7 0 1 0 6.3 4' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round'/><path d='M18.5 4.5v3.2h-3.2' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -23,7 +23,7 @@ The production model in one picture:
 PR ──[merge preconditions]──▶ main ──[CI: build ALL images, tag by version]──▶ ACR
                                                                                  │
                                   each install polls ACR per Admin/UpdatePolicy ◀┘
-                                  Continuous → newest build · Stable → newest release · None → manual
+                                  Stable (default) → newest clean release · Continuous + pattern → newest build the pattern admits · None → manual
                                                  │
                   AKS / local k3s: patch own deployment   MAUI: notify + relaunch
 ```
@@ -125,14 +125,19 @@ Two properties of the continuous leg matter to a reader of tags:
 
 ## 4. The update policy — `Admin/UpdatePolicy`
 
-A single mesh node, edited by platform admins under **Settings → Updates** (a dropdown bound straight
-to the node). Default **Continuous**.
+A single mesh node, edited by platform admins under **Settings → Updates** (a dropdown and a
+pattern field bound straight to the node). Default **Stable** — clean releases only (maintainer,
+2026-09-08: *"by default we will not upgrade as long as no version without `-ci…` is labelled"*).
 
-| Policy | Behaviour |
-|---|---|
-| **Continuous** (default) | Roll to the **latest-published** tag on ACR, **including** build-numbered continuous builds — latest by CD run number, not by version string ([why](/Doc/Architecture/SelfUpdateTargetSelection)). As soon as a new build number lands, the install picks it up. |
-| **Stable** | Roll only to the newest **clean release** (no build number). |
-| **None** | Never auto-update. Apply updates manually (operator, or the admin tab's *Apply available update now*). |
+| Policy | `pattern` | Behaviour |
+|---|---|---|
+| **Stable** (default) | *(optional; narrows to a line, e.g. `3.0.*`)* | Roll only to the newest **clean release** (no build number). |
+| **Continuous** | **required**, e.g. `3.0.1-ci*` | Roll to the newest sealed continuous build the pattern admits — latest by CD run number, not by version string ([why](/Doc/Architecture/SelfUpdateTargetSelection)). `3.0.0-ci*` never selects `3.0.1`: following a line ends when its release is tagged. **Without a pattern this is Stable**, and the poller says so once at Warning. |
+| **None** | *(ignored)* | Never auto-update. Apply updates manually (operator, or the admin tab's *Apply available update now*). |
+
+Fleet today (no clean release above `3.0.0` yet): `memex` and `memex-cloud` carry `Continuous` +
+`3.0.0-ci*`, to be changed the day `3.0.1` is tagged. The record shapes and the semver rule are in
+[Release Process & Versioning](/Doc/Architecture/ReleaseProcess) → "Which build an install takes".
 
 The poller (`SelfUpdateHostedService`) reads this node live: changing the policy re-drives it
 immediately. It checks ACR a few times a day, records the latest tag it sees on the node
@@ -212,7 +217,8 @@ in-cluster Deployment PATCH works without this; it only authenticates the tag-li
 - **Watch a continuous roll (AKS):** merge to `main` → a new `…-ci.<n>` tag lands on ACR → within the
   poll window a `Continuous` install patches `memex-portal-deployment` + `memex-migration-deployment`
   (`kubectl rollout status`).
-- **Pin an environment:** set the policy to `None` (or `Stable` for releases-only).
+- **Pin an environment:** set the policy to `None`. `Stable` (the default) is releases-only; a
+  `Continuous` install follows only the line its `pattern` names.
 - **Manual apply:** Settings → Updates → *Apply available update now* (installs that can self-patch).
 
 The decision logic (which tag each policy picks; "is newer") is unit-pinned in
@@ -234,8 +240,8 @@ not `kubectl set image` by hand. Forcing a specific tag on one instance is a `Ro
 
 | Step | Action | What ships | Who rolls to it |
 |---|---|---|---|
-| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.0.0-ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR**, bakes and seals | **Continuous** installs (dev/test) |
-| **b** | **Push the annotated tag `v3.0.0`** on a promoted, sealed commit | `release.yml` retags that set `3.0.0` in ACR, mirrors it to GHCR, records `_releases/3.0.0`, publishes the GitHub Release | **Stable** installs (prod) |
+| **a** | **Merge to `main`** (preconditions §1 green) | `main-cd.yml` builds the **multi-arch** image set (amd64 + arm64), tags it `3.0.0-ci.<run#>` (+ short SHA + moving `main`), pushes to **ACR**, bakes and seals | **Continuous** installs whose `pattern` admits the tag (dev/test; the fleet's `3.0.0-ci*` today) |
+| **b** | **Push the annotated tag `v3.0.0`** on a promoted, sealed commit | `release.yml` retags that set `3.0.0` in ACR, mirrors it to GHCR, records `_releases/3.0.0`, publishes the GitHub Release | **Stable** installs — the default (prod) |
 | **c** | **Merge the bump** the lane opened (`PlatformVersion` → `3.1.0`) | continuous builds become `3.1.0-ci.<n>` | opens the next development line |
 
 ```bash
