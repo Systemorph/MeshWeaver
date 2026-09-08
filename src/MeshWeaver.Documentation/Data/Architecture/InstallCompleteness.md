@@ -107,10 +107,63 @@ answers because four different things can go wrong and only one outcome is fine.
 
 **Declared side.** `PackageManifest.InstalledFiles` — the per-file hash map CI generates as
 `manifest.lock` and the installer stamps onto the record — mapped through
-`PackageInstaller.NodePathForFile`, the same file→node mapping the incremental update path uses.
-Non-node files (`README.md`, the manifest sidecar, `content/**` assets) map to `null` and are
-excluded: a content asset is not a node, and counting one would make every healthy install read as
-incomplete.
+`PackageInstaller.NodePathForFile`, the installer's OWN file→node rule.
+
+🚨 **That rule has TWO halves, and counting only the first is #3659.** A file is not a node
+candidate when it is a non-node file **by design** (`README.md` at the repo root, the
+`manifest.lock` sidecar, a `content/**` asset) **or** when **no registered parser claims its
+extension** — which is how a package's ordinary carry-along files are skipped by the install
+without a word. Until #3659 the declared side asked only the first question while
+`ParseCanonical` asked both, so the two disagreed about the very population this page compares:
+
+```text
+Chess ships 37 files.  manifest.lock and content/og-card.png excluded  →  35 "declared nodes"
+                       Chess/gui/rn/chess.tsx  →  no parser claims .tsx  →  never written
+sweep, every pod, every boot:  Chess → 1 of 35 declared node(s) are ABSENT: [Chess/gui/rn/chess]
+```
+
+Measured over `MeshWeaver.Plugins`' package folders on 2026-09-08: 617 `.cs`, 275 `.json` and 248
+`.md` files a parser claims, against 200+ it does not — `.ts`, `.tsx`, `.py`, `.png`, `.mjs`,
+`.js`, `.html`, `.gitignore`, `.mp4`, `.jpg`, and four files with no extension at all. Every one of
+those was a permanent phantom ABSENT: reported at **Error**, indefinitely, spelled exactly like the
+genuinely lost source node this whole page exists to find — and driving `SkipOrHeal` to run a FULL
+reinstall of the package on every catalog visit that could never make the count reach zero.
+
+`NodePathForFile` now takes the parser registry the install itself uses, and `ParseCanonical` is
+expressed in terms of it, so there is ONE predicate rather than two implementations of half of one.
+The registry is a required argument, deliberately: which extensions are claimed is DI-dependent (a
+module contributes parsers), so a hard-coded list would be a fourth copy of a rule that drifts the
+moment one is added.
+
+**The residual, stated because it is reachable.** The declared side holds PATHS, not bytes, so it
+can ask only the extension half. A file whose extension IS claimed can still fail to become a node
+on its CONTENT — a `.json` object carrying no `$type`/`id`/`nodeType`, a file no parser can read —
+and such a file is still counted. Measured on the same day over every package folder in
+`MeshWeaver.Plugins`: that set is **empty** (every `.json` inside a package carries a node key; the
+non-node ones all live under `app/` and `e2e/`, which are not packages). Closing it properly means
+recording what the install actually wrote rather than re-deriving it, which is a different change.
+
+### The verdict states its own population
+
+🚨 **A count over the wrong population reads exactly like a correct one.** Nothing in the old
+output said which set had been counted, which is why a phantom ABSENT and a real one were
+indistinguishable for as long as the sweep existed. Every verdict now carries and prints:
+
+| Field | Says |
+|---|---|
+| `DeclaredFiles` | how many FILES the record's map holds — the population that was read |
+| `NonNodeFiles` | how many of them are not node candidates, and why (README/manifest/content asset, or an extension no parser claims) |
+| `Declared` | the DISTINCT node paths the rest map to |
+
+`Population` renders the three as one clause on every line that reports a verdict. The three are
+printed rather than two and a subtraction because `DeclaredFiles − NonNodeFiles` legitimately
+exceeds `Declared` when two files fold onto one node (the `X.json` → `X/index.json` layout move),
+and a reader has to be able to see that rather than infer it.
+
+A record whose files are ALL carry-along assets now reads `Undeclared` — *"all N file(s) the record
+declares are non-node files … so this package declares no node to compare against"* — never
+`Complete` (which would be the zero-found-zero-expected pass this page rejects) and never
+`Incomplete` (which is what it answered before).
 
 **Observed side.** ONE batched `IStorageAdapter.ReadMany` over exactly the declared paths.
 
@@ -188,6 +241,11 @@ Stated so nobody reads a green sweep as more than it is.
   deliberately theirs.
 - **A record with no file map.** `Undeclared`, and it says so — but it cannot name what is missing,
   because nothing declared it.
+- **A declared file whose CONTENT is not a node** — a well-formed `.json` with no
+  `$type`/`id`/`nodeType`, or a file no parser can read. The extension gate cannot see it (the
+  declared side holds paths, not bytes) so it is still counted. Empty over every package folder in
+  `MeshWeaver.Plugins` as of 2026-09-08; stated because it is reachable, not because it is
+  occupied.
 - **A partial storage failure.** `ReadMany` reports absence by omission, so a silent partial loss
   reads as `Incomplete` rather than `NotObserved`. That errs toward reinstalling, which is
   idempotent — the safe direction.
