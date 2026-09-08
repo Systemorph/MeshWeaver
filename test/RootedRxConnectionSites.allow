@@ -1,0 +1,29 @@
+# RootedRxConnectionSites.allow — the rooted-Rx-connection ratchet (RootedRxConnectionRatchetGuard).
+#
+# A multicast chain's CONNECTION must be owned by the object whose services it resolves, so that
+# the owner's Dispose() releases it. The one sanctioned spelling is
+# `OwnedConnectionExtensions.AutoConnectOwnedBy(owner, name)` / `ConnectOwnedBy(owner)`
+# (src/MeshWeaver.Messaging.Hub/OwnedConnectionExtensions.cs). A bare `.AutoConnect(` or a bare
+# `.Connect()` in src/ keeps the handle where no teardown can reach it, and when the connect is a
+# pool-queued subscribe (`Defer(…).SubscribeOn(TaskPoolScheduler)`) it runs whenever the pool gets
+# to it — after the owner's scope has closed, resolving from a disposed container (11 stragglers
+# in one Plugins run, 34222933802, every one this shape; see Doc/Architecture/HubDisposalModel →
+# "Rooted Rx connections").
+#
+# 🚨 The ROOTED budget is ZERO and stays zero: no bare `.AutoConnect(` / `.Connect()` may be listed
+# here. Convert the site to the helper; do not add a line.
+#
+# `.RefCount()` sites ARE listed, each with the reason its SUBSCRIPTIONS are owned: a ref-counted
+# chain releases its upstream with its last subscriber, so there is no handle for the owner to hold
+# — what must be owned is each subscription, through the ordinary hub.RegisterForDisposal rule. A
+# new RefCount site needs a reasoned line here AND a raised RefCountBudget in the guard, in the
+# same change; a line whose site is gone is a failure, not a tidy-up.
+#
+# format: <repo-relative path><TAB><enclosing member><TAB><reason>   — '#' starts a comment.
+
+src/MeshWeaver.Data/VirtualDataSource.cs	StreamUpdates	RefCount, subscriber-owned: the data source's own subscription is stream.RegisterForDisposal'd in SetupDataSourceStream, the chain disconnects with the last subscriber, and EvictCachedStream drops a faulted one (#3155).
+src/MeshWeaver.Graph/Configuration/PartitionRegistry.cs	GetPartition	RefCount, subscriber-owned: script-execution callers hold and dispose their own subscriptions; the mesh service is resolved at CALL time, so a call after the hub's teardown throws at the resolve rather than inside a live chain.
+src/MeshWeaver.Graph/DeckSlidesCache.cs	GetOrderedSlides	RefCount, subscriber-owned: slide renders dispose with their layout-area hubs, the entry disconnects the instant the deck is left (deliberately NO RefCount(TimeSpan) — that timer rooted a disposed mesh, MeshHubDisposalLeakTest), and the PromiseCache evicts a faulted entry.
+src/MeshWeaver.Graph/MeshNodeTypeSource.cs	MeshNodeTypeSource	RefCount, subscriber-owned: the constructor's enrichment-capture subscription is hub.RegisterForDisposal'd and OwnNodeCache's is hub-scoped, so the routing own-node stream disconnects at the hub's ShutDown with the last of them.
+src/MeshWeaver.Hosting/Persistence/PartitionStorage/RoutingProxyAdapter.cs	RoutingProxyAdapter	RefCount, subscriber-owned one-shot: the Defer'd probe completes, so the connection lives only while a read is in flight; a probe after the caller hub's teardown resolves the providers from the dead scope INSIDE the Defer and terminates with ObjectDisposedException.
+src/MeshWeaver.Hosting/Persistence/PersistenceService.cs	PersistenceService	RefCount, subscriber-owned one-shot: Defer + Take(1) + Timeout per provider, so the probe completes and each read's subscription is the reader's own; no scope is resolved inside the chain.
