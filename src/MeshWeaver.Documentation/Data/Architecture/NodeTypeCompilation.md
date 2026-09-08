@@ -1546,8 +1546,11 @@ wave costs an assembly load instead of a Roslyn generation.
 
 **Triage fingerprint** — intermittent hangs while most requests succeed, on a portal that
 recently synced or baked: suspect a degraded-but-Ready replica, not a global wedge. One or two
-pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is this incident;
-`kubectl delete pod` them (grace-drain — the Deployment replaces them) and read #2194.
+pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is this incident
+(a break-glass read — the per-replica sample is not on the Hosting API yet,
+[OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)); replace them with a `Restart`
+`Hosting/InstanceAction` (the rolling restart grace-drains each pod and the Deployment replaces
+it), and read #2194.
 
 ### 🚨 A LEAVING pod never touches shared NodeType state — the adoption sweep observes host shutdown
 

@@ -274,6 +274,10 @@ the code together are in [Probe semantics](../ProbeSemantics).
 
 ## Triage
 
+> Break-glass reads, all four: per-replica memory and a pod's log lines are not on the Hosting API
+> yet ([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)). The cure is never a
+> `kubectl` write — a `Restart` `Hosting/InstanceAction` replaces the pod.
+
 ```bash
 # 1. Who is fat? Compare against 12 GiB (0.75 × the 16Gi limit), not against 16 GiB.
 kubectl top pods -n <ns> --no-headers

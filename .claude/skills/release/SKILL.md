@@ -174,7 +174,9 @@ complete image set, and publishes only when it does not — bounded at 3 attempt
   tag, and the `promote` job applies the real tags only after every leg succeeds, ending with
   `memex-portal-ai:<version>` — the single write the self-updater acts on.
 
-**Before believing something is deployed, check the IMAGE, never the green tick:**
+**Before believing something is deployed, check the IMAGE, never the green tick** — the Fleet
+Console (`/Hosting/Console`) shows the RUNNING version per instance; the cluster read is the
+break-glass form:
 
 ```bash
 az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
@@ -215,11 +217,15 @@ Two mechanisms, both live:
   `ReleaseAvailability`), then patches its own Deployment in-pod. `Stable` considers only clean
   tags — i.e. what `release.yml` promoted.
 
-Confirm a roll-out:
+Confirm a roll-out — the RUNNING version per instance is on the Fleet Console (`/Hosting/Console`
+on memex.meshweaver.cloud), and a roll you order by hand is a `Roll` `Hosting/InstanceAction` with
+the tag, never `kubectl set image` (policy:
+[OperatingFromThePortal.md](../../../src/MeshWeaver.Documentation/Data/Architecture/OperatingFromThePortal.md)).
+The cluster reads below are the break-glass form of the same three questions:
 ```bash
 # ACR has the new tag:
 az acr repository show-tags -n meshweaver --repository memex-portal-ai -o tsv | tail
-# Each portal serves + runs the new image (private cluster → az aks command invoke):
+# Each portal serves + runs the new image (break-glass: private cluster → az aks command invoke):
 az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
   "kubectl -n <ns> get deploy memex-portal-deployment -o jsonpath='{.spec.template.spec.containers[0].image}'"
 # The release's identity marker (what a Stable install's gate reads):

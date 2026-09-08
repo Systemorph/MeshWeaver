@@ -37,7 +37,10 @@ The repos under `meshweaver.azurecr.io`:
 ## Step 1 — Build the keeper list (do this FIRST)
 
 List every image referenced by a live Deployment in **all** namespaces on the shared cluster. The
-cluster is private — `kubectl` only via `az aks command invoke`.
+Fleet Console (`/Hosting/Console`) shows the RUNNING version per recorded instance; the cluster
+read below is break-glass — it covers namespaces no record describes, which is exactly why a
+cleanup must not trust the record list alone ([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)).
+The cluster is private — `kubectl` only via `az aks command invoke`.
 
 **Query every namespace, never a hand-written list** — the cluster runs at least three portal
 namespaces (`portalNamespaces` in `deploy/aks/infra/main.bicep` is `memex`, `prod`, `memex-cloud`), and a

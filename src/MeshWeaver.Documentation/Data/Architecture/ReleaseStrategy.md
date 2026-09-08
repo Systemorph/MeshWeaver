@@ -226,8 +226,11 @@ The decision logic (which tag each policy picks; "is newer") is unit-pinned in
 
 Three operator actions, two independent channels, and **steady state is self-update**: you *push
 images* (by merging or tagging) and installs roll **themselves** per `Admin/UpdatePolicy` — you do
-not `kubectl set image` by hand. The manual [AKS runbook](/Doc/Architecture/DeploymentAKS) is the
-**bootstrap / break-glass** path (first install, or forcing a specific tag).
+not `kubectl set image` by hand. Forcing a specific tag on one instance is a `Roll`
+`Hosting/InstanceAction` on the control instance
+([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)); the manual
+[AKS runbook](/Doc/Architecture/DeploymentAKS) is what the operator runs for it, and the
+**break-glass** path when the control plane itself cannot act.
 
 | Step | Action | What ships | Who rolls to it |
 |---|---|---|---|

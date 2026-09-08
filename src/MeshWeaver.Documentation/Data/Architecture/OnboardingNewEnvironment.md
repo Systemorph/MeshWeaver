@@ -116,8 +116,12 @@ curl -sS -k -o /dev/null -w "%{http_code}\n" --resolve <host>:443:$INGRESS_IP ht
 ## Self-update: first-install checklist
 
 A new environment should run on **self-update from day one** — that is the steady state.
-The manual [AKS runbook](/Doc/Architecture/DeploymentAKS) (`kubectl set image` + rollout) is the
-**bootstrap / break-glass** path only (the very first install, or forcing a specific tag). Once per
+A new instance is a `Deployments/<name>` record provisioned by a `Provision` `Hosting/InstanceAction`
+on the control instance (see [/new-deployment](https://github.com/Systemorph/MeshWeaver/blob/main/.claude/skills/new-deployment/SKILL.md)
+and [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)); the `az`/`kubectl` steps on
+this page are the pre-record procedure, kept as the record of how the existing environments were
+built and as break-glass. The manual [AKS runbook](/Doc/Architecture/DeploymentAKS) (`kubectl set
+image` + rollout) is what a `Roll` action runs, and the **break-glass** path only. Once per
 environment, in this order:
 
 1. **Deploy the `portal-identity` bicep.** It provisions the shared portal UAMI
