@@ -370,11 +370,12 @@ public sealed class MessageHub : IMessageHub
             // that reading is impossible from the callbacks alone.
             TryLog(LogLevel.Warning,
                 "[STALE-CALLBACK] {Address}: {Count} callback(s) pending > {ThresholdMs}ms: {Detail}{Fates} "
-                + "[pool threads={PoolThreads} pendingWork={PoolPending} completed={PoolCompleted}]",
+                + "[pool threads={PoolThreads} pendingWork={PoolPending} completed={PoolCompleted}]{Targets}",
                 Address, stale.Length, thresholdMs, FormatPendingCallbacks(stale),
                 FormatPendingCallbackFates(stale),
                 System.Threading.ThreadPool.ThreadCount, System.Threading.ThreadPool.PendingWorkItemCount,
-                System.Threading.ThreadPool.CompletedWorkItemCount);
+                System.Threading.ThreadPool.CompletedWorkItemCount,
+                FormatStaleCallbackTargets(stale));
         }
         catch (Exception ex)
         {
@@ -382,6 +383,158 @@ public sealed class MessageHub : IMessageHub
                 "[STALE-CALLBACK] {Address}: scan tick failed: {Error}",
                 Address, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// How many DISTINCT targets one <c>[STALE-CALLBACK]</c> line describes. Three is enough to
+    /// name a shared bottleneck without turning a wall of stale callbacks into a wall of hub
+    /// dumps — a failing CD bake emits 300+ of these lines, so the per-line cost is multiplied by
+    /// the very condition that makes the line interesting.
+    /// </summary>
+    private const int StaleCallbackTargetReportCap = 3;
+
+    /// <summary>
+    /// The TURN-LOOP STATE of the hubs these stale callbacks are waiting ON — the one thing the
+    /// report has never carried, and the one thing that decides the verdict.
+    ///
+    /// <para>🚨 <b>A stale-callback line describes the wrong hub.</b> Everything on it —
+    /// <c>{Address}</c>, <c>{Detail}</c>, the pool counters — belongs to the hub that is WAITING,
+    /// and a waiting hub is idle by construction. So the line has always reported, truthfully and
+    /// uselessly, that the reporter has nothing to do. The hub whose state answers "is this a
+    /// wedge or a queue" is the TARGET named inside <c>{Detail}</c> (<c>…@portal/nodeops-…</c>),
+    /// and it was never described. <see href="https://github.com/Systemorph/MeshWeaver/issues/2543">#2543</see>
+    /// has been asking for that hub's snapshot since 2026-08-28; it appears in exactly ONE captured
+    /// log in the whole history of the issue, because nothing emits it — the hub reader dump is
+    /// written on a disposal stall, and a live mesh saturating mid-bake never reaches one.</para>
+    ///
+    /// <para><b>What the fields discriminate</b> (see <c>Doc/Architecture/DisposalStallVerdicts</c>
+    /// for what each one measures, and why two of them measured nothing until #3593):</para>
+    /// <list type="bullet">
+    ///   <item><c>drainsInFlight&gt;0</c> with <c>Executing(T, N ms)</c> — a THREAD is inside that
+    ///     handler and has been for N ms. The turn is not slow, it is BLOCKED: the pump cannot
+    ///     advance because the handler has not returned. Look for a synchronous wait on the
+    ///     block.</item>
+    ///   <item><c>drainsInFlight=0</c> with <c>Executing(T, N ms)</c> — no thread is in the
+    ///     handler, yet the turn's observable has not terminated. The handler returned something
+    ///     that never completes; the pump is parked awaiting a terminal that is owed by an async
+    ///     leaf.</item>
+    ///   <item><c>drainsInFlight=0</c>, no <c>Executing</c>, <c>draining=true</c>, a non-empty
+    ///     <c>buffer</c> — the drain was scheduled and never ran. That is a scheduling stall in the
+    ///     target, not a handler at all.</item>
+    ///   <item>a small <c>buffer</c> and no <c>Executing</c> — the target is IDLE, so the silence is
+    ///     not queueing at all and the reply leg is where to look.</item>
+    /// </list>
+    ///
+    /// <para>Deliberately the COMPACT snapshot and not <see cref="GetPendingRequestDiagnostics"/>:
+    /// the target's own pending-callback list can run to kilobytes, and multiplying that by 300
+    /// lines is how a single hub once emitted a ~100 KB log line that broke the TRX parsers
+    /// (see <see cref="FormatPendingCallbacks"/>). Queue shape plus the executing turn is the
+    /// discriminating datum; the target's own scanner tick prints its callbacks.</para>
+    ///
+    /// <para>Resolution is a PURE READ (<see cref="HostedHubCreation.Never"/>) — a diagnostic must
+    /// never construct a hub, which would both perturb what it is measuring and take the very
+    /// creation lock a wedged mesh may be contending on. A target outside this mesh (a remote
+    /// address, a hub already gone) is skipped silently: there is nothing local to describe.</para>
+    /// </summary>
+    /// <param name="stale">The stale callbacks this tick is reporting.</param>
+    /// <returns>A possibly-empty clause; never null, never throws.</returns>
+    private string FormatStaleCallbackTargets(
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[] stale)
+    {
+        var sb = new System.Text.StringBuilder();
+        var seen = new HashSet<Address>(AddressComparer.Instance);
+        // 🚨 The cap counts targets actually DESCRIBED, not targets considered. Counting the
+        // considered ones lets three unresolvable addresses (a remote hub, one already gone) spend
+        // the whole budget and push the one hub that matters into "not described" — which is the
+        // shape this report exists to name.
+        var described = 0;
+        foreach (var entry in stale)
+        {
+            if (entry.Target is not { } target
+                || AddressComparer.Instance.Equals(target, Address)
+                || !seen.Add(target)
+                || ResolveLocalHub(target) is not { } owner)
+                continue;
+            if (described == StaleCallbackTargetReportCap)
+            {
+                sb.Append(" (further targets not described)");
+                break;
+            }
+            sb.Append(" TARGET ").Append(owner.GetTurnLoopSnapshot());
+            described++;
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// This hub's turn loop in one clause — the QUEUE SHAPE plus the currently-executing turn, with
+    /// no pending-callback list. The half of <see cref="GetPendingRequestDiagnostics"/> that says
+    /// whether the pump is advancing, sized to be quoted on somebody else's log line.
+    /// </summary>
+    /// <returns>A single-line description; never null.</returns>
+    public string GetTurnLoopSnapshot()
+    {
+        var snapshot = (messageService is MessageService ms)
+            ? ms.GetQueueSnapshot()
+            : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+        var sb = new System.Text.StringBuilder();
+        sb.Append(Address)
+          .Append(" RunLevel=").Append(RunLevel)
+          .Append(" Queue(buffer=").Append(snapshot.Buffer)
+          .Append(",deferred=").Append(snapshot.Deferred)
+          .Append(",drainsInFlight=").Append(snapshot.DrainsInFlight)
+          .Append(",openGates=").Append(snapshot.OpenGates)
+          .Append(",draining=").Append(snapshot.Draining)
+          .Append(')');
+        if (snapshot.CurrentMessage != null)
+            sb.Append(" Executing(").Append(snapshot.CurrentMessage)
+              .Append(", ").Append(snapshot.CurrentMessageElapsedMs).Append("ms)");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The hub in THIS mesh that <paramref name="target"/> addresses, or <c>null</c> when the
+    /// address is remote, nested below a top-level hub, already gone, or this hub itself.
+    ///
+    /// <para>Mirrors <c>HierarchicalRouting</c> at the root: climb the address's host chain to its
+    /// top-level form, then look that up on the mesh root — never creating — falling back to
+    /// shorter prefixes for a hub that hosts a sub-path. Extracted so the stale-callback report and
+    /// <see cref="AReplyIsOwedByAShuttingDownLocalHub"/> resolve a target the SAME way; two copies
+    /// of this walk is how a report and the budget it justifies come to disagree about which hub
+    /// they are talking about.</para>
+    /// </summary>
+    /// <param name="target">The address to resolve.</param>
+    /// <returns>The local hub, or null.</returns>
+    private MessageHub? ResolveLocalHub(Address? target)
+    {
+        if (target is null)
+            return null;
+        try
+        {
+            IMessageHub root = this;
+            while ((root as MessageHub)?.messageService is MessageService ms && ms.ParentHub is { } parent)
+                root = parent;
+            if (ReferenceEquals(root, this))
+                return null;
+            var top = target;
+            while (top.Host is not null)
+                top = top.Host;
+            var segments = top.Segments;
+            for (var k = segments.Length; k >= 1; k--)
+            {
+                var candidate = k == segments.Length ? top : new Address(segments[..k]);
+                if (root.GetHostedHub(candidate, HostedHubCreation.Never) is not MessageHub sibling
+                    || ReferenceEquals(sibling, this))
+                    continue;
+                return sibling;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // The registry or a scope is already gone — there is no local hub to describe.
+        }
+        return null;
     }
 
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
@@ -2775,35 +2928,9 @@ public sealed class MessageHub : IMessageHub
     /// — a remote address, a nested hub, a live hub that is not disposing — keeps today's budget.</para>
     /// </summary>
     private bool AReplyIsOwedByAShuttingDownLocalHub(Address? target)
-    {
-        if (target is null)
-            return false;
-        try
-        {
-            IMessageHub root = this;
-            while ((root as MessageHub)?.messageService is MessageService ms && ms.ParentHub is { } parent)
-                root = parent;
-            if (ReferenceEquals(root, this))
-                return false;
-            var top = target;
-            while (top.Host is not null)
-                top = top.Host;
-            var segments = top.Segments;
-            for (var k = segments.Length; k >= 1; k--)
-            {
-                var candidate = k == segments.Length ? top : new Address(segments[..k]);
-                if (root.GetHostedHub(candidate, HostedHubCreation.Never) is not MessageHub sibling
-                    || ReferenceEquals(sibling, this))
-                    continue;
-                return sibling.IsShuttingDown && !sibling.DisposalSignalled;
-            }
-        }
-        catch (ObjectDisposedException)
-        {
-            // The registry or a scope is already gone — nothing there will answer.
-        }
-        return false;
-    }
+        => ResolveLocalHub(target) is { } sibling
+           && sibling.IsShuttingDown
+           && !sibling.DisposalSignalled;
 
     /// <summary>
     /// Terminal step of the reactive Quiescing poll (see the Quiescing branch of

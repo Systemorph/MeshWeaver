@@ -204,12 +204,244 @@ those two instants is larger than the entire margin. See
 5. Signature counts (`STALE-CALLBACK`, `ADVANCE_WITHOUT_HANDOFF`) are **amplitude, not identity** —
    they are present in passing runs too. The fate trail discriminates; the counts do not.
 
+## 🚨 2026-09-08 — the capture this page reasons from was read through a BROKEN INSTRUMENT
+
+Everything above that says *"the hub stops draining"* rests on one dump, quoted twice on this page
+and throughout [#2543](https://github.com/Systemorph/MeshWeaver/issues/2543):
+
+```
+Reader: Hub portal/nodeops-… RunLevel=Started Queue(buffer=45,deferred=0,exec=0)
+  Executing(CreateNodeRequest, 24888ms)
+```
+
+**`exec=0` measured nothing.** `MessageService.GetQueueSnapshot` returned a **hard-coded literal
+`0`** in that position — a leftover from the TPL-Dataflow pump that the turn loop replaced — so it
+was true of every snapshot ever taken, on every hub, in every state. It is the field a reader
+naturally takes as *"no drain is running"*, i.e. as the very evidence that the pump has stopped, and
+it never said that about anything. Replaced by a live `Interlocked` count in
+[#3593](https://github.com/Systemorph/MeshWeaver/issues/3593) (`4e440f630`, **2026-09-07T15:05Z** —
+about an hour after the last comment on #2543, so **no reading in that entire thread used the fixed
+instrument**). The same commit renamed `deliveryActionCompleted`, whose printed name asserted the
+negation of its datum, to `draining`. Full taxonomy:
+[Reading a Disposal Stall Verdict](../DisposalStallVerdicts).
+
+🚨 **And there are TWO diagnostics here, not one — which is why the dumps were never found.**
+Measured over the 61 bake jobs (see the denominator below): the `Hub <address> RunLevel=… exec=…`
+form is `GetPendingRequestDiagnostics`, written on a **disposal stall**, and it fires **0 times in
+1,512,136 log lines**. `exec=` therefore appears **nowhere** in a live bake — searching for it finds
+nothing and reads as "no dumps exist". What a bake actually emits is
+`BuildTimeoutMessage`'s clause, embedded in every hub `TimeoutException` and beginning
+**`This hub:`** (lower-case *h*) — **34 occurrences in 20 of 61 jobs.** Its old-vocabulary field is
+`deliveryActionCompleted`, not `exec`; #3593 renamed both. Grep for `This hub: RunLevel=`, never for
+`Hub .* Queue\(buffer=`.
+
+### 🚨 The 34 dumps describe the WRONG HUB — and the message says so itself
+
+Every one of the 34 is the **requester** talking about itself, and all 34 are byte-identically idle:
+
+```
+This hub: RunLevel=Started Queue(buffer=0,deferred=0,openGates=0,drainsInFlight=0,draining=False).
+This hub was idle while waiting, so it processed everything delivered to it and the silence is
+upstream of here. Cause is UNKNOWN between: the target never received the request (routing), the
+target received it and is wedged …, or the target answered and the reply was lost.
+This message cannot distinguish them; the target's own RunLevel and queue can.
+```
+
+`buffer=0, deferred=0, openGates=0, drainsInFlight=0, draining=False` in **34 of 34**; `Executing(`
+absent in **34 of 34** (the clause is appended only when a handler is on the block). 32 of the 34 are
+`CreateOrUpdateNodeRequest → portal/nodeops-…`.
+
+**The last sentence names the measurement and nothing takes it.** `portal/nodeops`' own `RunLevel`
+and queue have not been observed since the single 2026-08-28 capture — not because the state is hard
+to read, but because no diagnostic in the system prints the TARGET's. That is the gap
+`[STALE-CALLBACK] … TARGET …` closes.
+
+### What survives, and what was never established
+
+`Executing(T, N ms)` **is** a real measurement and always was: `MessageService.RunHandler` sets
+`currentlyExecutingMessageType` immediately before `HandleMessageAsync` and clears it in that
+observable's `.Finally`. So the dump does say a `CreateNodeRequest` handler had been on the block for
+24.9 s with 45 turns behind it — and since `MessageService.DrainLoop` advances **only** when a turn's
+observable terminates (`Terminal()` is the sole thing that re-schedules the drain; no timer, no
+watchdog, nothing else restarts it), those 45 were going nowhere until it did.
+
+What was never established is **which of the two roots** that is, because they are the same picture
+until `drainsInFlight` is read beside it:
+
+| `drainsInFlight` | `Executing(T, N ms)` | Reading |
+|---|---|---|
+| **> 0** | set | A **thread is inside the handler** and has been for N ms. The turn is BLOCKED, not slow — look for a synchronous wait taken on the block. |
+| **0** | set | **No thread is in the handler**, yet the turn's observable has not terminated. The handler returned something that never completes; the terminal is owed by an async leaf. |
+| 0 | absent, `draining=True`, `buffer>0` | The drain was **scheduled and never ran** — a scheduling stall in the target, not a handler at all. |
+| 0 | absent, `buffer` small | The target is **IDLE**. The silence is not queueing; look at the reply leg. |
+
+Those are four different defects. Rows 1 and 2 are the two candidates named below, and until
+2026-09-07 nothing in the fleet could tell them apart.
+
+### The instrument now emits itself — no dump to capture
+
+The reason the 08-28 dump *"has not been reproduced since"* is that nothing emits it on a live mesh:
+the hub reader dump is written on a **disposal stall**, and a mesh saturating mid-bake never reaches
+one. Meanwhile `[STALE-CALLBACK]` fires every 5 s and 300+ times in a failing bake — and described
+the wrong hub. Every field on it (`{Address}`, the pending list, the pool counters) belongs to the
+hub that is **waiting**, and a waiting hub is idle by construction, so the line reported truthfully
+and uselessly that the reporter had nothing to do. The hub whose state decides the verdict is the
+TARGET named inside the detail (`…@portal/nodeops-…`), and it was never described.
+
+It is now. `MessageHub.ScanStaleCallbacks` resolves each distinct target to a local hub — a pure
+read, `HostedHubCreation.Never`, because a diagnostic must never construct a hub — and appends its
+turn-loop state:
+
+```
+[STALE-CALLBACK] Hosting/Admin: 1 callback(s) pending > 30000ms: …=CreateOrUpdateNodeRequest@portal/nodeops-…(31018ms)
+  [pool threads=12 pendingWork=0 completed=88401]
+  TARGET portal/nodeops-… RunLevel=Started Queue(buffer=45,deferred=0,drainsInFlight=1,openGates=0,draining=True) Executing(CreateNodeRequest, 24888ms)
+```
+
+Deliberately the COMPACT snapshot (`GetTurnLoopSnapshot`), not `GetPendingRequestDiagnostics`: the
+target's own callback list runs to kilobytes and multiplying that by 300 lines is how a hub once
+emitted a ~100 KB line that broke the TRX parsers. Capped at three distinct targets per line. The
+target's own scanner tick prints its callbacks.
+
+### The denominator, 2026-09-07T00:00Z → 2026-09-08T18:45Z
+
+Every `Plugins: bake + seal … / Bake + publish NodeType assemblies to portal storage` job in core's
+`Continuous Delivery (main)` (workflow `303778518`): 182 runs created, 80 non-cancelled, **61 bake
+jobs**, **61/61 logs fetched, 0 unfetchable**, 0 re-attempts. Durations 8m23s / 24m30s / 33m41s
+(min / median / max).
+
+| | count | of 61 |
+|---|---:|---:|
+| `success` | 50 | 82 % |
+| `failure` | 11 | 18 % |
+| carrying `GATE FAILED` | **6** | **9.8 %** |
+| `ADVANCE_WITHOUT_HANDOFF` present | 61 | **100 %** |
+| `STALE-CALLBACK` present | 59 | 97 % |
+| `OwnerUnreachable` present | 25 | 41 % |
+| `PATCH_ECHO_SEEN` present | 16 | 26 % |
+| `Executing(` present | **0** | **0 %** |
+
+🚨 **Only 6 of the 11 failures are this defect.** The other 5 are a concurrent-publish collision on
+the prebuilt-bundles PVC (*"the shelf holds a different sha"*, *"could not read back after uploading
+it"*) — a different bug that a `failure` conclusion alone does not separate. **Counting red bake
+jobs overstates this issue by ~2×**; count `GATE FAILED`.
+
+And the weak form is **universal, not diagnostic**: `ADVANCE_WITHOUT_HANDOFF` is present in 61 of 61
+jobs including all 50 green ones. Signature counts are amplitude; presence discriminates nothing.
+
+**One cohort worth re-measuring before anything else.** Splitting the 61 on `3893dc486`
+(*"arm the patch flush bound BEFORE the flush is built"*, merged 2026-09-08T06:55Z — the #3510 fix
+whose reasoning is recorded at the end of this page):
+
+| cohort | n | `OwnerUnreachable` jobs | `PATCH_ECHO_SEEN` jobs | `GATE FAILED` |
+|---|---:|---:|---:|---:|
+| before `3893dc486` | 45 | 25 (56 %) | 16 (36 %) | 6 |
+| **after** | **16** | **0** | **0** | **0** |
+
+The last `OwnerUnreachable` and the last `PATCH_ECHO_SEEN` in the whole window are the **same log
+line**, 2026-09-08T07:45:53Z; the first post-fix bake started 08:35:34Z. 🚨 **Confounded, and not to
+be banked**: all 16 post-fix jobs are short (≤ 23m31s), and prevalence tracks duration — the
+duration-matched pre-fix rate is 4/13 (31 %) and 2/13 (15 %), so n=16 clean is suggestive, not
+decisive. Re-measure once a long post-fix bake exists. This is the *write-verdict* half; it says
+nothing about queue latency on `nodeops`.
+
+**Where it does NOT reproduce.** In core outside the bake, over 32 jobs / 426 k lines
+(`Doc content compiles and runs` ×16, `Run tests (shard 0)` ×16): `STALE-CALLBACK`,
+`OwnerUnreachable` and `PATCH_ECHO_SEEN` are **0**; only `ADVANCE_WITHOUT_HANDOFF` appears, twice.
+🚨 The issue's claim that this reproduces in PR gates is about `test-repos / Compile + render node
+repos` and `Gate shard`, which are `node-repo-gate.yml` jobs — **core never calls that workflow**;
+they exist only in the satellites. That half is still unmeasured.
+
+🚨 **Scope — this covers the SATURATION shape, not the release-wave park.** The 2026-09-07 reading
+below measured **zero** `[STALE-CALLBACK]` lines during its eight-minute park, so an instrument
+riding on that line says nothing about it (#3510 closed that one separately). What it covers is the
+shape this page's first half measures: bimodal queue latency with a wall of stale callbacks, where
+by construction the line fires and the target is exactly the hub in question.
+
+**Calibration, so the reading is not itself a guess.** `NodeCrudTurnStateIsMeasuredTest` parks a real
+`CreateNodeRequest` inside the node-CRUD execution hub's turn (an `INodeValidator` that blocks —
+the same harness [The /api/content 503](../ContentRoute503) uses to establish that a validator runs
+*inside* that turn) and asserts the hub then reports `drainsInFlight` non-zero with
+`Executing(CreateNodeRequest, …)`; a negative control asserts an idle hub reports neither. That pair
+is what stops the field quietly becoming a constant again — which is the whole defect above, and
+the reason a field that cannot fail is not a measurement.
+
 ## Open — what the next measurement must be
 
-**Which rule holds `nodeops`' action block?** The 25 s `Executing(CreateNodeRequest, …)` capture is
-from 2026-08-28 and has not been reproduced since; today's job logs carry no hub-reader dump. Until
-that is measured, the saturation's *cause* is named but not identified. Two candidate shapes, both
-consistent with the actor loop awaiting the full rule chain:
+**Which rule holds `nodeops`' action block?** Not a rule at all: the fold has been walked and
+**no rule after the create handler can hold it**. `Executing(T, ms)` is set inside
+`MessageService.RunHandler`, so the window it measures is `HandleMessageAsync` — the rule fold —
+and nothing before it. (Worth knowing on its own: `AccessControlPipeline`'s permission fold is a
+DELIVERY-PIPELINE step, not a rule, so it runs while `Executing` reads *idle*. It is the obvious
+"IO per delivery" suspect and the field would never have shown it.)
+
+Inside the fold, the eight `WithNodeOperationHandlers` handlers are registered through
+`WithHandler<T>(sync)`, which is `Observable.Return(delivery.Invoke(...))` — **the handler body runs
+before the observable is even built**. `HandleCreateNodeRequest` is detached by design (it
+`.Subscribe(...)`s its chain and returns `Processed()`), so everything downstream of the first
+storage read runs off-block. What is charged to the block is therefore exactly: the handler's
+synchronous prologue, plus whatever `persistence.Read(node.Path, …)` does **at composition time** —
+that line is a CALL, not a `Defer`.
+
+🚨 **Measured, not assumed: on the bake's wiring the create pipeline does NOT hold the block.**
+`NodeCrudDoesNotOccupyTheExecutionBlockTest` parks a real create inside its own validator and reads
+the execution hub as `Queue(buffer=0,deferred=0,drainsInFlight=0,openGates=0,draining=False)` —
+completely idle, because storage reads go through `IIoPool` and the chain leaves the block at that
+hop. The first draft of that test asserted the opposite and failed. **So a create that holds the
+block for 24.9 s is doing something this path does not normally do**, and "the create pipeline is
+expensive" is not the answer.
+
+Two shapes remain, and the `drainsInFlight` table above picks between them:
+
+- **A blocking construct in the composition prologue.** Exactly one exists on the path:
+  `HostedHubsCollection.GetHubWithOutcome`'s per-address creation `Lazy`
+  (`LazyThreadSafetyMode.ExecutionAndPublication`, `lazy.Value`), which blocks a second caller for
+  the whole of `CreateHub` — unbounded, and `CreateHub` is *recursive* (`SyncBuildupActions` reach
+  `SynchronizationStream`'s constructor, which always creates a `sync/{clientId}` hub; 1,350 nested
+  Builds measured in one green test run). It is reached inline because
+  `RoutingProxyAdapter.Read → LegacyUserPartitionRepair.ReadWithRepair → ReadCore →
+  PartitionStorageRouter.AddressFor` evaluates `SpawnOrReuse` inside `Observable.Return(...)`, i.e.
+  eagerly on the calling thread. That router's hub cache carries a **5-minute sliding expiration
+  with a post-eviction `Dispose`**, so after any lull the next create re-pays a full hub
+  construction on the turn — a bimodal cost by construction, which is the shape this page measures.
+  🚨 **But this path is NOT in play for the bake:** `AddPartitionStorageHubs` is called nowhere in
+  `src/`, and the bake host wires `AddInMemoryPersistence()`
+  (`tools/MeshWeaver.PluginTester/PluginGateRunner.cs`). It is live for a portal wired that way, and
+  is a real defect there.
+- **Amplification.** Confirmed on the SUCCESS path, which is the case
+  [Action-Block Wedge Prevention](../ActionBlockWedgePrevention)'s invariants do not cover — they
+  are written about failure producing more messages. Every hop lands back on `nodeops`: an upsert
+  dispatches an inner `CreateNodeRequest` **to its own address** (so one upsert ≥ 3 turns — upsert,
+  inner create, response callback); `EnsurePartitionBootstrap` issues nested `meshService.CreateNode`
+  calls whose `NodeOperationTarget` resolves to `nodeops` again; and `nodeops` is the router's
+  `RouterCarrier`, so `Workspace.AnnounceRecycleToClientSubscriptions` posts one `StreamEndedEvent`
+  per orphaned client subscription through it — during exactly the package-root recycles a bulk
+  install performs (~120 per bake gate run). A handful of concurrent creates is arithmetically the
+  `buffer=45` in the capture.
+
+**Ruled out on the way, so the next session does not re-derive them:**
+
+- **`ActivatePendingControlPlane`** — fire-and-forget, strictly after the response, gated on the
+  content carrying a `RequestedXxx`. It cannot delay a create.
+- **The access-control permission fold** — runs outside the window `Executing` measures.
+- **Every leg of `EnsurePartitionBootstrap`** — it does three storage reads and a permission fold,
+  but all are bounded (`Timeout(15s)` + `Catch`, `DefaultIfEmpty`, 5 s absence probes) and all are
+  downstream of the first read, hence off-block. Its *amplification* is the live concern, not its
+  duration.
+
+**The two measurements that would settle it**, in order of cost:
+
+1. Read the next failing bake's `[STALE-CALLBACK] … TARGET portal/nodeops-… drainsInFlight=…` line
+   and take the row from the table. No capture, no instrumentation round — the line already fires
+   300+ times in a failing run.
+2. If row 1 (a thread inside the handler): time `persistence.Read(node.Path, …)` at its call site,
+   before the `.Subscribe`. It is the only inline call in the handler that can block, so one run
+   discriminates. **And note the unresolved binding question**: `RoutingProxyAdapter` is documented
+   as registered per-hub, but the only registration in `src/` is a container-level
+   `services.Replace(Singleton<IStorageAdapter>)` resolving `sp.GetRequiredService<IMessageHub>()` —
+   if that binds to the mesh hub, every node create's storage round-trips are issued from and
+   dispatched on **the router's** block, which is the `ROUTER_TRAFFIC` shape `nodeops` exists to
+   remove.
 
 - a rule that performs IO per delivery (a storage read, a permission fold, a path resolution) and is
   therefore charged to the block rather than to the pool; or
@@ -314,6 +546,8 @@ pending callback at all.
 
 ## Related
 
+- [Reading a Disposal Stall Verdict](../DisposalStallVerdicts) — what every field of a hub snapshot
+  measures, and the three that measured nothing while being read as evidence.
 - [Action-Block Wedge Prevention](../ActionBlockWedgePrevention) — the invariants a single-threaded hub
   must satisfy so no input can saturate it.
 - [Bounds Must Be Ordered](../BoundsMustBeOrdered) — why an inner bound just under an outer one
