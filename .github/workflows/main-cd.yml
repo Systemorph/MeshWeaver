@@ -1540,6 +1540,28 @@ jobs:
             echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\`"
             echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR)"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: "Phase D — the line pointers: <major>-latest, <major.minor>-latest, <major.minor.patch>-latest (ACR + GHCR)"
+        run: |
+          set -euo pipefail
+          # The three MOVING POINTERS of a line, from a version like 3.0.0-ci.8059 (or a clean
+          # 3.0.0): `3-latest` (the major), `3.0-latest` (major.minor) and `3.0.0-latest`
+          # (the patch line the ci builds belong to). Each moves along ITS line only — 3.1.0-ci
+          # never touches 3.0.0-latest, and a 4.x seal is a new set of pointers — so a package
+          # of major N that starts on `N-latest` can never be handed an image of another major.
+          # Written here, AFTER the arming PUT, so a fresh install that resolves a pointer sees a
+          # set whose migration and portal both exist (maintainer, 2026-09-08: "platform will be
+          # anyway self-updating => should point to latest image to start"; "1, 2 or 3 digits").
+          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          for pair in "memex-migration:$V_MIGRATION" "memex-portal-ai:$V_PORTAL"; do
+            repo="${pair%%:*}"; ver="${pair#*:}"
+            args=(); gargs=()
+            for t in $(line_tags "$ver"); do args+=(--tag "${{ env.ACR }}/$repo:$t"); gargs+=(--tag "ghcr.io/$NS/$repo:$t"); done
+            echo "→ $repo: $(line_tags "$ver")  (ACR, then GHCR — the adapter's default registry)"
+            docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/$repo:$STAGING"
+            docker buildx imagetools create "${gargs[@]}" --tag "ghcr.io/$NS/$repo:$ver" "${{ env.ACR }}/$repo:$STAGING"
+          done
+          echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL") (ACR + GHCR)" >> "$GITHUB_STEP_SUMMARY"
 
   # ────────── BAKE THE PLATFORM'S OWN CONTENT *IN THE SHIPPED IMAGE*, THEN PUBLISH ──────────
   # #1660 WS3 delivery, corrected by #1725. The portals adopt a prebuilt NodeType bundle only when

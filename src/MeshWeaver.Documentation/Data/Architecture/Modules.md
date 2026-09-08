@@ -547,7 +547,9 @@ carries a **different MVID**. Two copies with the same MVID are the same bytes i
 warn nothing, or the line would be noise.
 
 It reports the array it is HANDED, so the line and the load cannot disagree; the acceptance is
-literally that the path in `/proc/1/maps` equals the path the line named:
+literally that the path in `/proc/1/maps` equals the path the line named (a break-glass read —
+"which modules does THIS replica run" is one of the per-replica facts the Hosting API does not
+report yet, [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)):
 
 ```bash
 kubectl exec -n <ns> <pod> -c memex-portal -- sh -c \
@@ -716,8 +718,11 @@ was built against" for the producer half.
 
 The policy gate is the deployment's **existing update policy — `Admin/UpdatePolicy`**, the same
 single surface that governs the platform image roll; there is no module-specific knob.
-**Continuous — the platform default, and what an absent policy reads as — lands unattended;
-Stable and None decline the UPGRADE** (the catalog's manual Update still works there): a
+**Continuous lands unattended; Stable — the platform default since 2026-09-08 — and None
+(what an absent policy reads as, #3542) decline the UPGRADE** (the catalog's manual Update still
+works there). The record's version `pattern` governs the platform IMAGE only — modules carry their
+own versions — so a `Continuous` record without a pattern still lands modules while its platform
+stays on clean releases. A
 deployment that pins its image takes updates deliberately, and its modules do not run ahead of
 that choice. A **first landing** is deliberately policy-exempt: it completes an install the
 operator's own surfaces already sanctioned, and gating it would ship a package whose binary half

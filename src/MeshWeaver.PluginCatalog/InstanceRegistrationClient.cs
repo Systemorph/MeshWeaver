@@ -26,7 +26,68 @@ public static class InstanceRegistrationPayloads
     /// authentication), everything else is the same self-description a hand registration enters.</summary>
     public record Request(
         string BootstrapKey, string InstanceId, string DisplayName = "",
-        string Description = "", string HomeUrl = "");
+        string Description = "", string HomeUrl = "")
+    {
+        /// <summary>
+        /// The organisation this instance belongs to — the ownership record the registry keeps
+        /// against the id it issues.
+        ///
+        /// <para>🚨 <b>An INIT PROPERTY, never a constructor parameter</b>, exactly as
+        /// <see cref="Response.Plan"/> is. This record is shared verbatim by both sides of the wire:
+        /// a changed positional signature is a BINARY break that aborts a host in either roll
+        /// direction — a consumer compiled against the old ctor calling a new registry, or the
+        /// reverse. Additive init properties are invisible to a party that does not know them, which
+        /// is what lets the two halves roll independently.</para>
+        /// </summary>
+        public string? Company { get; init; }
+
+        /// <summary>The name of the person registering this instance. See <see cref="Company"/> for
+        /// why this is an init property.</summary>
+        public string? OwnerName { get; init; }
+
+        /// <summary>The email of the person registering this instance — how the registry reaches the
+        /// owner about the id it has issued them. See <see cref="Company"/> for why this is an init
+        /// property.</summary>
+        public string? OwnerEmail { get; init; }
+
+        /// <summary>
+        /// Evidence that a human accepted the privacy statement and the platform terms before this
+        /// registration was made.
+        ///
+        /// <para>🚨 The registry does not currently REFUSE a consent-less registration — the gate
+        /// lives in <c>InstanceAutoRegistrationService</c>, on the consumer side, so the endpoint
+        /// accepts what it is given. Sending it is therefore how a client that registers by another
+        /// route (the first-run wizard, which calls the endpoint directly) stays honest rather than
+        /// silently skipping a gate it never passed through.</para>
+        /// </summary>
+        public InstanceConsentEvidence? Consent { get; init; }
+    }
+
+    /// <summary>
+    /// What a registering client asserts about the consent it collected — the accepting person and
+    /// the exact documents they saw, by hash.
+    ///
+    /// <para>The hashes matter more than the boolean: "someone ticked a box" is not evidence, while
+    /// "this person accepted THESE documents at THIS time" is the thing an ownership record has to be
+    /// able to show later. Mirrors <c>InstanceConsent</c>, which is what the consumer stores locally.</para>
+    /// </summary>
+    public record InstanceConsentEvidence
+    {
+        /// <summary>When the human accepted.</summary>
+        public DateTimeOffset AcceptedAt { get; init; }
+
+        /// <summary>The name they gave.</summary>
+        public string? AcceptedByName { get; init; }
+
+        /// <summary>The email they gave.</summary>
+        public string? AcceptedByEmail { get; init; }
+
+        /// <summary>Hash of the privacy statement they were shown.</summary>
+        public string? PrivacyStatementHash { get; init; }
+
+        /// <summary>Hash of the platform terms they were shown.</summary>
+        public string? TermsHash { get; init; }
+    }
 
     /// <summary>The success response: the registered id, and the instance key — the ONLY time it is
     /// available in the clear. The caller must persist it now or lose it.</summary>

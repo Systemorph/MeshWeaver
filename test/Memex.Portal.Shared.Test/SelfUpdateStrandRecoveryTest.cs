@@ -244,6 +244,7 @@ public class SelfUpdateStrandRecoveryTest(ITestOutputHelper output) : MonolithMe
         RetryInterval = TimeSpan.FromMilliseconds(500),
         EventCoalesceWindow = TimeSpan.FromMilliseconds(50),
         DefaultPolicy = policy,
+        DefaultPattern = policy == UpdatePolicyKind.Continuous ? "*-ci*" : null,
     };
 
     /// <summary>
@@ -286,7 +287,13 @@ public class SelfUpdateStrandRecoveryTest(ITestOutputHelper output) : MonolithMe
             NodeType = UpdatePolicyNodeType.NodeType,
             Name = "Update Policy",
             State = MeshNodeState.Active,
-            Content = new UpdatePolicyContent { Policy = policy },
+            // 2026-09-08: a continuous build is eligible only when a pattern admits it — a
+            // Continuous seed without one is Stable and would roll to no ci tag at all.
+            Content = new UpdatePolicyContent
+            {
+                Policy = policy,
+                Pattern = policy == UpdatePolicyKind.Continuous ? "*-ci*" : null,
+            },
         };
         // System scope opened/closed SYNCHRONOUSLY around the subscribe — impersonation is an
         // AsyncLocal, so Observable.Using would restore it on the wrong thread.

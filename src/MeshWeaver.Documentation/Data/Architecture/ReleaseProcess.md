@@ -160,8 +160,9 @@ runtime"* as *"a floor can say anything"*.
 
 Two consequences of the same ordering, both load-bearing:
 
-- **A Stable install takes the clean release and nothing before it.** `Stable` selects
-  `!IsPrerelease`; the only clean tags are the promoted ones.
+- **An install takes the clean release and nothing before it — by default.** `Stable` selects
+  `!IsPrerelease`; the only clean tags are the promoted ones. Continuous builds are taken only
+  under a version PATTERN (next subsection).
 - **The number must move the day a release is tagged.** `3.0.0-ci.7950` sorts *below* `3.0.0`, so a
   continuous build stamped with an already-released number would stop every Continuous install from
   rolling forward. `release.yml` opens the pull request that moves the line to `3.1.0` itself; rc6
@@ -174,6 +175,63 @@ Two consequences of the same ordering, both load-bearing:
 seconds-since-midnight build number made a morning build sort below the previous evening's. See
 [Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection) for the two different
 keys the *ordering* and the *is-this-newer* questions use.
+
+### Which build an install takes — clean releases by default, continuous builds by pattern
+
+> Maintainer, 2026-09-08: *"by default we will not upgrade as long as no version without `-ci…` is
+> labelled ⇒ we want to have a clean label `3.0.1` to upgrade. If we want to get the `-ci…` we have
+> to specify the pattern `3.0.1-ci*` or something. At the moment it is `3.0.0-ci*` as we have not
+> released anything else."*
+
+The version scheme has two shapes, and **self-update reads them as two channels with one default**:
+
+| `Admin/UpdatePolicy` | `pattern` | what the install rolls to |
+|---|---|---|
+| `Stable` — **the default** | *(none)* | the newest clean `X.Y.Z`, and nothing before it |
+| `Stable` | `3.0.*` | the newest clean release of that line only |
+| `Continuous` | `3.0.1-ci*` | the newest sealed `3.0.1-ci.<n>` — by run number, so `ci.7845 < ci.8059` numerically and a retired `rc` label never outranks a later run |
+| `Continuous` | *(none)* | **the same as `Stable`** — a pre-release is eligible only when a pattern admits it; the poller says so once at Warning, naming the record and the pattern to set |
+| `None` | *(ignored)* | nothing |
+
+Three rules that follow, each pinned by `VersionSelectTest`:
+
+- 🚨 **A pattern is a glob over the registry tag and admits exactly what it names.** `3.0.1-ci*`
+  matches `3.0.1-ci.30` and NOT `3.0.2-ci.1` — and not the clean `3.0.1` either. So `3.0.0-ci*` can
+  **never** select `3.0.1`: following one line's continuous builds *ends* by the pattern matching
+  nothing new, and that is the intended way for it to end. `*` matches any run of characters, `?`
+  one; the whole tag must match; case does not matter.
+- **The order under a pattern is still the lineage** (`PlatformReleaseOrder.BuildOrdinal` — the CD
+  run number), never the version string: `ci < rc < release` holds where a wide pattern admits all
+  three, and two builds of one line compare by `<n>`.
+- 🚨 **The moving image pointers are never candidates.** CD re-points `<major>-latest`,
+  `<major.minor>-latest` and `<major.minor.patch>-latest` at every publication of the line
+  (`3-latest`, `3.0-latest`, `3.0.1-latest`) so that a fresh install *starts* from a pointer and
+  self-updates from there. They name different bytes tomorrow; `VersionSelect` drops them before
+  any policy or pattern is applied, and a pattern that would match one textually still selects
+  nothing.
+
+**How we do semver, in one line:** `<major>.<minor>.<patch>[-ci.<n>]` — the *family* is the major
+line (`3`), a *release* is a clean label on it, a *continuous build* is a release-in-progress
+distinguished only by its run number. A clean label is the only thing the default channel moves on,
+which is why it is what "releasing" means here.
+
+🚨 **The fleet's setting while no clean release above `3.0.0` exists: `policy: Continuous`,
+`pattern: 3.0.0-ci*`** on `memex` and `memex-cloud` — they follow the line's sealed sets. **Change
+it the day `3.0.1` is tagged**: either remove the pattern (the install then waits for clean
+releases — the default) or move it to `3.0.1-ci*` to keep following the next line's builds. A
+record that still reads `3.0.0-ci*` after the tag is not broken, it is finished: it selects nothing
+new, which the Updates tab shows as "no newer release".
+
+The record an operator writes (Settings → Updates edits the same fields):
+
+```json
+{ "$type": "UpdatePolicyContent", "policy": "Stable" }                                   // clean only — the default
+{ "$type": "UpdatePolicyContent", "policy": "Continuous", "pattern": "3.0.1-ci*" }      // follow one line's builds
+```
+
+`SelfUpdate__DefaultPolicy` / `SelfUpdate__DefaultPattern` seed a NEW install's record (a dev/test
+host that should track the line sets `Continuous` + `3.0.0-ci*`); an existing record is edited on
+the record, never by configuration.
 
 > 🚨 **There is no rc line and there will be none** (maintainer, 2026-09-05; restated and settled
 > 2026-09-07). `3.0.0-rc1` … `3.0.0-rc13` were tagged and rebuilt on tagging, which made each
@@ -230,6 +288,34 @@ the *compiled attributes* is what makes a promotion possible at all:
   passes it to the portal publish so the image reports its own build.
 
 ---
+
+### The moving pointers: `<major>-latest`, `<major.minor>-latest`, `<major.minor.patch>-latest`
+
+**Maintainer, 2026-09-08:** *"platform will be anyway self-updating ⇒ should point to latest image
+to start"*, *"let's offer all variants ⇒ we fix 1 digit, 2 digits, or even 3 digits"*, and for the
+adapter's default *"3 latest and 4 latest — I am for the latter"*.
+
+Every sealed set moves three pointers on `memex-portal-ai` and `memex-migration`, in ACR and in
+GHCR, derived from the set's version (`3.0.0-ci.8059` → `3.0.0`):
+
+| pointer | moves to | never touched by |
+|---|---|---|
+| `3-latest` | every sealed set of major 3, across minors | any 4.x seal |
+| `3.0-latest` | every sealed set of 3.0.x | 3.1.0-ci |
+| `3.0.0-latest` | every sealed set of the 3.0.0 line (the `3.0.0-ci.*` builds) | 3.0.1 |
+
+CD writes them in **Phase D, after the arming PUT** (`memex-portal-ai:<version>`, CD's last write
+before this), so a fresh install that resolves a pointer never sees a set whose migration exists
+and whose portal does not. `release.yml` moves the same three when it promotes a sealed set to a
+clean version. The self-updater ignores them — it selects on `^\d+\.\d+\.\d+` tags — so a
+pointer is only ever a **first-start** address.
+
+**The rule this makes clear:** a package of major N names `N-latest` and is otherwise independent
+of the image. `MeshWeaver.Aspire.Hosting.Memex` defaults `ImageTag` to `<its own major>-latest`,
+derived from its assembly version rather than typed, so a 4.x adapter cannot ship still naming
+`3-latest`; a consumer that wants a narrower line passes `WithImage(tag: "3.0-latest")` or an
+exact version. The package version moves only when the adapter's surface does — 3.0.x for fixes,
+3.1.0 when the API grows — never per image.
 
 ## 3. Commands
 

@@ -33,6 +33,66 @@ value, a ConfigMap key or an environment variable outranks the manifest every ti
 "configuration wins" rule of [`InstanceManifest`](../DataAccessPatterns) obtained structurally
 rather than by a precedence check each new section would have to repeat.
 
+## Ownership is collected BEFORE an id is claimed
+
+The wizard's first phase asks who this instance belongs to — organisation, owner name, owner email —
+and requires the privacy statement and platform terms to be accepted, before it registers anything.
+
+**The order is the requirement**, not presentation: *"collect data on the ownership of the instance
+… and then he gets his id and credentials"* (maintainer, 2026-09-08). An id is claimed globally and
+**never re-issued**, so a submission that was going to be refused must be refused before it costs
+one. Every check — name, organisation, owner, email shape, consent — therefore runs ahead of the
+`POST /api/instances/register` call, not after it.
+
+| Collected | Sent as | Kept on |
+|---|---|---|
+| Organisation, owner name, owner email | `Request.Company` / `.OwnerName` / `.OwnerEmail` | `MeshWeaverInstance` (registry) + `InstanceIdentitySelection.Ownership` (manifest) |
+| Consent | `Request.Consent` — who, when, and both document **hashes** | `InstanceIdentitySelection.Consent` |
+
+🚨 **The wire fields are init properties, never constructor parameters.** `Request` is shared
+verbatim by both sides, so a positional change is a binary break that aborts a host in either roll
+direction — a consumer compiled against the old signature calling a new registry, or the reverse.
+`Response.Plan` set the pattern; these follow it.
+
+🚨 **Ownership wins PER FIELD over the lane's existing owner.** On the bootstrap and open lanes
+`MeshWeaverInstanceService.Register` fills `OwnerUserName`/`OwnerUserEmail` from whoever **minted the
+registration key** — a platform admin at the registry, who for an open registration is a stranger to
+the person standing the instance up. Where the registrant stated who they are, that is the owner;
+where they stated nothing, the previous fallback is untouched. Per field, so a registrant who gives a
+company and a name but no email keeps the fallback email rather than losing it to a blank.
+
+### Why consent is collected here and not inherited
+
+Consent is enforced **client-side only**, in `InstanceAutoRegistrationService`
+(`if (open && !consentGiven) …`). `POST /api/instances/register` does **not** check it. The wizard
+calls that endpoint directly, so before this it registered with **no consent record at all** — a way
+around a gate every other lane passes through, created by the wizard's own shortcut.
+
+Collecting it here fixes it at the source. Making the *endpoint* refuse a consent-less registration
+is a separate, server-side change with a blast radius across every existing consumer — including
+API-driven registrations that carry none today — and belongs with the registry's authorization story
+rather than with this surface.
+
+**The hashes are the evidence, not the boolean.** "Someone ticked a box" cannot answer *accepted
+what?* later; "this person accepted THESE documents at THIS time" can. `SetupConsentDocuments` hashes
+a version marker rather than fetching the live documents, because the wizard runs before this
+instance has storage and often before it has general internet access — a consent step that could not
+complete offline would block setup on a network fetch.
+
+## One credential for everything the instance downloads next
+
+The instance key the registry issues is stored once, `enc:v1:`-encrypted, in the manifest — and
+projected into configuration two ways from that single value:
+
+- `PluginCatalog:RegistryToken` — what stops the configured boot registering a **second** time, by
+  taking `InstanceAutoRegistrationService`'s own *"a registry token is already configured"* branch.
+- `ContainerRegistry:DockerConfigJson` — a docker config for the fleet registry
+  (`cr.meshweaver.cloud`), which authenticates an instance as Basic `instance:<key>`.
+
+Neither is emitted when the key cannot be **decrypted**. A credential that authenticates nothing
+while looking configured is worse than an absent one: every fetch 401s, the catalog looks empty, and
+the instance appears to have been granted nothing — while its id sits claimed.
+
 ## 🚨 Where the secrets live
 
 Three different homes, because the three secrets are needed at three different moments.

@@ -814,6 +814,9 @@ this. **That is the next discriminator, and it is not settled here.**
 - **The scope line "`FutuRe.Test` only" is stale.** `MeshWeaver.GitSync.Test` took the same
   `exit=139` on Plugins#1191, run `34013024540`, 2026-09-06 — a second suite, and one that also
   serializes node types heavily. Re-measure the base rate against the LCG workload, not the project.
+  ⚠️ **Superseded in part by sightings #11/#12 below**: the fault returned to `background_sweep` on
+  a dedicated BGC thread the next day, so "the LCG workload" describes *this* sighting, not the
+  family's boundary. The base rate was re-measured there.
 
 #### Reproducing this read
 
@@ -823,6 +826,140 @@ Symbols by build-id, no `dotnet-symbol` needed:
 The whole read is `struct.unpack` over the ELF core plus one `llvm-objdump` — no container, no DAC.
 🚨 Index symbols by **vaddr** and bytes by **file offset**, and convert between them with the
 `PT_LOAD` table; do not assume they are equal.
+
+### 2026-09-07 / 2026-09-08: sightings #11 and #12 — two dumps, two frames, two `si_addr`s, **one** fingerprint
+
+Two occurrences from the same sweep were read end to end. Together they are the cleanest
+demonstration yet that the *frame* carries no information and the *zeroed MethodTable word* is the
+whole fingerprint — because they disagree on every incidental and agree on the invariant.
+
+| | **#11** `MeshWeaver.GitS-37600.dmp` | **#12** `MeshWeaver.Futu-50607.dmp` |
+|---|---|---|
+| run / job | [`34069990582`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34069990582) / `101585455000` | [`34210183539`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34210183539) / `102009955282` |
+| when / branch | 2026-09-07 00:29Z, **`main`** | 2026-09-08 09:28Z, `fix/1390-teardown-resolve-guard` |
+| suite | `MeshWeaver.GitSync.Test` | `MeshWeaver.FutuRe.Test` |
+| `si_signo` / `si_code` | 11 / 1 (`SEGV_MAPERR`) | 11 / 1 (`SEGV_MAPERR`) |
+| **`si_addr` / `CR2`** | **`0x4`** | **`0x0`** |
+| `TRAPNO` / `ERR` | 14 / `0x4` | 14 / `0x4` |
+| faulting RVA | `0x373887` | `0x5cb171` |
+| **frame** | **`LCGMethodResolver::GetCodeInfo(…)+0x1f7`** | **`WKS::gc_heap::background_sweep()+0xa61`** |
+| thread | **mutator**, inside the JIT | dedicated **background-GC** thread, no managed frame |
+| MethodTable field read | `m_BaseSize` (offset 4) | `m_dwFlags` (offset 0) |
+| the word at `[R15]` | **reads zero** (16 bytes read) | **reads zero** (32 bytes read) |
+| runtime / build-id | `10.0.11` / `989b56df…` | `10.0.11` / `989b56df…` |
+
+Both faults are the same read of a MethodTable word that is zero, differing only in which field the
+caller went on to want:
+
+```
+#11  0x373884: 49 8b 07     mov  (%r15),%rax      ; MethodTable word -> 0
+     0x373887: 8b 70 04     mov  0x4(%rax),%esi   ; <-- FAULT at 0x4   (MT->m_BaseSize)
+
+#12  0x5cb16a: 49 8b 07     mov  (%r15),%rax      ; MethodTable word -> 0
+     0x5cb16d: 48 83 e0 f8  and  $-8,%rax         ; strip GC mark bits
+     0x5cb171: 8b 08        mov  (%rax),%ecx      ; <-- FAULT at 0x0   (MT->m_dwFlags)
+```
+
+**In both, the null is confirmed at its source rather than inferred from `RAX`:** the bytes at `R15`
+in each core read zero.
+
+#### Why this pair settles two things a single dump cannot
+
+- **`si_addr` is definitively not part of the fingerprint.** `0x4` and `0x0` here are the offsets of
+  `m_BaseSize` and `m_dwFlags` — the same corruption seen through two different field reads, 33 hours
+  apart, against the same runtime binary. Sighting #10 already corrected this; #11/#12 make it a
+  measurement rather than an argument.
+- **The frame does not progress, it revisits.** `0x5cb171` is *not* a new RVA: the table in sighting
+  #9 already lists it as `background_sweep()+0xa61`, first seen 2026-08-18. So after `plan_phase`,
+  `find_first_object`, `background_mark_simple1` and `GetCodeInfo`, the fault has returned to a frame
+  already on the list. Reading #10's move out of `gc_heap` as the family *migrating* toward the
+  LCG/serialization workload would have been over-reading a sample of one. **The sharpened scope in
+  #10 describes that sighting's workload, not the family's boundary.**
+- **Culprit vs victim, from two directions at once.** #12's faulting thread is a dedicated BGC thread
+  with no managed frame on it (`CPalThread::ThreadEntry → CreateSuspendableThread::$_0::__invoke →
+  bgc_thread_stub → bgc_thread_function+0xdc → gc1+0xf6 → background_sweep+0xa61`). #11's is a
+  mutator inside the JIT (`MethodDesc::JitCompileCode+0x262 → JitCompileCodeLockedEventWrapper+0x3eb
+  → JitCompileCodeLocked+0xfa → UnsafeJitFunction+0x180 → CEECodeGenInfo::CEECodeGenInfo+0x11b →
+  CEEInfo::getMethodInfoWorker+0x133 → GetCodeInfo+0x1f7`). A defect in either path would not produce
+  the other; a heap whose object headers can read as zero produces both, wherever the next reader is.
+
+#### Disposal was clean in both, and both records are provably complete
+
+`_meshweaver-test-trace.log` in each artifact has its `FAULT-BUDGET` suppression lines on a
+*different* pid (`2828` for #11's `37600`, `2791` for #12's `50607`), so neither crashing process's
+record has gaps — the precondition this page insists on.
+
+| | #11 (pid 37600) | #12 (pid 50607) |
+|---|---|---|
+| `DISPOSE_DONE` / of which `teardown clean` | 61 / **61** | 30 / **30** |
+| `DISPOSE_QUIESCE_LEAK`, `DISPOSE_DIRTY_TEARDOWN`, `leakedIoLeaves>0` | **0** | **0** |
+| `TEST_START` − `TEST_END` | **1** — died in `GitHubSyncSettingsTabTest.GitHubSyncTab_Content_RendersPullRequestSection` | **1** — died in `FutuReAnalysisTest.Group_KeyMetrics_ShouldHaveNonZeroData` |
+| `alc` / `asm` at the last `INIT_MEM` | **1** / 133 | **1** / 133 |
+
+**`alc=1` in both is worth stating**: only the default `AssemblyLoadContext` was live, so there was no
+collectible context to be unloaded out from under anything. Neither job log contains an
+`Unwind: exception type` line, so the managed-exception route through `createdump` is ruled out
+rather than assumed away.
+
+#### Base rate, re-measured 2026-09-06 → 2026-09-08
+
+`Plugin Catalog CI`, **600 runs** listed over `2026-09-06T06:08Z … 2026-09-08T09:52Z`. Ten runs are
+excluded from *both* numerator and denominator because their job listing could not be read. The
+**denominator is 343** — runs in which at least one `Portal hosts (shard N)` job reached a terminal
+conclusion, i.e. the shard actually executed suites. The other **257** had none reach a verdict:
+overwhelmingly runs cancelled before the shard finished (311 of the 600 are `cancelled` — the
+merge-cadence pattern), plus 12 still in progress and 2 `startup_failure`. All **59** failed
+`Portal hosts` jobs in the window (at sweep time; 61 by the time the truncation control below ran)
+had their check-run annotations read, and none of those reads failed.
+
+🚨 **The annotation read was checked for truncation, because a paginated read that silently drops
+page 2 would undercount the numerator and look identical to a clean sweep.** Re-reading every failed
+`Portal hosts` job with `per_page=100`: **the largest annotation set on any one job is 15** — below
+even the endpoint's 30-item default, so nothing was cut off, on any job, in either pass.
+
+**4 occurrences, all on `Portal hosts (shard 1)` — 1.17 %:**
+
+| when | run | branch | suite | dump read? |
+|---|---|---|---|---|
+| 2026-09-06 17:14Z | `34047985756` | **`main`** | `MeshWeaver.FutuRe.Test` | no |
+| 2026-09-06 20:15Z | `34057413159` | `fix/edu-union-wait-measures-behaviour` | `MeshWeaver.FutuRe.Test` | no |
+| 2026-09-07 00:29Z | `34069990582` | **`main`** | `MeshWeaver.GitSync.Test` | **yes — #11** |
+| 2026-09-08 09:28Z | `34210183539` | `fix/1390-teardown-resolve-guard` | `MeshWeaver.FutuRe.Test` | **yes — #12** |
+
+All three occurrences before this read were previously unrecorded anywhere. The two undissected ones
+are listed as *occurrences*, not as sightings — their dumps were still in retention when this was
+written, so a later reader can add them if a third data point is wanted.
+
+🚨 **The two rates on this page are not directly comparable, and the difference is not a trend.**
+The 2026-08-29 → 09-03 measurement (0.74 %) used *non-cancelled runs* as its denominator; this one
+uses *runs whose portal-host shard reached a verdict*. What they agree on is the shape: a
+low-single-digit-percent, `Portal hosts (shard 1)`-only rate that **has not gone away**, with `main`
+among the affected branches in both windows.
+
+#### Controls run on this read
+
+The symbolization slip that produced #10's impossible frame was checked for explicitly, on #12:
+
+- **RVA vs file offset.** `libcoreclr.so`'s `PT_LOAD` table maps vaddr `0x1c9680+` at file offset
+  `0x1c8680+`, so RVA `0x5cb171` lives at **file offset `0x5ca171`** — the `0x1000` difference,
+  exactly the trap. Symbols were indexed by vaddr, bytes read by file offset.
+- **Instruction boundary.** The sequence starts at `0x5cb16a`, so `0x5cb171` is where
+  `mov (%rax),%ecx` begins. `RIP` is a boundary — `0x372887` in #10's first read was not.
+- **Bytes agree across two independent sources**: the core at `RIP`, and the stock `10.0.11`
+  `libcoreclr.so` at the corresponding file offset.
+- **The symbols are the crashed binary's.** The build-id read out of libcoreclr *as mapped in each
+  crashed process* is `989b56dfb2782aa230f822ee4c520e2ccfea71b7` in both, equal to the build-id of
+  the `.debug` the RVAs were resolved against.
+- **Each `ucontext` is unique.** Scanning every `PT_LOAD` for a `gregs[]` block with `TRAPNO=14`, a
+  `RIP` inside libcoreclr's mapping and `CR2 == si_addr` yields **exactly one** match per core.
+
+#### Scope note for the next reader
+
+`MeshWeaver.FutuRe.Test` has **no** `ProjectReference` to `MeshWeaver.AI`, directly or through
+`MeshWeaver.Hosting.Monolith.TestBase` — so teardown or disposed-scope work in the AI engine cannot
+reach this suite, and a fix there will not move this rate. Neither will the platform-pin staleness
+that reds Plugins PRs independently: the only failure annotations on `Portal hosts (shard 1)` in run
+`34210183539` are the SIGSEGV verdict and the generic `exit code 1`.
 
 ## Reading the result honestly
 
