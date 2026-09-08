@@ -270,8 +270,11 @@ container build that succeeded proves every assembly the module binds is one the
 already carries. The bundle inspection then asserts exactly that claim, refusing any non-`MeshWeaver.*`
 assembly in a container-built bundle. The in-root `ProjectReference`s the builder compiled from source
 are a separate question, answered the same way for both paths: **module-owned** ones ride (`--with`),
-**image-shipped** ones (`src/platform-shipped.txt`) must not, and one script computes that set for the
-packer, the lane and the inspection alike.
+**platform-shipped** ones must not, and one script computes that set for the packer, the lane and the
+inspection alike. Which names are platform-shipped is MEASURED off the pinned image — its app
+closure, its surface manifest and its seeded `modules/<Name>/` lane — not read from a declared list;
+the packer then drops any that slipped through anyway. See
+[The Platform-Shipped Witness](../PlatformShippedWitness).
 
 🚨 **Two preconditions gate any entry declaring `container`.** The pinned image must carry the
 `build-project` verb at all; and the builder must stamp `<AssemblyVersion>`. It runs no MSBuild

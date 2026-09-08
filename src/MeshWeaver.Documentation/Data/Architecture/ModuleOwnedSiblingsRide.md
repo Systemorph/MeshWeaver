@@ -74,6 +74,16 @@ not (Plugins#1268 removed it from `/app`) and no required package brings it. The
 [Module Closure Accounting](../ModuleClosureAccounting) was written after: *"Could not load file or
 assembly …"*, a red trunk in a repo that changed nothing, for eleven hours.
 
+🚨 **That third argument is CONDITIONAL on the image, and the image moved.** Plugins#1515 seeds
+`MeshWeaver.Markdown.Collaboration` (and `MeshWeaver.AI`, `MeshWeaver.Blazor.Chat`,
+`MeshWeaver.Mcp`) into the portal image under `/app/modules/<Name>/`, so *today* the image DOES
+supply it and the ride is both unnecessary and harmful. The rule is therefore not "declared modules
+ride" but "a sibling rides **iff** the platform host does not ship it" — the same predicate, now
+measured rather than assumed. Since MeshWeaver#3732 the packer answers it off the pinned image
+itself: see [The Platform-Shipped Witness](../PlatformShippedWitness). The decision below stands
+unchanged for every sibling the image genuinely does not carry, which is what the argument was
+always about.
+
 ### 4. The host case and the module case are not the same defect
 
 `ShippedByHostProblem` refuses host-vs-module because the two provenances use **incompatible id

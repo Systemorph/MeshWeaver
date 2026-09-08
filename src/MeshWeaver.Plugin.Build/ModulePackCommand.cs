@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MeshWeaver.Compiler;
 using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.Plugin.Build;
@@ -69,6 +70,16 @@ public static class ModulePackCommand
         Console.Error.WriteLine($"error: {what} '{value}' is invalid — {constraint}");
         return true;
     }
+
+    /// <summary>Which of the platform-shipped witness's three readings answered, in words a pack
+    /// log can be read by. The evidence path travels beside it, so a drop names a file.</summary>
+    private static string Describe(PlatformShipping how) => how switch
+    {
+        PlatformShipping.ApplicationClosure => "in its app closure",
+        PlatformShipping.SurfaceManifest => "named by its surface manifest",
+        PlatformShipping.SeededModule => "seeded under modules/<Name>/",
+        _ => how.ToString(),
+    };
 
     /// <summary>
     /// Reads <c>content.includeSource</c> off the package's ROOT node (<c>index.json</c>) — the
@@ -163,6 +174,19 @@ public static class ModulePackCommand
                                               bundles them instead of stopping: they are nowhere
                                               in /app, so a stop would ship a module that faults
                                               on its first sibling (Import's DataSetReader family)
+                  --platform-app <dir>        the PLATFORM HOST's application directory (a portal
+                                              image's extracted /app). Every MeshWeaver.* file the
+                                              closure would carry is measured against what that
+                                              host ACTUALLY ships — its app closure, its
+                                              meshweaver-surface.manifest, and its seeded
+                                              modules/<Name>/ lane — and a copy the host already
+                                              has is DROPPED, one line each naming the evidence.
+                                              🚨 This is the witness, not --own-platform: a name
+                                              list drifts silently the moment a project moves in or
+                                              out of the image, which is how 14 of 37 bundles came
+                                              to carry a second build of an assembly the image
+                                              seeds (#3732). A directory that is not a platform app
+                                              is refused, never read as "ships nothing"
                   --deps-closure              derive the module's PRIVATE dependency closure from
                                               <name>.deps.json beside the entry DLL and bundle it:
                                               assemblies reachable from the module's own package
@@ -191,6 +215,7 @@ public static class ModulePackCommand
         string? statedFrameworkMvid = null;
         var extras = new List<string>();
         var ownPlatform = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? platformApp = null;
         var depsClosure = false;
         var outputDirectory = Environment.CurrentDirectory;
 
@@ -225,6 +250,9 @@ public static class ModulePackCommand
                 case "--own-platform" when i + 1 < args.Length:
                     ownPlatform.UnionWith(args[++i]
                         .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                    break;
+                case "--platform-app" when i + 1 < args.Length:
+                    platformApp = args[++i];
                     break;
                 case "--deps-closure":
                     depsClosure = true;
@@ -477,6 +505,71 @@ public static class ModulePackCommand
             }
             if (!closure.Contains(extra, StringComparer.OrdinalIgnoreCase))
                 closure.Add(extra);
+        }
+
+        // ───────── THE PLATFORM-SHIPPED WITNESS — measured, never a list (#3732) ─────────
+        // 🚨 Everything above composes the closure from DECLARATIONS: --with names what the lane's
+        // classification said may ride, --deps-closure walks a graph whose platform/module split
+        // comes from --own-platform, and BOTH ultimately rest on a node repo's hand-maintained
+        // src/platform-shipped.txt. A declaration goes stale silently, in both directions, the
+        // moment a project moves in or out of the image — and it did: measured on
+        // MeshWeaver.Plugins main 2026-09-08, 14 of 37 module bundles carry 27 copies of
+        // MeshWeaver.AI / MeshWeaver.Markdown.Collaboration, both of which the portal image SEEDS
+        // under /app/modules/<Name>/ (Plugins#1515). MeshWeaver.* binds by a strictly synchronised
+        // AssemblyVersion, so two copies under one simple name are ONE identity: the loader keeps
+        // whichever it saw first, every NodeType whose dependency record named the other build is
+        // DECLINED at adoption, and the loser reads on the health check as "landed but not yet
+        // loaded" — which on memex.systemorph.com meant MeshWeaver.Blazor.Views never activated and
+        // every skinned StackControl rendered through FallbackHtml.
+        //
+        // So the bytes get a SECOND, INDEPENDENT reading — a typed measurement of the host they
+        // were compiled against, taken over the actual file list at the moment it is written. On a
+        // lane whose classification is also measured the two agree and this drops NOTHING, which is
+        // what makes the count a control: a non-zero drop line means the two readings disagree and
+        // is worth reading. A caller driving module-pack directly gets the protection without
+        // knowing the classification exists.
+        // Not a refusal, deliberately: shipping a correct bundle with a loud line beats reddening a
+        // delivery lane over a disagreement whose resolution is already in hand. Every drop is
+        // printed with the evidence it rests on, so the log says which witness answered.
+        if (platformApp is not null)
+        {
+            var (platformShipped, witnessProblem) = PlatformShippedAssemblies.Read(platformApp);
+            if (platformShipped is null)
+            {
+                Console.Error.WriteLine(
+                    $"error: --platform-app '{platformApp}' cannot answer what the platform ships — "
+                    + witnessProblem
+                    + ". A witness that reads nothing strips nothing while logging exactly like a "
+                    + "clean measurement, so the pack stops instead.");
+                return 2;
+            }
+            var dropped = new List<string>();
+            foreach (var file in closure.ToList())
+            {
+                var simple = Path.GetFileNameWithoutExtension(file);
+                // The ENTRY is never judged here. A module the image seeds under modules/<Name>/ is
+                // MEANT to be superseded by a landed bundle of itself (ModuleActivation's
+                // usable-persisted-entry override), and a module the image carries in its app
+                // closure is the two-producer FATAL that BakeHost.ShippedByHostProblem refuses at
+                // the bake, where both provenances are in one hand. This step is about the copies
+                // that RIDE, which no gate looked at at all.
+                if (string.Equals(simple, moduleName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!PlatformShippedAssemblies.IsPlatformAssemblyName(simple))
+                    continue;
+                if (!platformShipped.TryGetValue(simple, out var evidence))
+                    continue;
+                closure.Remove(file);
+                dropped.Add(file);
+                Console.WriteLine(
+                    $"platform-shipped: dropped {file} — the platform host ships {simple} "
+                    + $"({Describe(evidence.How)}: {evidence.Evidence}); a second copy beside the "
+                    + "module is one assembly identity with two builds");
+            }
+            Console.WriteLine(
+                $"platform-shipped: measured against {Path.GetFullPath(platformApp)} — "
+                + $"{platformShipped.Count} MeshWeaver.* assembl(y|ies) shipped by that host, "
+                + $"{dropped.Count} dropped from this bundle's closure");
         }
 
         var manifest = new PluginManifest(

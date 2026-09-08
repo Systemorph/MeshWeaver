@@ -127,9 +127,13 @@ true, and the half it misses is live.**
 `DepsClosure.Derive` does stop at `MeshWeaver.*`, and that is what the `sdk` pack path uses
 (`--deps-closure`). The **container** path — now the default for nearly every entry — does not use
 it. It reads the module's closure manifest and, for every `MeshWeaver.*` sibling in it, asks
-`module-owned-platform.sh` one question: *is this project's source in this repo's `src/` and
-absent from `src/platform-shipped.txt`?* If yes, the sibling **is copied into the bundle** and
+`module-owned-platform.sh` one question: *is this project's source in this repo's `src/` and does
+the platform host not already ship it?* If yes, the sibling **is copied into the bundle** and
 passed as `--with <Name>.dll`, and the job log says so:
+
+🚨 That second half used to read *"and absent from `src/platform-shipped.txt`"* — a hand-maintained
+list, which drifted in both directions and put 27 duplicate copies into 14 of 37 bundles. It is now
+MEASURED off the pinned image; see [The Platform-Shipped Witness](../PlatformShippedWitness).
 
 ```
 closure: MeshWeaver.Blazor.dll RIDES — module-owned (its source is in this repo's src/,
