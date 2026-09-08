@@ -13,7 +13,19 @@ namespace MeshWeaver.PluginCatalog;
 /// lane wrote one — the back-pointer a package card matches on. Null for an entry with no
 /// recorded origin.</param>
 /// <param name="Version">The package version the landed bundle was served at, when recorded.</param>
-public sealed record PendingModuleActivation(string Name, string? PackagePath, string? Version);
+public sealed record PendingModuleActivation(string Name, string? PackagePath, string? Version)
+{
+    /// <summary>
+    /// The declared-floor ADVISORY for this entry (#3648): the sentence naming both versions when
+    /// its recorded <c>minMeshVersion</c> ranks above the running platform, or null. Carried so a
+    /// status row can say "declares platform ≥ X; running Y" beside "restart required"; it is not
+    /// a state — the entry is pending exactly as one without a floor is, because boot no longer
+    /// skips on the string. An init-only property, not a positional parameter: replacing a public
+    /// record's constructor signature is a binary break for a host compiled against the previous
+    /// platform.
+    /// </summary>
+    public string? Advisory { get; init; }
+}
 
 /// <summary>
 /// Derives, per PROCESS, which activated modules are not running here yet.
@@ -59,30 +71,28 @@ public static class ModuleActivationStatus
     /// missing from the user's point of view, and reporting it would put an alarming "restart
     /// required" on a package that has just been removed.)</para>
     ///
-    /// <para>🚨 A HELD entry — one whose recorded platform floor <paramref name="platformGate"/>
-    /// refuses — is not pending either (2026-08-22). "Pending" is a promise: a restart activates this.
-    /// For a held entry that promise is false — boot applies the SAME gate and skips it — so
-    /// reporting it would put a permanent "restart required" on the surface that no restart can
-    /// ever clear (a registry SHELVES modules for platforms newer than itself, and the hold lasts
-    /// until a platform update; the update is itself a restart, at which point the entry loads and
-    /// leaves this question entirely). The gate is a parameter for the same reason boot's is:
-    /// production passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/>, and there is
-    /// never a second notion of the module platform requirement.</para>
+    /// <para>🚨 An entry whose recorded platform floor ranks above the running platform IS pending
+    /// (#3648). It used to be excluded as HELD (2026-08-22), because boot skipped it on the same
+    /// string comparison and "restart required" would have been a promise no restart could keep.
+    /// Boot no longer skips on the floor — the link probe decides whether the bytes load — so the
+    /// promise is honest again and the floor rides the entry as
+    /// <see cref="PendingModuleActivation.Advisory"/>, worded by <paramref name="platformGate"/>
+    /// (production passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/>, so there is
+    /// never a second wording).</para>
     ///
-    /// <para>🚨 And an entry whose LANDED BYTES ARE GONE is not pending either — it is
+    /// <para>🚨 An entry whose LANDED BYTES ARE GONE is not pending — it is
     /// <see cref="Unresolvable(ModuleActivationList, IReadOnlySet{string},
     /// IReadOnlyDictionary{string, string}, Func{string, string}, Func{ModuleActivationEntry, bool})"/>
-    /// (#2093). Same reason, sharper: "pending" promises that a restart
-    /// activates this, and boot skips an entry whose DLL is missing exactly as loudly as a held
-    /// one. Reporting it as pending is a promise every restart breaks and none of them clears —
-    /// and it is the state that took <c>/mcp</c> down for a pod's whole lifetime while every
-    /// surface said "restart required". The two must render differently because the ACTIONS
-    /// differ: wait for the restart, versus re-install the package.</para>
+    /// (#2093). "Pending" promises that a restart activates this, and boot skips an entry whose
+    /// DLL is missing, loudly. Reporting it as pending is a promise every restart breaks and none
+    /// of them clears — and it is the state that took <c>/mcp</c> down for a pod's whole lifetime
+    /// while every surface said "restart required". The two must render differently because the
+    /// ACTIONS differ: wait for the restart, versus re-install the package.</para>
     /// </summary>
     /// <param name="activation">The persisted activation list.</param>
     /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
-    /// <param name="platformGate">Returns WHY a recorded platform FLOOR is not satisfied by the
-    /// running platform, or null when it is (an absent floor is always satisfied).</param>
+    /// <param name="platformGate">Words the declared-floor advisory for each entry
+    /// (<see cref="PendingModuleActivation.Advisory"/>); its answer excludes nothing (#3648).</param>
     /// <param name="landedDllExists">Whether the entry's landed DLL is actually on the volume —
     /// production passes <see cref="ModuleActivationBoot.LandedModuleDllExists"/>, the SAME check
     /// boot gates on, so this report can never promise a restart boot would not honour.</param>
@@ -109,8 +119,8 @@ public static class ModuleActivationStatus
     /// <para>🚨 <b>Absence of a generation is never a mismatch.</b> A name missing from
     /// <paramref name="loadedModuleGenerations"/> means this process cannot say where that module
     /// was loaded from — not that it is stale. Claiming a mismatch there would print a "restart
-    /// required" no restart can clear, the exact false promise the held-entry and missing-bytes
-    /// rules above exist to prevent. Nor is an entry with no recorded
+    /// required" no restart can clear, the exact false promise the missing-bytes rule above exists
+    /// to prevent. Nor is an entry with no recorded
     /// <see cref="ModuleActivationEntry.Directory"/> (the legacy fixed <c>modules/&lt;name&gt;/</c>
     /// folder) ever stale: it names no generation to compare against.</para>
     /// </summary>
@@ -120,7 +130,7 @@ public static class ModuleActivationStatus
     /// (<c>&lt;name&gt;@&lt;id&gt;</c>) this process loaded it from — production passes
     /// <see cref="LoadedModuleGenerations()"/>. A name absent from the map is "unknown", never
     /// "stale".</param>
-    /// <param name="platformGate">The one platform floor gate.</param>
+    /// <param name="platformGate">Words the declared-floor advisory per entry; excludes nothing (#3648).</param>
     /// <param name="landedDllExists">Whether the entry's landed DLL is on the volume.</param>
     public static ImmutableList<PendingModuleActivation> NotYetLoaded(
         ModuleActivationList activation,
@@ -132,13 +142,13 @@ public static class ModuleActivationStatus
         ArgumentNullException.ThrowIfNull(landedDllExists);
         return AwaitingLoad(activation, loadedAssemblyNames, loadedModuleGenerations, platformGate)
             .Where(landedDllExists)
-            .Select(Describe)
+            .Select(entry => Describe(entry, platformGate))
             .ToImmutableList();
     }
 
     /// <summary>
-    /// The enabled, floor-satisfied entries that are not loaded here AND whose landed DLL is not on
-    /// the volume — activated modules a restart will NOT bring up (#2093).
+    /// The enabled entries that are not loaded here AND whose landed DLL is not on the volume —
+    /// activated modules a restart will NOT bring up (#2093).
     ///
     /// <para>This is the state behind an endpoint module that 404s for a pod's whole lifetime: the
     /// activation record says the module is on, so every NodeType-facing surface treats it as
@@ -148,7 +158,7 @@ public static class ModuleActivationStatus
     /// </summary>
     /// <param name="activation">The persisted activation list.</param>
     /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
-    /// <param name="platformGate">The one platform floor gate.</param>
+    /// <param name="platformGate">Words the declared-floor advisory per entry; excludes nothing (#3648).</param>
     /// <param name="landedDllExists">Whether the entry's landed DLL is on the volume.</param>
     public static ImmutableList<PendingModuleActivation> Unresolvable(
         ModuleActivationList activation,
@@ -169,7 +179,7 @@ public static class ModuleActivationStatus
     /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
     /// <param name="loadedModuleGenerations">Module simple name → loaded generation directory leaf;
     /// an absent name is "unknown", never "stale".</param>
-    /// <param name="platformGate">The one platform floor gate.</param>
+    /// <param name="platformGate">Words the declared-floor advisory per entry; excludes nothing (#3648).</param>
     /// <param name="landedDllExists">Whether the entry's landed DLL is on the volume.</param>
     public static ImmutableList<PendingModuleActivation> Unresolvable(
         ModuleActivationList activation,
@@ -181,12 +191,16 @@ public static class ModuleActivationStatus
         ArgumentNullException.ThrowIfNull(landedDllExists);
         return AwaitingLoad(activation, loadedAssemblyNames, loadedModuleGenerations, platformGate)
             .Where(entry => !landedDllExists(entry))
-            .Select(Describe)
+            .Select(entry => Describe(entry, platformGate))
             .ToImmutableList();
     }
 
-    private static PendingModuleActivation Describe(ModuleActivationEntry entry) =>
-        new(entry.Name, entry.PackagePath, entry.Version);
+    private static PendingModuleActivation Describe(
+        ModuleActivationEntry entry, Func<string?, string?> platformGate) =>
+        new(entry.Name, entry.PackagePath, entry.Version)
+        {
+            Advisory = platformGate(entry.MinMeshVersion),
+        };
 
     private static IEnumerable<ModuleActivationEntry> AwaitingLoad(
         ModuleActivationList activation,
@@ -199,10 +213,13 @@ public static class ModuleActivationStatus
         ArgumentNullException.ThrowIfNull(loadedModuleGenerations);
         ArgumentNullException.ThrowIfNull(platformGate);
 
+        // 🚨 #3648 — no `platformGate(entry.MinMeshVersion) is null` clause here any more. It
+        // excluded every entry whose declared floor ranked above the running platform, on the
+        // reasoning that boot would skip the same entry; boot no longer does, so the exclusion
+        // would hide a module that a restart genuinely activates.
         return activation.Entries
             .Where(entry => entry.Enabled
                 && !string.IsNullOrWhiteSpace(entry.Name)
-                && platformGate(entry.MinMeshVersion) is null
                 && (!loadedAssemblyNames.Contains(entry.Name)
                     || RunsAnOlderGeneration(entry, loadedModuleGenerations)));
     }
@@ -215,6 +232,13 @@ public static class ModuleActivationStatus
     /// generation it loaded that module from, and the two differ. Unknown is never a mismatch — see
     /// the note on the five-argument <see cref="NotYetLoaded(ModuleActivationList, IReadOnlySet{string},
     /// IReadOnlyDictionary{string, string}, Func{string, string}, Func{ModuleActivationEntry, bool})"/>.</para>
+    ///
+    /// <para>🚨 A module running its PREVIOUS generation (#3649) is such an entry BY CONSTRUCTION:
+    /// the set activates the head generation, the loader refused it and loaded the previous one.
+    /// This derivation cannot tell that apart from an ordinary update, and does not try — the
+    /// loader's <see cref="Mesh.FallbackModule"/> records can, and
+    /// <see cref="PendingModuleActivations"/> subtracts them, so the row reads "runs the previous
+    /// generation" and never "restart required" (a restart would fall back again).</para>
     /// </summary>
     private static bool RunsAnOlderGeneration(
         ModuleActivationEntry entry,

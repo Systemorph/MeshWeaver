@@ -133,20 +133,23 @@ public class SelfUpdateHostedService : IHostedService
         // any policy is available and is silently dropped — no first check at all. Take(1) gates the
         // trigger stream on that first emission; every LATER policy change is picked up without
         // re-subscribing the watch.
-        // Four trigger sources:
+        // Five trigger sources:
         //   • the one startup pass,
         //   • a build completion from the platform or ANY module the environment deploys,
         //   • an admin CHANGING the policy — enabling updates must not wait for the next
         //     publication, which could be weeks away. DistinctUntilChanged so a re-emission of the
         //     same policy is not a trigger, and Skip(1) so the replayed CURRENT policy is not one
         //     either (the startup pass already covers it),
-        //   • the safety net, so a dead event channel is bounded rather than permanent.
+        //   • the safety net, so a dead event channel is bounded rather than permanent,
+        //   • a landing wave on THIS process proposing a new module set (#3650) — a module shipped
+        //     and landed, and the restart that activates it must not wait for an unrelated roll.
         var checks = policy
             .Take(1)
             .SelectMany(_ => Observable.Merge(
                 Observable.Return(SelfUpdateTrigger.Startup),
                 BuildCompletionTicks().Do(_ => Interlocked.Increment(ref _buildEventsSeen)),
                 SafetyNetTicks(),
+                ModuleSetProposedTicks(),
                 policy.DistinctUntilChanged(content => content.Policy).Skip(1)
                     .Select(_ => SelfUpdateTrigger.PolicyChange)))
             // 🚨 Read the CURRENT policy at decision time — never WithLatestFrom. That operator only
@@ -166,6 +169,16 @@ public class SelfUpdateHostedService : IHostedService
                 // added is making "produced nothing" itself an outcome that gets reported.
                 .DefaultIfEmpty(SelfUpdateVerdict.NoOutcome())
                 .Take(1)
+                // 🚨 #3650 — after the platform half of EVERY check, the module half: a landed
+                // module generation waiting for a restart gets one, on the image this install
+                // runs, paced by the same floor. Composed here rather than inside RunOnce so the
+                // platform verdict it follows is already final (and already survived its own
+                // Catch), and so a fault in the restart is reported as what it is.
+                .SelectMany(verdict => ConsiderRestart(verdict)
+                    .Catch((Exception ex) => Observable.Return(new SelfUpdateVerdict(
+                        SelfUpdateOutcome.CheckFailed,
+                        $"{verdict.Message} The pending restart FAILED: {ex.GetType().Name}: {ex.Message}",
+                        verdict.Tag))))
                 .SelectMany(verdict => ReportCheck(check.trigger, verdict)))
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
@@ -212,6 +225,101 @@ public class SelfUpdateHostedService : IHostedService
             ? Observable.Never<SelfUpdateTrigger>()
             : Observable.Interval(_options.SafetyNetCheckInterval)
                 .Select(_ => SelfUpdateTrigger.SafetyNet);
+
+    /// <summary>
+    /// Ticks once per landing wave THIS process ends with a new module set
+    /// (<see cref="ModuleLandingService.ModuleSetProposed"/>, #3650) — the event that makes "a
+    /// module version shipped" and "this install runs it" minutes apart instead of one unrelated
+    /// roll apart. Coalesced like the build events. A host with no landing service (a monolith
+    /// without the catalog) ticks never. Virtual for the same reason the other trigger seams are.
+    /// </summary>
+    protected virtual IObservable<SelfUpdateTrigger> ModuleSetProposedTicks() =>
+        Observable.Defer(() => ResolveLandingService()?.ModuleSetProposed ?? Observable.Never<ModuleSet>())
+            .Throttle(_options.EventCoalesceWindow)
+            .Select(_ => SelfUpdateTrigger.ModuleSetProposed);
+
+    /// <summary>
+    /// The module-landing service, resolved from the mesh's services — the seam through which the
+    /// pending-restart state (<see cref="ModuleActivationList.PendingRestart"/>) and the
+    /// module-set-proposed trigger reach this poller. Virtual so a test can hand in a landing
+    /// service rooted in a temp directory and raise the marker there.
+    /// </summary>
+    protected virtual ModuleLandingService? ResolveLandingService() =>
+        _hub.ServiceProvider.GetService<ModuleLandingService>();
+
+    /// <summary>
+    /// 🚨 The module half of a check (#3650): a landed module generation loads only at a restart
+    /// (restart-as-activation), and until now that restart was whatever platform roll happened
+    /// next — a module could ship, land, and sit unloaded for days behind a fleet that had nothing
+    /// newer to roll to. So after the platform half of EVERY check, when that half patched nothing
+    /// (<see cref="SelfUpdateVerdict.MayRestartAfter"/>), the activation record is read and a
+    /// pending restart is TAKEN: a roll of the image this install runs, through
+    /// <see cref="IDeploymentUpdater.RestartAsync"/>, paced by <c>MinRollInterval</c> exactly like a
+    /// roll — a restart drops the same live circuits.
+    ///
+    /// <para>The record read is the landing service's own (<see cref="ModuleLandingService.GetActivation"/>,
+    /// on its pooled IO), never a file touched from a hub thread; a read that faults decides
+    /// nothing and leaves the platform verdict as it was, with a Warning that names itself. The
+    /// marker is cleared by the boot that follows the restart (<c>ConfigureMemexMesh</c>), which is
+    /// what keeps this from restarting twice — and the floor is what keeps two replicas that both
+    /// see the marker from issuing two rollouts.</para>
+    /// </summary>
+    private IObservable<SelfUpdateVerdict> ConsiderRestart(SelfUpdateVerdict platform) =>
+        Observable.Defer(() =>
+        {
+            if (!SelfUpdateVerdict.MayRestartAfter(platform))
+                return Observable.Return(platform);
+            var landing = ResolveLandingService();
+            if (landing is null)
+                return Observable.Return(platform);
+            return landing.GetActivation()
+                .Take(1)
+                .SelectMany(activation => activation.PendingRestart
+                    ? Restart(platform)
+                    : Observable.Return(platform))
+                .Catch((Exception ex) =>
+                {
+                    _logger?.LogWarning(ex,
+                        "[SelfUpdate] could not read the module activation record to decide a pending "
+                        + "restart; the platform verdict stands and the next check asks again.");
+                    return Observable.Return(platform);
+                });
+        });
+
+    /// <summary>The restart itself: detect-only says so; the floor defers; otherwise the updater rolls
+    /// the running image, or reports that it cannot.</summary>
+    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform)
+    {
+        var installed = ShippedReleaseSeed.InstalledPlatformVersion;
+        if (!_updater.CanPatch)
+            return Observable.Return(SelfUpdateVerdict.RestartUnavailable(
+                platform, installed, "this install does not self-patch (detect-and-notify)"));
+
+        // The same floor read Apply makes, and skipped for the same reason when the floor is off:
+        // LastRolledAtAsync is a Kubernetes GET whose answer cannot change a decision the floor
+        // does not take.
+        var lastRolled = _options.MinRollInterval <= TimeSpan.Zero
+            ? Observable.Return<DateTimeOffset?>(null)
+            : _http.Invoke(ct => _updater.LastRolledAtAsync(ct));
+        return lastRolled.SelectMany(lastRolledAt =>
+        {
+            if (SelfUpdateVerdict.RestartDeferredBy(
+                    platform, installed, lastRolledAt, _options.MinRollInterval, DateTimeOffset.UtcNow)
+                is { } deferred)
+                return Observable.Return(deferred);
+
+            _logger?.LogInformation(
+                "[SelfUpdate] a landed module generation is pending activation — restarting the "
+                + "workloads on {Installed} (last rolled {LastRolled}).",
+                installed, lastRolledAt?.ToString("O") ?? "never");
+            return _http.Invoke(ct => _updater.RestartAsync(ct))
+                .Select(restarted => restarted
+                    ? SelfUpdateVerdict.Restarted(platform, installed, lastRolledAt)
+                    : SelfUpdateVerdict.RestartUnavailable(platform, installed,
+                        "the deployment updater cannot roll the running image — it predates "
+                        + "IDeploymentUpdater.RestartAsync; update the MeshWeaver.SelfUpdate.Aks module"));
+        });
+    }
 
     /// <summary>
     /// 🚨 Reports the outcome of ONE check — the single reporting site, and the thing whose absence
@@ -265,6 +373,8 @@ public class SelfUpdateHostedService : IHostedService
                      // one. Both the terminal strand and the recovery roll carry
                      // UnresolvedInstalledTag, so the level follows the FACT rather than the outcome.
                      or SelfUpdateOutcome.InstalledTagWithdrawn
+                     // A landed module nothing will ever activate is a state an operator must see (#3650).
+                     or SelfUpdateOutcome.RestartUnavailable
                      || verdict.UnresolvedInstalledTag is not null)
                 _logger?.LogWarning("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
             else
@@ -694,11 +804,24 @@ public class SelfUpdateHostedService : IHostedService
                             _logger?.LogInformation(
                                 "[SelfUpdate] release-availability gate not enforced for {Tag}: {Reason}",
                                 target, notEnforced);
-                        // 🚨 The availability gate answered "an artifact exists". The combo gate
-                        // answers the question that artifact cannot: whether the candidate's
-                        // assemblies can still serve the module content this instance has landed.
-                        // Both have to clear before anything is patched.
-                        return ComboThenApply(policy, target);
+                        // 🚨 The advisories ride beside the verdict, never inside it (#3651,
+                        // #3648): the packages this roll would recompile at boot, a landed module
+                        // whose loadability on the target could not be measured, a declared floor
+                        // the target does not rank above. The floor sentences were the hold reasons
+                        // on 2026-09-07; they are logged so an operator can still read them, and
+                        // the roll proceeds on what the link probe measured — here against the
+                        // published surface, and again at boot.
+                        if (!verdict.Advisories.IsDefaultOrEmpty)
+                            _logger?.LogInformation(
+                                "[SelfUpdate] rolling to {Tag} with {Count} advisory line(s) — "
+                                + "reported, never a hold: {Advisories}",
+                                target, verdict.Advisories.Length,
+                                string.Join("; ", verdict.Advisories));
+                        // 🚨 The availability gate answered "nothing of yours is unloadable there".
+                        // The combo gate answers the question the bytes on the shelf cannot:
+                        // whether the candidate's assemblies can still serve the module content
+                        // this instance has landed. Both have to clear before anything is patched.
+                        return ComboThenApply(policy, target, verdict);
                     }
 
                     return RecordHold(target, verdict).Catch(HoldWriteFailed(target))
@@ -736,7 +859,13 @@ public class SelfUpdateHostedService : IHostedService
     /// UNVERIFIED roll is a state an operator can see, never a silent one.</item>
     /// </list>
     /// </summary>
-    private IObservable<SelfUpdateVerdict> ComboThenApply(UpdatePolicyContent policy, string target)
+    /// <param name="policy">The policy node as read this tick.</param>
+    /// <param name="target">The candidate.</param>
+    /// <param name="availability">The availability verdict that cleared the candidate — recorded
+    /// on the policy node beside the (cleared) hold so its advisories reach the Updates tab
+    /// (#3651); null when no availability gate ran.</param>
+    private IObservable<SelfUpdateVerdict> ComboThenApply(
+        UpdatePolicyContent policy, string target, UpdatabilityVerdict? availability = null)
     {
         var combo = ResolveComboGate();
         return (combo is null
@@ -764,8 +893,10 @@ public class SelfUpdateHostedService : IHostedService
 
                 // Clearing is unconditional, exactly as on the availability path: a previous hold
                 // that no longer applies must disappear from the admin tab the moment it is
-                // resolved.
-                return RecordHold(target, null).Catch(HoldWriteFailed(target))
+                // resolved. The availability verdict rides along so what it SAID about this tag
+                // (the boot-compile cost, an unmeasurable module — #3651) is recorded with the
+                // clear rather than lost with it.
+                return RecordHold(target, availability).Catch(HoldWriteFailed(target))
                     .IgnoreElements()
                     .Select(_ => SelfUpdateVerdict.NoOutcome())
                     .Concat(Apply(target).Select(verdict => Qualify(verdict, clearance)));
@@ -935,9 +1066,13 @@ public class SelfUpdateHostedService : IHostedService
         };
 
     /// <summary>
-    /// Writes (or clears, on null) the availability hold on the policy node, as System — the same
-    /// shape and the same reasons as <see cref="RecordAvailable"/>. Virtual so a test can fault it
-    /// and prove the hold DECISION survives a failed hold WRITE.
+    /// Writes (or clears, on null or on an updatable verdict) the availability hold on the policy
+    /// node, as System — the same shape and the same reasons as <see cref="RecordAvailable"/>.
+    /// 🚨 An UPDATABLE verdict clears the hold exactly as null does and additionally records what
+    /// the gate SAID about the tag (#3651, <see cref="UpdatabilityVerdict.Advisories"/>) — the
+    /// boot-compile cost and an unmeasurable module must be visible on the Updates tab, not only
+    /// in a pod log. Virtual so a test can fault it and prove the hold DECISION survives a failed
+    /// hold WRITE.
     /// </summary>
     protected virtual IObservable<Unit> RecordHold(string tag, UpdatabilityVerdict? verdict)
     {
@@ -958,13 +1093,18 @@ public class SelfUpdateHostedService : IHostedService
                 .Update<UpdatePolicyContent>((node, cur) =>
                 {
                     var current = cur ?? new UpdatePolicyContent();
+                    var advisories = verdict is { Advisories.IsDefaultOrEmpty: false }
+                        ? string.Join("; ", verdict.Advisories)
+                        : null;
                     return node with
                     {
-                        Content = verdict is null
+                        Content = verdict is null || verdict.IsUpdatable
                             ? current with
                             {
                                 HeldTag = null, HeldReason = null,
                                 HeldIndeterminate = false, HeldAt = null,
+                                AdvisoriesTag = advisories is null ? null : tag,
+                                Advisories = advisories,
                             }
                             : current with
                             {
@@ -972,6 +1112,8 @@ public class SelfUpdateHostedService : IHostedService
                                 HeldReason = verdict.HoldReason,
                                 HeldIndeterminate = verdict.IsIndeterminate,
                                 HeldAt = DateTimeOffset.UtcNow,
+                                AdvisoriesTag = advisories is null ? null : tag,
+                                Advisories = advisories,
                             },
                     };
                 })

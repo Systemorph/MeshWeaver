@@ -25,7 +25,7 @@ namespace Memex.Portal.Shared.Test;
 /// current version ⇒ update."</i></blockquote>
 ///
 /// <para>Nothing is mocked: each candidate is judged by
-/// <see cref="ReleaseAvailability.IsUpdatable"/> over a <see cref="PublishedBundleCatalogue"/>
+/// <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> over a <see cref="PublishedBundleCatalogue"/>
 /// observation of a root this test writes — the same code path
 /// <c>ReleaseAvailabilityService.IsUpdatable</c> runs in production. What is under test is the WALK
 /// and its denominator discipline.</para>
@@ -44,6 +44,14 @@ namespace Memex.Portal.Shared.Test;
 /// <para>That environment has been sitting on <c>3.0.0-rc9.ci.7693</c> with <c>policy: None</c> ever
 /// since. The gate was right and had nothing to offer instead — there was no way to ask "then which
 /// release SHOULD I be on". That is the gap these tests pin.</para>
+///
+/// <para>🚨 <b>Since #3651 a missing bake is a COST, not a decline</b> (maintainer rule of
+/// 2026-09-07): the newest release is selected and the outcome names what it recompiles at boot.
+/// The measured fixture above therefore selects <c>ci.7676</c> by default, naming the eight —
+/// and the walk that declines it survives under <c>Modules:RequirePrebuilt</c>, the opt-in strict
+/// mode, which is the arm the laziness and "behind current" cases below run on because those
+/// shapes need a decline to exist. The decline that exists everywhere now — an UNLOADABLE module —
+/// is pinned in <see cref="ReleaseLinkGateTest"/>.</para>
 /// </summary>
 public class RollSelectionTest : IDisposable
 {
@@ -79,12 +87,13 @@ public class RollSelectionTest : IDisposable
     // ── the walk ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// 🚨 THE ALGORITHM. The newest release does not publish a bundle for eight of the twelve
-    /// installed packages; the one below it publishes all twelve. The selector declines the newest —
-    /// <b>naming Feedback</b> — and selects the complete one.
+    /// 🚨 THE ALGORITHM, as of #3651. The newest release does not publish a bundle for eight of
+    /// the twelve installed packages; the one below it publishes all twelve. The selector takes
+    /// the NEWEST — a missing bake is a boot compile, not a reason to walk on — and the outcome
+    /// <b>names the eight</b>, Feedback among them, as the cost.
     /// </summary>
     [Fact]
-    public async Task SelectsTheLatestReleaseThatShipsEveryInstalledPlugin()
+    public async Task SelectsTheNewestRelease_NamingThePackagesItRecompilesAtBoot()
     {
         var root = MeasuredRoot();
 
@@ -92,12 +101,41 @@ public class RollSelectionTest : IDisposable
             .Should().Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(RollSelectionKind.Update, outcome.Kind);
-        Assert.Equal(CompleteVersion, outcome.SelectedVersion);
+        Assert.Equal(IncompleteVersion, outcome.SelectedVersion);
+        Assert.Empty(outcome.Declined);
 
         // The denominator is stated, not inferred from the pass — the whole #3441 lesson.
         Assert.Equal(AllPackages.Length, outcome.RequiredPlugins);
         Assert.Equal(AllPackages.Length, outcome.SatisfiedPlugins);
         Assert.Contains($"{AllPackages.Length} plugin(s) required", outcome.Summary);
+
+        // …and so is the COST, on the outcome and in its summary.
+        Assert.Equal(
+            NamedInTheHold.Order(StringComparer.Ordinal),
+            outcome.BootCompiles.Order(StringComparer.Ordinal));
+        Assert.Contains("would recompile at boot", outcome.Summary);
+        Assert.Contains("Feedback", outcome.Summary);
+        Assert.Contains(outcome.Advisories, a => a.Contains(IncompleteIdentity, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 THE ALGORITHM under the opt-in strict mode (<c>Modules:RequirePrebuilt</c>), which is
+    /// what it was everywhere before #3651: the newest release is declined — <b>naming
+    /// Feedback</b> — and the complete one is selected.
+    /// </summary>
+    [Fact]
+    public async Task UnderRequirePrebuilt_SelectsTheLatestReleaseThatShipsEveryInstalledPlugin()
+    {
+        var root = MeasuredRoot();
+
+        var outcome = await Select(root, RunningVersion, [IncompleteVersion, CompleteVersion], Strict)
+            .Should().Within(TestTimeouts.Convergence).Emit();
+
+        Assert.Equal(RollSelectionKind.Update, outcome.Kind);
+        Assert.Equal(CompleteVersion, outcome.SelectedVersion);
+        Assert.Equal(AllPackages.Length, outcome.RequiredPlugins);
+        Assert.Equal(AllPackages.Length, outcome.SatisfiedPlugins);
+        Assert.Empty(outcome.BootCompiles);
 
         var declined = Assert.Single(outcome.Declined);
         Assert.Equal(IncompleteVersion, declined.Version);
@@ -179,11 +217,12 @@ public class RollSelectionTest : IDisposable
     }
 
     /// <summary>
-    /// When NO release ships all plugins the selector stays put and NAMES the plugin — an alert,
-    /// never a silent hold and never "the closest one".
+    /// When NO release ships all plugins, a strict instance stays put and NAMES the plugin — an
+    /// alert, never a silent hold and never "the closest one". (By default the same fixture
+    /// selects the newest and names the eight as its boot compile — the first test above.)
     /// </summary>
     [Fact]
-    public async Task WhenNoReleaseShipsEveryPluginNothingIsSelectedAndThePluginIsNamed()
+    public async Task UnderRequirePrebuilt_WhenNoReleaseShipsEveryPluginNothingIsSelectedAndThePluginIsNamed()
     {
         var root = Track(NewRoot());
         Mark(root, IncompleteVersion, IncompleteIdentity);
@@ -192,7 +231,7 @@ public class RollSelectionTest : IDisposable
         Seal(root, IncompleteIdentity, "plugins", NotNamedInTheHold);
         Seal(root, CompleteIdentity, "plugins", NotNamedInTheHold);
 
-        var outcome = await Select(root, RunningVersion, [IncompleteVersion, CompleteVersion])
+        var outcome = await Select(root, RunningVersion, [IncompleteVersion, CompleteVersion], Strict)
             .Should().Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(RollSelectionKind.NoCompleteRelease, outcome.Kind);
@@ -217,12 +256,14 @@ public class RollSelectionTest : IDisposable
     {
         var root = MeasuredRoot();
         // The running version publishes nothing at all — a marker with an identity that holds no
-        // publication, exactly what PublishedBundleCatalogue answers ContentBakeMissing for.
+        // publication, exactly what PublishedBundleCatalogue answers ContentBakeMissing for. The
+        // strict policy is what makes that a decline (by default it is a boot compile and the
+        // running version is AlreadyCurrent).
         Mark(root, RunningVersion, "s3479running0000000000000000000");
         Directory.CreateDirectory(Path.Combine(root, "s3479running0000000000000000000"));
 
         var outcome = await Select(
-                root, RunningVersion, [RunningVersion, IncompleteVersion, CompleteVersion])
+                root, RunningVersion, [RunningVersion, IncompleteVersion, CompleteVersion], Strict)
             .Should().Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(RollSelectionKind.BehindCurrent, outcome.Kind);
@@ -323,11 +364,11 @@ public class RollSelectionTest : IDisposable
                     PluginInventory.Of(Installed, "the install records")),
                 // No guard around the builder: the walk is sequential by construction — the next
                 // candidate's verdict is only asked for inside the previous one's decline — and
-                // that is precisely what this test measures.
+                // that is precisely what this test measures. Strict, so that a decline exists.
                 version =>
                 {
                     asked.Add(version);
-                    return Verdict(root, Installed, version);
+                    return Verdict(root, Installed, version, Strict);
                 })
             .Should().Within(TestTimeouts.Convergence).Emit();
 
@@ -337,27 +378,35 @@ public class RollSelectionTest : IDisposable
 
     // ── driving the SHARED predicate ────────────────────────────────────────────────────────────
 
+    /// <summary>The opt-in strict mode — <c>Modules:RequirePrebuilt</c> — under which a missing
+    /// bake is still a decline (#3651).</summary>
+    private static readonly ReleaseGatePolicy Strict = new(RequirePrebuilt: true);
+
     /// <summary>The selection, judged by exactly the predicate the deployment gate runs.</summary>
     private static IObservable<RollSelectionOutcome> Select(
-        string root, string? current, ImmutableArray<string> candidatesNewestFirst) =>
+        string root, string? current, ImmutableArray<string> candidatesNewestFirst,
+        ReleaseGatePolicy? policy = null) =>
         RollSelection.Select(
             new RollSelectionInputs(
                 "memex",
                 current,
                 candidatesNewestFirst,
                 PluginInventory.Of(Installed, "the install records (Plugins/*, nodeType:Package)")),
-            version => Verdict(root, Installed, version));
+            version => Verdict(root, Installed, version, policy));
 
     /// <summary>🚨 The SHARED predicate, not a copy of it: the same
-    /// <see cref="PublishedBundleCatalogue.Read"/> + <see cref="ReleaseAvailability.IsUpdatable"/>
-    /// pair <c>ReleaseAvailabilityService</c> composes in production.</summary>
+    /// <see cref="PublishedBundleCatalogue.Read"/> + <see cref="ModuleLinkObservation.Measure"/> +
+    /// <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts, ReleaseGatePolicy)"/>
+    /// composition <c>ReleaseAvailabilityService</c> runs in production.</summary>
     private static IObservable<UpdatabilityVerdict> Verdict(
-        string root, ImmutableArray<RequiredPackage> required, string version) =>
+        string root, ImmutableArray<RequiredPackage> required, string version,
+        ReleaseGatePolicy? policy = null) =>
         Observable.Defer(() =>
         {
             var observation = PublishedBundleCatalogue.Read(root, version);
+            var measured = ModuleLinkObservation.Measure(observation.Artifacts, required);
             return Observable.Return(ReleaseAvailability.IsUpdatable(
-                observation.Target, required, observation.Artifacts));
+                observation.Target, required, measured, policy ?? ReleaseGatePolicy.Default));
         });
 
     // ── fixture ─────────────────────────────────────────────────────────────────────────────────

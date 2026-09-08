@@ -7,7 +7,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Roll Selection
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** "The latest platform version shipping all plugins" is re-read as "the newest release on which no installed module is UNLOADABLE": a missing bake is a boot compile (reported), a floor is advisory, and only a measured link failure against the target holds. The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 > **"Whenever a new platform / plugin is published, check for each environment which is the latest
 > platform version shipping all plugins, if different from current version ⇒ update."**
@@ -53,14 +53,37 @@ legitimately choose different targets, and one may correctly stay where it is.
    · could not read it            ⇒ Indeterminate  (HOLD, named)
    · read it and it is EMPTY      ⇒ NoPluginsKnown (REFUSE — see "the vacuity refusal")
 2. walk the candidate releases, NEWEST FIRST, one at a time
-   · for each, ask the SHARED predicate: does it ship all of them?
-   · stop at the first that does
+   · for each, ask the SHARED predicate: is any installed module UNLOADABLE on it?
+   · a content package with no bake for it ⇒ said on the outcome ("would recompile at boot: …"), never a decline
+   · stop at the first with no unloadable module
 3. conclude
    · selected == current          ⇒ AlreadyCurrent   (said, not left as a silence)
    · selected is newer            ⇒ Update
    · selected is OLDER            ⇒ BehindCurrent    (reported, never applied)
-   · nothing was complete         ⇒ NoCompleteRelease (stay put, name the plugin)
+   · every candidate declined     ⇒ NoCompleteRelease (stay put, name the MODULE)
 ```
+
+### 🚨 What declines a candidate — since MeshWeaver#3651, a module that cannot load there
+
+The maintainer's rule of 2026-09-07 ([Module Adoption Policy](../ModuleAdoptionPolicy)) changed what
+"ships all plugins" means. It used to mean *every content-bearing package has a sealed bake under
+the target's identity* — and on that day it would have kept every portal on the morning build a
+second day, because the satellites had not baked for the new identity yet, although their courses
+compile at boot on every pull request. It now means **no installed module is measured unloadable on
+the target**:
+
+| A package that… | Declines the candidate? | What the outcome says |
+|---|---|---|
+| ships a compiled module the target publishes a build of | no — it will be adopted at the roll | nothing |
+| ships a compiled module the target publishes NO build of, whose **landed generation links** against the target's published surface (`platform-surface.json`, [the link gate](../ModulePlatformLinkGate)) | no | nothing |
+| …whose landed generation **does not link** — it references a type the target does not carry | **yes** — `ModuleUnloadable`, the one decline | `Declined[].Reason` names the module and the missing type |
+| …whose loadability **could not be measured** — the release published no surface, the bytes are unreadable | no | `Advisories`: *"could not be determined …"* — reported, neither clearance nor a decline |
+| has no sealed content bake for the target | no — the instance compiles it at boot | `BootCompiles` / `Advisories`: *"would recompile at boot: …"*, and the summary line |
+| has a bake whose sealed set is torn or inconsistent (MeshWeaver#3175) | **yes** — unchanged | `Declined[].Reason` |
+
+`Modules:RequirePrebuilt` — the opt-in strict mode in which the seeder refuses a boot compile and
+parks the type — makes the missing bake a decline again, which is the arm the older tests below run
+on. The predicate is still the one the gate runs; `RollSelection` contributes only the walk.
 
 ### What is shared, and what is new
 
@@ -130,13 +153,15 @@ per-version verdict now holds on an empty denominator too, with the same reason.
 selector honours would be no rule: the poller re-gates whatever the walk hands back, so a refusal
 that lived only in the walk could be waved through one line later.
 
-Every outcome **prints the denominator**, whatever it concluded:
+Every outcome **prints the denominator** — and, since MeshWeaver#3651, the **cost** — whatever it
+concluded:
 
 ```text
 [RollSelect] memex: 77 plugin(s) required (from the install records (Plugins/*, nodeType:Package));
-             77 of 77 satisfied by 3.0.0-rc9.ci.7647, after declining 1 newer candidate(s) —
-             3.0.0-rc9.ci.7676: Feedback: no sealed content bake for framework identity
-             sf61a0f5d751c483216ea4a8d9883570f …. Different from 3.0.0-rc9.ci.7693 ⇒ update.
+             77 of 77 satisfied by 3.0.0-ci.8090, after declining 1 newer candidate(s) —
+             3.0.0-ci.8100: SocialMedia: its landed module MeshWeaver.Social cannot load on
+             3.0.0-ci.8100 … references MeshWeaver.Mesh.CodeOutputCurrency …; 2 package(s) would
+             recompile at boot: AgenticPrimer, Crm. Different from 3.0.0-ci.8009 ⇒ update.
 ```
 
 A completeness answer whose expected count nobody can read is one nobody can tell from a vacuous one.
@@ -146,13 +171,14 @@ This is the same discipline `[ReleaseGate] denominator: …` established one lev
 
 Both, and each has discriminated on a different real incident — so neither half may be dropped:
 
-| Incident | What the publication looked like | Which half caught it |
-|---|---|---|
-| memex.meshweaver.cloud, `3.0.0-rc9.ci.7676` (held 2026-09-03) | 38 of 77 installed packages had **no sealed bundle** under identity `sf61a0f5d75…` | **presence** |
-| memex-cloud, `3.0.0-ci.7621` ([#3175](../ReleaseGates)) | every package present; a bundle's NodeTypes recorded a module MVID the same identity's sealed module set did not carry | **adoptability** |
-| memex.systemorph.com, `3.0.0-ci.7926` (2026-09-06) | complete **and** consistent | **neither** — see below |
+| Incident | What the publication looked like | Which half caught it | Since MeshWeaver#3651 |
+|---|---|---|---|
+| memex.meshweaver.cloud, `3.0.0-rc9.ci.7676` (held 2026-09-03) | 38 of 77 installed packages had **no sealed bundle** under identity `sf61a0f5d75…` | **presence** | **named as the boot compile**, and the release is selected — a decline only under `Modules:RequirePrebuilt` |
+| memex-cloud, `3.0.0-ci.7621` ([#3175](../ReleaseGates)) | every package present; a bundle's NodeTypes recorded a module MVID the same identity's sealed module set did not carry | **adoptability** | unchanged — a torn set still declines |
+| memex.systemorph.com, `3.0.0-ci.7926` (2026-09-06) | complete **and** consistent | **neither** — see below | unchanged |
+| every production portal, `3.0.0-ci.8009` → all eleven candidates (2026-09-07) | complete for the platform's own content; the satellites not yet baked for the new identity; every landed module **would have loaded** | **presence** held it (behind the floors) — wrongly | the **link check** clears every candidate; the unbaked satellites are the named cost |
 
-The predicate already carries both, and `RollSelection` inherits them unchanged.
+The predicate carries all three, and `RollSelection` inherits them unchanged.
 
 ## 🚨 The boundary: what happened on `3.0.0-ci.7926`
 
@@ -228,6 +254,10 @@ question being asked at all.
 ## What it does not see
 
 - **The instance's own content**, as above.
+- **A release with no published surface.** A publication sealed before MeshWeaver#3651 carries no
+  `platform-surface.json`, so no landed module can be linked against it; the outcome carries that
+  as an advisory and the release is still selectable. The boot-time probe decides then — and the
+  keep-the-previous-generation fallback keeps the portal serving if it refuses.
 - **Anything with no release marker.** A release that published no platform content bake cannot be
   selected. That is deliberate — its identity is unknowable — but it means a bake lane that stops
   writing markers silently shrinks the candidate universe rather than failing.

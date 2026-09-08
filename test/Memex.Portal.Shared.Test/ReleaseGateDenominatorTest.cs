@@ -30,9 +30,17 @@ namespace Memex.Portal.Shared.Test;
 /// green" is the shape a completeness gate exists to make impossible.</para>
 ///
 /// <para>These tests are the falsification, both ways, on the reconstructed Education state. The
-/// OLD reading is computed alongside the new one in <see cref="TheOldDenominatorPassed_TheNewOneHolds"/>
-/// so the negative control is executed rather than asserted: a test that only showed the new
-/// reading holding could not distinguish "the fix works" from "the fixture was always red".</para>
+/// OLD reading is computed alongside the new one in
+/// <see cref="TheOldDenominatorSaidNothing_TheNewOneNamesEveryUnbakedCourse"/> so the negative
+/// control is executed rather than asserted: a test that only showed the new reading naming the
+/// courses could not distinguish "the fix works" from "the fixture was always red".</para>
+///
+/// <para>🚨 <b>What the denominator DECIDES changed in #3651; what it SEES did not.</b> A course
+/// with no bake for the target is now a COST the verdict names ("would recompile at boot: …") and
+/// the roll proceeds — holding on it is what would have kept every portal on the morning build a
+/// second day on 2026-09-07. The denominator still has to be independent and monotone for the
+/// naming to be honest, which is what these keep pinning; the hold itself survives only under the
+/// opt-in <c>Modules:RequirePrebuilt</c>, and that arm is asserted on the same fixture.</para>
 /// </summary>
 public class ReleaseGateDenominatorTest : IDisposable
 {
@@ -186,11 +194,14 @@ public class ReleaseGateDenominatorTest : IDisposable
     // ── the verdict, both ways, on the reconstructed Education state ─────────────────────────────
 
     /// <summary>
-    /// 🚨 THE ACCEPTANCE CRITERION. One fixture, two denominators, opposite verdicts — so the
-    /// negative control is a measurement rather than a claim.
+    /// 🚨 THE ACCEPTANCE CRITERION. One fixture, two denominators, opposite answers — so the
+    /// negative control is a measurement rather than a claim. With the old denominator the
+    /// verdict has NOTHING to say about Education; with the new one it names all nine courses as
+    /// the boot compile the roll will pay (#3651) — and, under <c>Modules:RequirePrebuilt</c>, as
+    /// the hold.
     /// </summary>
     [Fact]
-    public void TheOldDenominatorPassed_TheNewOneHolds()
+    public void TheOldDenominatorSaidNothing_TheNewOneNamesEveryUnbakedCourse()
     {
         var root = EducationRegressedRoot();
         var observation = PublishedBundleCatalogue.Read(root, TargetVersion);
@@ -203,30 +214,50 @@ public class ReleaseGateDenominatorTest : IDisposable
         var oldVerdict = ReleaseAvailability.IsUpdatable(
             observation.Target, Required(old), observation.Artifacts);
 
-        // The control: with the old denominator this roll PROCEEDS, over an Education publication
-        // that is not there. This is what "we kept rolling without edu being properly baked" was.
+        // The control: with the old denominator this roll proceeds SAYING NOTHING about an
+        // Education publication that is not there. This is what "we kept rolling without edu
+        // being properly baked" was — the silence, not the roll.
         Assert.True(oldVerdict.IsUpdatable);
         Assert.Empty(oldVerdict.Blockers);
+        Assert.Empty(oldVerdict.BootCompiles);
+        Assert.Empty(oldVerdict.Advisories);
 
         // ── the NEW reading: content-bearing = sealed under ANY identity this root holds ──
         var floor = PublishedBundleCatalogue.EverSealedBundles(root);
         var newVerdict = ReleaseAvailability.IsUpdatable(
             observation.Target, Required(floor.Bundles), observation.Artifacts);
 
-        Assert.False(newVerdict.IsUpdatable);
+        // It proceeds (#3651) — and names exactly which packages, and what the roll pays for them.
+        Assert.True(newVerdict.IsUpdatable, newVerdict.HoldReason);
+        Assert.Empty(newVerdict.Blockers);
+        Assert.Equal(
+            EducationPackages.OrderBy(p => p, StringComparer.Ordinal),
+            newVerdict.BootCompiles.OrderBy(p => p, StringComparer.Ordinal));
+        var cost = Assert.Single(newVerdict.Advisories);
+        Assert.Contains("would recompile at boot", cost);
+        Assert.Contains(Target, cost);
+        var named = newVerdict.Packages.Where(p => p.Kind == PackageAvailabilityKind.ContentBakeMissing).ToList();
+        Assert.Equal(EducationPackages.Length, named.Count);
+        Assert.All(named, p => Assert.True(p.IsAdvisory));
 
-        // It names exactly which packages, and says what is wrong with them.
-        var blockers = newVerdict.Blockers.ToList();
+        // The module-only package is NOT among them — the preserved exemption, asserted on the
+        // same run that names the courses, so "it names" cannot be hiding "it names everything".
+        Assert.DoesNotContain(ModuleOnlyPackage, named.Select(b => b.Package));
+
+        // ── the STRICT arm: the same denominator, under Modules:RequirePrebuilt, holds ──
+        var strict = ReleaseAvailability.IsUpdatable(
+            observation.Target, Required(floor.Bundles), observation.Artifacts,
+            new ReleaseGatePolicy(RequirePrebuilt: true));
+
+        Assert.False(strict.IsUpdatable);
+        var blockers = strict.Blockers.ToList();
         Assert.Equal(EducationPackages.Length, blockers.Count);
         Assert.Equal(
             EducationPackages.OrderBy(p => p, StringComparer.Ordinal),
             blockers.Select(b => b.Package).OrderBy(p => p, StringComparer.Ordinal));
         Assert.All(blockers, b =>
             Assert.Equal(PackageAvailabilityKind.ContentBakeMissing, b.Kind));
-        Assert.Contains(Target, newVerdict.HoldReason);
-
-        // The module-only package is NOT among them — the preserved exemption, asserted on the
-        // same run that produces the hold, so "it holds" cannot be hiding "it holds everything".
+        Assert.Contains(Target, strict.HoldReason);
         Assert.DoesNotContain(ModuleOnlyPackage, blockers.Select(b => b.Package));
     }
 
@@ -245,6 +276,8 @@ public class ReleaseGateDenominatorTest : IDisposable
         Assert.True(verdict.IsUpdatable);
         Assert.Empty(verdict.Blockers);
         Assert.Null(verdict.HoldReason);
+        Assert.Empty(verdict.BootCompiles);
+        Assert.Empty(verdict.Advisories);
 
         // 🚨 The denominator was non-zero on the green arm too. A pass over an empty expected set
         // is exactly what this gate exists to prevent, so the green arm asserts WHAT WAS DEMANDED
@@ -260,7 +293,8 @@ public class ReleaseGateDenominatorTest : IDisposable
     /// <summary>
     /// A package that regressed to a PARTIAL bake — some courses sealed, some not — is named
     /// package by package. The maintainer's ask is "all packages of all plugins", so a source that
-    /// seals four of nine must not read as a sealed source.
+    /// seals four of nine must not read as a sealed source: the five are the boot-compile cost,
+    /// and under <c>Modules:RequirePrebuilt</c> the five are the blockers.
     /// </summary>
     [Fact]
     public void APartialEducationBake_NamesTheMissingCoursesOnly()
@@ -274,10 +308,19 @@ public class ReleaseGateDenominatorTest : IDisposable
         var verdict = ReleaseAvailability.IsUpdatable(
             observation.Target, Required(floor.Bundles), observation.Artifacts);
 
-        Assert.False(verdict.IsUpdatable);
+        Assert.True(verdict.IsUpdatable, verdict.HoldReason);
         Assert.Equal(
             EducationPackages.Skip(4).OrderBy(p => p, StringComparer.Ordinal),
-            verdict.Blockers.Select(b => b.Package).OrderBy(p => p, StringComparer.Ordinal));
+            verdict.BootCompiles.OrderBy(p => p, StringComparer.Ordinal));
+
+        var strict = ReleaseAvailability.IsUpdatable(
+            observation.Target, Required(floor.Bundles), observation.Artifacts,
+            new ReleaseGatePolicy(RequirePrebuilt: true));
+
+        Assert.False(strict.IsUpdatable);
+        Assert.Equal(
+            EducationPackages.Skip(4).OrderBy(p => p, StringComparer.Ordinal),
+            strict.Blockers.Select(b => b.Package).OrderBy(p => p, StringComparer.Ordinal));
     }
 
     // ── fixture ─────────────────────────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Module Versioning
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** Delivery is no longer keyed on SemVer alone: a rebuilt same-version bundle for this platform's identity is adopted, and a fallback generation re-examines every new build. The mechanism described below is what runs until [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) lands; this page is rewritten by that change.
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** Delivery is no longer keyed on SemVer alone: a rebuilt same-version bundle for this platform's identity is adopted, and a fallback generation re-examines every new build. Implemented in [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661) (2026-09-08); the sections below describe the mechanism as it runs now.
 
 **A package's version is not decoration. It is the ONLY thing that decides whether anything you
 built reaches a portal that already has an older copy.** Get it wrong and the pipeline stays green,

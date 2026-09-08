@@ -5,7 +5,7 @@ Description: The module lane end to end — MeshNodeProviderAttribute, the Modul
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
 ---
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A declared `minMeshVersion` no longer refuses, holds or skips a module anywhere on this page's lane — loadability is measured by the link probe, and an installation keeps its previous generation when a newer one does not load. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) and [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649) lands; this page is rewritten by that change.
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A declared `minMeshVersion` no longer refuses, holds or skips a module anywhere on this page's lane — loadability is measured by the link probe, and an installation keeps its previous generation when a newer one does not load. Implemented in [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661) (2026-09-08); the sections below describe the mechanism as it runs now.
 
 A **module** is a compiled MeshWeaver assembly a deployment turns on by LISTING it — no code
 change, no recompile of the platform. This page is the operator- and author-facing reference for
@@ -123,16 +123,19 @@ folder is deleted, and the change likewise takes effect at restart.
 
 **The skip rules** (persisted entries only — the deployment must always boot):
 
-- **Unsatisfied platform floor** — the running platform no longer satisfies the module's declared
-  `minMeshVersion` (a rollback below its requirement). The entry is SKIPPED with a loud log
-  naming both versions and stays in the sidecar, waiting for the platform to move forward again.
-  The gate is `ModulePlatformFloor.DeclineReason` — the ONE notion of the module platform
-  requirement, shared with landing and serving. Deliberately a **semver floor, never MVID
-  equality**: a module is a plain assembly binding by simple name, so a landed module keeps
-  loading across ordinary platform updates; MVID equality is bake semantics and belongs to the
-  NodeType assembly lane. The identity it was built with, recorded on the entry, is never a
-  LANDING gate — it answers the separate question of whether there is anything new to land
-  ("Already landed" means this content against this FRAMEWORK, below).
+- **Declared platform floor — ADVISORY, never a skip (#3648).** The entry's `minMeshVersion` is
+  compared with the running platform by `ModulePlatformFloor.DeclineReason` — still the ONE notion
+  of the declared requirement, shared with landing, serving and the pack-time lint — but since
+  #3648 a floor the running platform does not satisfy decides nothing at boot: the sentence
+  naming both versions is logged and carried onto the activation report and the module's status
+  row ("declares platform ≥ X; running Y"), and the entry is loaded like any other. Whether it
+  loads is MEASURED — the link probe below and the actual load. The comparison stays a **semver
+  floor, never MVID equality**: a module is a plain assembly binding by simple name, so a landed
+  module keeps loading across ordinary platform updates; MVID equality is bake semantics and
+  belongs to the NodeType lane. Why the floor stopped gating: it ranks a continuous build below a
+  release candidate, and on 2026-09-07 that held every production portal on its morning build
+  for a day while every candidate would have loaded (`Doc/Architecture/ModuleAdoptionPolicy`,
+  rule R2).
 - **Missing DLL** — the entry's `modules/<name>/<name>.dll` does not exist (lost volume, manual
   deletion). Skipped loudly; re-install to heal. The check is that path SPECIFICALLY — a
   same-named DLL in the app closure never satisfies a store-installed entry (the
@@ -143,6 +146,21 @@ The landing service itself gates twice more, at placement: the same floor check 
 never reach disk), and a refusal of any module whose entry DLL name collides with an app-closure
 assembly — `ResolveModulePath` probes `modules/<name>/` first, so such a module would silently
 shadow the platform's own binary at the next boot.
+
+**The fallback rule (MeshWeaver#3649).** A landed generation that does not load on the running
+platform — refused by the [link probe](../ModulePlatformLinkGate) before loading, or faulting in
+`Assembly.LoadFrom` — no longer leaves the module absent. Every landing records the entry it
+displaces as `PreviousDirectory` (with `PreviousVersion` / `PreviousFrameworkMvid`); boot hands
+`MeshBuilder.InstallModules` both generations and the loader runs the previous one when the head
+one cannot load here, registering a `FallbackModule` — present, running, one version behind — and
+saying so on stderr and, once the pipeline is up, as a Warning. The GC references the previous
+generation like the head one; the mesh-set adoption records the generation that actually loaded;
+the status row reads *"runs v1.2.3 (gen A); v1.3.0 (gen B) landed but does not load here: …"*, the
+readiness probe stays Healthy, and nothing says "restart required" (a restart falls back again).
+Only when no generation loads is the module incompatible, as before; an uninstall clears both
+pointers. This is rule R1 of the [Module Adoption Policy](../ModuleAdoptionPolicy): *an
+installation runs the newest generation of every module that loads, and keeps the one it has until
+a newer one does.*
 
 ### 🚨 "Keeps loading across ordinary platform updates" is a promise the PLATFORM owes (#2370)
 
@@ -615,14 +633,47 @@ transport end to end — there is deliberately no second distribution channel:
 
 ### Auto-update
 
-Store-installed modules **update themselves by default**. The boot reconcile
-(`RegistryUpdateReconciler`) runs a module pass after the content pass: for every installed
+Store-installed modules **update themselves by default**, and since #3650 they do so **eagerly** —
+rule R3 of the Module Adoption Policy (`Doc/Architecture/ModuleAdoptionPolicy`): *as soon as a new
+module version ships, we start using it.* The reconcile (`RegistryUpdateReconciler`) runs a module
+pass after the content pass — at boot, the moment the registry **broadcasts** that a module was
+published (for that one package), and every 30 minutes as a safety net
+([Plugin Update on Green Build](/Doc/Architecture/PluginUpdateOnGreenBuild)). For every installed
 module-declaring package it consults the registry's bundle index and applies the one pure decision
-(`ModuleUpdateDecision`) — a newer version whose **floor this platform satisfies** lands via
-`ModuleLandingService` and flags `PendingRestart`; the same served version **built against the same
-framework** is skipped without a download; a bundle whose floor **exceeds** the running platform is
-skipped silently-with-log (it becomes installable once the platform has updated, and the same
-reconcile lands it then). Nothing is ever rolled back unattended.
+(`ModuleUpdateDecision`): a newer version lands via `ModuleLandingService` and flags
+`PendingRestart`; the same served version **built against the same framework** is skipped without a
+download; a bundle's declared floor is an **advisory** worded into the log, never a skip (#3648) —
+whether the bytes load is measured by the link probe at placement. Nothing is ever rolled back
+unattended.
+
+**The restart happens, too.** A landed generation loads only at a restart, and that restart used to
+be whatever platform roll came next. The self-updater now reads the activation record after the
+platform half of every check that patched nothing and, when `PendingRestart` is raised, rolls the
+workloads **on the image they run** (`IDeploymentUpdater.RestartAsync`) — paced by
+`SelfUpdate:MinRollInterval` exactly like a roll, because a restart drops the same live circuits. A
+landing wave this process ends (`ModuleLandingService.ModuleSetProposed`) triggers the check
+directly, so the restart follows the landing by the coalesce window plus the floor, not by the next
+unrelated publication. An install that cannot restart itself reports `RestartUnavailable` on the
+Updates tab, naming the operator's move.
+
+**A fallback is re-examined.** When the newest landed generation could not be loaded and the previous
+one runs ([the keep-the-old fallback](/Doc/Architecture/ModuleSetConvergence), #3649), **the boot that
+falls back writes the marker the reconcile re-examines**: for every store entry the loader was handed,
+`ModuleLoadabilityRecorder` reads the `FallbackModule` / `IncompatibleModule` records back onto the
+generation the loader tried and writes that module's marker file — `activation.d/<Name>.unloadable`,
+the head's generation, its framework identity and the refusal — or deletes it when the head loaded. A
+create and a delete, never a read-modify-write of the entry a landing on another replica may be
+replacing (#2090). `ModuleActivationSidecar.Read` attaches the identity to the entry
+(`ModuleActivationEntry.UnloadableFrameworkMvid`, never stored in the entry file) only while the entry
+still heads the generation the marker measured, so a landing that moves the head on retires a stale
+marker without touching it. It is the boot's measurement rather than the module set's adoption record
+(`ModuleSetIndex.FallbackGenerations`) on purpose: that record is written once per set by the first
+replica to adopt it and survives a platform roll unchanged, so it can report a fallback the running
+image no longer takes; every boot rewrites the marker. The same-version branch of the decision then
+asks the one question such a deployment has: does the registry serve a *different* build of this
+version than the one that would not load? It **lands** when it does — a build for this platform
+appeared — and answers `SkipUnloadable` (never "already landed") when the registry still serves the
+build that was refused.
 
 #### "Already landed" means this content against this FRAMEWORK
 

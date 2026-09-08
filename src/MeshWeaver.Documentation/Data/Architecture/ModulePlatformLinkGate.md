@@ -1,13 +1,13 @@
 ---
 Name: The Module Platform Link Gate
 Category: Architecture
-Description: A module's platform requirement is not a version string an author writes — it is the set of types its bytes are linked against. This is the gate that measures that requirement against the platform actually running, refuses a module the process cannot load, and parks the generation instead of the portal.
+Description: A module's platform requirement is not a version string an author writes — it is the set of types its bytes are linked against. This is the gate that measures that requirement against the platform actually running, refuses a module the process cannot load, parks the generation instead of the portal — and, through the surface every bake publishes, holds a platform roll only when a landed module provably cannot load on the target.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12h6"/><path d="M12 9v6"/></svg>
 ---
 
 # The Module Platform Link Gate
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** The link probe becomes the ONLY platform gate on the module lane (the declared floor no longer gates first), and a refused generation no longer leaves the module absent: the previous loadable generation is loaded and named. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) and [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649) lands; this page is rewritten by that change.
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 **A module is adopted on what this process can LOAD, never on a version string.**
 
@@ -73,7 +73,7 @@ The verdict is a **three-state**, and the third state is the point:
 |---|---|---|
 | `Linkable` | every referenced type in every resolved platform assembly exists | load it |
 | `Unlinkable` | a referenced type is absent, or a whole referenced platform assembly is | refuse, naming the type |
-| `Indeterminate` | the check could not be MADE (unreadable bytes; a platform copy that would not parse) | refuse |
+| `Indeterminate` | the check could not be MADE (unreadable bytes; a platform copy that would not parse; no published surface) | at landing and at boot: refuse. At the **roll gate**: report — see *At the roll* below |
 
 `ModuleLinkVerdict.MayLoad` is true for `Linkable` **and nothing else**. It is written as an
 explicit predicate rather than left to each call site precisely so that nobody can spell the check
@@ -151,11 +151,120 @@ host to surface, and classified `RequiredModuleState.Incompatible` so a module d
 The blast radius is the point. One module that cannot link costs **that module's contribution and
 nothing else** — never every other module, never the portal, never every render on it.
 
+### The previous generation runs when the newest cannot (MeshWeaver#3649)
+
+Refusing a generation is not the same as losing the module. Until #3649 it was, for every module
+the image did not also ship: the refused generation was the activation entry's only pointer, the
+generation that had loaded last time was unreferenced, and the next GC pass reclaimed it. A shelved
+landing built for a newer platform therefore took a working Store-only module away for good. Rule
+R1 of the [Module Adoption Policy](../ModuleAdoptionPolicy) is the opposite: **an installation runs
+the newest generation of every module that loads, and keeps the one it has until a newer one does.**
+
+- **The landing keeps what it displaces.** `ModuleLandingService.LandCore` records the entry it
+  replaces as `ModuleActivationEntry.PreviousDirectory` (with `PreviousVersion` and
+  `PreviousFrameworkMvid`). When the displaced generation is itself measured unloadable here and
+  holds a fallback of its own, that fallback carries forward — two unloadable landings in a row
+  cannot push the loadable generation out of reach. Measured on the bytes, like every other
+  decision point; there is no persisted "held" flag to go stale.
+- **The loader falls back.** Boot hands `MeshBuilder.InstallModules` a `ModuleInstallCandidate`
+  per module: the newest generation, and a *lazy* resolver for the previous one (the portal pins
+  a generation to process-local storage before loading it, and pinning every previous generation
+  up front would double that copy for a path taken only when something is wrong). When the newest
+  is refused before loading or `Assembly.LoadFrom` throws, the previous generation goes through
+  the same probe and load; when it succeeds the module is installed from it and a `FallbackModule`
+  is registered — never an `IncompatibleModule` — with one
+  `[MeshWeaver.Mesh.FallbackModule] '<name>' runs its previous generation v1.2.3 (gen A) because
+  v1.3.0 (gen B) cannot load here: …` line on stderr, re-logged as a Warning once the pipeline is
+  up. Only when neither loads is the module incompatible, exactly as before. A generation whose
+  assembly *loaded* and whose registration then threw (#2234's shape) is never swapped: two
+  assemblies of one simple name cannot coexist in the default load context.
+- **The GC keeps it.** `CollectGarbage` references `PreviousDirectory` exactly like `Directory`,
+  and the running generations the adoption records (below).
+- **The set records what runs.** The wave still proposes the head generation; the adoption
+  (`ModuleSetStore.RecordAdoption` with `RunningGenerationsOf(set, fallbacks)`) records the
+  generation each module actually loaded, `ModuleSetIndex.RunningGenerations` /
+  `FallbackGenerations` read it back, and `ModuleSetStore.Describe` names the modules that run a
+  previous generation.
+- **Uninstall clears both** pointers and deletes both directories.
+
+The fallback is **present, not incompatible**: `Modules:Required` classifies it `Present`, the
+readiness probe stays Healthy, and the package card says which version runs. It is also **not
+pending**: a restart re-measures the same bytes and falls back again, so `PendingModuleActivations`
+subtracts a fallback whose refused generation is still the one the set activates — and counts it
+pending again the moment the set moves on to a generation other than the refused one, which a
+restart genuinely tries. What makes that restart happen is MeshWeaver#3650 (rule R3).
+
 🚨 **The surface is the application closure PLUS every directory the boot is loading from.** A
 store-landed module lives in its own generation directory and may legitimately reference another
 module landed beside it; measuring against `/app` alone would report that sibling as an absent
 platform assembly and quarantine a module that is perfectly fine. The runtime's own resolution
 surface is what has to be measured.
+
+### At the roll — the surface travels as a document
+
+**A platform roll is held only by a module that provably cannot load on the target, and by
+nothing declared** (MeshWeaver#3651; the maintainer's rule of 2026-09-07,
+[Module Adoption Policy](../ModuleAdoptionPolicy)). On that day every production portal sat on its
+morning build: the declared floors declined every candidate (lifted by MeshWeaver#3648), and the
+satellites' missing bakes for the new identity would have held it again the moment the floors were
+lifted — while a boot compile of those courses succeeds on every pull request, and every candidate
+would have loaded. So the roll gate asks the same question this page's probe asks at boot — *would
+these bytes load there?* — about a platform that is **not running anywhere the gate can reach**.
+
+The answer needs the target's type surface at gate time, and the one process that can write it is
+the bake, because the bake runs inside the target image. Every bake therefore writes
+**`platform-surface.json`** beside `framework-mvid.txt` (`BakeOutput.WritePlatformSurface`, from
+`ModulePlatformSurface.ToJson`), `publish-bake-bundles.sh` uploads it beside `_complete` for every
+identity, and `PublishedBundleCatalogue` reads it back (`ModulePlatformSurface.FromJson`). The shape
+is deliberately minimal — the identity the document is keyed to, and per assembly the full type
+names it exports, exactly the set `TypesOf` answers on a running process:
+
+```json
+{
+  "identity": "s5b8b0e2c…",
+  "assemblies": {
+    "MeshWeaver.Blazor": ["MeshWeaver.Blazor.BlazorView`2", "…"],
+    "MeshWeaver.Mesh.Contract": ["MeshWeaver.Mesh.MeshNode", "MeshWeaver.Mesh.ModulePlatformSurface", "…"],
+    "…": []
+  }
+}
+```
+
+An assembly whose surface the producer could not read is **omitted**, never written empty: an empty
+list reads as "this assembly has no types" and would report every reference to it as missing. A
+document that is not this shape is refused by the reader (`JsonException`) rather than read as an
+empty surface — an empty surface refuses every module that binds a `MeshWeaver.*` assembly, which
+would be a confidently wrong hold, not a missing measurement. `mw-plugin-test platform-surface
+[<app-dir> --shared-frameworks <dir>]` writes the same document by hand for a bake that predates it.
+
+At the gate (`ReleaseAvailability`, fed by `ModuleLinkObservation.Measure` — the one IO step, on the
+file-system pool), per installed package that ships a compiled module:
+
+| Situation | Answer |
+|---|---|
+| The target's sealed module set **declares** a build of the module | it will be adopted at the roll (MeshWeaver#3650); nothing to measure — its consistency is the sealed-set rule's business (MeshWeaver#3175) |
+| No such build, and **nothing landed** on this instance | nothing keeps running across the roll; nothing to hold on |
+| No such build, and a **landed generation** — the bytes that keep running | `ModulePlatformLink.Check(landed entry DLL, target surface)`: **`Unlinkable` ⇒ `ModuleUnloadable`, the hold**, naming the module and the missing types; `Linkable` ⇒ clear; `Indeterminate` ⇒ **reported** |
+
+🚨 **`Indeterminate` is REPORTED at the roll, not refused — and that is the opposite of what this
+page says for boot and landing, on purpose.** At boot and at landing the thing being refused is one
+module's *load*, and the fallback keeps the previous generation serving; the blast radius is one
+module. At the roll the thing that would be refused is the *whole platform's* update, for every
+module, on a publication that simply predates the surface — which is exactly the shape of the
+2026-09-07 hold, reintroduced with a better excuse. So a release with no `platform-surface.json`,
+a document that does not parse, or landed bytes that cannot be read is written onto the verdict's
+**advisories** ("Views: whether its landed module … loads on 3.0.0-ci.8100 could not be determined
+— no sealed source publishes platform-surface.json …"), logged, recorded on `Admin/UpdatePolicy`
+and shown on the Updates tab — and decides nothing. The safety net after such a roll is this page's
+boot-time probe (which DOES refuse), the keep-the-previous-generation fallback (MeshWeaver#3649),
+and the readiness stall.
+
+The same verdict carries the missing content bakes as a **cost**, not a hold
+(`UpdatabilityVerdict.BootCompiles`, "would recompile at boot on …: education, crm"): the compile
+is the code path every pull request of that content already proved green. `Modules:RequirePrebuilt`
+— the opt-in strict mode in which the seeder refuses a boot compile and parks the type — keeps it
+the hold it used to be everywhere. `RollSelection` therefore walks newest-first and stops at the
+first release with no unloadable module; "no complete release" names the module.
 
 ### How it composes with the generation pin
 
@@ -179,6 +288,7 @@ one of these states was previously mis-rendered as "restart required":
 | `Unresolvable` | activated, but its bytes are gone | re-install the package |
 | `Deferred` | landed, but in no proposed module set | the landing wave must complete |
 | **`Quarantined`** | **refused: its bytes need a platform this deployment is not running** | **a platform update — which is itself the restart that loads it** |
+| **`Fallbacks`** (MeshWeaver#3649) | **present and running its PREVIOUS generation; the newest one landed but does not load here** | **none — a build that loads here, or a platform update, takes over by itself** |
 
 A quarantined module must never be reported as pending. Its assembly genuinely is not loaded, so
 the pending derivation finds it — and a restart re-runs the same measurement on the same bytes and
@@ -209,9 +319,38 @@ missing type — and lands it through the real `ModuleLandingService`.
 | `AModuleReferencingASiblingModuleLandedMomentsEarlier_IsNotRefused` | the FALSE-refusal direction: a sibling module is not an absent platform assembly |
 | `AnUnloadableModule_IsParked_AndTheOthersStillInstall` | the blast radius: one module, not the portal |
 | `AParkedModule_ReadsAsQuarantined_NeverAsRestartRequired` | the false-promise rule |
+| `ARequiredModuleRunningItsPreviousGeneration_IsPresent_NeverIncompatible` | a fallback (MeshWeaver#3649) is `Present` — the probe stays Healthy |
+
+The fallback itself is proven end-to-end in
+`test/MeshWeaver.Compiler.Pipeline.Test/ConfiguredModuleActivationTest.cs` (the `#3649` section):
+a loadable generation is landed, a generation built for a newer platform is shelved over it, and a
+boot composed as the portal composes it runs the previous one and reports it; both generations
+unloadable stays incompatible; the GC keeps the fallback and reclaims it after an uninstall; the
+adoption records what loaded; the projection onto the mesh's set carries the pointer; the
+activation report names the row and never calls it "restart required".
+
+The roll gate's half (MeshWeaver#3651) is `ModulePlatformSurfaceJsonTest` and `ReleaseLinkGateTest`
+in the same project — real modules, a real published root on disk, the running process's own
+surface document with one type removed as "the older target":
+
+| Test | What it pins |
+|---|---|
+| `ToJson_ThenFromJson_CarriesTheIdentityAndEveryAssemblysTypes` | the document round-trips the identity and exactly the set `TypesOf` answers |
+| `ARealModule_LinksIdenticallyAgainstTheLiveSurfaceAndTheDocument` | the same module, the same verdict and the same denominator on both |
+| `ADocumentThatIsNotASurface_IsRefused_NeverReadAsAnEmptySurface` | fail closed on shape — an empty surface would refuse everything |
+| `AModuleUnlinkableAgainstTheTargetSurface_HoldsTheRoll_NamingTheModule` | THE hold: `ModuleUnloadable`, module and type named, never Indeterminate |
+| `ALandedModuleThatLinksAgainstTheTarget_Clears` | the gate is a gate, not a wall |
+| `AModuleWithABuildPublishedForTheTarget_IsNotHeldOnItsLandedGeneration` | the published build is what will be adopted; the landed one does not decide |
+| `AReleaseWithNoPublishedSurface_IsIndeterminate_ReportedNeitherClearanceNorHold` | the roll-time direction of the third state |
+| `AMissingContentBake_IsACostTheVerdictNames_AndAHoldOnlyUnderRequirePrebuilt` | both arms of the bake rule on one fixture |
+| `TheWalkStopsAtTheFirstReleaseWithNoUnloadableModule` | newest-first, past the unloadable one, naming it; the cost said on the outcome |
+| `WhenEveryCandidateCannotLoadTheModule_NothingIsSelected_AndTheModuleIsNamed` | "no complete release" stays put and names the module |
 
 ## Related
 
+- [Module Adoption Policy](../ModuleAdoptionPolicy) — the rule this gate is the only instrument of: run the newest thing that loads, keep what you have until then, never let a string decide.
+- [Release Availability Gates](../ReleaseGates) — the roll gate that consumes the published surface.
+- [Roll Selection](../RollSelection) — the walk that stops at the first release with no unloadable module.
 - [Module Versioning](../ModuleVersioning) — what the pack lane records, what the build derives.
 - [Module Build Architecture](../ModuleBuildArchitecture) — the one build shape, every repo.
 - [NodeType Compilation](../NodeTypeCompilation) — the *other* identity lane, where MVID equality

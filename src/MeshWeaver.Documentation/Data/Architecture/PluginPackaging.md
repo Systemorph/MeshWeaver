@@ -8,7 +8,7 @@ icon: /static/NodeTypeIcons/box.svg
 
 # Plugin Packaging
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** `minMeshVersion` stops being "THE landing gate": it is carried, shown and linted at pack time, and decides nothing at landing, serving or boot. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) lands; this page is rewritten by that change.
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** `minMeshVersion` stops being "THE landing gate": it is carried, shown and linted at pack time, and decides nothing at landing, serving or boot. Implemented in [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661) (2026-09-08); the sections below describe the mechanism as it runs now.
 
 C# stored in mesh nodes compiles **at runtime, in the portal** — see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation). This page is about compiling the same
@@ -197,19 +197,26 @@ both manifest-driven, and the module side is **all-or-nothing** (a NodeType with
 simply compiles; a module missing part of its closure loads and then faults at first use, so an
 incomplete closure yields no files at all).
 
-**The module gate is a `minMeshVersion` FLOOR, not the MVID.** The MVID-equality rule above is
-*bake* semantics: a NodeType assembly is compiled in-process against exact framework references,
-so only the identical build is known-good. A module is an ordinary assembly binding by **simple
-name**; its contract is API compatibility, which the semver floor expresses. So the consumer lands
-any bundle whose floor its platform satisfies — one bundle serves every compatible platform build
-(nothing is rebundled per CI build), and a module can be installed **ex post** onto a platform
-newer than the one it was built with.
+**The module gate is MEASURED — the link probe and the load — never the MVID and, since
+#3648, never the declared `minMeshVersion` either.** The MVID-equality rule above is *bake*
+semantics: a NodeType assembly is compiled in-process against exact framework references, so only
+the identical build is known-good. A module is an ordinary assembly binding by **simple name**; its
+real contract is the set of types its bytes are linked against, which `ModulePlatformLink.Check`
+reads from the metadata at landing and again at boot. So the consumer lands any bundle the probe
+can link — one bundle serves every platform build that carries what it binds (nothing is rebundled
+per CI build), and a module can be installed **ex post** onto a platform newer than the one it was
+built with. The `minMeshVersion` a bundle declares is an authoring claim: linted at pack time
+(`check-module-platform-floor.py`), shown as an advisory ("declares platform ≥ X; running Y") when
+the running platform does not satisfy it, and decisive nowhere at runtime
+([Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy), rule R2).
 
 🚨 The bundle's built-against `frameworkMvid` is **not** diagnostic and is **not optional** — it
 stopped being either when the update decision started reading it (#3154) and #3211 made a bundle
-that cannot state one unpublishable. It is still never a LANDING refusal: the one landing gate is
-`ModulePlatformFloor.DeclineReason`, applied at the index, at the manifest, at placement and again
-at boot. What it decides is whether there is anything new to land — see
+that cannot state one unpublishable. It is still never a LANDING refusal: the landing gate is the
+link probe (`ModulePlatformLink.Check`), applied to the bundle's bytes at placement and to the landed
+generation again at boot; `ModulePlatformFloor.DeclineReason` runs beside it at the index, the
+manifest, placement and boot as the advisory only. What the MVID decides is whether there is
+anything new to land — see
 [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) → "A bundle states what it was
 built against".
 

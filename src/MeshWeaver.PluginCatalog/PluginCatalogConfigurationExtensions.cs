@@ -187,6 +187,11 @@ public static class PluginCatalogConfigurationExtensions
                         .Select(m => m.Name)
                         .Where(n => !string.IsNullOrWhiteSpace(n))
                         .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+                    // 🚨 #3649 — the modules it loaded from their PREVIOUS generation because the
+                    // head one does not load here. Without this set they read as PENDING (the
+                    // generation the set activates is not the one loaded), and every surface
+                    // promises a restart that falls back again.
+                    FallbackModules = [.. sp.GetServices<FallbackModule>()],
                 })
                 // The COUNT that proves the distribution lane works (#1782 gap 4). Adoption's only
                 // evidence used to be a log line, and the most important miss — "the registry does

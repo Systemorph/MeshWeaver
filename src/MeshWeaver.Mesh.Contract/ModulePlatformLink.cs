@@ -3,6 +3,8 @@ using System.Collections.Immutable;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Text;
+using System.Text.Json;
 
 namespace MeshWeaver.Mesh;
 
@@ -25,7 +27,11 @@ public enum ModuleLinkState
     /// <summary>🚨 The third state, modelled on purpose: the check could not be MADE. Never folded
     /// into <see cref="Linkable"/> — "I could not determine whether this loads" and "this loads"
     /// are different facts, and a gate that reports the first as the second is a gate that cannot
-    /// fail. Every caller treats this exactly as <see cref="Unlinkable"/>.</summary>
+    /// fail. At landing and at boot every caller treats this exactly as <see cref="Unlinkable"/>
+    /// (the thing refused is one module's load, and the previous generation keeps serving). At the
+    /// platform ROLL gate (#3651) it is REPORTED and decides nothing — the thing that would be
+    /// refused there is the whole platform's update, on a publication that may simply predate the
+    /// surface document; the boot-time probe is the safety net.</summary>
     Indeterminate,
 }
 
@@ -105,11 +111,33 @@ public sealed record ModuleLinkVerdict(
 /// <para>🚨 An INSTANCE, never a static cache. The surface it describes is a property of THIS
 /// process's loaded assemblies and probe directories; a process-wide static would survive mesh
 /// disposal and bleed one test's fabricated platform into the next one's.</para>
+///
+/// <para><b>Three sources, one shape (#3651).</b> A surface is measured on a running process
+/// (<see cref="OfRunningProcess"/>), on a set of files (<see cref="OfFiles"/>), or READ BACK from
+/// the document a bake published about a platform that is not running here
+/// (<see cref="FromJson"/> / <see cref="ToJson"/>). The link check does not know which it was
+/// handed; that is what lets the release gate answer "would this module load on the target" with
+/// the same code the boot probe runs.</para>
 /// </summary>
 public sealed class ModulePlatformSurface
 {
+    /// <summary>
+    /// The file name a PUBLISHED surface travels under (#3651): the bake writes it beside
+    /// <c>framework-mvid.txt</c>, <c>publish-bake-bundles.sh</c> uploads it beside <c>_complete</c>
+    /// for every identity, and the release gate reads it back through <see cref="FromJson"/> to
+    /// link a landed module against a platform that is not running anywhere it can reach. One
+    /// name, three call sites, so the producer and both consumers cannot drift.
+    /// </summary>
+    public const string PublishedFileName = "platform-surface.json";
+
     private readonly ImmutableDictionary<string, string> _files;
     private readonly ImmutableDictionary<string, Assembly> _loaded;
+    // 🚨 The DECLARED surface (#3651): assembly → the full type names it exports, read from a
+    // platform-surface.json a bake wrote about a platform this process is NOT running. Authoritative
+    // for the names it carries — the producer read the same metadata OfRunningProcess reads — and
+    // silent about everything else, so a reference to an undeclared assembly is judged by the same
+    // carries/platform-prefix rules as against a live surface.
+    private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _declared;
     // Per-instance memo of what each platform assembly exports. ConcurrentDictionary because a
     // caller may check several modules in parallel; an instance field, so its lifetime is the
     // batch's.
@@ -117,11 +145,30 @@ public sealed class ModulePlatformSurface
         new(StringComparer.OrdinalIgnoreCase);
 
     private ModulePlatformSurface(
-        ImmutableDictionary<string, string> files, ImmutableDictionary<string, Assembly> loaded)
+        ImmutableDictionary<string, string> files,
+        ImmutableDictionary<string, Assembly> loaded,
+        ImmutableDictionary<string, ImmutableHashSet<string>>? declared = null,
+        string? identity = null)
     {
         _files = files;
         _loaded = loaded;
+        _declared = declared
+            ?? ImmutableDictionary<string, ImmutableHashSet<string>>.Empty
+                .WithComparers(StringComparer.OrdinalIgnoreCase);
+        Identity = identity;
     }
+
+    /// <summary>
+    /// The framework build identity this surface describes, when it was PUBLISHED with one
+    /// (<see cref="FromJson"/>); null for a surface read off a running process or a directory,
+    /// which knows its bytes but not the identity the platform resolves for them.
+    /// </summary>
+    public string? Identity { get; }
+
+    /// <summary>True when this surface was read back from a <see cref="PublishedFileName"/>
+    /// document rather than measured on a process or a directory — a reader's hint about
+    /// provenance; the verdicts are computed identically either way.</summary>
+    public bool IsDeclared => !_declared.IsEmpty;
 
     /// <summary>
     /// The surface of the RUNNING process: every loaded assembly (the copies a module actually
@@ -165,9 +212,138 @@ public sealed class ModulePlatformSurface
         return new ModulePlatformSurface(files.ToImmutable(), loaded.ToImmutable());
     }
 
+    /// <summary>
+    /// The surface of an explicit set of assembly FILES — the shape a bake has when it compiles
+    /// against a platform host that is a directory rather than this process (a portal image's
+    /// <c>/app</c> plus its shared frameworks, #3022). The first file of a simple name wins, so the
+    /// caller orders the paths by binding precedence exactly as it ordered its reference set.
+    /// </summary>
+    /// <param name="assemblyPaths">Managed assembly files, in precedence order. Paths that do not
+    /// exist are skipped.</param>
+    public static ModulePlatformSurface OfFiles(IEnumerable<string> assemblyPaths)
+    {
+        ArgumentNullException.ThrowIfNull(assemblyPaths);
+        var files = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in assemblyPaths)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                continue;
+            files.TryAdd(Path.GetFileNameWithoutExtension(path), path);
+        }
+        return new ModulePlatformSurface(
+            files.ToImmutable(), ImmutableDictionary<string, Assembly>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The surface, SERIALIZED (#3651)</b> — so a release gate can link a landed module
+    /// against a platform that is not running anywhere it can reach. A platform roll is held only by
+    /// a module that provably cannot load on the target, and "provably" needs the target's type
+    /// surface at gate time; the bake job runs inside the target image, so it is the one process
+    /// that can write this document, and it writes it beside <c>framework-mvid.txt</c>.
+    ///
+    /// <para>The shape is minimal and documented in <c>Doc/Architecture/ModulePlatformLinkGate</c>:</para>
+    /// <code>
+    /// { "identity": "s&lt;hash&gt;",
+    ///   "assemblies": { "MeshWeaver.Blazor": ["MeshWeaver.Blazor.BlazorView`2", …], … } }
+    /// </code>
+    /// <para>Every assembly this surface carries is listed with the SAME set <see cref="TypesOf"/>
+    /// answers — type definitions and exported/forwarded types, full names, nested as
+    /// <c>Outer+Inner</c> — so a check against the document reaches the verdict a check against the
+    /// live process would. An assembly whose surface cannot be read (no file, unreadable metadata)
+    /// is OMITTED rather than written empty: an empty list would read as "this assembly has no
+    /// types" and report every reference to it as missing.</para>
+    /// </summary>
+    /// <param name="identity">The framework build identity the described platform resolves, or
+    /// null when the writer does not know it.</param>
+    public string ToJson(string? identity = null)
+    {
+        var names = _declared.Keys.Concat(_loaded.Keys).Concat(_files.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.Ordinal);
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString(IdentityProperty, identity ?? Identity);
+            writer.WriteStartObject(AssembliesProperty);
+            foreach (var name in names)
+            {
+                var types = TypesOf(name);
+                if (types is null)
+                    continue;
+                writer.WriteStartArray(name);
+                foreach (var type in types.OrderBy(t => t, StringComparer.Ordinal))
+                    writer.WriteStringValue(type);
+                writer.WriteEndArray();
+            }
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    /// <summary>
+    /// Reads a surface written by <see cref="ToJson"/>. Strict about the shape — a document that
+    /// is not the documented one throws <see cref="JsonException"/> rather than yielding a surface
+    /// that carries nothing, because a surface that carries nothing refuses every module that
+    /// references a platform assembly (the platform-prefix rule) and that is a confidently wrong
+    /// verdict, not a missing one. The caller turns the exception into
+    /// <see cref="ModuleLinkState.Indeterminate"/>.
+    /// </summary>
+    /// <param name="json">The document.</param>
+    public static ModulePlatformSurface FromJson(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new JsonException($"{PublishedFileName}: the document is not an object");
+        if (!root.TryGetProperty(AssembliesProperty, out var assemblies)
+            || assemblies.ValueKind != JsonValueKind.Object)
+            throw new JsonException(
+                $"{PublishedFileName}: no '{AssembliesProperty}' object — the document does not "
+                + "describe a platform surface");
+        string? identity = null;
+        if (root.TryGetProperty(IdentityProperty, out var identityElement)
+            && identityElement.ValueKind == JsonValueKind.String)
+            identity = identityElement.GetString();
+
+        var declared = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var assembly in assemblies.EnumerateObject())
+        {
+            if (assembly.Value.ValueKind != JsonValueKind.Array)
+                throw new JsonException(
+                    $"{PublishedFileName}: '{assembly.Name}' is not an array of type names");
+            var types = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+            foreach (var type in assembly.Value.EnumerateArray())
+            {
+                if (type.ValueKind != JsonValueKind.String)
+                    throw new JsonException(
+                        $"{PublishedFileName}: '{assembly.Name}' lists a type name that is not a string");
+                types.Add(type.GetString()!);
+            }
+            declared[assembly.Name] = types.ToImmutable();
+        }
+        if (declared.Count == 0)
+            throw new JsonException(
+                $"{PublishedFileName}: '{AssembliesProperty}' is empty — a platform with no "
+                + "assemblies is not a surface anything could link against");
+
+        return new ModulePlatformSurface(
+            ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
+            ImmutableDictionary<string, Assembly>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
+            declared.ToImmutable(),
+            identity);
+    }
+
+    private const string IdentityProperty = "identity";
+    private const string AssembliesProperty = "assemblies";
+
     /// <summary>Whether this platform carries an assembly of that simple name at all.</summary>
     public bool Carries(string assemblyName) =>
-        _loaded.ContainsKey(assemblyName) || _files.ContainsKey(assemblyName);
+        _loaded.ContainsKey(assemblyName) || _files.ContainsKey(assemblyName)
+        || _declared.ContainsKey(assemblyName);
 
     /// <summary>
     /// The full type names <paramref name="assemblyName"/> exposes here — type definitions AND
@@ -180,6 +356,10 @@ public sealed class ModulePlatformSurface
 
     private ImmutableHashSet<string>? ReadTypes(string assemblyName)
     {
+        // A DECLARED surface is what its producer measured; nothing here can read past it.
+        if (_declared.TryGetValue(assemblyName, out var declared))
+            return declared;
+
         // Prefer the FILE of the loaded copy: it is the exact bytes bound, and metadata gives both
         // definitions and forwarders without loading a single type.
         var path = _loaded.TryGetValue(assemblyName, out var assembly)
@@ -225,8 +405,9 @@ public sealed class ModulePlatformSurface
     /// <summary>Whether a file-backed surface exists for <paramref name="assemblyName"/> — i.e.
     /// whether <see cref="TypesOf"/> is authoritative rather than the empty fallback.</summary>
     internal bool HasReadableFile(string assemblyName) =>
-        (_loaded.TryGetValue(assemblyName, out var assembly)
-         && !string.IsNullOrEmpty(assembly.Location) && File.Exists(assembly.Location))
+        _declared.ContainsKey(assemblyName)
+        || (_loaded.TryGetValue(assemblyName, out var assembly)
+            && !string.IsNullOrEmpty(assembly.Location) && File.Exists(assembly.Location))
         || _files.ContainsKey(assemblyName);
 
     private static string FullNameOf(MetadataReader metadata, TypeDefinition type)

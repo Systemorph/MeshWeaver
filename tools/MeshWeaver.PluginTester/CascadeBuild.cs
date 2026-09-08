@@ -328,14 +328,14 @@ public static class CascadeBuild
                     return (build, build.IsGreen);
                 },
                 options.MaxParallel)
-            .Select(results => Finish(options, wall, frameworkIdentity, snapshot, packages, results, entriesByPackage, workDirectory, DependenciesOf));
+            .Select(results => Finish(options, wall, frameworkIdentity, snapshot, packages, results, entriesByPackage, workDirectory, DependenciesOf, host.Surface));
     }
 
     private static Report Finish(
         Options options, Stopwatch wall, string frameworkIdentity, RepoSnapshot snapshot,
         IReadOnlyList<PackageManifest> packages, ImmutableArray<Cascade.NodeResult<PackageBuild>> results,
         Dictionary<string, List<BundleWriter.AssemblyEntry>> entriesByPackage, string workDirectory,
-        Func<string, IReadOnlyList<string>> DependenciesOf)
+        Func<string, IReadOnlyList<string>> DependenciesOf, Func<MeshWeaver.Mesh.ModulePlatformSurface> surface)
     {
         var bundles = ImmutableArray<string>.Empty;
         if (options.OutputDirectory is { } outDir)
@@ -348,7 +348,7 @@ public static class CascadeBuild
                     SourceSha = options.SourceSha,
                     Output = options.Output,
                 },
-                packages, snapshot, frameworkIdentity, entriesByPackage);
+                packages, snapshot, frameworkIdentity, entriesByPackage, surface);
         }
 
         try
