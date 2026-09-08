@@ -202,8 +202,18 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "continuous set: $CI_VERSION (core $SHORT, plugins ${PAIR#*-p})"
 
+      # 🚨 `--pointers` (#3670): a release PROMOTES an already-promoted continuous set, so phase C is
+      # long past and the whole pointer set must be there — `main` on all three repositories, the
+      # tester's `latest`, and the continuous `<version>` on all three. An ASYMMETRIC set (the tag on
+      # one half and not the other) is not releasable, and this is the last moment anything can say
+      # so. The version is the one resolved from the tags on this commit's own digest above, never a
+      # re-derivation. See Doc/Architecture/ImageTagContract.
       - name: "The set is complete"
-        run: .github/scripts/check-image-set.sh "${{ steps.rel.outputs.short }}" "${{ steps.set.outputs.plugins_short }}"
+        run: >
+          .github/scripts/check-image-set.sh
+          "${{ steps.rel.outputs.short }}"
+          "${{ steps.set.outputs.plugins_short }}"
+          --pointers "${{ steps.set.outputs.ci_version }}"
 
       - name: "The set is sealed — platform content and the Plugins modules"
         env:
