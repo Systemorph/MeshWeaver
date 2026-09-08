@@ -826,6 +826,40 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         check("the pointer is NOT stamped — it is written after the postcondition, by construction",
               s.stamp(POINTER) == {}, f"stamp={s.stamp(POINTER)!r}")
 
+    # 🚨 THE ORDER, OBSERVED RATHER THAN READ OFF THE CODE. The pointer moves once the generation is
+    # sealed and BEFORE the flat compatibility copy — deliberately, so that an overlap on the flat
+    # copy (which still races) costs that copy rather than a publication which is already whole and
+    # disjoint. Nothing in the finished state records the order, so this hooks the flat copy's first
+    # upload and asks whether the pointer is already there. Without it the ordering lived only in a
+    # comment, and a comment is what drifted: the announcement line described the opposite order for
+    # one review cycle.
+    print("\ngeneration layout — the pointer moves BEFORE the flat compatibility copy:")
+    h.reset()
+    witness = work / "pointer-at-flat-copy"
+    r = h.publish(core, "Systemorph/MeshWeaver", "3501", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/{BUNDLES[0]}",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-order",
+        "MOCK_AZ_HOOK_CMD":
+            f'if [ -f "{h.shelf_root}/{ACCOUNT}/{SHARE}/{DEST}/{POINTER}" ]; '
+            f'then echo present > "{witness}"; else echo absent > "{witness}"; fi',
+        **gen,
+    })
+    s = h.shelf()
+    check("the hook really did fire on the flat copy's first upload (not vacuous)",
+          witness.is_file(), f"witness={witness.read_text().strip() if witness.is_file() else '<none>'}")
+    if not expect_defect:
+        check("the pointer is already live when the flat compatibility copy starts being written",
+              witness.is_file() and witness.read_text().strip() == "present"
+              and r.returncode == 0 and s.pointer() == "Systemorph-MeshWeaver-3501-1",
+              f"rc={r.returncode}, at the flat copy's first upload {POINTER} was "
+              f"{witness.read_text().strip() if witness.is_file() else '<unobserved>'}")
+        check("…and the announcement says that order, so an incident log matches the code",
+              r.stdout.index(f"then {POINTER}") < r.stdout.index("then the flat compatibility copy")
+              if (f"then {POINTER}" in r.stdout and "then the flat compatibility copy" in r.stdout)
+              else False,
+              "the generation-layout line names the pointer before the flat copy")
+
     # ── THE HEADLINE: interleave two publishers and neither directory can hold the other's bytes.
     print("\ngeneration layout — two publishers interleaved on one prefix:")
     h.reset()

@@ -142,7 +142,8 @@ SENTINEL="_complete"
 #
 #   flat        the historical layout: <identity>/<source>/ IS the publication, replaced IN PLACE.
 #   generation  each publication gets its OWN directory <identity>/<source>/<publication token>/,
-#               and a one-line `_current` pointer — moved LAST — says which one applies.
+#               and a one-line `_current` pointer — moved as soon as that directory is SEALED, and
+#               before the flat compatibility copy — says which one applies.
 #
 # 🚨 IT DEFAULTS TO `flat` AND MUST STAY THAT WAY until every producer of a prefix can write
 # generations. A NEW writer and an OLD writer on one prefix is the half-migration to avoid: the new
@@ -360,7 +361,8 @@ fi
 # 🚨 THAT LAYOUT IS DESIGNED AND ITS READER HALF IS LANDED — do not re-derive it either:
 # Doc/Architecture/SealedPublicationGenerations. Each publication goes into its OWN directory named
 # by $PUBLICATION (already unique per run, already a legal bare name), and a one-line `_current`
-# pointer is moved LAST; disjoint directories mean two publishers cannot interleave at all, so a mix
+# pointer is moved once that directory is sealed and never before it; disjoint directories mean two
+# publishers cannot interleave at all, so a mix
 # stops being detectable and becomes unrepresentable. Every READER now resolves that pointer and
 # falls back to this flat layout when there is none (ShippedPrebuiltBundles.PublicationDirectoryOf),
 # so the reader side is already deployed and inert.
@@ -995,7 +997,7 @@ publish_publication() { # <account> <share> <dest> <live-was-sealed>
     return 0
   fi
   generation="$dest/$PUBLICATION"
-  echo "generation layout: $account/$share/$dest — publishing into $PUBLICATION/ (a path no other publisher writes), then the flat compatibility copy, then $POINTER."
+  echo "generation layout: $account/$share/$dest — publishing into $PUBLICATION/ (a path no other publisher writes), then $POINTER, then the flat compatibility copy (which is the part that still races)."
   publish_one_target "$account" "$share" "$generation" false
   # The flat copy's own sealed state, read fresh: `resealing` above describes the LIVE publication,
   # which under this layout may be a generation directory and says nothing about the flat copy.
