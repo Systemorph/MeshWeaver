@@ -25,11 +25,28 @@ config:
     # blanking the requirement is the sanctioned other half of what the health
     # check itself suggests.
     #
-    # Cost, stated plainly: no Radzen charts, Analysis, EntityViews, GoogleMaps or
-    # Speech on a self-registry install. The way out is not a local build lane
-    # but the other mode: `memex-local registry https://memex.meshweaver.cloud
-    # --key mwr_…` makes this install a consumer of the registry that HAS the
-    # bundles, and this file stops being applied.
+    # Cost, stated plainly: no Radzen charts, Analysis, GoogleMaps or Speech on a
+    # self-registry install. The way out is not a local build lane but the other
+    # mode: `memex-local registry https://memex.meshweaver.cloud --key mwr_…`
+    # makes this install a consumer of the registry that HAS the bundles, and
+    # this file stops being applied.
+    #
+    # 🚨 EntityViews is no longer on that list, and the correction matters because
+    # the old wording read as a loss of VISUALISATIONS. It was not: EntityViews is
+    # every input control in the product — text, number, date and choice fields
+    # plus the Editor/EditForm/Property skins — so this install could render a
+    # quiz and not let anyone answer it, show the Subscribe paywall with no usable
+    # coupon box, and open dialogs whose fields printed as text
+    # (MeshWeaver.Plugins#1483). The portal image now carries EntityViews and
+    # Graph as modules/ SEEDS and names them under Modules:Assemblies, so they
+    # arrive without a registry.
+    #
+    # Index 2 stays BLANK all the same. Un-blanking it would require the module of
+    # an image that may predate the seed, and a required module that cannot land
+    # fails required_modules, answers /health 503 and times the rollout out with
+    # the portal never serving — Memex#131, the very failure this file exists to
+    # avoid. `memex-local verify` is what reports the pack now, and it asserts the
+    # portal LOADED it rather than that a file exists.
     Modules__Required__0: ""
     Modules__Required__1: ""
     Modules__Required__2: ""
