@@ -134,9 +134,13 @@ and an empty candidate set stay silent — they are not failures.
 - **The export side.** `Push` reconstructs the commit tree from `HeadInfo.ExistingBlobs`, which is
   the *same* read. A truncated tree there would drop files from the repository rather than from the
   mesh. The flag now travels on `HeadInfo` so the guard can be added; it has not been.
-- **A partition whose orphans are already live.** The guards stop the class of defect from being
-  created; they do not retire nodes a previous route already wrote. A partition in that state needs
-  a forced re-import once its listing reads in full.
+- **~~A partition whose orphans are already live.~~** *(Closed 2026-09-08.)* The guards on this page
+  stop the class of defect being created; they cannot retire what is already there, because the run
+  that left the orphans stamped a green content-addressed marker and every later trigger answers
+  `Skipped` before the prune is reached. That is a second defect on the same path, and it is fixed
+  in [The Import Marker Records Convergence](/Doc/Architecture/ImportMarkerRecordsConvergence): the
+  marker now records whether its run CONVERGED, an absent verdict reads as UNKNOWN, and a partition
+  in this state retires its orphans on the one re-import that buys. No forced re-import is needed.
 - **The satellite-path question.** Whether `path:{p} scope:descendants` returns a partition's
   `Source/*` satellite rows on a Postgres backend is a separate strand, in a different repository's
   query layer. In the in-memory adapter `Source`/`Test` are *not* satellite paths, so a monolith test
@@ -148,3 +152,4 @@ and an empty candidate set stay silent — they are not failures.
 - [GitHub Sync](/Doc/Architecture/GitHubSync) — the route that fetches, parses and imports a repo
 - [Partition Sync Guide](/Doc/Architecture/PartitionSyncGuide) — the `PartitionSyncMode` the prune reads
 - [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess) — why a query never decides a single node's content
+- [The Import Marker Records Convergence](/Doc/Architecture/ImportMarkerRecordsConvergence) — the other half of #3589: why a refused prune must not licence the next skip
