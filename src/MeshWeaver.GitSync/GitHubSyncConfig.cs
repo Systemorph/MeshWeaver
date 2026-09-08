@@ -168,4 +168,13 @@ public record GitHubSyncConfig
     /// </summary>
     [Browsable(false)]
     public string? LastSyncOutcome { get; init; }
+
+    /// <summary>
+    /// WHY the last attempt did not move the source — the hold reason of the sealed-publication
+    /// gate ("built at X, not sealed for this instance …"), or the reconciler's finding — so an
+    /// operator reading the config sees the cause rather than only the outcome. Cleared by the
+    /// next attempt that lands. Set by the sync operation; not user-editable.
+    /// </summary>
+    [Browsable(false)]
+    public string? LastSyncNote { get; init; }
 }

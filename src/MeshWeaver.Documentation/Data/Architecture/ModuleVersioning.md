@@ -176,6 +176,70 @@ transitive in-repo `ProjectReference`s and therefore sees riders for free.
 > **If you are reading this while that derivation is still landing:** bump `content.version`'s MINOR
 > by hand for any `src/`-only change to a mixed package, and say in the PR that you did so and why.
 
+## 🚨 Version strictness — what a platform roll ADOPTS (`Modules:VersionStrictness`)
+
+> Maintainer directive, 2026-09-08: *"typically it should accept newer platform versions, especially
+> within the same family ⇒ we can have a setting for version strictness; but for dev we should be very
+> tolerant and only use min versions."* And earlier: *"for every new platform release we should be
+> able to just roll it and the old modules should work — then it is fully decoupled."*
+
+Until this setting, a portal adopted a prebuilt bundle only when it was sealed under the portal's
+**exact framework identity** (`<root>/<identity>/<source>/`). Every platform roll therefore adopted
+**nothing** until every satellite had re-sealed for the new identity, and on 2026-09-08 — with CD
+unable to produce a sealed set at all — that meant no roll. The identity gate is still the safest
+statement there is, and it is still the default for the **image's own bundles**; but a bundle's real
+requirement is the set of platform TYPES its bytes link against, and that is **measurable** from the
+assembly's own metadata (`ModulePlatformLink`, the module lane's gate — see
+[Module Platform Link Gate](../ModulePlatformLinkGate)). So adoption now has a strictness, decided
+by `PrebuiltAdoptionPolicy` and read once per sweep:
+
+| `Modules:VersionStrictness` | adopts a bundle sealed for another identity when… | default where |
+|---|---|---|
+| `Exact` | never — this identity's seal only (the rule before 2026-09-08) | — |
+| `Family` | its `_releases` marker places it on the **same major line** (3.x on 3.y), its declared floor (`minMeshVersion`) is satisfied, **and every assembly's platform type references resolve** against the running process | every deployment |
+| `Minimum` | its floor is satisfied and its links resolve — the platform line is not consulted | a `Development` host (the Monolith, the Aspire dev profiles) |
+
+What the policy does per bundle:
+
+1. **This identity's seal adopts as before** — no link check; the bytes were compiled against exactly
+   this platform.
+2. Otherwise the identity is placed on a line through the `_releases/<version>` markers
+   (`SealedPublicationIndex.ReleasesOf`). `Family` declines an identity no marker names — it cannot
+   establish the line and does not guess; `Minimum` does not need the line.
+3. A candidate the line and floor admit is **measured**: `ModulePlatformLink.Check` over each
+   assembly's type references against the running platform's surface. Linkable → adopted, stamped
+   with the **live** dependency ids (`PrebuiltAdoptionPolicy.LiveStampOf`, so the build-currency
+   clause does not immediately call it stale); unlinkable → **compiled from source** on a mesh that
+   may compile, or **refused loudly** — naming the type and the missing member — on a
+   `Modules:RequirePrebuilt` mesh.
+4. The sweep takes, for each source this identity has **not** sealed, the newest sealed publication
+   among the admitted identities (`ShippedPrebuiltBundles.FallbackPublishedBundlesOf`). A source this
+   identity HAS sealed is never shadowed.
+
+What the link check does **not** see, so nobody assumes it does: a member that moved on a type that
+still exists. That surfaces at activation (`MissingMethodException`), where the stale-build self-heal
+recompiles the type from source — the same fallback a declined bundle takes, one step later.
+
+**Development.** `Minimum` is what "very tolerant" means: yesterday's bakes load on an unreleased
+platform unless a type they need is genuinely gone. A developer who wants the production rule sets
+`Modules:VersionStrictness=Family` (or `Exact`) in the Monolith's configuration — a configured value
+always wins over the environment default.
+
+> 🚨 **What this setting does NOT decide: whether the replicas of one installation converge on one
+> sealed set.** [#3417](https://github.com/Systemorph/MeshWeaver/pull/3417) (fix for #3395) settled
+> the mechanism — two compiles in one process resolve one module set — and deliberately left the
+> POLICY open: whether a replica whose pinned set no longer matches should (a) restart itself,
+> (b) flip readiness so the rollout replaces it, or (c) decline to write NodeType compile records
+> while it is behind (#3417 → "Still open"; [Modules](../Modules) → "Replicas of ONE deployment can
+> run DIFFERENT module sets"). This setting inherits that gap unchanged: every replica reads the same shared storage under the same
+> rule, so two replicas of one image choose the same publication **unless a seal lands between their
+> boots** — the in-place-republish window [Sealed Publication Reads](../SealedPublicationReads)
+> describes, which `Family`/`Minimum` neither widen in kind nor close (they only admit more
+> candidate directories). A replica's adoption is written onto the SHARED NodeType record with that
+> replica's coordinates, exactly as a local compile is today. Whether replicas must converge — and
+> how — is the maintainer's decision, and it is stated here so that it is not settled as a side
+> effect of the strictness default.
+
 ## Full rebuild when the platform updates
 
 A module is built against a platform pin. **When the platform releases, the pin moves and EVERY

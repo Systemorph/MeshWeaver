@@ -283,6 +283,54 @@ public static class GitHubActivityExtensions
                 }, onActivityCreated));
     }
 
+    /// <summary>
+    /// <see cref="UpdateToProvenCommitFromGitHub"/> in RECONCILE mode
+    /// (<see cref="ImportConflictPolicy.Reconcile"/>): the import re-evaluates the partition against
+    /// the tree at <paramref name="commitSha"/> even when the content fingerprint matches a prior
+    /// import — for the sealed-publication reconciler, which has measured that the live sources
+    /// disagree with the bytes baked from this very commit. Conflict protection stays armed: a
+    /// person's edit since the last sync is preserved, an import's own leftovers are not.
+    /// </summary>
+    /// <param name="hub">The hub to run on.</param>
+    /// <param name="spacePath">The Space to reconcile.</param>
+    /// <param name="userId">The GitHub identity whose credential authenticates the pull.</param>
+    /// <param name="commitSha">The sealed commit. Required.</param>
+    /// <param name="onActivityCreated">Receives the activity path as soon as it exists.</param>
+    /// <param name="sourceId">The sync source (null = the primary).</param>
+    public static IObservable<string> ReconcileAtProvenCommitFromGitHub(
+        this IMessageHub hub, string spacePath, string userId, string commitSha,
+        Action<string>? onActivityCreated = null, string? sourceId = null)
+    {
+        if (string.IsNullOrWhiteSpace(commitSha))
+            return Observable.Throw<string>(new ArgumentException(
+                $"A reconciling GitHub import of '{spacePath}' must name the sealed commit; there is "
+                + "no branch-HEAD fallback (MeshWeaver.Plugins#1430).", nameof(commitSha)));
+
+        var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
+        var shortSha = Short(commitSha);
+        return TriggerAuthorizedAsSystem(hub, spacePath, "update", requiresCommitAuthority: false,
+            () => hub.RunActivity(spacePath, ActivityCategory.Import,
+                new LogMessage(
+                        $"Reconcile {spacePath} with the sealed commit {shortSha}", LogLevel.Information)
+                    .WithKey("activity.gitsync.reconcileAtProvenCommit.title",
+                        ("space", spacePath), ("sha", shortSha)),
+                ctx =>
+                {
+                    ctx.Log(new LogMessage(
+                            $"Fetching {shortSha} — the commit this instance's bundles were baked from — "
+                            + "and reconciling the partition against it…", LogLevel.Information)
+                        .WithKey("activity.gitsync.reconcileAtProvenCommit.fetching", ("sha", shortSha)));
+                    return sync.ReconcileAtCommit(spacePath, commitSha, userId, sourceId, ctx.Log)
+                        .Select(r =>
+                        {
+                            if (r.PrunedPaths.Count > 0)
+                                ctx.Log(PrunedLine(r));
+                            ctx.Log(ImportedLine(r, commitish: shortSha));
+                            return Unit.Default;
+                        });
+                }, onActivityCreated));
+    }
+
     /// <summary>The first 8 characters of a sha — what a human reads in a log line. Anything
     /// shorter than that (a branch name arriving where a sha was expected) is passed through whole,
     /// so the line never silently truncates a ref into an unrecognisable stub.</summary>

@@ -189,17 +189,43 @@ public static class ServiceDefaults
             // Healthy with an empty "live" set (MeshWeaver#2194). A readiness endpoint that could
             // not fail would be that same defect, rebuilt.
             .AddCheck("self", () => HealthCheckResult.Healthy(),
-                [ProbeEndpoints.LiveTag, ProbeEndpoints.ReadyTag]);
+                [ProbeEndpoints.LiveTag, ProbeEndpoints.ReadyTag])
+            // What this replica could not TYPE (2026-09-08): a node whose content type is not
+            // loaded here renders empty, and until now /health said only "Degraded". No probe
+            // tag — Degraded on purpose, never a reason to pull the pod — so it reads on
+            // ProbeEndpoints.Health alone, with the node types named in the detail.
+            .AddCheck<ContentTypeHealthCheck>(ContentDegradationRegistry.HealthCheckName);
 
         return builder;
+    }
+
+    /// <summary>
+    /// The <c>/health</c> body: the aggregate status on the first line — exactly what it was,
+    /// so nothing that reads the first word changes — then one line per check that is not
+    /// Healthy, naming it and its description. Before this the endpoint answered the bare word
+    /// <c>Degraded</c>, and finding WHICH check meant reading pod logs.
+    /// </summary>
+    internal static Task WriteHealthWithDetail(HttpContext context, HealthReport report)
+    {
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        var lines = new List<string> { report.Status.ToString() };
+        foreach (var (name, entry) in report.Entries)
+        {
+            if (entry.Status == HealthStatus.Healthy)
+                continue;
+            lines.Add($"{name}: {entry.Status}" + (string.IsNullOrEmpty(entry.Description) ? "" : $" — {entry.Description}"));
+        }
+        return context.Response.WriteAsync(string.Join('\n', lines));
     }
 
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
         app.UseRequestTimeouts();
 
-        // All health checks must pass for app to be considered ready
-        app.MapHealthChecks(ProbeEndpoints.Health);
+        // All health checks must pass for app to be considered ready. The body names every check
+        // that is not Healthy (WriteHealthWithDetail) — the status word stays on line one.
+        app.MapHealthChecks(ProbeEndpoints.Health,
+            new HealthCheckOptions { ResponseWriter = WriteHealthWithDetail });
 
         // Only health checks tagged with "live" must pass for app to be considered alive
         app.MapHealthChecks(ProbeEndpoints.Live,
