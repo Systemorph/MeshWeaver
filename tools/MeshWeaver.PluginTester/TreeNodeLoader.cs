@@ -15,7 +15,7 @@ namespace MeshWeaver.PluginTester;
 /// import: the same files the installer would write, materialised in a list.
 ///
 /// <para><b>The path rule is not re-implemented.</b> Which files are nodes, and what path each one
-/// takes, comes from <see cref="PackageInstaller.NodePathForFile"/> — the installer's own public
+/// takes, comes from <see cref="PackageInstaller.NodePathForFile(string, FileFormatParserRegistry)"/> — the installer's own public
 /// mapping (<c>NodeFileMapper.FromRelativePath</c> plus the README / <c>manifest.lock</c> /
 /// <c>content/**</c> exclusions). A private copy of that rule here is exactly how a build-process
 /// bake would start resolving sources under paths the runtime never uses, and the failure would be
@@ -95,8 +95,12 @@ public static class TreeNodeLoader
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(packages);
 
-        // No serializer options: the JSON parser is replaced by the explicit typed reader below.
-        var parsers = new FileFormatParserRegistry();
+        // 🚨 JSON options ARE supplied (#3659), although MaterialiseJson below still does the
+        // typed read: since the file→node rule asks whether any parser claims the extension, a
+        // registry with no JSON parser would answer "not a node" for every `.json` in the tree and
+        // this loader would discover nothing at all. The JSON parser is registered so the rule can
+        // be asked; it is never the one that reads the file.
+        var parsers = new FileFormatParserRegistry(new JsonSerializerOptions(JsonSerializerDefaults.Web));
         var result = ImmutableArray.CreateBuilder<TreeNode>();
 
         foreach (var package in packages.OrderBy(p => p.Id, StringComparer.Ordinal))
@@ -109,7 +113,7 @@ public static class TreeNodeLoader
                 // The installer's own rule: null = this file is not a node (README, manifest.lock,
                 // content/** asset). NodeRepo packages keep the FULL repo-relative path — the
                 // package folder IS the partition — so no rebasing happens here either.
-                if (PackageInstaller.NodePathForFile(file.Path) is not { Length: > 0 } nodePath)
+                if (PackageInstaller.NodePathForFile(file.Path, parsers) is not { Length: > 0 } nodePath)
                     continue;
 
                 var node = Materialise(parsers, file, nodePath, out var reason);

@@ -632,6 +632,13 @@ jobs:
           set -uo pipefail
           # 🚨 The second argument is what lets a plugins-only host change be SEEN. Without it a
           # complete-for-core's-sha set answers "complete" and the reconciler does nothing (#2622).
+          #
+          # 🚨 NO `--pointers` HERE, and this asymmetry with `verify-images` is deliberate (#3670).
+          # This probe runs BEFORE `promote`: this run's `<version>` does not exist yet by
+          # construction, so a version assertion would answer "incomplete" on every tick forever and
+          # the reconciler would publish forever. A completeness probe must never fail on a pointer a
+          # later phase legitimately has not written. `verify-images` runs after phase C and is where
+          # the pointer set is asserted. See Doc/Architecture/ImageTagContract.
           if .github/scripts/check-image-set.sh "${{ steps.target.outputs.short_sha }}" "${{ steps.plugins.outputs.plugins_short }}"; then
             echo "complete=true" >> "$GITHUB_OUTPUT"
           else
@@ -2497,7 +2504,22 @@ jobs:
         # 🚨 The SAME plugins sha `gate` resolved — read from its output, never re-resolved. A
         # plugins merge landing during this ~20 min run must not make this assert a tag the
         # publish could not have written (#2622).
-        run: .github/scripts/check-image-set.sh "${{ needs.gate.outputs.short_sha }}" "${{ needs.gate.outputs.plugins_short }}"
+        #
+        # 🚨 `--pointers` is passed HERE and only here in this workflow (#3670). This job
+        # `needs: promote`, so phase C — the portal's `<version>`, the arming write — is behind us
+        # and the promoted pointer set is whole: `main` on all three repositories, the tester's
+        # `latest`, and `<version>` on all three. `gate`'s reconcile probe calls the SAME script and
+        # must NOT pass it: that probe runs BEFORE promote, this run's version does not exist yet,
+        # and a completeness probe that fails on a pointer a later phase has not written would make
+        # the reconciler publish forever. The version is the portal leg's `$(Version)` — the same
+        # value phase C tagged, and equal to the other legs' by construction (one run number, one
+        # root props). If that leg died the value is empty and the script says so, RED, after it has
+        # named the missing images: no `if:`, no fallback, no skip.
+        run: >
+          .github/scripts/check-image-set.sh
+          "${{ needs.gate.outputs.short_sha }}"
+          "${{ needs.gate.outputs.plugins_short }}"
+          --pointers "${{ needs.portal-image.outputs.version }}"
       # A heal that WORKED has to say so on the same issue that recorded the attempt, or the
       # ledger only ever grows and nobody can tell a fixed hole from an open one.
       # 🚨 HEALING IS AN OUTCOME, NOT A PATH. This used to require
