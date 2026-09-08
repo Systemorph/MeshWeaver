@@ -1048,13 +1048,90 @@ the satellite already has for its gates.
    half-hourly poll can cancel a main run part-way through `tag-modules`, work the scheduled
    replacement does not do and nothing else recovers. Release polling supersedes release polling;
    it never supersedes a push.
-3. **A `FOLLOW_RELEASE` bake-target resolution** in `preflight`: on a release trigger resolve the
-   digest `MW_TEST_IMAGE` currently points at and pass THAT down; on a push keep the pin (that bake
-   certifies the bits the gates just ran). It must **fail loud** when the digest cannot be resolved
-   — a silent fall back to the pin republishes an already-published identity and leaves the instance
-   held, reporting success.
+3. **A `FOLLOW_RELEASE` bake-target resolution** in `preflight` that resolves **BOTH images of one
+   wave** — the tester AND the portal — and passes both down; on a push keep both pins (that bake
+   certifies the bits the gates just ran). It must **fail loud** when either digest cannot be
+   resolved — a silent fall back to a pin republishes an already-published identity and leaves the
+   instance held, reporting success.
+
+   🚨 **BOTH, from ONE tag. Resolving only the tester is the defect this list used to prescribe**
+   (this page said "resolve the digest `MW_TEST_IMAGE` currently points at" and stopped there, which
+   predates the portal becoming a second required image in MeshWeaver#3022). A caller that moves the
+   tester on a release trigger and leaves `platform-image-digest:` a literal composes **two CD
+   waves**, and the lanes refuse it by name:
+
+   ```
+   framework-identity: MISMATCH — the bake published under 's4e84d301…'
+   but '/portal' resolves 's556a0d43…'.
+   ::error::the tester image and the platform image do NOT resolve one framework identity
+   ```
+
+   Measured 2026-09-08: MeshWeaver.Manufacturing's poll failed this way in its `test-repos` gate
+   (Manufacturing#67) and MeshWeaver.Crm's in its `publish-bake` (Crm#66) — two repositories, one
+   recipe, both of them faithful to what this page used to say. MeshWeaver.Reinsurance#179 is the
+   landed shape.
+
 4. **`schedule` in the `publish-bake` job's `if:`** — parts 1–3 do nothing if the bake itself is
    still gated to pushes and dispatches.
+
+#### What a wake is entitled to resolve — the set is named by the wake, never by a floating tag
+
+| trigger | how it learns the identity | tester | portal |
+|---|---|---|---|
+| `push` / `pull_request` | the repo's PIN | `MW_IMAGE_DIGEST` | `MW_PORTAL_IMAGE_DIGEST` |
+| `meshweaver-framework-released` | `client_payload.version` | `<tester>:$version` | `<portal>:$version` |
+| `meshweaver-upstream-published` | the upstream's payload | `client_payload.image` | `client_payload.platform_image` |
+| `schedule` (the poll) | it resolves a moving tag itself | `<tester>:main` | `<portal>:main` |
+
+🚨 **`:main`, never `:latest`, for the poll.** `promote` phase B applies `main` to *every* repository
+of the set but `latest` to `mw-plugin-test` **only** — the portal repository deliberately carries no
+`latest`, so deriving the portal's tag from `vars.MW_TEST_IMAGE`'s `:latest` yields
+`'memex-portal-ai:latest' returned no digest` and reddens every release wake (Reinsurance run
+34179478079, 2026-09-08). `mw-plugin-test:main` and `:latest` are the same object, so the poll sees
+exactly what it saw before; what changes is that the portal is now resolvable at the same tag.
+
+🚨 **`node-repo-publish-bake.yml` already resolves branch for branch and `node-repo-gate.yml` does
+not.** The bake lane reads `client_payload` itself, so a dispatch wake composes one wave there even
+when the caller hands it a mixed pair — which is why Crm's `meshweaver-upstream-published` wakes are
+green while its poll is red. The gate lane reads no payload at all and takes the caller's two inputs
+verbatim. **So the caller is the only place where both lanes can be made to agree, and it must
+resolve both halves itself on every release trigger.**
+
+#### A missing upstream publication is a WAIT — and it still fails RED
+
+`upstream 'plugins' has no SEALED publication … for identity <id>` is a fact about the **upstream**,
+not about the repository whose run is red. Both lanes refuse it — `node-repo-gate.yml`'s seed and
+`node-repo-publish-bake.yml`'s `check-release-availability.sh` gate — and both refuse on **every**
+trigger. There is no exit-zero arm, no `continue-on-error:` and no `if:` asking about an input: a
+gate that cannot fail is not a gate. What the event changes is what is *said*, never whether the
+gate runs.
+
+| the run was | it learned the identity from | an unsealed upstream means |
+|---|---|---|
+| `push` / `pull_request` | the repo's PIN | **the PIN is wrong** — move it to an identity the upstream has published for |
+| `repository_dispatch` | the wake's own payload | the wave is mid-flight — a WAIT |
+| `schedule` | a moving tag the run resolved itself | nobody promised the upstream published for it — a WAIT |
+
+**What re-enables a waiting run** is the upstream's own `publish-bake`: on sealing, it POSTs the
+publication to the control instance, which dispatches `meshweaver-upstream-published` to every
+repository declaring that source. The wake carries **both** images of the upstream's wave, so the
+rebuild lands on the identity the dependency is actually sealed for. Measured 2026-09-08 on
+MeshWeaver.Crm — a `meshweaver-framework-released` run failed the availability gate at 15:36Z and
+the `meshweaver-upstream-published` wake for the same set succeeded at 16:01Z.
+
+🚨 **The poll does NOT retry the identity it failed on**, and this lane's message used to claim it
+did. A poll re-resolves a *moving* tag, so the next run asks about whatever has been promoted since
+— a different identity. Waiting for tomorrow's poll to clear today's is waiting for something that
+never happens. The dispatch above is the only thing that re-asks the question, and if no wake ever
+arrives then the upstream is not publishing for released identities at all — **that is the
+upstream's red**, visible on its own `publish-bake` and its own poll, and nothing in the dependent
+repairs it.
+
+🚨 **Do NOT "fix" this by having the poll walk back to the newest identity that HAS a complete
+publication.** It reads like a narrowing and it is a fallback: an upstream that stops publishing
+would leave every dependent's poll green forever, which is the same trapdoor as falling back to the
+pin — *"a silent fall back to the pin republishes an already-published identity and leaves the
+instance held, reporting success"*, one bullet up. The condition is reported once, at its source.
 
 Use `docker manifest inspect -v … | jq '… .Descriptor.digest'`. **Not**
 `imagetools inspect --format '{{.Manifest.Digest}}'`: that template reads a member an OCI manifest
