@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: 'Deploy MeshWeaver — the two routes (shared AKS cluster, and Azure Container Apps via the Aspire test/prod modes) and the traps that make a deploy look done when it is not. Use when rolling a code change onto a portal, standing up or patching an environment, or verifying that what is running is what you built. Covers the AKS build-image / set-image / restart sequence on a PRIVATE cluster (kubectl only through az aks command invoke), why an env deploy.sh is first-time setup and not a code-update path, why the database migration is a run-once Job that a helm upgrade runs — never a Deployment to roll — and the DbVersionGate that makes a portal refuse to serve ahead of its schema.'
+description: 'Deploy MeshWeaver — the two routes (shared AKS cluster, and Azure Container Apps via the Aspire test/prod modes) and the traps that make a deploy look done when it is not. Use when rolling a code change onto a portal, standing up or patching an environment, or verifying that what is running is what you built. FIRST RULE (maintainer, 2026-09-08): on AKS an operation is a Hosting/InstanceAction on the control instance (Roll, Restart, Suspend, Audit, Reconcile, …) executed by the in-cluster operator — az aks command invoke / kubectl are break-glass, never the procedure. Also covers the bootstrap build-image / set-image / restart sequence the operator runs for you, why an env deploy.sh is first-time setup and not a code-update path, why the database migration is a run-once Job that a helm upgrade runs — never a Deployment to roll — and the DbVersionGate that makes a portal refuse to serve ahead of its schema.'
 user-invocable: true
 allowed-tools:
   - Read
@@ -10,6 +10,17 @@ allowed-tools:
 ---
 
 # /deploy — pick the route by TARGET, then verify what is actually running
+
+🚨 **The cluster is not the surface — the control instance is** (maintainer, 2026-09-08: *"all the
+operations through the memex api"*, *"no direct access of aks"*). On AKS, an instance is a
+`Deployments/<name>` record on memex.meshweaver.cloud and every operation is a
+`Hosting/InstanceAction` node — `Roll` (the record's image pin, or an explicit `imageTag`, then WAIT
+for the rollout), `Restart`, `Suspend`/`Reactivate`, `Audit`, `Reconcile`, `HelmRelease` — run by
+the in-cluster operator and reported on the same node. Every `az aks command invoke` / `kubectl`
+line below is what the operator runs FOR you, kept here as the bootstrap form and as break-glass;
+a break-glass write is half an operation (the Hosting manual's "Break glass" section lists the
+other half). Policy page, with what the API does NOT answer yet:
+[OperatingFromThePortal.md](../../../src/MeshWeaver.Documentation/Data/Architecture/OperatingFromThePortal.md).
 
 **Two deploy routes, different targets — neither deprecated. Don't mix them.**
 
@@ -59,8 +70,9 @@ swedencentral) — namespace `memex` — against the Postgres Flexible Server, i
 `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`** — and only when
 the API above cannot answer.
 
-**On AKS a code update = build image → set image → restart** (the AKS route does NOT use
-`tools/deploy.sh` or `aspire deploy` — those are the Container Apps route):
+**On AKS a code update = the record's image pin + a `Roll` action.** What the operator then runs is
+build image → set image → restart (the AKS route does NOT use `tools/deploy.sh` or `aspire deploy`
+— those are the Container Apps route). The commands, for the bootstrap / break-glass case only:
 
 ```bash
 az acr login -n meshweaver
@@ -146,9 +158,10 @@ wiring itself — a full restart costs 30–60 s and loses the dashboard auth to
 
 - [ ] Route chosen by target (AKS vs Container Apps) — no `tools/deploy.sh`/`aspire deploy` against
       AKS.
-- [ ] The operation went through the memex API (`Hosting/InstanceAction`: Reconcile/Roll, Sample,
-      Logs, Audit) — `az`/`kubectl` only for break-glass, and said so.
-- [ ] `kubectl` reached only through `az aks command invoke`.
+- [ ] The operation was filed as a `Hosting/InstanceAction` on the control instance (Reconcile/Roll,
+      Sample, Logs, Audit); any `kubectl` you ran yourself is written up as break-glass, with its
+      other half reconciled.
+- [ ] Where `kubectl` was unavoidable, it was reached only through `az aks command invoke`.
 - [ ] No `deploy.sh` re-run for a code update.
 - [ ] The migration Job's log shows `Database migration completed. Version: N`.
 - [ ] The RUNNING image tag was read back off the deployment — not inferred from a green CI tick.

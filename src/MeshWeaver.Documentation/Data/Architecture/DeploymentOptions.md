@@ -100,7 +100,7 @@ Anything in `.cs` (e.g. the Claude Code PTY fix, the static-catalog behaviour) o
    - **Continuous (default):** merge to `main` → `main-cd.yml` builds and pushes `3.0.0-ci.<n>` to **ACR** (`meshweaver.azurecr.io`). This is what the portals self-update onto. It also runs on an hourly reconcile schedule and `workflow_dispatch`.
    - **Official release:** push an annotated `v*.*.*` tag on a promoted, sealed commit → `release.yml` retags that set with the clean version in ACR and mirrors it to **GHCR**. Nothing is rebuilt ([Release Process](/Doc/Architecture/ReleaseProcess)).
    - **Manual (break-glass):** `dotnet publish -t:PublishContainer` straight to ACR — see [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) §1. 🚨 Only usable with the self-updater paused, because a non-SemVer tag is not a self-update candidate and the poller will roll the Deployment back off it.
-2. **Roll the cluster to it.** Because the API server is private, run server-side via `az aks command invoke`:
+2. **Roll the cluster to it** — as a `Roll` (image) or `HelmRelease deploy` / `Reconcile` (config) `Hosting/InstanceAction` on the control instance ([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)). The commands below are what the operator runs; typed by hand they are break-glass, server-side via `az aks command invoke` because the API server is private:
 
 ```bash
 # config/manifest changes (works against the CURRENT image). The SecretProviderClass is

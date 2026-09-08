@@ -118,6 +118,10 @@ dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.D
 kubectl -n memex set image deployment/memex-portal-deployment memex-portal=<registry>.azurecr.io/memex-portal-ai:<tag>
 ```
 
+> The `set image` line is what a `Roll` `Hosting/InstanceAction` runs for you on the control
+> instance; typing it yourself is break-glass
+> ([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)).
+
 > **`-r linux-x64` was removed deliberately.** Pinning one RID builds a single-arch image; the other
 > architecture then gets an `ImagePullBackOff`. Dropping `-r` and setting `ContainerRuntimeIdentifiers`
 > makes the SDK publish per-RID and assemble an OCI image index. `-p:PublishProfile=` is required to

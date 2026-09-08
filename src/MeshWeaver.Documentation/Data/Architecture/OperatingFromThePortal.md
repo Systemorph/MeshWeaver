@@ -1,0 +1,104 @@
+---
+Name: Operating from the portal, not the cluster
+Category: Architecture
+Description: The operating policy for every deployment — operations and diagnostics go through the Hosting surfaces of the control instance; az aks command invoke, kubectl, Loki-by-curl and a hand helm-release dispatch are break-glass. What exists today, what does not yet, and how each cluster recipe in this doc tree is to be read.
+Icon: Cloud
+---
+
+# Operating from the portal, not the cluster
+
+**Maintainer directive, 2026-09-08:** *"do all the operations through the memex api"* · *"no direct
+access of aks etc"* · *"build the api in a way that you don't need any az access"*.
+
+An instance is a **record** (`Deployments/<name>`, a `Hosting/Deployment` node on the control
+instance `memex.meshweaver.cloud`, GitSynced to the private `Systemorph/Memex` repo), and every
+change to it is an **action node** (`Hosting/InstanceAction`) that the control instance's operator
+executes **in-cluster** under its own service account. The operator's credential lives in the
+cluster; the person or agent who asks holds none. That is the whole design: an operator who never
+had `az`, `kubectl` or a Loki endpoint can still roll, restart, suspend, audit and reconcile an
+instance — and can read what it is running.
+
+The rest of this doc tree still carries `az aks command invoke …` / `kubectl …` recipes. **They are
+evidence, not procedure**: each one is either a measurement that was taken through the cluster
+before the API surface existed (kept because the war story is the reason the rule exists), or a
+break-glass read for the case where the control plane itself cannot act. Read them that way.
+
+## What exists today (measured on the control instance, 2026-09-08)
+
+The `Hosting` package (MeshWeaver.Plugins, `Hosting/**`; its own manual is the in-mesh page
+`Hosting/Guide`, source
+[Hosting/Guide.md](https://github.com/Systemorph/MeshWeaver.Plugins/blob/main/Hosting/Guide.md))
+gives you:
+
+| Surface | What it answers / does |
+|---|---|
+| **`/Hosting/Console`** — the Fleet Console | every instance at a glance: recorded state, the version it is RUNNING, sampled health with the sample's age, per-instance log links. It reports; it does not command. |
+| **`Deployments/<name>`** (`Hosting/Deployment`) | the record — host, namespace, cluster, database, image repository, key-vault classes, env precedence, operator settings. The record's image pin **is** the roll. |
+| **`Hosting/InstanceAction`** kinds | `Provision`, `Teardown`, `Backup`, `Restore`, `Suspend`, `Reactivate`, `HelmRelease` (`helmAction: capture\|adopt\|deploy` — dispatches the config repo's `helm-release.yml` and follows it), `Roll` (set image to `imageTag`, else the record's pin, then WAIT for the rollout), `Restart` (rolling restart, then WAIT), `InstallAddOn`, `Audit`, `RotateRegistryKey`, `Reconcile` (converge a drifted instance back onto its record — the reconcile loop). Each run carries phases, a log, the invoker's identity and the name-the-instance confirmation. |
+| **`Hosting/DeploymentStatus`**, **`Hosting/LogEntry`**, **`Hosting/Issue`** (types) | the designed observation surfaces — one status sample per deployment (ready/desired replicas, restarts, health, RUNNING image, last activity), structured log records pulled from the logging backend, filed issues. |
+| **`Sample`** and **`Logs`** (`Hosting/InstanceAction` kinds — Systemorph/MeshWeaver.Plugins#1521, the delivery of the paragraphs below) | READ-ONLY, no operator job, no confirmation: `Sample` writes `Ops/Status/<id>` with `replicas[]` — per pod the image, ready, restarts, started, phase, terminating, generation, and what the pod's OWN `/health` says (verdict, detail, `version`, `frameworkIdentity`, `pluginCount`) — plus `generations`, `converged` and `warnings[]` (unknown is never zero); `Logs` + `query`/`sinceMinutes`/`limit`/`pod` lands a Loki window as `Hosting/LogEntry` nodes under `Ops/Logs` with the exact LogQL, the count and whether it was CUT on the run. Both read Prometheus and Loki from the control instance's own pod, where they are credential-free. |
+
+An action is one node:
+
+```json
+{ "id": "roll-memex", "namespace": "Ops/Actions", "name": "Roll memex",
+  "nodeType": "Hosting/InstanceAction",
+  "content": { "$type": "InstanceActionContent",
+    "deployment": "memex", "requestedAction": "Roll", "imageTag": "3.0.0-ci.8079",
+    "confirmation": "memex", "reason": "…", "dryRun": true } }
+```
+
+Start with `dryRun: true` — it renders the exact commands and changes nothing. Then watch the same
+node: `state` goes `Requested → Running → Done`, or `Failed` naming the phase, or `Refused` with
+the question you did not answer. Through MCP that is `create` / `get`; through the portal it is the
+node's own page.
+
+## What did NOT exist on 2026-09-08 — and what delivers it
+
+Measured 2026-09-08 10:40Z on the control instance: the `DeploymentStatus`, `LogEntry` and
+`Issue` **types existed and had ZERO instances**, `Ops` itself did not exist, and the maintainer's
+own identity was refused `Create` on `Ops/Actions/…`. Nothing sampled status in-cluster, nothing
+answered a log query, and no replica reported what it could load. **The delivery is
+Systemorph/MeshWeaver.Plugins#1521** (Hosting module) — read this table as "before / after it
+lands on the control instance":
+
+| Question | Before (break-glass read) | After #1521 (one node, no credential) |
+|---|---|---|
+| *What image / how many restarts / how old is each replica — and is an old process still a cluster member?* | `az aks command invoke … kubectl -n <ns> get pods -o wide` | `{ "requestedAction": "Sample" }` → `Ops/Status/<id>`: `replicas[]` with image, ready, restarts, started, phase, `terminating`, `generation`; `generations` and `converged` on the node. A roll (`Roll`/`Restart`/`Reconcile`/`Reactivate`) now ends with **Verify one generation** and refuses Done while a previous-generation pod is still a member — the 8059-after-8079 measurement. |
+| *What did the process log at time T?* | `az aks command invoke … curl loki.monitoring.svc.cluster.local:3100/loki/api/v1/query_range …` — the invoke shell has `curl` but **no `sed`/`python3`** | `{ "requestedAction": "Logs", "query": "…", "sinceMinutes": 60, "limit": 300 }` → `logQl`, `entryCount`, `truncated` on the run; lines under `Ops/Logs`, the Deployment page's Logs area. Zero entries WITH a `logQl` is an answer. |
+| *Can THIS replica load NodeType X?* | `kubectl exec … ls /tmp/MeshWeaver/.mesh-cache/<Type>*` on EACH replica — a live compile is pod-local (`local` = `FileSystemAssemblyStore`), see [NodeTypeCompilation](/Doc/Architecture/NodeTypeCompilation) | the `Sample` keeps each pod's whole `/health` body beside its verdict, so the answer appears there the moment the portal's health detail states it (the core half, in flight beside #1521); until then a Ready process that reports **0 plugins** already degrades the sample, which is the shape that outage wore. |
+| *Who may create the first action?* | nobody — `Ops` did not exist and no grant path existed | the Hosting module provisions `Ops` and mirrors every `Admin` on `Admin/_Access` as `Admin` on `Ops/_Access` at start (`OperationalSpaceProvisioning`, on the always-activated `Hosting/PlatformBuilds` hub). |
+
+Until #1521 is on the control instance, the "before" column is what you have; see
+[MeasuringALivePortalReadOnly](/Doc/Architecture/MeasuringALivePortalReadOnly) for the safe,
+read-only shapes. A break-glass read is fine; a break-glass **write** is half an operation. The
+Hosting manual's "Break glass — when the control plane cannot act" section says exactly which
+half the cluster command leaves undone (paywall, backup question, the record's stamp, the audit)
+and how to reconcile it in the same session. Do not re-derive that list here — read it there.
+
+## How to read a cluster recipe in this doc tree
+
+1. **Is there an action kind for it?** `set image` + rollout → `Roll`; `rollout restart` →
+   `Restart`; `scale --replicas=0` → `Suspend`; `helm upgrade` → `HelmRelease deploy` (today) /
+   the record pin + `Roll`; "make the cluster match the record" → `Reconcile`; "what is drifting?"
+   → `Audit`. Use the action. The kubectl line is what the operator runs for you.
+2. **Is it a read the API does not answer yet?** (the three above) Take it read-only, name it as
+   break-glass in what you write down, and file the gap against the Hosting package rather than
+   leaving the recipe as the procedure.
+3. **Is it a measurement in a war story?** Leave it — it is the reason the rule on the page exists.
+   Do not run it to "check"; ask the API question the page's rule now points at.
+
+## Related rules decided the same day
+
+- **A platform roll must not need every satellite re-baked first:** `Modules:VersionStrictness`
+  (`Exact` / `Family` / `Minimum`, dev = `Minimum`) and "a sealed publication syncs its own sources"
+  — [ModuleVersioning](/Doc/Architecture/ModuleVersioning),
+  [SealedPublicationReads](/Doc/Architecture/SealedPublicationReads).
+- **Self-update takes clean releases by default;** a `-ci.<n>` build is opted into by a version
+  pattern on `Admin/UpdatePolicy` — [ReleaseProcess](/Doc/Architecture/ReleaseProcess). The version
+  scheme is `X.Y.Z-ci.<n>` (temporary) → clean `X.Y.Z` (final); `rc` is retired.
+- **A cancelled delivery run with zero jobs is a superseded queue entry**, not a lost seal —
+  [ReadingCiSignals](/Doc/Architecture/ReadingCiSignals).
+- **Steady state is self-update and CD**, never a hand roll —
+  [ReleaseStrategy](/Doc/Architecture/ReleaseStrategy), [DeploymentAKS](/Doc/Architecture/DeploymentAKS)
+  (the bootstrap runbook, now read under rule 1 above).

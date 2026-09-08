@@ -293,21 +293,35 @@ die("unmodelled file action %r" % action)
 class Bake:
     """One producer's bake directory — every byte in it names the bake that made it."""
 
-    def __init__(self, root: Path, name: str, source_sha: str, surface: bool = True):
+    def __init__(self, root: Path, name: str, source_sha: str, surface: bool = True,
+                 surface_shared: bool = False, extra_bundles: tuple[str, ...] = ()):
         self.name = name
         self.source_sha = source_sha
+        self.bundles = list(BUNDLES) + list(extra_bundles)
         self.dir = root / f"bake-{name}"
         (self.dir / "modules").mkdir(parents=True, exist_ok=True)
         (self.dir / "framework-mvid.txt").write_text(IDENTITY + "\n")
-        for b in BUNDLES:
+        for b in self.bundles:
             (self.dir / b).write_text(f"{b} produced by bake {name} at {source_sha}\n")
         for m in MODULES:
             (self.dir / "modules" / m).write_text(f"{m} produced by bake {name} at {source_sha}\n")
         if surface:
-            # The real document is JSON; the harness reads bytes, not shape, so the fixture line
-            # names its producer like every other file — a mix is then a fact about the shelf.
-            (self.dir / SURFACE).write_text(
-                f"{SURFACE} produced by bake {name} at {source_sha}\n")
+            if surface_shared:
+                # 🚨 THE REAL DOCUMENT IS A PROPERTY OF THE PLATFORM IMAGE, NOT OF THE BAKE RUN, so
+                # two bakes taken with one image write it byte-identically — measured on the
+                # 2026-09-08 incident, where source-commit.txt, repository.txt, architecture.txt,
+                # modules/_index AND platform-surface.json were all byte-identical between the two
+                # racing publications and only the compiled zips differed. A fixture that made it
+                # differ per bake could never reproduce a convergence, and the case below would
+                # pass having tested the wrong thing. It carries no "produced by bake" phrase, so
+                # the shelf reader counts it as a marker rather than as a second bake's bytes.
+                (self.dir / SURFACE).write_text(
+                    f"{SURFACE} for the platform image behind {IDENTITY}\n")
+            else:
+                # The harness reads bytes, not shape, so the fixture line names its producer like
+                # every other file — a mix is then a fact about the shelf.
+                (self.dir / SURFACE).write_text(
+                    f"{SURFACE} produced by bake {name} at {source_sha}\n")
 
 
 class Shelf:
@@ -319,6 +333,11 @@ class Shelf:
 
     def sealed(self) -> bool:
         return (self.dest / SENTINEL).is_file()
+
+    def stamp(self, rel: str) -> dict:
+        """The metadata the publisher wrote on one file — `digest` and `publication`."""
+        mp = self.root / ".meta" / ACCOUNT / SHARE / DEST / (rel + ".json")
+        return json.loads(mp.read_text()) if mp.is_file() else {}
 
     def files(self) -> dict[str, str]:
         """path-under-dest → content, for every published file (the sentinel excluded)."""
@@ -641,6 +660,106 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         check("the superseded publisher goes RED rather than claiming it published",
               r.returncode != 0 and "entirely superseded" in r.stdout,
               f"rc={r.returncode}")
+        check("…and says the shelf describes DIFFERENT content, so it did not converge",
+              "describes DIFFERENT content" in r.stdout,
+              "a different source sha is what separates this from the convergence case below")
+
+    # ── CONVERGENCE: superseded by a publication of THE SAME CONTENT. #3461, 2026-09-08 ───────
+    #
+    # The shape that actually bit, and the one the postcondition used to call a failure. Core CD
+    # runs 34205409381 and 34206854855 both published `plugins` at source cfac152ef… for identity
+    # s057b1e77…; each won one of the two storage targets and each went RED on the other, with the
+    # same verdict — "40 of 45 file(s) were overwritten … the remaining 5 are byte-identical".
+    # The 40 are bundle zips and module packages (the compile is not reproducible byte-for-byte);
+    # the 5 are the markers, the module index and the platform surface, byte-identical BECAUSE it
+    # is the same content. Both targets ended sealed with exactly the right bytes, and both CD runs
+    # failed — a false red that produced no sealed set and blocked the platform pin behind it.
+    #
+    # The publication key the sealed-skip uses is CONTENT × FRAMEWORK, so a sibling that published
+    # this content and sealed it has made the publication this run was asked for. Reporting that is
+    # the same statement the skip makes a minute earlier; refusing was the two ends of one script
+    # disagreeing.
+    print("\nconvergence — a sibling publishes THE SAME CONTENT and seals it while we are in flight:")
+    same_sha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    mine = Bake(work, "run-a", same_sha, surface_shared=True)
+    sibling = Bake(work, "run-b", same_sha, surface_shared=True)
+    h.reset()
+    inner = h.publish_command(sibling, "Systemorph/MeshWeaver", "1902")
+    r = h.publish(mine, "Systemorph/MeshWeaver", "1901", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "after",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-converged",
+        "MOCK_AZ_HOOK_CMD": inner,
+    })
+    s = h.shelf()
+    theirs_only = set(s.bakes_present()) - {"<marker>"} == {"run-b"}
+    check("the fixture really did leave the sibling's publication whole (not vacuous)",
+          theirs_only and len(s.files()) == EXPECTED_FILES and s.sealed(), denominator(s))
+    check("…and this run really did publish first, so it had bytes to lose (not vacuous)",
+          f"publication Systemorph-MeshWeaver-1901-1: {EXPECTED_FILES} file(s)" in r.stdout
+          and f"→ {TARGET}: {DEST}" in r.stdout,
+          "it uploaded a full publication before the sibling overwrote it")
+    if expect_defect:
+        check("PRE-FIX: the superseded run seals its own sentinel over their bytes",
+              s.sealed() and r.returncode == 0, f"rc={r.returncode}, {denominator(s)}")
+    else:
+        check("a run superseded by an equivalent publication SUCCEEDS",
+              r.returncode == 0 and "Superseded by an equivalent publication" in r.stdout,
+              f"rc={r.returncode}")
+        check("…naming the publication that made it",
+              "Systemorph-MeshWeaver-1902-1" in r.stdout)
+        check("…and counting it apart from a seal this run did not write",
+              "targets-published=0 targets-converged=1" in r.stdout,
+              "the summary never claims a publication it did not make")
+        check("the sibling's seal is left exactly as it is",
+              s.stamp(SENTINEL).get("publication") == "Systemorph-MeshWeaver-1902-1",
+              f"_complete is stamped {s.stamp(SENTINEL).get('publication')!r}")
+        check("nothing of this run's is on the shelf under their seal",
+              theirs_only, denominator(s))
+
+    # The SAME fixture, one variable apart: the sibling never seals. Convergence is a positive
+    # proof that the publication EXISTS, so an unsealed directory must stay RED — a run reporting
+    # a publication that is not there is the silent-nothing outcome, whoever would have made it.
+    print("\n…but an unsealed sibling is not a publication:")
+    h.reset()
+    counter = work / "counter-unsealed"
+    inner = h.publish_command(sibling, "Systemorph/MeshWeaver", "1912",
+                              {"MOCK_AZ_UPLOAD_COUNTER": counter,
+                               "MOCK_AZ_FAIL_UPLOADS_AFTER": EXPECTED_FILES})
+    r = h.publish(mine, "Systemorph/MeshWeaver", "1911", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "after",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-unsealed",
+        "MOCK_AZ_HOOK_CMD": inner,
+    })
+    s = h.shelf()
+    check("the fixture really did overwrite everything without sealing (not vacuous)",
+          set(s.bakes_present()) - {"<marker>"} == {"run-b"} and not s.sealed(), denominator(s))
+    if not expect_defect:
+        check("an unsealed sibling does NOT converge — the run stays red",
+              r.returncode != 0 and "entirely superseded" in r.stdout
+              and "has not sealed" in r.stdout, f"rc={r.returncode}")
+
+    # And one variable the other way: the sibling seals the same CONTENT but a different bundle
+    # SET. `source-commit.txt` cannot see that, so the sealed listing's digest is what does — the
+    # reason the check reads `_complete` rather than trusting the content marker alone.
+    print("\n…and an equivalent-looking sibling with a DIFFERENT bundle set is refused:")
+    h.reset()
+    bigger = Bake(work, "run-c", same_sha, surface_shared=True, extra_bundles=("Extra.zip",))
+    inner = h.publish_command(bigger, "Systemorph/MeshWeaver", "1922")
+    r = h.publish(mine, "Systemorph/MeshWeaver", "1921", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "after",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-widerset",
+        "MOCK_AZ_HOOK_CMD": inner,
+    })
+    s = h.shelf()
+    check("the fixture really did seal a WIDER set (not vacuous)",
+          s.sealed() and len(s.files()) == EXPECTED_FILES + 1, denominator(s))
+    if not expect_defect:
+        check("a sibling sealing a different bundle set does NOT converge",
+              r.returncode != 0 and "entirely superseded" in r.stdout
+              and "lists a different bundle set" in r.stdout, f"rc={r.returncode}")
 
     # ── FAIL CLOSED: a file that cannot be read back is refused, not assumed unchanged. ────────
     print("\nfail-closed (an unreadable answer is not a permissive one):")

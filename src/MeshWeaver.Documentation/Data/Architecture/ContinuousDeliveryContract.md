@@ -451,7 +451,8 @@ But the rule underneath is unchanged and applies to every "did it deploy?" quest
 # 2. What is actually in the registry, newest first?
 az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
 
-# 3. What is the cluster actually running?
+# 3. What is the cluster actually running? (the Fleet Console /Hosting/Console answers this per
+#    instance; the cluster read is break-glass — /Doc/Architecture/OperatingFromThePortal)
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
 ```
