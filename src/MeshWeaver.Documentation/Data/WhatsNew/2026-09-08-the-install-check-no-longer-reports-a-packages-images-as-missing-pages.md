@@ -32,7 +32,7 @@ why, and how many distinct pages were compared:
 
 ```text
 Chess → 'Chess': every declared node is present.
-Counted over: 37 file(s) declared, 3 of them not node files
+Counted over: 36 file(s) declared, 2 of them not node files
 (README/manifest/content assets, or an extension no parser claims) → 34 distinct node path(s) compared.
 ```
 

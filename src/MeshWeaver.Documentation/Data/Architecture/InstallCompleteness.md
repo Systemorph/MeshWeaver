@@ -117,9 +117,11 @@ without a word. Until #3659 the declared side asked only the first question whil
 `ParseCanonical` asked both, so the two disagreed about the very population this page compares:
 
 ```text
-Chess ships 37 files.  manifest.lock and content/og-card.png excluded  →  35 "declared nodes"
-                       Chess/gui/rn/chess.tsx  →  no parser claims .tsx  →  never written
+Chess ships 37 files; gen-manifests leaves manifest.lock out of the map  →  36 declared files
+   content/og-card.png excluded (a content asset)                        →  35 "declared nodes"
+   Chess/gui/rn/chess.tsx  →  no parser claims .tsx  →  no install ever writes it
 sweep, every pod, every boot:  Chess → 1 of 35 declared node(s) are ABSENT: [Chess/gui/rn/chess]
+                    after the fix:  36 file(s) declared, 2 not node files → 34 compared, Complete
 ```
 
 Measured over `MeshWeaver.Plugins`' package folders on 2026-09-08: 617 `.cs`, 275 `.json` and 248
