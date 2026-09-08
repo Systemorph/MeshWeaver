@@ -558,4 +558,5 @@ measurement above raised.
 ## Related
 
 [The Platform Image's Closure](../PlatformImageClosure) · [Plugin Registry](../PluginRegistry) ·
+[Plugin Bundles in the Registry](../PluginBundlesInTheRegistry) ·
 [Module Build Architecture](../ModuleBuildArchitecture) · [Deployment](../Deployment)
