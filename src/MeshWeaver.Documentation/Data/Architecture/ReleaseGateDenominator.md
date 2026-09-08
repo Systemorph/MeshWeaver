@@ -8,7 +8,7 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # The Release Gate's Denominator
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A package that stops shipping content no longer holds a release forever: a missing bake is advisory ("would compile at boot"). The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 > Maintainer, 2026-09-06: *"let's see that the deploy rolls only when **all** packages of all
 > plugins are baked"* — *"we kept rolling without edu being properly baked."*
@@ -19,7 +19,7 @@ content was not baked, and it did so while reporting a clean pass. This page is 
 rule is now.
 
 > 🚨 **What the denominator DECIDES changed in MeshWeaver#3651; what it SEES did not.** Since the
-> maintainer's rule of 2026-09-07 (the Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`)) a course with
+> maintainer's rule of 2026-09-07 ([Module Adoption Policy](../ModuleAdoptionPolicy)) a course with
 > no bake for the target is a **cost the verdict names** — *"would recompile at boot on …:
 > AgenticPrimer, …"* (`UpdatabilityVerdict.BootCompiles`) — and the roll proceeds; the compile is
 > the code path every pull request of that content already proved green, and holding on it is what
@@ -234,5 +234,5 @@ Naming the blind spot is worth more than overclaiming the coverage.
 - [Reading CI Signals](../ReadingCiSignals) — the same vacuity trap on the CI side
 - [Roll Selection](../RollSelection) — the same vacuity trap one level up, where an empty
   denominator would make every release complete and turn the selector back into "take the newest"
-- The Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`, MeshWeaver#3652) — why a missing bake is a cost and not a hold
+- [Module Adoption Policy](../ModuleAdoptionPolicy) — why a missing bake is a cost and not a hold
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — the publication this gate reads

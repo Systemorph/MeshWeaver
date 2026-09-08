@@ -7,7 +7,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Roll Selection
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** "The latest platform version shipping all plugins" is re-read as "the newest release on which no installed module is UNLOADABLE": a missing bake is a boot compile (reported), a floor is advisory, and only a measured link failure against the target holds. The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 > **"Whenever a new platform / plugin is published, check for each environment which is the latest
 > platform version shipping all plugins, if different from current version ⇒ update."**
@@ -65,7 +65,7 @@ legitimately choose different targets, and one may correctly stay where it is.
 
 ### 🚨 What declines a candidate — since MeshWeaver#3651, a module that cannot load there
 
-The maintainer's rule of 2026-09-07 (the Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`)) changed what
+The maintainer's rule of 2026-09-07 ([Module Adoption Policy](../ModuleAdoptionPolicy)) changed what
 "ships all plugins" means. It used to mean *every content-bearing package has a sealed bake under
 the target's identity* — and on that day it would have kept every portal on the morning build a
 second day, because the satellites had not baked for the new identity yet, although their courses

@@ -8,7 +8,7 @@ icon: /static/NodeTypeIcons/box.svg
 
 # CI Content Bake
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** "An instance must roll to the newest release that is actually baked" becomes "the newest release on which everything loads": a missing satellite bake is a boot compile, reported, not a hold. The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 Every `.cs` stored in a mesh node compiles **at runtime in the portal** (see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation)), and until issue #1660 that was also

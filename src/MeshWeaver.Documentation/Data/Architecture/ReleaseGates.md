@@ -8,7 +8,7 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # Release Availability Gates
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** The module floor is no longer a release gate, as a regression check or otherwise; a missing content bake is reported as a boot compile, not held; the only module-lane hold is measured loadability on the target. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 A release is not safe to act on just because its version is newer. Two questions have the same
 answer, and until they were asked, both were answered by hand:
@@ -55,7 +55,7 @@ check, one set of bytes. See [Plugin Registry](../PluginRegistry).
 
 ## 🚨 What holds a roll: a module that provably cannot load there — and nothing declared
 
-> **Maintainer, 2026-09-07** (the Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`), implemented by
+> **Maintainer, 2026-09-07** ([Module Adoption Policy](../ModuleAdoptionPolicy), implemented by
 > MeshWeaver#3648 and MeshWeaver#3651): *if no plugin version is shipped, we use the old one. We
 > make it load despite a newer dependency on the platform or on another module. As soon as a new
 > module version ships, we start using it.*
@@ -620,6 +620,6 @@ pinned by SHA, so nothing changes for a repo until it bumps.
 - [CI Content Bake](../CiContentBake) — where the sealed bundles and the framework identity come from
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — the publication this gate reads
 - [Release & Self-Update Strategy](../ReleaseStrategy) — the poll, the policy node, the roll
-- The Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`, MeshWeaver#3652) — the rule: run the newest thing that loads, keep what you have until then, never let a string decide
+- [Module Adoption Policy](../ModuleAdoptionPolicy) — the rule: run the newest thing that loads, keep what you have until then, never let a string decide
 - [The Module Platform Link Gate](../ModulePlatformLinkGate) — the measurement, and the surface document that lets the roll gate make it
 - [Modules](../Modules) — the `MinMeshVersion` floor (advisory since MeshWeaver#3648) and why modules are not MVID-gated

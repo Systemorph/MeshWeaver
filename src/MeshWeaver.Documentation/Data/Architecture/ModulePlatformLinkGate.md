@@ -7,7 +7,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Module Platform Link Gate
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** The link probe becomes the ONLY platform gate on the module lane (the declared floor no longer gates first), and a refused generation no longer leaves the module absent: the previous loadable generation is loaded and named. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) and [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649) lands; this page is rewritten by that change.
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 **A module is adopted on what this process can LOAD, never on a version string.**
 
@@ -204,7 +204,7 @@ surface is what has to be measured.
 
 **A platform roll is held only by a module that provably cannot load on the target, and by
 nothing declared** (MeshWeaver#3651; the maintainer's rule of 2026-09-07,
-the Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`)). On that day every production portal sat on its
+[Module Adoption Policy](../ModuleAdoptionPolicy)). On that day every production portal sat on its
 morning build: the declared floors declined every candidate (lifted by MeshWeaver#3648), and the
 satellites' missing bakes for the new identity would have held it again the moment the floors were
 lifted — while a boot compile of those courses succeeds on every pull request, and every candidate
@@ -348,7 +348,7 @@ surface document with one type removed as "the older target":
 
 ## Related
 
-- The Module Adoption Policy page (`Doc/Architecture/ModuleAdoptionPolicy`, MeshWeaver#3652) — the rule this gate is the only instrument of: run the newest thing that loads, keep what you have until then, never let a string decide.
+- [Module Adoption Policy](../ModuleAdoptionPolicy) — the rule this gate is the only instrument of: run the newest thing that loads, keep what you have until then, never let a string decide.
 - [Release Availability Gates](../ReleaseGates) — the roll gate that consumes the published surface.
 - [Roll Selection](../RollSelection) — the walk that stops at the first release with no unloadable module.
 - [Module Versioning](../ModuleVersioning) — what the pack lane records, what the build derives.
