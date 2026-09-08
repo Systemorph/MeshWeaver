@@ -250,6 +250,41 @@ on:
         required: false
         type: string
         default: 'plugin-gate.allow'
+      publication-layout:
+        description: >-
+          Where a publication is written under
+          `<base>/prebuilt-bundles/<framework-identity>/<bake-source>/` (MeshWeaver#3461).
+
+          `flat` (the default, and today's behaviour everywhere): that directory IS the
+          publication, replaced IN PLACE — unseal, upload over the live files, re-seal. Two
+          publishers interleaved on one prefix can therefore leave a sentinel over bytes from two
+          bakes; the publisher's byte-level postcondition refuses to seal that, which makes an
+          overlap a loud red rather than a silent mix, but it is a postcondition and not mutual
+          exclusion.
+
+          `generation`: each publication is written into its OWN directory named by the publisher's
+          run-unique token, sealed there, and a one-line `_current` pointer — written after the
+          seal — says which one applies. Two publishers never write the same bytes, so a mix
+          becomes unrepresentable rather than merely detectable. The flat copy is still written
+          for readers that predate pointer resolution, and THAT copy still races: flipping a
+          prefix closes the window for pointer-following readers only.
+
+          🚨 DO NOT FLIP A PREFIX UNTIL EVERY PRODUCER OF IT CAN WRITE GENERATIONS. A new writer
+          and an old writer on one prefix is the half-migration to avoid: the new one moves the
+          pointer, the old one replaces the flat copy in place and never touches it, so a
+          pointer-following reader keeps serving its generation and never sees the old writer's
+          NEWER publication — a stale serve with nothing red anywhere. `plugins` is the only
+          prefix with two producers (core CD's `plugins-bake` and this repo's own `publish-bake`),
+          so it flips in ONE change set; every other prefix flips in its own repository's PR.
+
+          🚨 Retention is not implemented: generations accumulate until a sweep lands. That sweep
+          deletes from the production share, so it is its own reviewed change — and it is a
+          precondition on flipping, not a follow-up.
+
+          Full reference: Doc/Architecture/SealedPublicationGenerations.
+        required: false
+        type: string
+        default: 'flat'
       platform-ref:
         description: >-
           Ref of Systemorph/MeshWeaver to take the canonical publish script from. Default main;
@@ -1209,6 +1244,9 @@ jobs:
           # it was written for. Same expression as the checkout's `repository:` on purpose: one
           # answer to "whose content is this", used by both.
           BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+          # flat (the default) or generation — see the `publication-layout` input. At `flat` the
+          # script behaves byte-identically to before this input existed.
+          BAKE_PUBLICATION_LAYOUT: ${{ inputs.publication-layout }}
         # Contract: layout <base>/prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip,
         # every bundle first, the `_complete` sentinel strictly LAST; an already-sealed identity
         # with the same source sha skips (the surface identity is breaking-change-keyed, so
