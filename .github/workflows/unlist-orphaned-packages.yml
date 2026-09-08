@@ -41,6 +41,9 @@ jobs:
     name: Report or unlist orphaned packages
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      id-token: write       # NuGet/login — the short-lived unlist key, only when applying
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -72,14 +75,31 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # 🔐 Trusted Publishing: nuget.org exchanges this run's GitHub OIDC token for a short-lived
+      # key, under the policy that names this repository and THIS workflow file (a policy per
+      # file — publish-packages.yml has its own). No stored NuGet secret anywhere.
+      - name: The policy owner is named
+        if: inputs.apply && inputs.confirm == 'UNLIST'
+        env:
+          NUGET_TRUSTED_USER: ${{ vars.NUGET_TRUSTED_USER }}
+        run: |
+          set -euo pipefail
+          [ -n "${NUGET_TRUSTED_USER:-}" ] || { echo "::error::vars.NUGET_TRUSTED_USER is not set — the nuget.org account that owns the Trusted Publishing policy for unlist-orphaned-packages.yml. A step that cannot run must fail RED, never pass quietly."; exit 1; }
+      - name: Log in to nuget.org (Trusted Publishing)
+        if: inputs.apply && inputs.confirm == 'UNLIST'
+        id: nuget_login
+        uses: NuGet/login@v1.2.0
+        with:
+          user: ${{ vars.NUGET_TRUSTED_USER }}
+
       - name: Unlist them
         if: inputs.apply && inputs.confirm == 'UNLIST'
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_PAT }}
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${NUGET_API_KEY:-}" ]; then
-            echo "::error::secrets.NUGET_PAT is not provisioned — the unlist cannot run. A step that cannot run must fail RED, never pass quietly."
+            echo "::error::the Trusted Publishing exchange returned no key — the unlist cannot run. A step that cannot run must fail RED, never pass quietly."
             exit 1
           fi
           keep_args=""
