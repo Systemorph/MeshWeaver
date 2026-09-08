@@ -651,6 +651,54 @@ jobs:
           SEED_DIR="${RUNNER_TEMP:-/tmp}/upstream-seed"
           mkdir -p "$SEED_DIR"
 
+          # 🚨 "THE UPSTREAM HAS NOT PUBLISHED FOR THIS IDENTITY" IS A WAIT, NOT A REPO DEFECT — and
+          # it still fails RED, on every trigger. A gate that cannot fail is not a gate (AGENTS.md),
+          # so nothing here exits 0, carries `continue-on-error:`, or asks an `if:` about an input.
+          # What the event changes is WHAT IS SAID, never WHETHER the gate runs: the three triggers
+          # learn this identity three different ways, and only one of them is this repository's
+          # fault. Same wording, same title and same table as node-repo-publish-bake.yml's
+          # "Upstreams not ready" step — one condition must not wear two names across two lanes.
+          #
+          # 🚨 THE `schedule` ROW IS THE ONE THAT USED TO BE WRONG. This lane's message promised
+          # "the upstream's own publish-bake for this identity re-enables this run", which is TRUE
+          # for a dispatch wave (measured 2026-09-08 on MeshWeaver.Crm: red 15:36Z, the
+          # meshweaver-upstream-published wake for the same set green at 16:01Z) and FALSE for a
+          # nightly poll — the poll re-resolves a MOVING tag, so its next run asks about a different
+          # identity and never retries this one. Manufacturing#67 / Crm#66.
+          upstream_not_ready() { # <src> <where> <extra sentence>
+            local src="$1" where="$2" extra="${3:-}"
+            {
+              echo "### ⛔ Upstreams not ready — did NOT gate"
+              echo ""
+              echo "Upstream \`$src\` has no sealed publication at $where for framework identity"
+              echo "\`$IDENTITY\`. This gate installs its dependency from that publication; compiling"
+              echo "the upstream's source instead would gate this repo against a framework its"
+              echo "dependency was never built for, so it refuses. ${extra}"
+              echo ""
+              echo "**This is a WAIT on the upstream, not a defect in this repository** — and which"
+              echo "wait depends on how this run learned the identity above:"
+              echo ""
+              echo "| this run was | it learned the identity from | an unsealed upstream means |"
+              echo "|---|---|---|"
+              echo "| \`push\` / \`pull_request\` | this repo's PIN | the PIN is wrong — move it to an identity the upstream HAS published for |"
+              echo "| \`repository_dispatch\` | the wake's own payload | the wave is mid-flight; the upstream's publication re-triggers this run |"
+              echo "| \`schedule\` | a MOVING release tag this run resolved itself | nobody promised the upstream published for it |"
+              echo ""
+              echo "This run's event was \`${GITHUB_EVENT_NAME:-unknown}\`."
+              echo ""
+              echo "**What re-enables it:** the upstream's own \`publish-bake\`, on sealing for this"
+              echo "identity, POSTs the publication to the control instance, which dispatches"
+              echo "\`meshweaver-upstream-published\` to every repository that declares that source."
+              echo ""
+              echo "🚨 **The \`schedule\` poll does NOT retry this identity** — it re-resolves a moving"
+              echo "tag, so the next poll asks about whatever has been promoted since. If no wake ever"
+              echo "arrives, the upstream is not publishing for released identities at all: that is"
+              echo "the UPSTREAM's red, and nothing in this repository repairs it."
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            echo "::error title=Upstreams not ready — did not gate::upstream '$src' has no SEALED publication at $where for framework identity $IDENTITY. What re-enables it is the upstream's own publish-bake dispatching meshweaver-upstream-published for this identity — NOT the schedule poll, which re-resolves a moving tag and therefore asks about a different identity next time. This run's event was ${GITHUB_EVENT_NAME:-unknown}."
+            exit 1
+          }
+
           # 🚨 A 5xx is not an answer — it is the ABSENCE of one, and refusing on it makes every
           # platform promotion a source of red CI across the fleet (MeshWeaver#2787). Promotion
           # rolls the portal that SERVES this registry, so the window is STRUCTURAL: the more
@@ -718,7 +766,7 @@ jobs:
               code=$(registry_get "$base" "$SEED_DIR/.index.json")
               case "$code" in
                 200) ;;
-                404) echo "::error::upstream '$src' has no SEALED publication on $REGISTRY_URL for identity $IDENTITY. Not compiling it instead."; exit 1 ;;
+                404) upstream_not_ready "$src" "$REGISTRY_URL" "" ;;
                 401|403) echo "::error::the registry refused registry-key for '$src' ($code) — the instance needs a whole-source grant '$src/*'."; exit 1 ;;
                 *) echo "::error::registry answered $code for $base — refusing."; exit 1 ;;
               esac
@@ -803,10 +851,16 @@ jobs:
             # is not "absent", and absent is a red gate, not an empty seed.
             sealed=$(az storage file exists --account-name "$account" --share-name "$share" \
               --path "$dir/_complete" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors 2>/dev/null || echo unknown)
-            if [ "$sealed" != "true" ]; then
-              echo "::error::upstream '$src' has no SEALED publication under $account/$share/$dir for framework identity $IDENTITY (exists=$sealed). This gate cannot install its dependency and will not compile it instead. The upstream's own publish-bake for this identity re-enables this run."
-              exit 1
-            fi
+            # 🚨 ABSENT and COULD-NOT-DETERMINE are two answers, and only one of them is a wait —
+            # `check-release-availability.sh` splits them for the same reason ("an errored probe is
+            # NOT an absent one"). Both refuse; conflating them would have sent a reader chasing an
+            # upstream publication when the real fault was an unreadable share.
+            case "$sealed" in
+              true) ;;
+              false) upstream_not_ready "$src" "$account/$share/$dir" "" ;;
+              *) echo "::error::could not read $account/$share/$dir/_complete for framework identity $IDENTITY (exists=$sealed) — availability CANNOT BE DETERMINED, which is a hold and not an absence. Check the storage credential and the share, not the upstream's publication."
+                 exit 1 ;;
+            esac
             az storage file download-batch --account-name "$account" --share-name "$share" \
               --source "$share/$dir" --destination "$SEED_DIR" --pattern '*.zip' \
               --auth-mode login --backup-intent --only-show-errors > /dev/null
