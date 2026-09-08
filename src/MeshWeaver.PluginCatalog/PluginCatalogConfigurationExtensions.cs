@@ -215,7 +215,13 @@ public static class PluginCatalogConfigurationExtensions
                 // on the bundle routes is byte-identical on the wire (#1777), which is right for
                 // the caller and blind for the operator: "not granted" and "I could not reach the
                 // registry to find out" leave the same trace. Bounded, process-scoped diagnostic.
-                .AddSingleton<PackageEntitlementLedger>())
+                .AddSingleton<PackageEntitlementLedger>()
+                // The registry's record of bundles PUSHED to the fleet's OCI registry — the seam
+                // the bundle and catalog indexes read their per-package `artifact` from
+                // (Doc/Architecture/PluginBundlesInTheRegistry). The platform's default records
+                // nothing, so the field stays null until a host registers a recorder; TryAdd so a
+                // host's own registration, made before this, is the one that answers.
+                .WithPublicationArtifactsDefault())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();
