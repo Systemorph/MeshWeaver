@@ -8,6 +8,8 @@ icon: /static/NodeTypeIcons/box.svg
 
 # CI Content Bake
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** "An instance must roll to the newest release that is actually baked" becomes "the newest release on which everything loads": a missing satellite bake is a boot compile, reported, not a hold. The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+
 Every `.cs` stored in a mesh node compiles **at runtime in the portal** (see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation)), and until issue #1660 that was also
 the *deploy* path: every image roll changed the framework identity, invalidated every cached

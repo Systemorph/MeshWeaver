@@ -8,6 +8,8 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # The Release Gate's Denominator
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A package that stops shipping content no longer holds a release forever: a missing bake is advisory ("would compile at boot"). The mechanism described below is what runs until [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) lands; this page is rewritten by that change.
+
 > Maintainer, 2026-09-06: *"let's see that the deploy rolls only when **all** packages of all
 > plugins are baked"* — *"we kept rolling without edu being properly baked."*
 
