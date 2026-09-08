@@ -72,6 +72,12 @@ on:
       - ".github/workflows/clients.yml"
       - "src/MeshWeaver.Mesh.Contract/Protos/**"
 
+# One live run per ref: a newer push to the same PR branch cancels the run it supersedes; main and
+# the merge queue never cancel (each main push is its own group, keyed on the commit).
+concurrency:
+  group: clients-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   python-sdk:
     name: "meshweaver (Python test)"

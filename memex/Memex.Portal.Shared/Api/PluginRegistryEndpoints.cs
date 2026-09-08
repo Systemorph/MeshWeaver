@@ -154,19 +154,35 @@ public static class PluginRegistryEndpoints
     // the filter runs BEFORE the merge, while each package still knows which source it came from.
     // A caller therefore cannot even learn that an ungranted package exists.
     private static IObservable<IReadOnlyList<PackageManifest>> ListAll(
-        IReadOnlyList<ConfiguredPackageSource> sources, AuthenticatedInstance? caller, ILogger? logger)
+        IReadOnlyList<ConfiguredPackageSource> sources, AuthenticatedInstance? caller,
+        IObservable<IReadOnlyList<PublicationArtifact>> artifacts, ILogger? logger)
         => Observable.CombineLatest(sources.Select(s =>
                 ListFrom(s, sources.Count == 1, logger).Select(list => (Source: s, Packages: list))))
-            .Select(perSource => (IReadOnlyList<PackageManifest>)perSource
+            .SelectMany(perSource => artifacts.Select(pushed => (IReadOnlyList<PackageManifest>)perSource
                 // Stamp the source each package came from BEFORE the merge — afterwards the
                 // provenance is gone. Consumers scope source-specific actions on it (notably
                 // PluginCatalog:InstallByDefault, which must distinguish the platform repo from
                 // paid content the same instance may also be granted).
                 .SelectMany(x => x.Packages
                     .Where(p => IsGranted(caller, x.Source, p))
-                    .Select(p => p with { Source = x.Source.Name }))
+                    .Select(p => p with
+                    {
+                        Source = x.Source.Name,
+                        // The bundle as an OCI artifact in the fleet's registry
+                        // (Doc/Architecture/PluginBundlesInTheRegistry), when this registry has
+                        // pushed it — matched on the content version manifest.lock gives the
+                        // bundle, then the catalog's own version. Null otherwise; additive.
+                        Artifact = pushed.ReferenceFor(
+                            x.Source.Name, p.Id, p.ReleasedVersion, p.ModuleVersion, p.Version),
+                    }))
                 .DistinctBy(p => p.Id, StringComparer.Ordinal)
-                .ToList());
+                .ToList()));
+
+    /// <summary>The registry's record of pushed publications, read once per listing; the platform
+    /// default records nothing.</summary>
+    private static IObservable<IReadOnlyList<PublicationArtifact>> Artifacts(IMessageHub hub) =>
+        hub.ServiceProvider.GetService<IPublicationArtifacts>()?.Read().Take(1)
+        ?? Observable.Return((IReadOnlyList<PublicationArtifact>)[]);
 
     // Legacy anonymous mode has no instance to scope to and sees everything — that mode is gated
     // by PluginCatalog:RequireInstanceKey and warns on every request.
@@ -183,7 +199,7 @@ public static class PluginRegistryEndpoints
         var sources = Sources(hub, config);
         if (sources.Count == 0)
             return Task.FromResult(Results.Content(PluginRegistryPayloads.List([]), "application/json"));
-        return ListAll(sources, caller, logger)
+        return ListAll(sources, caller, Artifacts(hub), logger)
             .Select(list => (IResult)Results.Content(PluginRegistryPayloads.List(list), "application/json"))
             .Catch((Exception ex) =>
             {

@@ -27,6 +27,12 @@ on:
 permissions:
   contents: read
 
+# One live run per ref: a newer push to the same PR branch cancels the run it supersedes; main and
+# the merge queue never cancel (each main push is its own group, keyed on the commit).
+concurrency:
+  group: hosting-operator-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   scripts:
     name: Operator scripts (shellcheck + behaviour)
@@ -104,6 +110,7 @@ jobs:
           hosting-kv-purge
           hosting-pull-secret
           hosting-pv-purge
+          hosting-pv-resize
           hosting-redirect
           hosting-restore
           hosting-tls
@@ -167,7 +174,7 @@ jobs:
           set +e
           jq -n -f deploy/aks/operator/bin/_audit.jq --slurpfile manifest /dev/null --slurpfile live /dev/null \
             --arg namespace n --arg release r --arg deployment d --arg container c --argjson revision 1 \
-            --arg chart "" --arg auditedAt now --arg skipped "" >/dev/null 2>"$RUNNER_TEMP/audit-jq.err"
+            --arg chart "" --arg auditedAt now --arg skipped "" --argjson persistence '{}' >/dev/null 2>"$RUNNER_TEMP/audit-jq.err"
           jq_rc=$?
           set -e
           if [ "$jq_rc" -eq 3 ]; then
@@ -182,7 +189,7 @@ jobs:
         # through to a REAL az/kubectl on a runner that has one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done

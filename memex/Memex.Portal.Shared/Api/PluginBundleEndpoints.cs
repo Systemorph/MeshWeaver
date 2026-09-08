@@ -804,6 +804,17 @@ public static class PluginBundleEndpoints
         http.RequestServices.GetService<PackageOriginAnchor>()
         ?? RootHub(http).ServiceProvider.GetService<PackageOriginAnchor>();
 
+    /// <summary>
+    /// The registry's record of bundles pushed to the fleet's OCI registry, read once. Same
+    /// two-step resolution as <see cref="Anchor"/>; a host that registers none renders no
+    /// <c>artifact</c>, which is exactly what the platform default answers.
+    /// </summary>
+    private static IObservable<IReadOnlyList<PublicationArtifact>> Artifacts(HttpContext http) =>
+        (http.RequestServices.GetService<IPublicationArtifacts>()
+         ?? RootHub(http).ServiceProvider.GetService<IPublicationArtifacts>())
+        ?.Read().Take(1)
+        ?? Observable.Return((IReadOnlyList<PublicationArtifact>)[]);
+
     /// <summary>The record that makes a degraded entitlement answer legible (#1782 gap 2). Same
     /// two-step resolution as <see cref="Anchor"/>.</summary>
     private static PackageEntitlementLedger? Ledger(HttpContext http) =>
@@ -849,6 +860,10 @@ public static class PluginBundleEndpoints
         // HttpContext.RequestServices has been disposed, so resolving inside the lambda would throw
         // exactly when the report is needed.
         var lateFaultLogger = Log(http);
+        // The record of pushed publications (Doc/Architecture/PluginBundlesInTheRegistry) — resolved
+        // NOW for the same reason as the logger above, and read once per index request. The
+        // platform default records nothing, so `artifact` reads null until a host records pushes.
+        var artifacts = Artifacts(http);
 
         return Servable(rootHub, Anchor(http), ct)
             .Select(state =>
@@ -866,7 +881,7 @@ public static class PluginBundleEndpoints
                 return granted;
             })
             .SelectMany(packages => ServableModules(rootHub, packages)
-                .Select(modules => Results.Json(new
+                .SelectMany(modules => artifacts.Select(pushed => Results.Json(new
                 {
                     frameworkMvid = FrameworkMvid,
                     // The architecture that identity belongs to (#1751). The identity already FOLDS
@@ -901,8 +916,14 @@ public static class PluginBundleEndpoints
                         // converge). Additive: a pre-#931 client ignores it, and a pre-#931
                         // registry simply omits it, which reads as unknown rather than as a match.
                         frameworkMvid = servable?.FrameworkMvid,
+                        // The bundle as an OCI artifact in the fleet's registry
+                        // (Doc/Architecture/PluginBundlesInTheRegistry): the digest-addressed
+                        // reference a consumer fetches by, verified against the digest. Null on
+                        // every bundle this registry has not pushed — the consumer then takes the
+                        // HTTP route above, byte for byte as before. Additive.
+                        artifact = pushed.ReferenceFor(p.Source, p.PluginId, p.Version),
                     }).ToArray(),
-                })))
+                }))))
             .FirstAsync()
             .ObserveCompletion(
                 ex => lateFaultLogger?.LogWarning(ex,

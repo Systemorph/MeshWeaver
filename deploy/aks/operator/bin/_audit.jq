@@ -5,6 +5,12 @@
 #   $manifest[0]  the helm manifest + hooks as an ARRAY of Kubernetes objects (the truth)
 #   $live[0]      every live object in the namespace, every kind, as ONE array
 #   $namespace $release $deployment $container $revision $chart $auditedAt $skipped
+#   $persistence  the release's user-supplied `persistence` values — the Deployment record's
+#                 volumes[] as HelmValues rendered them (claimName + size per volume). The one
+#                 RECORD-vs-live comparison here: a claim's live capacity below what the record
+#                 declares is drift the manifest cannot show, because on this fleet the portal's
+#                 claims are not helm-managed and a bigger `size` changes nothing until
+#                 hosting-pv-resize applies it.
 #
 # 🚨 NAMES, NEVER VALUES. A ConfigMap value is compared here and never emitted; an env entry's
 # `value` decides whether it is a plain value and is never emitted. The report is written to a node
@@ -38,6 +44,18 @@ def only(a; b): [a[] | select(. as $x | (b | index($x)) == null)] | unique;
 # (`cpu: 4` in a template, `"4"` back from the API). Compare shapes, not spellings.
 def norm: walk(if type == "number" then tostring else . end);
 def compact: tojson | if length > 120 then .[:117] + "…" else . end;
+
+# A Kubernetes quantity as a number of bytes, or null when it is not one. Both unit families
+# occur: the record writes binary units (128Gi), and a provisioner may answer in either.
+def quantity_bytes:
+  (tostring) as $q
+  | if ($q | test("^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$")) | not then null
+    else ($q | capture("^(?<n>[0-9]+(\\.[0-9]+)?)(?<u>[A-Za-z]*)$")) as $m
+      | ($m.n | tonumber) * ({"": 1, "k": 1000, "M": 1000000, "G": 1000000000, "T": 1000000000000,
+                              "P": 1000000000000000, "E": 1000000000000000000,
+                              "Ki": 1024, "Mi": 1048576, "Gi": 1073741824, "Ti": 1099511627776,
+                              "Pi": 1125899906842624, "Ei": 1152921504606846976}[$m.u])
+    end;
 
 # 🚨 lifecycle values are REDACTED to their shape. Every other compared pod-spec field carries
 # placement and sizing (replicas, selectors, quantities, probe numbers) — but a lifecycle hook
@@ -135,11 +153,31 @@ def annotations: (.spec.template.metadata.annotations // {}) | keys;
        | .metadata.name as $n | ((.data // {}) | keys[]) | select(secretish) | "configmap:\($n)/\(.)" ]
    | unique) as $plainSecretEntries
 
+# ── claims below the capacity the record declares ──────────────────────────────────────────────
+# The record's volumes[] arrive as the release's `persistence` values. Every entry with a claimName
+# AND a size is compared against the live claim's status.capacity (what the volume IS, not what
+# was asked for). Below → a finding; absent → a finding (the pod could not have mounted it);
+# unreadable on either side → a finding rather than a silent pass, because "could not compare"
+# must never read as "matches". At or above → nothing: a claim larger than its record is the
+# record's problem to state, and hosting-pv-resize refuses to shrink it.
+| ([ ($persistence // {}) | to_entries[]
+     | .key as $volume | .value as $spec
+     | select(($spec | type) == "object" and (($spec.claimName // "") != "") and (($spec.size // "") != ""))
+     | ($l | map(select(.kind == "PersistentVolumeClaim" and .metadata.name == $spec.claimName)) | .[0]) as $pvc
+     | ($spec.size | quantity_bytes) as $declared
+     | (if $pvc == null then null else ($pvc.status.capacity.storage // $pvc.spec.resources.requests.storage // null) end) as $liveQ
+     | (if $liveQ == null then null else ($liveQ | quantity_bytes) end) as $live
+     | select($pvc == null or $declared == null or $live == null or $live < $declared)
+     | {volume: $volume, claimName: $spec.claimName, declared: ($spec.size | tostring),
+        live: (if $pvc == null then "absent" else ($liveQ // "unknown" | tostring) end)} ]
+   | sort_by(.volume)) as $volumeCapacityBelowRecord
+
 # ── the verdict — derived from the lists, and re-derived by the mesh ───────────────────────────
 | (($envLiveOnly | length) + ($envManifestOnly | length) + ($envFromLiveOnly | length)
    + ($volumesLiveOnly | length) + ($mountsLiveOnly | length) + ($containersLiveOnly | length)
    + ($podAnnotationsLiveOnly | length) + ($podSpecDiffs | length) + $configMapCount
-   + $unmanagedCount + ($unmanagedSecrets | length) + ($plainSecretEntries | length)) as $findingCount
+   + $unmanagedCount + ($unmanagedSecrets | length) + ($plainSecretEntries | length)
+   + ($volumeCapacityBelowRecord | length)) as $findingCount
 | {
     namespace: $namespace,
     release: $release,
@@ -164,6 +202,7 @@ def annotations: (.spec.template.metadata.annotations // {}) | keys;
     unmanagedObjects: $unmanagedObjects,
     unmanagedSecrets: $unmanagedSecrets,
     plainSecretEntries: $plainSecretEntries,
+    volumeCapacityBelowRecord: $volumeCapacityBelowRecord,
     findingCount: $findingCount,
     verdict: (if $findingCount == 0 then "clean" else "drift" end)
   }

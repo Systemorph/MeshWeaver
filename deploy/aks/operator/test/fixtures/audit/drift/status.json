@@ -2,7 +2,36 @@
   "name": "memex",
   "namespace": "memex",
   "version": 42,
-  "info": { "status": "deployed" },
-  "chart": { "metadata": { "name": "memex", "version": "1.4.0" } },
-  "config": { "secrets": { "note": "the user-supplied values — the audit must never print these: value-that-must-never-print" } }
+  "info": {
+    "status": "deployed"
+  },
+  "chart": {
+    "metadata": {
+      "name": "memex",
+      "version": "1.4.0"
+    }
+  },
+  "config": {
+    "secrets": {
+      "note": "the user-supplied values \u2014 the audit must never print these: value-that-must-never-print"
+    },
+    "persistence": {
+      "content": {
+        "claimName": "memex-content",
+        "mountPath": "/mnt/content",
+        "size": "64Gi",
+        "storageClass": "azurefile-memex"
+      },
+      "data": {
+        "claimName": "memex-data",
+        "mountPath": "/data",
+        "size": "128Gi",
+        "storageClass": "azurefile-memex"
+      },
+      "postgres": {
+        "size": "128Gi",
+        "storageClass": "managed-csi"
+      }
+    }
+  }
 }

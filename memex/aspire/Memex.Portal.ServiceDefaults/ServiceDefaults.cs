@@ -201,6 +201,12 @@ public static class ServiceDefaults
             // on purpose, never a reason to pull the pod — read on ProbeEndpoints.Health alone,
             // with the path and the numbers in the detail.
             .AddCheck<StorageCapacityHealthCheck>(StorageCapacityHealth.HealthCheckName);
+            // How full the data volume is (2026-09-08): the share holding the prebuilt bundles,
+            // the modules, the assembly cache and the DataProtection keys reached 3 MiB free and
+            // every write on it failed far from the cause. Degraded below DataVolume:MinimumFreeBytes
+            // (1 GiB) on the volume of any configured store root — no probe tag, pulling the pod
+            // frees nothing — naming the path, used and total.
+            .AddCheck(DataVolumeFreeSpace.HealthCheckName, new DataVolumeHealthCheck(builder.Configuration));
 
         return builder;
     }

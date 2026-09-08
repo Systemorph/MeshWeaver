@@ -61,6 +61,14 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
     verbs: ["get", "list"]
+  # READ-ONLY, for hosting-pv-resize. The storage class decides whether a claim can grow
+  # (allowVolumeExpansion); the command reads it BEFORE patching, and refuses a class that cannot
+  # expand rather than leaving a request in Pending forever. The patch itself is the
+  # persistentvolumeclaims grant above. Re-apply this file when adopting the feature — a Forbidden
+  # here fails the "Ensure volume capacity" step of every Provision / Reconcile by name.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

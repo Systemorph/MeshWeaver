@@ -1,0 +1,33 @@
+{
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "memex-data",
+        "namespace": "memex",
+        "annotations": {
+          "helm.sh/resource-policy": "keep"
+        }
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteMany"
+        ],
+        "storageClassName": "azurefile-memex",
+        "resources": {
+          "requests": {
+            "storage": "16Gi"
+          }
+        }
+      },
+      "status": {
+        "phase": "Bound",
+        "capacity": {
+          "storage": "16Gi"
+        }
+      }
+    }
+  ]
+}
