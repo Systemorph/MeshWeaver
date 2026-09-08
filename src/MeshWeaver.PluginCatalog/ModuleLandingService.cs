@@ -2,6 +2,8 @@ using System.IO;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Security.Cryptography;
+using System.Text;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
@@ -253,6 +255,16 @@ public sealed class ModuleLandingService : IDisposable
                     "Modules GC: removed {Count} superseded module set record(s) below sequence "
                     + "{Sequence}", prunedSets, onSet.Sequence);
         }
+        // 🚨 #3656: and the LOSER of a decided duplicate, at ANY sequence — Prune above only
+        // reaches below the current set, so a duplicate at the newest sequence survived every
+        // pass and every pod re-read it and re-reported the same decided conflict on every boot,
+        // forever. Retiring it says the conflict once, where it is decided, and leaves the one
+        // record the mesh actually resolves to. Gated on the same fail-closed counter as the
+        // pruning above: with anything unreadable on the volume this pass removes nothing.
+        if (readFaults == 0)
+            ModuleSetStore.PruneDuplicateProposals(baseDirectory,
+                onRetired: msg => logger?.LogInformation("Modules GC: {Message}", msg),
+                onWarn: msg => logger?.LogWarning("Modules GC: {Message}", msg));
         // 🚨 #2509: with any entry file unreadable, `referenced` is INCOMPLETE — an ACTIVE
         // generation would read as an orphan. Generation deletes are skipped wholesale this pass.
         var referencesReliable = readFaults == 0;
@@ -692,6 +704,27 @@ public sealed class ModuleLandingService : IDisposable
             return verdict.MayLoad ? null : verdict.Report();
         }
 
+        // 🚨 THE GENERATION IS CONTENT-ADDRESSED (#3656) — `name@<16 hex of SHA-256 over the bytes
+        // this landing writes>`, never a random id. The leaf used to be `name@<8 random hex>`, and
+        // that is what turned a HARMLESS simultaneity into a permanent divergence. Every replica
+        // reconciles the same feed at boot and on every ModulePublished broadcast, so two replicas
+        // deciding to land the SAME bundle at the same moment is the normal shape, not a rarity —
+        // and each wrote the identical bytes into a DIFFERENT directory. The set each then derived
+        // from the activation record (ModuleSetStore.GenerationsOf reads the DIRECTORY) therefore
+        // named a different generation for that module, so both proposed the same sequence with
+        // different ids: the conflict ModuleSetIndex resolves deterministically, the loser's bytes
+        // left behind as an orphan, and the loser's `.proposed.json` sitting at the mesh's newest
+        // sequence until some later wave superseded it — re-read and re-reported by every pod's
+        // sweep in the meantime, on every boot, forever. Measured on memex-cloud 2026-09-08: 100
+        // duplicate sequences, 687 set records, 843 generation directories.
+        //
+        // Addressing the directory by its CONTENT makes those two landings ONE landing: same leaf,
+        // same activation entry, same derived set — and the second replica's Propose is the no-op
+        // it should always have been, so no conflicting record is ever written. A GENUINE conflict
+        // (two replicas landing different content) still derives two sets and is still reported;
+        // that report is now about something that actually differs.
+        var generation = $"{name}@{GenerationIdOf(assemblies, staticAssets)}";
+
         // 🚨 #3649 — THE PREVIOUS GENERATION IS KEPT, never overwritten. The entry this landing
         // displaces becomes the new entry's fallback: boot loads the head generation, and when
         // that one cannot load on the running platform it loads this one instead and says so.
@@ -709,8 +742,14 @@ public sealed class ModuleLandingService : IDisposable
             && !string.IsNullOrWhiteSpace(e.Directory));
         var previous = displaced is null ? null : PreviousToKeep(displaced);
 
-        ModuleActivationEntry PreviousToKeep(ModuleActivationEntry current)
+        ModuleActivationEntry? PreviousToKeep(ModuleActivationEntry current)
         {
+            // A re-land of the IDENTICAL bytes resolves to the generation the entry ALREADY names,
+            // because the leaf is the content address. Nothing is displaced, so nothing becomes a
+            // fallback: the entry keeps the fallback it had. Recording itself would be a fallback
+            // that is no fallback (PreviousGeneration reads it back as none anyway).
+            if (string.Equals(current.Directory, generation, StringComparison.OrdinalIgnoreCase))
+                return ModuleActivationBoot.PreviousGeneration(current);
             var older = ModuleActivationBoot.PreviousGeneration(current);
             if (older is null || !ModuleActivationBoot.LandedModuleDllExists(baseDirectory, older))
                 return current;
@@ -738,7 +777,6 @@ public sealed class ModuleLandingService : IDisposable
         // garbage-collected by the post-start GC pass (ModuleGenerationsGcHostedService →
         // CollectGarbage), skip-on-locked, once no entry references them.
         var modulesRoot = Path.Combine(baseDirectory, "modules");
-        var generation = $"{name}@{Guid.NewGuid():N}"[..(name.Length + 9)];
         var target = Path.Combine(modulesRoot, generation);
         var staging = Path.Combine(modulesRoot, $".staging-{name}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
@@ -756,7 +794,30 @@ public sealed class ModuleLandingService : IDisposable
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 File.WriteAllBytes(destination, bytes);
             }
-            Directory.Move(staging, target);
+            // 🚨 An EXISTING target is the right answer, never a collision (#3656): the leaf is the
+            // content address, so a directory already carrying this name already carries these
+            // bytes. Another replica landing the same bundle concurrently, or an earlier landing
+            // this deployment's entry has since moved off — either way the landing ADOPTS it
+            // instead of writing a second copy under a second name, which is the whole point of
+            // addressing it by content. Probed first and caught as well: the other replica's
+            // rename can land between the probe and ours.
+            var alreadyLanded = Directory.Exists(target);
+            if (!alreadyLanded)
+            {
+                try
+                {
+                    Directory.Move(staging, target);
+                }
+                catch (IOException) when (Directory.Exists(target))
+                {
+                    alreadyLanded = true;
+                }
+            }
+            if (alreadyLanded)
+            {
+                Directory.Delete(staging, recursive: true);
+                AdoptLandedGeneration(target, name, generation);
+            }
         }
         catch
         {
@@ -820,6 +881,75 @@ public sealed class ModuleLandingService : IDisposable
                 name, generation, assemblies.Count, held, previous?.Directory ?? "(none)");
 
         return new ModuleLandingOutcome(Held: held is not null, HoldReason: held);
+    }
+
+    /// <summary>
+    /// The CONTENT ADDRESS of one landing (#3656): 16 lowercase hex characters of SHA-256 over
+    /// every file the landing would write — each file's module-relative path, its byte length and
+    /// its bytes, ordinal-sorted by path, so the answer depends on the content alone and never on
+    /// the order the caller happened to hand the files over in.
+    ///
+    /// <para>This is what makes two replicas landing one bundle land ONE generation. The
+    /// generation leaf was a random id until #3656, and two replicas that both decided to land the
+    /// same module — the normal shape of a reconcile wave, since every replica reconciles the same
+    /// feed — therefore wrote identical bytes under two names, derived two different module sets
+    /// from the activation record and proposed both at the same sequence. See the block comment in
+    /// <c>LandCore</c> for the production measurement.</para>
+    ///
+    /// <para>Sixteen characters (64 bits), deliberately not the eight the random leaf used: a
+    /// content address that COLLIDES would make a landing adopt somebody else's bytes, where a
+    /// random one merely failed the rename. It also means no legacy <c>name@&lt;8 hex&gt;</c>
+    /// directory can ever be mistaken for a content-addressed one — the lengths differ.</para>
+    /// </summary>
+    /// <param name="assemblies">The assemblies the landing writes, as file name → bytes.</param>
+    /// <param name="staticAssets">The static web assets it writes, as module-relative path →
+    /// bytes; null or empty when the module ships none.</param>
+    internal static string GenerationIdOf(
+        IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var (path, bytes) in (assemblies ?? [])
+                     .Select(a => (Path: a.FileName.Replace('\\', '/'), a.Bytes))
+                     .Concat((staticAssets ?? [])
+                         .Select(a => (Path: a.RelativePath.Replace('\\', '/'), a.Bytes)))
+                     .OrderBy(x => x.Path, StringComparer.Ordinal))
+        {
+            // The length goes in as well as the bytes, so no concatenation of two files can hash
+            // like a different split of the same stream.
+            hash.AppendData(Encoding.UTF8.GetBytes($"{path}\n{bytes?.Length ?? 0}\n"));
+            if (bytes is { Length: > 0 })
+                hash.AppendData(bytes);
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset())[..16];
+    }
+
+    /// <summary>
+    /// Takes over a generation directory that was ALREADY on the volume when this landing resolved
+    /// its content address — the concurrent-replica case (#3656). The bytes are identical by
+    /// construction, so there is nothing to write; what the landing must do is put the directory
+    /// back inside the #2303 grace window, because a directory nothing referenced a moment ago is
+    /// exactly the directory a GC pass on another replica may be about to reclaim — and the
+    /// activation entry written immediately after this is about to reference it.
+    /// </summary>
+    private void AdoptLandedGeneration(string target, string name, string generation)
+    {
+        try
+        {
+            Directory.SetLastWriteTimeUtc(target, DateTime.UtcNow);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Surfaced, never swallowed: the landing itself is complete and correct — the entry
+            // below references bytes that are on disk. What is lost is the grace window, so a GC
+            // pass that had already read this directory as unreferenced could still reclaim it,
+            // and the next reconcile would re-land it. Loud enough to see it happen twice.
+            logger?.LogWarning(ex,
+                "Module '{Name}': generation {Generation} was already landed by another replica, "
+                + "but its timestamp could not be refreshed ({Cause}) — a concurrent GC pass may "
+                + "still reclaim it as unreferenced, and the next reconcile re-lands it.",
+                name, generation, ex.Message);
+        }
     }
 
     private void RemoveCore(string name)
