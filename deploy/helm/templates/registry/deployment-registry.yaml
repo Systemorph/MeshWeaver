@@ -1,0 +1,153 @@
+{{- if (.Values.registry).enabled }}
+{{- $r := include "memex.registry" . | fromYaml }}
+# ---- distribution: the registry pods ---------------------------------------
+# Stateless: every byte lives in the Azure Storage container, so replicas share nothing but the
+# http.secret (which is what lets a chunked upload continue on a different pod). The pod runs as
+# the namespace's workload identity — that is how the azure storage driver authenticates
+# (default_credentials), and why there is no storage key anywhere in this chart.
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "memex-registry-deployment"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  replicas: {{ $r.replicas }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "{{ .Chart.Name }}"
+      app.kubernetes.io/component: "memex-registry"
+      app.kubernetes.io/instance: "{{ .Release.Name }}"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "{{ .Chart.Name }}"
+        app.kubernetes.io/component: "memex-registry"
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+        # Opt the pod into the Azure workload-identity webhook: it injects AZURE_CLIENT_ID,
+        # AZURE_TENANT_ID and the federated token file from the service account's annotation,
+        # which is what DefaultAzureCredential inside the storage driver picks up.
+        azure.workload.identity/use: "true"
+      annotations:
+        # A config change is delivered at pod START; hashing the rendered ConfigMap into the pod
+        # template turns it into the same graceful roll an image change gets, and into nothing
+        # when nothing changed (same idiom as memex-portal/deployment.yaml).
+        checksum/config: {{ include (print $.Template.BasePath "/registry/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ $r.serviceAccount | quote }}
+      containers:
+        - name: "registry"
+          image: {{ $r.image | quote }}
+          imagePullPolicy: "IfNotPresent"
+{{- if $r.notificationUrl }}
+          # distribution's env override for the endpoint's `headers` map unmarshals the value as
+          # YAML into a []string — a plain "Bearer …" fails to parse ("cannot unmarshal !!str
+          # into []string", measured against 3.0.0). The vault holds the PLAIN header value, so
+          # it is wrapped into list form here, at container start, and the config file stays the
+          # rendered one. `exec` keeps the registry as PID 1 for signals.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              export REGISTRY_NOTIFICATIONS_ENDPOINTS_0_HEADERS_AUTHORIZATION="[\"$MEMEX_REGISTRY_NOTIFICATION_AUTHORIZATION\"]"
+              unset MEMEX_REGISTRY_NOTIFICATION_AUTHORIZATION
+              exec registry serve /etc/registry/config.yml
+{{- else }}
+          args: ["serve", "/etc/registry/config.yml"]
+{{- end }}
+          ports:
+            - name: "http"
+              protocol: "TCP"
+              containerPort: 5000
+          env:
+            # distribution 3.x enables an OTLP trace exporter BY DEFAULT and, with no collector,
+            # logs `traces export: Post "https://localhost:4318/v1/traces" … connection refused`
+            # every ten seconds for the life of the pod (measured against 3.0.0). Nothing here
+            # collects traces; off explicitly.
+            - name: "OTEL_TRACES_EXPORTER"
+              value: "none"
+            # http.secret — signs upload state so a multi-part push may continue on any replica.
+            # From the vault via the synced Secret, never from the ConfigMap.
+            - name: "REGISTRY_HTTP_SECRET"
+              valueFrom:
+                secretKeyRef:
+                  name: "memex-registry-secrets"
+                  key: "http-secret"
+{{- if $r.notificationUrl }}
+            # The Authorization header value the registry sends with every event (plain, e.g.
+            # "Bearer <key>"), from the vault via the synced Secret; the command wrapper above
+            # hands it to distribution's env-override path in the list form it requires, so the
+            # bearer stays out of the ConfigMap.
+            - name: "MEMEX_REGISTRY_NOTIFICATION_AUTHORIZATION"
+              valueFrom:
+                secretKeyRef:
+                  name: "memex-registry-secrets"
+                  key: "notification-authorization"
+{{- end }}
+          volumeMounts:
+            - name: "config"
+              mountPath: "/etc/registry/config.yml"
+              subPath: "config.yml"
+              readOnly: true
+            # The CSI mount: cert.pem (rootcertbundle) and the rest under their aliases. Mounting
+            # it is also what makes the driver sync memex-registry-secrets for the env above.
+            - name: "token"
+              mountPath: "/etc/registry/token"
+              readOnly: true
+          resources:
+            {{- toYaml $r.registryResources | nindent 12 }}
+          readinessProbe:
+            # `/` answers 200 from a healthy registry (measured against 3.0.0) and 503 from one
+            # whose storage-driver health check (config.yml) is failing — distribution's health
+            # wrapper fails EVERY request then — so it is a real "can I take a pull" signal.
+            # NOT /v2/: under token auth that answers 401 to a credential-less probe, which is
+            # the healthy answer and which kubelet counts as failure.
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            # TCP, deliberately a different question from readiness: a blob-storage outage must
+            # take the pod OUT of the Service, not restart it — only a dead listener trips this.
+            tcpSocket:
+              port: 5000
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: "config"
+          configMap:
+            name: "memex-registry-config"
+        - name: "token"
+          csi:
+            driver: "secrets-store.csi.k8s.io"
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "memex-registry-keyvault"
+---
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "memex-registry-service"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  type: "ClusterIP"
+  selector:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  ports:
+    - name: "http"
+      protocol: "TCP"
+      port: 5000
+      targetPort: 5000
+{{- end }}

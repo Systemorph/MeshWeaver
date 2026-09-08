@@ -1,0 +1,111 @@
+{{- if (.Values.registry).enabled }}
+{{- $r := include "memex.registry" . | fromYaml }}
+# ---- docker_auth: the token server -----------------------------------------
+# Answers https://<host>/auth (path-routed by the Ingress) with a signed bearer token after
+# authenticating the caller: the static publisher account by bcrypt, every other account by
+# validating its password as an instance key against the portal (validate.sh). Signs with the
+# certificate + key from the CSI mount — the same certificate distribution verifies against.
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "memex-registry-auth-deployment"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry-auth"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  replicas: {{ $r.replicas }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "{{ .Chart.Name }}"
+      app.kubernetes.io/component: "memex-registry-auth"
+      app.kubernetes.io/instance: "{{ .Release.Name }}"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "{{ .Chart.Name }}"
+        app.kubernetes.io/component: "memex-registry-auth"
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+        # Not for Azure access (docker_auth talks to no Azure API) — it is what lets this pod
+        # mount the SAME CSI volume as the registry: the Key Vault Secrets Provider add-on
+        # authenticates with the add-on's identity named in the SecretProviderClass, and the pod
+        # runs as the workload-identity SA so the two deployments carry one identity story.
+        azure.workload.identity/use: "true"
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/registry/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ $r.serviceAccount | quote }}
+      containers:
+        - name: "docker-auth"
+          image: {{ $r.authImage | quote }}
+          imagePullPolicy: "IfNotPresent"
+          args: ["/config/auth_config.yml"]
+          ports:
+            - name: "http"
+              protocol: "TCP"
+              containerPort: 5001
+          volumeMounts:
+            - name: "config"
+              mountPath: "/config/auth_config.yml"
+              subPath: "auth_config.yml"
+              readOnly: true
+            - name: "config"
+              mountPath: "/etc/docker_auth/validate.sh"
+              subPath: "validate.sh"
+              readOnly: true
+            - name: "token"
+              mountPath: "/etc/registry/token"
+              readOnly: true
+          resources:
+            {{- toYaml $r.authResources | nindent 12 }}
+          readinessProbe:
+            # `/` answers 200 (docker_auth's landing page, measured against 1.14.0); /auth would
+            # answer 401 to a credential-less probe, which kubelet counts as failure.
+            httpGet:
+              path: /
+              port: 5001
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 5001
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: "config"
+          configMap:
+            name: "memex-registry-auth-config"
+            # validate.sh must be executable for docker_auth to exec it.
+            defaultMode: 0555
+        - name: "token"
+          csi:
+            driver: "secrets-store.csi.k8s.io"
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "memex-registry-keyvault"
+---
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "memex-registry-auth-service"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry-auth"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  type: "ClusterIP"
+  selector:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry-auth"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  ports:
+    - name: "http"
+      protocol: "TCP"
+      port: 5001
+      targetPort: 5001
+{{- end }}

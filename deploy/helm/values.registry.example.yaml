@@ -1,0 +1,38 @@
+# A COMPLETE registry overlay — every (required) key set — so the chart gate renders the registry
+# on every pull request (deploy/aks/scripts/check-chart-invariants.sh lists this file as a
+# combination) and a broken template is a red PR rather than a failed `helm upgrade`.
+#
+# Layer it over values.yaml: `helm template memex deploy/helm -f deploy/helm/values.yaml
+# -f deploy/helm/values.registry.example.yaml`. A real environment keeps its own copy in the
+# private deployment repo with its vault, storage account and identity filled in; nothing here is
+# a credential — the vault entries are object NAMES, the publisher password is a bcrypt HASH of
+# the example password "example-publisher-password", and the ids are placeholders.
+registry:
+  enabled: true
+  host: "cr.meshweaver.cloud"
+  image: "ghcr.io/distribution/distribution:3.0.0@sha256:4ba3adf47f5c866e9a29288c758c5328ef03396cb8f5f6454463655fa8bc83e2"
+  authImage: "cesanta/docker_auth:1.14.0@sha256:98e0307e0d2dcbafe10098814a97d248143b78ca478693f78c3c0d67fe776ab4"
+  issuer: "memex-registry"
+  replicas: 1
+  storage:
+    accountName: "meshweaverregistry"
+    container: "registry"
+  serviceAccount: "memex-portal-sa"
+  keyVault:
+    name: "Systemorph"
+    tenantId: "00000000-0000-0000-0000-000000000000"
+    identityClientId: "00000000-0000-0000-0000-000000000000"
+    certObject: "Registry-TokenCert"
+    keyObject: "Registry-TokenKey"
+    httpSecretObject: "Registry-HttpSecret"
+    notificationSecretObject: "Registry-NotificationAuthorization"
+  publisher:
+    username: "publisher"
+    passwordBcrypt: "$2y$05$lBf8Wat1qrnRJAZaknsvL.4okJYxEJ4OsCOGXVCelcQ8bwIe0Y3B6"
+  validationUrl: "https://memex.meshweaver.cloud/api/plugins?ref=HEAD"
+  notifications:
+    url: "https://memex.meshweaver.cloud/api/registry/events"
+  ingress:
+    className: "nginx"
+    clusterIssuer: "letsencrypt"
+    tlsSecret: "memex-registry-tls"

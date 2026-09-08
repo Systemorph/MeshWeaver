@@ -1,14 +1,26 @@
 ---
 Name: A Container Registry in Memex
 Category: Architecture
-Description: Serving OCI images from the mesh — what it buys us that ACR cannot, the bootstrap circularity that decides the shape, and why the first increment is a read-through mirror rather than a replacement. The pull surface, the bearer handshake, closure-as-data and the digest-keyed read-through cache are built; push, GC, pin-protected retention and the /app assembly closure are not.
+Description: The fleet's own container registry at cr.meshweaver.cloud — decided 2026-09-08 as a SEPARATE service built from CNCF distribution and docker_auth (no registry code of ours), why off-the-shelf, the bootstrap note, what was measured before it shipped — plus the in-mesh pull surface, bearer handshake, closure-as-data and read-through cache that remain built.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="9" width="20" height="11" rx="2"/><path d="M6 9V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3"/><line x1="7" y1="14" x2="7" y2="14"/><line x1="11" y1="14" x2="11" y2="14"/><line x1="15" y1="14" x2="15" y2="14"/></svg>
 ---
 
 # A Container Registry in Memex
 
-> **Status: v1 pull surface IMPLEMENTED** (`src/MeshWeaver.ContainerImages`, issue #3353) —
+> **Status (2026-09-08): DECIDED — the fleet gets its OWN registry at `cr.meshweaver.cloud`, as a
+> SEPARATE service.** Not a memex plugin and not a mirror in front of ACR: its own pods, its own
+> host, its own blob container, built from two off-the-shelf images and zero registry code of ours
+> (see "The registry as a separate service" below). Every installation — the main portal included
+> — pulls its images from it, and ACR is retired afterwards. The chart half is in
+> `deploy/helm/templates/registry/` (`registry.enabled`, off by default); the bootstrap note
+> below is the one constraint that survives the change of shape.
 >
+> **Also built, and still standing:** the in-mesh v1 pull surface (`src/MeshWeaver.ContainerImages`,
+> issue #3353) — `GET`/`HEAD` on `/v2/`, `…/manifests/{reference}`, `…/blobs/{digest}` (Range
+> included) and `…/tags/list`, the bearer token exchange at `GET /v2/token`, the OCI-level closure
+> and provenance of every manifest served recorded as `ContainerImage` nodes, and the digest-keyed
+> read-through cache. It is what the closure-as-data sections below describe, and it is
+> unchanged; what the decision changes is WHERE images are authoritatively stored and served.
 > 🚨 The assembly is **`MeshWeaver.ContainerImages`, deliberately NOT `MeshWeaver.ContainerRegistry`**
 > — MeshWeaver.Plugins already ships an assembly of that name (the plugin registry module), in the
 > same namespace, declaring its own `ContainerRegistryEndpoints`, `ContainerRegistryOptions` and an
@@ -16,26 +28,94 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > one-producer FATAL by name; two identical fully-qualified types is `CS0433`; two identical
 > extension signatures is `CS0121`. The config section moved to `ContainerImages:` for the same
 > reason. Renamed in #3361 while nothing referenced it yet — which is the only cheap moment.
-> **Built:** `GET`/`HEAD` on `/v2/`, `…/manifests/{reference}`, `…/blobs/{digest}` (Range included)
-> and `…/tags/list`, plus the bearer token exchange at `GET /v2/token` — proxied to the upstream
-> with the mirror's own credential while the caller authenticates against memex — plus the
-> OCI-level **closure and provenance of every manifest served, recorded as `ContainerImage`
-> nodes**, and the **digest-keyed read-through cache**: a miss fetches, serves and stores; the next
-> pull of that digest is served without the upstream being contacted at all.
 >
 > 🚨 The token exchange arrived one increment LATE, and the gap is worth recording: the first cut
 > emitted a correct-looking `WWW-Authenticate` challenge naming a realm at `/v2/token`, and **nothing
 > served that route**. Every endpoint read correctly in isolation; a real `docker pull` went
 > 401 → fetch the realm → 404 → give up. Only a test that walks the WHOLE handshake — probe,
 > challenge, token, pull — could see it, which is why `PullSurfaceTest` is written as one
-> conversation rather than per-endpoint assertions.
+> conversation rather than per-endpoint assertions. The separate service was verified the same
+> way, for the same reason: a real `docker login` / `push` / `pull` against the rendered configs,
+> not per-endpoint reads (see below).
 >
-> **Not built:** no push or upload, no `/v2/_catalog`, no referrers API, no delete, no
-> pin-protected retention, and no **/app assembly** closure — see "What v1 records" below for
-> exactly where that line falls, and "The pull surface, exactly" for the endpoint-by-endpoint list.
-> The boot image comes from the upstream, permanently. Container images live in Azure Container
+> **Not built in the mirror, and not needed once the service exists:** push, `/v2/_catalog`,
+> referrers, delete, pin-protected retention. Today container images still live in Azure Container
 > Registry (`meshweaver.azurecr.io`), named by `ACR:` in `main-cd.yml` and referenced by eight
-> workflows. This page exists so the decision is a decision rather than a recurring conversation.
+> workflows; moving the producers and consumers over is the next increment, not this page's.
+
+## The registry as a separate service
+
+**The shape.** `cr.meshweaver.cloud` is its own Deployment pair in the portal's namespace, on its
+own host, writing to its own blob container — and none of it is MeshWeaver code:
+
+| piece | image | what it does |
+|---|---|---|
+| the registry | `ghcr.io/distribution/distribution:3.0.0` (CNCF distribution, the reference implementation) | serves `/v2/…`; storage driver `azure`, authenticating as the namespace's **workload identity** (`credentials.type: default_credentials`) — no storage key anywhere; token auth pointed at the auth server |
+| the token server | `cesanta/docker_auth:1.14.0` | answers `https://cr.meshweaver.cloud/auth`; authenticates a caller and signs a bearer token the registry verifies against the same certificate |
+
+One Ingress on the host routes `/auth` to docker_auth and everything else to distribution
+(`proxy-body-size: 0`, request buffering off, an hour each way — a layer is one PATCH of hundreds
+of megabytes). The token certificate and key, distribution's `http.secret` and the optional
+notification bearer are Key Vault objects, mounted through one SecretProviderClass into both
+pods. Values: `registry.*` in `deploy/helm/values.yaml`; a complete example the chart gate renders
+on every pull request: `deploy/helm/values.registry.example.yaml`.
+
+**Who may do what.** Two ways in, in the order docker_auth tries them:
+
+1. **One static account, the publisher** (CI). Its bcrypt hash is the only credential in values —
+   `htpasswd -nB publisher`, a `$2y$` hash, committable. It may `push`, `pull` and `delete`
+   anything. A wrong password for THIS account is `WrongPass` and is refused immediately; it never
+   falls through to the second way.
+2. **Any other account name, with a MeshWeaver instance key as the password.** docker_auth's
+   `ext_auth` hook (`validate.sh`, a ConfigMap) presents the password as `Authorization: Bearer`
+   to `registry.validationUrl` — by default the portal's plugin catalog,
+   `https://memex.meshweaver.cloud/api/plugins?ref=HEAD`. `200` authenticates, `401`/`403` denies,
+   and **anything else is exit 3, an ERROR, never a pass** — a DNS failure, a timeout or a 5xx
+   refuses the login and is logged by docker_auth as such, so an outage of the validator reads as
+   an outage, not as "wrong key". Every authenticated account may `pull` anything.
+
+Anonymous matches no rule and is denied by default. So an installation authenticates to the
+registry with the same key it already holds for the plugin registry — the credential-sprawl
+argument above, closed without the mirror.
+
+**Why off-the-shelf.** The wire protocol is small but the operational surface is not: resumable
+chunked uploads, `Range` on blobs, SAS redirects so a layer never streams through a pod, upload
+purging, garbage collection, and the token handshake's every corner case. distribution has had a
+decade of clients against all of it; docker_auth exists precisely to bolt an external
+authenticator onto it. A registry we wrote would be a second implementation of a solved problem,
+and every bug in it would be a fleet-wide pull failure. The mesh keeps what only it can provide —
+the closure and provenance DATA, which the mirror records and which the registry's notification
+endpoint (`registry.notifications.url`, every event POSTed with the vault-held bearer) can feed
+just as well.
+
+**🚨 The bootstrap note.** The registry's own two images are the only images an installation
+pulls from OUTSIDE its own registry: `distribution` from `ghcr.io`, `docker_auth` from Docker Hub.
+The constraint from "The constraint that decides the shape" is unchanged in kind and shrunk in
+scope — it no longer applies to the portal's image (which the registry serves), only to the
+registry's own. Both are pinned by digest in values so that boot path is reviewable.
+
+**What was measured before this shipped** (2026-09-08, the two images run locally with the
+RENDERED configs — filesystem storage instead of azure, a self-signed RSA certificate, a stub
+validator — and a real `docker login`/`push`/`pull`):
+
+* `docker login` as the publisher with the `$2y$` hash → accepted; `push` → accepted; wrong
+  password → refused without reaching the validator.
+* `docker login` as `instance` with the known key → accepted (the stub saw the bearer); `pull` →
+  accepted; `push` → **denied by the ACL**; a bad key → refused; the validator stopped → refused,
+  logged `bad return code from command: 3`; anonymous `pull` → refused.
+* Every registry event reached the stub carrying the Authorization header from the vault
+  (`pull` and `push` actions observed).
+* 🚨 **docker_auth 1.13.0 cannot pair with distribution 3 at all.** distribution 3 keys its
+  `rootcertbundle` by RFC 7638 JWK thumbprint; docker_auth's default `kid` is the legacy libtrust
+  id and no `x5c` chain is sent, so EVERY token was refused with `token signed by untrusted key
+  with ID` while the exchange itself answered 200 — no login succeeded, the publisher's included.
+  1.14.0 adds `token.disable_legacy_key_id: true`, which the rendered config sets; that is why the
+  pin is 1.14.0 and not the 1.13 the first draft named.
+* distribution 3 also enables an OTLP trace exporter by default and logs a connection error every
+  ten seconds without a collector; the Deployment sets `OTEL_TRACES_EXPORTER=none`.
+* distribution's env override for an endpoint's `headers` map unmarshals the value as YAML into
+  `[]string`, so the plain `Bearer …` the vault holds is wrapped into list form by the container
+  command at start rather than stored pre-quoted.
 
 ## What is already in memex, and what is not
 
