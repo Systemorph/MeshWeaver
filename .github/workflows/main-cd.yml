@@ -980,7 +980,7 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      # The VERSION (3.0.0-rc1.ci.<run#>) is what each install's self-updater (ReleaseStrategy.md)
+      # The VERSION (3.0.0-ci.<run#>) is what each install's self-updater (ReleaseStrategy.md)
       # compares to decide a rollout — so it MUST be the monotonic $(Version) (Directory.Build.props
       # derives the .ci.<n> suffix from $GITHUB_RUN_NUMBER). -getProperty:Version prints the computed
       # version without building; CIRun=true so it matches the version baked into the binaries below.
@@ -1956,7 +1956,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # ---- Which RELEASE does this bake belong to? ------------------------------------------
-      # `portal-image` mints the version (3.0.0-rc8.ci.<run#>) — a per-RUN string — and on a
+      # `portal-image` mints the version (3.0.0-ci.<run#>) — a per-RUN string — and on a
       # bake-only reconcile that job is SKIPPED, so its output is empty. The first reconcile that
       # ever fired (2026-08-27, run 33063843072 — the cron was starved until #2491 gave it its
       # own concurrency lane) published the bake fine and then died in the assert below on

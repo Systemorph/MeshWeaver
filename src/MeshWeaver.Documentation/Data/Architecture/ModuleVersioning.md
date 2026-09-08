@@ -17,6 +17,18 @@ This page is the authoring reference for that number. For the *node* revision co
 number entirely — see [MeshNode Versioning](/Doc/Architecture/MeshNodeVersioning). For what a module IS and how a
 deployment activates one, see [Modules](/Doc/Architecture/Modules).
 
+🚨 **The PLATFORM's version is a third number, and it is not authored here.** `PlatformVersion` has
+exactly two shapes — `X.Y.Z-ci.<n>` for every continuous build and clean `X.Y.Z` for the release, no
+`rc`, no `preview`, no labelled line, ever — stated authoritatively in
+[Release Process & Versioning §1](/Doc/Architecture/ReleaseProcess). Read it before writing a
+package's `content.minMeshVersion` **floor**: a floor is a platform version, and SemVer §11.4 ranks
+pre-release identifiers as text, which is how 42 packages came to declare floors no shipping platform
+could ever satisfy (#3554). 🚨 A floor is an **authoring** claim checked at pack time
+(`check-module-platform-floor.py` refuses one above the platform the bundle is built against) — at
+runtime it is advisory and loadability is measured, never declared
+([issue #3648](https://github.com/Systemorph/MeshWeaver/issues/3648)). Getting it wrong therefore
+fails your build; it is not a knob for keeping a module off a deployment.
+
 ## The three numbers, and who owns each
 
 | number | lives in | owned by |

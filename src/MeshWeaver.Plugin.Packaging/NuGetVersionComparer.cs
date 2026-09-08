@@ -6,8 +6,8 @@ namespace MeshWeaver.Plugin.Packaging;
 /// Orders NuGet/SemVer-2 version strings.
 ///
 /// <para>🚨 <b>String ordering is wrong here in a way that silently picks an old build.</b> The
-/// framework's continuous versions are <c>3.0.0-rc3.ci.&lt;run-number&gt;</c>, and as text
-/// <c>"3.0.0-rc3.ci.900"</c> sorts ABOVE <c>"3.0.0-rc3.ci.3758"</c> — `9` &gt; `3`. Picking the
+/// framework's continuous versions are <c>3.0.0-ci.&lt;run-number&gt;</c>, and as text
+/// <c>"3.0.0-ci.900"</c> sorts ABOVE <c>"3.0.0-ci.3758"</c> — `9` &gt; `3`. Picking the
 /// "latest" that way compiles every plugin against a framework thousands of runs stale, and nothing
 /// reports it: the build succeeds, because that framework is a real one.</para>
 ///

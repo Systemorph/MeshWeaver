@@ -7,7 +7,7 @@ namespace MeshWeaver.Mesh;
 /// disagree.
 ///
 /// <para>Two stamps carry the identity, and they are produced in different places on purpose. The
-/// run-numbered platform version (e.g. <c>3.0.0-rc3.ci.3961</c>) rides the container IMAGE CONFIG
+/// run-numbered platform version (e.g. <c>3.0.0-ci.3961</c>) rides the container IMAGE CONFIG
 /// as an environment variable, because compiled assemblies are COMMIT-DETERMINISTIC (issue #1660
 /// WS3): baking the run number in would fork the framework identity between the CI run that bakes
 /// NodeType assemblies and the CD run that builds the image. The commit sha and the base version

@@ -8,10 +8,17 @@ namespace MeshWeaver.Graph.Test;
 /// Pins the ordering used to resolve "the latest framework".
 ///
 /// <para>🚨 <b>The failure this prevents is silent.</b> Continuous framework builds are versioned
-/// <c>3.0.0-rc3.ci.&lt;run-number&gt;</c>. Ordered as TEXT, <c>ci.900</c> sorts above
+/// <c>3.0.0-ci.&lt;run-number&gt;</c>. Ordered as TEXT, <c>ci.900</c> sorts above
 /// <c>ci.3758</c> — `9` &gt; `3` — so "latest" picks a framework thousands of runs stale, every
 /// plugin compiles against it successfully (it is a real framework), and the only symptom is a
 /// missing API surfacing much later.</para>
+///
+/// <para>🚨 The fixtures below are deliberately written in the RETIRED <c>3.0.0-rc3.ci.&lt;n&gt;</c>
+/// shape, and must stay that way. Minting one shape is not reading one: the platform now mints only
+/// <c>X.Y.Z-ci.&lt;n&gt;</c> and clean <c>X.Y.Z</c> (<c>Doc/Architecture/ReleaseProcess</c> §1), but
+/// the rc-line images are still addressable and this comparer is a READER of whatever a registry
+/// holds. Narrowing the fixtures to the minted shape would leave the harder case — a label BETWEEN
+/// the line and the run number — untested, which is the case the ordering exists for.</para>
 /// </summary>
 public class NuGetVersionComparerTest
 {
