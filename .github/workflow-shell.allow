@@ -14,7 +14,7 @@
 #
 # Format:  <check> <path> <hash>       (the gate prints the exact line to paste)
 
-# publish-bake-bundles.sh: the ABSENCE of $DEST/$SOURCE_MARKER is a NORMAL, expected state — a
+# publish-bake-bundles.sh: the ABSENCE of $LIVE/$SOURCE_MARKER is a NORMAL, expected state — a
 # publication sealed before source-marker recording existed simply has no such file, and this
 # script's whole job at that point is to notice that and republish. So `az storage file download`
 # failing here is the ordinary path, not an incident, and it runs once per module per publish (~40
@@ -23,4 +23,7 @@
 # authoritative: the next two lines test it against $SOURCE_SHA and fall through to republishing
 # when it does not match, so a genuine credential failure degrades to "publish again", never to
 # "already published; skipping".
-swallow .github/scripts/publish-bake-bundles.sh 67fc06cddcb7
+# (Re-keyed 2026-09-08: the read now resolves the publication pointer first, so it addresses
+# $LIVE — the generation that currently applies — rather than the prefix. Same call, same
+# diagnosis; only the line changed. MeshWeaver#3461.)
+swallow .github/scripts/publish-bake-bundles.sh 465523efa176

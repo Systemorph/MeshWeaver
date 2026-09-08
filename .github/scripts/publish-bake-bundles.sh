@@ -137,6 +137,61 @@ fi
 # portals' Azure Files share 2026-08-17; with the naive shape the seal step can never succeed and
 # every publication stays torn (unreadable to portals) forever.
 SENTINEL="_complete"
+
+# ══════════════════════ THE PUBLICATION LAYOUT SELECTOR (MeshWeaver#3461) ══════════════════════
+#
+#   flat        the historical layout: <identity>/<source>/ IS the publication, replaced IN PLACE.
+#   generation  each publication gets its OWN directory <identity>/<source>/<publication token>/,
+#               and a one-line `_current` pointer — moved LAST — says which one applies.
+#
+# 🚨 IT DEFAULTS TO `flat` AND MUST STAY THAT WAY until every producer of a prefix can write
+# generations. A NEW writer and an OLD writer on one prefix is the half-migration to avoid: the new
+# one moves the pointer, the old one replaces the flat copy in place and never touches it, so a
+# pointer-following reader keeps serving its generation and never sees the old writer's NEWER
+# publication. A stale serve, silent, with nothing red anywhere. `plugins` is the only prefix with
+# two producers (core CD's `plugins-bake` and the MeshWeaver.Plugins satellite's own `publish-bake`),
+# and core CD pins nothing — it checks the platform out at its own gate sha — so a writer that was on
+# by default would flip that prefix the day it merged, against a satellite hundreds of commits
+# behind. Hence a per-caller selector, and hence the flip is a separate one-line change per producer.
+#
+# 🚨 WHY A POINTER AND NOT AN ATOMIC DIRECTORY RENAME, measured rather than assumed. The obvious
+# design — stage the publication, then rename it over the live one — is NOT AVAILABLE on this store
+# through this client. Measured against azure-cli 2.90.0 (the version the read-back query above was
+# measured against): `az storage file` offers copy / hard-link / metadata / symbolic-link / delete /
+# delete-batch / download / download-batch / exists / generate-sas / list / resize / show / update /
+# upload / upload-batch / url — and NO `rename`; `az storage directory` offers create / delete /
+# exists / list / show — no `rename`, and its `delete` is documented "Delete the specified EMPTY
+# directory". There is no `lease` command under either group either, so a lease per identity is not
+# reachable from this lane. Even in the REST API, where `Rename Directory` exists (2021-04-10), a
+# rename cannot REPLACE an existing directory — the swap would be rename-away plus rename-in, two
+# operations with a gap in which the live path does not exist at all. So the smallest write this
+# store actually offers is one small FILE, and that is what the pointer is.
+#
+# 🚨 The pointer write is not atomic either (`az storage file upload` is create-then-put-range, so a
+# reader can catch it empty or short) — but it CANNOT PRODUCE A MIX. Every unusable pointer resolves
+# to the source directory: absent, blank, unreadable, not a single path segment, or naming a
+# directory that is not there. So the worst case degrades to the generation that applied a moment
+# ago, never to a set no publisher produced. That is the whole trade, and it is why this is a
+# different thing from a shorter version of the same window.
+#
+# Doc/Architecture/SealedPublicationGenerations carries the phases, the reader contract and what
+# each phase does and does not close. 🚨 In particular: phase 4 (flipping a prefix) does NOT close
+# the window for the flat compatibility copy below — that copy is still unsealed, rewritten and
+# re-sealed in place, so it still races, and only dropping it (phase 5, once no pinned reader needs
+# it) removes the window rather than moving it.
+PUBLICATION_LAYOUT="${BAKE_PUBLICATION_LAYOUT:-flat}"
+case "$PUBLICATION_LAYOUT" in
+  flat|generation) ;;
+  *)
+    echo "::error::BAKE_PUBLICATION_LAYOUT='$PUBLICATION_LAYOUT' is not a known publication layout (flat|generation). It decides where a publication is written and which directory every reader resolves, so an unrecognised value must never be published under."
+    exit 1 ;;
+esac
+
+# The publication POINTER (must match ShippedPrebuiltBundles.PublicationPointerFileName): one line
+# naming the SUBDIRECTORY of a source directory that holds the publication which currently applies.
+# Leading underscore so it can never collide with a publication token.
+POINTER="_current"
+
 SENTINEL_LOCAL_DIR=$(mktemp -d)
 trap 'rm -rf "$SENTINEL_LOCAL_DIR"' EXIT
 SENTINEL_LOCAL="$SENTINEL_LOCAL_DIR/$SENTINEL"
@@ -388,6 +443,65 @@ read_stamp() { # <account> <share> <path>
   STAMP_OWNER=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $2 }')
   if [ "$STAMP_DIGEST" = "-" ]; then STAMP_DIGEST=""; fi
   if [ "$STAMP_OWNER" = "-" ]; then STAMP_OWNER=""; fi
+  return 0
+}
+
+# 🚨 THE POINTER RESOLUTION, AND IT MIRRORS THE READER'S EXACTLY — same rules, same fallbacks, same
+# order (`ShippedPrebuiltBundles.PublicationDirectoryOf`). If the writer and the readers disagreed
+# about which directory is live, the writer would decide "already published" from one publication
+# while portals served another, which is the silent stale serve this whole layout exists to prevent.
+#
+# It NEVER fails; it falls back. Absent, blank, unreadable, not a single path segment, or naming a
+# directory that is not there ⇒ the source directory itself, which IS the flat layout. That is what
+# makes the migration possible at all: resolution is opt-in BY THE WRITER, never by the reader.
+#
+# 🚨 A pointer is a NAME. Anything carrying a separator, a root, or a `.`/`..` segment is refused
+# outright — a publication pointer must never be able to address bytes outside its own source
+# directory. Refused loudly, because it means a publisher wrote something this lane will not follow.
+#
+# Answers through a global for the same reason read_stamp does: a `::warning::` written inside a
+# command substitution would be captured instead of reaching the log.
+RESOLVED_DIR=""
+resolve_publication_dir() { # <account> <share> <source-dir>
+  local account="$1" share="$2" source_dir="$3" exists named local_pointer
+  RESOLVED_DIR="$source_dir"
+  exists=$(az storage file exists --account-name "$account" --share-name "$share" \
+    --path "$source_dir/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$exists" != "true" ]; then
+    # `unknown` lands here too, deliberately: an unreadable pointer means "the previous generation
+    # still applies", which in the flat layout IS the source directory. There is no answer this can
+    # give that reaches bytes no publisher produced.
+    return 0
+  fi
+  local_pointer="$SENTINEL_LOCAL_DIR/remote-$POINTER"
+  rm -f "$local_pointer"
+  if ! az storage file download --account-name "$account" --share-name "$share" \
+      --path "$source_dir/$POINTER" --dest "$local_pointer" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+    echo "::notice::$source_dir/$POINTER exists but could not be read — reading $source_dir as its own publication directory. A pointer being replaced reads this way, and the next read resolves it."
+    return 0
+  fi
+  named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$local_pointer" | grep -m1 '[^[:space:]]' || true)
+  rm -f "$local_pointer"
+  if [ -z "$named" ]; then
+    return 0
+  fi
+  case "$named" in
+    # A rooted name always contains a '/', so `*/*` already covers it — shellcheck SC2222 is
+    # right that a separate `/*` arm can never match anything this one does not.
+    .|..|*/*|*\\*)
+      echo "::warning::$source_dir/$POINTER names '$named', which is not a single directory name — a publication pointer may only address a subdirectory of its own source directory. Reading $source_dir as its own publication directory instead."
+      return 0 ;;
+  esac
+  exists=$(az storage directory exists --account-name "$account" --share-name "$share" \
+    --name "$source_dir/$named" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$exists" != "true" ]; then
+    echo "::warning::$source_dir/$POINTER names generation '$named', which is not on the share (exists=$exists) — reading $source_dir as its own publication directory instead. A generation the pointer names must outlive the pointer."
+    return 0
+  fi
+  RESOLVED_DIR="$source_dir/$named"
   return 0
 }
 
@@ -806,8 +920,9 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   local verdict=0
   verify_publication "$account" "$share" "$dest" || verdict=$?
   if [ "$verdict" -eq 2 ]; then
-    echo converged >> "$OUTCOMES"
-    return 0
+    # 3, not 0: the caller does the accounting, and it must be able to tell a seal this run wrote
+    # from a publication somebody else made. Returning 0 here would count a convergence as a seal.
+    return 3
   fi
   if [ "$verdict" -ne 0 ]; then
     exit 1
@@ -819,10 +934,81 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
     --metadata "digest=$(sha256_of "$SENTINEL_LOCAL")" "publication=$PUBLICATION" \
     --auth-mode login --backup-intent --only-show-errors > /dev/null
   echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown}, platform surface: $HAS_SURFACE)"
-  # 🚨 Recorded HERE, beside the seal, and not at the call sites: since the convergence verdict
-  # returns 0 without sealing, a caller counting "publish_one_target returned" as "published"
-  # would report a publication this run did not make.
+}
+
+# Moves the pointer that says which generation applies. The LAST write of a generation publication,
+# and the only one a reader has to see for the new publication to become live.
+#
+# 🚨 Deliberately OUTSIDE the verified manifest, and it is the one file that must be. Everything in
+# the manifest is read back and asserted to be this run's bytes immediately before its directory is
+# sealed; the pointer is written AFTER that, precisely because it is what CHANGES once the set is
+# proven whole. Stamping it would claim it was covered by a postcondition that, by construction, ran
+# before it existed.
+move_pointer() { # <account> <share> <dest>
+  local account="$1" share="$2" dest="$3"
+  printf '%s\n' "$PUBLICATION" > "$SENTINEL_LOCAL_DIR/$POINTER"
+  # Same directory-as---path shape the sentinel needs: an extensionless --path is re-interpreted as
+  # a DIRECTORY by the CLI, which then appends the source basename.
+  az storage file upload --account-name "$account" --share-name "$share" \
+    --path "$dest" --source "$SENTINEL_LOCAL_DIR/$POINTER" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null
+  echo "pointer: $account/$share/$dest/$POINTER -> $PUBLICATION (this publication is now the live one)"
+}
+
+# ONE publication, in whichever layout this caller selected. Everything above this function writes
+# ONE directory; this is the only place that knows there can be two.
+#
+# At `generation` the order is load-bearing and is the whole safety argument:
+#
+#   1. the generation directory — a fresh path named by this run's publication token, so NO other
+#      publisher can be writing it. The #3496 postcondition still runs there and still refuses, but
+#      it now asserts something that cannot fail for the reason it was written for.
+#   2. the pointer — so a reader either sees the previous generation (intact, sealed, still on the
+#      shelf) or this one, and never a directory being filled in. A refusal at 1 fails the target
+#      before this, so a run that could not prove its publication never becomes the live one.
+#   3. the flat compatibility copy, for readers that predate pointer resolution. 🚨 THIS COPY IS
+#      STILL REPLACED IN PLACE AND STILL RACES — the postcondition is the only thing covering it,
+#      exactly as today. Flipping a prefix does NOT close that window; only dropping the flat copy
+#      does, once no pinned reader needs it.
+#
+# 🚨 THE POINTER MOVES BEFORE THE FLAT COPY, and the design page says "last" — this is the one
+# deliberate deviation, so here is the reasoning. "Last" is about the GENERATION: a reader must never
+# be pointed at a directory that is still being filled in, and moving the pointer after the seal
+# satisfies that exactly. The flat copy is a different audience — readers that cannot follow a
+# pointer at all — and it is the one part of a generation publication that another publisher can
+# still be writing. Ordering it after the pointer means an overlap on the flat copy costs the
+# compatibility copy (which the postcondition refuses to seal as a mix, as today, and the run goes
+# red) instead of costing the publication itself. Ordering it before would let a race on the OLD
+# layout withhold a publication that is already whole, sealed and disjoint on the NEW one — which
+# would make flipping a prefix deliver nothing until the flat copy is dropped.
+#
+# 🚨 RETENTION IS NOT HERE, and that is a precondition on flipping a prefix rather than an omission
+# to fix later. Generations accumulate (~45 small files each) until a sweep removes the ones nothing
+# names, and that sweep DELETES from the production share — it must land as its own reviewed change,
+# with its own harness, and it cannot be written before there is anything to sweep. Nothing in this
+# function deletes anything it did not create.
+publish_publication() { # <account> <share> <dest> <live-was-sealed>
+  local account="$1" share="$2" dest="$3" resealing="$4" rc=0 flat_resealing generation
+  if [ "$PUBLICATION_LAYOUT" = "flat" ]; then
+    publish_one_target "$account" "$share" "$dest" "$resealing" || rc=$?
+    if [ "$rc" -eq 3 ]; then echo converged >> "$OUTCOMES"; else echo published >> "$OUTCOMES"; fi
+    return 0
+  fi
+  generation="$dest/$PUBLICATION"
+  echo "generation layout: $account/$share/$dest — publishing into $PUBLICATION/ (a path no other publisher writes), then the flat compatibility copy, then $POINTER."
+  publish_one_target "$account" "$share" "$generation" false
+  # The flat copy's own sealed state, read fresh: `resealing` above describes the LIVE publication,
+  # which under this layout may be a generation directory and says nothing about the flat copy.
+  flat_resealing=$(az storage file exists --account-name "$account" --share-name "$share" \
+    --path "$dest/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo false)
+  if [ "$flat_resealing" != "true" ]; then flat_resealing=false; fi
+  move_pointer "$account" "$share" "$dest"
+  # Recorded before the compatibility copy: the publication IS live at this point, for every reader
+  # that follows the pointer. A refusal below leaves that true and still fails the target.
   echo published >> "$OUTCOMES"
+  publish_one_target "$account" "$share" "$dest" "$flat_resealing" || rc=$?
+  return 0
 }
 
 # 🚨 PER-TARGET ISOLATION (Plugins #2682, 2026-08-30). Each target is published in its OWN subshell:
@@ -856,6 +1042,19 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
     echo marker >> "$OUTCOMES"
   fi
   DEST="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
+  # 🚨 WHICH DIRECTORY IS ALREADY PUBLISHED, resolved by the SAME rules the portal readers use
+  # (MeshWeaver#3461). Every question below — which architecture published, is it sealed, from which
+  # source commit, does it carry a module set — is a question about the LIVE publication, and under
+  # the generation layout that is a subdirectory the pointer names, not the prefix itself. Asking
+  # the prefix would answer from the flat compatibility copy while portals served the generation:
+  # the writer and the readers would disagree about what is published, which is the silent stale
+  # serve this layout exists to prevent. In the flat layout there is no pointer, LIVE == DEST, and
+  # every read below is byte-identical to what it has always been.
+  resolve_publication_dir "$ACCOUNT" "$SHARE" "$DEST"
+  LIVE="$RESOLVED_DIR"
+  if [ "$LIVE" != "$DEST" ]; then
+    echo "::notice::$ACCOUNT/$SHARE: $DEST/$POINTER names '${LIVE##*/}' — reading the live publication from there."
+  fi
   # "Rebuild only when we need to" applies to the publish too (#1660 WS3), but the key is
   # CONTENT × FRAMEWORK: a sealed directory is already-published only when the framework
   # identity (the directory) AND the source commit (the marker) both match. A framework-only
@@ -881,33 +1080,33 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
   # recorded", which is the one answer that lets the publish proceed. A guard whose error path is
   # indistinguishable from its permissive path is not a guard.
   arch_exists=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
-    --path "$DEST/$ARCH_MARKER" --auth-mode login --backup-intent --query exists -o tsv \
+    --path "$LIVE/$ARCH_MARKER" --auth-mode login --backup-intent --query exists -o tsv \
     --only-show-errors 2>/dev/null || echo "unknown")
   if [ "$arch_exists" != "true" ] && [ "$arch_exists" != "false" ]; then
-    echo "::error::could not determine whether $ACCOUNT/$SHARE holds $DEST/$ARCH_MARKER (az returned no usable answer). Refusing rather than assuming the marker is absent — that assumption is what would let one architecture overwrite another's publication."
+    echo "::error::could not determine whether $ACCOUNT/$SHARE holds $LIVE/$ARCH_MARKER (az returned no usable answer). Refusing rather than assuming the marker is absent — that assumption is what would let one architecture overwrite another's publication."
     exit 1
   fi
   published_arch=""
   if [ "$arch_exists" = "true" ]; then
     if ! az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
-        --path "$DEST/$ARCH_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER" \
+        --path "$LIVE/$ARCH_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER" \
         --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
-      echo "::error::$DEST/$ARCH_MARKER EXISTS under $ACCOUNT/$SHARE but could not be read. Refusing: an unreadable marker is not an absent one."
+      echo "::error::$LIVE/$ARCH_MARKER EXISTS under $ACCOUNT/$SHARE but could not be read. Refusing: an unreadable marker is not an absent one."
       exit 1
     fi
     published_arch="$(tr -d '[:space:]' < "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER")"
     rm -f "$SENTINEL_LOCAL_DIR/remote-$ARCH_MARKER"
     if [ -z "$published_arch" ]; then
-      echo "::error::$DEST/$ARCH_MARKER under $ACCOUNT/$SHARE is present but EMPTY — the incumbent's architecture cannot be established, so this publication cannot be proven safe. Refusing."
+      echo "::error::$LIVE/$ARCH_MARKER under $ACCOUNT/$SHARE is present but EMPTY — the incumbent's architecture cannot be established, so this publication cannot be proven safe. Refusing."
       exit 1
     fi
   fi
   if [ -n "$published_arch" ] && [ "$published_arch" != "$BAKE_ARCHITECTURE" ]; then
-    echo "::error::$ACCOUNT/$SHARE holds a publication under $DEST built for '$published_arch', but this bake is '$BAKE_ARCHITECTURE'. One framework identity cannot hold two architectures: the reference assemblies differ, so pods resolving this identity would adopt bytes they did not build against (TypeLoadException inside a collectible ALC at activation). This means the identity is architecture-INDEPENDENT — a g<sha> commit stamp rather than an s<hash> surface hash — so the two lanes need distinct identities before both can publish. Refusing rather than overwriting '$published_arch'."
+    echo "::error::$ACCOUNT/$SHARE holds a publication under $LIVE built for '$published_arch', but this bake is '$BAKE_ARCHITECTURE'. One framework identity cannot hold two architectures: the reference assemblies differ, so pods resolving this identity would adopt bytes they did not build against (TypeLoadException inside a collectible ALC at activation). This means the identity is architecture-INDEPENDENT — a g<sha> commit stamp rather than an s<hash> surface hash — so the two lanes need distinct identities before both can publish. Refusing rather than overwriting '$published_arch'."
     exit 1
   fi
   complete=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
-    --path "$DEST/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
+    --path "$LIVE/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
     --only-show-errors 2>/dev/null || echo false)
   # An incumbent with NO architecture marker predates this recording, and the only lane that has
   # ever published is amd64 — so it is treated as linux-x64.
@@ -928,19 +1127,19 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       # `verify_publication` can be looking at this file while it is written. If this run goes on
       # to republish, `publish_one_target` overwrites it stamped a moment later.
       az storage file upload --account-name "$ACCOUNT" --share-name "$SHARE" \
-        --path "$DEST" --source "$ARCH_MARKER_LOCAL" \
+        --path "$LIVE" --source "$ARCH_MARKER_LOCAL" \
         --auth-mode login --backup-intent --only-show-errors > /dev/null
-      echo "::notice::stamped $DEST/$ARCH_MARKER = $BAKE_ARCHITECTURE on a pre-existing publication (it predates architecture recording). Another architecture can now establish whether it may publish under this identity."
+      echo "::notice::stamped $LIVE/$ARCH_MARKER = $BAKE_ARCHITECTURE on a pre-existing publication (it predates architecture recording). Another architecture can now establish whether it may publish under this identity."
       published_arch="$BAKE_ARCHITECTURE"
     else
-      echo "::error::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST with no $ARCH_MARKER — it predates architecture recording, so it can only be the linux-x64 lane. This bake is '$BAKE_ARCHITECTURE' and would overwrite it. The next linux-x64 publication to this target stamps the marker automatically (even when it skips the bundles); retry after it has run."
+      echo "::error::$ACCOUNT/$SHARE holds a COMPLETE publication under $LIVE with no $ARCH_MARKER — it predates architecture recording, so it can only be the linux-x64 lane. This bake is '$BAKE_ARCHITECTURE' and would overwrite it. The next linux-x64 publication to this target stamps the marker automatically (even when it skips the bundles); retry after it has run."
       exit 1
     fi
   fi
   resealing=false
   if [ "$complete" = "true" ]; then
     published_sha=$(az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
-      --path "$DEST/$SOURCE_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$SOURCE_MARKER" \
+      --path "$LIVE/$SOURCE_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$SOURCE_MARKER" \
       --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 \
       && tr -d '[:space:]' < "$SENTINEL_LOCAL_DIR/remote-$SOURCE_MARKER" || echo "")
     # A publication sealed before module sealing existed has no modules/_index. Under the current
@@ -948,29 +1147,29 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
     # republished even when the content is unchanged. This is what converges the fleet (#2698):
     # the next bake of each source re-seals it WITH its module set, and nothing is done by hand.
     module_set=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
-      --path "$DEST/$MODULES_DIR_NAME/$MODULES_INDEX" --auth-mode login --backup-intent --query exists -o tsv \
+      --path "$LIVE/$MODULES_DIR_NAME/$MODULES_INDEX" --auth-mode login --backup-intent --query exists -o tsv \
       --only-show-errors 2>/dev/null || echo unknown)
     if [ "$module_set" != "true" ]; then
-      echo "sealed publication under $DEST carries no $MODULES_DIR_NAME/$MODULES_INDEX (exists=$module_set) — it predates module sealing; republishing WITH the module set."
+      echo "sealed publication under $LIVE carries no $MODULES_DIR_NAME/$MODULES_INDEX (exists=$module_set) — it predates module sealing; republishing WITH the module set."
       echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
-      publish_one_target "$ACCOUNT" "$SHARE" "$DEST" true
+      publish_publication "$ACCOUNT" "$SHARE" "$DEST" true
       return 0
     fi
     if [ -n "${SOURCE_SHA:-}" ] && [ "$published_sha" = "$SOURCE_SHA" ]; then
-      echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication of THIS content under $DEST (sentinel present, source $published_sha) — already published; skipping."
+      echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication of THIS content under $LIVE (sentinel present, source $published_sha) — already published; skipping."
       return 0
     fi
     if [ -z "${SOURCE_SHA:-}" ]; then
       # No content identity given (framework-repo producer): the framework identity IS the
       # content key, so a sealed directory is already this publication.
-      echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST ($SENTINEL present) — surface unchanged, bake already published; skipping."
+      echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication under $LIVE ($SENTINEL present) — surface unchanged, bake already published; skipping."
       return 0
     fi
     resealing=true
-    echo "sealed publication under $DEST is from source '${published_sha:-<unrecorded>}' but this bake is from '$SOURCE_SHA' — republishing."
+    echo "sealed publication under $LIVE is from source '${published_sha:-<unrecorded>}' but this bake is from '$SOURCE_SHA' — republishing."
   fi
   echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s))"
-  publish_one_target "$ACCOUNT" "$SHARE" "$DEST" "$resealing"
+  publish_publication "$ACCOUNT" "$SHARE" "$DEST" "$resealing"
 }
 
 FAILED=()

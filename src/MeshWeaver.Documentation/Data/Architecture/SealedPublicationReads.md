@@ -280,16 +280,21 @@ Stated plainly, because a page that only lists what works is how the next sessio
   a generation directory plus an atomic pointer swap removes republication in place entirely, and
   is the shape the read side already pins.
 
-  **That layout is now designed and its reader half is landed**:
+  **That layout is now designed, and BOTH its reader half and its writer half are landed**:
   [Sealed Publication Generations](../SealedPublicationGenerations) carries the directory shape, the
   resolution rules, the retention rule, and — the part that decides the order — why a *new* writer
   and an *old* writer on one prefix is the half-migration to avoid: the pointer-following reader
   would keep serving its generation and never see the flat writer's newer publication, a stale serve
-  with nothing red anywhere. Phase 1 (every reader tolerates a pointer) is in; the writer is not, so
-  **everything on this page still describes what is live**. The ORDER that gets there was re-measured
-  on 2026-09-07 and corrected on that page: `plugins` is the only prefix with two producers, core CD
-  pins nothing (so an unconditional writer would flip it the day it merged), and the writer therefore
-  lands behind a per-caller layout selector defaulting to flat.
+  with nothing red anywhere. The writer is behind a per-caller `publication-layout` selector that
+  **defaults to `flat`**, so nothing anywhere writes a generation until a caller opts in and
+  **everything on this page still describes what is live**. What remains is each producer's pin
+  reaching the writer, then flipping — `plugins` in ONE change set, because it is the only prefix
+  with two producers.
+
+  🚨 That page also records what an **OCI registry** does and does not close, since the fleet is
+  moving plugin bundles into one: content-addressed blobs make a mix unrepresentable, but a **tag**
+  is a mutable last-writer-wins reference and simply moves the defect unless the seal names
+  **digests** — the rule already in force for images via `MW_IMAGE_DIGEST`.
 - **A refused publication leaves the prefix unsealed**, which every consumer skips — correct, and
   it means an overlap now costs a red lane and a re-run rather than a portal that renders nothing.
   It is not free: the identity serves nothing until either publisher runs again.
