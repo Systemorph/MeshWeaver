@@ -600,7 +600,19 @@ public static class ModuleActivationSidecar
 /// live in the directory ITS entry points at, a baseline module's are resolved by probing, and a
 /// caller that guesses which lane a name belongs to is how the boot gate and the boot loader came
 /// to disagree (#1949).</param>
-public sealed record EffectiveModule(string Entry, ModuleActivationEntry? Landed);
+public sealed record EffectiveModule(string Entry, ModuleActivationEntry? Landed)
+{
+    /// <summary>
+    /// The raw <c>Modules:Assemblies</c> entry this landed module DISPLACED — set only when
+    /// <see cref="Landed"/> is non-null and the image lists the same module (#3735). The boot
+    /// hands it to the loader as the last step of the fallback order
+    /// (<c>ModuleInstallCandidate.ImageBaseline</c>): when the landed generation does not load
+    /// here and no previous generation does either, the image's own copy runs. Null for a
+    /// baseline entry (it IS the image copy) and for a Store-only module (the image ships none).
+    /// Init-only, for binary compatibility with hosts compiled against the two-argument record.
+    /// </summary>
+    public string? BaselineEntry { get; init; }
+}
 
 /// <summary>
 /// The boot-time union of #1664 step 9: appsettings baseline ∪ enabled persisted store installs,
@@ -880,8 +892,14 @@ public static class ModuleActivationBoot
             if (!seen.Add(name))
                 continue; // a baseline that repeats a name is still deduped
 
+            // 🚨 #3735 — the displaced baseline entry TRAVELS with the override. "An unusable one
+            // must not [override]" above is decided on the DLL's existence alone; whether the
+            // landed generation LOADS is measured later, by the link probe in
+            // MeshBuilder.InstallModules — and when it does not, the image's copy is the one
+            // thing that loads by construction. Dropping the entry here is how a refused store
+            // generation came to shadow the working image copy (memex.systemorph.com, 2026-09-08).
             effective.Add(overrides.TryGetValue(name, out var winner)
-                ? new EffectiveModule(winner.Name + ".dll", winner)
+                ? new EffectiveModule(winner.Name + ".dll", winner) { BaselineEntry = entry }
                 : new EffectiveModule(entry, Landed: null));
         }
 

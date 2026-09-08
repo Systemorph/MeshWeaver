@@ -188,9 +188,11 @@ public sealed record ModuleActivationReport(
               + (HasFloorAdvisories ? "; " + DescribeFloorAdvisories(FloorAdvisories) : string.Empty);
 
     /// <summary>
-    /// One human-readable line naming the modules that run their PREVIOUS generation (#3649) —
-    /// one named row per module, "X runs v1.2.3 (gen A); v1.3.0 (gen B) landed but does not load
-    /// here: …" — kept apart from every other line because it asks for nothing of the operator:
+    /// One human-readable line naming the modules that run their PREVIOUS generation (#3649) or
+    /// the IMAGE-SHIPPED baseline (#3735) — one named row per module, "X runs v1.2.3 (gen A);
+    /// v1.3.0 (gen B) landed but does not load here: …" / "X runs the image-shipped baseline;
+    /// v1.3.0 (gen B) landed but does not load here: …" — kept apart from every other line
+    /// because it asks for nothing of the operator:
     /// the module works, and the newest generation starts running by itself when a build of it
     /// that loads here ships or the platform moves.
     /// </summary>
@@ -206,9 +208,9 @@ public sealed record ModuleActivationReport(
             .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
             .Select(f => $"{f.Name} {f.Reason}")
             .ToArray();
-        return $"{rows.Length} module(s) run a PREVIOUS generation because the one the mesh's set "
-            + "activates does not load on this platform — present and working, one version "
-            + "behind; no restart changes that, a build that loads here does: "
+        return $"{rows.Length} module(s) run a PREVIOUS generation or the image-shipped baseline "
+            + "because the one the mesh's set activates does not load on this platform — present "
+            + "and working, behind the set; no restart changes that, a build that loads here does: "
             + string.Join("; ", rows.Take(Math.Max(1, maxNamed)))
             + (rows.Length > maxNamed ? $"; …(+{rows.Length - maxNamed})" : string.Empty);
     }
