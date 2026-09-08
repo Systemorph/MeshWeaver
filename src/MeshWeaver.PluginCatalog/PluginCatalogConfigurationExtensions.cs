@@ -187,6 +187,11 @@ public static class PluginCatalogConfigurationExtensions
                         .Select(m => m.Name)
                         .Where(n => !string.IsNullOrWhiteSpace(n))
                         .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+                    // 🚨 #3649 — the modules it loaded from their PREVIOUS generation because the
+                    // head one does not load here. Without this set they read as PENDING (the
+                    // generation the set activates is not the one loaded), and every surface
+                    // promises a restart that falls back again.
+                    FallbackModules = [.. sp.GetServices<FallbackModule>()],
                 })
                 // The COUNT that proves the distribution lane works (#1782 gap 4). Adoption's only
                 // evidence used to be a log line, and the most important miss — "the registry does
@@ -241,7 +246,16 @@ public static class PluginCatalogConfigurationExtensions
             .WithType(typeof(SyncTokenSigningKey), nameof(SyncTokenSigningKey))
             .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery))
             .WithType(typeof(DefaultInstallLedger), nameof(DefaultInstallLedger))
-            .WithType(typeof(RegistryReconcileLedger), nameof(RegistryReconcileLedger));
+            .WithType(typeof(RegistryReconcileLedger), nameof(RegistryReconcileLedger))
+            // 🚨 The module-inventory record every instance writes about ITSELF, and it was the one
+            // type on this surface that was never registered (#3625). DeploymentReportService
+            // stamped a hand-written discriminator, "ModuleInventoryContent", that named NO CLR
+            // type at all — so the cure its own comment describes ("content without the
+            // discriminator materialises as NOTHING") did not work: the reading hub could not
+            // resolve the name, the value degraded back to a raw JsonElement, and the node still
+            // materialised as nothing. Registering the real record and stamping nameof() is what
+            // makes Ops/Modules/{deployment} readable as DeploymentReport.
+            .WithType(typeof(DeploymentReport), nameof(DeploymentReport));
 
     private static MeshNode CreatePackageNodeType() => new(PackageInstaller.PackageNodeType)
     {

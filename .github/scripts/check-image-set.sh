@@ -40,9 +40,11 @@
 #   az login && .github/scripts/check-image-set.sh 4f0c35c
 #
 # Why the short SHA and not the version tag: every leg pushes the commit's short SHA, so it is the
-# one identity all four images share. The version tag (3.0.0-rc1.ci.<n>) is per-RUN, and
-# memex-portal-next computes a DIFFERENT one (3.0.0-ci.<n>, no -rc1 — pre-existing drift), so it
-# is not a cross-image identity.
+# one identity all four images share. The version tag (3.0.0-ci.<n>) is per-RUN, so it is not a
+# cross-image identity. (This note used to record a drift between legs computing 3.0.0-rc1.ci.<n>
+# and memex-portal-next hand-writing 3.0.0-ci.<n>. Both halves are gone: the rc line is retired —
+# every leg mints the clean shape, Doc/Architecture/ReleaseProcess §1 — and portal-next is no
+# longer built here.)
 set -uo pipefail
 
 SHA="${1:?usage: check-image-set.sh <short-sha> [<plugins-short-sha>]}"

@@ -65,14 +65,30 @@ public sealed record RequiredModuleVerdict(
 /// sub-reason and remedy, and NOT Healthy — but it does not hold a rollout that cannot fix it.</para>
 ///
 /// <para>🚨 <b>Degraded is not lenient.</b> Every ExpectedLater module is named on <c>/health</c>,
-/// in the payload and in the boot log, with which of the four sub-states it is in (never installed
-/// / landed-awaiting-restart / landing incomplete / held above the platform floor) and what to do.
-/// An operator can always tell "required and nothing here can produce it" from "expected, and here
-/// is precisely what it is waiting for". What is gone is only the one behaviour that never helped:
-/// stalling a rollout on a lane the rollout is upstream of.</para>
+/// in the payload and in the boot log, with which of the sub-states it is in (never installed /
+/// landed-awaiting-restart / landing incomplete / refused by the link probe for this platform) and
+/// what to do. An operator can always tell "required and nothing here can produce it" from
+/// "expected, and here is precisely what it is waiting for". What is gone is only the one
+/// behaviour that never helped: stalling a rollout on a lane the rollout is upstream of.</para>
 ///
-/// <para>Pure and total — the caller supplies configuration, the loaded set, the activation record
-/// and both gates — so the whole contract is testable with no filesystem and no host.</para>
+/// <para>🚨 <b>"Held above the platform floor" is no longer a state (#3648).</b> A landed entry
+/// whose declared <c>minMeshVersion</c> ranks above the running platform used to classify as held
+/// — a restart would not load it, because boot skipped it on the same string comparison. Boot no
+/// longer skips on it: the entry is landed-awaiting-restart like any other, its floor is worded
+/// onto the reason as an advisory ("declares platform ≥ X; running Y"), and the only "cannot load
+/// here" verdict is the measured one — the link probe's refusal, which arrives as
+/// <see cref="Mesh.IncompatibleModule"/>.</para>
+///
+/// <para>🚨 <b>A module running its PREVIOUS generation is <see cref="RequiredModuleState.Present"/>
+/// (#3649).</b> When the generation the mesh's set activates does not load here, boot loads the
+/// previous one and records a <see cref="Mesh.FallbackModule"/> — never an
+/// <see cref="Mesh.IncompatibleModule"/>: the assembly IS loaded and its features work, so the
+/// loaded-names check answers Present and a readiness probe stays Healthy. What it is not is
+/// current, and that is the status row's business, not the probe's.</para>
+///
+/// <para>Pure and total — the caller supplies configuration, the loaded set, the activation record,
+/// the existence check and the floor's wording — so the whole contract is testable with no
+/// filesystem and no host.</para>
 /// </summary>
 public static class RequiredModuleStatus
 {
@@ -91,8 +107,12 @@ public static class RequiredModuleStatus
     /// <param name="activation">The persisted activation record.</param>
     /// <param name="landedDllExists">Whether a store entry's landed DLL is on the volume —
     /// production passes <see cref="ModuleActivationBoot.LandedModuleDllExists"/>.</param>
-    /// <param name="platformGate">The ONE platform floor gate
-    /// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>).</param>
+    /// <param name="platformGate">Words the declared-floor ADVISORY
+    /// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>): the sentence naming both
+    /// versions when a landed entry's floor ranks above the running platform, or null. 🚨 Since
+    /// #3648 it changes no verdict — it is appended to the landed-awaiting-restart reason so the
+    /// probe says what the module claims; the parameter stays so a host compiled against the
+    /// previous platform keeps binding.</param>
     public static ImmutableList<RequiredModuleVerdict> Classify(
         IEnumerable<string?>? requiredEntries,
         IEnumerable<string?>? baselineEntries,
@@ -158,16 +178,17 @@ public static class RequiredModuleStatus
             if (broken is not null)
             {
                 // 🚨 A module REFUSED BEFORE LOADING because its bytes need a platform this
-                // deployment is not running (#3538) is the declared FLOOR's case, not #2234's — and
+                // deployment is not running (#3538) is the store lane's case, not #2234's — and
                 // the two must not classify alike. #2234 is "the image and its module set
                 // disagree", which this deployment CAN fix by moving both together, so a rollout
                 // stalls. A store-delivered module built for another platform is one no rollout of
                 // this deployment can conjure: stalling on it would recreate the 2026-08-22
                 // three-way deadlock in a new place, and in the rollback direction it would stall
-                // the very roll that resolves it. ExpectedLater — named, reported, NOT Healthy —
-                // exactly as a floor-held entry is. An IMAGE-shipped module that cannot link is
-                // still Incompatible: that is a build defect the previous generation does not
-                // share, which is precisely what a rollout must not complete over.
+                // the very roll that resolves it. ExpectedLater — named, reported, NOT Healthy.
+                // Since #3648 this is the ONLY "cannot load here" state: the link probe's refusal
+                // is measured, the declared floor is advisory. An IMAGE-shipped module that cannot
+                // link is still Incompatible: that is a build defect the previous generation does
+                // not share, which is precisely what a rollout must not complete over.
                 verdicts.Add(new RequiredModuleVerdict(
                     entry!, name,
                     broken.RefusedBeforeLoad && !imageShips.Contains(name)
@@ -219,15 +240,18 @@ public static class RequiredModuleStatus
                     + "from the registry, or delist it from Modules:Required if this deployment "
                     + "does not want the feature. The image never shipped it, so no rollout can "
                     + "deliver it.";
-            if (platformGate(record.MinMeshVersion) is { } held)
-                return $"store-delivered, landed, and HELD above this platform: {held}. A platform "
-                    + "update satisfies the floor and that boot loads it.";
             if (!landedDllExists(record))
                 return "store-delivered and recorded as installed, but its landed assembly is "
                     + "ABSENT — the landing did not complete, and no restart will fix it. "
                     + "Re-install the package.";
+            // 🚨 #3648 — a floor above the running platform is no longer "HELD above this
+            // platform"; boot loads the entry (the link probe decides), so a restart DOES activate
+            // it. The claim still rides the sentence so an operator reading /health sees what the
+            // module declares.
             return "store-delivered and landed on the volume, not yet loaded in this process — "
-                + "a restart activates it.";
+                + "a restart activates it"
+                + (platformGate(record.MinMeshVersion) is { } advisory ? $" ({advisory})" : string.Empty)
+                + ".";
         }
     }
 

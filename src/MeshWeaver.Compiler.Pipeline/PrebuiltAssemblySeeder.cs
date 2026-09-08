@@ -43,15 +43,24 @@ public static class PrebuiltAssemblySeeder
     {
         try
         {
-            var value = services?
-                .GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[RequirePrebuiltConfigKey];
-            return bool.TryParse(value, out var parsed) && parsed;
+            return RequirePrebuiltFromValue(services?
+                .GetService<Microsoft.Extensions.Configuration.IConfiguration>()?[RequirePrebuiltConfigKey]);
         }
         catch
         {
             return false;
         }
     }
+
+    /// <summary>
+    /// The ONE parse rule for a <see cref="RequirePrebuiltConfigKey"/> value — absent or
+    /// unparseable means OFF — for a caller that already holds the configuration rather than a
+    /// service provider (the release gate reads the same key to decide whether a missing bake is
+    /// a cost or a hold, #3651). Two readers of one key must never disagree about what "true" is.
+    /// </summary>
+    /// <param name="configuredValue">The raw configuration value, or null.</param>
+    public static bool RequirePrebuiltFromValue(string? configuredValue) =>
+        bool.TryParse(configuredValue, out var parsed) && parsed;
 
     /// <summary>
     /// The NAMED refusal a require-prebuilt mesh parks a NodeType with when it would otherwise

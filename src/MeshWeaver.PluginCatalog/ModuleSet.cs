@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -73,7 +74,20 @@ public sealed record ModuleSetAdoption(
     long Sequence,
     string Id,
     DateTime AdoptedAtUtc,
-    string? AdoptedBy = null);
+    string? AdoptedBy = null)
+{
+    /// <summary>
+    /// Module simple name → the generation the adopting replica ACTUALLY LOADED (#3649): the
+    /// set's own generation for every module that loaded as proposed, and the PREVIOUS generation
+    /// for every module that fell back because the set's one does not load on this platform. So
+    /// a reader of the set records learns what the mesh RUNS, not only what it proposed — and the
+    /// GC references what runs. Null on a record written before this field existed, which reads
+    /// as "the set's generations, as far as anyone recorded". An init-only property, not a fifth
+    /// positional parameter: replacing a public record's constructor signature is a binary break
+    /// for a host compiled against the previous platform.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string>? Generations { get; init; }
+}
 
 /// <summary>
 /// Everything the <c>modules/sets/</c> directory says, read in one pass: which set the mesh has
@@ -95,6 +109,30 @@ public sealed record ModuleSetIndex(
 {
     /// <summary>An empty deployment's index — no proposal, no adoption, no conflict.</summary>
     public static readonly ModuleSetIndex Empty = new(null, null, []);
+
+    /// <summary>
+    /// Module simple name → the generation the replica that adopted <see cref="Current"/>
+    /// actually loaded (#3649) — <see cref="ModuleSet.Generations"/> of the current set for every
+    /// module that loaded as proposed, the previous generation for every module that fell back.
+    /// Empty when no set is current, or when the adoption record predates the field. What the
+    /// mesh RUNS, as opposed to what it proposed; an init-only property, for binary compatibility
+    /// with hosts compiled against the three-argument record.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string> RunningGenerations { get; init; } =
+        ImmutableSortedDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The modules of <see cref="Current"/> that RUN A PREVIOUS GENERATION on the adopting replica
+    /// (#3649): name → the generation loaded, for every module whose running generation differs
+    /// from the set's. Empty when every module loaded as proposed.
+    /// </summary>
+    public ImmutableSortedDictionary<string, string> FallbackGenerations =>
+        Current is null
+            ? ImmutableSortedDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase)
+            : RunningGenerations
+                .Where(kv => Current.Generations.TryGetValue(kv.Key, out var proposed)
+                             && !string.Equals(proposed, kv.Value, StringComparison.Ordinal))
+                .ToImmutableSortedDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// True while the mesh has declared a set that NO replica has booted onto yet — the
@@ -183,10 +221,44 @@ public static class ModuleSetStore
     /// transient SMB fault must not take a portal down or silently collapse the mesh's module set
     /// to "none". A proposal that is skipped simply leaves an older one current, which is a set
     /// that was correct a moment ago.</para>
+    /// <para>🚨 <b>It decides from the NAMES and reads only what the decision needs.</b> Every record
+    /// this store writes is named <c>&lt;sequence:D9&gt;-&lt;id16&gt;.proposed|adopted.json</c>
+    /// (<see cref="PathOf"/>), so the newest proposal and the newest adopted set are determined
+    /// from one directory listing; only the proposal files of those two sequences and the one
+    /// adoption record are opened. Measured on memex-cloud (2026-09-08): 687 records under
+    /// <c>modules/sets</c> on Azure Files, and the previous read — every file, every call — took
+    /// 10 s per call, inside a health check probed every 10 s with a 5 s timeout: no new pod could
+    /// pass its startup probe, so a rollout stuck for hours on two ageing replicas. A record that
+    /// no decision depends on is neither read nor reported — a corrupt superseded record is
+    /// <see cref="Prune"/>'s to remove, not this reader's to announce on every probe; the
+    /// conflict report likewise names only the sequences that were actually decided on.</para>
     /// </summary>
     /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under.</param>
-    /// <param name="onCorrupt">The loud channel — one call per record that could not be read.</param>
-    public static ModuleSetIndex Read(string baseDirectory, Action<string>? onCorrupt = null)
+    /// <param name="onCorrupt">The loud channel — one call per record that could not be read. This
+    /// overload also routes the duplicate-proposal NOTICE here, which is what every caller saw
+    /// before #3675; a caller that must tell the two apart passes <c>onNotice</c> on the
+    /// three-argument overload.</param>
+    public static ModuleSetIndex Read(string baseDirectory, Action<string>? onCorrupt = null) =>
+        Read(baseDirectory, onCorrupt, onNotice: onCorrupt);
+
+    /// <summary>
+    /// <see cref="Read(string, Action{string})"/> with the NOTICE channel separate from the FAULT
+    /// channel (#3675). "Sequence N was proposed by more than one replica" is a decided outcome —
+    /// the ordinally smallest id wins, every reader picks the same one, nothing is lost — and not a
+    /// record that could not be read. Delivering it through <paramref name="onCorrupt"/> made the
+    /// modules GC count it as a read fault and fail closed on EVERY pass for as long as one such pair
+    /// existed on the volume: measured on memex-cloud 2026-09-08 — 100 duplicate sequences, 687 set
+    /// records and 843 generation directories that no pass ever reclaimed, and a <c>/health</c>
+    /// probe reading all 687 records in 9–10 s on Azure Files (over its 5 s timeout), which is what
+    /// kept every new pod from passing its startup probe.
+    /// </summary>
+    /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under.</param>
+    /// <param name="onCorrupt">The loud channel — one call per record (or the directory) that could
+    /// not be read. A caller that fails closed on incomplete knowledge counts THESE.</param>
+    /// <param name="onNotice">The informational channel — one call per sequence that more than one
+    /// replica proposed, naming the winner. Never a reason to distrust the index.</param>
+    public static ModuleSetIndex Read(
+        string baseDirectory, Action<string>? onCorrupt, Action<string>? onNotice)
     {
         var directory = SetsDirectory(baseDirectory);
         string[] files;
@@ -206,64 +278,170 @@ public static class ModuleSetStore
             return ModuleSetIndex.Empty;
         }
 
-        var proposals = new List<ModuleSet>();
-        var adopted = new HashSet<string>(StringComparer.Ordinal);
+        // ── 1. Index by NAME — one listing, no file opened ──
+        // proposals: sequence → the proposal files written for it (one per proposing replica);
+        // adoptions: "{sequence}:{id16}" → the adoption file. A name this store never wrote is
+        // read as before (it cannot be placed on the index without its content).
+        var proposalFiles = new Dictionary<long, List<string>>();
+        var adoptionFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+        var unnamedProposals = new List<string>();
+        var unnamedAdoptions = new List<string>();
         foreach (var file in files)
         {
-            if (file.EndsWith(ProposedSuffix, StringComparison.Ordinal))
+            var leaf = Path.GetFileName(file);
+            if (leaf.EndsWith(ProposedSuffix, StringComparison.Ordinal))
             {
-                if (TryRead<ModuleSet>(file, onCorrupt) is { } set && set.Generations is not null)
-                    // 🚨 The comparer does NOT survive the JSON round-trip — a deserialized
-                    // ImmutableSortedDictionary carries the DEFAULT ordinal one. Module identity is
-                    // case-insensitive everywhere else (the activation record, the loaded-assembly
-                    // set, MeshBuilder's probe), and a set that alone compared case-sensitively
-                    // would silently defer a module whose entry differs only in case — the same
-                    // name reading as two.
-                    proposals.Add(set with
-                    {
-                        Generations = set.Generations
-                            .WithComparers(StringComparer.OrdinalIgnoreCase),
-                    });
+                if (TryParseRecordName(leaf, ProposedSuffix, out var sequence, out _))
+                    (proposalFiles.TryGetValue(sequence, out var list) ? list : proposalFiles[sequence] = []).Add(file);
+                else
+                    unnamedProposals.Add(file);
             }
-            else if (file.EndsWith(AdoptedSuffix, StringComparison.Ordinal)
-                     && TryRead<ModuleSetAdoption>(file, onCorrupt) is { } adoption)
+            else if (leaf.EndsWith(AdoptedSuffix, StringComparison.Ordinal))
             {
-                adopted.Add(Key(adoption.Sequence, adoption.Id));
+                if (TryParseRecordName(leaf, AdoptedSuffix, out var sequence, out var shortId))
+                    adoptionFiles.TryAdd(ShortKey(sequence, shortId), file);
+                else
+                    unnamedAdoptions.Add(file);
             }
         }
 
-        if (proposals.Count == 0)
+        // ── 2. Read the few records the decision needs ──
+        var proposals = new Dictionary<long, List<ModuleSet>>();
+        var read = new HashSet<long>();
+        void ReadProposalsAt(long sequence)
+        {
+            if (!read.Add(sequence) || !proposalFiles.TryGetValue(sequence, out var atSequence))
+                return;
+            foreach (var file in atSequence)
+                if (TryRead<ModuleSet>(file, onCorrupt) is { } set && set.Generations is not null)
+                    Add(proposals, sequence, WithCaseInsensitiveGenerations(set));
+        }
+        // A hand-placed or foreign-named record keeps the old contract: read, then indexed by content.
+        foreach (var file in unnamedProposals)
+            if (TryRead<ModuleSet>(file, onCorrupt) is { } set && set.Generations is not null)
+            {
+                Add(proposals, set.Sequence, WithCaseInsensitiveGenerations(set));
+                read.Add(set.Sequence);
+            }
+        var unnamedAdopted = new Dictionary<string, ModuleSetAdoption>(StringComparer.Ordinal);
+        foreach (var file in unnamedAdoptions)
+            if (TryRead<ModuleSetAdoption>(file, onCorrupt) is { } foreign)
+                unnamedAdopted.TryAdd(Key(foreign.Sequence, foreign.Id), foreign with
+                {
+                    Generations = foreign.Generations?.WithComparers(StringComparer.OrdinalIgnoreCase),
+                });
+
+        // The newest proposal: the highest sequence whose records can be read. A sequence whose
+        // every file is corrupt is reported (it was opened) and the next one down decides — exactly
+        // what reading everything answered, minus the records nothing depended on.
+        ModuleSet? newest = null;
+        foreach (var sequence in proposalFiles.Keys.Concat(proposals.Keys).Distinct().OrderByDescending(s => s))
+        {
+            ReadProposalsAt(sequence);
+            if (WinnerAt(proposals, sequence) is { } winner)
+            {
+                newest = winner;
+                break;
+            }
+        }
+        if (newest is null)
             return ModuleSetIndex.Empty;
 
-        // 🚨 Deterministic conflict resolution. Two replicas can complete a wave at the same
-        // moment and each write sequence N+1; both files survive (nothing is ever renamed over).
-        // Every reader must then pick the SAME one without talking to anyone, so the tie-break is
-        // the ordinally smallest content id. The loser is not lost: the proposal is derived from
-        // the activation record, so the next wave's sequence N+2 carries everything both landed.
-        var bySequence = proposals
-            .GroupBy(p => p.Sequence)
-            .ToDictionary(
-                g => g.Key,
-                g => g.OrderBy(p => p.Id, StringComparer.Ordinal).First());
+        // The current set: the highest sequence that has BOTH a proposal and an adoption record
+        // for the same id. The name index answers which sequences qualify; only their records are
+        // read, highest first, until one reads consistently (a corrupt adoption falls through to the
+        // next adopted sequence, as it always did).
+        ModuleSet? current = null;
+        ModuleSetAdoption? adoption = null;
+        var adoptedSequences = proposalFiles
+            .Where(kv => kv.Value.Any(file =>
+                TryParseRecordName(Path.GetFileName(file), ProposedSuffix, out _, out var shortId)
+                && adoptionFiles.ContainsKey(ShortKey(kv.Key, shortId))))
+            .Select(kv => kv.Key)
+            .Concat(unnamedAdopted.Values.Select(a => a.Sequence))
+            .Distinct()
+            .OrderByDescending(s => s);
+        foreach (var sequence in adoptedSequences)
+        {
+            ReadProposalsAt(sequence);
+            if (WinnerAt(proposals, sequence) is not { } winner)
+                continue;
+            var candidate = unnamedAdopted.GetValueOrDefault(Key(winner.Sequence, winner.Id));
+            if (candidate is null
+                && adoptionFiles.TryGetValue(ShortKey(winner.Sequence, ShortId(winner.Id)), out var adoptionFile)
+                && TryRead<ModuleSetAdoption>(adoptionFile, onCorrupt) is { } readAdoption
+                && string.Equals(readAdoption.Id, winner.Id, StringComparison.Ordinal))
+                candidate = readAdoption with
+                {
+                    Generations = readAdoption.Generations?.WithComparers(StringComparer.OrdinalIgnoreCase),
+                };
+            if (candidate is null)
+                continue;
+            current = winner;
+            adoption = candidate;
+            break;
+        }
+
+        // 🚨 Deterministic conflict resolution, reported for the sequences this read decided on.
+        // Two replicas can complete a wave at the same moment and each write sequence N+1; both
+        // files survive (nothing is ever renamed over). Every reader picks the SAME one without
+        // talking to anyone — the ordinally smallest content id — and the loser is not lost: the
+        // proposal is derived from the activation record, so the next wave carries everything both
+        // landed. A conflict on a sequence nothing decides on any more is history, not a finding.
         var conflicts = proposals
-            .GroupBy(p => p.Sequence)
-            .Where(g => g.Select(p => p.Id).Distinct(StringComparer.Ordinal).Count() > 1)
-            .Select(g => g.Key)
+            .Where(kv => kv.Value.Select(p => p.Id).Distinct(StringComparer.Ordinal).Count() > 1)
+            .Select(kv => kv.Key)
             .OrderBy(x => x)
             .ToImmutableList();
         foreach (var sequence in conflicts)
-            onCorrupt?.Invoke(
+            onNotice?.Invoke(
                 $"Module set sequence {sequence} was proposed by more than one replica — the "
-                + $"ordinally smallest id wins ('{bySequence[sequence].Id}'), and the next landing "
+                + $"ordinally smallest id wins ('{WinnerAt(proposals, sequence)!.Id}'), and the next landing "
                 + "wave folds every landing back in. No module is lost; the mesh runs one set.");
 
-        var newest = bySequence.Values.OrderByDescending(p => p.Sequence).First();
-        var current = bySequence.Values
-            .Where(p => adopted.Contains(Key(p.Sequence, p.Id)))
-            .OrderByDescending(p => p.Sequence)
-            .FirstOrDefault();
-        return new ModuleSetIndex(newest, current, conflicts);
+        // #3649 — what the adopting replica RAN. An adoption written before the field existed
+        // carries no generations, and then the set's own are the best anyone recorded.
+        var running = current is null || adoption is null
+            ? ImmutableSortedDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase)
+            : adoption.Generations ?? current.Generations;
+        return new ModuleSetIndex(newest, current, conflicts) { RunningGenerations = running };
     }
+
+    /// <summary>Parses a record name this store wrote — <c>&lt;sequence:D9&gt;-&lt;id16&gt;&lt;suffix&gt;</c>.</summary>
+    private static bool TryParseRecordName(string leaf, string suffix, out long sequence, out string shortId)
+    {
+        sequence = 0;
+        shortId = string.Empty;
+        if (!leaf.EndsWith(suffix, StringComparison.Ordinal))
+            return false;
+        var stem = leaf[..^suffix.Length];
+        var dash = stem.IndexOf('-');
+        if (dash <= 0 || dash == stem.Length - 1)
+            return false;
+        if (!long.TryParse(stem[..dash], NumberStyles.None, CultureInfo.InvariantCulture, out sequence))
+            return false;
+        shortId = stem[(dash + 1)..];
+        return true;
+    }
+
+    private static string ShortKey(long sequence, string shortId) => $"{sequence}:{shortId}";
+
+    private static void Add(Dictionary<long, List<ModuleSet>> proposals, long sequence, ModuleSet set)
+        => (proposals.TryGetValue(sequence, out var list) ? list : proposals[sequence] = []).Add(set);
+
+    /// <summary>The proposal that wins <paramref name="sequence"/>: the ordinally smallest id.</summary>
+    private static ModuleSet? WinnerAt(Dictionary<long, List<ModuleSet>> proposals, long sequence)
+        => proposals.TryGetValue(sequence, out var at) && at.Count > 0
+            ? at.OrderBy(p => p.Id, StringComparer.Ordinal).First()
+            : null;
+
+    // 🚨 The comparer does NOT survive the JSON round-trip — a deserialized ImmutableSortedDictionary
+    // carries the DEFAULT ordinal one. Module identity is case-insensitive everywhere else (the
+    // activation record, the loaded-assembly set, MeshBuilder's probe), and a set that alone
+    // compared case-sensitively would silently defer a module whose entry differs only in case —
+    // the same name reading as two.
+    private static ModuleSet WithCaseInsensitiveGenerations(ModuleSet set)
+        => set with { Generations = set.Generations.WithComparers(StringComparer.OrdinalIgnoreCase) };
 
     /// <summary>
     /// Proposes the set the deployment's activation record currently describes — the coordination
@@ -322,6 +500,26 @@ public static class ModuleSetStore
         ModuleSet set,
         string? adoptedBy = null,
         Action<string>? onWarn = null)
+        => RecordAdoption(baseDirectory, set, runningGenerations: null, adoptedBy, onWarn);
+
+    /// <summary>
+    /// As the four-argument form, recording what this process ACTUALLY LOADED per module (#3649)
+    /// — the set's generation where it loaded, the previous generation where boot fell back — so
+    /// the mesh's records say what runs and the GC references it. An overload, not a new optional
+    /// parameter: the four-argument signature is binary API for hosts compiled against it.
+    /// </summary>
+    /// <param name="baseDirectory">The deployment root.</param>
+    /// <param name="set">The set this process loaded.</param>
+    /// <param name="runningGenerations">Module simple name → the generation loaded, as
+    /// <see cref="RunningGenerationsOf"/> derives it; null records the set's own generations.</param>
+    /// <param name="adoptedBy">Diagnostics — which process.</param>
+    /// <param name="onWarn">The loud channel for a failed record.</param>
+    public static void RecordAdoption(
+        string baseDirectory,
+        ModuleSet set,
+        IReadOnlyDictionary<string, string>? runningGenerations,
+        string? adoptedBy = null,
+        Action<string>? onWarn = null)
     {
         ArgumentNullException.ThrowIfNull(set);
         var path = PathOf(baseDirectory, set.Sequence, set.Id, AdoptedSuffix);
@@ -329,8 +527,13 @@ public static class ModuleSetStore
         {
             if (File.Exists(path))
                 return;
+            var generations = (runningGenerations ?? set.Generations)
+                .ToImmutableSortedDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
             WriteOnce(path, JsonSerializer.Serialize(
-                new ModuleSetAdoption(set.Sequence, set.Id, DateTime.UtcNow, adoptedBy), Json));
+                new ModuleSetAdoption(set.Sequence, set.Id, DateTime.UtcNow, adoptedBy)
+                {
+                    Generations = generations,
+                }, Json));
         }
         catch (Exception ex)
         {
@@ -350,7 +553,7 @@ public static class ModuleSetStore
     /// while a wave's landings wait to be proposed, so that generation is unreferenced by the
     /// entries alone — and GC would reclaim the very bytes every replica is running.</para>
     /// </summary>
-    /// <param name="index">The set index, as <see cref="Read"/> answered it.</param>
+    /// <param name="index">The set index, as <see cref="Read(string, Action{string})"/> answered it.</param>
     public static IReadOnlySet<string> ReferencedGenerations(ModuleSetIndex? index)
     {
         var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -358,13 +561,41 @@ public static class ModuleSetStore
             foreach (var generation in set?.Generations.Values ?? Enumerable.Empty<string>())
                 if (!string.IsNullOrWhiteSpace(generation))
                     referenced.Add(generation);
+        // #3649 — and what the adopting replica actually RUNS, which for a module that fell back
+        // is a generation neither retained set names.
+        foreach (var generation in index?.RunningGenerations.Values ?? Enumerable.Empty<string>())
+            if (!string.IsNullOrWhiteSpace(generation))
+                referenced.Add(generation);
         return referenced;
+    }
+
+    /// <summary>
+    /// What a process that installed <paramref name="set"/> actually runs (#3649): the set's own
+    /// generation for every module, overridden by the generation that LOADED for every module in
+    /// <paramref name="fallbacks"/> — the records <c>MeshBuilder.InstallModules</c> registered for
+    /// the modules whose head generation did not load here. The one derivation, shared by the
+    /// boot path that records the adoption and the tests that read it back.
+    /// </summary>
+    /// <param name="set">The set the process booted onto.</param>
+    /// <param name="fallbacks">The fallback records the loader registered.</param>
+    public static ImmutableSortedDictionary<string, string> RunningGenerationsOf(
+        ModuleSet set, IEnumerable<MeshWeaver.Mesh.FallbackModule> fallbacks)
+    {
+        ArgumentNullException.ThrowIfNull(set);
+        ArgumentNullException.ThrowIfNull(fallbacks);
+        var running = set.Generations.ToBuilder();
+        running.KeyComparer = StringComparer.OrdinalIgnoreCase;
+        foreach (var fallback in fallbacks)
+            if (running.ContainsKey(fallback.Name)
+                && !string.IsNullOrWhiteSpace(fallback.PreviousGeneration))
+                running[fallback.Name] = fallback.PreviousGeneration;
+        return running.ToImmutable();
     }
 
     /// <summary>
     /// Removes set records the mesh has moved past — everything below <paramref name="keepFrom"/>.
     /// One tiny file per record, but a deployment that lands weekly for a year accumulates
-    /// hundreds, and <see cref="Read"/> is on the BOOT path.
+    /// hundreds, and <see cref="Read(string, Action{string})"/> is on the BOOT path.
     ///
     /// <para>🚨 A record below the CURRENT set references generations nothing the mesh runs
     /// resolves against — and a process still on one of them loaded from its own pinned copy
@@ -414,7 +645,16 @@ public static class ModuleSetStore
                   + $"{proposed.Generations.Count} module(s)) and NO replica has booted onto it yet "
                   + $"— it was proposed at {proposed.ProposedAtUtc:O}"
                 : $"the mesh is on module set {proposed.Sequence} ('{proposed.Id}', "
-                  + $"{proposed.Generations.Count} module(s))";
+                  + $"{proposed.Generations.Count} module(s))"
+                  + DescribeFallbacks(index.FallbackGenerations);
+
+    /// <summary>The "; N module(s) run a previous generation: …" suffix, or nothing (#3649).</summary>
+    private static string DescribeFallbacks(ImmutableSortedDictionary<string, string> fallbacks) =>
+        fallbacks.Count == 0
+            ? string.Empty
+            : $"; {fallbacks.Count} module(s) run a PREVIOUS generation because the set's does not "
+              + "load on this platform: "
+              + string.Join(", ", fallbacks.Select(kv => $"{kv.Key} ({kv.Value})"));
 
     private static string Key(long sequence, string? id) => $"{sequence}:{id}";
 

@@ -5,6 +5,8 @@ Description: One module set per mesh at a time — how a landing wave proposes t
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><path d="M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M19.1 4.9l-2.8 2.8M7.7 16.3l-2.8 2.8"/></svg>
 ---
 
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A HELD module is no longer skipped at boot by a floor; the set records the generation that actually loaded, including a fallback to the previous one. Implemented in [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661) (2026-09-08); the sections below describe the mechanism as it runs now.
+
 Replicas of one deployment used to run **different module sets**, indefinitely, and nothing made
 them converge. This page is the design that ends it: a mesh runs **one module set at a time**, a
 landing wave is what moves it, and boot adopts what the mesh declares instead of reading a record
@@ -97,6 +99,20 @@ without coordinating: **the ordinally smallest `Id` wins**, and the conflict is 
 lost — a proposal is derived from the activation record, never from the previous proposal, so the
 next wave's sequence N+2 carries everything both replicas landed.
 
+**The reader decides from the NAMES and opens only what the decision needs.** Every record's name
+carries its sequence and set id (`<sequence:D9>-<id16>.proposed|adopted.json`), so one directory
+listing determines the newest proposal and the newest adopted set; `ModuleSetStore.Read` then opens
+the proposal files of those two sequences and the one adoption record — nothing else. 🚨 Measured
+on memex-cloud, 2026-09-08: 687 records had accumulated under `modules/sets` (the GC that prunes
+them had been fail-closing — see [GC must see the set](#gc-must-see-the-set)), the previous reader
+opened every one on every call, and on Azure Files that took 10 s — inside
+`pending_module_activation`, the health check the startup probe asks every 10 s with a 5 s
+timeout. No new pod could pass the probe; the 8059 rollout sat for hours on two ageing replicas and
+KEDA could add nothing. A record no decision depends on is neither read nor reported: a corrupt
+superseded record is `Prune`'s to remove, not the reader's to announce on every probe, and the
+conflict notice names only the sequences that were actually decided on (the historical
+"proposed by more than one replica" lines that used to repeat on every boot are gone).
+
 ## Boot — converge, don't serve your own
 
 `MemexConfiguration.ConfigureMemexMesh`, in order:
@@ -106,9 +122,9 @@ ModuleActivationSidecar.Read(moduleRoot)          // what has LANDED — a movin
 ModuleSetStore.Read(moduleRoot)                   // what the MESH runs — stable between waves
 ModuleActivationBoot.ProjectOntoMeshSet(...)      // the convergence
 ModuleActivationBoot.ComputeEffectiveModuleEntries(...)
-ModuleGenerationPin.PinnedLoadPath(...)           // unchanged (#2509)
-MeshBuilder.InstallAssemblies(...)
-ModuleSetStore.RecordAdoption(...)                // AFTER the install — see below
+ModuleGenerationPin.PinnedLoadPath(...)           // unchanged (#2509); the PREVIOUS generation is pinned lazily
+MeshBuilder.InstallModules(...)                   // the set's generation, or the previous one when that cannot load (#3649)
+ModuleSetStore.RecordAdoption(...)                // AFTER the install — records what LOADED, see below
 ```
 
 `ProjectOntoMeshSet` has three rules, and each is a deliberate refusal to guess:
@@ -121,6 +137,12 @@ ModuleSetStore.RecordAdoption(...)                // AFTER the install — see b
   is the torn set.
 - A **disabled** entry passes through untouched. An uninstall deletes the folder, so honouring it is
   not optional and never waits for a set.
+- The entry's **`PreviousDirectory`** — the generation boot falls back to when the set's does not
+  load here (MeshWeaver#3649) — travels with it onto the set's generation, and is dropped only when
+  it names that very generation (the mid-wave shape: the entry moved to D with the set's G as its
+  fallback, so G is the head now). A fallback that names an *older* generation than the set's — a
+  landing that carried it forward past a displaced generation measured unloadable — is kept, and is
+  exactly what boot runs if the set's generation does not load either.
 
 🚨 **One degradation, and it is reported.** The set can only pin what is on the volume. If the pinned
 generation's bytes are gone — a replica on the PREVIOUS platform build sweeping by the entries alone
@@ -136,9 +158,17 @@ A deployment with **no** set records — every deployment until its first wave a
 gets the list back unchanged. Pre-#3395 behaviour, byte for byte, is the migration path; the first
 completed wave proposes sequence 1 and the mechanism starts.
 
-**Adoption is recorded after `InstallAssemblies`, not after the read.** The claim is *"this set is
+**Adoption is recorded after `InstallModules`, not after the read.** The claim is *"this set is
 running"*, not *"this set was read"* — a boot that dies earlier must not close a convergence window
-it never entered.
+it never entered. And since MeshWeaver#3649 the claim says *what* is running: the adoption record
+carries `Generations` — the set's generation for every module that loaded as proposed, the
+**previous** generation for every module the loader fell back on because the set's does not load on
+this platform. `ModuleSetIndex.RunningGenerations` reads it back, `FallbackGenerations` lists the
+difference, and `ModuleSetStore.Describe` names the modules that run a previous generation, so the
+boot line and the status surfaces say what the mesh runs and not only what it proposed. The
+proposal itself is unchanged — a wave proposes what it landed; whether that loads is measured at
+every boot, so a replica on a newer platform where the set's generation *does* load adopts it
+(rule R3).
 
 ## The window, and why it is bounded
 
@@ -189,6 +219,13 @@ LOADED. `ModuleLandingService.CollectGarbage` therefore unions
 sweep would reclaim the very bytes the whole mesh is executing: the 2026-08-27 outage, from the
 other side. A set directory that cannot be read counts as a read fault for the same fail-closed
 reason the entries do.
+
+🚨 Two more references since MeshWeaver#3649, for the same reason: every entry's
+**`PreviousDirectory`** — the generation boot falls back to when the head one does not load here,
+which for a Store-only module is the only generation that runs — and the **running generations**
+the current set's adoption recorded (`ReferencedGenerations` includes `RunningGenerations`). A
+sweep that trusted the head pointers alone would reclaim the generation a replica is executing
+because a newer one exists that cannot load — the shape #3649 removes.
 
 The same pass prunes set records below the CURRENT set — never below the proposal, which would take
 the mesh's own generations out of the reference set.

@@ -8,6 +8,8 @@ icon: /static/NodeTypeIcons/box.svg
 
 # CI Content Bake
 
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
+
 Every `.cs` stored in a mesh node compiles **at runtime in the portal** (see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation)), and until issue #1660 that was also
 the *deploy* path: every image roll changed the framework identity, invalidated every cached
@@ -44,6 +46,11 @@ persists:
   **dependency record**, which the consumer validates against ITS environment before adopting and
   stamps on adopt) plus each compiled assembly and its symbols;
 - `framework-mvid.txt` — the framework identity every bundle in the directory is keyed to.
+- `platform-surface.json` — the platform's TYPE SURFACE (MeshWeaver#3651): every assembly the bake
+  compiled against and the full type names each exports, keyed to the same identity. The bake runs
+  inside the platform image, so it is the one process that can write what that platform carries;
+  the release gate reads it back to link an instance's landed modules against a release that is not
+  running anywhere it can reach — see [The Module Platform Link Gate](/Doc/Architecture/ModulePlatformLinkGate).
 
 Only types that reached `CompilationStatus.Ok` contribute. A type the gate's known-debt allowlist
 tolerates simply has no entry — the consumer compiles it as it would have anyway. A type that
@@ -652,8 +659,8 @@ lose that. `PlatformBakeLaneGuard` pins both halves — `--bake-output` (the mes
 banned in that job, `--seed` is required, and the bake must come first. The job then copies the
 resulting bundles to the portals'
 shared storage (`.github/scripts/publish-bake-bundles.sh`), laid out
-`prebuilt-bundles/<identity>/<source>/<bundle>.zip`, sealed by a `_complete` sentinel written
-strictly LAST. Each booting pod seeds ONLY its own identity's SEALED source directories
+`prebuilt-bundles/<identity>/<source>/<bundle>.zip` with `platform-surface.json` beside them,
+sealed by a `_complete` sentinel written strictly LAST. Each booting pod seeds ONLY its own identity's SEALED source directories
 (`ShippedPrebuiltBundles.SeedPublishedRoot`, config `PreWarm:PrebuiltBundleRoot`) before its
 sweep — an unsealed or torn publication (a publish that died mid-way) is refused loudly and the
 sweep compiles instead. "Rebuild only when we need to" applies to the publish too: when the
@@ -865,9 +872,15 @@ evidence. So each of these resolves to a FULL bake, naming itself in the log and
 - a baseline commit this checkout cannot resolve, or one that is not an ancestor of HEAD
   (history rewritten);
 - the selector refusing — an **empty diff** is a broken range, never "nothing to do";
-- the selector answering ALL modules: a change under `scripts/`, `.github/`, a repo-root file, or
-  **a module directory that no longer exists**. That last one is why a DELETED module still
-  shrinks the publication correctly.
+- the selector answering ALL modules: a change under `scripts/`, `.github/`, a repo-root file the
+  platform's `NOOP_FILES` does not name, or **a module directory that no longer exists**. That last
+  one is why a DELETED module still shrinks the publication correctly.
+
+> 🚨 **The MODULE lane's copy of this decision — `node-repo-scope.py` — had two blind spots that
+> made "a repo-root file" and "the two `NOOP_DIRS` copies differ" cost a full run each, measured at
+> 105 jobs / 345 job-minutes for a one-file documentation diff and at *every pull request three
+> satellites ever opened*. Both are closed, with the falsification evidence and the numbers:
+> [What a Pull Request Rebuilds](/Doc/Architecture/BuildScopeNarrowing).**
 
 And one verdict that is neither: **`scope=none`**, when the sealed publication already records
 *this* commit for *this* identity. It is a positive finding — read from every target, logged with

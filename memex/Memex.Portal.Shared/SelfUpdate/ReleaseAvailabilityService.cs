@@ -17,12 +17,16 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// <summary>
 /// 🚨 <b>The deployment gate (#1754): may this environment be rolled to that release?</b>
 ///
-/// <para>An image is not rollable just because its version is newer. Every package the environment
-/// DEPLOYS must also have a usable artifact for the target release — a sealed content bake under
-/// the target's framework identity, or a compiled module whose <c>MinMeshVersion</c> floor the
-/// target satisfies. Rolling without that check is what turns a routine update into a boot that
-/// Roslyn-compiles the whole content set, and a type that fails to compile parks its hub for the
-/// full 60 s activation budget.</para>
+/// <para>An image is not rollable just because its version is newer — but since #3651 (maintainer
+/// rule of 2026-09-07, <c>Doc/Architecture/ModuleAdoptionPolicy</c>) the ONLY thing that holds it
+/// is MEASURED: a module this environment has landed, for which the target publishes no build,
+/// whose bytes reference a type the target's platform surface does not carry. A missing content
+/// bake is reported ("would recompile at boot: …") and the roll proceeds — the compile is what
+/// every PR of that content already proved green; <c>Modules:RequirePrebuilt</c> keeps it a hold
+/// for the instances that opt in. A declared <c>MinMeshVersion</c> floor is worded onto the
+/// advisories and decides nothing. This service is what adds the environment's LANDED generations
+/// (the activation sidecar) to the gate's inputs and runs the link measurement against the surface
+/// the publication carries.</para>
 ///
 /// <para><b>Why the service lives here, in the registry, and not in each portal's poller.</b> An
 /// instance only knows itself; it cannot answer "is this release safe for environment X". Memex
@@ -63,6 +67,21 @@ public class ReleaseAvailabilityService(
     /// <summary>The published bundle root this deployment mounts, or null when it consumes no CI
     /// bakes.</summary>
     public string? PublishedRoot => configuration[ShippedPrebuiltBundles.PublishedRootConfigKey];
+
+    /// <summary>
+    /// The instance's gate policy (#3651): <c>Modules:RequirePrebuilt</c> — off by default — is the
+    /// one knob that turns a missing content bake from a reported cost back into a hold, because on
+    /// such an instance the seeder refuses the boot compile and the type would park. Read from the
+    /// SAME configuration the published root comes from — the host's — through the seeder's own
+    /// parse rule, so the gate and the seeder cannot disagree about what the key says.
+    /// </summary>
+    public ReleaseGatePolicy Policy =>
+        new(PrebuiltAssemblySeeder.RequirePrebuiltFromValue(
+            configuration[PrebuiltAssemblySeeder.RequirePrebuiltConfigKey]));
+
+    /// <summary>The module root every landed generation lives under — the same resolution the
+    /// landing service and the boot loader share, so the gate measures the bytes boot would load.</summary>
+    private string ModuleRootPath => ModuleRoot.Resolve(configuration);
 
     /// <summary>
     /// 🚨 <b>Does this gate APPLY to this deployment at all?</b> Returns the reason it does not, or
@@ -146,7 +165,7 @@ public class ReleaseAvailabilityService(
     /// plugins and there is nothing left for a readiness gate to refuse.</para>
     ///
     /// <para><b>The predicate is the same one.</b> Each candidate is judged by exactly the code
-    /// <see cref="IsUpdatable"/> runs — <see cref="ReleaseAvailability.IsUpdatable"/> over
+    /// <see cref="IsUpdatable"/> runs — <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> over
     /// <see cref="PublishedBundleCatalogue"/>'s observation — and the walk itself lives in
     /// <see cref="RollSelection"/>. There is deliberately no second copy of "does this release ship
     /// all plugins" to drift from the first.</para>
@@ -259,10 +278,8 @@ public class ReleaseAvailabilityService(
         ImmutableArray<RequiredPackage> required,
         string version,
         Func<string, string?>? condemned) =>
-        PublishedBundleCatalogue
-            .Observe(pool, publishedRoot, version, logger)
-            .Select(observation => ReleaseAvailability.IsUpdatable(
-                observation.Target, required, observation.Artifacts))
+        Judge(publishedRoot, required, version)
+            .Do(LogAdvisories)
             .Select(verdict => verdict.IsUpdatable && condemned?.Invoke(version) is { } refusal
                 // Folded into the SAME verdict shape rather than kept beside it, so the walk has
                 // one notion of "this candidate is out" and the refusal travels with its reason.
@@ -387,10 +404,45 @@ public class ReleaseAvailabilityService(
                 // verdict is re-evaluated from scratch on every tick, so a portal that has not yet
                 // written its records holds for one interval and then proceeds.
                 ? Observable.Return(UpdatabilityVerdict.Unavailable(VacuousDenominatorReason))
-                : PublishedBundleCatalogue
-                    .Observe(pool, publishedRoot, targetVersion, logger)
-                    .Select(observation => ReleaseAvailability.IsUpdatable(
-                        observation.Target, required, observation.Artifacts)));
+                : Judge(publishedRoot, required, targetVersion).Do(LogAdvisories));
+    }
+
+    /// <summary>
+    /// 🚨 THE SHARED PREDICATE, with its two IO halves (#3651) — read the target's publication
+    /// (<see cref="PublishedBundleCatalogue.Read"/>), link every landed module against the surface
+    /// it carries (<see cref="ModuleLinkObservation.Measure"/>), then decide
+    /// (<see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts, ReleaseGatePolicy)"/>).
+    /// Both IO halves run on the file-system pool, never on a hub action block; the rule is pure.
+    /// Every roll path — the poller's selection, the per-version verdict, the endpoints — comes
+    /// through here, so no caller can judge a candidate without the measurement.
+    /// </summary>
+    private IObservable<UpdatabilityVerdict> Judge(
+        string publishedRoot, ImmutableArray<RequiredPackage> required, string? version)
+    {
+        var policy = Policy;
+        return pool.InvokeBlocking(_ =>
+        {
+            var observation = PublishedBundleCatalogue.Read(publishedRoot, version, logger);
+            var measured = ModuleLinkObservation.Measure(observation.Artifacts, required, logger);
+            return ReleaseAvailability.IsUpdatable(observation.Target, required, measured, policy);
+        });
+    }
+
+    /// <summary>
+    /// 🚨 The advisories SAY something and decide nothing, so they are logged (Information) beside
+    /// the verdict rather than folded into it: the boot-compile cost and a link check that could
+    /// not be made (#3651), and the declared floors (#3648). On 2026-09-07 the floor sentences were
+    /// the HOLD reasons ("77 plugins required … every one declined"); now they are what an
+    /// operator reads while the roll proceeds on what is measured.
+    /// </summary>
+    private void LogAdvisories(UpdatabilityVerdict verdict)
+    {
+        if (verdict.Advisories.IsDefaultOrEmpty)
+            return;
+        logger?.LogInformation(
+            "[ReleaseGate] {Count} advisory line(s) beside the verdict — reported, never a hold "
+            + "(#3651/#3648): {Advisories}",
+            verdict.Advisories.Length, string.Join("; ", verdict.Advisories));
     }
 
     /// <summary>Why an empty denominator is a hold rather than a pass — see the call site.</summary>
@@ -444,43 +496,72 @@ public class ReleaseAvailabilityService(
     /// </summary>
     private IObservable<ImmutableArray<RequiredPackage>> RequiredPackages(SealedBundleFloor floor) =>
         InstalledPackages()
-            .Select(installed =>
-            {
-                var required = installed
-                    .Select(manifest => new RequiredPackage(
-                        manifest.Id,
-                        manifest.Id,
-                        LiveFloorOf(manifest.MinMeshVersion),
-                        floor.Bundles.Contains(manifest.Id)))
-                    .ToImmutableArray();
-                // 🚨 PRINT THE DENOMINATOR. A completeness gate whose expected count nobody can
-                // read is one nobody can tell from a vacuous one — the count being non-zero is
-                // the claim, so it is logged rather than inferred from a pass.
-                logger?.LogInformation(
-                    "[ReleaseGate] denominator: {ContentBearing} of {Installed} installed package(s) "
-                    + "must carry a sealed bake, taken from {Identities} framework identity(ies) this "
-                    + "root has published: {Packages}",
-                    required.Count(p => p.HasContent),
-                    required.Length,
-                    floor.Identities,
-                    string.Join(", ", required.Where(p => p.HasContent).Select(p => p.Name).Order(StringComparer.Ordinal)));
-                return required;
-            });
+            // The activation sidecar is a file read, so the package list is built on the
+            // file-system pool rather than on the query's hub thread.
+            .SelectMany(installed => pool.InvokeBlocking(_ => BuildRequiredPackages(installed, floor)));
 
     /// <summary>
-    /// A module's floor, but only when the RUNNING platform already satisfies it — otherwise null.
-    ///
-    /// <para>🚨 The same regression rule the content half uses, for the same reason. SemVer puts
-    /// <c>3.0.0-rc4.ci.4049</c> BELOW <c>3.0.0</c>, so a module declaring <c>minMeshVersion:
-    /// 3.0.0</c> is below floor on every <c>-rc</c> platform — including the one prod runs. Judged
-    /// absolutely it would hold that environment on every release forever; judged as a regression
-    /// it holds only a roll that would newly break a module that works today. Since self-update
-    /// rolls strictly forward (<c>VersionSelect.IsNewer</c> has already passed), a floor met today
-    /// is met by the target too — so this fires exactly where it should, on a ROLLBACK below a
-    /// module's declared floor.</para>
+    /// The gate's inputs from the install records plus the ACTIVATION SIDECAR (#3651): each
+    /// package's module by name (the record's <c>module</c> field) and, when a generation of it is
+    /// landed on this instance, the entry DLL of the ACTIVE generation — through the one resolution
+    /// rule boot and the landing service share (<see cref="ModuleActivationBoot.LandedDllPath"/>),
+    /// so what the gate links against the target's surface is exactly what boot would load.
     /// </summary>
-    private static string? LiveFloorOf(string? minMeshVersion) =>
-        ModulePlatformFloor.DeclineReason(minMeshVersion) is null ? minMeshVersion : null;
+    private ImmutableArray<RequiredPackage> BuildRequiredPackages(
+        ImmutableArray<PackageManifest> installed, SealedBundleFloor floor)
+    {
+        var moduleRoot = ModuleRootPath;
+        var landed = ModuleActivationSidecar.Read(moduleRoot,
+                message => logger?.LogWarning("[ReleaseGate] activation sidecar: {Message}", message))
+            .Entries
+            .Where(entry => entry.Enabled && !string.IsNullOrWhiteSpace(entry.Name))
+            .GroupBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+
+        var required = installed
+            .Select(manifest => new RequiredPackage(
+                manifest.Id,
+                manifest.Id,
+                // 🚨 #3648 — the declared floor passes through AS DECLARED. It used to
+                // be filtered to "only when the running platform already satisfies it"
+                // (LiveFloorOf), a regression-check reading that still held every
+                // production portal on 2026-09-07: the predicate treated an unmet floor
+                // as a BLOCKER. It is an advisory now (UpdatabilityVerdict.Advisories),
+                // so there is nothing to protect the verdict from.
+                manifest.MinMeshVersion,
+                floor.Bundles.Contains(manifest.Id))
+            {
+                ModuleName = string.IsNullOrWhiteSpace(manifest.Module) ? null : manifest.Module,
+                LandedModulePath = LandedPathOf(moduleRoot, manifest.Module, landed),
+            })
+            .ToImmutableArray();
+        // 🚨 PRINT THE DENOMINATOR. A completeness gate whose expected count nobody can
+        // read is one nobody can tell from a vacuous one — the count being non-zero is
+        // the claim, so it is logged rather than inferred from a pass.
+        logger?.LogInformation(
+            "[ReleaseGate] denominator: {ContentBearing} of {Installed} installed package(s) "
+            + "carry content ({Landed} with a landed module generation to link), taken from "
+            + "{Identities} framework identity(ies) this root has published: {Packages}",
+            required.Count(p => p.HasContent),
+            required.Length,
+            required.Count(p => p.LandedModulePath is not null),
+            floor.Identities,
+            string.Join(", ", required.Where(p => p.HasContent).Select(p => p.Name).Order(StringComparer.Ordinal)));
+        return required;
+    }
+
+    /// <summary>The ACTIVE landed generation's entry DLL for a package's module, or null when the
+    /// package ships no module, none is landed, or the landed bytes are gone (then nothing would
+    /// load across the roll, and there is nothing to measure).</summary>
+    private static string? LandedPathOf(
+        string moduleRoot, string? moduleName, IReadOnlyDictionary<string, ModuleActivationEntry> landed)
+    {
+        if (string.IsNullOrWhiteSpace(moduleName) || !landed.TryGetValue(moduleName, out var entry))
+            return null;
+        return ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry)
+            ? ModuleActivationBoot.LandedDllPath(moduleRoot, entry)
+            : null;
+    }
 
     /// <summary>
     /// This environment's install records — the same query the bundle index serves from, so the

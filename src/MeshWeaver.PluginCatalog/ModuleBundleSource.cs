@@ -16,13 +16,12 @@ namespace MeshWeaver.PluginCatalog;
 /// deadlock: modules extracted from the platform image declared a floor above the registry's own
 /// version, the publish path refused to carry them, and the registry could not update to that
 /// version because its <c>Modules:Required</c> gate held the rollout for exactly those absent
-/// modules. The floor is the CONSUMER's gate, applied against the CONSUMER's platform — it rides
-/// the bundle index and the bundle manifest, and every consumer checks it three times
-/// (<c>ModuleUpdateDecision.Decide</c> before any download, <c>PluginBundleClient.LandFromBundle</c>
-/// against the manifest, <see cref="ModuleLandingService"/> at placement) — so serving above-floor
-/// bytes costs a below-floor consumer zero bytes and can never land where they would not load. A
-/// serve-side floor re-check would be a SECOND notion of the same gate, wrong for the warehouse
-/// role by construction.</para>
+/// modules. Loadability is the CONSUMER's question, measured against the CONSUMER's platform by
+/// the link probe in <see cref="ModuleLandingService"/> at placement (#3538) — so serving bytes
+/// this instance cannot load can never land where they would not load. The declared floor rides
+/// the bundle index and the bundle manifest as an ADVISORY (#3648): the consumer logs what the
+/// module claims and lands what links. A serve-side check of either would be a SECOND notion of
+/// the same question, wrong for the warehouse role by construction.</para>
 ///
 /// <para>Pure decision + one directory listing — no mesh, no HTTP — so the serve rules are
 /// pinnable with a temp directory.</para>

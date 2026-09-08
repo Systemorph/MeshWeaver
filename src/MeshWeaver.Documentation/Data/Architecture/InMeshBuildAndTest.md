@@ -131,10 +131,16 @@ The maintainer's shape for a CI job, in four lines:
 
 ```yaml
 - uses: actions/checkout@v7                                   # 0. checkout git
-- run: dotnet tool install -g MeshWeaver.Cli                  # 1. install the CLI
-- run: memex build plugin <path>                              # 2. pull them, run in them, build + test
-    --image <tester> --platform-image <portal>
+- run: dotnet run --project <meshweaver>/src/MeshWeaver.Cli \  # 1. the CLI, from source
+    -- build plugin <path>                                    # 2. pull them, run in them, build + test
+       --image <tester> --platform-image <portal>
 ```
+
+🚨 **The CLI is not installed from a feed.** `MeshWeaver.Cli` is not published
+([NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement)); a lane either runs it from a
+platform checkout, as above, or — as every lane in this fleet actually does — invokes the
+`mw-plugin-test` image's entrypoint directly, the `memex build` verb being only the trip into the
+container.
 
 **`memex build plugin <path> --image <tester> --platform-image <portal>` is the whole contract.** A
 workflow says *which plugin this job is about* and *which images to build it against*; the tool pulls
@@ -247,8 +253,9 @@ publishing:**
 🚨 **"Package" here is a module bundle in the plugin registry, not NuGet.** That is not in tension
 with *"no NuGet packages"* above: the platform is never consumed as a NuGet package, and what gets
 published at the end of a build is the plugin's own bundle, which is how installs already receive
-modules. The one NuGet artefact in the whole picture is the CLI itself
-(`dotnet tool install -g MeshWeaver.Cli`), which is the tool, not the product.
+modules. There is no NuGet artefact anywhere in this picture — the CLI itself stopped being
+published on 2026-09-07 ([NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement)), and
+the two packages that survive are entry points a newcomer starts from, not build inputs.
 
 ### Why the downstream half is the important half
 

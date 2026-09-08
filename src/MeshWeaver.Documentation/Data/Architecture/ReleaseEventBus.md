@@ -78,8 +78,8 @@ rebuilt against it.
 Release
   repository    Systemorph/MeshWeaver.Plugins
   packageId     MeshWeaver.Blazor.EntityViews
-  version       3.0.0-rc8.ci.5432
-  platform      3.0.0-rc8.ci.5432     # the framework identity it was built against
+  version       3.0.0-ci.5432
+  platform      3.0.0-ci.5432         # the framework identity it was built against
   commit        <sha>
 ```
 

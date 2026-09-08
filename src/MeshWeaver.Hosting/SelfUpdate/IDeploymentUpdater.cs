@@ -61,6 +61,34 @@ public interface IDeploymentUpdater
     /// <returns>How the migration ended; never throws for an outcome the poller can act on.</returns>
     Task<MigrationRunOutcome> RunMigrationAsync(string versionTag, CancellationToken ct) =>
         Task.FromResult(MigrationRunOutcome.NotSupported);
+
+    /// <summary>
+    /// 🚨 Restarts the portal workloads ON THE IMAGE THEY RUN — the activation of a landed module
+    /// generation (#3650). A module never swaps inside a running process (restart-as-activation,
+    /// <c>PendingRestart</c>); until this member existed that restart waited for the next
+    /// UNRELATED platform roll, which could be days away, so "a module version ships" and "an
+    /// installation uses it" were separated by whatever the image happened to do. The poller calls
+    /// this when a check finds nothing newer to roll to but the module activation record says a
+    /// restart is pending — paced by the same <c>MinRollInterval</c> floor as any other roll.
+    ///
+    /// <para>🚨 It is NOT <see cref="PatchToVersionAsync"/> with the installed tag. The Kubernetes
+    /// implementation patches the container image with a strategic merge, and a patch whose pod
+    /// template is unchanged rolls NOTHING — the last-rolled stamp sits on the Deployment's own
+    /// metadata, outside the template, precisely so that it never triggers a rollout of its own.
+    /// A restart needs a template-level change (what <c>kubectl rollout restart</c> does:
+    /// <c>spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]</c>), stamped
+    /// together with the last-rolled annotation so the floor sees it as the roll it is.</para>
+    ///
+    /// <para>Returns <c>true</c> when a restart was issued; <c>false</c> when this updater cannot
+    /// issue one — the default, so a host whose updater predates the seam (and the detect-only
+    /// fallback) keeps building and reports the pending restart as a state an operator has to act
+    /// on, never as a restart that happened. A default rather than an abstract member so the seam
+    /// can land in core first without turning every dependent's build red; the Kubernetes updater
+    /// in <c>MeshWeaver.SelfUpdate.Aks</c> (MeshWeaver.Plugins) implements it.</para>
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Whether a restart of the running image was issued.</returns>
+    Task<bool> RestartAsync(CancellationToken ct) => Task.FromResult(false);
 }
 
 /// <summary>

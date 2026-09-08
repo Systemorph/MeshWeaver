@@ -1,7 +1,7 @@
 ---
 Name: Plugin Update on Green Build
 Category: Architecture
-Description: A plugin repo's CI going green reaches every installation that uses it, with nobody opening the catalog and no poll timer anywhere. An installation with GitHub access subscribes to a build node the webhook writes; an installation that installs from a registry reads that registry's own feed at startup. Both react per module, gated on content identity, so a build that changed nothing stays completely silent.
+Description: A plugin repo's CI going green reaches every installation that uses it, with nobody opening the catalog. An installation with GitHub access subscribes to a build node the webhook writes; an installation that installs from a registry reads that registry's own feed at startup, is told by the registry the moment a module is published, and reconciles on a half-hourly safety net so a lost notification is bounded. All react per module, gated on content identity, so a build that changed nothing stays completely silent.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/><path d="m9 12 2 2 4-4"/></svg>
 ---
 
@@ -87,7 +87,7 @@ There are now two inputs, by deployment shape:
 | | learns from | how | when |
 |---|---|---|---|
 | **Registry instance** (holds the GitHub credential) | its plugin repos | `PluginUpdateWatcher` subscribes to `Admin/_Build/{owner}.{repo}` | on every green build |
-| **Consumer** (registry token, no GitHub) | its registry | `RegistryUpdateReconciler` **reads** `GET /api/plugins` | at startup |
+| **Consumer** (registry token, no GitHub) | its registry | `RegistryUpdateReconciler` **reads** `GET /api/plugins` | at startup; on a **module-published broadcast** from the registry (that one package); and every **30 minutes** as a safety net (#3650) |
 
 Both hand the per-module verdict to the same `PackageUpdateReconciler`, so they can never disagree
 about what "changed" means or about who opted into an unattended install. Both are registered
@@ -107,18 +107,87 @@ the same content identity the install records carry, so **comparing the two answ
 outright**. That is the shape `BuildProtocolDriver.FollowGo` arrived at for the cross-cluster case:
 end on a fact you can read, not on a notification that cannot reach you.
 
-### 🚨 Not a poll timer
+### 🚨 Three events and a floor — never "the next boot" (#3650)
 
-The reconcile runs on an event the deployment already has — **this process starting** — and not on a
-clock. A timer answers "how stale am I willing to be", which is a question nobody asked, and it turns
-one misconfiguration into permanent background load.
+The reconcile used to run on exactly one event, **this process starting**, on the reasoning that the
+restart *is* the fan-out: plugin content and the framework image ship from the same CI, and a portal
+rolls onto each image. That bound stopped being honest when the module lane became eager — rule R3
+of the Module Adoption Policy (`Doc/Architecture/ModuleAdoptionPolicy`), maintainer 2026-09-07: *as soon
+as a new module version ships, we start using it.* A module publish is not an image roll, so "the
+next boot" could be days away; and an installation running its previous generation of a module
+([the keep-the-old fallback](/Doc/Architecture/Modules), #3649) had no event at all that would ever
+re-examine it.
 
-On these deployments the restart *is* the fan-out: plugin content and the framework image are
-published by the same CI, and the portals self-update onto each new image, so a green plugin build
-and a pod roll already arrive together. The honest bound is therefore **a consumer learns on its next
-boot** — plus immediately, on demand, whenever somebody opens the catalog page, which reads the same
-feed and offers the same **Update**. An installation that never restarts also never picks up
-framework fixes, which is a louder problem with its own alarm.
+The consumer now reconciles on three events, and everything a consumer learns still ends on a fact
+it reads — never on what it was told:
+
+| event | what runs | latency |
+|---|---|---|
+| **boot** | the full pass — content lane, module lane, module-set proposal — with its retry budget and its deferral (below) | one process start |
+| **module-published broadcast** | the module lane for **that one package**: the registry POSTs a `ModulePublished` record to the consumer's webhook inbox the moment a bundle lands on its shelf | minutes |
+| **safety net** (`PluginCatalog:ReconcileSafetyNetInterval`, default 30 min, `≤ 0` disables) | the full pass, against every configured registry | at most the interval |
+
+Every pass runs on **one serialized lane** inside the reconciler (`Subject` + `Concat`): a landing
+wave ends by proposing the mesh's module set from the activation record as it stands
+([Module Set Convergence](/Doc/Architecture/ModuleSetConvergence)), and two waves interleaving would
+let one propose the other's half-landed mix — the torn set the proposal exists to make unreachable.
+
+#### The broadcast is a wake-up, never the truth
+
+The registry does not know which installations installed a package, and it does not need to. It
+tells **every registered instance** that recorded a `HomeUrl` (`PluginCatalog:HomeUrl` at
+registration): one `ModulePublished` record — `event: module-published`, the registry's URL, the
+package, the module, the version, the framework identity — POSTed to
+`{HomeUrl}/api/hooks/Plugins/_RegistryReconcileLedger`. The target is the reconcile ledger node the
+reconciler already **owns**, so it exists on every installation with a registry configured and
+nothing new has to be seeded; the delivery lands as a durable `WebhookEvent` under its `_Inbox`, and
+the reconciler drains it on its own thread. A delivery that lands while the process is down replays
+into the first emission of the next boot's watch: at-least-once, and the decision behind it is
+idempotent.
+
+The consumer reads nothing off the record but *which registry* (matched by host against its
+configured registries — an unknown registry's delivery is dropped) and *which package*. The drain
+then reads the package's **own install record** (is it installed here, which module does it
+declare), the registry's **own authenticated bundle index**, and runs the same `ModuleUpdateDecision`
+the boot runs against the same activation record. A stale, duplicated or forged delivery therefore
+costs one authenticated index read for one installed package — which is what lets the delivery be
+**unsigned by default**. A consumer that allowlists the target *with* a `SecretConfigKey` is answered
+with a matching `X-Hub-Signature-256` when the registry configures
+`Plugins:Registry:BroadcastSecret`; a mismatch is a 401 the registry logs per consumer, never a
+silent drop (#3312).
+
+The fan-out is **reporter-class**: it runs detached from the publisher's response (a CI job must not
+wait on a slow consumer), a 404 (target not allowlisted) or an unreachable instance is one logged
+line per consumer, and nothing about it can fail the publish. Which is exactly why the floor exists.
+
+#### The safety net is the floor, not the driver
+
+A broadcast reaches an installation over a chain nobody re-verifies — the `HomeUrl` it registered,
+the `WebhookInbox:Targets` slot, the ingress between — and every joint of it fails **silently**: an
+installation whose channel is dead is byte-identical to one that is up to date. The safety net
+bounds that, the way `SelfUpdate:SafetyNetCheckInterval` bounds a dead build-event channel (#2494):
+it is not a poll that drives the update, it is the worst case a lost broadcast can cost. It cannot
+change *what* lands — the same decision runs, and an unchanged module costs one feed read and one
+index read, no download — only how late. Its default, 30 minutes, is half of
+`SelfUpdate:MinRollInterval`, so a module that ships is landed before the next restart the roll
+floor allows.
+
+A safety-net read that finds the registry **pending** (the boot deferred it, see #2888 below) does
+not run a second pass: the read itself reported to the reconciler and drained the deferral. A read
+that fails is a Warning and the next tick; it never notifies admins or marks the ledger — that is the
+boot deferral's job, and the boot's retry budget is what such a registry has already exhausted.
+
+#### The restart happens
+
+A landed generation still loads only at a restart — a module never swaps inside a running process.
+What changes is who takes the restart: the self-updater, after the platform half of every check that
+patched nothing, reads the activation record and, when `PendingRestart` is raised, rolls the
+workloads **on the image they run** (`IDeploymentUpdater.RestartAsync`), paced by
+`SelfUpdate:MinRollInterval` exactly like a roll. A wave this process ends
+(`ModuleLandingService.ModuleSetProposed`) is itself a trigger, so the check does not wait for the
+hourly safety net. See [Modules → Auto-update](/Doc/Architecture/Modules).
+
+A human opening the catalog page still reads the same feed and offers the same **Update**.
 
 ### 🚨 A boot read that fails past its budget is deferred, not dropped (#2888)
 
@@ -155,10 +224,10 @@ registry can never land an older snapshot over a newer one — the same shape as
 "one at a time" in the codebase, never a lock
 ([Removing Hand-Woven Gates](/Doc/Architecture/RemovingHandWovenGates)).
 
-What this deliberately does **not** do: retry on a timer, widen the budget, or add a new caller
-that has to remember to reconcile. The design decision above — no poll, the restart and the
-catalog open are the events — stands; the change is that a catalog open now *is* a reconcile when
-one is owed, which the log line had always claimed and the code had never done.
+What this deliberately does **not** do: widen the budget, or add a new caller that has to remember
+to reconcile. The change is that a catalog open now *is* a reconcile when one is owed, which the log
+line had always claimed and the code had never done. (The safety net above reads the feed too, and a
+successful read from it drains a pending registry through this same path — one pass, not two.)
 
 ## Why a node and not a call
 
@@ -304,6 +373,21 @@ in (the Helm chart sets this for our portals). Per package: set `AutoUpdate` on 
 package's record. Both are edits to the record's own flag — the deployment key is only the
 install-time seed.
 
+### 4. Receiving the module-published broadcast (consumers, #3650)
+
+On each **consuming** installation, allowlist the reconciler's inbox target and record the public
+URL the registry should deliver to:
+
+| key | value |
+|---|---|
+| `WebhookInbox:Targets:N` | `Plugins/_RegistryReconcileLedger` |
+| `PluginCatalog:HomeUrl` | the installation's public base URL — sent at registration and stored on its instance record |
+| `WebhookInbox:Targets:N:SecretConfigKey` | *optional* — the key holding a shared secret; then set the same value on the registry as `Plugins:Registry:BroadcastSecret` |
+| `PluginCatalog:ReconcileSafetyNetInterval` | *optional* — default `00:30:00`; `00:00:00` disables the safety net (broadcast and boot only) |
+
+Nothing is configured on the registry for the fan-out itself: its subscriber set is the instances
+registered with it. An installation that configures none of this is reached by the safety net alone.
+
 ### What you should see
 
 - **Nothing changed** → no notification, no log line beyond the build record itself. This is the
@@ -327,7 +411,11 @@ install-time seed.
 | A green build produced nothing, and the log says the fact is **NOT recorded AND the sync did not run** | The `Admin/_Build/{owner}.{repo}` write failed. GitHub was answered 200, so there is no redelivery. The payload is kept at `Admin/_MissedBuild/{owner}.{repo}` (#3374) — read it with `MissedBuildFact.WatchQuery`, and compare it against the current build record to see whether a later green run of the SAME workflow has already superseded it. If a second Warning says the miss could not be recorded either, the log line is the only witness and the fact must be replayed from GitHub. |
 | Build node updates but no installation reacts | The package is not installed on that instance. A catalog lists far more packages than any instance installs; only packages with an install record are considered. |
 | The same "Update available" reminder keeps reappearing, or the bell re-lights on one you dismissed | Before #3213 this was the norm — a new row per reconcile, forever. The reminder is now told once per candidate version: the install record carries `NotifiedModuleVersion`, and the notification's id is derived from *(record, kind, candidate)*. Seeing it again means the candidate genuinely moved (`ModuleVersion` differs from the one on the record's marker) — read the record and compare the two, rather than assuming a duplicate. |
-| The boot log says the feed of a registry could not be read after N attempts and was **recorded as PENDING**, and admins got a bell notification pointing at `Plugins/_RegistryReconcileLedger` | The registry stayed unavailable for longer than the boot's retry budget (#2888). Nothing is lost: the ledger entry for that registry reads `Pending: true`, and the reconcile runs on the next successful feed read — open the catalog page (or install anything from that registry) once the registry is back, then check the entry reads `LastReconciledVia: feed-read`. If the registry answers a *definite* refusal (401/403) instead, the entry is pending too, but no catalog open will drain it until the key or grant is fixed — the `LastFault` names which. |
+| The boot log says the feed of a registry could not be read after N attempts and was **recorded as PENDING**, and admins got a bell notification pointing at `Plugins/_RegistryReconcileLedger` | The registry stayed unavailable for longer than the boot's retry budget (#2888). Nothing is lost: the ledger entry for that registry reads `Pending: true`, and the reconcile runs on the next successful feed read — the safety net's, a catalog open, an install — once the registry is back; then check the entry reads `LastReconciledVia: feed-read`. If the registry answers a *definite* refusal (401/403) instead, the entry is pending too, but no read will drain it until the key or grant is fixed — the `LastFault` names which. |
+| A module was published and the registry's log says `{Package}: 0/N consumer(s) told — … (404: …)` for this installation | The installation has not allowlisted the inbox target (`WebhookInbox:Targets:N = Plugins/_RegistryReconcileLedger`), or its instance record carries no `HomeUrl`, or the ledger node does not exist yet (no boot pass has run against a configured registry). The safety net reconciles it within `PluginCatalog:ReconcileSafetyNetInterval` regardless; the ledger's `LastReconciledVia` then reads `safety-net` instead of `broadcast`. |
+| The registry's log says a consumer answered **401** to the broadcast | The consumer's target declares a `SecretConfigKey` and the registry's `Plugins:Registry:BroadcastSecret` does not match (or is unset). The consumer stores nothing — that is the fail-closed contract of #3312 — and is reached by its safety net meanwhile. |
+| A module landed (`RESTART REQUIRED` in the log) and the self-update check reads `RestartUnavailable` | The install cannot roll its own workloads: it does not self-patch, or its updater predates `IDeploymentUpdater.RestartAsync` (the `MeshWeaver.SelfUpdate.Aks` module needs updating). Restart the portal workloads by hand (`kubectl rollout restart deployment/<portal>`) to load the landed generation. |
+| The ledger reads `LastReconciledVia: broadcast` but `Pending: true` | Both are true: a broadcast reconciled one package on the module lane, while the boot's full pass against that registry is still owed and drains on the next successful feed read. |
 
 The webhook **never throws** on a write failure: GitHub retries a non-2xx delivery, so an unhandled
 fault would turn one bad write into a delivery storm. Failures are logged and reported as "nothing

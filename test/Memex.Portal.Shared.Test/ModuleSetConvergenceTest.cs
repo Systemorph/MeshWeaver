@@ -228,6 +228,92 @@ public class ModuleSetConvergenceTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 #3675: a sequence two replicas proposed is a decided outcome, not a record that could not
+    /// be read. The three-argument <see cref="ModuleSetStore.Read(string, Action{string}, Action{string})"/>
+    /// keeps the two apart — the notice never reaches the fault channel — while the two-argument
+    /// overload still surfaces it to every caller that read it there before (the health report's
+    /// notes, the boot log), so nothing that used to be said falls silent.
+    /// </summary>
+    [Fact]
+    public async Task ADuplicateProposal_IsANotice_NeverAFault()
+    {
+        await LandWave(ModuleA);
+        var landed = ModuleActivationSidecar.Read(root);
+        await Land(ModuleB);
+        var rival = ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), "replica-2")!;
+        WriteRivalProposalAtSameSequence(rival.Sequence, landed);
+
+        var faults = new List<string>();
+        var notices = new List<string>();
+        var index = ModuleSetStore.Read(root, faults.Add, notices.Add);
+
+        Assert.Empty(faults);
+        Assert.Contains(notices, m => m.Contains("proposed by more than one replica"));
+        Assert.Equal([rival.Sequence], index.ConflictingSequences);
+
+        // Compatibility: the two-argument overload still says it, where every caller heard it.
+        var reported = new List<string>();
+        ModuleSetStore.Read(root, reported.Add);
+        Assert.Contains(reported, m => m.Contains("proposed by more than one replica"));
+
+        // And a record that genuinely cannot be read IS a fault, on the three-argument overload too.
+        // At the NEWEST sequence, so it is a record the reader has to open (#3676 opens only the
+        // deciding records; an unreadable one below them is not consulted and not a fault).
+        var garbage = Path.Combine(ModuleSetStore.SetsDirectory(root), $"{rival.Sequence + 1:D9}-garbage000000000.proposed.json");
+        File.WriteAllText(garbage, "{ not json");
+        faults.Clear();
+        ModuleSetStore.Read(root, faults.Add, notices.Add);
+        Assert.Contains(faults, m => m.Contains("garbage000000000"));
+    }
+
+    /// <summary>
+    /// 🚨 #3675, the consequence that mattered: the GC used to count the duplicate-proposal notice as
+    /// a read fault and fail closed on EVERY pass for as long as one such pair existed — on
+    /// memex-cloud, 100 duplicate sequences kept 687 set records and 843 generation directories
+    /// alive that no pass ever reclaimed, and reading that pile is what put the /health probe over
+    /// its timeout. With a duplicate pair on the volume the sweep must still prune the records
+    /// below the current set and still reclaim an orphan generation — and a record that really
+    /// cannot be read must still stop it (#2509 is untouched).
+    /// </summary>
+    [Fact]
+    public async Task GarbageCollection_StillSweepsWithADuplicateProposalOnTheVolume()
+    {
+        await LandWave(ModuleA);
+        BootReplica();                                   // sequence 1 adopted — the mesh is on it
+        var landed = ModuleActivationSidecar.Read(root);
+        await Land(ModuleB);
+        var rival = ModuleSetStore.Propose(root, ModuleActivationSidecar.Read(root), "replica-2")!;
+        WriteRivalProposalAtSameSequence(rival.Sequence, landed);
+        BootReplica();                                   // the winner at sequence 2 is adopted
+        var current = ModuleSetStore.Read(root).Current!.Sequence;
+        Assert.Equal(rival.Sequence, current);
+
+        var orphan = Path.Combine(root, "modules", "MeshWeaver.Orphan@deadbeef");
+        Directory.CreateDirectory(orphan);
+        File.WriteAllText(Path.Combine(orphan, "MeshWeaver.Orphan.dll"), "not a module");
+        var below = SetRecordsBelow(current);
+        Assert.NotEmpty(below);
+
+        ModuleLandingService.CollectGarbage(root, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+
+        Assert.False(Directory.Exists(orphan), "an unreferenced generation survived a pass that had nothing unreadable to fail closed on");
+        Assert.Empty(SetRecordsBelow(current));
+        Assert.Equal(2, ProposalIds(current).Count);   // the duplicate pair itself is never the one removed
+
+        // #2509 still holds: one record that cannot be read, and the pass reclaims nothing.
+        Directory.CreateDirectory(orphan);
+        File.WriteAllText(Path.Combine(orphan, "MeshWeaver.Orphan.dll"), "not a module");
+        File.WriteAllText(Path.Combine(ModuleSetStore.SetsDirectory(root), $"{current + 1:D9}-garbage000000000.proposed.json"), "{ not json");
+        ModuleLandingService.CollectGarbage(root, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+        Assert.True(Directory.Exists(orphan), "a pass with an unreadable set record must not reclaim anything");
+    }
+
+    private IReadOnlyList<string> SetRecordsBelow(long sequence) =>
+        [.. Directory.EnumerateFiles(ModuleSetStore.SetsDirectory(root), "*.json")
+            .Select(f => Path.GetFileName(f))
+            .Where(f => long.TryParse(f[..f.IndexOf('-')], out var seq) && seq < sequence)];
+
+    /// <summary>
     /// 🚨 The generations the mesh's set PINS are referenced even when the activation entries have
     /// moved past them — otherwise the convergence would re-open the 2026-08-27 outage from the
     /// other side, with GC reclaiming the very bytes every replica is executing.

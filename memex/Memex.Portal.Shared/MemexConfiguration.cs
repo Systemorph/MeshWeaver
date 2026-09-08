@@ -89,6 +89,9 @@ public static class MemexConfiguration
                 .Select(m => m.Name)
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+            // #3649 — the modules it loaded from their PREVIOUS generation: present, one version
+            // behind, and never "restart required".
+            FallbackModules = [.. app.Services.GetServices<FallbackModule>()],
         }.Read();
 
         if (report.IsUndetermined)
@@ -121,6 +124,12 @@ public static class MemexConfiguration
                 "{Count} activated module(s) are landed but not loaded in this process — whatever "
                 + "they contribute (endpoints included) is absent until a restart: {Detail}",
                 report.Pending.Count, ModuleActivationStatus.Describe(report.Pending));
+
+        // 🚨 #3649 — once per boot, on the logger: the loader already said it on stderr before the
+        // pipeline was up, and this is the line an operator's log query finds. A Warning, not an
+        // Error: the module is running, one version behind, and nothing here is broken.
+        foreach (var fallback in app.Services.GetServices<FallbackModule>())
+            logger.LogWarning("[MeshWeaver.Mesh.FallbackModule] {Report}", fallback.Report());
     }
 
     /// <summary>
@@ -195,17 +204,20 @@ public static class MemexConfiguration
             //
             // #1664 step 9 — the effective set is the appsettings baseline ∪ the ENABLED entries
             // of the modules/activation.json sidecar (store-installed modules landed by
-            // ModuleLandingService), deduped by name. Sidecar entries are guarded: a declared
-            // minMeshVersion FLOOR the running platform no longer satisfies (a rollback below the
-            // module's requirement) or a missing DLL SKIPS the entry with a loud stderr line —
-            // never a crash, the deployment must boot; the entry stays for when the platform
-            // moves forward again. A landed module's built-against framework identity is not a
-            // LOAD gate HERE — modules bind by simple name across platform builds, and the strict
-            // identity gate is the NodeType bake lane's. (It is not merely diagnostic either, since
-            // #3154: ModuleUpdateDecision compares it to tell a rebuild from a no-op, and #3211
-            // makes a bundle that states none unpublishable. That is the UPDATE question, not this
-            // one.) Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
-            // to Loki regardless).
+            // ModuleLandingService), deduped by name. Sidecar entries are guarded by ONE rule: a
+            // missing DLL SKIPS the entry with a loud stderr line — never a crash, the deployment
+            // must boot. 🚨 A declared minMeshVersion FLOOR above the running platform is NOT a
+            // skip since #3648 — it is announced on stdout as an advisory ("declares platform ≥
+            // X; running Y") and the entry is handed to the loader, whose link probe
+            // (MeshBuilder.InstallAssemblies) measures whether the bytes load. The floor skip is
+            // the line that held every production portal on the morning build for all of
+            // 2026-09-07 (ci < rc in the comparator) while every module would have linked. A
+            // landed module's built-against framework identity is not a LOAD gate here either —
+            // modules bind by simple name across platform builds, and the strict identity gate is
+            // the NodeType bake lane's. (It is not merely diagnostic, since #3154:
+            // ModuleUpdateDecision compares it to tell a rebuild from a no-op, and #3211 makes a
+            // bundle that states none unpublishable. That is the UPDATE question, not this one.)
+            // Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
             // 🚨 The SAME root ModuleLandingService writes (ModuleRoot) — never
             // AppContext.BaseDirectory directly. They must name one directory: a landed module
@@ -268,8 +280,8 @@ public static class MemexConfiguration
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 moduleAssemblies,
                 activationOnMeshSet,
-                // The ONE module platform gate (ModulePlatformFloor) — never a second notion of
-                // the module platform requirement.
+                // The ONE wording of the declared floor (ModulePlatformFloor) — ADVISORY since
+                // #3648: it names both versions for the line below and skips nothing.
                 ModulePlatformFloor.DeclineReason,
                 // 🚨 The entry's OWN landed directory SPECIFICALLY — modules/<Directory ?? name>/
                 // <name>.dll — never ResolveModulePath, whose BaseDirectory fallback would let a
@@ -282,7 +294,12 @@ public static class MemexConfiguration
                 // the deployment while its bytes sat correctly on disk (#1949).
                 entry => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry),
                 (module, reason) => Console.Error.WriteLine(
-                    $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
+                    $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"),
+                // 🚨 #3648 — stdout, not stderr: an advisory is not a fault. It says what the
+                // module's author claimed; the link probe in InstallAssemblies says whether it
+                // loads, and THAT line is the one to read when it does not.
+                (module, advisory) => Console.WriteLine(
+                    $"[ModuleActivation] store-installed module '{module}' {advisory}"));
             // 🚨 A LISTED-BUT-ABSENT module must never crash boot. `InstallAssemblies` does
             // `Assembly.LoadFrom`, which throws FileNotFoundException, so one stale line in
             // `Modules:Assemblies` takes the whole portal down before anything is serving —
@@ -296,6 +313,7 @@ public static class MemexConfiguration
             // both: skip, say so on stderr, and boot. A module that is genuinely required makes
             // itself known as a missing FEATURE, which is diagnosable — a portal that will not
             // start is not.
+            void WarnPin(string msg) => Console.Error.WriteLine($"[ModuleActivation] {msg}");
             var loadableModules = effectiveModules
                 // 🚨 ONE resolution, shared with the existence gate above
                 // (ModuleActivationBoot.ResolveLoadPath): a store-landed module resolves to the
@@ -311,12 +329,24 @@ public static class MemexConfiguration
                 // still lazily loads dependency DLLs from it (first chat after that was
                 // FileNotFoundException 'OpenAI' — the 2026-08-27 outage). Baseline entries stay
                 // un-pinned: they resolve into the image's own immutable closure.
+                //
+                // 🚨 #3649: a store-landed entry that still holds its PREVIOUS generation hands
+                // the loader a way back — resolved (and pinned) LAZILY, only when the head
+                // generation is refused before loading or fails to load. Pinning every previous
+                // generation up front would double the per-boot copy for a path taken only when
+                // something is wrong. The loader then runs the previous generation, records a
+                // FallbackModule, and says so on stderr; the module is present, one version
+                // behind, instead of absent.
                 .Select(module => (
                     Module: module,
                     Path: module.Landed is not null
-                        ? ModuleGenerationPin.PinnedLoadPath(moduleRoot, module.Landed,
-                            onWarn: msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"))
-                        : ModuleActivationBoot.ResolveLoadPath(moduleRoot, module)))
+                        ? ModuleGenerationPin.PinnedLoadPath(moduleRoot, module.Landed, onWarn: WarnPin)
+                        : ModuleActivationBoot.ResolveLoadPath(moduleRoot, module),
+                    Previous: module.Landed is { } landed
+                              && ModuleActivationBoot.PreviousGeneration(landed) is { } previous
+                              && ModuleActivationBoot.LandedModuleDllExists(moduleRoot, previous)
+                        ? previous
+                        : null))
                 .Where(candidate =>
                 {
                     if (File.Exists(candidate.Path))
@@ -329,7 +359,16 @@ public static class MemexConfiguration
                     return false;
                 })
                 .ToArray();
-            var resolvedModules = loadableModules.Select(candidate => candidate.Path).ToArray();
+            var resolvedModules = loadableModules
+                .Select(candidate => new ModuleInstallCandidate(candidate.Path)
+                {
+                    Version = candidate.Module.Landed?.Version,
+                    PreviousVersion = candidate.Previous?.Version,
+                    Previous = candidate.Previous is { } previous
+                        ? () => ModuleGenerationPin.PinnedLoadPath(moduleRoot, previous, onWarn: WarnPin)
+                        : null,
+                })
+                .ToArray();
 
             // 🚨 #2223 — SAY WHICH COPY IS BEING LOADED. A view-pack fix can merge, build, land in
             // the module store and still not run, because a baseline Modules:Assemblies entry
@@ -340,7 +379,8 @@ public static class MemexConfiguration
             // and boots: a pod that refuses to start cannot be given the fix for what is wrong
             // with it.
             ModuleLoadReport.Write(
-                ModuleLoadReport.Describe(moduleRoot, loadableModules),
+                ModuleLoadReport.Describe(moduleRoot,
+                    loadableModules.Select(candidate => (candidate.Module, candidate.Path))),
                 Console.WriteLine,
                 Console.Error.WriteLine);
 
@@ -356,7 +396,7 @@ public static class MemexConfiguration
             // Configuration must mean "the deployment supplied nothing", never "the host forgot".
             builder.WithConfiguration(configuration);
             if (resolvedModules.Length > 0)
-                builder.InstallAssemblies(resolvedModules);
+                builder.InstallModules(resolvedModules);
 
             // 🚨 #3395 — say, once and durably, that a replica came up on the mesh's set. Deferred
             // to a hosted service rather than written here, because the claim is "this set is
@@ -371,12 +411,35 @@ public static class MemexConfiguration
             // later in boot than it did here. Create-if-absent, so the second and every later
             // replica writes nothing, and best-effort — a read-only volume costs the mesh-level
             // signal and nothing else.
+            // 🚨 #3649 — the adoption records what this process ACTUALLY LOADED per module: the
+            // set's generation where it loaded, the previous one where the loader fell back. Read
+            // off the container, because the FallbackModule records exist only after
+            // InstallModules ran; so the mesh's records say what runs, and the GC references it.
             if (meshModuleSets.Proposed is { } adoptedSet)
                 builder.ConfigureServices(services => services.AddModuleSetAdoption(
                     $"module set {adoptedSet.Sequence} ('{adoptedSet.Id}')",
-                    () => ModuleSetStore.RecordAdoption(moduleRoot, adoptedSet,
+                    sp => ModuleSetStore.RecordAdoption(moduleRoot, adoptedSet,
+                        ModuleSetStore.RunningGenerationsOf(adoptedSet, sp.GetServices<FallbackModule>()),
                         adoptedBy: Environment.MachineName,
                         onWarn: msg => Console.Error.WriteLine($"[ModuleSet] {msg}"))));
+            // 🚨 #3650 — the boot that falls back WRITES THE MARKER the update reconcile reads:
+            // for every store entry the loader was handed (the union above, so its Directory is
+            // the generation actually tried), the FallbackModule / IncompatibleModule records say
+            // whether that generation loaded here, and the verdict lands on that module's own
+            // sidecar marker (activation.d/<Name>.unloadable). Without it the reconcile's
+            // fallback branch (ModuleUpdateDecision, an entry in fallback re-examining every new
+            // build of its version) could never fire — #3665 records what RUNS on the module set's
+            // adoption, once per set, which survives a platform roll unchanged; this is re-measured
+            // by every boot. Unconditional, unlike the adoption: a deployment with no proposed set
+            // yet still measures its heads.
+            var triedEntries = loadableModules
+                .Select(candidate => candidate.Module.Landed)
+                .Where(landed => landed is not null)
+                .Select(landed => landed!)
+                .ToArray();
+            if (triedEntries.Length > 0)
+                builder.ConfigureServices(services =>
+                    services.AddModuleLoadabilityRecord(moduleRoot, triedEntries));
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
             // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.
@@ -697,6 +760,17 @@ public static class MemexConfiguration
                 // types); off the thread pool so it never blocks startup.
                 .ConfigureServices(services =>
                     services.AddHostedService<ShippedReleaseSeedHostedService>())
+                // The registry's module-published broadcast (#3650): the publish route tells every
+                // registered consumer the moment a bundle lands on the shelf. Registered on every
+                // portal — it is inert where no instance is registered — because whether THIS
+                // deployment is a registry is a runtime fact (a publish token configured), not a
+                // composition-time one.
+                .ConfigureServices(services =>
+                {
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions
+                        .TryAddSingleton<Api.ModulePublishedBroadcaster>(services);
+                    return services;
+                })
                 // Markdown export (PDF/DOCX/HTML + share-by-email) rides the
                 // MeshWeaver.Markdown.Export MODULE (MarkdownExportProviderAttribute →
                 // AddMarkdownExport(); node seeding is IfAbsent so the lane switch is idempotent).

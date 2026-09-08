@@ -30,8 +30,8 @@ was not.
 
 | What | Where it lives | Produced by |
 |---|---|---|
-| Base version + commit sha (`3.0.0-rc9+<sha>`) | **Assembly metadata** on every assembly of the build | `PlatformVersion` and the `AddCommitHashMetadata` target in the root `Directory.Build.props` |
-| Full run-numbered version (`3.0.0-rc9.ci.7231`) | **Container image config**, as `MESHWEAVER_PLATFORM_VERSION` | `-p:Version=` on the container publish → the `ContainerEnvironmentVariable` item in `Memex.Portal.Distributed.csproj` |
+| Base version + commit sha (`3.0.0+<sha>`) | **Assembly metadata** on every assembly of the build | `PlatformVersion` and the `AddCommitHashMetadata` target in the root `Directory.Build.props` |
+| Full run-numbered version (`3.0.0-ci.7231`) | **Container image config**, as `MESHWEAVER_PLATFORM_VERSION` | `-p:Version=` on the container publish → the `ContainerEnvironmentVariable` item in `Memex.Portal.Distributed.csproj` |
 
 The split is not incidental. CI compile inputs are **commit-deterministic** (#1660 WS3): the
 framework identity that lets CI-baked NodeType assemblies seed at boot must be equal between the

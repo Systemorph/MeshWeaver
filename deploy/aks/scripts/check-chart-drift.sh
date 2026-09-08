@@ -315,12 +315,15 @@ fi
 # DIFFERENT value, so the secret's copy is dead and the pod authenticates with a plaintext one
 # (MeshWeaver#3201). Reading only the names is enough to see that, and is all we read.
 #
-# 🚨 And reading only the names is also all we may CLAIM. Re-measured 2026-09-04, the two sides were
-# not one credential in two places: they were valid instance keys of DIFFERENT registered instances,
-# and the secret's copy was never Key Vault-provisioned at all (that namespace's CSI-backed secret is
-# memex-kv-secrets, which does not carry this key, and the vault holds no such entry). A name-only
-# checker cannot see provenance or identity — so it reports the shadow and says the two are unknown,
-# rather than narrating a story about where either side came from.
+# 🚨 And reading only the names is also all we may CLAIM — which is exactly why the story behind this
+# example has been rewritten twice while the checker's output stayed correct. Measured 2026-09-04 the
+# two sides were valid instance keys of DIFFERENT registered instances and no CSI class mapped the key
+# at all; measured 2026-09-08, after Systemorph/Memex#180 declared it, `memex` has a THIRD copy in the
+# chart-owned synced Secret memex-portal-keyvault, that copy is byte-EQUAL to the inline entry, and it
+# is the chart's own memex-portal-secrets that now holds the odd one out. A name-only checker sees
+# none of that — not provenance, not identity, not equality — so it reports the shadow and says the
+# two are unknown, rather than narrating a story about where either side came from. That restraint is
+# the feature: the narrative aged twice, the finding did not.
 #
 # 🚨 BOTH source kinds, not just Secrets. `.Values.extraEnvFrom` takes verbatim EnvFromSource
 # objects and the chart documents `{configMapRef: {name: …}}` as one of the two shapes, so

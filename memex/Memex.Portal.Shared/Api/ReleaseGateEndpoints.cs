@@ -144,6 +144,14 @@ public static class ReleaseGateEndpoints
                 // read is one nobody can tell from a vacuous one.
                 requiredPlugins = outcome.RequiredPlugins,
                 satisfiedPlugins = outcome.SatisfiedPlugins,
+                // 🚨 #3651 — what the selected release's verdict said without deciding on it,
+                // and the packages it would recompile at boot.
+                advisories = outcome.Advisories.IsDefault
+                    ? Array.Empty<string>()
+                    : outcome.Advisories.ToArray(),
+                bootCompiles = outcome.BootCompiles.IsDefault
+                    ? Array.Empty<string>()
+                    : outcome.BootCompiles.ToArray(),
                 declined = outcome.Declined
                     .Select(d => new
                     {
@@ -214,8 +222,26 @@ public static class ReleaseGateEndpoints
                     // 🚨 Distinguishes an availability failure from a compatibility verdict.
                     indeterminate = verdict.IsIndeterminate,
                     holdReason = verdict.HoldReason,
+                    // 🚨 #3648 — what the installed modules DECLARE about the target, beside the
+                    // verdict and never inside it: a declared floor the target does not rank
+                    // above is an advisory, not a hold.
+                    advisories = verdict.Advisories.IsDefault
+                        ? Array.Empty<string>()
+                        : verdict.Advisories.ToArray(),
+                    // 🚨 #3651 — the packages the roll would Roslyn-compile at boot, by name: a
+                    // cost the caller reads, never a reason in isUpdatable.
+                    bootCompiles = verdict.BootCompiles.IsDefault
+                        ? Array.Empty<string>()
+                        : verdict.BootCompiles.ToArray(),
                     packages = verdict.Packages
-                        .Select(p => new { package = p.Package, status = p.Kind.ToString(), reason = p.Reason })
+                        .Select(p => new
+                        {
+                            package = p.Package,
+                            status = p.Kind.ToString(),
+                            reason = p.Reason,
+                            // Whether the status is a cost the roll accepts rather than a hold.
+                            advisory = p.IsAdvisory,
+                        })
                         .ToArray(),
                 });
             });

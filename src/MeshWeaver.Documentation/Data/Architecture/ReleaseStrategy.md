@@ -15,6 +15,8 @@ Tags:
 
 # Release & Self-Update Strategy
 
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
+
 The production model in one picture:
 
 ```
@@ -53,6 +55,12 @@ a reviewer enforce (c)+(d). The checklist is in `.github/pull_request_template.m
 
 ## 2. Versions: current-build vs official
 
+**Two shapes, and no others: `X.Y.Z-ci.<n>` for every continuous build, clean `X.Y.Z` for the
+release.** No `rc`, no `preview`, no `beta`, no labelled line, ever — the scheme, the mint-versus-read
+split and the ordering consequences are stated once, authoritatively, in
+[Release Process & Versioning §1](/Doc/Architecture/ReleaseProcess); this page describes what the two
+channels *do* with them.
+
 The one number is `PlatformVersion` in `Directory.Build.props` — **today `3.0.0`**, the *next*
 release. Every build derives its version from it ([details](/Doc/Architecture/ReleaseProcess)):
 
@@ -73,9 +81,10 @@ release. Every build derives its version from it ([details](/Doc/Architecture/Re
 > continuous build able to reach it. Full reference:
 > [Self-Update Target Selection](/Doc/Architecture/SelfUpdateTargetSelection).
 >
-> **No pre-release label on the core, and no rc line.** The rc labels were retired on 2026-09-05
-> (SemVer compares them as text, so `rc13` sorted below `rc2`). The bump to `3.1.0` still happens the
-> day `3.0.0` is tagged — the lane opens that pull request. See
+> **No pre-release label on the core beyond `-ci.<n>`, and no rc line** — retired 2026-09-05, settled
+> 2026-09-07. `-ci.<n>` is a channel marker, never a version; the release is a promotion of a sealed
+> continuous set, not a rebuild; and nothing else may ever be minted. The bump to `3.1.0` still
+> happens the day `3.0.0` is tagged — the lane opens that pull request. Full rule:
 > [Release Process & Versioning](/Doc/Architecture/ReleaseProcess) §1.
 
 ### Cutting an official release and starting the next line
@@ -144,12 +153,19 @@ applies the update.
 ### The availability gate — "newer" is not sufficient
 
 Whichever target it is, a newer tag is **not** on its own a reason to roll. Before patching
-anything, the poller asks the [release availability gate](../ReleaseGates) whether every package
-this deployment runs actually has a usable artifact for that release. If one does not, the update is
-**held**: the poller stays on the current image, writes the refusal to `Admin/UpdatePolicy`
-(`HeldTag`, `HeldReason`, `HeldAt`), and the Updates tab reports it — the About tab shows
-`⏸️ Update held` rather than `⬆️ Update available`, because an install that has refused a build must
-not look like one that is about to take it.
+anything, the poller asks the [release availability gate](../ReleaseGates) whether a module this
+deployment has landed provably cannot load on that release — the landed bytes linked against the
+surface the release published ([the link gate](../ModulePlatformLinkGate), MeshWeaver#3651). If
+one cannot, the update is **held**: the poller stays on the current image, writes the refusal to
+`Admin/UpdatePolicy` (`HeldTag`, `HeldReason`, `HeldAt`), and the Updates tab reports it — the
+About tab shows `⏸️ Update held` rather than `⬆️ Update available`, because an install that has
+refused a build must not look like one that is about to take it.
+
+What the gate reports **without** holding — a course with no prebuilt bake for that build, which
+compiles when the new build starts; a module whose loadability could not be measured, which the
+platform decides at start-up and keeps the previous version of if the new one cannot load — is
+written to the same node (`AdvisoriesTag`, `Advisories`) and shown on the tab beneath the available
+line. Only `Modules:RequirePrebuilt` turns the missing bake back into a hold.
 
 A hold is not sticky. It is re-evaluated on every poll and every green-build event and clears itself
 the moment the missing artifact is published, so nothing has to be un-stuck by hand. The manual

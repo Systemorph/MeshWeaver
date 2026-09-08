@@ -782,6 +782,28 @@ public static class CatalogLayoutAreas
                 .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
                            + "display: block; margin-top: 6px;"));
 
+        // 🚨 #3649 — the FIFTH state, and the first that is not a fault: the newest generation
+        // does not load on this platform, so this installation runs the previous one. The module
+        // works; the line says which version that is and that the newer one is waiting on a
+        // build that loads here. Neither "restart required" (a restart falls back again) nor
+        // "not running here" (it is running). Localized: platform-owned chrome follows the VIEWER.
+        else if (activation.FallbackForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } fallback)
+            card = card.WithView(Controls.Body(
+                    $"ℹ️ {host.Localize("ui.moduleRunsPreviousVersion", fallback.PreviousVersion ?? "?", fallback.Version ?? "?")}")
+                .WithStyle("color: var(--warning-foreground, #9d5d00); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
+
+        // 🚨 #3648 — what the module DECLARES, beside whatever state it is in, never instead of
+        // it. A declared minMeshVersion above the running platform used to be a hidden hold (boot
+        // skipped the entry, the card said nothing); now the entry loads or not on what the link
+        // probe measured, and this line says what its author claimed so the two can be compared.
+        // Localized like every other line on this card: platform-owned chrome follows the VIEWER.
+        if (activation.FloorAdvisoryForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } floor)
+            card = card.WithView(Controls.Body(
+                    $"ℹ️ {host.Localize("ui.moduleDeclaresNewerPlatform", floor.DeclaredFloor, floor.RunningVersion ?? "?")}")
+                .WithStyle("color: var(--neutral-foreground-hint, #605e5c); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
+
         return card;
     }
 

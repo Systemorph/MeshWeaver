@@ -94,7 +94,7 @@ Two things to know before calling it deployed:
   completes successfully on a `push` to `main` — so a hand-kicked `workflow_dispatch` of that
   workflow makes main look green while CD still skips. If no image appeared, re-drive CD directly:
   `gh workflow run main-cd.yml --ref main` (it also runs itself hourly as a reconciler).
-- **The tag the self-updater acts on is `memex-portal-ai:<version>`** (e.g. `3.0.0-rc1.ci.2470`) —
+- **The tag the self-updater acts on is `memex-portal-ai:<version>`** (e.g. `3.0.0-ci.2470`) —
   `VersionSelect` requires `^\d+\.\d+\.\d+`, so the moving `:main` pointer and the per-run
   `staging-<sha>-<run_id>` tag are invisible to it by construction. Publication is all-or-nothing:
   every leg pushes only the staging tag, and the `promote` job applies the real tags last. Verify the

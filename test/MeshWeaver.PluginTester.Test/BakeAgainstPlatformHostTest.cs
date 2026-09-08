@@ -137,6 +137,18 @@ public class BakeAgainstPlatformHostTest(ITestOutputHelper output)
             Assert.Equal(hostIdentity, File.ReadAllText(Path.Combine(bake, TreeBake.FrameworkMvidFile)).Trim());
             Assert.Contains("reference set = platform host", log.ToString(), StringComparison.Ordinal);
             Assert.Contains(host, log.ToString(), StringComparison.Ordinal);
+
+            // 🚨 And the platform SURFACE is the HOST's (#3651): keyed to its identity, listing what
+            // the host's directory carries — never this process's own loaded assemblies, which
+            // would describe a platform nothing baked here is addressed to.
+            var surface = MeshWeaver.Mesh.ModulePlatformSurface.FromJson(
+                File.ReadAllText(Path.Combine(bake, BakeOutput.PlatformSurfaceFile)));
+            Assert.Equal(hostIdentity, surface.Identity);
+            Assert.True(surface.IsDeclared);
+            var hostAssembly = Directory.EnumerateFiles(host, "MeshWeaver.*.dll")
+                .Select(Path.GetFileNameWithoutExtension)
+                .First();
+            Assert.True(surface.Carries(hostAssembly!), $"the host's own '{hostAssembly}' must be on its surface");
         }
         finally
         {
