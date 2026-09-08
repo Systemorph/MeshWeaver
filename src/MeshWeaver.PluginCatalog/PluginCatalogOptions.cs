@@ -117,8 +117,34 @@ public sealed class PluginCatalogOptions
     /// operator's chosen extras.</para>
     /// </summary>
     public bool InstallPreInstalledPackages { get; set; } = true;
-    /// <summary>This installation's public base URL, recorded on the instance node (advisory).</summary>
+    /// <summary>This installation's public base URL, recorded on the instance node (advisory).
+    /// 🚨 Since #3650 it is also where a registry DELIVERS its module-published broadcast
+    /// (<see cref="ModulePublished"/>): an installation that records none is reached by the safety
+    /// net alone.</summary>
     public string HomeUrl { get; set; } = "";
+
+    /// <summary>
+    /// 🚨 The SAFETY NET of the module lane (#3650): the longest this installation may go without
+    /// reconciling its installed packages against each configured registry's feed. Zero or
+    /// negative disables it.
+    ///
+    /// <para>The fast path is the registry's <see cref="ModulePublished"/> broadcast, delivered to
+    /// this installation's webhook inbox within seconds of a publish — and, like every event
+    /// channel, it reaches this installation over a chain nobody re-verifies (the
+    /// <see cref="HomeUrl"/> the registry recorded, a <c>WebhookInbox:Targets</c> allowlist slot,
+    /// a reachable ingress), every joint of which fails SILENTLY. An installation whose channel is
+    /// dead looks exactly like one that is up to date. This interval BOUNDS that, the way
+    /// <c>SelfUpdate:SafetyNetCheckInterval</c> bounds a dead build-event channel: it is not a poll
+    /// that drives the update — the broadcast does — it is the worst case a lost broadcast can
+    /// cost. It cannot change WHAT lands (the same <see cref="ModuleUpdateDecision"/> runs, and an
+    /// unchanged module costs one feed read and one index read, no download), only how late.</para>
+    ///
+    /// <para>Default 30 minutes — half of <c>SelfUpdate:MinRollInterval</c>, so a module that
+    /// ships is landed before the next restart the roll floor allows, and the restart that
+    /// activates it (a landed generation raises <c>PendingRestart</c>, and the self-updater rolls
+    /// the running image on it) is never held for a reconcile that has not happened yet.</para>
+    /// </summary>
+    public TimeSpan ReconcileSafetyNetInterval { get; set; } = TimeSpan.FromMinutes(30);
 
     /// <summary>
     /// The registries to actually consume: <see cref="Registries"/> (entries with a URL), or the

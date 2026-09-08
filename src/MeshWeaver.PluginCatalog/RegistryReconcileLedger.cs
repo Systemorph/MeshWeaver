@@ -31,6 +31,15 @@ public record RegistryReconcileEntry
     /// installation made for another reason (a catalog open, an install).</summary>
     public const string ViaFeedRead = "feed-read";
 
+    /// <summary>The registry told this installation a module was published
+    /// (<see cref="ModulePublished"/>, delivered to the reconciler's inbox) and the module lane
+    /// ran for that one package (#3650).</summary>
+    public const string ViaBroadcast = "broadcast";
+
+    /// <summary>The safety-net reconcile (<see cref="PluginCatalogOptions.ReconcileSafetyNetInterval"/>)
+    /// ran — the bound on how long a lost broadcast can hide (#3650).</summary>
+    public const string ViaSafetyNet = "safety-net";
+
     /// <summary>The registry's base URL (the configured value, trailing slash trimmed).</summary>
     public string Url { get; init; } = "";
 
@@ -59,6 +68,7 @@ public record RegistryReconcileEntry
     /// <summary>When a reconcile against this registry last completed in this process.</summary>
     public DateTimeOffset? LastReconciledAt { get; init; }
 
-    /// <summary><see cref="ViaBoot"/> or <see cref="ViaFeedRead"/>.</summary>
+    /// <summary><see cref="ViaBoot"/>, <see cref="ViaFeedRead"/>, <see cref="ViaBroadcast"/> or
+    /// <see cref="ViaSafetyNet"/>.</summary>
     public string? LastReconciledVia { get; init; }
 }
