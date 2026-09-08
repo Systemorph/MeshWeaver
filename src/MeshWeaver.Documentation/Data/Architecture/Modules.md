@@ -657,12 +657,23 @@ unrelated publication. An install that cannot restart itself reports `RestartUna
 Updates tab, naming the operator's move.
 
 **A fallback is re-examined.** When the newest landed generation could not be loaded and the previous
-one runs ([the keep-the-old fallback](/Doc/Architecture/ModuleSetConvergence), #3649), the entry
-carries the refused build's identity (`ModuleActivationEntry.UnloadableFrameworkMvid`). The
-same-version branch of the decision then asks the one question such a deployment has: does the
-registry serve a *different* build of this version than the one that would not load? It **lands**
-when it does — a build for this platform appeared — and answers `SkipUnloadable` (never "already
-landed") when the registry still serves the build that was refused.
+one runs ([the keep-the-old fallback](/Doc/Architecture/ModuleSetConvergence), #3649), **the boot that
+falls back writes the marker the reconcile re-examines**: for every store entry the loader was handed,
+`ModuleLoadabilityRecorder` reads the `FallbackModule` / `IncompatibleModule` records back onto the
+generation the loader tried and writes that module's marker file — `activation.d/<Name>.unloadable`,
+the head's generation, its framework identity and the refusal — or deletes it when the head loaded. A
+create and a delete, never a read-modify-write of the entry a landing on another replica may be
+replacing (#2090). `ModuleActivationSidecar.Read` attaches the identity to the entry
+(`ModuleActivationEntry.UnloadableFrameworkMvid`, never stored in the entry file) only while the entry
+still heads the generation the marker measured, so a landing that moves the head on retires a stale
+marker without touching it. It is the boot's measurement rather than the module set's adoption record
+(`ModuleSetIndex.FallbackGenerations`) on purpose: that record is written once per set by the first
+replica to adopt it and survives a platform roll unchanged, so it can report a fallback the running
+image no longer takes; every boot rewrites the marker. The same-version branch of the decision then
+asks the one question such a deployment has: does the registry serve a *different* build of this
+version than the one that would not load? It **lands** when it does — a build for this platform
+appeared — and answers `SkipUnloadable` (never "already landed") when the registry still serves the
+build that was refused.
 
 #### "Already landed" means this content against this FRAMEWORK
 

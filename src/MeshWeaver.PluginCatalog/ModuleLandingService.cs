@@ -843,6 +843,9 @@ public sealed class ModuleLandingService : IDisposable
                 PreviousFrameworkMvid = null,
             });
         ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
+        // An uninstalled module has no head to have measured (#3650); a marker left behind would
+        // be inert (its generation is gone) but is one more thing to explain.
+        ModuleActivationSidecar.ClearUnloadable(baseDirectory, name);
 
         // Best-effort immediate delete: on a shared volume the files of a LOADED module refuse
         // deletion (SMB keeps them open) — that is fine, the cleared pointers above make the
