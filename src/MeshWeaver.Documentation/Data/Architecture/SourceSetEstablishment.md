@@ -92,6 +92,20 @@ queries and carries a populated `CurrentSourceVersions`.
 The image was identical on three of the six boots that granted readiness. Nothing about the image
 explains the difference; the size of one query pass does.
 
+**With a positive control, because a zero needs a denominator.** The same instrument, the same
+15-hour window, counted over the whole window on the instant endpoint:
+
+```logql
+count_over_time({namespace="memex"}       |= "NodeType bake regressed" [15h])   →  1065, ONE stream
+count_over_time({namespace="memex-cloud"} |= "NodeType bake regressed" [15h])   →     0
+```
+
+The 1065 all come from `7d5d458cc4-cbztk`'s **boot 0** and nowhere else — one line per readiness
+probe at the 10-second cadence for 2 h 58 m, which is the startup budget below, and the reason the
+`memex` count is non-zero is what makes the `memex-cloud` zero mean something. **In fifteen hours,
+across two portals, exactly one container boot ever put the bake gate into `Regressed`.** The
+simultaneous memex-cloud stall did not involve this gate at all.
+
 > **The prebuilt bytes were already there.** The same boot logged
 > `ShippedPrebuiltBundles: bundle Doc.zip: adopted 4/4 prebuilt assembly(ies)` at 00:31:08 — ten
 > seconds before the sweep enumerated `204 of 209 … need building — 5 already on the share` and set
