@@ -59,6 +59,18 @@ ends by itself when the next release is tagged. **Fleet today: `memex` and `meme
 candidate. Full rule: [ReleaseProcess.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseProcess.md)
 → "Which build an install takes".
 
+🚨 **A platform roll no longer waits for every satellite to re-seal** (2026-09-08,
+`Modules:VersionStrictness`, default `Family`). A portal on 3.1.0 adopts a bundle sealed for any
+3.x identity whose declared floor is satisfied AND whose platform type references measurably resolve
+(`ModulePlatformLink`); one that cannot load compiles from source (or is refused, named, on a
+require-prebuilt mesh). `Exact` restores the old identity-only rule; `Minimum` (the Development
+default) drops the line check. So "sealed for THIS identity" is no longer the precondition for a
+roll — a sealed set of the SAME LINE is. The seal still matters for the sources: a publication sealed
+for the portal's own identity brings the repository's sync sources onto its commit
+(`IPublicationSyncReconciler`), which is what keeps bundle and sources one unit. Full reference:
+[ModuleVersioning.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ModuleVersioning.md)
+→ "Version strictness".
+
 ## Preconditions for a release (gates the lane enforces — check them before tagging)
 
 1. **The commit is on `main` and its CD run SEALED**: `Promote`, `Verify every image shipped` and

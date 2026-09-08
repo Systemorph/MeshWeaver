@@ -1304,6 +1304,8 @@
   "activity.gitsync.update.fetchingForce": "Branch-HEAD wird von GitHub geholt und lokale Änderungen werden überschrieben (erzwungen)…",
   "activity.gitsync.updateToProvenCommit.title": "{space} auf den gebauten Commit {sha} bringen",
   "activity.gitsync.updateToProvenCommit.fetching": "{sha} — der vom Build geprüfte Commit — wird von GitHub geholt und die Änderungen werden importiert…",
+  "activity.gitsync.reconcileAtProvenCommit.title": "{space} mit dem versiegelten Commit {sha} abgleichen",
+  "activity.gitsync.reconcileAtProvenCommit.fetching": "{sha} — der Commit, aus dem die Bundles dieser Instanz gebaut wurden — wird geholt und die Partition damit abgeglichen…",
   "activity.gitsync.prunedNodes": "{count} Node(s) entfernt, die im Repository nicht mehr vorhanden sind: {paths}",
   "activity.gitsync.import.done": "Importiert: {outcome} ({count} Node(s)).",
   "activity.gitsync.import.skipped": "Import übersprungen — ein früherer VOLLSTÄNDIGER Import hat genau diesen Inhalt bereits unter dem Fingerabdruck {fingerprint} ({markerPath}) festgehalten; die Partition wurde daher nicht erneut gelesen.",
