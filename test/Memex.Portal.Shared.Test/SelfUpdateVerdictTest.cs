@@ -35,6 +35,11 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
     [InlineData(SelfUpdateOutcome.CheckFailed, false)]
     [InlineData(SelfUpdateOutcome.NoOutcome, false)]
+    // A restart activates a MODULE this install already landed — nothing newer was waiting in
+    // the registry, so a safety-net check that restarts must never fire the dead-channel report.
+    [InlineData(SelfUpdateOutcome.Restarted, false)]
+    [InlineData(SelfUpdateOutcome.RestartDeferred, false)]
+    [InlineData(SelfUpdateOutcome.RestartUnavailable, false)]
     public void FoundNewerRelease_IsTrueExactlyWhenAReleaseWasWaiting(
         SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, new SelfUpdateVerdict(outcome, "…").FoundNewerRelease);
@@ -59,6 +64,11 @@ public class SelfUpdateVerdictTest
             SelfUpdateVerdict.ComboBlocked("3.0.1", "'Widget' does not compile against it"),
             SelfUpdateVerdict.MigrationFailed("3.0.1", MigrationRunOutcome.TimedOut),
             SelfUpdateVerdict.InstalledTagWithdrawn("3.1.0-ci.7841", "it is not in the registry"),
+            SelfUpdateVerdict.Restarted(SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", null),
+            SelfUpdateVerdict.RestartDeferred(
+                SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", TimeSpan.FromMinutes(5), TimeSpan.FromHours(1)),
+            SelfUpdateVerdict.RestartUnavailable(
+                SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", "this install does not self-patch"),
         ];
 
         Assert.Equal(
@@ -198,5 +208,109 @@ public class SelfUpdateVerdictTest
 
         Assert.Contains("SelfUpdateHostedService", verdict.Message, StringComparison.Ordinal);
         Assert.False(verdict.FoundNewerRelease);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  A pending restart rolls the same image, within the interval rules (#3650)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private static readonly SelfUpdateVerdict UpToDate = SelfUpdateVerdict.NoNewerRelease(7, "3.0.0");
+
+    private static readonly DateTimeOffset Now = new(2026, 9, 8, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// 🚨 Only a check that PATCHED nothing has a restart to take. An applied roll IS the restart;
+    /// a refused migration leaves the image where it is on purpose; a failed check decided
+    /// nothing; a disabled policy means never; and the structural backstop is not a verdict at
+    /// all. Every other outcome — up to date, held, deferred, detect-only, combo-blocked, a strand
+    /// — may be followed by the restart of the image that IS running.
+    /// </summary>
+    [Theory]
+    [InlineData(SelfUpdateOutcome.NoNewerRelease, true)]
+    [InlineData(SelfUpdateOutcome.Held, true)]
+    [InlineData(SelfUpdateOutcome.Deferred, true)]
+    [InlineData(SelfUpdateOutcome.DetectOnly, true)]
+    [InlineData(SelfUpdateOutcome.ComboBlocked, true)]
+    [InlineData(SelfUpdateOutcome.InstalledTagWithdrawn, true)]
+    [InlineData(SelfUpdateOutcome.Applied, false)]
+    [InlineData(SelfUpdateOutcome.MigrationFailed, false)]
+    [InlineData(SelfUpdateOutcome.CheckFailed, false)]
+    [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
+    [InlineData(SelfUpdateOutcome.NoOutcome, false)]
+    public void MayRestartAfter_OnlyWhenTheCheckPatchedNothing(SelfUpdateOutcome outcome, bool expected)
+        => Assert.Equal(expected, SelfUpdateVerdict.MayRestartAfter(new SelfUpdateVerdict(outcome, "…")));
+
+    /// <summary>Inside the floor the restart is deferred, naming how long ago the install rolled
+    /// and the floor it sits inside — the same sentence shape a deferred roll uses.</summary>
+    [Fact]
+    public void RestartDeferredBy_InsideTheFloor_Defers()
+    {
+        var verdict = SelfUpdateVerdict.RestartDeferredBy(
+            UpToDate, "3.0.0", Now - TimeSpan.FromMinutes(5), TimeSpan.FromHours(1), Now);
+
+        Assert.NotNull(verdict);
+        Assert.Equal(SelfUpdateOutcome.RestartDeferred, verdict!.Outcome);
+        Assert.Contains("00:05:00", verdict.Message, StringComparison.Ordinal);
+        Assert.Contains("01:00:00", verdict.Message, StringComparison.Ordinal);
+        Assert.Contains("deferring the restart", verdict.Message, StringComparison.Ordinal);
+        Assert.Equal("3.0.0", verdict.Tag);
+    }
+
+    /// <summary>Past the floor, at the floor, never rolled, floor disabled: the restart proceeds.</summary>
+    [Fact]
+    public void RestartDeferredBy_OutsideTheFloor_NeverRolled_OrFloorOff_Proceeds()
+    {
+        var floor = TimeSpan.FromHours(1);
+
+        Assert.Null(SelfUpdateVerdict.RestartDeferredBy(UpToDate, "3.0.0", Now - TimeSpan.FromHours(2), floor, Now));
+        Assert.Null(SelfUpdateVerdict.RestartDeferredBy(UpToDate, "3.0.0", Now - floor, floor, Now));
+        Assert.Null(SelfUpdateVerdict.RestartDeferredBy(UpToDate, "3.0.0", lastRolledAt: null, floor, Now));
+        Assert.Null(SelfUpdateVerdict.RestartDeferredBy(UpToDate, "3.0.0", Now - TimeSpan.FromSeconds(1), TimeSpan.Zero, Now));
+    }
+
+    /// <summary>
+    /// A restart verdict KEEPS the platform verdict it followed: the record still has to say what
+    /// the check found about the registry, and the restart is the second sentence, not a
+    /// replacement for the first.
+    /// </summary>
+    [Fact]
+    public void Restarted_CarriesThePlatformVerdict_AndNamesTheImage()
+    {
+        var verdict = SelfUpdateVerdict.Restarted(UpToDate, "3.0.0", Now);
+
+        Assert.Equal(SelfUpdateOutcome.Restarted, verdict.Outcome);
+        Assert.StartsWith(UpToDate.Message, verdict.Message, StringComparison.Ordinal);
+        Assert.Contains("RESTARTED on 3.0.0", verdict.Message, StringComparison.Ordinal);
+        Assert.Equal("3.0.0", verdict.Tag);
+        Assert.False(verdict.FoundNewerRelease);
+    }
+
+    /// <summary>
+    /// 🚨 A landed module nothing will ever activate is a state an operator has to see and can
+    /// act on: the verdict names why this install cannot restart itself and the move.
+    /// </summary>
+    [Fact]
+    public void RestartUnavailable_NamesTheReason_AndTheOperatorsMove()
+    {
+        var verdict = SelfUpdateVerdict.RestartUnavailable(
+            UpToDate, "3.0.0", "this install does not self-patch (detect-and-notify)");
+
+        Assert.Equal(SelfUpdateOutcome.RestartUnavailable, verdict.Outcome);
+        Assert.Contains("does not self-patch", verdict.Message, StringComparison.Ordinal);
+        Assert.Contains("kubectl rollout restart", verdict.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A restart taken on the recovery path keeps the strand visible: the withdrawn
+    /// tag the platform verdict carried survives onto the restart verdict.</summary>
+    [Fact]
+    public void ARestartVerdict_KeepsTheUnresolvedInstalledTag()
+    {
+        var stranded = SelfUpdateVerdict.NoNewerRelease(0, "3.1.0-ci.7841")
+            .Recovering("3.1.0-ci.7841", "the installed tag is NOT among the listed tags");
+
+        Assert.Equal("3.1.0-ci.7841",
+            SelfUpdateVerdict.Restarted(stranded, "3.1.0-ci.7841", null).UnresolvedInstalledTag);
+        Assert.Equal("3.1.0-ci.7841",
+            SelfUpdateVerdict.RestartUnavailable(stranded, "3.1.0-ci.7841", "detect-only").UnresolvedInstalledTag);
     }
 }

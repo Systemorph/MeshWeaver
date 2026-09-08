@@ -98,6 +98,24 @@ public sealed record ModuleActivationEntry
     /// reconcile re-lands once and records it.</summary>
     public string? Version { get; init; }
 
+    /// <summary>
+    /// 🚨 The framework identity of the NEWEST landed generation when boot could not load it and
+    /// fell back to the previous one (#3649 supplies that fallback: <c>PreviousDirectory</c> and
+    /// its siblings, the boot's link probe deciding). Null when the newest generation loads, or
+    /// was never probed — the ordinary state.
+    ///
+    /// <para>This is the one fact the update reconcile needs to honour rule R3 of
+    /// <c>Doc/Architecture/ModuleAdoptionPolicy</c> (#3650): an entry in fallback is
+    /// RE-EXAMINED on every reconcile, and an index entry serving the SAME version built against a
+    /// DIFFERENT identity than this one is a build for this platform that appeared — it lands.
+    /// Without it the same-version branch of <see cref="ModuleUpdateDecision"/> could only compare
+    /// against <see cref="FrameworkMvid"/>, and a deployment running its previous generation would
+    /// answer "already landed" for exactly the build that would have got it off the fallback.
+    /// Written by the boot that falls back, cleared by the boot that loads the newest generation;
+    /// the reconcile never writes it.</para>
+    /// </summary>
+    public string? UnloadableFrameworkMvid { get; init; }
+
     /// <summary>False = uninstalled (the record is kept for history/idempotence; the folder is
     /// deleted). Takes effect at the next restart, like every activation change.</summary>
     public bool Enabled { get; init; } = true;

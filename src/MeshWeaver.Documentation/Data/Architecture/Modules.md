@@ -633,14 +633,36 @@ transport end to end — there is deliberately no second distribution channel:
 
 ### Auto-update
 
-Store-installed modules **update themselves by default**. The boot reconcile
-(`RegistryUpdateReconciler`) runs a module pass after the content pass: for every installed
+Store-installed modules **update themselves by default**, and since #3650 they do so **eagerly** —
+rule R3 of the Module Adoption Policy (`Doc/Architecture/ModuleAdoptionPolicy`): *as soon as a new
+module version ships, we start using it.* The reconcile (`RegistryUpdateReconciler`) runs a module
+pass after the content pass — at boot, the moment the registry **broadcasts** that a module was
+published (for that one package), and every 30 minutes as a safety net
+([Plugin Update on Green Build](/Doc/Architecture/PluginUpdateOnGreenBuild)). For every installed
 module-declaring package it consults the registry's bundle index and applies the one pure decision
-(`ModuleUpdateDecision`) — a newer version whose **floor this platform satisfies** lands via
-`ModuleLandingService` and flags `PendingRestart`; the same served version **built against the same
-framework** is skipped without a download; a bundle whose floor **exceeds** the running platform is
-skipped silently-with-log (it becomes installable once the platform has updated, and the same
-reconcile lands it then). Nothing is ever rolled back unattended.
+(`ModuleUpdateDecision`): a newer version lands via `ModuleLandingService` and flags
+`PendingRestart`; the same served version **built against the same framework** is skipped without a
+download; a bundle's declared floor is an **advisory** worded into the log, never a skip (#3648) —
+whether the bytes load is measured by the link probe at placement. Nothing is ever rolled back
+unattended.
+
+**The restart happens, too.** A landed generation loads only at a restart, and that restart used to
+be whatever platform roll came next. The self-updater now reads the activation record after the
+platform half of every check that patched nothing and, when `PendingRestart` is raised, rolls the
+workloads **on the image they run** (`IDeploymentUpdater.RestartAsync`) — paced by
+`SelfUpdate:MinRollInterval` exactly like a roll, because a restart drops the same live circuits. A
+landing wave this process ends (`ModuleLandingService.ModuleSetProposed`) triggers the check
+directly, so the restart follows the landing by the coalesce window plus the floor, not by the next
+unrelated publication. An install that cannot restart itself reports `RestartUnavailable` on the
+Updates tab, naming the operator's move.
+
+**A fallback is re-examined.** When the newest landed generation could not be loaded and the previous
+one runs ([the keep-the-old fallback](/Doc/Architecture/ModuleSetConvergence), #3649), the entry
+carries the refused build's identity (`ModuleActivationEntry.UnloadableFrameworkMvid`). The
+same-version branch of the decision then asks the one question such a deployment has: does the
+registry serve a *different* build of this version than the one that would not load? It **lands**
+when it does — a build for this platform appeared — and answers `SkipUnloadable` (never "already
+landed") when the registry still serves the build that was refused.
 
 #### "Already landed" means this content against this FRAMEWORK
 

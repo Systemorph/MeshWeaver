@@ -23,6 +23,14 @@ public enum SelfUpdateTrigger
     /// <summary>The safety net (<see cref="MeshWeaver.Hosting.SelfUpdate.SelfUpdateOptions.SafetyNetCheckInterval"/>).
     /// Nothing told this install anything; it asked anyway.</summary>
     SafetyNet,
+
+    /// <summary>
+    /// A landing wave on THIS process proposed a new module set
+    /// (<see cref="ModuleLandingService.ModuleSetProposed"/>, #3650): a module version shipped
+    /// and landed, and the restart that activates it is what this check exists to take. Appended,
+    /// never inserted: the members before it keep their ordinals.
+    /// </summary>
+    ModuleSetProposed,
 }
 
 /// <summary>The outcome of exactly one self-update check.</summary>
@@ -93,6 +101,30 @@ public enum SelfUpdateOutcome
     /// <para>🚨 Appended, never inserted: the members before it keep their ordinals.</para>
     /// </summary>
     InstalledTagWithdrawn,
+
+    /// <summary>
+    /// Nothing newer was rolled, and the workloads were RESTARTED on the image they run because a
+    /// landed module generation was waiting for exactly that (<c>PendingRestart</c>, #3650). Not a
+    /// newer release — <see cref="SelfUpdateVerdict.FoundNewerRelease"/> stays false — so a
+    /// safety-net check that restarts never fires the dead-event-channel report. Appended, never
+    /// inserted.
+    /// </summary>
+    Restarted,
+
+    /// <summary>
+    /// A restart is pending and the roll floor (<c>MinRollInterval</c>) deferred it — a restart is
+    /// a roll and drops the same live circuits, so it is paced like one. Re-decided on the next
+    /// check, never scheduled. Appended, never inserted.
+    /// </summary>
+    RestartDeferred,
+
+    /// <summary>
+    /// 🚨 A restart is pending and this install CANNOT take it: it does not self-patch, or its
+    /// updater predates <see cref="IDeploymentUpdater.RestartAsync"/>. A landed module that nothing
+    /// will ever activate is a state an operator has to see, so it is reported at Warning and on
+    /// the policy node, never folded into "no newer release". Appended, never inserted.
+    /// </summary>
+    RestartUnavailable,
 }
 
 /// <summary>
@@ -268,4 +300,70 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         SelfUpdateOutcome.NoOutcome,
         "the check produced NO outcome — a filter in the self-update pipeline swallowed it. "
         + "This is a defect in SelfUpdateHostedService, not a state of this install.");
+
+    // ── The pending-restart half (#3650): a module swap is a restart, and the restart happens ──
+
+    /// <summary>
+    /// The workloads were restarted on the image they run, to activate a landed module generation.
+    /// Carries the platform verdict it followed (<paramref name="after"/>) so the record still says
+    /// what the check found about the registry.
+    /// </summary>
+    public static SelfUpdateVerdict Restarted(SelfUpdateVerdict after, string installed, DateTimeOffset? lastRolledAt) => new(
+        SelfUpdateOutcome.Restarted,
+        $"{after.Message} RESTARTED on {installed}: a landed module generation was pending activation "
+        + $"(last rolled {lastRolledAt?.ToString("O") ?? "never"}); the workloads were rolled on the "
+        + "same image so it loads.",
+        installed)
+    {
+        UnresolvedInstalledTag = after.UnresolvedInstalledTag,
+    };
+
+    /// <summary>The roll floor deferred a pending restart, exactly as it defers a roll.</summary>
+    public static SelfUpdateVerdict RestartDeferred(SelfUpdateVerdict after, string installed, TimeSpan elapsed, TimeSpan floor) => new(
+        SelfUpdateOutcome.RestartDeferred,
+        $"{after.Message} A landed module generation is pending activation, but this install rolled "
+        + $"{elapsed} ago, inside the {floor} floor — deferring the restart. The next check re-decides it.",
+        installed)
+    {
+        UnresolvedInstalledTag = after.UnresolvedInstalledTag,
+    };
+
+    /// <summary>🚨 A restart is pending and this install cannot take it — named, so an operator can.</summary>
+    public static SelfUpdateVerdict RestartUnavailable(SelfUpdateVerdict after, string installed, string reason) => new(
+        SelfUpdateOutcome.RestartUnavailable,
+        $"{after.Message} A landed module generation is pending activation and this install cannot "
+        + $"restart itself ({reason}) — restart the portal workloads to load it "
+        + "(kubectl rollout restart deployment/<portal>).",
+        installed)
+    {
+        UnresolvedInstalledTag = after.UnresolvedInstalledTag,
+    };
+
+    /// <summary>
+    /// 🚨 Whether a pending restart may follow <paramref name="platform"/>'s verdict at all. Only a
+    /// check that PATCHED nothing has a restart to take: an applied roll IS the restart (the new
+    /// pods boot the landed set), a refused migration leaves the image deliberately where it is, a
+    /// failed check decided nothing, and a disabled policy means never — an operator who pins the
+    /// image restarts by hand. Pure; pinned by <c>SelfUpdateVerdictTest</c>.
+    /// </summary>
+    public static bool MayRestartAfter(SelfUpdateVerdict platform) => platform.Outcome
+        is not (SelfUpdateOutcome.Applied or SelfUpdateOutcome.MigrationFailed
+            or SelfUpdateOutcome.CheckFailed or SelfUpdateOutcome.UpdatesDisabled
+            or SelfUpdateOutcome.NoOutcome);
+
+    /// <summary>
+    /// The roll floor applied to a pending restart: the <see cref="RestartDeferred"/> verdict when
+    /// the install rolled less than <paramref name="floor"/> ago, or <c>null</c> when the restart
+    /// may proceed — a floor of zero or less never defers, and an install that never rolled (or
+    /// cannot tell) is free. The same rule <c>Apply</c> uses for a roll, stated once and pure so
+    /// the interval arithmetic is pinned without a mesh.
+    /// </summary>
+    public static SelfUpdateVerdict? RestartDeferredBy(
+        SelfUpdateVerdict after, string installed, DateTimeOffset? lastRolledAt, TimeSpan floor, DateTimeOffset now)
+    {
+        if (floor <= TimeSpan.Zero || lastRolledAt is null)
+            return null;
+        var elapsed = now - lastRolledAt.Value;
+        return elapsed < floor ? RestartDeferred(after, installed, elapsed, floor) : null;
+    }
 }

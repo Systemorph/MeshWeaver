@@ -5,6 +5,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -42,16 +43,35 @@ namespace MeshWeaver.PluginCatalog;
 /// step with the first. That is the shape <c>BuildProtocolDriver.FollowGo</c> arrived at for the
 /// cross-cluster case (#1440/#1450): end on a fact you can read.</para>
 ///
-/// <para>🚨 <b>No poll timer.</b> The reconcile runs on an event the deployment already has — this
-/// process starting — and not on a clock. #1366 removed a staleness clock for the same reason: a
-/// timer answers "how stale am I willing to be", which is a question nobody asked, and it turns one
-/// misconfiguration into a permanent background load. On these deployments the restart IS the
-/// fan-out: plugin content and the framework image are published by the same CI, and the portals
-/// self-update onto each new image, so a green plugin build and a pod roll already arrive together.
-/// The honest bound is therefore <b>a consumer learns on its next boot</b> — plus immediately, on
-/// demand, whenever a human opens the catalog page, which reads the same feed and offers the same
-/// Update. An installation that never restarts also never picks up framework fixes, which is a
-/// louder problem with its own alarm.</para>
+/// <para>🚨 <b>Three events and a floor — never "the next boot" (#3650).</b> This service used to
+/// run the reconcile ONCE, at boot, on the reasoning that the restart is the fan-out (plugin content
+/// and the image ship from the same CI, and a portal rolls onto each image). That bound stopped
+/// being honest the day the module lane became eager (rule R3 of
+/// <c>Doc/Architecture/ModuleAdoptionPolicy</c>, maintainer 2026-09-07: <i>as soon as a new module
+/// version ships, we start using it</i>): a module publish is not an image roll, so "the next boot"
+/// could be days away, and a deployment running its previous generation of a module (#3649) had no
+/// event at all that would ever re-examine it. The reconcile now runs on:</para>
+/// <list type="bullet">
+///   <item><b>Boot</b> — one full pass per process start, as before, with its retry budget and its
+///   deferral (below).</item>
+///   <item><b>A module-published broadcast</b> — the registry POSTs a <see cref="ModulePublished"/>
+///   record to this installation's webhook inbox the moment a bundle is published; the inbox is the
+///   reconcile ledger node this service owns (<see cref="LedgerPath"/>), so the delivery lands as a
+///   durable <c>WebhookEvent</c> and is drained from here for THAT package alone
+///   (<see cref="ReconcileModule"/>). A wake-up, never the truth: the drain reads the registry's own
+///   index and runs the same decision the boot runs. "Ships" → "used" is minutes.</item>
+///   <item><b>The safety net</b> — every <see cref="PluginCatalogOptions.ReconcileSafetyNetInterval"/>
+///   (30 min), a full pass against each registry's feed. Not a poll that drives the update: the
+///   broadcast does that. It is the bound on how long a lost broadcast can hide — the
+///   <c>HomeUrl</c> the registry recorded, the inbox allowlist slot and the ingress between them all
+///   fail SILENTLY, and an installation whose broadcast channel is dead is byte-identical to one
+///   that is up to date. The same reasoning, and the same shape, as
+///   <c>SelfUpdate:SafetyNetCheckInterval</c> (#2494).</item>
+/// </list>
+/// <para>Every pass — boot, drain, broadcast, safety net — runs on ONE serialized lane
+/// (<see cref="OnLane"/>): a landing wave ends by proposing the mesh's module set (#3395), and two
+/// waves interleaving would let one propose the other's half-landed mix. A human opening the
+/// catalog page still reads the same feed and offers the same Update.</para>
 ///
 /// <para>🚨 <b>A boot read that fails past its budget is DEFERRED, not dropped
 /// (Systemorph/MeshWeaver#2888).</b> The 2026-08-31 fix taught the boot read to re-ask a transient
@@ -140,12 +160,35 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
 
     private sealed record TrackedRegistry(PluginRegistryReference Registry, RegistryReconcileEntry Entry);
 
-    /// <summary>Creates the service; the ledger write channel is live from construction so a state
-    /// change is recorded whether it arrives from the boot pass or from a later feed read.</summary>
+    /// <summary>
+    /// THE reconcile lane (#3650): every pass that lands modules and proposes the module set —
+    /// the boot pass, a deferred drain, a broadcast's single-package reconcile, a safety-net pass
+    /// — is enqueued here and runs ONE AT A TIME, in arrival order. A wave ends by proposing the
+    /// mesh's module set from the activation record as it stands (#3395); two waves interleaving
+    /// would let one of them propose the other's half-landed mix, which is the torn set the
+    /// proposal exists to make unreachable. Serialization through Rx (<c>Concat</c>), never a
+    /// lock (Doc/Architecture/RemovingHandWovenGates); synchronized because jobs arrive from the
+    /// boot thread, the inbox watch and a feed read on a caller's thread.
+    /// </summary>
+    private readonly ISubject<IObservable<Unit>> lane = Subject.Synchronize(new Subject<IObservable<Unit>>());
+
+    /// <summary>The inbox deliveries this process has already picked up, by path — a delivery is
+    /// deleted once drained, and the query re-emits until that delete lands, so the claim is what
+    /// keeps a slow delete from draining the same event twice. Instance state, immutable-swapped.</summary>
+    private ImmutableHashSet<string> claimedDeliveries = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+
+    /// <summary>Creates the service; the ledger write channel and the reconcile lane are live from
+    /// construction so a state change is recorded, and a pass runs, whether it arrives from the
+    /// boot, from a later feed read, from a broadcast or from the safety net.</summary>
     public RegistryUpdateReconciler(IMessageHub hub, ILogger<RegistryUpdateReconciler> logger)
     {
         this.hub = hub;
         this.logger = logger;
+        subscriptions.Add(lane
+            .Concat()
+            .Subscribe(_ => { }, ex => logger.LogError(ex,
+                "[RegistryUpdate] the reconcile lane faulted — no further pass runs in this process; "
+                + "installed packages keep their current version until the next boot.")));
         subscriptions.Add(ledgerDirty
             .Select(_ => Observable.Defer(WriteLedger)
                 .Catch((Exception ex) =>
@@ -237,6 +280,59 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 ex => logger.LogError(ex,
                     "[RegistryUpdate] the boot reconcile failed; installed packages keep their "
                     + "current version and the catalog page still offers a manual Update.")));
+
+        // #3650 — the two other events, armed after the same precondition and independent of how
+        // the boot pass went: a boot that deferred still has an inbox to drain and a floor to keep.
+        subscriptions.Add(defaultsDone
+            .ObserveOn(TaskPoolScheduler.Default)
+            .SelectMany(_ => WatchInbox(options))
+            .SubscribeOn(TaskPoolScheduler.Default)
+            .Subscribe(
+                _ => { },
+                ex => logger.LogError(ex,
+                    "[RegistryUpdate] the module-published inbox watch faulted — broadcasts are not "
+                    + "drained in this process any more; each delivery stays in the inbox and is "
+                    + "consumed at the next boot, and the safety net still reconciles meanwhile.")));
+        subscriptions.Add(defaultsDone
+            .ObserveOn(TaskPoolScheduler.Default)
+            .SelectMany(_ => SafetyNet(options))
+            .SubscribeOn(TaskPoolScheduler.Default)
+            .Subscribe(
+                _ => { },
+                ex => logger.LogError(ex,
+                    "[RegistryUpdate] the safety-net reconcile faulted — no further scheduled pass "
+                    + "runs in this process; broadcasts and the next boot still reconcile.")));
+    }
+
+    /// <summary>
+    /// Enqueues one reconcile pass on the serialized lane and hands back ITS completion — the
+    /// caller observes exactly the pass it asked for (the boot chain, a test), while the lane
+    /// keeps every pass from overlapping any other. A pass that faults faults its caller and
+    /// never the lane; a pass enqueued during teardown completes at once, having run nothing.
+    /// </summary>
+    private IObservable<Unit> OnLane(Func<IObservable<Unit>> pass)
+    {
+        var done = new AsyncSubject<Unit>();
+        if (subscriptions.IsDisposed)
+        {
+            logger.LogDebug("[RegistryUpdate] a reconcile pass was requested during teardown — skipped.");
+            done.OnNext(Unit.Default);
+            done.OnCompleted();
+            return done;
+        }
+        lane.OnNext(Observable.Defer(pass)
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync()
+            .Do(_ => { },
+                ex => done.OnError(ex),
+                () =>
+                {
+                    done.OnNext(Unit.Default);
+                    done.OnCompleted();
+                })
+            // Reported to the pass's own caller above; the lane itself moves on to the next pass.
+            .Catch((Exception _) => Observable.Return(Unit.Default)));
+        return done;
     }
 
     /// <summary>
@@ -321,10 +417,177 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                                     registry.Url, f.attempt + 1, FeedReadRetries + 1))
                             : Observable.Throw<Unit>(new FeedReadExhaustedException(f.fault, f.attempt + 1))))
                     .Take(1)
-                    .SelectMany(packages => ReconcileFromFeed(
-                        registry, name, gitRef, source, bundles, packages, RegistryReconcileEntry.ViaBoot));
+                    .SelectMany(packages => OnLane(() => ReconcileFromFeed(
+                        registry, name, gitRef, source, bundles, packages, RegistryReconcileEntry.ViaBoot)));
             })
             .Catch((Exception ex) => Defer(registry, name, ex));
+    }
+
+    /// <summary>
+    /// The module-published inbox (#3650): the live listing of <c>WebhookEvent</c> deliveries under
+    /// this service's own ledger node (<see cref="ModulePublished.InboxTarget"/><c>/_Inbox</c>),
+    /// each drained once — the registry named in it matched against the configured registries, the
+    /// one package it names reconciled on the lane, the delivery deleted. Durable on both ends: a
+    /// delivery that lands while this process is down replays into the first emission of the next
+    /// boot's watch, so the inbox is at-least-once and the decision behind it idempotent. Never
+    /// completes on its own; a fault ends the watch loudly (the subscriber's error line), never
+    /// silently — a lost watch costs latency until the next boot, and the safety net still runs.
+    /// </summary>
+    private IObservable<Unit> WatchInbox(PluginCatalogOptions options)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Never<Unit>();
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var inbox = $"{ModulePublished.InboxTarget}/{WebhookInbox.InboxContainer}";
+        // 🚨 PATH-SCOPED and read as System: the install-records partition is System-owned, and a
+        // query with no path reaches only the partitions a caller's RLS grants — a hosted service
+        // has no caller. The same lesson as SelfUpdate's build watch (BuildCompletion.WatchQuery).
+        var query = $"path:{inbox} scope:children nodeType:{WebhookInbox.NodeType}";
+        return access.RunAsSystem(() => hub.GetQuery($"RegistryUpdate.Inbox:{hub.Address}", query))
+            .SelectMany(nodes => (nodes ?? [])
+                .Where(node => !string.IsNullOrWhiteSpace(node.Path))
+                // Oldest first within one emission: a burst of publishes from one CI wave drains
+                // in publish order, so a later version of the same package is examined last.
+                .OrderBy(node => node.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
+                .Where(node => ImmutableInterlocked.Update(ref claimedDeliveries, set => set.Add(node.Path)))
+                .ToArray())
+            .Select(node => Observable.Defer(() => DrainDelivery(node, options, meshService, access))
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[RegistryUpdate] draining the module-published delivery {Path} failed — it "
+                        + "stays in the inbox and is retried at the next boot. Cause: {Cause}",
+                        node.Path, ex.Message);
+                    return Observable.Return(Unit.Default);
+                }))
+            .Concat();
+    }
+
+    /// <summary>One delivery: parse, match its registry, reconcile that package on the lane, delete.</summary>
+    private IObservable<Unit> DrainDelivery(
+        MeshNode node, PluginCatalogOptions options, IMeshService meshService, AccessService? access)
+    {
+        var delivery = node.ContentAs<WebhookEvent>(hub.JsonSerializerOptions);
+        var published = ModulePublished.TryParse(delivery?.Body);
+        var registry = published is null
+            ? null
+            : RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
+                .FirstOrDefault(r => SameRegistry(r.Url, published.Registry));
+
+        IObservable<Unit> reconcile;
+        if (published is null)
+        {
+            logger.LogDebug(
+                "[RegistryUpdate] inbox delivery {Path} is not a module-published record — dropped.",
+                node.Path);
+            reconcile = Observable.Return(Unit.Default);
+        }
+        else if (registry is null)
+        {
+            logger.LogInformation(
+                "[RegistryUpdate] a module-published broadcast for {Package} arrived from {Registry}, "
+                + "which this installation does not consume — dropped.",
+                published.Package, published.Registry);
+            reconcile = Observable.Return(Unit.Default);
+        }
+        else
+        {
+            logger.LogInformation(
+                "[RegistryUpdate] {Name} published module '{Module}' of {Package} at {Version} "
+                + "(framework {Framework}) — reconciling that package now.",
+                DisplayName(registry), published.Module ?? "(unnamed)", published.Package,
+                published.Version ?? "(unversioned)", published.FrameworkMvid ?? "(unrecorded)");
+            reconcile = OnLane(() => ReconcileModule(registry, published.Package)
+                .Do(_ => Mark(registry, entry => entry with
+                {
+                    LastReconciledAt = DateTimeOffset.UtcNow,
+                    LastReconciledVia = RegistryReconcileEntry.ViaBroadcast,
+                })));
+        }
+
+        // The delete is the acknowledgement — after the reconcile, so a process dying mid-pass
+        // leaves the delivery for the next boot rather than losing it. A failed delete costs one
+        // repeated pass at the next boot (the decision is idempotent), never a lost event.
+        return reconcile.SelectMany(_ => access.RunAsSystem(() => meshService.DeleteNode(node.Path))
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[RegistryUpdate] could not delete the drained delivery {Path}; it is re-examined "
+                    + "at the next boot.", node.Path);
+                return Observable.Return(Unit.Default);
+            }));
+    }
+
+    /// <summary>
+    /// The safety net (#3650): after each <see cref="PluginCatalogOptions.ReconcileSafetyNetInterval"/>,
+    /// one full pass against every configured registry, sequentially, on the lane — then the wait
+    /// starts again, so passes never pile up behind a slow one. Off when the interval is zero or
+    /// negative, which a deployment that genuinely wants broadcast-only opts into in configuration,
+    /// where it is visible. A registry that cannot be read this tick is logged at Warning and read
+    /// again next tick; nothing here notifies admins or marks the ledger pending — that is the boot
+    /// deferral's job, and the boot's retry budget is what such a registry has already exhausted.
+    /// </summary>
+    private IObservable<Unit> SafetyNet(PluginCatalogOptions options)
+    {
+        if (options.ReconcileSafetyNetInterval <= TimeSpan.Zero)
+        {
+            logger.LogInformation(
+                "[RegistryUpdate] the reconcile safety net is disabled ({Section}:{Key} ≤ 0) — a lost "
+                + "module-published broadcast is caught at the next boot only.",
+                PluginCatalogOptions.SectionName, nameof(PluginCatalogOptions.ReconcileSafetyNetInterval));
+            return Observable.Never<Unit>();
+        }
+        if (hub.ServiceProvider.GetService<RegistryTokenResolver>() is null)
+            return Observable.Never<Unit>();
+
+        return Observable.Defer(() => Observable.Timer(options.ReconcileSafetyNetInterval))
+            .SelectMany(_ => RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
+                .Select(SafetyNetReconcile)
+                .ToObservable()
+                .Concat()
+                .DefaultIfEmpty(Unit.Default)
+                .LastAsync())
+            .Repeat();
+    }
+
+    /// <summary>One safety-net pass against one registry: read the feed once, reconcile on the lane.</summary>
+    private IObservable<Unit> SafetyNetReconcile(PluginRegistryReference registry)
+    {
+        var tokenResolver = hub.ServiceProvider.GetService<RegistryTokenResolver>();
+        if (tokenResolver is null)
+            return Observable.Return(Unit.Default);
+        var name = DisplayName(registry);
+        var gitRef = EffectiveRef(registry.Ref);
+        // Captured BEFORE the read: a successful ListPackages reports itself to OnFeedRead, which
+        // claims and drains a PENDING boot reconcile from that very read — that drain IS this
+        // tick's pass for the registry, and running a second one behind it would be the same work
+        // twice.
+        var wasPending = tracked.TryGetValue(Key(registry.Url), out var candidate) && candidate.Entry.Pending;
+
+        return tokenResolver.ResolveToken(registry)
+            .Take(1)
+            .SelectMany(token =>
+            {
+                var bundles = new PluginBundleClient(hub, registry.Url, token);
+                var source = new RegistryPackageSource(hub, registry.Url, token) { Bundles = bundles };
+                return source.ListPackages(gitRef)
+                    .Take(1)
+                    .SelectMany(packages => wasPending
+                        ? Observable.Return(Unit.Default)
+                        : OnLane(() => ReconcileFromFeed(
+                            registry, name, gitRef, source, bundles, packages,
+                            RegistryReconcileEntry.ViaSafetyNet)));
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[RegistryUpdate] the safety-net pass against {Name} ({Url}) failed — installed "
+                    + "packages from it keep their current version until the next pass. Cause: {Cause}",
+                    name, registry.Url, ex.Message);
+                return Observable.Return(Unit.Default);
+            });
     }
 
     /// <summary>
@@ -378,8 +641,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             {
                 var bundles = new PluginBundleClient(hub, registry.Url, token);
                 var source = new RegistryPackageSource(hub, registry.Url, token) { Bundles = bundles };
-                return ReconcileFromFeed(
-                    registry, name, readRef, source, bundles, packages, RegistryReconcileEntry.ViaFeedRead);
+                return OnLane(() => ReconcileFromFeed(
+                    registry, name, readRef, source, bundles, packages, RegistryReconcileEntry.ViaFeedRead));
             })
             // Off the reading caller's thread: that is an IO-pool continuation (a catalog render, an
             // install) and the reconcile is a partition's worth of writes.
@@ -535,6 +798,22 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
 
     private static string Key(string? url) => (url ?? "").Trim().TrimEnd('/');
 
+    /// <summary>
+    /// Whether a broadcast's <see cref="ModulePublished.Registry"/> names a configured registry:
+    /// by HOST when both parse as absolute URLs — a registry announces itself by its public URL,
+    /// which a consumer may have configured with a different scheme or a trailing slash — with the
+    /// port compared only when one side names one explicitly (a scheme's default port is not a
+    /// statement about the registry); else by the trimmed, case-insensitive URL. Pure.
+    /// </summary>
+    internal static bool SameRegistry(string? configured, string? announced)
+    {
+        if (Uri.TryCreate(Key(configured), UriKind.Absolute, out var a)
+            && Uri.TryCreate(Key(announced), UriKind.Absolute, out var b))
+            return string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase)
+                   && ((a.IsDefaultPort && b.IsDefaultPort) || a.Port == b.Port);
+        return string.Equals(Key(configured), Key(announced), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string EffectiveRef(string? gitRef) => string.IsNullOrWhiteSpace(gitRef) ? "HEAD" : gitRef;
 
     private static string DisplayName(PluginRegistryReference registry) =>
@@ -592,27 +871,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     .Take(1)
                     .SelectMany(record => record is null
                         // Not installed here → somebody else's module; nothing to reconcile.
-                        ? Observable.Return(0)
-                        : bundles.AdoptModule(pkg.Id, pkg.Module!, recordPath, unattended: true))
-                    // 🚨 A HANG is worse than a failure here: the packages run as one sequential
-                    // Concat, so a single adopt that never answers (a wedged record read, a
-                    // download that stalls) silently starves EVERY package after it — on
-                    // memex.systemorph.com the Northwind adopt was never even attempted while
-                    // earlier packages logged failures (Plugins#959). A bounded wait turns the
-                    // hang into the loud, caught failure below and the chain proceeds.
-                    .Timeout(PerPackageAdoptBudget)
-                    .Catch((Exception ex) =>
-                    {
-                        // The CAUSE goes into the message itself, not only the attached exception:
-                        // single-line log pipelines (Loki greps) see the template line alone, and
-                        // "failed" with no reason cost a night of archaeology (Plugins#959).
-                        logger.LogWarning(ex,
-                            "[RegistryUpdate] module reconcile of {Id} against {Name} failed — "
-                            + "its landed module is unchanged. Cause: {Cause}",
-                            pkg.Id, registryName, ex.Message);
-                        return Observable.Return(0);
-                    })
-                    .Select(_ => Unit.Default);
+                        ? Observable.Return(Unit.Default)
+                        : AdoptOne(bundles, registryName, pkg.Id, pkg.Module!, recordPath));
             })
             .ToObservable()
             .Concat()
@@ -625,6 +885,84 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             // this point proposes nothing, so the mesh keeps running the set it was on.
             .SelectMany(_ => ProposeMeshModuleSet());
     }
+
+    /// <summary>
+    /// The module lane for ONE package (#3650) — what a <see cref="ModulePublished"/> broadcast
+    /// triggers: the same decision and the same landing as the boot's module pass
+    /// (<see cref="AdoptOne"/>), for the package the registry named, followed by the module-set
+    /// proposal that ends every wave. Reads nothing off the broadcast but the package id: the
+    /// install record decides whether the package is installed here and which module it declares,
+    /// and the registry's index decides whether anything is newer. A package that is not installed
+    /// here, or declares no module, costs one record read and lands nothing.
+    /// </summary>
+    internal IObservable<Unit> ReconcileModule(PluginRegistryReference registry, string packageId)
+    {
+        var tokenResolver = hub.ServiceProvider.GetService<RegistryTokenResolver>();
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (tokenResolver is null || storage is null || string.IsNullOrWhiteSpace(packageId))
+            return Observable.Return(Unit.Default);
+        var name = DisplayName(registry);
+        var recordPath = $"{PackageInstaller.InstalledPartition}/{packageId}";
+
+        return tokenResolver.ResolveToken(registry)
+            .Take(1)
+            .SelectMany(token =>
+            {
+                var bundles = new PluginBundleClient(hub, registry.Url, token);
+                return storage.Read(recordPath, hub.JsonSerializerOptions)
+                    .Take(1)
+                    .SelectMany(record =>
+                    {
+                        if (record is null)
+                        {
+                            logger.LogDebug(
+                                "[RegistryUpdate] {Name} published {Package}, which is not installed here — nothing to reconcile.",
+                                name, packageId);
+                            return Observable.Return(Unit.Default);
+                        }
+                        var module = record.ContentAs<PackageManifest>(hub.JsonSerializerOptions)?.Module;
+                        if (string.IsNullOrWhiteSpace(module))
+                        {
+                            logger.LogDebug(
+                                "[RegistryUpdate] {Name} published {Package}, whose install record here declares no module — nothing to reconcile.",
+                                name, packageId);
+                            return Observable.Return(Unit.Default);
+                        }
+                        return AdoptOne(bundles, name, packageId, module, recordPath);
+                    });
+            })
+            // The wave of one: ends the same way every wave ends (#3395).
+            .SelectMany(_ => ProposeMeshModuleSet());
+    }
+
+    /// <summary>
+    /// One package's module adopt on the unattended lane — the decision, the download when it
+    /// decides Land, the landing — bounded and failure-tolerant, so one package can neither hang
+    /// nor fail the packages after it. Shared by the boot pass and the broadcast drain, so the two
+    /// cannot differ in what "adopt" means.
+    /// </summary>
+    private IObservable<Unit> AdoptOne(
+        PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath) =>
+        bundles.AdoptModule(packageId, moduleName, recordPath, unattended: true)
+            // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
+            // so a single adopt that never answers (a wedged record read, a download that stalls)
+            // silently starves EVERY package after it — on memex.systemorph.com the Northwind
+            // adopt was never even attempted while earlier packages logged failures
+            // (Plugins#959). A bounded wait turns the hang into the loud, caught failure below and
+            // the chain proceeds.
+            .Timeout(PerPackageAdoptBudget)
+            .Catch((Exception ex) =>
+            {
+                // The CAUSE goes into the message itself, not only the attached exception:
+                // single-line log pipelines (Loki greps) see the template line alone, and
+                // "failed" with no reason cost a night of archaeology (Plugins#959).
+                logger.LogWarning(ex,
+                    "[RegistryUpdate] module reconcile of {Id} against {Name} failed — "
+                    + "its landed module is unchanged. Cause: {Cause}",
+                    packageId, registryName, ex.Message);
+                return Observable.Return(0);
+            })
+            .Select(_ => Unit.Default);
 
     /// <summary>
     /// Closes the landing wave by proposing the module set the activation record now describes

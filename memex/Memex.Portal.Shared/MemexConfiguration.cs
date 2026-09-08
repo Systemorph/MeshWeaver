@@ -742,6 +742,17 @@ public static class MemexConfiguration
                 // types); off the thread pool so it never blocks startup.
                 .ConfigureServices(services =>
                     services.AddHostedService<ShippedReleaseSeedHostedService>())
+                // The registry's module-published broadcast (#3650): the publish route tells every
+                // registered consumer the moment a bundle lands on the shelf. Registered on every
+                // portal — it is inert where no instance is registered — because whether THIS
+                // deployment is a registry is a runtime fact (a publish token configured), not a
+                // composition-time one.
+                .ConfigureServices(services =>
+                {
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions
+                        .TryAddSingleton<Api.ModulePublishedBroadcaster>(services);
+                    return services;
+                })
                 // Markdown export (PDF/DOCX/HTML + share-by-email) rides the
                 // MeshWeaver.Markdown.Export MODULE (MarkdownExportProviderAttribute →
                 // AddMarkdownExport(); node seeding is IfAbsent so the lane switch is idempotent).
