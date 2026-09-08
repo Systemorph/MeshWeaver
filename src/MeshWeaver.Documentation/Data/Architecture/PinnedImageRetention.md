@@ -55,20 +55,85 @@ Do not look for an `ImagePullBackOff` or a `manifest unknown` near the purge tim
 not be one. Work from the pin instead: read the digest out of the repository's workflow and ask the
 registry whether it still exists.
 
-## The guard — a dead pin is named before a repository discovers it
+## The guard — a dead pin named before a repository discovers it, an unprotected one before it dies
 
 `.github/scripts/check-pinned-digests.py`, run daily by
-`.github/workflows/pinned-digests.yml` at 05:20 UTC — **after** both retention tasks — and again on
-any push to `main` that touches either file.
+`.github/workflows/pinned-digests.yml` at 05:20 UTC — **after** the 01:00 lock and the 03:00 purge —
+and again on any push to `main` that touches it, the lock workflow, or the retention record.
 
-It does not prevent the deletion. It converts *"an entire repository's CI is inexplicably dead,
-including its nightly"* into one red naming the repository, the declaration and the digest. That is
-worth having whichever retention change lands, because it also catches the next variant.
+Its **existence** arm does not prevent the deletion. It converts *"an entire repository's CI is
+inexplicably dead, including its nightly"* into one red naming the repository, the declaration and
+the digest.
 
-🚨 **It answers EXISTENCE only.** Whether the digests one repository pins name the *same promoted
-build* is a different question with a different answer, and two manifests that both exist satisfy
-this sweep completely while being a half-moved set — see [Pin Set Consistency](../PinSetConsistency),
-whose tag arm runs beside this one in the same workflow, under the same credential.
+🚨 **Existence is a LAGGING indicator, and until 2026-09-08 it was the only one.** A manifest that
+is `GONE` is a past incident — the wedge has already happened and the repository is already dead.
+The leading indicator is one field away and the *same* `az acr repository show` already carries it:
+
+> a pinned manifest whose `deleteEnabled` is still **true** is not protected, and `--ago 7d
+> --keep 10` guarantees it dies. The only open question is which night.
+
+So the sweep reads `changeableAttributes.deleteEnabled` off every pin it resolves — no extra call,
+`-o json` instead of `-o none` — and classifies it:
+
+| Verdict | Meaning | Red? |
+|---|---|---|
+| `PROTECTED` | `deleteEnabled == false` — the purge skips it | no |
+| `UNPROTECTED` | unlocked, and the lock job has had a scheduled opportunity | **yes** |
+| `PENDING-LOCK` | unlocked, but the pin moved *after* the last scheduled lock | no — counted |
+| `INDETERMINATE` | the registry did not report the attribute, or the opportunity could not be established | **yes** |
+
+**The default is never `PROTECTED`.** Only the registry saying `deleteEnabled: false`, in its own
+words, earns it; "the field was not in the response" is INDETERMINATE. That asymmetry is the point —
+the failure being guarded against is a protection that quietly stopped, and a protection that cannot
+be read has not been shown to be working.
+
+**What this closes, and nothing else did.** The lock job asserts its own postcondition *per
+manifest, at lock time* (see below). Nothing asserted that the postcondition still **holds**, from a
+process that does not depend on the lock job having run. So every one of these left a green wall
+until a satellite died days later: `lock-pinned-digests.yml` deleted; its `schedule:` removed; the
+`metadata/write` grant revoked; a manifest unlocked by hand; the cron moved past the purge.
+
+### 🚨 The ordering of two clocks IS the protection, and it is now asserted on every pull request
+
+`acr purge` skips locked manifests; the lock job is what makes a pinned manifest locked. If the lock
+ever fires **after** the purge, every pin moved since the previous lock faces that purge unprotected
+— and *both jobs would still report success about their own work*. So the sweep also asserts, from
+the two places the schedules are actually written down:
+
+* `.github/workflows/lock-pinned-digests.yml` exists and carries a `schedule:` — a protection that
+  only runs when someone remembers to dispatch it is not a protection;
+* its `cron` fires **before** every *enabled* purge step's `schedule` in
+  `.github/acr-retention/tasks.json`. A `Disabled` task deletes nothing, so only a live clock counts.
+
+Neither needs a credential, so both live in `--self-test` and run on **every pull request** in
+`dotnet-test.yml`'s workflow-shell lane, rather than only at 05:20. Falsified 2026-09-08 by editing
+the shipped files: moving the lock cron to `0 4 * * *` reds with *"the lock fires at 04:00 UTC and
+purge task 'purge-old-images' at 03:00 UTC"*; deleting the workflow reds with *"that workflow IS the
+protection"*. Two sabotages (a lock at 23:00, a lock schedule that never fires) are driven through
+the same comparison inside the self-test and must both come back non-empty.
+
+### PENDING-LOCK is an exemption, and it is COUNTED
+
+A pin that moved after the last scheduled lock has not yet had an opportunity to be protected, so
+calling it a failure would red on the fleet's ordinary working day. It is exempt — and the count is
+printed as its own line, because an exemption that can silently grow to cover the whole fleet is how
+this arm would become vacuous.
+
+The proxy is deliberately conservative: *when did the declaring workflow file last change*, one REST
+call per repository, not *when did this digest change*. A file touched for an unrelated reason
+exempts its pins — a **softening**, never a false alarm. And the window where that matters is narrow
+at the hour it runs: the sweep is at 05:20 and the lock at 01:00, so a pin has to have moved inside
+those 4h20m to be exempted at all.
+
+🚨 **A missing lock schedule does NOT exempt anything.** "The clock is gone" is the worst possible
+reason to relax a protection check, so with no schedule to compare against an unlocked pin stays
+`UNPROTECTED` — and the missing schedule is its own red besides.
+
+🚨 **It answers existence and protection, not agreement.** Whether the digests one repository pins
+name the *same promoted build* is a third question, and two manifests that both exist and are both
+locked satisfy this sweep completely while being a half-moved set — see
+[Pin Set Consistency](../PinSetConsistency), whose tag arm runs beside this one in the same workflow,
+under the same credential.
 
 ```
     repositories scanned                  8
@@ -88,6 +153,65 @@ Measured 2026-09-06, mid-release-wave. The three GONE are Education's, and they 
 `mw-plugin-test@sha256:df19f10afc1f…`. Note the gap between **15** and **9**: the fleet moves its
 pins as one set, so most manifests are pinned from several repositories at once, and the two numbers
 must not be collapsed into one — see below.
+
+### The same sweep with the protection arm, measured 2026-09-08T13:5xZ
+
+```
+    …declarations that RESOLVE            15
+    …declarations that are GONE            0
+
+    of the declarations that RESOLVE —
+      …PROTECTED (deleteEnabled false)    11
+      …UNPROTECTED — purge can delete      0
+      …PENDING-LOCK (exempt: moved since   4
+        the last scheduled lock)
+      …protection INDETERMINATE            0
+      last scheduled lock run             2026-09-08T01:00:00Z  (0 1 * * *)
+```
+
+**Zero gone, and every pin the lock has had a turn at is locked.** The four `PENDING-LOCK` are
+MeshWeaver.Plugins' current pair (`mw-plugin-test@7202afd4…`, `memex-portal-ai@05080741…`, over four
+declaration sites), whose `ci.yml` moved at 10:46Z — nine hours after the 01:00 lock run that saw
+the previous pair. Nothing is wrong: tonight's 01:00 lock precedes tomorrow's 03:00 purge, so they
+are protected before anything can delete them.
+
+🚨 **But it makes the shape of the residual exposure legible, and it is worth stating plainly:
+protection is DERIVED on a daily cadence and the purge does not wait for it.** The two live in
+different systems — the lock is a GitHub Actions cron, the purge an ACR timer task — with no
+interlock between them. So a pin that lands in the **01:00–03:00 window** meets that night's purge
+unprotected, and if the lock job does not run at all (a GitHub Actions outage, a failed OIDC login,
+a revoked grant) the purge still runs at 03:00 regardless. Neither is a widened window away from
+being fixed; both are closed only by making the pin move and its lock ONE act, which today means a
+cross-repo dispatch from each satellite and is not built.
+
+**Until it is, the guard's protection arm is what makes the residual exposure visible instead of
+silent** — and a pin that stays unprotected past a lock run is a red naming the repository, the
+declaration, the digest and the one `az` command that fixes it now.
+
+**The independent denominator, measured the same day** (a plain `sha256:` grep over every workflow
+file in all 34 org repositories, deliberately not the shipped extractor):
+
+| | |
+|---|---|
+| repositories in the org | 34 |
+| …with a `.github/workflows` directory | 16 |
+| …declaring ≥ 1 digest pin | 6 (Crm, Education, Manufacturing, Plugins, Reinsurance, SocialMedia) |
+| `sha256:`-shaped tokens found | 31 |
+| …inside COMMENTS (prose about past incidents) | 11 |
+| **pin declaration SITES** | **20** — exactly what the lock job reports |
+| …over how many DISTINCT manifests | 9 |
+| …that exist | 9 |
+| …that are GONE | 0 |
+| …that exist and are LOCKED | 7 |
+| …that exist and are UNLOCKED | 2 (both Plugins', pinned hours earlier) |
+
+Two things that only a hand count shows. **Eleven of thirty-one `sha256:` tokens are comments** —
+several of them narrating *this* incident inside the very files it broke — so any "count the digests"
+instrument that does not exclude them over-reports by more than a third. And **20 sites collapse to
+15 declarations** in the shipped report, because it dedupes on `(declaration name, digest)` and both
+Plugins and Crm write the same `platform-image-digest:` value at two lane calls; 9 distinct
+manifests is the number retention actually has to keep alive, and it is the one the two counts agree
+on.
 
 ### What it is built not to do
 
@@ -232,6 +356,28 @@ would have dragged `memex-portal` from 30 days to `7d --keep 10` with nobody dec
 removed the second *task* — the "which of two lists?" question — while preserving each repository's
 effective window exactly. Both steps share **one 3600 s task budget**; the per-step `timeout` is a
 per-step ceiling, not a second hour.
+
+**Re-verified against the live registry 2026-09-08**, from the task definitions rather than from any
+summary of them — `az acr task show` for both, decoding `step.encodedTaskContent`:
+
+| Task | `status` | `schedule` | Steps |
+|---|---|---|---|
+| `purge-old-images` | **Enabled** | `0 3 * * *` | 5 CI repos at `--ago 7d --keep 10 --untagged`; `memex-portal` at `--ago 30d --untagged` |
+| `purge-old-ci-releases` | **Disabled** | `0 4 * * *` | its old single 30-day step, kept as the record of the Memex#122 reasoning |
+
+So the issue's headline finding — *"the second purge task never learned Memex#122"* — is **settled,
+and the settlement is that there is no longer a second task to teach.** The divergence itself was
+the defect: one repository (`mw-plugin-test`) appeared in the aggressive list and in no other, and
+whether a new repository landed under a 7-day or a 30-day window depended on which of two
+independently-edited filter lists someone happened to open. `lastModifiedAt` on both is
+2026-09-06T21:51Z, ninety seconds apart, which is the edit that collapsed them.
+
+🚨 **The committed record is not the registry, and only one command relates them.**
+`.github/acr-retention/*.yaml` is a *record* — nothing deploys from it — so "the record says
+Disabled" is not evidence the task is. `acr-retention-tasks.sh verify` is what compares the two, and
+it is deliberately not in CI (it needs `registries/tasks/read`, a strictly larger grant than the
+lock job holds, and a step that is permanently red for a missing grant is a step that gets ignored).
+The reading above was taken by hand, read-only.
 
 🚨 **A correction to the reasoning recorded in that task, measured 2026-09-07.** The task's own
 comment justifies the split by saying `memex-portal` "is pinned on the OTHER axis (committed tags in
@@ -413,17 +559,16 @@ protection against a future filter addition rather than against tonight.
 deleted. The job reds on them, by construction, on the same fact the 05:20 guard reds on. Education's
 bump must move all three.
 
-🚨 **Locking is a WRITE, and the read-only sweep's credential cannot do it.**
+### ✅ The WRITE half works — measured on the first apply run, 2026-09-08
+
+**Locking is a WRITE, and the read-only sweep's credential could not do it.**
 `az acr repository update` needs the data action
 `Microsoft.ContainerRegistry/registries/repositories/metadata/write`, which is in
 **`Container Registry Repository Writer`** (and in Contributor/Owner) and in **neither `AcrPull` nor
-`AcrPush`** — measured 2026-09-07: `AcrPush` is `pull/read` + `push/write` and nothing else.
-
-The registry's three service principals hold, between them, only `AcrPull`, `AcrPush` and
-`Container Registry Data Importer and Data Reader` — measured with `--include-inherited`, and that
-third role is `metadata/**read**` only. So on the evidence the lock will be refused until a grant is
-added. **The job's first run is the decisive measurement**, and it reds **once**, naming the exact
-assignment rather than repeating one refusal per manifest:
+`AcrPush`** — measured 2026-09-07: `AcrPush` is `pull/read` + `push/write` and nothing else. The
+registry's three service principals held only `AcrPull`, `AcrPush` and `Container Registry Data
+Importer and Data Reader` (`metadata/**read**` only), so the prediction was that the lock would be
+refused until a grant was added:
 
 ```bash
 az role assignment create --assignee <the AZURE_CLIENT_ID app's object id> \
@@ -431,7 +576,29 @@ az role assignment create --assignee <the AZURE_CLIENT_ID app's object id> \
   --scope /subscriptions/<sub>/resourceGroups/meshweaver-shared/providers/Microsoft.ContainerRegistry/registries/meshweaver
 ```
 
-That is a provisioning task, not a workflow defect.
+**That grant landed, and the prediction was confirmed by its removal**: the scheduled run of
+2026-09-08T01:14Z ([34176008757](https://github.com/Systemorph/MeshWeaver/actions/runs/34176008757))
+is the first `apply` run in the job's history to succeed, and it wrote locks:
+
+```
+mode: apply (event: schedule)
+
+    UNION — manifests the fleet pins            REGISTRY
+      distinct manifests wanted        18         manifests in the registry     2813
+      …already protected               10         …currently locked               26
+      …TO LOCK                          8         …locked and pinned by NOTHING   16
+      …that could NOT be protected      0
+
+Protected 18 manifest(s) (8 newly locked this run); 0 released.
+```
+
+Every previous run was report-only or blocked, so **`0 that could NOT be protected` is the first
+measurement of the mechanism end to end** rather than of its plan. The three that #3438 could not
+protect were Education's already-deleted trio; Education's bump moved all three, and they now read
+`memex-portal-ai@47dc1750…`, `memex-migration@24ea2fc6…`, `mw-plugin-test@4cef7b67…`.
+
+🚨 **`…locked and pinned by NOTHING 16` is the standing debt of a lock-only job**, and it grows every
+time a pin moves. The release arm that would clear it stays disabled on purpose — see below.
 
 ### 🚨 The lock asserts its own postcondition — an exit code is not a locked manifest
 
@@ -466,10 +633,9 @@ answer. Both were **falsified** — deleting the read-back turns them red with
 `5 lock(s) were COUNTED although none took`, which is what makes them assertions rather than
 decoration.
 
-This matters more than it looks, because **the write half has never actually run**. Both runs so far
-were report-only or blocked, and the `metadata/write` grant below is (on the role evidence) still
-missing. The first `apply` run is the decisive measurement, and it must not be able to report
-success without having achieved it.
+That read-back is what makes the 2026-09-08 apply run above *evidence*. Before it, the job had never
+written a lock at all; had it still been believing exit codes, `Protected 18 manifest(s)` would have
+been indistinguishable from 18 manifests the purge could still delete.
 
 ### Two questions about the lock job, settled by measurement rather than reasoning
 

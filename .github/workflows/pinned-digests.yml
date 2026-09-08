@@ -10,12 +10,27 @@ name: Pinned image digests
 # below anything a CI log calls out, and the purge itself is not adjacent to the breakage in any log
 # (runners and pods serve from cache long after the delete — Memex#122's lesson, unchanged here).
 #
-# 🚨 THIS IS THE CHEAP HALF, AND DELIBERATELY NOT THE FIX. It does not stop the deletion. It turns
+# 🚨 EXISTENCE IS THE LAGGING HALF, AND IT IS NOT THE FIX. It does not stop the deletion. It turns
 # "an entire repository's CI is inexplicably dead, including its nightly" into one red naming the
-# repository, the declaration and the digest. The retention half — locking pinned manifests so
-# `acr purge` skips them, and collapsing the two divergent purge tasks into one — is designed in
-# src/MeshWeaver.Documentation/Data/Architecture/PinnedImageRetention.md and is a live change to
-# shared registry infrastructure, so it is the maintainer's to apply.
+# repository, the declaration and the digest — after the fact. The retention half — locking pinned
+# manifests so `acr purge` skips them, and collapsing the two divergent purge tasks into one — is
+# lock-pinned-digests.yml, and it is live: its first APPLY run on 2026-09-08 locked 8 manifests and
+# left 0 unprotectable.
+#
+# 🚨 SO THIS SWEEP ALSO ASKS THE LEADING QUESTION: is every pinned manifest PROTECTED? A manifest
+# that is GONE is a past incident; a pinned manifest whose `deleteEnabled` is still true is a
+# scheduled one, because `--ago 7d --keep 10` is measured in age and in newer builds and guarantees
+# it dies. The same `az acr repository show` that answers existence carries the attribute, so the
+# leading indicator costs no extra call — and it closes the one hole nothing covered: the lock job
+# could stop protecting (deleted workflow, removed schedule, revoked metadata/write grant, a
+# manifest unlocked by hand) and every wall would stay green until a satellite died days later.
+#
+# Two of its arms need NO credential and therefore run on every pull request inside `--self-test`:
+# that lock-pinned-digests.yml exists with a `schedule:`, and that the lock fires BEFORE the purge
+# (its cron vs. the schedule in .github/acr-retention/tasks.json). Moving the lock past the purge
+# would make it decorative, and nothing anywhere would have noticed.
+#
+# See src/MeshWeaver.Documentation/Data/Architecture/PinnedImageRetention.md.
 #
 # 🛡️ THIS WORKFLOW MAY NOT SKIP (AGENTS.md — "a gate NEVER tests its own inputs"). GitHub paints a
 # skipped job with the same grey tick as a passed one, so:
@@ -44,9 +59,13 @@ name: Pinned image digests
 
 on:
   schedule:
-    # 05:20 UTC — AFTER both ACR retention tasks (purge-old-images at 03:00, purge-old-ci-releases
-    # at 04:00) and before the working day, so a pin the night's purge ate is named in a red that is
-    # already waiting rather than discovered by a satellite's CI dying at `manifest unknown`.
+    # 05:20 UTC — AFTER the lock (01:00) and AFTER the purge (03:00), and before the working day.
+    # Both orderings matter and they are why this hour is what it is: a pin the night's purge ate is
+    # named in a red that is already waiting rather than discovered by a satellite's CI dying at
+    # `manifest unknown`, AND the night's lock run has had its turn, so a pin that is STILL
+    # unprotected at this hour means the protection did not do its work — not that it has not
+    # started. The 4h20m between the lock and this sweep is also the whole of the PENDING-LOCK
+    # exemption window; the report counts what it exempts.
     - cron: "20 5 * * *"
   workflow_dispatch:
   push:
@@ -55,6 +74,10 @@ on:
       - '.github/workflows/pinned-digests.yml'
       - '.github/scripts/check-pinned-digests.py'
       - '.github/scripts/check-pin-set-consistency.py'
+      # The protection arm reads both of these, so a change to either must be re-asserted against
+      # the live registry rather than waiting for 05:20.
+      - '.github/workflows/lock-pinned-digests.yml'
+      - '.github/acr-retention/tasks.json'
 
 permissions:
   contents: read
@@ -167,8 +190,10 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # No `if:`, no `continue-on-error:`. The script fails closed on an unreadable repository, on a
-      # pin-shaped declaration whose value is not a digest, on an indeterminate registry answer, and
-      # on a fleet in which it found no pins at all — that last one because a sweep that extracted
+      # pin-shaped declaration whose value is not a digest, on an indeterminate registry answer, on
+      # a pinned manifest that is UNPROTECTED after the lock has had its turn, on a protection state
+      # the registry would not report, on a lock that is not scheduled before the purge, and on a
+      # fleet in which it found no pins at all — that last one because a sweep that extracted
       # nothing has proven the extractor broken, not the fleet clean.
       - name: Sweep the fleet
         env:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""check-pinned-digests.py — does every image digest the fleet PINS still exist in ACR?
+"""check-pinned-digests.py — does every image digest the fleet PINS still exist in ACR, and is it
+PROTECTED from the next purge?
 
 (The name on this first line is load-bearing in the same way compile-check.py's and
 check-workflow-timeouts.py's are: a lane that fetches this file at the platform ref can refuse a
@@ -28,13 +29,43 @@ contradiction and nothing reconciles them.
 
 WHAT THIS SCRIPT IS, AND WHAT IT IS NOT
 ---------------------------------------
-It is the CHEAP half and it is deliberately not the fix: it does not stop the deletion. It converts
-"an entire repository's CI is inexplicably dead, including its nightly" into one named red saying
-which repo, which variable, and which digest is gone. That is worth having whichever retention
-change lands, because it also catches the next variant.
+Its EXISTENCE arm is the cheap half and is deliberately not the fix: it does not stop the deletion.
+It converts "an entire repository's CI is inexplicably dead, including its nightly" into one named
+red saying which repo, which variable, and which digest is gone.
 
 The retention half — locking the pinned manifests so `acr purge` skips them, and collapsing the two
-divergent tasks into one — is written up in Doc/Architecture/PinnedImageRetention.
+divergent tasks into one — is written up in Doc/Architecture/PinnedImageRetention and is implemented
+by lock-pinned-digests.py, running at 01:00 UTC, two hours before the 03:00 purge.
+
+🚨 THE PROTECTION ARM (#3438, added 2026-09-08) — EXISTENCE IS A LAGGING INDICATOR
+---------------------------------------------------------------------------------
+A manifest that is GONE is a past incident: the wedge has already happened and the repository is
+already dead. The leading indicator is one field away and the same `az` call already fetches it:
+
+    a pinned manifest whose `deleteEnabled` is still TRUE is not protected, and `--ago 7d --keep 10`
+    guarantees it dies — the only open question is which night.
+
+So this sweep now reads `changeableAttributes.deleteEnabled` off every pin it resolves and reports
+PROTECTED / UNPROTECTED / PENDING-LOCK. That closes the one hole nothing covered: **the lock job
+could stop protecting and nothing would say so.** A deleted `lock-pinned-digests.yml`, a removed
+`schedule:`, a revoked `metadata/write` grant, a manifest unlocked by hand — every one of those
+leaves a green wall until a satellite's CI dies at `manifest unknown` days later, which is exactly
+the failure mode of the incident this whole file exists for, one level up.
+
+Two structural assertions come with it, and they need NO credential, so they run on every pull
+request inside `--self-test` rather than only at 05:20:
+
+  * `lock-pinned-digests.yml` EXISTS and carries a `schedule:` — the protection is not a comment.
+  * the lock fires BEFORE the purge. Both are read from committed files (the lock workflow's own
+    `cron:`, and the purge task's `schedule` in .github/acr-retention/tasks.json). Moving the lock
+    to 04:00 would make it useless and, until this arm existed, nothing anywhere would have noticed.
+
+PENDING-LOCK, and why it is not a skip. A pin that moved AFTER the last scheduled lock has not yet
+had an opportunity to be protected, so calling it a failure would red on the fleet's ordinary
+working day. It is reported and EXEMPT — and the exemption is COUNTED in the denominator, so a
+sweep that exempted everything cannot read as a sweep that found everything protected. The window
+is narrow where it matters: this sweep runs at 05:20 UTC and the lock at 01:00, so the exempting
+window is 4h20m, not a day.
 
 DESIGN CONSTRAINTS, each one a thing this fleet has already been bitten by
 -------------------------------------------------------------------------
@@ -67,20 +98,23 @@ USAGE
   check-pinned-digests.py --repos Systemorph/A,...   scan exactly these repositories
   check-pinned-digests.py --self-test                prove the extractor fires and stays silent
 
-Exit 0 only when every pin found resolves. Every failure is a `::error` annotation naming the
-repository, the declaration and the digest.
+Exit 0 only when every pin found resolves AND every pin the lock job has had an opportunity to
+protect is locked. Every failure is a `::error` annotation naming the repository, the declaration
+and the digest.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import datetime as dt
 import json
 import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 REGISTRY_DEFAULT = "meshweaver"
 REGISTRY_HOST_RE = r"(?P<host>[a-z0-9]+)\.azurecr\.io"
@@ -178,6 +212,23 @@ class Pin:
     resolved_in: str | None = None
     verdict: str = "UNCHECKED"    # RESOLVES | GONE | INDETERMINATE
     detail: str = ""
+    # 🚨 A SECOND, INDEPENDENT VERDICT — never folded into `verdict` above. Existence and
+    # protection are different questions about the same manifest and a pin can pass either while
+    # failing the other; collapsing them into one field is how "it resolves" would come to mean
+    # "it is safe", which is the reading that made #3438 invisible until the manifest was gone.
+    #   PROTECTED     deleteEnabled == false — `acr purge` skips it (neither purge step passes
+    #                 --include-locked; asserted against the committed record on every PR)
+    #   UNPROTECTED   deleteEnabled == true, and the lock job HAS had an opportunity → a failure
+    #   PENDING-LOCK  deleteEnabled == true, but this pin moved after the last scheduled lock run
+    #   INDETERMINATE the registry did not say — never read as protected
+    protection: str = "UNCHECKED"
+    protection_detail: str = ""
+    delete_enabled: bool | None = None
+
+    @property
+    def workflow_file(self) -> str:
+        """The workflow file this pin is declared in — `where` is '<file>:<name>'."""
+        return self.where.split(":", 1)[0]
 
 
 @dataclass
@@ -407,24 +458,290 @@ def registry_control_probe(registry: str) -> None:
     print(f"registry {registry}: reachable, {len(repos)} repositories.")
 
 
-def resolve(registry: str, acr_repo: str, digest: str, cache: dict) -> tuple[bool, str]:
+def resolve(registry: str, acr_repo: str, digest: str, cache: dict) -> tuple[bool, str, bool | None]:
+    """(exists, detail, delete_enabled).
+
+    🚨 `-o json`, not `-o none`. The protection arm needs `changeableAttributes.deleteEnabled` and
+    this is the SAME registry round trip that answers existence — reading it costs nothing and
+    adds no call. `delete_enabled` is None when the manifest is absent, and also when it is present
+    but the attribute could not be read; the caller treats the second as INDETERMINATE, never as
+    protected. "The registry did not say" is not a confirmation.
+    """
     key = (acr_repo, digest)
     if key in cache:
         return cache[key]
-    rc, _, err = az(
-        ["acr", "repository", "show", "--name", registry, "--image", f"{acr_repo}@{digest}", "-o", "none"]
+    rc, out, err = az(
+        ["acr", "repository", "show", "--name", registry, "--image", f"{acr_repo}@{digest}", "-o", "json"]
     )
     if rc == 0:
-        result = (True, "")
+        delete_enabled: bool | None = None
+        try:
+            attrs = (json.loads(out) or {}).get("changeableAttributes") or {}
+            value = attrs.get("deleteEnabled")
+            if isinstance(value, bool):
+                delete_enabled = value
+        except (json.JSONDecodeError, AttributeError):
+            delete_enabled = None
+        result = (True, "", delete_enabled)
     else:
         blob = err.lower()
         if any(marker in blob for marker in ABSENT_MARKERS):
-            result = (False, "absent")
+            result = (False, "absent", None)
         else:
             # Neither present nor provably absent. Surfaced, never smoothed into "gone".
-            result = (False, "INDETERMINATE: " + " ".join(err.split())[:300])
+            result = (False, "INDETERMINATE: " + " ".join(err.split())[:300], None)
     cache[key] = result
     return result
+
+
+# ── The protection schedule: read from committed files, never from a constant here ─────────────
+#
+# 🚨 THE ORDER OF TWO CLOCKS IS THE WHOLE PROTECTION. `acr purge` skips locked manifests; the lock
+# job is what makes a pinned manifest locked. If the lock ever fires AFTER the purge, every pin
+# moved since the previous lock is unprotected for a full day — and nothing anywhere would say so,
+# because both jobs would report success about their own work. So the relation between the two
+# schedules is asserted, from the two places they are actually written down.
+
+LOCK_WORKFLOW = ".github/workflows/lock-pinned-digests.yml"
+RETENTION_RECORD = ".github/acr-retention/tasks.json"
+
+CRON_LINE_RE = re.compile(r"^\s*-\s*cron:\s*(?P<quote>['\"]?)(?P<expr>[^'\"#\r\n]+)(?P=quote)", re.MULTILINE)
+
+
+def _cron_field_matches(spec: str, value: int, low: int, high: int) -> bool:
+    """One crontab field against one value. Supports `*`, lists, ranges and `/steps`."""
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            return False
+        step = 1
+        if "/" in part:
+            part, _, raw_step = part.partition("/")
+            if not raw_step.isdigit() or int(raw_step) == 0:
+                return False
+            step = int(raw_step)
+        if part in ("*", "?"):
+            start, end = low, high
+        elif "-" in part.lstrip("-"):
+            start_s, _, end_s = part.partition("-")
+            if not (start_s.isdigit() and end_s.isdigit()):
+                return False
+            start, end = int(start_s), int(end_s)
+        elif part.isdigit():
+            start = end = int(part)
+            if step != 1:
+                end = high
+        else:
+            return False
+        if start < low or end > high or start > end:
+            return False
+        if start <= value <= end and (value - start) % step == 0:
+            return True
+    return False
+
+
+def cron_matches(expr: str, when: dt.datetime) -> bool:
+    """Does this 5-field crontab expression fire at `when` (UTC, minute resolution)?"""
+    fields = expr.split()
+    if len(fields) != 5:
+        return False
+    minute, hour, dom, month, dow = fields
+    # GitHub/POSIX: when BOTH day-of-month and day-of-week are restricted the match is their union.
+    dom_restricted = dom.strip() not in ("*", "?")
+    dow_restricted = dow.strip() not in ("*", "?")
+    day_ok_dom = _cron_field_matches(dom, when.day, 1, 31)
+    day_ok_dow = _cron_field_matches(dow, when.isoweekday() % 7, 0, 6)
+    if dom_restricted and dow_restricted:
+        day_ok = day_ok_dom or day_ok_dow
+    elif dom_restricted:
+        day_ok = day_ok_dom
+    elif dow_restricted:
+        day_ok = day_ok_dow
+    else:
+        day_ok = True
+    return (
+        _cron_field_matches(minute, when.minute, 0, 59)
+        and _cron_field_matches(hour, when.hour, 0, 23)
+        and _cron_field_matches(month, when.month, 1, 12)
+        and day_ok
+    )
+
+
+def last_cron_occurrence(exprs: list[str], now: dt.datetime, horizon_days: int = 8) -> dt.datetime | None:
+    """The most recent minute at or before `now` at which any of these crons fires.
+
+    Walks back minute by minute rather than solving the expression: the fleet's crons are daily and
+    the horizon is a week, so the loop is ~11k cheap comparisons and there is no clever arithmetic
+    to get subtly wrong. None means "no occurrence within the horizon" — for a job whose whole job
+    is to run before a NIGHTLY purge, that is a defect, not an answer.
+    """
+    cursor = now.replace(second=0, microsecond=0)
+    for _ in range(horizon_days * 24 * 60 + 1):
+        if any(cron_matches(expr, cursor) for expr in exprs):
+            return cursor
+        cursor -= dt.timedelta(minutes=1)
+    return None
+
+
+def read_lock_schedule(repo_root: Path) -> tuple[list[str], str | None]:
+    """The `cron:` expressions the lock workflow declares — from the file, never remembered here."""
+    path = repo_root / LOCK_WORKFLOW
+    if not path.is_file():
+        return [], (
+            f"{LOCK_WORKFLOW} does not exist. That workflow IS the protection: it locks every "
+            "manifest the fleet pins so `acr purge` skips it. Without it every pin ages out."
+        )
+    text = path.read_text(encoding="utf-8", errors="replace")
+    exprs = [m.group("expr").strip() for m in CRON_LINE_RE.finditer(text)]
+    if not exprs:
+        return [], (
+            f"{LOCK_WORKFLOW} declares no `schedule:` cron. A protection that only runs when "
+            "someone remembers to dispatch it is not a protection."
+        )
+    return exprs, None
+
+
+def read_purge_schedules(repo_root: Path) -> tuple[list[tuple[str, str]], str | None]:
+    """(task name, cron) for every ENABLED purge task in the committed retention record."""
+    path = repo_root / RETENTION_RECORD
+    if not path.is_file():
+        return [], f"{RETENTION_RECORD} does not exist, so the purge schedule is unknown."
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [], f"{RETENTION_RECORD} is not JSON: {exc}"
+    tasks = []
+    for task in doc.get("tasks", []):
+        if str(task.get("status", "")).lower() != "enabled":
+            continue          # a Disabled task deletes nothing; only a live clock can beat the lock
+        schedule = task.get("schedule")
+        if schedule:
+            tasks.append((task.get("name", "?"), str(schedule)))
+    if not tasks:
+        return [], (
+            f"{RETENTION_RECORD} records no ENABLED purge task with a schedule. Either the record "
+            "is stale or retention stopped; both are worth a red rather than a silent pass."
+        )
+    return tasks, None
+
+
+def ordering_problems(lock_crons: list[str], purges: list[tuple[str, str]]) -> list[str]:
+    """Pure comparison of two sets of daily clocks — the lock's, and every enabled purge's.
+
+    Separated from the file reads so --self-test can drive it with SABOTAGED schedules and watch it
+    go red. A gate that has only ever been shown to pass has not been shown to be a gate.
+    """
+    problems: list[str] = []
+    # Anchor on a fixed, ordinary UTC day rather than "now": the question is about the relation
+    # between two daily clocks, and it must answer the same on every day this runs.
+    end_of_day = dt.datetime(2026, 1, 7, 23, 59, tzinfo=dt.timezone.utc)   # a Wednesday, mid-month
+    lock_at = last_cron_occurrence(lock_crons, end_of_day, horizon_days=1)
+    if lock_at is None:
+        return [
+            f"{LOCK_WORKFLOW}'s schedule ({', '.join(lock_crons)}) does not fire on an ordinary "
+            "day. The purge runs nightly, so a lock that does not is not protection."
+        ]
+    for name, expr in purges:
+        purge_at = last_cron_occurrence([expr], end_of_day, horizon_days=1)
+        if purge_at is None:
+            problems.append(
+                f"purge task '{name}' has schedule '{expr}', which does not fire on an ordinary "
+                "day — the record cannot be related to the lock's clock."
+            )
+            continue
+        if lock_at >= purge_at:
+            problems.append(
+                f"the lock fires at {lock_at:%H:%M} UTC and purge task '{name}' at "
+                f"{purge_at:%H:%M} UTC — the lock is NOT before the purge. Every pin moved since "
+                "the previous lock run would face that purge unprotected, and both jobs would "
+                "still report success about their own work."
+            )
+    return problems
+
+
+def check_schedule_ordering(repo_root: Path) -> list[str]:
+    """Is the lock still scheduled to fire BEFORE the purge? Offline, credential-free.
+
+    Returns a list of problems; empty means the ordering holds. This runs in --self-test, so a pull
+    request that moves either clock the wrong way reds on that pull request rather than on the night
+    a satellite's pins quietly stop being protected.
+    """
+    lock_crons, lock_error = read_lock_schedule(repo_root)
+    if lock_error:
+        return [lock_error]
+    purges, purge_error = read_purge_schedules(repo_root)
+    if purge_error:
+        return [purge_error]
+    return ordering_problems(lock_crons, purges)
+
+
+def classify_protection(
+    delete_enabled: bool | None,
+    moved_at: dt.datetime | None,
+    last_lock: dt.datetime | None,
+    move_error: str = "",
+) -> tuple[str, str]:
+    """(verdict, detail) for one resolving pin. Pure, so --self-test can drive every branch.
+
+    🚨 The default is never PROTECTED. Only `deleteEnabled is False` — the registry saying the
+    manifest is locked, in its own words — earns that; every other answer, including "the field was
+    not in the response", is INDETERMINATE. That asymmetry is the whole point: the failure this
+    guards against is a protection that quietly stopped, and a protection that cannot be read has
+    not been shown to be working.
+    """
+    if delete_enabled is False:
+        return "PROTECTED", ""
+    if delete_enabled is None:
+        return "INDETERMINATE", (
+            "the manifest exists but the registry did not report "
+            "changeableAttributes.deleteEnabled"
+        )
+    # delete_enabled is True — unlocked. Has the lock job had an opportunity?
+    if last_lock is None:
+        # No schedule to compare against. The missing schedule is its own red (see
+        # check_schedule_ordering); the pin stays UNPROTECTED rather than being exempted by it,
+        # because "the clock is gone" is the worst possible reason to relax a protection check.
+        return "UNPROTECTED", "no lock schedule could be read, so no opportunity can be established"
+    if moved_at is None:
+        return "INDETERMINATE", (
+            "this manifest is UNLOCKED and it could not be established whether the lock job has "
+            f"had an opportunity since the pin moved — {move_error or 'no commit date'}"
+        )
+    if moved_at > last_lock:
+        return "PENDING-LOCK", (
+            f"the declaring workflow last changed {moved_at:%Y-%m-%dT%H:%M:%SZ}, after the last "
+            f"scheduled lock at {last_lock:%Y-%m-%dT%H:%M:%SZ}"
+        )
+    return "UNPROTECTED", (
+        f"the declaring workflow last changed {moved_at:%Y-%m-%dT%H:%M:%SZ}; the lock was scheduled "
+        f"at {last_lock:%Y-%m-%dT%H:%M:%SZ} and did not protect it"
+    )
+
+
+def last_touched(gh_repo: str, path: str) -> tuple[dt.datetime | None, str]:
+    """When the default branch last changed this file. One REST call, Contents: Read.
+
+    🚨 This is a PROXY and it errs in the SAFE direction only. It answers "could this pin have
+    moved since the last lock run", never "did it". A file touched for an unrelated reason exempts
+    its pins from the protection failure — softening, never a false alarm — and the exemption is
+    COUNTED in the denominator so a sweep that exempted the whole fleet cannot read as a clean one.
+    """
+    rc, out, err = gh_api(f"repos/{gh_repo}/commits?path={path}&per_page=1")
+    if rc != 0:
+        return None, err.strip()[:200] or "commits listing failed"
+    try:
+        commits = json.loads(out)
+    except json.JSONDecodeError as exc:
+        return None, f"commits listing is not JSON: {exc}"
+    if not commits:
+        return None, "no commit touches this path"
+    stamp = (((commits[0] or {}).get("commit") or {}).get("committer") or {}).get("date")
+    if not stamp:
+        return None, "commit carries no committer date"
+    try:
+        return dt.datetime.fromisoformat(stamp.replace("Z", "+00:00")), ""
+    except ValueError as exc:
+        return None, f"unparseable commit date {stamp!r}: {exc}"
 
 
 # ── Reporting ──────────────────────────────────────────────────────────────────────────────────
@@ -445,8 +762,15 @@ def emit(text: str) -> None:
             handle.write(text + "\n")
 
 
-def run(repos: list[str], registry: str) -> int:
+def run(repos: list[str], registry: str, repo_root: Path) -> int:
     registry_control_probe(registry)
+
+    # 🚨 FIRST, and with no credential: is the protection still SCHEDULED, and still scheduled
+    # BEFORE the purge? Everything below assumes the lock job ran; this is what makes that an
+    # assertion rather than an assumption.
+    ordering_problems = check_schedule_ordering(repo_root)
+    lock_crons, _ = read_lock_schedule(repo_root)
+    last_lock = last_cron_occurrence(lock_crons, dt.datetime.now(dt.timezone.utc)) if lock_crons else None
 
     scans: list[RepoScan] = []
     for gh_repo in repos:
@@ -472,15 +796,44 @@ def run(repos: list[str], registry: str) -> int:
                 continue
             indeterminate = ""
             for acr_repo in pin.acr_repos:
-                ok, detail = resolve(registry, acr_repo, pin.digest, cache)
+                ok, detail, delete_enabled = resolve(registry, acr_repo, pin.digest, cache)
                 if ok:
                     pin.verdict, pin.resolved_in = "RESOLVES", acr_repo
+                    # Protection is decided in two passes: the registry answer now, and — only for
+                    # the unlocked ones — the pin's own age, below, which costs a REST call each.
+                    if delete_enabled is False:
+                        pin.protection = "PROTECTED"
+                    elif delete_enabled is True:
+                        pin.protection = "UNPROTECTED"
+                    else:
+                        pin.protection, pin.protection_detail = classify_protection(None, None, None)
+                    pin.delete_enabled = delete_enabled
                     break
                 if detail.startswith("INDETERMINATE"):
                     indeterminate = detail
             else:
                 pin.verdict = "INDETERMINATE" if indeterminate else "GONE"
                 pin.detail = indeterminate or "tried: " + ", ".join(pin.acr_repos)
+
+    # PENDING-LOCK: an UNPROTECTED pin the lock job has not yet had a scheduled opportunity to see.
+    # One commits call per (repository, workflow file) that actually holds an unprotected pin — so
+    # a fleet that is fully protected costs nothing extra.
+    touched_cache: dict[tuple[str, str], tuple[dt.datetime | None, str]] = {}
+    for scan in scans:
+        for pin in scan.pins:
+            if pin.protection != "UNPROTECTED":
+                continue
+            moved_at, error = None, ""
+            if last_lock is not None:
+                key = (pin.gh_repo, pin.workflow_file)
+                if key not in touched_cache:
+                    touched_cache[key] = last_touched(
+                        pin.gh_repo, f".github/workflows/{pin.workflow_file}"
+                    )
+                moved_at, error = touched_cache[key]
+            pin.protection, pin.protection_detail = classify_protection(
+                pin.delete_enabled, moved_at, last_lock, error
+            )
 
     all_pins = [pin for scan in scans for pin in scan.pins]
     pinning = [scan for scan in scans if scan.pins]
@@ -492,6 +845,10 @@ def run(repos: list[str], registry: str) -> int:
     resolved = [pin for pin in all_pins if pin.verdict == "RESOLVES"]
     distinct_digests = {pin.digest for pin in all_pins}
     gone_digests = {pin.digest for pin in gone}
+    protected = [pin for pin in resolved if pin.protection == "PROTECTED"]
+    unprotected = [pin for pin in resolved if pin.protection == "UNPROTECTED"]
+    pending_lock = [pin for pin in resolved if pin.protection == "PENDING-LOCK"]
+    protection_unknown = [pin for pin in resolved if pin.protection == "INDETERMINATE"]
 
     # 🚨 THE DENOMINATOR, PRINTED. A bare "0 unresolved" has two causes — every pin is fine, or
     # nothing was extracted — and they are indistinguishable from the verdict alone.
@@ -515,6 +872,19 @@ def run(repos: list[str], registry: str) -> int:
     emit(f"    …INDETERMINATE (registry not reached) {len(indeterminate)}")
     emit(f"    pin-shaped declarations MALFORMED     {len(malformed)}")
     emit("")
+    # 🚨 THE PROTECTION DENOMINATOR — the leading indicator beside the lagging one. Existence says
+    # whether the wedge already happened; protection says whether it is coming. The EXEMPT line is
+    # printed even at zero: it is the one number that could quietly make this whole arm vacuous.
+    emit("    of the declarations that RESOLVE —")
+    emit(f"      …PROTECTED (deleteEnabled false)    {len(protected)}")
+    emit(f"      …UNPROTECTED — purge can delete     {len(unprotected)}")
+    emit(f"      …PENDING-LOCK (exempt: moved since  {len(pending_lock)}")
+    emit(f"        the last scheduled lock)")
+    emit(f"      …protection INDETERMINATE           {len(protection_unknown)}")
+    if last_lock is not None:
+        emit(f"      last scheduled lock run             {last_lock:%Y-%m-%dT%H:%M:%SZ}"
+             f"  ({', '.join(lock_crons)})")
+    emit("")
     for scan in scans:
         if scan.unreadable:
             emit(f"  {scan.gh_repo}: UNREADABLE — {scan.unreadable}")
@@ -526,11 +896,32 @@ def run(repos: list[str], registry: str) -> int:
         for pin in sorted(scan.pins, key=lambda p: (p.verdict, p.where)):
             where = f"{pin.where}"
             target = pin.resolved_in or "/".join(pin.acr_repos) or "(no ACR repo named)"
-            emit(f"      {pin.verdict:14s} {target}@{pin.digest[:19]}…  {where}"
+            state = pin.verdict if pin.verdict != "RESOLVES" else f"RESOLVES/{pin.protection}"
+            emit(f"      {state:26s} {target}@{pin.digest[:19]}…  {where}"
                  + (f"  [{pin.detail}]" if pin.detail else ""))
     emit("")
 
     failed = False
+
+    # 🚨 THE BUCKETS MUST ACCOUNT FOR EVERY RESOLVING PIN. A pin that fell through every branch
+    # would leave the protection block reporting fewer manifests than it examined, with no line
+    # saying so — the "0 at risk over an unstated denominator" shape this whole file refuses.
+    accounted = len(protected) + len(unprotected) + len(pending_lock) + len(protection_unknown)
+    if accounted != len(resolved):
+        print(f"::error::{len(resolved)} pin declaration(s) resolve but only {accounted} carry a "
+              "protection verdict.")
+        print("  The protection buckets must partition the resolving pins. An unaccounted pin is")
+        print("  invisible in the report, which is the failure this arm exists to prevent.")
+        failed = True
+
+    # The protection's own schedule — asserted before anything that depends on it having run.
+    for problem in ordering_problems:
+        print("::error::the pinned-manifest protection is not correctly scheduled.")
+        print(f"  {problem}")
+        print("  `acr purge` skips locked manifests and lock-pinned-digests.yml is what locks them;")
+        print("  the ordering of those two clocks IS the protection. See")
+        print("  Doc/Architecture/PinnedImageRetention.")
+        failed = True
 
     for scan in unreadable:
         print(f"::error::{scan.gh_repo}: its workflows could not be read, so its pins were NOT checked.")
@@ -578,6 +969,46 @@ def run(repos: list[str], registry: str) -> int:
         print("  and then protect the new one — see Doc/Architecture/PinnedImageRetention.")
         failed = True
 
+    # 🚨 THE LEADING INDICATOR. Everything above this point fires after the manifest is already
+    # gone — which is to say, after the repository is already wedged. This fires while the bytes
+    # are still there and the fix is one `az` command.
+    if protection_unknown:
+        print(f"::error::{len(protection_unknown)} pin declaration(s) exist but their protection "
+              "state could not be read, so it is NOT known whether the purge can delete them.")
+    for pin in protection_unknown:
+        print(f"::error::{pin.gh_repo} — {pin.where}: {pin.protection_detail}")
+        print("  Indeterminate is not a confirmation. A manifest whose lock cannot be read has not")
+        print("  been shown to be locked.")
+        failed = True
+
+    if unprotected:
+        unprotected_digests = {pin.digest for pin in unprotected}
+        print(f"::error::{len(unprotected)} pin declaration(s) over {len(unprotected_digests)} "
+              "manifest(s) are pinned and NOT protected from the purge.")
+    for pin in unprotected:
+        print(f"::error::{pin.gh_repo} — {pin.where} pins "
+              f"{pin.resolved_in}@{pin.digest}, which is UNLOCKED (deleteEnabled=true).")
+        if pin.protection_detail:
+            print(f"  {pin.protection_detail}")
+        print("  CONSEQUENCE — `--ago 7d --keep 10` is measured in AGE and in NEWER BUILDS, so an")
+        print("  unlocked pinned manifest is not at some hypothetical risk: it will be deleted, and")
+        print("  the only open question is which night. When it goes, every job that pulls it dies")
+        print("  at `manifest unknown` before it runs anything, INCLUDING that repository's own")
+        print("  nightly (MeshWeaver#3438 — three satellites down at once, Education's baseline")
+        print("  among them).")
+        print("  🚨 This is the LEADING half. `GONE` above is the same defect after the fact.")
+        print("  WHY IT IS UNLOCKED — the nightly lock job derives its set from the fleet's pins")
+        print("  and locks them (lock-pinned-digests.yml, 01:00 UTC). A pin it has had an")
+        print("  opportunity to see and did not protect means that job is not doing its work:")
+        print("  check its last run, and check that the AZURE_CLIENT_ID app still holds")
+        print("  'Container Registry Repository Writer' on the registry.")
+        print("  TO FIX NOW — one idempotent command, then fix the job:")
+        print(f"      az acr repository update --name {registry} \\")
+        print(f"        --image {pin.resolved_in}@{pin.digest} --delete-enabled false")
+        print("  Do NOT raise --ago/--keep instead: that moves the cliff rather than removing it")
+        print("  (Doc/Architecture/PinnedImageRetention).")
+        failed = True
+
     # A sweep that found nothing has not proven the fleet is clean; it has proven the extractor is
     # broken (a workflow syntax the shapes above do not cover, or a token that reads no repository).
     if not all_pins and not unreadable:
@@ -589,7 +1020,8 @@ def run(repos: list[str], registry: str) -> int:
     if failed:
         return 1
     emit(f"All {len(resolved)} pin declaration(s) — {len(distinct_digests)} distinct digest(s) — "
-         f"across {len(pinning)} repository(ies) resolve.")
+         f"across {len(pinning)} repository(ies) resolve; {len(protected)} are locked against the "
+         f"purge and {len(pending_lock)} await the next scheduled lock.")
     return 0
 
 
@@ -625,7 +1057,105 @@ jobs:
 """
 
 
-def self_test() -> int:
+def self_test_schedule(repo_root: Path) -> list[str]:
+    """The protection-schedule arms: the cron evaluator, then the REAL committed schedules.
+
+    🚨 The second half is deliberately not a fixture. The whole point of the ordering assertion is
+    that it is about the two clocks this repository actually ships, and a fixture would agree with
+    itself forever while the shipped ones drifted apart — the vacuity this file's own history is
+    made of (a placeholder digest read as an absence; a release arm asserted against a fixture with
+    nothing to release).
+    """
+    failures: list[str] = []
+
+    def expect(expr: str, when: str, want: bool, why: str) -> None:
+        moment = dt.datetime.fromisoformat(when).replace(tzinfo=dt.timezone.utc)
+        if cron_matches(expr, moment) != want:
+            failures.append(f"cron {expr!r} at {when}: expected {want} — {why}")
+
+    expect("0 1 * * *", "2026-01-07T01:00", True, "a daily 01:00 job fires at 01:00")
+    expect("0 1 * * *", "2026-01-07T01:01", False, "…and not a minute later")
+    expect("0 1 * * *", "2026-01-07T03:00", False, "…and not at the purge's hour")
+    expect("20 5 * * *", "2026-01-07T05:20", True, "this sweep's own schedule")
+    expect("*/15 * * * *", "2026-01-07T04:45", True, "a step field")
+    expect("*/15 * * * *", "2026-01-07T04:50", False, "…which does not fire off-step")
+    expect("0 1 * * 1-5", "2026-01-07T01:00", True, "a weekday range, on a Wednesday")
+    expect("0 1 * * 0", "2026-01-07T01:00", False, "…and not on a Sunday-only cron")
+    expect("0 1 * *", "2026-01-07T01:00", False, "a 4-field expression is not a cron")
+    expect("0 99 * * *", "2026-01-07T01:00", False, "an out-of-range hour matches nothing")
+
+    # last_cron_occurrence walks BACK; it must never answer with a future minute.
+    now = dt.datetime(2026, 1, 7, 2, 30, tzinfo=dt.timezone.utc)
+    last = last_cron_occurrence(["0 1 * * *"], now)
+    if last != dt.datetime(2026, 1, 7, 1, 0, tzinfo=dt.timezone.utc):
+        failures.append(f"last_cron_occurrence returned {last}, expected 2026-01-07T01:00Z")
+    if last_cron_occurrence(["0 0 30 2 *"], now, horizon_days=8) is not None:
+        failures.append("a cron that cannot fire within the horizon must answer None, not a time")
+
+    # …and the real thing: the shipped lock workflow and the shipped purge record.
+    for problem in check_schedule_ordering(repo_root):
+        failures.append(f"the shipped schedules do not hold the ordering: {problem}")
+
+    # 🚨 POSITIVE CONTROL — the assertion must be able to FAIL. Every arm above could pass with the
+    # comparison deleted; these two cannot.
+    lock_crons, error = read_lock_schedule(repo_root)
+    purges, purge_error = read_purge_schedules(repo_root)
+    if error or purge_error:
+        failures.append(f"falsification arm has no input: {error or purge_error}")
+    else:
+        if ordering_problems(["0 23 * * *"], purges) == []:
+            failures.append(
+                "SABOTAGE UNDETECTED: a lock scheduled at 23:00 — after every purge — was accepted"
+            )
+        if ordering_problems(["0 0 30 2 *"], purges) == []:
+            failures.append(
+                "SABOTAGE UNDETECTED: a lock schedule that never fires was accepted"
+            )
+        if ordering_problems(lock_crons, purges) != []:
+            failures.append("the shipped pair was rejected by the very check that accepted it above")
+
+    # A missing lock workflow is a DELETED protection, and must not read as an absent subject.
+    missing_root = Path(__file__).resolve().parent / "__no_such_repo_root__"
+    _, missing_error = read_lock_schedule(missing_root)
+    if not missing_error:
+        failures.append("SABOTAGE UNDETECTED: a missing lock-pinned-digests.yml read as fine")
+
+    # ── The protection classifier, every branch, offline ────────────────────────────────────────
+    # 🚨 This is the arm that cannot be exercised against the live registry without UNLOCKING a
+    # manifest, which is a mutation of production retention state and is not something a test may
+    # do. So the decision is a pure function and it is driven here instead.
+    lock_at = dt.datetime(2026, 9, 8, 1, 0, tzinfo=dt.timezone.utc)
+    before = dt.datetime(2026, 9, 7, 21, 28, tzinfo=dt.timezone.utc)   # Crm's real shape
+    after = dt.datetime(2026, 9, 8, 10, 46, tzinfo=dt.timezone.utc)    # Plugins' real shape
+
+    def expect_class(delete_enabled, moved_at, last, want, why, move_error=""):
+        got, _ = classify_protection(delete_enabled, moved_at, last, move_error)
+        if got != want:
+            failures.append(f"classify_protection({delete_enabled}, {moved_at}) = {got}, "
+                            f"expected {want} — {why}")
+
+    expect_class(False, before, lock_at, "PROTECTED",
+                 "deleteEnabled=false is the registry saying the purge will skip it")
+    expect_class(False, after, lock_at, "PROTECTED",
+                 "a locked manifest is locked whenever the pin moved")
+    expect_class(True, before, lock_at, "UNPROTECTED",
+                 "the lock ran after this pin was written and did not protect it — THE red")
+    expect_class(True, after, lock_at, "PENDING-LOCK",
+                 "the pin moved after the last scheduled lock, so no opportunity has passed")
+    expect_class(True, None, lock_at, "INDETERMINATE",
+                 "unlocked, and no commit date — never silently exempted")
+    expect_class(True, before, None, "UNPROTECTED",
+                 "🚨 a MISSING lock schedule must not exempt an unlocked pin")
+    expect_class(None, before, lock_at, "INDETERMINATE",
+                 "the registry did not report deleteEnabled — not a confirmation")
+    # The one that would make the whole arm vacuous: an unlocked pin reading as protected.
+    if classify_protection(True, before, lock_at)[0] == "PROTECTED":
+        failures.append("SABOTAGE UNDETECTED: an UNLOCKED pinned manifest classified as PROTECTED")
+
+    return failures
+
+
+def self_test(repo_root: Path) -> int:
     pins, malformed = extract("Systemorph/Fixture", "ci.yml", SELF_TEST_YAML)
     found = {(p.where, p.digest, tuple(p.acr_repos)) for p in pins}
     failures: list[str] = []
@@ -682,11 +1212,19 @@ def self_test() -> int:
     if any(not m.value for m in malformed):
         failures.append("FALSE POSITIVE: a key whose value is the nested block beneath it")
 
+    # The protection arms — the cron evaluator, the SHIPPED lock/purge ordering, and the sabotages
+    # that prove the ordering check can go red. No credential, so a pull request that moves either
+    # clock the wrong way is caught on that pull request.
+    schedule_failures = self_test_schedule(repo_root)
+    failures.extend(schedule_failures)
+
     for line in failures:
         print(f"::error::self-test: {line}")
     if failures:
         return 1
-    print(f"self-test: {len(pins)} pin(s) extracted, {len(malformed)} malformed, no false positive.")
+    print(f"self-test: {len(pins)} pin(s) extracted, {len(malformed)} malformed, no false positive; "
+          "the lock is scheduled before every enabled purge and the ordering check goes red when "
+          "it is not.")
     return 0
 
 
@@ -698,10 +1236,17 @@ def main() -> int:
     parser.add_argument("--registry", default=REGISTRY_DEFAULT)
     parser.add_argument("--self-test", action="store_true",
                         help="prove the extractor fires and stays silent; no network")
+    # The lock workflow and the retention record are read from here — both are committed files in
+    # THIS repository, so the default is this script's own repo root and not a guess.
+    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[2]),
+                        help="root of the MeshWeaver checkout holding the lock workflow and the "
+                             "ACR retention record")
     args = parser.parse_args()
 
+    repo_root = Path(args.repo_root).resolve()
+
     if args.self_test:
-        return self_test()
+        return self_test(repo_root)
     if bool(args.repos) == bool(args.discover):
         parser.error("give exactly one of --repos or --discover")
 
@@ -709,7 +1254,7 @@ def main() -> int:
         r.strip() for r in args.repos.split(",") if r.strip()
     ]
     print(f"scanning {len(repos)} repository(ies): {', '.join(repos)}")
-    return run(repos, args.registry)
+    return run(repos, args.registry, repo_root)
 
 
 if __name__ == "__main__":
