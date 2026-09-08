@@ -49,7 +49,10 @@ public class FateStageTokensAreAContractTest(ITestOutputHelper output) : HubTest
                 return delivery.Processed();
             });
 
-    [Fact(Timeout = 30_000)]
+    // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a
+    // constant, and the inner wait below already carries the adaptive bound. This outer one
+    // only has to stop a WEDGE.
+    [Fact(Timeout = 120_000)]
     public async Task TheEnqueuedStageRendersAsTheBareTokenFollowedByTheAddress()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -61,7 +64,7 @@ public class FateStageTokensAreAContractTest(ITestOutputHelper output) : HubTest
         // nothing.
         var response = host.Observe((object)new Probe(), o => o.WithTarget(host.Address), requestId)!
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(20))
+            .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
         await response;
