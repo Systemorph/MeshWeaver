@@ -86,6 +86,11 @@ COMBOS=(
   "self-host (neutral chart defaults)|deploy/helm/values.yaml"
   "AKS overlay (the layer every AKS install shares)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml"
   "memex-local (Colima k3s)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml"
+  # The fleet registry (templates/registry/) renders NOTHING under the three shapes above — it is
+  # off by default — so without this combination a broken registry template is invisible to every
+  # pull request and surfaces as a failed `helm upgrade` in the deployment repo. The example
+  # overlay sets every required key (object NAMES and a bcrypt HASH, no credential).
+  "AKS overlay + the fleet registry (cr.meshweaver.cloud)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/helm/values.registry.example.yaml"
 )
 
 WORK="$(mktemp -d)"

@@ -1,0 +1,163 @@
+{{- if (.Values.registry).enabled }}
+{{- $r := include "memex.registry" . | fromYaml }}
+# ---- distribution (the registry) configuration ------------------------------
+# Off-the-shelf CNCF distribution, configured — not extended. Everything secret is OUTSIDE this
+# file: http.secret arrives as REGISTRY_HTTP_SECRET (deployment-registry.yaml, from the synced
+# Secret) and the token bundle is the CSI mount at /etc/registry/token.
+#
+# Storage is the `azure` driver authenticating as the pod's WORKLOAD IDENTITY
+# (credentials.type: default_credentials → DefaultAzureCredential → the federated token the
+# webhook injects for `registry.serviceAccount`). No storage key anywhere. The identity needs
+# "Storage Blob Data Contributor" on the container; the pod needs the workload-identity label the
+# Deployment carries.
+#
+# Token auth: distribution never sees a password. It answers 401 with a challenge naming
+# https://<host>/auth, the client fetches a token there (docker_auth, same host, path-routed by
+# the Ingress), and distribution verifies the token's signature against rootcertbundle — the SAME
+# certificate docker_auth signs with, mounted into both pods from one vault object.
+---
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "memex-registry-config"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+data:
+  config.yml: |
+    version: 0.1
+    log:
+      level: info
+      formatter: text
+      fields:
+        service: registry
+    storage:
+      azure:
+        accountname: {{ $r.accountName | quote }}
+        container: {{ $r.container | quote }}
+        credentials:
+          type: default_credentials
+      # DELETE is on so a retention policy can exist at all; nothing deletes on its own — a
+      # manifest is removed only by an explicit DELETE from the publisher account (the ACL's only
+      # account with that action), and blobs by `registry garbage-collect`.
+      delete:
+        enabled: true
+      # Blob downloads REDIRECT to a short-lived SAS URL on the storage account, so a layer never
+      # streams through this pod (or the ingress) at all — the registry answers with a 307 and
+      # the client pulls from Azure directly. Uploads still go through here (proxy-body-size 0).
+      redirect:
+        disable: false
+      maintenance:
+        uploadpurging:
+          enabled: true
+          age: 168h
+          interval: 24h
+          dryrun: false
+    http:
+      addr: ":5000"
+      headers:
+        X-Content-Type-Options: [nosniff]
+    auth:
+      token:
+        realm: "https://{{ $r.host }}/auth"
+        service: {{ $r.host | quote }}
+        issuer: {{ $r.issuer | quote }}
+        rootcertbundle: /etc/registry/token/cert.pem
+    health:
+      storagedriver:
+        enabled: true
+        interval: 10s
+        threshold: 3
+{{- if $r.notificationUrl }}
+    # Every registry event (manifest push, pull, delete, blob upload …) is POSTed to the listener,
+    # with the Authorization header value from the vault (REGISTRY_NOTIFICATIONS_ENDPOINTS_0_
+    # HEADERS_AUTHORIZATION, deployment-registry.yaml). Rendered only when a URL is set: an
+    # endpoint with an empty url is a queue that backs off forever, not "notifications off".
+    notifications:
+      endpoints:
+        - name: memex
+          url: {{ $r.notificationUrl | quote }}
+          timeout: 5s
+          threshold: 5
+          backoff: 10s
+{{- end }}
+# ---- docker_auth (the token server) configuration ---------------------------
+# cesanta/docker_auth, again configured — not extended. Two ways to authenticate, in the order
+# docker_auth tries them (static users FIRST, then ext_auth):
+#
+#   1. the ONE static account `{{ $r.publisherUsername }}` — CI's publisher. Its bcrypt hash is the
+#      only credential in values (a hash, committable; `htpasswd -nB {{ $r.publisherUsername }}`).
+#      A wrong password for THIS account is `WrongPass` and denies immediately — it never falls
+#      through to the key validator below.
+#   2. `ext_auth` — validate.sh, for EVERY OTHER account name: the password is a MeshWeaver
+#      instance key, validated by asking the portal's plugin catalog with it as a bearer.
+#      docker_auth's contract (auth_server/authn/ext_auth.go): "<user> <password>" on stdin,
+#      exit 0 = allow, 1 = deny, 2 = no match (try the next authenticator), 3 = error.
+#
+# The ACL is then two lines: the publisher may push/pull/delete anything; any authenticated
+# account may pull anything; anonymous (account "") matches no rule and docker_auth denies by
+# default — there is no `account: ""` rule on purpose.
+#
+# No TLS here: the pod is reached only through the Ingress, which terminates TLS for the host.
+---
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "memex-registry-auth-config"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-registry-auth"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+data:
+  auth_config.yml: |
+    server:
+      addr: ":5001"
+    token:
+      issuer: {{ $r.issuer | quote }}
+      expiration: 900
+      certificate: /etc/registry/token/cert.pem
+      key: /etc/registry/token/key.pem
+      # 🚨 LOAD-BEARING against distribution 3.x, and the reason the pin is docker_auth ≥ 1.14.0.
+      # distribution 3 keys its rootcertbundle by RFC 7638 JWK thumbprint; docker_auth's default
+      # `kid` is the legacy libtrust id (KF26:LQHR:…), and no x5c chain is sent. Measured against
+      # 3.0.0: every token was refused with "token signed by untrusted key with ID", so NO login
+      # succeeded — the publisher's included — while the token exchange itself answered 200.
+      # 1.13.0 has no such switch and cannot pair with distribution 3 at all.
+      disable_legacy_key_id: true
+    users:
+      {{ $r.publisherUsername | quote }}:
+        password: {{ $r.publisherPasswordBcrypt | quote }}
+    ext_auth:
+      command: /etc/docker_auth/validate.sh
+    acl:
+      - match: {account: {{ $r.publisherUsername | quote }}}
+        actions: ["push", "pull", "delete"]
+        comment: "the publisher (CI) may push, pull and delete any repository"
+      - match: {account: "/.+/"}
+        actions: ["pull"]
+        comment: "any authenticated account — an installation holding a valid instance key — may pull any repository"
+  # ext_auth hook. Reads "<user> <password>" from stdin (docker_auth writes them space-separated
+  # with NO trailing newline, so `read` returns non-zero at EOF while still assigning — hence no
+  # `set -e` and no test of read's status), validates the PASSWORD as an instance key against the
+  # portal, and maps the answer onto docker_auth's exit codes. The image is Alpine with busybox
+  # (no curl, no bash): busybox wget with -S prints the response status to stderr, which is the
+  # only thing read. Anything that is not a definite 200 or a definite 401/403 — DNS failure,
+  # timeout, a 5xx, a redirect chain ending elsewhere — is exit 3 (ERROR), never a pass and never
+  # a quiet deny that would read as "wrong key" to the caller.
+  validate.sh: |
+    #!/bin/sh
+    # docker_auth ext_auth contract: stdin "<user> <password>", exit 0 allow / 1 deny / 3 error.
+    read -r user password
+    if [ -z "$password" ]; then
+      exit 1
+    fi
+    url={{ $r.validationUrl | quote }}
+    status=$(wget -T 10 -qS -O /dev/null --header="Authorization: Bearer $password" "$url" 2>&1 \
+      | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | tail -n 1)
+    case "$status" in
+      200) exit 0 ;;
+      401|403) exit 1 ;;
+      *) echo "validate.sh: no definite answer from $url (status '$status')" >&2; exit 3 ;;
+    esac
+{{- end }}
