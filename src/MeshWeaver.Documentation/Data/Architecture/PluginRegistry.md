@@ -451,6 +451,44 @@ An admin clicks **Install** (or **Update**). No GitHub credential is involved on
 Re-installing is an upsert (create-or-update by path); installing one module never disturbs another
 in a shared partition.
 
+## Bundle bytes from the registry
+
+A package's compiled bundle — the `<package>.zip` a bake produces, with its NodeType assemblies
+and its module section — reaches a consumer by one of two routes, and the registry's index says
+which. Both indexes carry an `artifact` per entry:
+
+- **`GET /api/plugins/bundles/index.json`** — each bundle carries `artifact`: the digest-addressed
+  reference `cr.meshweaver.cloud/plugins/<source>/<package>@sha256:<manifest digest>` of the bundle
+  in the fleet's [container registry](../ContainerRegistryInMemex), or `null`.
+- **`GET /api/plugins`** — each package carries the same `artifact`, stamped beside `source`; the
+  shape stays `{ packages: [...] }`, `storageType` included, so the first-run setup wizard reads it
+  unchanged.
+
+The registry renders the field from its record of **pushed publications**
+(`IPublicationArtifacts`, `MeshWeaver.PluginCatalog`) — a seam a host fills once its bake lane
+records pushes; the platform default (`NoPublicationArtifacts`) records nothing, so a registry that
+has pushed nothing renders `null` everywhere and behaves exactly as before.
+
+The consumer, `PluginBundleClient`, branches on the field:
+
+- **`artifact` present** — it fetches the manifest by digest and the bundle's
+  `application/vnd.meshweaver.bundle.v1.zip` layer by digest from the OCI registry, through the
+  shared `OciRegistryClient`, which verifies every byte against the digest it was fetched under.
+  The credential is the plugin-registry token the client already holds for the registry that
+  advertised the artifact, presented as `Basic instance:<token>` at the realm the registry's `401`
+  challenge names; the registry edge validates it at that registry's `POST /api/instances/token`.
+  Bytes that do not hash to the sealed digest are **refused**: nothing lands, there is no HTTP
+  fallback, and the adoption ledger records `ArtifactRefused`. A transport failure is the miss it
+  always was (`FetchFailed`): logged, counted, the consumer compiles or keeps what it has.
+- **`artifact` null** — it takes `GET /api/plugins/bundles/{plugin}/{version}` exactly as before.
+
+Either way the bytes enter the same landing path — `ModuleLandingService`, the link probe at
+placement, `PrebuiltAssemblySeeder`'s identity rule — so where the bytes came from changes nothing
+about whether they may load. `OciRegistryClient` is also what the self-updater's `OciTagLister`
+lists image tags with, so an installation speaks to the fleet's registry through one client, with
+one credential, for images and bundles alike. The design is
+[Plugin Bundles in the Registry](../PluginBundlesInTheRegistry).
+
 ## Free syncs freely, commercial needs a Global Admin
 
 Who may bring a package onto an installation is decided by its **price**, and the decision is made on
