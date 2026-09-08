@@ -65,6 +65,7 @@ public class SealedSyncReconcileTest
     {
         var plan = SealedSyncReconcile.Decide(Sealed(), Crm, "Crm", At(SealedCommit), [Sealed()], Identity, []);
         plan.Action.Should().Be(SealedSyncReconcile.Action.None);
+        plan.SteadyState.Should().BeTrue("the structured signal, never the reason text, is what the reconciler reads");
         plan.Reason.Should().Contain("nothing was declined");
     }
 
@@ -74,6 +75,7 @@ public class SealedSyncReconcileTest
         var torn = Sealed(isSealed: false);
         var plan = SealedSyncReconcile.Decide(torn, Crm, "Crm", At(OlderCommit), [torn], Identity, ["Crm/Client"]);
         plan.Action.Should().Be(SealedSyncReconcile.Action.None);
+        plan.SteadyState.Should().BeFalse("a hold is recorded and said; the steady state is neither");
         plan.Reason.Should().Contain("not sealed");
     }
 

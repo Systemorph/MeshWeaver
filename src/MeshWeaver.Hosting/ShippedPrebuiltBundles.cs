@@ -312,12 +312,15 @@ public static class ShippedPrebuiltBundles
             var identityDir = Path.Combine(publishedRoot, identity);
             if (!Directory.Exists(identityDir))
                 continue;
+            // ONE enumeration + sentinel read per identity directory; the per-source filter below
+            // is a string comparison over that list, never a second walk of the share.
+            var complete = CompletePublishedBundlesOf(identityDir, logger);
             foreach (var sealedSource in SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
             {
                 if (!sealedSource.IsSealed || !taken.Add(sealedSource.Source))
                     continue;
                 var sourceDir = PublicationDirectoryOf(Path.Combine(identityDir, sealedSource.Source), logger);
-                var listed = CompletePublishedBundlesOf(identityDir, logger)
+                var listed = complete
                     .Where(b => string.Equals(Path.GetDirectoryName(b), sourceDir, StringComparison.Ordinal))
                     .ToList();
                 if (listed.Count == 0)

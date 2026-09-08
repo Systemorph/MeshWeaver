@@ -47,8 +47,10 @@ public static class SealedSyncReconcile
         ReconcileAtSealedCommit = 3,
     }
 
-    /// <summary>The decision and its reason (log copy an operator can act on).</summary>
-    public sealed record Plan(Action Action, string? Commit, string Reason);
+    /// <summary>The decision and its reason (log copy an operator can act on).
+    /// <paramref name="SteadyState"/> is the STRUCTURED signal for "at the seal, nothing declined"
+    /// — the one <see cref="Action.None"/> that is not a hold and is never recorded or logged.</summary>
+    public sealed record Plan(Action Action, string? Commit, string Reason, bool SteadyState = false);
 
     /// <summary>
     /// Decides for one sync source of the repository a sealed source belongs to.
@@ -97,7 +99,8 @@ public static class SealedSyncReconcile
             .ToList();
         if (declinedHere.Count == 0)
             return new Plan(Action.None, commit,
-                $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source is at it; nothing was declined");
+                $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source is at it; nothing was declined",
+                SteadyState: true);
 
         return new Plan(Action.ReconcileAtSealedCommit, commit,
             $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source claims that commit, "
@@ -221,8 +224,7 @@ internal sealed class SealedPublicationSyncReconciler(
     private void RecordHold(string configPath, GitHubWebhookProcessor.PushTarget target,
         SealedSyncReconcile.Plan plan, GitHubSyncConfig? config)
     {
-        var steadyState = plan.Reason.Contains("nothing was declined", StringComparison.Ordinal);
-        if (steadyState)
+        if (plan.SteadyState)
         {
             loggedHolds.TryRemove(configPath, out _);
             return;
