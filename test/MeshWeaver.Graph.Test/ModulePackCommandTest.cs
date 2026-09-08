@@ -522,4 +522,214 @@ public class ModulePackCommandTest : IDisposable
         Assert.False(Directory.Exists(Path.Combine(root, "out-missing")),
             "a refused invocation must not have written anything");
     }
+
+    // ─────── #3732: the platform-shipped witness, measured off the host, applied to the RIDES ───────
+
+    /// <summary>Bytes of the copy the PLATFORM ships — deliberately different from the copy the
+    /// module output holds, because that difference IS the condition under test.</summary>
+    private const string PlatformBuild = "BUILD-A (the copy the platform ships)";
+
+    /// <summary>Bytes of the copy the module output holds — the ride.</summary>
+    private const string ModuleBuild = "BUILD-B (the copy that would ride the bundle)";
+
+    /// <summary>
+    /// A platform host directory shaped like a portal image's <c>/app</c>: an app closure carrying
+    /// <c>MeshWeaver.Blazor.Views</c>, a surface manifest, and a SEEDED module under
+    /// <c>modules/&lt;Name&gt;/</c> — the three ways an image ships an assembly.
+    /// </summary>
+    private string PlatformApp()
+    {
+        var app = Path.Combine(root, "app");
+        Directory.CreateDirectory(app);
+        File.WriteAllText(Path.Combine(app, "MeshWeaver.Blazor.Views.dll"), PlatformBuild);
+        File.WriteAllText(Path.Combine(app, "MeshWeaver.Graph.dll"), PlatformBuild);
+        File.WriteAllLines(Path.Combine(app, "meshweaver-surface.manifest"),
+        [
+            "MeshWeaver.Blazor.Views=0000000000000000000000000000000000000000000000000000000000000000",
+            "MeshWeaver.Graph=1111111111111111111111111111111111111111111111111111111111111111",
+        ]);
+        var seeded = Path.Combine(app, "modules", "MeshWeaver.Markdown.Collaboration");
+        Directory.CreateDirectory(seeded);
+        File.WriteAllText(
+            Path.Combine(seeded, "MeshWeaver.Markdown.Collaboration.dll"), PlatformBuild);
+        return app;
+    }
+
+    /// <summary>The module output as the lane hands it to the packer: the entry, two MeshWeaver.*
+    /// siblings the host also has (at a DIFFERENT build), and one it does not.</summary>
+    private void ModuleOutputWithRides()
+    {
+        var closure = Path.Combine(root, "closure");
+        File.WriteAllText(
+            Path.Combine(closure, "MeshWeaver.Markdown.Collaboration.dll"), ModuleBuild);
+        File.WriteAllText(Path.Combine(closure, "MeshWeaver.Markdown.Collaboration.pdb"), ModuleBuild);
+        File.WriteAllText(Path.Combine(closure, "MeshWeaver.Blazor.Views.dll"), ModuleBuild);
+        // The name the platform genuinely does NOT ship — the anti-vacuity control.
+        File.WriteAllText(Path.Combine(closure, "MeshWeaver.Maps.dll"), ModuleBuild);
+    }
+
+    private int PackWidget(string outDir, string? platformApp)
+    {
+        var args = new List<string>
+        {
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.9.0",
+            "--framework-mvid", Identity,
+            "--with", "MeshWeaver.Markdown.Collaboration.dll",
+            "--with", "MeshWeaver.Markdown.Collaboration.pdb",
+            "--with", "MeshWeaver.Blazor.Views.dll",
+            "--with", "MeshWeaver.Maps.dll",
+            "--out", outDir,
+        };
+        if (platformApp is not null)
+        {
+            args.Add("--platform-app");
+            args.Add(platformApp);
+        }
+        return ModulePackCommand.Run([.. args]);
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE CONDITION, REPRODUCED (#3732).</b> Without the witness the bundle carries a SECOND
+    /// BUILD of two assemblies the platform host already has — one from its app closure
+    /// (<c>MeshWeaver.Blazor.Views</c>, which no package declares as a module at all: it arrives
+    /// only because a module-owned sibling references it) and one from its seeded
+    /// <c>modules/&lt;Name&gt;/</c> lane (<c>MeshWeaver.Markdown.Collaboration</c>).
+    ///
+    /// <para>Both bind by a strictly synchronised <c>AssemblyVersion</c>, so the two copies are ONE
+    /// identity: the loader keeps whichever it saw first and the loser is never in memory. On
+    /// memex.systemorph.com that loser was <c>MeshWeaver.Blazor.Views</c> — both pods reported
+    /// <c>pending_module_activation</c> Degraded ("landed but not yet loaded"), and every skinned
+    /// <c>StackControl</c> rendered through <c>FallbackHtml</c>.</para>
+    ///
+    /// <para>This is the state of the lane BEFORE the fix, asserted rather than described — without
+    /// it the test below could pass because the packer drops everything, or because the fixture
+    /// never carried the rides at all.</para>
+    /// </summary>
+    [Fact]
+    public void WithoutTheWitness_TheBundleCarriesASecondBuildOfWhatThePlatformShips()
+    {
+        var app = PlatformApp();
+        ModuleOutputWithRides();
+
+        var outDir = Path.Combine(root, "out-unwitnessed");
+        Assert.Equal(0, PackWidget(outDir, platformApp: null));
+
+        var (manifest, files) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.9.0.module.nupkg")));
+
+        Assert.Contains("MeshWeaver.Blazor.Views.dll", manifest!.Module!.Assemblies!);
+        Assert.Contains("MeshWeaver.Markdown.Collaboration.dll", manifest.Module.Assemblies!);
+
+        // …and they are a DIFFERENT BUILD from the host's own copies, which is what makes one
+        // assembly name reach a process at two builds rather than merely costing bytes.
+        var ridden = files.Single(f => f.FileName == "MeshWeaver.Blazor.Views.dll");
+        Assert.Equal(ModuleBuild, Encoding.UTF8.GetString(ridden.Bytes));
+        Assert.Equal(PlatformBuild,
+            File.ReadAllText(Path.Combine(app, "MeshWeaver.Blazor.Views.dll")));
+        Assert.NotEqual(
+            File.ReadAllText(Path.Combine(app, "modules", "MeshWeaver.Markdown.Collaboration",
+                "MeshWeaver.Markdown.Collaboration.dll")),
+            Encoding.UTF8.GetString(
+                files.Single(f => f.FileName == "MeshWeaver.Markdown.Collaboration.dll").Bytes));
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE FIX (#3732).</b> With the host in hand, every <c>MeshWeaver.*</c> file the closure
+    /// would carry is measured against what that host ACTUALLY ships and dropped when it already
+    /// has it — from the manifest AND from the archive, symbols included — whichever of the three
+    /// witnesses answered.
+    ///
+    /// <para><b>And the anti-vacuity control is in the same assertion:</b>
+    /// <c>MeshWeaver.Maps</c> is a <c>MeshWeaver.*</c> sibling the host does NOT ship, so it must
+    /// STILL ride. A packer that simply dropped every platform-named file would pass the first half
+    /// and fail here — and would reintroduce the opposite defect, a name that reaches a mesh from
+    /// nowhere at all (#3335's <c>MeshWeaver.Maps</c> line, exactly).</para>
+    /// </summary>
+    [Fact]
+    public void WithTheWitness_ThePlatformsOwnCopiesAreDropped_AndOnlyThose()
+    {
+        var app = PlatformApp();
+        ModuleOutputWithRides();
+
+        var outDir = Path.Combine(root, "out-witnessed");
+        Assert.Equal(0, PackWidget(outDir, app));
+
+        var (manifest, files) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.9.0.module.nupkg")));
+
+        // Dropped: the app-closure copy, the seeded-module copy, and the symbols that came with it.
+        Assert.DoesNotContain("MeshWeaver.Blazor.Views.dll", manifest!.Module!.Assemblies!);
+        Assert.DoesNotContain("MeshWeaver.Markdown.Collaboration.dll", manifest.Module.Assemblies!);
+        Assert.DoesNotContain("MeshWeaver.Markdown.Collaboration.pdb", manifest.Module.Assemblies!);
+        Assert.DoesNotContain(files, f => f.FileName.StartsWith(
+            "MeshWeaver.Blazor.Views", StringComparison.Ordinal));
+        Assert.DoesNotContain(files, f => f.FileName.StartsWith(
+            "MeshWeaver.Markdown.Collaboration", StringComparison.Ordinal));
+
+        // Kept: the entry, and the sibling the platform does not ship.
+        Assert.Contains("Widget.dll", manifest.Module.Assemblies!);
+        Assert.Contains("MeshWeaver.Maps.dll", manifest.Module.Assemblies!);
+        Assert.Contains(files, f => f.FileName == "MeshWeaver.Maps.dll");
+        Assert.Contains(files, f => f.FileName == "Widget.dll");
+    }
+
+    /// <summary>
+    /// 🚨 The ENTRY is never judged by this step, and that boundary is deliberate. A module the
+    /// image seeds under <c>modules/&lt;Name&gt;/</c> is MEANT to be superseded by a landed bundle
+    /// of itself (a usable persisted entry overrides the same-named baseline in place), so dropping
+    /// the entry would delete the module from its own bundle. The host-vs-entry two-producer case
+    /// is <c>BakeHost.ShippedByHostProblem</c>'s, at the bake, where both provenances are in one
+    /// hand.
+    /// </summary>
+    [Fact]
+    public void TheEntryAssemblyIsNeverDropped_EvenWhenTheImageSeedsThatVeryModule()
+    {
+        var app = PlatformApp();
+        var closure = Path.Combine(root, "closure2");
+        Directory.CreateDirectory(closure);
+        File.WriteAllText(
+            Path.Combine(closure, "MeshWeaver.Markdown.Collaboration.dll"), ModuleBuild);
+
+        var outDir = Path.Combine(root, "out-entry");
+        var exit = ModulePackCommand.Run(
+        [
+            closure,
+            "--module-name", "MeshWeaver.Markdown.Collaboration",
+            "--plugin", "Essentials",
+            "--package-version", "2.0.0",
+            "--framework-mvid", Identity,
+            "--platform-app", app,
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(0, exit);
+        var (manifest, files) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.Essentials.2.0.0.module.nupkg")));
+        Assert.Contains("MeshWeaver.Markdown.Collaboration.dll", manifest!.Module!.Assemblies!);
+        Assert.Contains(files, f => f.FileName == "MeshWeaver.Markdown.Collaboration.dll");
+    }
+
+    /// <summary>
+    /// 🚨 A witness that reads nothing must REFUSE, never answer "the platform ships nothing" — that
+    /// answer strips nothing while logging exactly like a clean measurement, which is the
+    /// gate-that-cannot-fail shape CI forbids.
+    /// </summary>
+    [Fact]
+    public void APlatformAppThatIsNotOne_IsRefused_AndWritesNothing()
+    {
+        ModuleOutputWithRides();
+        var notAnApp = Path.Combine(root, "not-an-app");
+        Directory.CreateDirectory(notAnApp);
+        File.WriteAllText(Path.Combine(notAnApp, "readme.txt"), "no assemblies, no manifest");
+
+        var outDir = Path.Combine(root, "out-bad-witness");
+        var exit = PackWidget(outDir, notAnApp);
+
+        Assert.Equal(2, exit);
+        Assert.False(Directory.Exists(outDir),
+            "a refused invocation must not have written a bundle");
+    }
 }

@@ -122,6 +122,44 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     /// </summary>
     public ImmutableList<RefusedContentSync> RefusedContent { get; init; } =
         ImmutableList<RefusedContentSync>.Empty;
+
+    /// <summary>
+    /// 🚨 <b>Issue #3589.</b> True when this run could NOT ask the prune's question at all: the
+    /// source listing came back incomplete (a TRUNCATED GitHub tree — HTTP 200, partial body), so
+    /// "absent from the source" stopped being evidence of a deletion and
+    /// <see cref="StaticRepoImporter.ComputePrunableNodes"/> returned empty before every other guard
+    /// (#3614). Distinct from <c>PrunedPaths.Count == 0</c>, which cannot say WHY it is zero — the
+    /// unfalsifiable silence the issue was reported on.
+    /// </summary>
+    public bool PruneRefused { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>Issue #3589 — the ONE question the content-addressed import marker answers.</b> True
+    /// when this run left the partition EQUAL to the source content it hashed.
+    ///
+    /// <para>The marker at <c>{Partition}/_Activity/import-{fingerprint}</c> is a claim about the
+    /// PARTITION ("this partition holds exactly content F"), and the next run reads it INSTEAD OF
+    /// the partition. So only a run that made that claim true may stamp it green. Four ways a run
+    /// leaves it false: it kept a live node back from an overwrite or from the prune
+    /// (<see cref="Preserved"/>), some node did not land (<see cref="Failed"/>), the whole import
+    /// failed (<see cref="Outcome"/>), or the prune could not run (<see cref="PruneRefused"/>).</para>
+    ///
+    /// <para><b>Measured on memex.systemorph.com, 2026-09-07/08.</b> The Crm import at 10:15Z
+    /// correctly found five prune candidates the repository had deleted and preserved all five
+    /// (<c>"Imported 23 node(s), kept 5 local change(s), pruned 0"</c>) — then stamped
+    /// <c>import-0ff4e895224bfde0</c> <see cref="ActivityStatus.Succeeded"/> anyway. At 23:11Z the
+    /// next sync read that marker, answered <c>Skipped</c> WITHOUT reading the partition, reported
+    /// <c>Preserved = 0</c> — a zero it never measured — and
+    /// <c>GitHubSyncService.MayAdvanceBaseline</c> read that zero as "the mesh is in sync" and
+    /// advanced <c>LastSyncCommitSha</c> to the branch head. The partition was then permanently
+    /// declared converged to a commit whose tree it demonstrably did not match, three retired
+    /// <c>Crm/Source/Mail*</c> files still compiled into every Crm type.</para>
+    /// </summary>
+    public bool Converged =>
+        Preserved == 0
+        && Failed == 0
+        && !PruneRefused
+        && !string.Equals(Outcome, "Failed", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -809,7 +847,7 @@ public static class StaticRepoImporter
                 // skip arm below decides whether to re-run from it, and a decision that parses a log
                 // line is one re-wording away from silently re-importing forever again.
                 MeshNode BookkeepingNode(
-                    string id, string name, ActivityStatus status, string? outcome = null,
+                    string id, string name, ActivityStatus status, ImportMarkerVerdict? verdict = null,
                     params LogMessage[] messages) =>
                     new(id, activityNamespace)
                     {
@@ -823,10 +861,9 @@ public static class StaticRepoImporter
                             HubPath = source.Partition,
                             Status = status,
                             End = status == ActivityStatus.Running ? null : DateTime.UtcNow,
-                            ReturnValue = outcome is null
+                            ReturnValue = verdict is null
                                 ? null
-                                : System.Text.Json.JsonSerializer.SerializeToElement(
-                                    new ImportMarkerVerdict(outcome)),
+                                : System.Text.Json.JsonSerializer.SerializeToElement(verdict),
                             Messages = ImmutableList.CreateRange(messages),
                         }
                     };
@@ -859,11 +896,12 @@ public static class StaticRepoImporter
                 // node that may not exist yet (the early-failure path) AND on one left forked by a prior
                 // half-write. The human-readable log lives on the attempt; the lock carries the verdict
                 // plus a pointer to the attempt that produced it.
-                IObservable<int> StampLock(ActivityStatus status, string summary, string? lockOutcome = null) =>
+                IObservable<int> StampLock(
+                    ActivityStatus status, string summary, ImportMarkerVerdict? verdict = null) =>
                     // A scoped run never touches the content-addressed marker — see isScopedRun.
                     isScopedRun
                     ? Observable.Return(0)
-                    : Upsert(hub, BookkeepingNode(activityId, lockName, status, lockOutcome,
+                    : Upsert(hub, BookkeepingNode(activityId, lockName, status, verdict,
                             new LogMessage(summary, status is ActivityStatus.Succeeded
                                 ? Microsoft.Extensions.Logging.LogLevel.Information
                                 : status is ActivityStatus.Warning
@@ -950,7 +988,17 @@ public static class StaticRepoImporter
                         //    (Run guards its own faults into a "Failed" RESULT rather than an exception,
                         //    so this arm — not the Catch below — is what a failed run reaches.)
                         .SelectMany(result => StampLock(
-                                lockOutcome: result.Outcome,
+                                // 🚨 #3589 — the marker records WHAT THE RUN LEFT UNDONE, not only
+                                // its outcome word. `Preserved` and `PruneRefused` are the two ways
+                                // an "Imported" run leaves the partition unequal to the content the
+                                // marker id names, and the skip arm reads them before it trusts the
+                                // claim. Written for every run so an absent value can keep its one
+                                // honest meaning: UNKNOWN.
+                                verdict: new ImportMarkerVerdict(result.Outcome)
+                                {
+                                    Preserved = result.Preserved,
+                                    PruneRefused = result.PruneRefused,
+                                },
                                 status: result.Outcome switch
                                 {
                                     "ImportedWithErrors" => ActivityStatus.Warning,
@@ -1045,6 +1093,43 @@ public static class StaticRepoImporter
                     logger?.LogInformation(
                         "[StaticRepoImport] {Partition}: reconciling re-import at unchanged fingerprint "
                         + "{Fingerprint} — the live partition was measured to disagree with it.",
+                        source.Partition, fingerprint);
+                    return Reimport();
+                }
+
+                // 🚨 issue #3589 — A SUCCEEDED MARKER IS A CLAIM ABOUT THE **PARTITION**, AND ONLY A
+                // RUN THAT CONVERGED MAY MAKE IT.
+                //
+                // The id is content-addressed on the SOURCE, but what the next run reads out of it is
+                // "this partition holds exactly content F" — and it reads that INSTEAD of the
+                // partition. A run that kept live nodes back (from an overwrite or from the prune)
+                // did not make that true; nor did one whose prune could not run at all (#3614). Both
+                // stamped Succeeded anyway, so the very next trigger answered "Skipped" — and
+                // GitHubSyncService then read Skipped's `Preserved = 0`, a zero nothing measured, as
+                // "the mesh is in sync" and advanced LastSyncCommitSha to the branch head. The
+                // partition is then declared converged to a commit whose tree it does not match, and
+                // no later import ever looks again.
+                //
+                // Measured end to end on memex.systemorph.com: the 2026-09-07 10:15Z Crm import found
+                // all five nodes the repo had deleted, preserved all five ("kept 5 local change(s),
+                // pruned 0"), stamped import-0ff4e895224bfde0 Succeeded, and at 23:11Z the next sync
+                // skipped and advanced the commit pointer. Three retired Crm/Source/Mail* files were
+                // still compiled into every Crm type two days after the commit that deleted them, and
+                // every Crm bundle stayed refused on its source fingerprint (#2813).
+                //
+                // 🚨 An ABSENT verdict is UNKNOWN, never zero — the marker predates this field, so
+                // nothing recorded whether that run converged. Reading it as "converged" is exactly
+                // the fail-open zero this fixes, and it is also what would leave every partition
+                // ALREADY in this state stranded for ever: the residue is retired by the ONE
+                // re-import an unknown verdict buys. That re-import is cheap and self-limiting — at
+                // an unchanged fingerprint the per-node manifest matches, so it writes nothing and
+                // recompiles nothing — and it ends the moment a converged run stamps a real verdict.
+                if (!MarkerConverged(existingLog))
+                {
+                    logger?.LogInformation(
+                        "[StaticRepoImport] {Partition}: the marker at {Fingerprint} says imported, but "
+                        + "the run that wrote it did NOT converge (or recorded no verdict) — re-importing "
+                        + "rather than skipping on a claim nothing checked.",
                         source.Partition, fingerprint);
                     return Reimport();
                 }
@@ -1899,6 +1984,11 @@ public static class StaticRepoImporter
                                 // has to string-match a log line to learn that a Space's assets are
                                 // stale is one re-wording away from not learning it at all.
                                 RefusedContent = refusedContent,
+                                // 🚨 #3589 — carried so the MARKER can record it. "pruned 0" cannot
+                                // separate "looked and found nothing" from "could not look", and the
+                                // second is not convergence: a run that could not ask the prune's
+                                // question must not licence the next one to skip asking it too.
+                                PruneRefused = !sourceListingIsComplete,
                             };
                         });
                         }));
@@ -2813,7 +2903,32 @@ public static class StaticRepoImporter
         // fired and the loop this fixes stayed exactly as it was, with every test green except the
         // one that measured the second pass.
         [property: System.Text.Json.Serialization.JsonPropertyName("outcome")]
-        string Outcome);
+        string Outcome)
+    {
+        /// <summary>
+        /// 🚨 <b>Issue #3589 — how many live nodes the run KEPT BACK</b>
+        /// (<see cref="StaticRepoImportResult.Preserved"/>): kept-not-overwritten plus
+        /// kept-not-pruned. Zero is the marker's licence to skip; anything else says the run left
+        /// the partition unequal to the content this marker's id names.
+        ///
+        /// <para>🚨 NULLABLE ON PURPOSE. <c>null</c> means the marker was written before this field
+        /// existed (2026-09-08) and nothing recorded whether that run converged — <b>UNKNOWN, never
+        /// zero</b>. That distinction is the whole fix: reading an absent field as zero is the
+        /// fail-open that let a run which had just preserved five deleted files hand the next run a
+        /// green light.</para>
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("preserved")]
+        public int? Preserved { get; init; }
+
+        /// <summary>
+        /// 🚨 <b>Issue #3589 / #3614.</b> True when the run could not ask the prune's question —
+        /// the source listing came back incomplete, so nothing was removed and nothing could be.
+        /// A run that pruned nothing BECAUSE IT COULD NOT LOOK has not converged either, and must
+        /// not licence a skip that would make the refusal permanent at this fingerprint.
+        /// </summary>
+        [System.Text.Json.Serialization.JsonPropertyName("pruneRefused")]
+        public bool PruneRefused { get; init; }
+    }
 
     /// <summary>
     /// ONE source node's contribution to the upsert phase's tally: the counters, the path it wrote or
@@ -2863,6 +2978,49 @@ public static class StaticRepoImporter
         catch (System.Text.Json.JsonException)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>Issue #3589 — did the run that wrote this marker CONVERGE the partition to the content
+    /// the marker's id names?</b> Only then is the marker a licence to answer <c>Skipped</c> without
+    /// reading the partition.
+    ///
+    /// <para>Reads the two facts the run recorded: <see cref="ImportMarkerVerdict.Preserved"/> (live
+    /// nodes it kept back — from an overwrite or from the prune) and
+    /// <see cref="ImportMarkerVerdict.PruneRefused"/> (the prune could not run at all). Converged
+    /// means kept nothing back and the prune was able to look.</para>
+    ///
+    /// <para>🚨 <b>ABSENT ⇒ FALSE, and that is the point.</b> A marker with no <c>preserved</c>
+    /// field predates 2026-09-08: nothing recorded whether that run converged, so the honest answer
+    /// is UNKNOWN and the safe reading of UNKNOWN is "look again". Every partition already carrying
+    /// the residue this fixes is in exactly that state, and this is the branch that retires it —
+    /// one re-import, which at an unchanged fingerprint writes nothing (the per-node manifest
+    /// matches) and then stamps a real verdict, after which the skip is free again.</para>
+    ///
+    /// <para>Pure and total: an unreadable, non-object or non-numeric verdict answers <c>false</c>,
+    /// never throws.</para>
+    /// </summary>
+    /// <param name="log">The marker's activity log.</param>
+    /// <returns><c>true</c> only when the run recorded that it converged.</returns>
+    private static bool MarkerConverged(ActivityLog log)
+    {
+        if (log.ReturnValue is not { } value)
+            return false;
+        try
+        {
+            if (value.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !value.TryGetProperty("preserved", out var preserved)
+                || preserved.ValueKind != System.Text.Json.JsonValueKind.Number
+                || !preserved.TryGetInt32(out var keptBack))
+                return false;
+            var pruneRefused = value.TryGetProperty("pruneRefused", out var refused)
+                               && refused.ValueKind == System.Text.Json.JsonValueKind.True;
+            return keptBack == 0 && !pruneRefused;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
         }
     }
 

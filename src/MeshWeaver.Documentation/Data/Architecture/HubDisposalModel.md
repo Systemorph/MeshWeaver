@@ -320,6 +320,76 @@ an observable.
 
 ---
 
+## Rooted Rx connections: what a `Dispose()` must release, and the one spelling for it
+
+Every multicast chain an object builds — `Replay(1)`, `Publish()`, `PublishLast()` — has a
+**connection**: the upstream subscription `Connect()` opens. Whoever holds the handle
+`Connect()` returns is the only party that can close it. Two spellings hold it *nowhere an
+owner can reach*, and both were live in core until 2026-09-08:
+
+- **`.AutoConnect(1)`** keeps the handle *inside the operator*. The owner's `Dispose()`
+  detaches everything it can name and never touches the chain.
+- **`.Connect()` whose result is dropped** (or stored in a field nobody disposes) is the
+  same thing without the operator.
+
+That would be a leak. What makes it a **use-after-dispose** is that the connect is frequently
+*not synchronous*: a chain shaped `Defer(…).SubscribeOn(TaskPoolScheduler)` only *queues* its
+upstream subscribe on the first subscriber's thread, and **nothing in the teardown joins a
+pool-queued Rx subscribe** — `DisposalCompleted` covers the action blocks,
+`IoPoolRegistry.DrainAll()` covers `IIoPool` leaves, the `AsyncDisposeQueue` covers enqueued
+cleanup. The item ran whenever the pool reached it. Measured on MeshWeaver.Plugins run
+`34222933802` (2026-09-08): all 11 disposed-scope stragglers captured across three suites
+were `MeshNodeStreamCache.GetQueryRaw`'s `Defer` resolving `cacheHub.GetWorkspace()` from an
+Autofac scope the mesh had already closed, the FutuRe pair 4 ms after `DISPOSE_DONE`
+([the chain walk](/Doc/Architecture/DebuggingNativeCrashes)).
+
+**The rule.** A connection is owned by the object whose services the chain resolves, and
+that object's `Dispose()` releases it. The one spelling is
+`MeshWeaver.Messaging.OwnedConnectionExtensions`:
+
+```csharp
+// A lazily-connected shared chain (a promise cache, a synced query, a per-name collection):
+var stream = Observable.Defer(() => BuildAgainst(hub.GetWorkspace()))
+    .SubscribeOn(TaskPoolScheduler.Default)
+    .Replay(1)
+    .AutoConnectOwnedBy(hub, nameof(MyService));          // or (compositeDisposableField, name)
+
+// An eager feed that must keep filling with no subscribers (a directory index, a counter):
+applied.ConnectOwnedBy(hub);                              // or ConnectOwnedBy(compositeDisposableField)
+```
+
+What the helper guarantees, and what a bare `AutoConnect(1)` cannot:
+
+| | bare `AutoConnect(1)` / dropped `Connect()` | `AutoConnectOwnedBy` / `ConnectOwnedBy` |
+|---|---|---|
+| The owner's `Dispose()` | cannot reach the upstream | unsubscribes it (`hub.RegisterForDisposal` → ShutDown phase, strictly before any scope closes) |
+| A connect still **queued** on the pool | runs later, against whatever is left | is **cancelled** before the pool dequeues it — the registration lands in a disposed `CompositeDisposable`, whose `Add` disposes on the spot |
+| A subscriber arriving **after** the release | gets the replay buffer, then silence forever ("burst then dead silence") | is **refused** with `ObjectDisposedException(ownerName)` — terminates, attributable |
+| A chain that **terminates** (a settled promise) | — | drops its handle, so the owner tracks *live* connections only and a faulted-then-rebuilt promise never accumulates dead handles |
+
+**Choosing the owner.** A hub-scoped service registers with its hub; a DI singleton owns a
+`CompositeDisposable` field it disposes in its own `Dispose()` (the container disposes
+singletons); an object that already has a disposal registry (`MeshNodeStreamCache`'s
+`_queryConnections`) uses that. Never a static.
+
+**`RefCount()` is different, deliberately.** A ref-counted chain's connection belongs to its
+*subscribers* — it releases with the last of them — so there is no handle for an owner to
+hold. What must be owned there is each *subscription*, through the ordinary
+`RegisterForDisposal` rule (`MeshNodeTypeSource` registers its own; `VirtualDataSource`
+registers with its stream). Every `RefCount()` site in `src/` is inventoried with the reason
+its subscriptions are owned.
+
+**Enforced** by `RootedRxConnectionRatchetGuard` (`test/MeshWeaver.Documentation.Test`):
+a bare `.AutoConnect(` / `.Connect()` anywhere in `src/` is red with no allow-list escape
+(the rooted budget is zero); a `.RefCount(` site must carry a reasoned line in
+`test/RootedRxConnectionSites.allow`, and that inventory only grows together with the
+guard's budget constant. Pinned end to end by `OwnedConnectionTest` (Messaging.Hub.Test —
+a connect queued on a `TestScheduler` is cancelled by the owner's release, with a control
+arm proving it was registered) and, at a converted site,
+`ContentCollectionConnectionOwnedByHubTest` and `QueryConnectionsReleasedOnTeardownTest`.
+
+---
+
 ## Teardown-safe writes: `Post` drops, incoming streams error
 
 Disposal is reactive and bounded, but it is not instantaneous — and **background

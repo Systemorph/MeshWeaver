@@ -77,7 +77,13 @@ from pathlib import Path
 # instead of deriving an MVID from a compiler DLL built per matrix job (#3308). Bundles packed
 # under recipe 2 state an identity no consumer can match, so they must be REPACKED rather than
 # reused — which is exactly what changing this constant forces.
-RECIPE_VERSION = "3"
+# 4: the pack now MEASURES what the platform ships (`--platform-app`, the pinned image's extracted
+# /app: its app closure, its surface manifest and its seeded modules/<Name>/ lane) and DROPS every
+# MeshWeaver.* sibling that host already has, instead of trusting the repo's declared
+# src/platform-shipped.txt (#3732). Bundles packed under recipe 3 carry those duplicates — 14 of
+# MeshWeaver.Plugins' 37 carried 27 of them, measured 2026-09-08 — and a duplicate is exactly what
+# makes one assembly name reach a process at two builds, so they must be REPACKED, never reused.
+RECIPE_VERSION = "4"
 
 # Repo-level files that change what EVERY project compiles or tests. Presence and content both
 # count; a file the repo does not have hashes as null so adding it later changes the key.

@@ -221,7 +221,10 @@ running"*, not *"this set was read"* — a boot that dies earlier must not close
 it never entered. And since MeshWeaver#3649 the claim says *what* is running: the adoption record
 carries `Generations` — the set's generation for every module that loaded as proposed, the
 **previous** generation for every module the loader fell back on because the set's does not load on
-this platform. `ModuleSetIndex.RunningGenerations` reads it back, `FallbackGenerations` lists the
+this platform — and the stand-in `@image` (`FallbackModule.ImageBaselineGeneration`) for a module
+running the image-shipped copy because no landed generation loads (MeshWeaver#3735; the stand-in
+is not a directory name, so the GC that reads this record reclaims nothing on its account).
+`ModuleSetIndex.RunningGenerations` reads it back, `FallbackGenerations` lists the
 difference, and `ModuleSetStore.Describe` names the modules that run a previous generation, so the
 boot line and the status surfaces say what the mesh runs and not only what it proposed. The
 proposal itself is unchanged — a wave proposes what it landed; whether that loads is measured at

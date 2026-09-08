@@ -151,6 +151,38 @@ Three things get strictly better:
    be answered either way; deriving it (`LateResponseWatchBound - 10.Seconds()`) keeps that true
    without a second literal, per [Bounds must be ordered](../BoundsMustBeOrdered).
 
+### What makes `Dead` safe to read: the run level is monotone, and that is enforced
+
+The shape above rests on one property that is easy to assume and was not, until #3647, actually
+guaranteed: **`RunLevel` never goes backwards.** Read the ordering again and notice that every phase
+of `HandleShutdownCore` is entered by handling a `ShutdownRequest`, and that two of the three
+idempotency guards test `RunLevel == <their own phase>` rather than `>=`:
+
+```csharp
+case MessageHubRunLevel.Quiescing:          if (RunLevel >= Quiescing)          return Ignored;   // ✅
+case MessageHubRunLevel.DisposeHostedHubs:  if (RunLevel == DisposeHostedHubs)  return Ignored;   // ⚠️
+case MessageHubRunLevel.ShutDown:           if (RunLevel == ShutDown)           return Ignored;   // ⚠️
+```
+
+A `ShutdownRequest` handled *after* `RunLevel = Dead` therefore does **not** hit its guard: it
+re-enters the phase and assigns the run level back down to `DisposeHostedHubs` or `ShutDown`. Every
+caller and every test that this page tells to wait for `Dead` and then read state would be reading a
+value that can be un-set behind it.
+
+Nothing can produce that today, and the reason is worth stating because it is what the fix makes
+structural rather than incidental. `ShutdownRequest` is `internal` and is deliberately absent from
+the default `TypeRegistry`, so no wire sender can mint one; in-process there are exactly three
+posters (`MessageHub.Dispose`, `OnQuiesceComplete`, `PostShutDownPhase`) and each fires once per
+hub. The **intake gate** now says so as well: `MessageService.RefusesIntake` exempts teardown's own
+traffic only while a phase is left for it to advance — `ShutdownRequest` up to `ShutDown`,
+`DisposeRequest` up to `Quiescing` — instead of exempting both at every level forever. So the
+monotonicity `Dead` depends on is a property of the gate, not of who happens to post.
+
+The same unbounded exemption was what produced #3647's report, and
+[Teardown layers](../TeardownLayers) carries that half: a `DisposeRequest` admitted into a window
+where its handler is a proven no-op became a queued turn, and `messageService.Dispose()` filed it at
+Error as discarded work — while the pump, one stack frame below, drained and answered it 3 ms later.
+
 ### A second defect the same change removes
 
 The old assertion polled `registry.ArmedCount == 0` — a **whole-registry** count. But dispatching

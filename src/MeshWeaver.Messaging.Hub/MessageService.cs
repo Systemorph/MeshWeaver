@@ -94,10 +94,53 @@ public class MessageService : IMessageService
     // until the last gate opens. Exactly one turn drains at a time (the actor's single
     // logical thread); each turn is (re)scheduled on turnScheduler and awaited before
     // the next — the MaxDegreeOfParallelism=1 ActionBlock semantics, minus Dataflow.
-    private readonly Queue<Func<IObservable<IMessageDelivery>>> mainQueue = new();
-    private readonly Queue<Func<IObservable<IMessageDelivery>>> deferredQueue = new();
+    private readonly Queue<QueuedTurn> mainQueue = new();
+    private readonly Queue<QueuedTurn> deferredQueue = new();
     private readonly Lock turnGate = new();
     private bool draining;
+
+    /// <summary>
+    /// One queued turn plus the ARRIVAL ORDER it must keep.
+    ///
+    /// <para>🚨 The sequence is not decoration and it is not a diagnostic — it is what makes
+    /// "total arrival order" a checkable property of a hub that has TWO queues. Deliveries move
+    /// between <see cref="mainQueue"/> and <see cref="deferredQueue"/> at TURN time, and a turn
+    /// can be executing (dequeued from both) while <see cref="OpenGate"/> restores the deferred
+    /// backlog underneath it. Without a per-turn stamp there is no way for that in-flight turn to
+    /// discover that older work was just put in front of it, which is exactly how a message
+    /// arriving later got processed first (Plugins#1394 — observed as <c>B, A, C</c> and
+    /// <c>C, A, B</c>). See <c>TryRequeueBehindOlderTurns</c>.</para>
+    ///
+    /// <para><b>Invariant:</b> <see cref="mainQueue"/> is always ordered by ascending
+    /// <see cref="Seq"/>. Every producer preserves it — <c>EnqueueTurn</c> appends the largest
+    /// seq ever issued, the <see cref="OpenGate"/> restore concatenates deferred-then-waiting
+    /// (everything deferred is strictly older than everything still waiting, because deferral
+    /// happens at turn time and the loop is FIFO), and the re-queue below inserts in place.</para>
+    ///
+    /// <para>🚨 The DELIVERY rides along so a report about the QUEUE can name what is in it. The
+    /// <see cref="Run"/> thunk closes over it, which makes it opaque from outside — so
+    /// <see cref="Dispose"/>'s report on the turns still queued could say only how MANY there
+    /// were. That is precisely what left #3647 undiagnosable: one production line, a count of 1,
+    /// and nothing at all about which message it was or who sent it, so the investigation could
+    /// get no further than "a late post beat the pump by milliseconds". The delivery is already
+    /// allocated and the closure was being built anyway, so carrying it costs nothing per
+    /// message.</para>
+    /// </summary>
+    /// <param name="Seq">Monotonic arrival stamp, issued under <see cref="turnGate"/> at enqueue.</param>
+    /// <param name="Delivery">The delivery this turn hands to the pipeline.</param>
+    /// <param name="Run">The turn body.</param>
+    private readonly record struct QueuedTurn(
+        long Seq,
+        IMessageDelivery Delivery,
+        Func<IObservable<IMessageDelivery>> Run)
+    {
+        /// <summary>Names the delivery for a diagnostic — type, id and sender, never its body.</summary>
+        public string Describe() =>
+            $"{Delivery.Message?.GetType().Name ?? "<null>"} (id={Delivery.Id}, from {Delivery.Sender})";
+    }
+
+    /// <summary>Monotonic turn stamp; issued and read only under <see cref="turnGate"/>.</summary>
+    private long turnSequence;
 
     /// <summary>
     /// Per-message deferral timeout. A message that sits in <see cref="deferredQueue"/>
@@ -317,84 +360,101 @@ public class MessageService : IMessageService
     {
         lock (gateStateLock)
         {
-            if (gates.TryRemove(name, out _))
+            if (!gates.ContainsKey(name))
             {
-                // A gate that is opened after all is no longer dead — drop any failure marker so
-                // the deferral path stops answering-instead-of-parking (Dispose opens every gate,
-                // including one FailGate marked, and this keeps the two states consistent).
-                failedGates.TryRemove(name, out _);
-                logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}. Closed gates {Gates}", name,
-                    Address, gates.Keys);
+                logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)",
+                    name, Address);
+                return false;
+            }
 
-                // If this was the last gate, link deferred buffer to main buffer and mark hub as started
-                // Use lock to ensure atomicity with ScheduleNotify checking gates.IsEmpty
-                if (gates.IsEmpty)
+            // 🚨 THE RESTORE HAPPENS BEFORE THE REMOVAL PUBLISHES "no gates left" (Plugins#1394).
+            //
+            // The deferral decision reads `gates.IsEmpty` WITHOUT this lock as its fast path, and
+            // takes the lock only when that read says "not empty". So the instant the last gate
+            // leaves `gates`, concurrent turns stop funnelling through here — and if the deferred
+            // backlog were still parked at that instant, such a turn would run ahead of messages
+            // that arrived before it with nothing left to notice. Removing the gate LAST closes
+            // that window by construction: a turn's fast-path read either precedes the removal (so
+            // it blocks on this lock and finds the queue already restored) or follows it (so the
+            // queue is already restored). There is no third state.
+            //
+            // Nothing can be deferred INTO the emptied queue during the window either: the defer
+            // decision and its `deferredQueue.Enqueue` are inside this same lock, which is held
+            // throughout — so restoring first cannot strand a late deferral.
+            var isLastGate = gates.Count == 1;
+            if (isLastGate && hub.RunLevel < MessageHubRunLevel.Started)
+            {
+                startupTimer?.Dispose();
+                hub.Start();
+
+                // 🚨 Deferred turns go to the FRONT of the main queue, not the back.
+                //
+                // Deferral happens at TURN time, not at arrival: a message is dequeued,
+                // found on-target with a gate closed, and pushed onto deferredQueue. The
+                // turn loop is strictly FIFO, so everything in deferredQueue is by
+                // construction OLDER than anything still waiting in mainQueue — a message
+                // that has not been turned yet cannot have arrived first. Appending was
+                // therefore always the wrong end, and it silently reordered whenever the
+                // loop happened to be BUSY across the gate open: a message that arrived
+                // while the parked one waited was already ahead of it in mainQueue, so the
+                // parked message ran LAST (Plugins#1394 — observed as "B, C, A" where A was
+                // posted and released first; load-sensitive on CI, green in isolation,
+                // which is exactly what "the loop happened to be busy" looks like).
+                //
+                // The old comment claimed this preserved FIFO. It only did so against
+                // messages arriving AFTER the open — the easy half. The turn that is
+                // ALREADY EXECUTING when this runs is the other half, and no rebuild here
+                // can reach it because it is in neither queue; it is caught instead by the
+                // arrival-order barrier in NotifyAsync (TryRequeueBehindOlderTurns).
+                logger.LogDebug("Draining deferred queue to the front of the main queue for hub {Address}", Address);
+                int drainedDeferred, drainedBehind;
+                lock (turnGate)
                 {
-                    if (hub.RunLevel < MessageHubRunLevel.Started)
+                    drainedDeferred = deferredQueue.Count;
+                    drainedBehind = mainQueue.Count;
+                    if (deferredQueue.Count > 0)
                     {
-                        startupTimer?.Dispose();
-                        hub.Start();
-
-                        // 🚨 Deferred turns go to the FRONT of the main queue, not the back.
-                        //
-                        // Deferral happens at TURN time, not at arrival: a message is dequeued,
-                        // found on-target with a gate closed, and pushed onto deferredQueue. The
-                        // turn loop is strictly FIFO, so everything in deferredQueue is by
-                        // construction OLDER than anything still waiting in mainQueue — a message
-                        // that has not been turned yet cannot have arrived first. Appending was
-                        // therefore always the wrong end, and it silently reordered whenever the
-                        // loop happened to be BUSY across the gate open: a message that arrived
-                        // while the parked one waited was already ahead of it in mainQueue, so the
-                        // parked message ran LAST (Plugins#1394 — observed as "B, C, A" where A was
-                        // posted and released first; load-sensitive on CI, green in isolation,
-                        // which is exactly what "the loop happened to be busy" looks like).
-                        //
-                        // The old comment claimed this preserved FIFO. It only did so against
-                        // messages arriving AFTER the open — the easy half.
-                        logger.LogDebug("Draining deferred queue to the front of the main queue for hub {Address}", Address);
-                        int drainedDeferred, drainedBehind;
-                        lock (turnGate)
-                        {
-                            drainedDeferred = deferredQueue.Count;
-                            drainedBehind = mainQueue.Count;
-                            if (deferredQueue.Count > 0)
-                            {
-                                // Rebuild as deferred-then-waiting. Both runs keep their own order,
-                                // so the result is total arrival order across the two queues.
-                                var reordered = new Queue<Func<IObservable<IMessageDelivery>>>(
-                                    deferredQueue.Count + mainQueue.Count);
-                                while (deferredQueue.Count > 0)
-                                    reordered.Enqueue(deferredQueue.Dequeue());
-                                while (mainQueue.Count > 0)
-                                    reordered.Enqueue(mainQueue.Dequeue());
-                                while (reordered.Count > 0)
-                                    mainQueue.Enqueue(reordered.Dequeue());
-                            }
-                        }
-                        // 🚨 The RESTORE point, stamped (Plugins#1394). This is where total arrival
-                        // order is supposed to be re-established, so a reorder investigation needs
-                        // to know it happened at all, and what it moved: `deferred=0` here means
-                        // there was nothing to restore, which — paired with a delivery whose fate
-                        // says it WAS deferred — proves the deferral landed after this drain and
-                        // has to wait for a later one. That pairing is not derivable from either
-                        // stamp alone, and it is the discrimination the permutations turn on.
-                        MessageTrace.Write($"hub={Address} GATE_DRAIN gate={name} deferred={drainedDeferred} behind={drainedBehind}");
-                        // Gate opened + drained — the hub is no longer stuck, so re-arm the one-shot
-                        // gate-stuck logger for any future episode.
-                        Interlocked.Exchange(ref _deferralOverflowLogged, 0);
-                        KickDrain();
-
-                        logger.LogDebug("Message hub {address} fully initialized (all gates opened)", Address);
+                        // Rebuild as deferred-then-waiting. Both runs keep their own order,
+                        // so the result is total arrival order across the two queues.
+                        var reordered = new Queue<QueuedTurn>(
+                            deferredQueue.Count + mainQueue.Count);
+                        while (deferredQueue.Count > 0)
+                            reordered.Enqueue(deferredQueue.Dequeue());
+                        while (mainQueue.Count > 0)
+                            reordered.Enqueue(mainQueue.Dequeue());
+                        while (reordered.Count > 0)
+                            mainQueue.Enqueue(reordered.Dequeue());
                     }
                 }
-
-                return true;
+                // 🚨 The RESTORE point, stamped (Plugins#1394). This is where total arrival
+                // order is supposed to be re-established, so a reorder investigation needs
+                // to know it happened at all, and what it moved: `deferred=0` here means
+                // there was nothing to restore, which — paired with a delivery whose fate
+                // says it WAS deferred — proves the deferral landed after this drain and
+                // has to wait for a later one. That pairing is not derivable from either
+                // stamp alone, and it is the discrimination the permutations turn on.
+                MessageTrace.Write($"hub={Address} GATE_DRAIN gate={name} deferred={drainedDeferred} behind={drainedBehind}");
+                // Gate opened + drained — the hub is no longer stuck, so re-arm the one-shot
+                // gate-stuck logger for any future episode.
+                Interlocked.Exchange(ref _deferralOverflowLogged, 0);
             }
-        }
 
-        logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name,
-            Address);
-        return false;
+            gates.TryRemove(name, out _);
+            // A gate that is opened after all is no longer dead — drop any failure marker so
+            // the deferral path stops answering-instead-of-parking (Dispose opens every gate,
+            // including one FailGate marked, and this keeps the two states consistent).
+            failedGates.TryRemove(name, out _);
+            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}. Closed gates {Gates}", name,
+                Address, gates.Keys);
+
+            if (isLastGate)
+            {
+                KickDrain();
+                logger.LogDebug("Message hub {address} fully initialized (all gates opened)", Address);
+            }
+
+            return true;
+        }
     }
 
     /// <summary>
@@ -504,7 +564,8 @@ public class MessageService : IMessageService
     ///
     /// <para><b>Tier 2 — <see cref="MessageHubRunLevel.DisposeHostedHubs"/> and beyond</b> (the
     /// historical gate). Routing is over and the hosted hubs are going away, so nothing but
-    /// teardown's own <c>ShutdownRequest</c> / <c>DisposeRequest</c> gets in.</para>
+    /// teardown's own <c>ShutdownRequest</c> gets in — and only while a phase is left for it to
+    /// advance (see the two exemption bounds in the body, and #3647).</para>
     ///
     /// <para><b>Tier 1 — <see cref="MessageHubRunLevel.Quiescing"/></b> (issue #3506). Disposal has
     /// STARTED and the hub is spending a FIXED budget draining the callbacks it already owes. A
@@ -550,9 +611,41 @@ public class MessageService : IMessageService
         if (runLevel < MessageHubRunLevel.Quiescing)
             return false;
 
-        // Teardown's OWN traffic gets in at every level — it is what advances the phases at all.
-        if (delivery.Message is ShutdownRequest or DisposeRequest)
-            return false;
+        // Teardown's OWN traffic gets in — but only while there is a phase left for it to advance,
+        // which is the REASON the exemption exists and was not the rule it was written as. It read
+        // `is ShutdownRequest or DisposeRequest → let in`, at every level, forever.
+        //
+        // 🚨 An exemption that outlives its reason MANUFACTURES the state the disposal report then
+        // files as a defect (#3647). The admitted delivery cannot advance anything; all it can do
+        // is occupy a turn slot, and `Dispose()` — which runs a few statements later, inside this
+        // hub's own ShutdownRequest turn — then finds it in the queue. One production line, one
+        // turn, `RunLevel=ShutDown`, `last turn executing: ShutdownRequest`: that is this gate
+        // letting a message in one phase after the last one that could use it.
+        //
+        // The two exemptions have DIFFERENT bounds because they advance different things:
+        if (delivery.Message is ShutdownRequest)
+            // It drives the phase machine itself, so it is exempt until the machine reaches its
+            // TERMINAL phase. From ShutDown on there is no phase left to advance and the request
+            // can only RE-ENTER one the hub has already run — and since each phase's idempotency
+            // guard tests `RunLevel == <its own phase>` rather than `>=`, one handled after
+            // `RunLevel = Dead` would move the run level BACKWARD out of its terminal state. That
+            // state is exactly what Doc/Architecture/TeardownVerdictsAreCausal tells every caller
+            // and every test to read as "the owner has had its chance to answer", so keeping it
+            // monotone is not housekeeping. (No producer outside this process can mint one —
+            // `ShutdownRequest` is `internal` and is not in the `TypeRegistry` — but a gate is what
+            // makes that a property rather than an accident of who happens to post.)
+            return runLevel >= MessageHubRunLevel.ShutDown;
+
+        if (delivery.Message is DisposeRequest)
+            // It asks the hub to BEGIN disposing, and `runLevel >= Quiescing` (established above)
+            // means it already has: `MessageHub.Dispose()` is the only thing that moves the run
+            // level off Started, and it is idempotent. So from Quiescing on `HandleDispose` is a
+            // PROVEN no-op turn — `IsShuttingDown` is already set, so there is no recycle
+            // announcement to make, and `Dispose()` returns on its first line. It is
+            // `[CanBeIgnored]` fire-and-forget, so refusing it leaves nobody waiting: this is a
+            // refusal that costs a caller nothing and a turn slot that costs a teardown a false
+            // report.
+            return true;
 
         if (runLevel >= MessageHubRunLevel.DisposeHostedHubs)
             return true;
@@ -971,8 +1064,9 @@ public class MessageService : IMessageService
         fate?.Add($"RECEIVED runLevel={hub.RunLevel}", Address);
 
         // The TEARDOWN INTAKE GATE. See RefusesIntake for the two tiers and why the second one
-        // (#3506) is narrower than the first. Only ShutdownRequest / DisposeRequest are exempt at
-        // every level; everything else is dropped once the gate closes, to prevent endless cascades.
+        // (#3506) is narrower than the first. Teardown's own traffic is exempt only while a phase
+        // is left for it to advance (#3647); everything else is dropped once the gate closes, to
+        // prevent endless cascades.
         if (RefusesIntake(delivery))
         {
             if (logger.IsEnabled(LogLevel.Debug))
@@ -1124,7 +1218,7 @@ public class MessageService : IMessageService
         // was enqueued and processed, and a reorder between two deliveries is indistinguishable
         // from a reorder between two queues. See ProcessDeferredMessage / OpenGate for the
         // matching stamps: every transition a delivery can make now carries both depths.
-        var mainDepthAtEnqueue = EnqueueTurn(() => NotifyAsync(delivery, cancellationToken));
+        var (_, mainDepthAtEnqueue) = EnqueueTurn(delivery, seq => NotifyAsync(delivery, cancellationToken, seq));
         MessageTrace.Write($"hub={Address} msg={typeName} id={delivery.Id} ENQUEUED");
         // 🚨 The stage token stays EXACTLY "ENQUEUED" — it is a matched CONTRACT, not a log line.
         // Stages render as `{stage}@{hub}`, and two suites wait on that literal substring
@@ -1152,16 +1246,20 @@ public class MessageService : IMessageService
     /// attributed once you know which queue each delivery entered and how many turns were ahead of
     /// it, and this hub has two queues that deliveries move between at turn time.
     /// </returns>
-    private int EnqueueTurn(Func<IObservable<IMessageDelivery>> turn)
+    private (long Seq, int Depth) EnqueueTurn(
+        IMessageDelivery delivery, Func<long, IObservable<IMessageDelivery>> turnFactory)
     {
+        long seq;
         int depth;
         lock (turnGate)
         {
-            mainQueue.Enqueue(turn);
+            seq = ++turnSequence;
+            var stamped = seq;
+            mainQueue.Enqueue(new QueuedTurn(stamped, delivery, () => turnFactory(stamped)));
             depth = mainQueue.Count;
         }
         KickDrain();
-        return depth;
+        return (seq, depth);
     }
 
     private void KickDrain()
@@ -1204,7 +1302,7 @@ public class MessageService : IMessageService
     {
         while (true)
         {
-            Func<IObservable<IMessageDelivery>>? turn;
+            QueuedTurn queued;
             lock (turnGate)
             {
                 if (mainQueue.Count == 0)
@@ -1212,8 +1310,9 @@ public class MessageService : IMessageService
                     draining = false;
                     return;
                 }
-                turn = mainQueue.Dequeue();
+                queued = mainQueue.Dequeue();
             }
+            var turn = queued.Run;
             // The DEQUEUE stamp. Incremented here rather than at handler completion so a turn that
             // never reaches a handler still moves it — that gap is what makes a pump that never
             // started indistinguishable from one wedged in a handler when only turnsCompleted is
@@ -1275,8 +1374,19 @@ public class MessageService : IMessageService
         catch { /* logger itself failed — nothing else to do */ }
     }
 
-    private IObservable<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+    /// <param name="turnSeq">
+    /// This turn's arrival stamp (see <see cref="QueuedTurn"/>). Carried so a deferral keeps the
+    /// delivery's place in total arrival order, and so a turn that finds the gate opened underneath
+    /// it can re-join the queue instead of overtaking the backlog that was just restored.
+    /// </param>
+    private IObservable<IMessageDelivery> NotifyAsync(
+        IMessageDelivery delivery, CancellationToken cancellationToken, long turnSeq)
     {
+        // The delivery EXACTLY as this turn received it. A re-queue (see
+        // TryRequeueBehindOlderTurns) must re-enter NotifyAsync with this value, not with the
+        // routed/unpacked local below: NotifyAsync early-returns on any state other than
+        // Submitted, so re-entering with a mutated delivery would silently DROP the message.
+        var asReceived = delivery;
         // Per-message hot path. Lift the trace gate once at the top.
         var traceEnabled = logger.IsEnabled(LogLevel.Trace);
         var name = GetMessageType(delivery);
@@ -1361,6 +1471,11 @@ public class MessageService : IMessageService
         {
             // Check if we need to defer this message - must check inside lock to avoid race with OpenGate
             bool shouldDefer = !gates.IsEmpty;
+            // Set by the two bypasses below. Those deliveries are exempt from gate ORDERING by
+            // design (deferring them deadlocks the hub), so the arrival-order barrier at the end
+            // of this block must exempt them too — re-queueing a ShutdownRequest behind a backlog
+            // would reintroduce exactly the teardown hang the bypass exists to prevent.
+            bool bypassesGate = false;
             MessageTrace.Write($"hub={Address} msg={name} id={delivery.Id} onTarget gates.IsEmpty={gates.IsEmpty} shouldDefer={shouldDefer}");
             if (shouldDefer)
             {
@@ -1390,6 +1505,7 @@ public class MessageService : IMessageService
                         "Allowing system message {MessageType} (ID: {MessageId}) through all gates for hub {Address}",
                         delivery.Message.GetType().Name, delivery.Id, Address);
                     shouldDefer = false;
+                    bypassesGate = true;
                 }
                 // A reply to a request THIS hub issued must never be deferred behind the
                 // hub's own init gate: deferring it deadlocks the hub against its own
@@ -1407,6 +1523,7 @@ public class MessageService : IMessageService
                         "Allowing awaited response {MessageType} (ID: {MessageId}) through gates for hub {Address}",
                         delivery.Message.GetType().Name, delivery.Id, Address);
                     shouldDefer = false;
+                    bypassesGate = true;
                 }
                 else
                 {
@@ -1494,7 +1611,12 @@ public class MessageService : IMessageService
                             ScheduleDeferralTimeout(delivery);
                             lock (turnGate)
                             {
-                                deferredQueue.Enqueue(() => ProcessDeferredMessage(delivery, cancellationToken));
+                                // The ORIGINAL arrival stamp travels with the parked turn, so the
+                                // restore in OpenGate re-establishes total arrival order across
+                                // both queues rather than merely the order within each.
+                                deferredQueue.Enqueue(new QueuedTurn(
+                                    turnSeq, delivery,
+                                    () => ProcessDeferredMessage(delivery, cancellationToken)));
                                 deferredPosition = deferredQueue.Count;
                                 mainDepthAtDefer = mainQueue.Count;
                             }
@@ -1508,6 +1630,21 @@ public class MessageService : IMessageService
                     }
                 }
             }
+
+            // 🚨 THE ARRIVAL-ORDER BARRIER (Plugins#1394). A turn is dequeued from mainQueue and
+            // only THEN decides whether it defers — and between those two instants the last gate
+            // can open on another thread, which restores the whole deferred backlog to the FRONT
+            // of a queue this turn has already left. This turn is then younger than every restored
+            // delivery and yet about to run first: the residual reorder that survived
+            // MeshWeaver#3408, seen in the field as B,A,C and C,A,B where the parked message was
+            // posted first and processed second.
+            //
+            // The check is exact, not heuristic: mainQueue is ordered by ascending Seq, and under
+            // FIFO dequeue its head is ALWAYS younger than the running turn — so a head that is
+            // OLDER can only mean a restore happened underneath this turn. Rejoining the queue in
+            // place is what "FIFO" means here; running now is what breaks it.
+            if (!bypassesGate && TryRequeueBehindOlderTurns(asReceived, cancellationToken, turnSeq, fate))
+                return Observable.Return(asReceived.Forwarded());
 
             logger.LogTrace(
                 "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
@@ -1578,6 +1715,73 @@ public class MessageService : IMessageService
     /// <summary>
     /// Process a deferred message, bypassing the deferral check to prevent infinite loops
     /// </summary>
+    /// <summary>
+    /// Puts a turn that is about to overtake OLDER queued work back into <see cref="mainQueue"/> at
+    /// its arrival position, and answers whether it did.
+    ///
+    /// <para>🚨 <b>Why a running turn can be younger than the queue's head.</b> The turn loop
+    /// dequeues strictly FIFO, so the head of <see cref="mainQueue"/> is normally younger than the
+    /// turn executing — this method therefore costs one uncontended lock and a compare, and returns
+    /// false, on every ordinary delivery. It returns TRUE in exactly one situation: the last
+    /// initialization gate opened while this turn was in flight, and <see cref="OpenGate"/> put the
+    /// deferred backlog — every entry of which arrived BEFORE this turn — at the front of the queue
+    /// this turn had already left. Running now would process a later message first, which is the
+    /// reorder Plugins#1394 observed on CI as <c>B, A, C</c> / <c>C, A, B</c>.</para>
+    ///
+    /// <para><b>Why it terminates.</b> Seq is monotonic and no new turn can ever be issued a
+    /// smaller one, so each re-queue is followed by at least one older turn being dequeued and run.
+    /// After finitely many turns nothing older remains and the delivery runs. Nothing else can be
+    /// draining while this method executes — the drain flag is latched by the very turn that called
+    /// it — so the queue it rebuilds cannot be consumed concurrently.</para>
+    ///
+    /// <para><b>Why the delivery re-enters as received.</b> <c>NotifyAsync</c> early-returns on any
+    /// state other than <c>Submitted</c>; re-queueing the routed/unpacked local would drop the
+    /// message silently on its second turn.</para>
+    /// </summary>
+    private bool TryRequeueBehindOlderTurns(
+        IMessageDelivery delivery, CancellationToken cancellationToken, long turnSeq,
+        RequestFateLedger.RequestFate? fate)
+    {
+        int position;
+        lock (turnGate)
+        {
+            if (mainQueue.Count == 0 || mainQueue.Peek().Seq > turnSeq)
+                return false;
+
+            var reordered = new Queue<QueuedTurn>(mainQueue.Count + 1);
+            var placed = false;
+            position = 0;
+            while (mainQueue.Count > 0)
+            {
+                if (!placed && mainQueue.Peek().Seq > turnSeq)
+                {
+                    reordered.Enqueue(new QueuedTurn(
+                        turnSeq, delivery, () => NotifyAsync(delivery, cancellationToken, turnSeq)));
+                    placed = true;
+                }
+                if (!placed)
+                    position++;
+                reordered.Enqueue(mainQueue.Dequeue());
+            }
+            if (!placed)
+                reordered.Enqueue(new QueuedTurn(
+                    turnSeq, delivery, () => NotifyAsync(delivery, cancellationToken, turnSeq)));
+            while (reordered.Count > 0)
+                mainQueue.Enqueue(reordered.Dequeue());
+        }
+
+        MessageTrace.Write(
+            $"hub={Address} msg={GetMessageType(delivery)} id={delivery.Id} REQUEUED_IN_ARRIVAL_ORDER seq={turnSeq} behind={position}");
+        // Additive stage — never edit an existing fate token, they are a matched contract
+        // (see the ENQUEUED note in ScheduleNotify and FateStageTokensAreAContractTest).
+        fate?.Add($"REQUEUED_IN_ARRIVAL_ORDER seq={turnSeq} behind={position}", Address);
+        logger.LogDebug(
+            "Re-queueing {MessageType} (ID: {MessageId}) in {Address} behind {Count} older turn(s) "
+            + "restored by an initialization gate opening mid-turn",
+            delivery.Message?.GetType().Name, delivery.Id, Address, position);
+        return true;
+    }
+
     /// <summary>
     /// Tracks a deferred delivery and schedules a <see cref="DeferralTimeout"/>
     /// deadline. If the hub doesn't drain the message within the budget, posts a
@@ -2349,17 +2553,66 @@ public class MessageService : IMessageService
         logger.LogDebug("[DISPOSE-TRACE] {address}: turn queues (mainCount={bufferCount}, deferredCount={deferredCount})",
             Address, mainQueue.Count, deferredQueue.Count);
         // The ShutDown request is FIFO behind everything accepted before it, so by the time this
-        // runs the main queue holds only what arrived in the shutdown window and is about to be
-        // left unprocessed once the pump stops. Anything at all here is the same discard as above.
+        // runs the main queue holds only what arrived in the shutdown window.
+        //
+        // 🚨 That is NOT the same thing as a discard, and this site used to say it was — "still
+        // queued and unprocessed (the pump stops with this call)", at Error, which is the line the
+        // red-log pipeline opened #3647 on.
+        //
+        // The pump does not stop with this call and cannot: `Dispose()` runs INSIDE the
+        // ShutdownRequest turn (`MessageHub.HandleShutdownCore`'s ShutDown case calls it), so
+        // `DrainLoop` is one frame below on this very stack and its `while (true)` takes the next
+        // turn the instant this turn returns. MEASURED on the unfixed tree, with
+        // `ShutdownWindowAdmissionTest`'s fixture reproducing the production line byte for byte —
+        // 3 ms after that Error, on the same hub: `Hub victim/… is disposing. Not processing
+        // DisposeRequest (id=…)`. The pump had dequeued the very delivery this line called
+        // unprocessed and the disposing seam in `RunHandler` had ANSWERED it — a transient
+        // `ShuttingDown` NACK for anything a sender awaits, a silent drop for `[CanBeIgnored]`
+        // traffic nobody awaits. Nothing was left waiting; the drain contract held.
+        //
+        // An Error that names work as lost while the same loop is about to finish it is a FALSE
+        // verdict, and a false verdict costs more than no verdict: it sends the reader hunting for
+        // a producer that did nothing wrong. So the level now follows the FACT, and the fact is
+        // measured rather than narrated — `drainsInFlight` counts drain bodies actually executing
+        // (#3593), so "somebody is going to take these" is read off the pump, not asserted about
+        // it. Only the state where nothing is draining strands a turn, and that is what stays an
+        // Error.
+        //
+        // And it NAMES them. The one thing #3647 needed and could not get was which message it
+        // was: the queue element carried only a closure, so the line could report a count and
+        // nothing else. See QueuedTurn.
+        //
+        // 🚨 The names are rendered ONLY if a line will actually be written. A method argument is
+        // evaluated before the call whatever the log level, and this file already carries the scar
+        // of that on this exact path (#3044/#3056, the serialize-on-every-drop line a few hundred
+        // lines up): the counting read is cheap and unconditional, the rendering is not.
         int leftBehind;
         lock (turnGate) leftBehind = mainQueue.Count;
-        if (leftBehind > 0)
-            logger.LogError(DisposalDiscardedQueuedDelivery,
-                "[DISPOSE-DISCARD] Hub {Address} is disposing with {Count} turn(s) still queued and "
-                + "unprocessed (the pump stops with this call). RunLevel={RunLevel}; {Discarded} deferred "
-                + "delivery(ies) already answered ShuttingDown; last turn executing: {Executing}. Accepted work "
-                + "must be drained before a hub goes down — find what posted into the shutdown window.",
-                Address, leftBehind, hub.RunLevel, discarded, currentlyExecutingMessageType ?? "(idle)");
+        var pumpIsRunning = Volatile.Read(ref drainsInFlight) > 0;
+        if (leftBehind > 0 && (!pumpIsRunning || logger.IsEnabled(LogLevel.Debug)))
+        {
+            QueuedTurn[] stillQueued;
+            lock (turnGate) stillQueued = mainQueue.ToArray();
+            var queued = string.Join("; ", stillQueued.Select(t => t.Describe()));
+            if (pumpIsRunning)
+                logger.LogDebug(
+                    "[DISPOSE-DRAIN] Hub {Address} reached its ShutDown phase with {Count} turn(s) still "
+                    + "queued: {Queued}. RunLevel={RunLevel}; {Discarded} deferred delivery(ies) answered "
+                    + "ShuttingDown; last turn executing: {Executing}. The pump is running this very call, "
+                    + "so it drains them next and the disposing seam answers each one — this is the drain "
+                    + "contract holding, not a discard.",
+                    Address, stillQueued.Length, queued, hub.RunLevel, discarded,
+                    currentlyExecutingMessageType ?? "(idle)");
+            else
+                logger.LogError(DisposalDiscardedQueuedDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with {Count} turn(s) still queued and "
+                    + "NOTHING DRAINING (drainsInFlight=0), so nobody will take them: {Queued}. "
+                    + "RunLevel={RunLevel}; {Discarded} deferred delivery(ies) already answered "
+                    + "ShuttingDown; last turn executing: {Executing}. Accepted work must be drained before "
+                    + "a hub goes down — find why this hub's pump is not turning.",
+                    Address, stillQueued.Length, queued, hub.RunLevel, discarded,
+                    currentlyExecutingMessageType ?? "(idle)");
+        }
 
         // Don't wait on deliveryAction.Completion. Handler execution now runs INLINE
         // on this same block (executionBuffer/executionBlock were collapsed away), so

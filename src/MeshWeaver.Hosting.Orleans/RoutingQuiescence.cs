@@ -49,7 +49,9 @@ public sealed class RoutingQuiescence : IDisposable
     private readonly Subject<int> deltas = new();
     private readonly EventLoopScheduler scheduler = new();
     private readonly IConnectableObservable<int> counts;
-    private readonly IDisposable connection;
+    // Owns the counts connection: released in Dispose(), through the one sanctioned spelling for a
+    // rooted connection (ConnectOwnedBy) so the ratchet can see it is owned.
+    private readonly CompositeDisposable connections = new();
     private int disposed;
 
     // 🚨 What is in flight, not just HOW MANY. The count alone made the shutdown residual
@@ -75,7 +77,7 @@ public sealed class RoutingQuiescence : IDisposable
             .Scan(0, (running, delta) => running + delta)
             .StartWith(0)
             .Replay(1);
-        connection = counts.Connect();
+        counts.ConnectOwnedBy(connections);
     }
 
     /// <summary>
@@ -153,7 +155,7 @@ public sealed class RoutingQuiescence : IDisposable
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)
             return;
-        connection.Dispose();
+        connections.Dispose();
         scheduler.Dispose();
     }
 }

@@ -6,6 +6,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Concurrency;
 using System.Reactive.Subjects;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
@@ -62,7 +63,9 @@ public sealed class ActivityTracker : IDisposable
     private readonly Subject<int> deltas = new();
     private readonly EventLoopScheduler scheduler = new();
     private readonly IConnectableObservable<int> counts;
-    private readonly IDisposable connection;
+    // Owns the counts connection: released in Dispose(), through the one sanctioned spelling for a
+    // rooted connection (ConnectOwnedBy) so the ratchet can see it is owned.
+    private readonly CompositeDisposable connections = new();
     // The live runs, keyed by ticket, so a quiesce can look at EACH one's progress rather than at
     // an anonymous count. Instance field on the mesh-scoped singleton — never static.
     private readonly ConcurrentDictionary<long, ActivityRunHandle> runs = new();
@@ -78,7 +81,7 @@ public sealed class ActivityTracker : IDisposable
             .Scan(0, (running, delta) => running + delta)
             .StartWith(0)
             .Replay(1);
-        connection = counts.Connect();
+        counts.ConnectOwnedBy(connections);
     }
 
     /// <summary>
@@ -259,7 +262,7 @@ public sealed class ActivityTracker : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        connection.Dispose();
+        connections.Dispose();
         deltas.Dispose();
         scheduler.Dispose();
     }

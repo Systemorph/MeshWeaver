@@ -416,7 +416,11 @@ public static class PrebuiltBundleStore
                 + "identity it references is unknown, so no identity can be called unreferenced",
                 ImmutableList<string>.Empty);
 
-        var comparer = NuGetVersionComparer.Instance;
+        // 🚨 The SEALED-PUBLICATION LINEAGE, never the version LABEL (#3542). Retention decides what
+        // to DELETE, so a label that sorts above a later run does not merely mis-rank a listing here:
+        // it protects the stale publication and collects the newest one. `3.0.0-rc9.ci.7824` and the
+        // withdrawn `3.1.0-ci.7841` both outrank `3.0.0-ci.8130` under SemVer.
+        var comparer = PlatformReleaseOrder.Newest;
         var readable = scan.Markers.Where(m => m.Identity is not null).ToImmutableList();
 
         // identity → the newest version naming it (the SAME reading ShippedPrebuiltBundles orders

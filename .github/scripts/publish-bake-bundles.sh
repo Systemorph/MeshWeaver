@@ -42,7 +42,12 @@
 #
 # AUTH: `az login` must already have happened (the CD jobs use OIDC). Data-plane access uses
 # --auth-mode login with --backup-intent, which requires the identity to hold the
-# "Storage File Data Privileged Contributor" role on the target storage accounts.
+# "Storage File Data Privileged Contributor" role on the target storage accounts. The bulk
+# phases — every upload of a publication, and every read-back before the seal — run through
+# publish-bake-files.py beside this file, ONE process per phase per target on the Azure SDK with
+# the SAME CLI identity (AzureCliCredential + token_intent=backup); see THE BULK PHASES below.
+# The remaining `az` calls are the handful of per-target decisions (does the sentinel exist, what
+# does the marker say) and the rarely-taken paths (unseal, release marker, architecture backfill).
 #
 # <release-version> is the PLATFORM VERSION this publication belongs to (main-cd passes the
 # promoted `memex-portal-ai:<version>`; node repos pass nothing — they do not define a platform
@@ -129,13 +134,17 @@ fi
 # PRESENCE means "every bundle of this publication landed", because it is uploaded strictly LAST.
 # Its content lists the bundle set, so the reader can detect a listed-but-missing bundle too.
 #
-# 🚨 The local copy lives in a temp DIRECTORY under its REAL name, and the upload below targets
-# the destination DIRECTORY (not "$dest/$SENTINEL"): `az storage file upload` silently treats an
-# EXTENSIONLESS --path as a directory and appends the source basename — so uploading a mktemp
-# file to "$dest/_complete" actually attempts "$dest/_complete/tmp.XXXX" and fails
-# `ParentNotFound` every time, while every ".zip" beside it lands fine. Verified live against the
-# portals' Azure Files share 2026-08-17; with the naive shape the seal step can never succeed and
-# every publication stays torn (unreadable to portals) forever.
+# 🚨 The local copy lives in a temp DIRECTORY under its REAL name. That used to be forced by the
+# CLI: `az storage file upload` silently treats an EXTENSIONLESS --path as a directory and appends
+# the source basename — so uploading a mktemp file to "$dest/_complete" actually attempts
+# "$dest/_complete/tmp.XXXX" and fails `ParentNotFound` every time, while every ".zip" beside it
+# lands fine. Verified live against the portals' Azure Files share 2026-08-17; with the naive
+# shape the seal step can never succeed and every publication stays torn (unreadable to portals)
+# forever. The publication's files and the sentinel now go through the SDK helper, which
+# addresses the exact path and has no such rule — but the two `az` uploads that remain (the
+# release marker and the architecture backfill) still pass the DIRECTORY as --path for this
+# reason, and the real-name convention is kept for all of them so no reader has to know which
+# uploader a file took.
 SENTINEL="_complete"
 
 # ══════════════════════ THE PUBLICATION LAYOUT SELECTOR (MeshWeaver#3461) ══════════════════════
@@ -239,8 +248,9 @@ printf '%s\n' "${SOURCE_SHA:-unknown}" > "$SOURCE_MARKER_LOCAL"
 # attribute a sealed source to the repository whose green builds it receives, so its sync sources
 # advance only to the commit sealed for its own identity (SealedPublicationIndex / SealedSyncGate
 # in core). A local run records nothing rather than a guess; the gate attributes such a seal by
-# commit instead. Listed and uploaded BEFORE architecture.txt, which stays the LAST upload before
-# the postcondition — the overlap harness hooks its second publisher onto that file.
+# commit instead. Planned BEFORE architecture.txt, which stays the LAST entry of the upload plan
+# — the overlap harness runs the plan with a pool of 1 and hooks its second publisher onto that
+# file.
 #
 # 🚨 It is the CONTENT repository, NEVER $GITHUB_REPOSITORY (MeshWeaver#3583). The two differ in
 # exactly the case the marker exists for: core CD's `plugins-bake` bakes MeshWeaver.Plugins content
@@ -387,10 +397,11 @@ fi
 # `plugins` prefix in ONE change set because it is the only one with two producers.
 # Doc/Architecture/SealedPublicationGenerations carries the table and the ordered phases.
 #
-# Cost: one `az storage file show` per published file per target, at seal time — measured against
-# the ~43-file publication these lanes produce, ~1s each. That is the price of the assertion and it
-# is deliberately paid in full: verifying a SAMPLE would be a guard that passes on the files nobody
-# overwrote.
+# Cost: every published file is read back per target, at seal time — deliberately paid in full:
+# verifying a SAMPLE would be a guard that passes on the files nobody overwrote. What changed on
+# 2026-09-08 is HOW it is paid — see THE BULK PHASES just below. It used to be one `az storage
+# file show` process per file (~1–3 s each, 46 per target, on top of 46 upload processes), which
+# made this step 5–10 minutes of a bake whose compile is ~7; it is now one process per phase.
 sha256_of() { # <file> — hex digest, portable across the CI runner and a developer's macOS
   if command -v sha256sum > /dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -399,53 +410,109 @@ sha256_of() { # <file> — hex digest, portable across the CI runner and a devel
   fi
 }
 
-# 🚨 THE RENDERING IS MEASURED, NOT ASSUMED, and getting it wrong is silent. knack's `format_tsv`
-# treats a TOP-LEVEL list as ROWS: `--query "[a, b]" -o tsv` prints a's value and b's value on TWO
-# LINES, not as two columns — so `awk '{print $2}'` would read EMPTY for every file, every owner
-# would compare unequal to $PUBLICATION, `ours` would be 0 on every publish and the postcondition
-# would refuse EVERY publication in the fleet as "superseded". Hence a list-of-ONE-ROW: `[[a, b]]`
-# renders one tab-separated line. The `|| '-'` guards exist because a null field renders as the
-# LITERAL STRING 'None', not as empty. Both measured against azure-cli 2.90.0's own jmespath +
-# knack formatter, and re-asserted with the real jmespath engine by test-publish-bake-overlap.py.
-STAMP_QUERY="[[metadata.digest || '-', metadata.publication || '-']]"
+# ═══════════════════════════════ THE BULK PHASES (2026-09-08) ═══════════════════════════════
+#
+# Maintainer directive, after asking why the bake queue runs so slowly: "how many are there? this
+# must be one bulk query ==> optimize this to one bulk query". Measured: a 46-file publication was
+# 46 `az storage file upload` launches and 46 `az storage file show` launches PER TARGET — 184 CLI
+# processes for two targets, 1–3 s each, so this step took 5–10 minutes of a bake whose compile is
+# ~7 minutes. Each launch paid the CLI's start-up, a fresh token lookup and a new connection for
+# ONE request.
+#
+# publish-bake-files.py (beside this file, fetched at the same platform-ref) now does each phase
+# in ONE process per target on the Azure SDK: `upload` pushes every file of the plan through a
+# bounded thread pool with the two metadata stamps, and `verify` lists the destination ONCE and
+# reads every manifest file's properties in the same process over one connection pool, printing
+# one TSV row per file that the accounting below consumes. 🚨 The listing cannot carry the stamps
+# — Azure Files' List Directories and Files returns names and sizes, never metadata — so the
+# per-file property read inside one process IS the bulk read; the helper prints the elapsed time
+# so the cost stays measured. Every verdict, bucket and refusal below is UNCHANGED: only the input
+# source of the sweep moved.
+#
+# 🚨 THE SDK IS INSTALLED HERE, PINNED, AND NOT BY THE WORKFLOW. Satellites fetch this script at
+# `platform-ref` but run the lane at their `uses:` pin, and the two move independently (the
+# EXT_MODULES_DIR refusal above is that exact skew) — a workflow-side install would leave a
+# satellite whose ref is newer than its pin running a script whose dependency nobody installed.
+# The venv lands under $RUNNER_TEMP (the runner's own scratch, cleaned per job) and the install
+# is followed by `sdk-check`, which asserts the installed versions ARE the pins and constructs the
+# clients — the positive signal, so a broken install is RED here and never a later "unreadable".
+# PUBLISH_BAKE_PYTHON names a python that ALREADY carries exactly these pins (the overlap harness
+# passes its own, so twenty publications do not build twenty venvs); sdk-check holds it to the
+# same pins. There is no fallback to the per-file CLI path: that is the defect this replaces.
+HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/publish-bake-files.py"
+if [ ! -f "$HELPER" ]; then
+  echo "::error::$HELPER is missing beside publish-bake-bundles.sh — the two are fetched together at platform-ref; a checkout that carries one without the other cannot publish."
+  exit 1
+fi
+SDK_PINS=("azure-storage-file-share==12.26.0" "azure-identity==1.25.3")
+if [ -n "${PUBLISH_BAKE_PYTHON:-}" ]; then
+  PYTHON="$PUBLISH_BAKE_PYTHON"
+else
+  VENV="${RUNNER_TEMP:-$SENTINEL_LOCAL_DIR}/publish-bake-venv"
+  python3 -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet --disable-pip-version-check "${SDK_PINS[@]}"
+  PYTHON="$VENV/bin/python"
+fi
+"$PYTHON" "$HELPER" sdk-check --pins "${SDK_PINS[*]}"
+# The pool width for both phases. 12 is plenty for ~46 small files and well under the share's
+# per-client request limits; the harness sets 1 so the plan order is the upload order.
+PUBLISH_BAKE_UPLOAD_WORKERS="${PUBLISH_BAKE_UPLOAD_WORKERS:-12}"
 
-# The ONE read-back, in one place. Both the per-file verification sweep and the sentinel check the
-# convergence verdict makes parse the SAME rendering, so a query change cannot leave one of them
-# reading a shape the other no longer produces. Answers through globals rather than stdout: an
-# `::error::` written inside a command substitution would be CAPTURED instead of reaching the log.
+# The ONE parse of a read-back row, in one place. Both the per-file verification sweep and the
+# sentinel check the convergence verdict makes parse the SAME rendering, so a helper change cannot
+# leave one of them reading a shape the other no longer produces. Answers through globals rather
+# than stdout: an `::error::` written inside a command substitution would be CAPTURED instead of
+# reaching the log.
 #
-#   rc 0  STAMP_DIGEST / STAMP_OWNER hold the values ('' where az rendered '-')
-#   rc 1  unreadable — a transient fault, an expired credential, or the file is simply not there
-#   rc 2  the CLI's rendering changed; STAMP_RAW/STAMP_FIELDS say what came back
+# A row is `<path> <state> <digest> <publication> <length>`, tab-separated, and the field count is
+# ASSERTED rather than trusted — the helper's `-` for an absent value is what lets an empty digest
+# be told from a missing column. If that rendering ever changes this is a loud refusal on the next
+# publish instead of a fleet-wide false verdict (the first draft of the CLI-based read used a
+# `--query` shape that rendered two LINES instead of two columns, which would have refused every
+# publication in the fleet as "superseded").
 #
-# 🚨 `< /dev/null` because the sweep below runs this INSIDE a `while read` loop fed by the
-# manifest: a command that consumed stdin would swallow the remaining lines and the loop would end
-# early, having verified a PREFIX of the publication while reporting no foreign bytes at all.
+#   rc 0  STAMP_DIGEST / STAMP_OWNER hold the values ('' where the helper rendered '-')
+#   rc 1  unreadable — the helper could not read the file (state error/absent), or no row at all
+#   rc 2  the rendering changed; STAMP_RAW/STAMP_FIELDS say what came back
 STAMP_DIGEST=""
 STAMP_OWNER=""
 STAMP_RAW=""
 STAMP_FIELDS=0
-read_stamp() { # <account> <share> <path>
-  local account="$1" share="$2" path="$3" props fields
-  STAMP_DIGEST=""; STAMP_OWNER=""; STAMP_RAW=""; STAMP_FIELDS=0
-  if ! props=$(az storage file show --account-name "$account" --share-name "$share" \
-      --path "$path" --auth-mode login --backup-intent \
-      --query "$STAMP_QUERY" -o tsv --only-show-errors < /dev/null); then
+STAMP_STATE=""
+read_stamp_row() { # <row>
+  local props="$1" fields
+  STAMP_DIGEST=""; STAMP_OWNER=""; STAMP_RAW="$props"; STAMP_FIELDS=0; STAMP_STATE=""
+  if [ -z "$props" ]; then
     return 1
   fi
-  STAMP_RAW="$props"
   fields=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print NF }')
   STAMP_FIELDS="${fields:-0}"
-  # The field count is ASSERTED rather than trusted: if that rendering ever changes, this is a loud
-  # refusal on the next publish instead of a fleet-wide false verdict.
-  if [ "$STAMP_FIELDS" -ne 2 ]; then
+  if [ "$STAMP_FIELDS" -ne 5 ]; then
     return 2
   fi
-  STAMP_DIGEST=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $1 }')
-  STAMP_OWNER=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $2 }')
+  STAMP_STATE=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $2 }')
+  case "$STAMP_STATE" in
+    ok) ;;
+    absent|error) return 1 ;;
+    *) return 2 ;;
+  esac
+  STAMP_DIGEST=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $3 }')
+  STAMP_OWNER=$(printf '%s' "$props" | awk -F'\t' 'NR == 1 { print $4 }')
   if [ "$STAMP_DIGEST" = "-" ]; then STAMP_DIGEST=""; fi
   if [ "$STAMP_OWNER" = "-" ]; then STAMP_OWNER=""; fi
   return 0
+}
+# ONE file, read now — used by the convergence verdict for the sentinel, AFTER the sweep, so a
+# sibling that sealed while the sweep ran is seen. `< /dev/null` is discipline kept from when this
+# ran inside the manifest loop: a command that consumed stdin there would have ended the loop
+# early, having verified a PREFIX of the publication.
+read_stamp() { # <account> <share> <path>
+  local account="$1" share="$2" path="$3" props
+  if ! props=$("$PYTHON" "$HELPER" stamp --account "$account" --share "$share" --path "$path" < /dev/null); then
+    STAMP_DIGEST=""; STAMP_OWNER=""; STAMP_RAW=""; STAMP_FIELDS=0; STAMP_STATE=""
+    return 1
+  fi
+  read_stamp_row "$props"
 }
 
 # 🚨 THE POINTER RESOLUTION, AND IT MIRRORS THE READER'S EXACTLY — same rules, same fallbacks, same
@@ -571,20 +638,42 @@ $1
 }
 echo "publication $PUBLICATION: $MANIFEST_COUNT file(s) to publish and verify per target (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), $MARKER_COUNT marker/index file(s)$([ "$HAS_SURFACE" = "true" ] && echo ", surface published" || echo ", NO platform surface"))"
 
-# Uploads ONE file of the publication, stamped with the two metadata values the postcondition
-# reads back. The digest is LOOKED UP from the manifest rather than recomputed: a file uploaded
-# that the manifest does not describe would be published and never verified, so that is fatal
-# rather than a fresh digest.
-upload_published_file() { # <account> <share> <dest> <path-under-dest> <local-file> [<upload-path>]
-  local account="$1" share="$2" dest="$3" rel="$4" src="$5" upload_path="${6:-$3/$4}" digest
+# The upload PLAN: "<path-under-dest><TAB><local-file><TAB><sha256>", one line per file, in the
+# order the files used to be uploaded one by one — bundles, modules, modules/_index, the markers,
+# architecture.txt last. Built ONCE like the manifest (the local bytes are the same for every
+# target) and handed to the helper, which uploads it in one process. The digest is LOOKED UP from
+# the manifest rather than recomputed: a file planned that the manifest does not describe would be
+# published and never verified, so that is fatal rather than a fresh digest.
+PLAN="$SENTINEL_LOCAL_DIR/plan"
+: > "$PLAN"
+plan_add() { # <path-under-dest> <local-file>
+  local rel="$1" src="$2" digest
   digest=$(awk -F'\t' -v k="$rel" '$1 == k { print $2; found = 1 } END { exit !found }' "$MANIFEST") || {
     echo "::error::'$rel' is being uploaded but the publication manifest does not describe it — it would be published and never verified. This is a bug in this script, not in the bake."
     exit 1
   }
-  az storage file upload --account-name "$account" --share-name "$share" \
-    --path "$upload_path" --source "$src" \
-    --metadata "digest=$digest" "publication=$PUBLICATION" \
-    --auth-mode login --backup-intent --only-show-errors > /dev/null
+  printf '%s\t%s\t%s\n' "$rel" "$src" "$digest" >> "$PLAN"
+}
+for zip in "${BUNDLES[@]}"; do plan_add "$(basename "$zip")" "$zip"; done
+for m in ${MODULES[@]+"${MODULES[@]}"}; do plan_add "$MODULES_DIR_NAME/$(basename "$m")" "$m"; done
+plan_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
+plan_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
+if [ "$HAS_SURFACE" = "true" ]; then plan_add "$SURFACE_FILE" "$SURFACE_LOCAL"; fi
+plan_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
+plan_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
+PLAN_COUNT=$(grep -c '[^[:space:]]' "$PLAN" || true)
+if [ "${PLAN_COUNT:-0}" -ne "$MANIFEST_COUNT" ]; then
+  echo "::error::the upload plan holds $PLAN_COUNT file(s) but the manifest describes $MANIFEST_COUNT — the two are built from the same lists, so this is a bug in this script. Refusing: a file in one and not the other is either unpublished or unverified."
+  exit 1
+fi
+
+# Uploads a whole plan — every file stamped with the two metadata values the postcondition reads
+# back — in ONE helper process per target. Fatal on any failure: the helper cancels what is
+# pending, names the file on stderr, and the directory stays sentinel-less.
+upload_plan() { # <account> <share> <dest> <plan-file>
+  local account="$1" share="$2" dest="$3" plan="$4"
+  "$PYTHON" "$HELPER" upload --account "$account" --share "$share" --dest "$dest" \
+    --plan "$plan" --publication "$PUBLICATION" --workers "$PUBLISH_BAKE_UPLOAD_WORKERS" < /dev/null
 }
 
 # Removes a seal that is known to cover a MIX. Called only from the mixed verdict below, and it
@@ -716,24 +805,41 @@ converged_on_equivalent() { # <account> <share> <dest> <foreign-markers> <neutra
 # core lane deleted the satellite's seal.
 verify_publication() { # <account> <share> <dest>
   local account="$1" share="$2" dest="$3" rel expected actual owner rc ours=0 neutral=0
-  local foreign_markers=0 neutral_markers=0 foreign_owners=""
+  local foreign_markers=0 neutral_markers=0 foreign_owners="" table row rows
   local -a foreign=() unreadable=() overlapped=()
+  # THE ONE READ-BACK per target: the helper lists the directory once and reads every manifest
+  # file's stamps in one process, one row per file. A sweep that cannot run at all (a listing that
+  # fails, a credential that expired) leaves the verdict undecidable and is refused like an
+  # unreadable file — never read as "nothing foreign".
+  table="$SENTINEL_LOCAL_DIR/verify-$(printf '%s' "$account-$share-$dest" | tr -c 'A-Za-z0-9._-' '_')"
+  if ! "$PYTHON" "$HELPER" verify --account "$account" --share "$share" --dest "$dest" \
+      --manifest "$MANIFEST" --workers "$PUBLISH_BAKE_UPLOAD_WORKERS" < /dev/null > "$table"; then
+    echo "::error title=Refusing to seal — the publication could not be read back::$account/$share/$dest: the read-back sweep itself failed (see the helper's ::error:: above), so whether this directory holds one publication or two cannot be established. Refusing rather than assuming — that assumption is what would seal a mix."
+    return 1
+  fi
+  rows=$(grep -c '[^[:space:]]' "$table" || true)
+  if [ "${rows:-0}" -ne "$MANIFEST_COUNT" ]; then
+    echo "::error title=Refusing to seal — the verification did not cover the publication::$account/$share/$dest: the read-back answered ${rows:-0} row(s) for a manifest of $MANIFEST_COUNT file(s). A sweep that reports on fewer files than it was asked about has NOT shown this publication to be free of another publisher's bytes. Refusing."
+    return 1
+  fi
   while IFS=$'\t' read -r rel expected; do
     [ -n "$rel" ] || continue
-    # 🚨 FAIL CLOSED. `|| echo ""` on the read would turn a transient fault, an expired credential
-    # or a CLI shape change into "no digest recorded" — the one answer that is indistinguishable
-    # from "another publisher wrote this", and the errors below would then name the wrong cause.
-    # An unreadable file is refused as loudly as a foreign one; it is simply refused by name. The
-    # accounting assertion after the loop is the belt to `read_stamp`'s `< /dev/null` brace.
+    # 🚨 FAIL CLOSED. A transient fault, an expired credential or a helper shape change must never
+    # read as "no digest recorded" — the one answer that is indistinguishable from "another
+    # publisher wrote this", and the errors below would then name the wrong cause. An unreadable
+    # file is refused as loudly as a foreign one; it is simply refused by name. Nothing inside this
+    # loop runs a command that could consume its stdin, and the accounting assertion after it is
+    # the belt to that.
     rc=0
-    read_stamp "$account" "$share" "$dest/$rel" || rc=$?
+    row=$(awk -F'\t' -v k="$dest/$rel" '$1 == k { print; exit }' "$table")
+    read_stamp_row "$row" || rc=$?
     if [ "$rc" -eq 1 ]; then
-      unreadable+=("$rel")
+      unreadable+=("$rel (${STAMP_STATE:-no row in the read-back table})")
       continue
     fi
     if [ "$rc" -ne 0 ]; then
-      echo "::error::az answered '$STAMP_RAW' for $dest/$rel — one tab-separated row of TWO fields was expected from --query \"$STAMP_QUERY\" -o tsv. The CLI's rendering has changed; this verification cannot be trusted until the parse is updated to match."
-      unreadable+=("$rel (unexpected --query rendering: $STAMP_FIELDS field(s))")
+      echo "::error::the read-back answered '$STAMP_RAW' for $dest/$rel — one tab-separated row of FIVE fields (path, state, digest, publication, length) with state ok/absent/error was expected from publish-bake-files.py verify. The rendering has changed; this verification cannot be trusted until the parse is updated to match."
+      unreadable+=("$rel (unexpected read-back rendering: $STAMP_FIELDS field(s), state '${STAMP_STATE:-}')")
       continue
     fi
     actual="$STAMP_DIGEST"
@@ -778,7 +884,8 @@ verify_publication() { # <account> <share> <dest>
   # cannot fail by inspection — which is precisely why it is checked: the loop is fed by a
   # redirect, so anything inside it that consumed stdin would end it EARLY, and a verification that
   # covered the first few files would then report "no foreign bytes" and SEAL. A guard that can
-  # quietly check less than it claims is the vacuity every gate here is written to avoid.
+  # quietly check less than it claims is the vacuity every gate here is written to avoid. (The
+  # row-count assertion above is the same check on the helper's side of the table.)
   local accounted=$((ours + neutral + ${#foreign[@]} + ${#unreadable[@]}))
   if [ "$accounted" -ne "$MANIFEST_COUNT" ]; then
     echo "::error title=Refusing to seal — the verification did not cover the publication::$account/$share/$dest: $accounted of $MANIFEST_COUNT file(s) were accounted for ($ours ours, $neutral byte-identical, ${#foreign[@]} foreign, ${#unreadable[@]} unreadable). The read-back loop ended early, so this publication has NOT been shown to be free of another publisher's bytes. Refusing."
@@ -889,7 +996,6 @@ publish_release_marker() { # <account> <share> <base>
 
 publish_one_target() { # <account> <share> <dest-dir> <resealing>
   local account="$1" share="$2" dest="$3" resealing="$4"
-  ensure_directory "$account" "$share" "$dest"
   # Republishing OVER a sealed directory: UNSEAL first. Readers must never seed a mid-replace
   # mix of old and new bundles under a stale sentinel — deleting the sentinel returns the
   # directory to the not-yet-complete state readers skip, and the re-seal below closes it again.
@@ -898,36 +1004,14 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
       --path "$dest/$SENTINEL" --auth-mode login --backup-intent --only-show-errors > /dev/null
     echo "unsealed: $account/$share/$dest ($SENTINEL removed — content changed, republishing)"
   fi
-  local zip
-  for zip in "${BUNDLES[@]}"; do
-    upload_published_file "$account" "$share" "$dest" "$(basename "$zip")" "$zip"
-    echo "published: $account/$share/$dest/$(basename "$zip")"
-  done
-  # The module set: every bundle, then its index — both strictly before the sentinel.
-  ensure_directory "$account" "$share" "$dest/$MODULES_DIR_NAME"
-  local m
-  for m in ${MODULES[@]+"${MODULES[@]}"}; do
-    upload_published_file "$account" "$share" "$dest" \
-      "$MODULES_DIR_NAME/$(basename "$m")" "$m"
-    echo "published module: $account/$share/$dest/$MODULES_DIR_NAME/$(basename "$m")"
-  done
-  upload_published_file "$account" "$share" "$dest" \
-    "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL" "$dest/$MODULES_DIR_NAME"
-  echo "module set: $account/$share/$dest/$MODULES_DIR_NAME/$MODULES_INDEX (${#MODULES[@]} bundle(s))"
-  # 🚨 Both marker uploads pass the DIRECTORY as --path on purpose — the CLI appends the source
-  # basename. An extensionless "$dest/$SENTINEL" --path would be silently re-interpreted as a
-  # DIRECTORY and fail ParentNotFound (see the SENTINEL_LOCAL comment above).
-  upload_published_file "$account" "$share" "$dest" "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL" "$dest"
-  # The platform surface (#3651) — before repository.txt and architecture.txt, which stay the last
-  # uploads before the postcondition (the overlap harness hooks its second publisher onto them).
-  # A ".json" --path is a FILE to the CLI, so the full path is passed; the directory trick the
-  # extensionless markers need does not apply here.
-  if [ "$HAS_SURFACE" = "true" ]; then
-    upload_published_file "$account" "$share" "$dest" "$SURFACE_FILE" "$SURFACE_LOCAL"
-    echo "published surface: $account/$share/$dest/$SURFACE_FILE"
-  fi
-  upload_published_file "$account" "$share" "$dest" "$REPO_MARKER" "$REPO_MARKER_LOCAL" "$dest"
-  upload_published_file "$account" "$share" "$dest" "$ARCH_MARKER" "$ARCH_MARKER_LOCAL" "$dest"
+  # THE WHOLE PUBLICATION IN ONE PROCESS: every bundle, every module, modules/_index, the markers
+  # and the platform surface — the plan built above, in the order they used to go one by one
+  # (architecture.txt last; the overlap harness hooks its second publisher onto that order with a
+  # pool of 1). The helper creates $dest and $dest/modules first. Every one of these files is
+  # strictly BEFORE the sentinel, which is a separate call after the postcondition; the reader
+  # contract needs no other ordering. `set -e` stops here on a failed upload, exactly as before.
+  upload_plan "$account" "$share" "$dest" "$PLAN"
+  echo "module set: $account/$share/$dest/$MODULES_DIR_NAME/$MODULES_INDEX (${#MODULES[@]} bundle(s)); platform surface: $HAS_SURFACE"
   # 🚨 THE POSTCONDITION, between the last content upload and the seal (MeshWeaver#3461). Every
   # file above is read back and must still carry THIS run's digest; a foreign publisher that
   # overwrote any of them makes this refuse, and the directory stays sentinel-less rather than
@@ -948,11 +1032,11 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
     exit 1
   fi
   # LAST write — the atomic completeness marker. Anything that dies before this line leaves the
-  # directory sentinel-less: unreadable to portals, re-published wholesale by the next run.
-  az storage file upload --account-name "$account" --share-name "$share" \
-    --path "$dest" --source "$SENTINEL_LOCAL" \
-    --metadata "digest=$(sha256_of "$SENTINEL_LOCAL")" "publication=$PUBLICATION" \
-    --auth-mode login --backup-intent --only-show-errors > /dev/null
+  # directory sentinel-less: unreadable to portals, re-published wholesale by the next run. A
+  # one-line plan through the same uploader, stamped like every other file (the convergence
+  # verdict reads the sentinel's digest and token on the next overlapping run).
+  printf '%s\t%s\t%s\n' "$SENTINEL" "$SENTINEL_LOCAL" "$(sha256_of "$SENTINEL_LOCAL")" > "$SENTINEL_LOCAL_DIR/seal-plan"
+  upload_plan "$account" "$share" "$dest" "$SENTINEL_LOCAL_DIR/seal-plan"
   echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown}, platform surface: $HAS_SURFACE)"
 }
 
@@ -1139,7 +1223,7 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       # be carried out. Stamping is safe precisely because the refusal below is sound: only the
       # amd64 lane has ever published, and this IS that lane.
       #
-      # 🚨 Deliberately NOT `upload_published_file`: this writes onto a publication that is NOT
+      # 🚨 Deliberately NOT the stamped uploader (`upload_plan`): this writes onto a publication that is NOT
       # this run's, so stamping it with this run's `publication` token would be a lie — a later
       # verification would read one of somebody else's files as ours. It is safe to leave
       # unstamped because it only ever runs on a directory that IS sealed (`complete = true`), and

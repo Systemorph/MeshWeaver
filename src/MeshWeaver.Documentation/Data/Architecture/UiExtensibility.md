@@ -68,10 +68,36 @@ line.
 
 Two load-bearing rules for pack authors:
 
-1. **Register before `AddBlazor()`.** View maps are first-match-wins and the core registry's
-   default mapping is currently terminal (its fallback never declines), so a pack registered after
-   the core mapping is silently dead. The portal's composition does this correctly today; treat it
-   as a contract until the planned explicit-priority fix lands.
+1. **Decline what you do not know — return `null`, never throw and never a fallback.** View maps
+   are first-match-wins in registration order, and the escaped-HTML last resort lives OUTSIDE that
+   list (`WithFallbackView`, set once by the host), so order is no longer load-bearing: a map that
+   declines lets every later pack be consulted, and only after all of them declined does the
+   fallback render. A map that answers for a control it does not own — or throws, which the old
+   terminal arm did — silently replaces every pack registered after it.
+
+   **Reading the fallback warning.** That last resort is the one place a control silently turns
+   into text (`StackControl { Id = , Style = … }` on screen), so `LayoutClientConfiguration` logs
+   it once per control type per hub, at Warning, on the channel
+   `MeshWeaver.Layout.Client.ViewDispatch`:
+
+   ```
+   no view map accepted StackControl ($type StackControl, skins [LayoutStackSkin]) in area Workspace
+   on hub mesh/memex: 3 map(s) registered [MeshWeaver.Blazor.Views:AddDefaultViews, …] — falling
+   back to the last-resort view (escaped HTML in the Blazor portal)
+   ```
+
+   Read it from the tail. `0 map(s) registered — no view pack applied its HubConfigurations to this
+   hub` means the packs never reached the hub the page renders on (the hub address says which one
+   was asked — the Blazor renderer resolves `ILayoutClient` from the per-circuit `portal/<id>` hub,
+   whose container is a child scope of the mesh hub's, so an address of `mesh/…` here says the
+   root hub's configuration answered). A list of owners means the packs DID register and each one
+   declined: the owners are recorded at `WithView` time as `Assembly:Method` (`ViewMapOwners`), so a
+   pack missing from the list never registered, and a pack present in it declined this control —
+   check its skin arm. A control or skin printed as `LayoutStackSkin@MeshWeaver.Layout[…]` names an
+   assembly or load context other than the framework's: the same-named-type trap, where every
+   pattern match on the real type declines the copy. The Blazor portal pairs the line with an
+   Information entry from `DispatchView` (`Rendering Area … through the escaped-HTML fallback`) and
+   a `view_packs` health check that reports the same owner list for the root hub.
 2. **Never ship copies of contract assemblies.** The pack compiles against the host's
    `MeshWeaver.Layout` / `MeshWeaver.Blazor` and binds to them at load time. A same-named type from
    a second copy is the platform's documented trap-door class — values silently read as absent.

@@ -168,9 +168,11 @@ public static class DepsClosure
             universe);
     }
 
+    // ONE spelling of "the platform side owns this name", shared with the platform-shipped witness
+    // and with PublishedBundleCatalogue's sealed-set reading (#3732) — the three used to carry
+    // three copies of the same three lines.
     private static bool IsPlatform(string name) =>
-        name.StartsWith("MeshWeaver.", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(name, "MeshWeaver", StringComparison.OrdinalIgnoreCase);
+        MeshWeaver.Compiler.PlatformShippedAssemblies.IsPlatformAssemblyName(name);
 
     /// <summary>Transitive reachability over the dependency edges, from <paramref name="roots"/>
     /// inclusive — STOPPING at MeshWeaver.* nodes (collected separately, never walked: their

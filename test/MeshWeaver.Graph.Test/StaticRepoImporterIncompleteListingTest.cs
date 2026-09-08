@@ -131,4 +131,56 @@ public class StaticRepoImporterIncompleteListingTest
         public bool Versioned => false;
         public IReadOnlyList<MeshNode> EnumerateSourceNodes() => [];
     }
+
+    // ── The other half of #3589: DID THE RUN CONVERGE? ───────────────────────────────────────────
+    //
+    // The refusal above is the prune's premise. This is what the run has to RECORD about itself, and
+    // it is the half that decides whether the next run ever reaches the prune at all. The
+    // content-addressed marker at {Partition}/_Activity/import-{fingerprint} is read INSTEAD of the
+    // partition, so a run that left the partition unequal to the content that id names must not
+    // stamp it as a licence to skip. Four ways to leave it unequal — each one pinned below.
+
+    private static StaticRepoImportResult Result(
+        string outcome = "Imported", int preserved = 0, int failed = 0, bool pruneRefused = false) =>
+        new(Partition, "fp", outcome, Count: 1, Preserved: preserved)
+        {
+            Failed = failed,
+            PruneRefused = pruneRefused,
+        };
+
+    [Fact]
+    public void ACleanImport_Converged()
+        => Result().Converged.Should().BeTrue(
+            "nothing was kept back, nothing failed, and the prune was able to look — the partition "
+            + "now holds exactly the content the marker's id names, which is the only state that "
+            + "licenses the next run to skip reading it");
+
+    [Fact]
+    public void AnImportThatKeptNodesBack_DidNotConverge()
+        => Result(preserved: 5).Converged.Should().BeFalse(
+            "measured on memex.systemorph.com: the 2026-09-07 10:15Z Crm import kept back all five "
+            + "nodes the repository had deleted (\"kept 5 local change(s), pruned 0\") and stamped "
+            + "its marker Succeeded anyway. At 23:11Z the next sync read that marker, answered "
+            + "Skipped without reading the partition, and its unmeasured Preserved = 0 advanced "
+            + "LastSyncCommitSha to the branch head");
+
+    [Fact]
+    public void AnImportWhoseNodesDidNotAllLand_DidNotConverge()
+        => Result(outcome: "ImportedWithErrors", failed: 2).Converged.Should().BeFalse(
+            "a node that did not land is a node the partition does not hold — the same claim, and "
+            + "the same reason the sync baseline is held (#2229 item C)");
+
+    [Fact]
+    public void AnImportWhosePruneWasRefused_DidNotConverge()
+        => Result(pruneRefused: true).Converged.Should().BeFalse(
+            "🚨 the case the count alone cannot see: preserved is 0 and pruned is 0, but the prune "
+            + "never ran — the source listing came back truncated. \"Looked and found nothing\" and "
+            + "\"could not look\" read identically in every log, and only the second means the "
+            + "retired files are still there");
+
+    [Fact]
+    public void AFailedImport_DidNotConverge()
+        => Result(outcome: "Failed").Converged.Should().BeFalse(
+            "the whole import failed; it carries no per-file tally to read, so the outcome literal "
+            + "is still the signal for that one");
 }

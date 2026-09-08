@@ -41,7 +41,17 @@ spec:
         - name: "docker-auth"
           image: {{ $r.authImage | quote }}
           imagePullPolicy: "IfNotPresent"
-          args: ["/config/auth_config.yml"]
+          # glog (docker_auth's logger) writes Info to FILES inside the container and only ERROR to
+          # stderr, so with the image's own command a login — accepted or refused, and the labels
+          # a token was minted with — never reaches `kubectl logs` or Loki. -alsologtostderr=true
+          # keeps the files and copies every line to stderr; the ext_auth hook's own stderr rides
+          # along. Measured 2026-09-08: `docker logs` of 1.14.0 is EMPTY without it.
+          args: ["-alsologtostderr=true", "/config/auth_config.yml"]
+          env:
+            # Read by validate.sh (docker_auth execs the ext_auth hook with its own environment):
+            # the key→token exchange every non-publisher login is validated against.
+            - name: "MEMEX_VALIDATION_URL"
+              value: {{ $r.validationUrl | quote }}
           ports:
             - name: "http"
               protocol: "TCP"

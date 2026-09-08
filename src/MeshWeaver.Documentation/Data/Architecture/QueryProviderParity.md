@@ -185,6 +185,40 @@ also carries a `createdBy`; for any node type whose content does not, the same s
 empty. Fixing it is a MeshWeaver.Plugins change (widen `PropertyMap`), not a core one, and the
 corpus is the checklist.
 
+### The free-text divergence, and why it is not closable by widening a map
+
+Everything above is about **selectors**. The bare-text half of a query diverged too, and that one
+cannot be fixed by teaching one executor another column name — the two are answering genuinely
+different questions:
+
+| | `QueryEvaluator.GetFuzzyScore` (A) | Postgres (B) |
+|---|---|---|
+| free text | EVERY term must be a case-insensitive **substring** of the node's searchable text | **cosine distance** to the query's embedding, hybridised with a lexical tier |
+| a semantic neighbour sharing no literal token | no match | ranked in |
+| adding a word to the query | can only ever **narrow** | re-ranks |
+
+Before MeshWeaver.Plugins#1493 both were lexical and agreed. #1493 gave the unpinned fan-out a
+vector branch — and *that is what created the divergence*, because A is not dev-only: it is the
+live-query relevance gate on **every** backend. SQL ranked a row in; A, asked about the same row,
+said no; the change notification was dropped and the live query never re-read.
+
+🚨 **The direction is the dangerous one.** A stops the result set from ever updating, silently, on
+the exact queries the vector index was added to serve — and no test of the Initial read can see it.
+
+**A cannot be made to agree**, because it has no embeddings in memory and no business calling an
+embedding provider from a change-feed filter. So the resolution is not parity of *answers* but
+parity of *scope*: for a query that takes the semantic route, A is asked only the **structured**
+half (`parsed with { TextSearch = null }`) — the half both executors resolve identically — and the
+free-text half is dropped rather than answered wrongly. One predicate,
+`PostgreSqlPartitionedMeshQuery.TakesSemanticRoute`, is read by both the routing site and the gate,
+so the two cannot drift; a host with no embedding provider keeps the lexical contract on both sides.
+
+This is the general shape whenever B gains a capability A structurally lacks: **narrow what the
+weaker executor is asked, never let it veto on a question it cannot answer.** Erring toward an
+extra re-query is bounded; erring toward a veto drops rows and looks like an empty mesh.
+
+See [Vector Search](/Doc/Architecture/VectorSearch) for the routing and the no-provider fallback.
+
 ## A third resolver exists
 
 `MeshSearchView.razor.cs` (MeshWeaver.Plugins) carries its own private

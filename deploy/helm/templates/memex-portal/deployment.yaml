@@ -44,6 +44,14 @@ spec:
         # with the same values yields the same hash.
         checksum/config: {{ include (print $.Template.BasePath "/memex-portal/config.yaml") . | sha256sum }}
         checksum/secrets: {{ include (print $.Template.BasePath "/memex-portal/secrets.yaml") . | sha256sum }}
+{{- $bundles := include "memex.bundles" . | fromYaml }}
+{{- if $bundles.enabled }}
+        # The bundle-fetch init container's script (bundle-fetch.yaml): an edit to it must roll the
+        # pods for the same reason a config edit must — nothing re-runs an init container in place.
+        # Rendered only when bundles.registry is set, so an environment that has not opted in
+        # renders byte-identically.
+        checksum/bundle-fetch: {{ include (print $.Template.BasePath "/memex-portal/bundle-fetch.yaml") . | sha256sum }}
+{{- end }}
     spec:
       # The in-pod self-updater patches this deployment via the Kubernetes API using this SA's
       # projected token (RBAC in rbac.yaml). See Doc/Architecture/ReleaseStrategy.
@@ -83,6 +91,61 @@ spec:
             {{- $pgHost := .Values.postgres.enabled | ternary "memex-postgres-service" (.Values.config.memex_portal.MEMEX_HOST | default "memex-postgres-service") }}
             {{- $pgPort := .Values.postgres.enabled | ternary "5432" (.Values.config.memex_portal.MEMEX_PORT | default "5432") }}
             - "until nc -z {{ $pgHost }} {{ $pgPort }}; do echo 'waiting for postgres'; sleep 2; done"
+{{- if $bundles.enabled }}
+        # Bundle materialisation from the fleet registry (Doc/Architecture/PluginBundlesInTheRegistry,
+        # gated by the `memex.bundles` helper in _bundles.tpl): pulls the sealed publication of
+        # every source in bundles.sources for bundles.identity with ORAS into the directory the
+        # pre-warm reads (PreWarm__PrebuiltBundleRoot), as `<root>/<identity>/<source>/…` with
+        # `_complete` gating each source — the layout ShippedPrebuiltBundles reads from the share,
+        # byte for byte. The credential is the pod's imagePullSecret, mounted as a docker config:
+        # the key that pulls the platform image pulls the bundles. A missing tag is an UNSEALED
+        # publication: the container logs it, writes nothing for that source and exits 0 — the
+        # pre-warm compiles as it does today; any other failure exits 1 and holds the pod, because a
+        # fetch that could not complete must never read as "no bundles".
+        - name: "bundle-fetch"
+          image: {{ $bundles.image | quote }}
+          imagePullPolicy: "IfNotPresent"
+          command: ["/bin/sh", "/etc/memex/bundle-fetch.sh"]
+          env:
+            - name: "BUNDLES_REGISTRY"
+              value: {{ $bundles.registry | quote }}
+            - name: "BUNDLES_SOURCES"
+              value: {{ join " " $bundles.sources | quote }}
+            - name: "BUNDLES_ROOT"
+              value: {{ $bundles.root | quote }}
+{{- if $bundles.identity }}
+            - name: "BUNDLES_IDENTITY"
+              value: {{ $bundles.identity | quote }}
+{{- end }}
+{{- if $bundles.identityFile }}
+            - name: "BUNDLES_IDENTITY_FILE"
+              value: {{ $bundles.identityFile | quote }}
+{{- end }}
+            - name: "BUNDLES_REGISTRY_CONFIG"
+              value: "/run/secrets/registry/config.json"
+          volumeMounts:
+            - name: "memex-bundles"
+              mountPath: {{ $bundles.root | quote }}
+            - name: "bundle-fetch-script"
+              mountPath: "/etc/memex/bundle-fetch.sh"
+              subPath: "bundle-fetch.sh"
+              readOnly: true
+            - name: "registry-pull-config"
+              mountPath: "/run/secrets/registry"
+              readOnly: true
+{{- if $bundles.identityFile }}
+            # bundles.identityFile is read from the shared data volume: an identity written there
+            # by the deployment (a file, one line) is what the init container pulls for.
+            - name: "memex-data"
+              mountPath: "/data"
+              readOnly: true
+{{- end }}
+          resources:
+            {{- toYaml $bundles.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+{{- end }}
       containers:
         - image: "{{ .Values.portal.image }}"
           name: "memex-portal"
@@ -227,6 +290,14 @@ spec:
               mountPath: "/data"
             - name: "memex-users"
               mountPath: "/mnt/users"
+{{- if $bundles.enabled }}
+{{- /* The shelf the bundle-fetch init container filled, at the path the pre-warm reads
+       (PreWarm__PrebuiltBundleRoot). Mounted over whatever the data volume holds at that path, so
+       this pod reads exactly the publication it fetched for its own identity. */}}
+            - name: "memex-bundles"
+              mountPath: {{ $bundles.root | quote }}
+              readOnly: true
+{{- end }}
 {{- /* Local plugin-repo checkouts (dev only): lets pluginCatalog.sources point at a path INSIDE
        the container, so a local registry serves the node-native plugin repos with no GitHub
        credential. Read-only — the registry reads a checkout, it never writes one. */}}
@@ -463,6 +534,24 @@ spec:
             claimName: "{{ .Values.persistence.users.claimName }}"
 {{- else }}
           emptyDir: {}
+{{- end }}
+{{- if $bundles.enabled }}
+{{- /* Bundle materialisation (bundles.*, gated by _bundles.tpl): the shelf the init container
+       fills and the portal reads — per pod, so a pod always boots on the publication fetched for
+       its own image; its script; and the pod's pull secret projected as a docker config.json for
+       ORAS (`kubernetes.io/dockerconfigjson` keeps the config under the `.dockerconfigjson` key). */}}
+        - name: "memex-bundles"
+          emptyDir: {}
+        - name: "bundle-fetch-script"
+          configMap:
+            name: "memex-bundle-fetch"
+            defaultMode: 0444
+        - name: "registry-pull-config"
+          secret:
+            secretName: {{ $bundles.pullSecret | quote }}
+            items:
+              - key: ".dockerconfigjson"
+                path: "config.json"
 {{- end }}
 {{- /* Extra persistent volumes declared under .Values.persistence (content, attachments,
        workspace, …). Rendered between users and dumps so the historical volume order

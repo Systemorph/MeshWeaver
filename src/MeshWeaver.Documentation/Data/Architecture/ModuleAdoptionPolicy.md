@@ -31,7 +31,39 @@ Two lanes, two measurements, one fallback:
 
 - **Compiled modules** (`modules/<name>@<gen>/`): `ModulePlatformLink.Check` links the entry assembly's type references against the running platform's surface before any load; the load itself is the second measurement. A refusal names the missing type. This gate exists since core #3552 and is unchanged by the policy — the policy makes it the *only* gate.
 - **NodeType content** (`prebuilt-bundles/<identity>/<source>/`): a baked assembly is adopted only for the exact framework build identity it was baked against (`PrebuiltAssemblySeeder.DeclineReason`, ordinal equality). That is also unchanged — a mismatched bake would be worse than none. What changes is the consequence of *no* bake: **the content compiles in the mesh**, which is the same code path every pull request already proves green. A missing bake is a cost (boot time), not a reason to hold a roll. `Modules:RequirePrebuilt` remains the opt-in strict mode for installations that prefer a named park to a compile.
-- **Fallback**: when the newest generation of a module does not load, the previous generation that did is loaded instead, reported as such, and kept from garbage collection. Only when *no* generation loads is the module absent — and that is the readiness probe's business (the rollout stalls on the pod, the previous pods keep serving), which is the last safety net and the one that has never failed.
+- **Fallback**: when the newest generation of a module does not load, the previous generation that did is loaded instead, reported as such, and kept from garbage collection. When that one does not load either — or the installation holds none — and the **image ships a copy of the same module** (the `Modules:Assemblies` baseline entry the store generation displaced), the image's copy runs, reported as such ([#3735](https://github.com/Systemorph/MeshWeaver/issues/3735)). Only when *nothing* loads is the module absent — and that is the readiness probe's business (the rollout stalls on the pod, the previous pods keep serving), which is the last safety net and the one that has never failed.
+
+**"Loads" includes "installs".** A generation that is refused by the link probe, that faults in
+`Assembly.LoadFrom`, or whose provider attribute throws while its contributions are materialised
+has not loaded in the sense of R1 — it contributes nothing, and a module that contributes nothing
+is *worse* than one that is absent when it has displaced a copy that would have worked. The order
+of the fallback is fixed and every step is **measured by the same probe and load as the one
+before it**: the newest generation → the previous landed generation → the image-shipped copy →
+absent, reported. The one shape the order cannot reach is a generation whose assembly *loaded* and
+whose install then threw: the default load context holds one assembly per simple name, so neither
+the previous generation nor the image copy can be loaded beside it. That shape stays absent and
+reported, and the report names the image copy it could not substitute, so nobody reads the absence
+as "the image had nothing" (the mechanism is on
+[The Module Platform Link Gate](../ModulePlatformLinkGate)).
+
+The rule was measured against on 2026-09-08 (memex.systemorph.com, image `3.0.0-ci.8079`): the
+module set pinned a two-week-old store generation of `MeshWeaver.Blazor.Views`, an assembly the
+image also ships. The boot's link probe refused it correctly — it referenced
+`MeshWeaver.Graph.AnchoredComment`, a type the platform had since removed — but the boot union had
+already substituted the store entry in place of the baseline entry, so the image's copy was never
+tried, the module "contributed nothing", and every skinned control on the portal rendered through
+its fallback HTML. The probe was not the gap; the fallback order was, and this section is what
+closes it.
+
+🚨 **This is the CONSUMER half, and it masks the producer's defect rather than removing it.** A
+portal that falls back to the image copy renders correctly while its publication still carries two
+builds of one assembly name, so *"does it render"* is not evidence a bundle is clean. The producer
+half — a module bundle never carrying a `MeshWeaver.*` copy the platform already ships, measured off
+the image rather than declared in a list — is
+[The Platform-Shipped Witness](../PlatformShippedWitness), and it probes the same two locations
+`MeshBuilder.ResolveModulePath` does, on purpose. Two things this fallback cannot reach: a riding
+copy that *does* load shadows the image copy, so the fallback never runs; and the sealed-set
+conflict below still HOLDS the roll for the whole fleet whatever one process does at boot.
 
 ## What the platform roll gates on
 

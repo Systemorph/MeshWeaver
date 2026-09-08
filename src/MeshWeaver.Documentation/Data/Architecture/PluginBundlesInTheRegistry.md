@@ -26,10 +26,25 @@ represented as an **OCI image index** whose entries are the bundles:
 
 | object | OCI form | name |
 |---|---|---|
-| the publication | image index (`application/vnd.oci.image.index.v1+json`) | `cr.meshweaver.cloud/plugins/<source>`, tag `<identity>` |
-| one bundle | image manifest with two layers: `<package>.zip` (`application/vnd.meshweaver.bundle.v1.zip`) and `<package>.module.nupkg` (`application/vnd.meshweaver.module.v1.nupkg`, absent for a content-only package) | referenced from the index; also addressable as `cr.meshweaver.cloud/plugins/<source>/<package>` tag `<version>-<identity>` |
-| the sidecars | the index's config blob (`application/vnd.meshweaver.publication.v1+json`): `sourceCommit`, `repository`, `architecture`, `platformSurface` (the whole `platform-surface.json`), `modules` (the module index), `release` | on the index, never a separate object |
-| a release's identity | image manifest with an empty layer; config `{ "identity": "<identity>", "version": "<version>" }` | `cr.meshweaver.cloud/plugins/_releases`, tag `<version>` |
+| the publication | image index (`application/vnd.oci.image.index.v1+json`, `artifactType: application/vnd.meshweaver.publication.v1+json`) naming the sidecar manifest and every bundle manifest by digest | `cr.meshweaver.cloud/plugins/<source>`, tag `<identity>` (and an immutable `<identity>-<run>`) |
+| one bundle | image manifest (`artifactType: application/vnd.meshweaver.bundle.v1+json`) with two layers: `<package>.zip` (`application/vnd.meshweaver.bundle.v1.zip`) and `modules/<package>.module.nupkg` (`application/vnd.meshweaver.module.v1.nupkg`, absent for a content-only package), each titled with its publication-relative name | referenced from the index, resident in `plugins/<source>` by digest; also tagged as `cr.meshweaver.cloud/plugins/<source>/<package>`, tag `<identity>` |
+| the sidecars | one image manifest (`artifactType: application/vnd.meshweaver.publication.v1+json`) whose layers are EVERY file of the publication that is not a bundle or a module — `_complete`, `source-commit.txt`, `repository.txt`, `architecture.txt`, `platform-surface.json`, `modules/_index`, and any file a later publisher adds — each titled with its publication-relative name; its config blob (`application/vnd.meshweaver.publication.v1+json`) carries the facts: `identity`, `source`, `sourceCommit`, `repository`, `architecture`, `release`, `bundles` (`package`, `digest`, `module`), `files` | referenced from the index, resident in `plugins/<source>` by digest |
+| a release's identity | image manifest with no layer; config `{ "identity": "<identity>", "version": "<version>" }` (`application/vnd.meshweaver.release.v1+json`) | `cr.meshweaver.cloud/plugins/releases`, tag `<version>` |
+
+An OCI image index carries no config blob of its own, which is why the sidecars are a manifest
+the index names rather than a field on the index; and every name is in the registry's grammar —
+lowercase, a path component starting alphanumeric — so `<source>` and `<package>` are the
+publisher's names lowercased, and the release repository is `plugins/releases` (`_releases`,
+the share's directory name, is not a legal repository name and is refused by the registry and by
+ORAS alike). A source may therefore not be named `releases`. The sidecar layers are the whole
+reason a consumer needs no schema: `oras pull` of the index writes every titled layer of every
+manifest it names back under its title, so the layout on disk is the publication, byte for byte,
+and a sidecar added later lands without a change anywhere.
+
+Manifests carry `org.opencontainers.image.created` pinned to the epoch: a publication is
+content-addressed, and the wall clock would otherwise ride in the manifest bytes and give the
+same publication a new digest on every push. When it was pushed is what the `<identity>-<run>`
+tag and the registry's log record.
 
 🚨 **The framework identity is part of every name.** A bundle's `version` comes from
 `manifest.lock` and encodes content only; the same version rebuilt for another platform identity
@@ -60,7 +75,7 @@ assume "same commit ⇒ same digest".
 
 | consumer | pulls | credential | how |
 |---|---|---|---|
-| an installation's pre-warm (`ShippedPrebuiltBundles`) | the index for its own identity and each mounted source, materialised under `PreWarm:PrebuiltBundleRoot` in the layout it already reads | the pod's `imagePullSecrets` credential | an init container runs the fetch before the portal starts; the pre-warm keeps reading a filesystem, and needs no mesh and no network |
+| an installation's pre-warm (`ShippedPrebuiltBundles`) | the index for its own identity and each source in `bundles.sources`, materialised under `PreWarm:PrebuiltBundleRoot` in the layout it already reads | the pod's `imagePullSecrets` credential (`portal.imagePullSecret`), projected into the init container as a docker config | the `bundle-fetch` init container (`deploy/helm/files/bundle-fetch.sh`, rendered when `bundles.registry` is set) runs ORAS before the portal starts; the pre-warm keeps reading a filesystem, and needs no mesh and no network |
 | the Store, `RegistryUpdateReconciler`, `InstanceAutoRegistrationService` (a bundle adopted at runtime) | one bundle manifest by digest, named by the index's `artifact` (`cr.meshweaver.cloud/plugins/<source>/<package>@sha256:…`), then its `.zip` layer by digest | the instance credential `RegistryTokenResolver` already holds, presented at the registry's token realm as `Basic instance:<token>` | `PluginBundleClient` through `OciRegistryClient` (`MeshWeaver.PluginCatalog`, the same client `OciTagLister` lists image tags with) — the same landing path, entering `ModuleLandingService.LandCore`, gated by the `ModulePlatformLink` probe and the load; a bundle whose `artifact` is `null` takes the HTTP route |
 | `memex-local` and every self-hosted install | as above | the instance key in its manifest, projected as `ContainerRegistry:DockerConfigJson` (`{"auths":{"cr.meshweaver.cloud":{"auth":base64("instance:<key>")}}}`, emitted only when the key decrypts — core #3722) | no second credential |
 | satellite CI on `main` (`node-repo-gate`, `compose-sealed-modules`, `memex build plugin`) | the index and bundles for the pinned identity | the repository's instance key (`REGISTRY_KEY`) | ORAS |
@@ -70,31 +85,80 @@ The registry edge validates every login by exchanging the presented key at memex
 `POST /api/instances/token`; the durable key is on the wire once per token lifetime, exactly as
 for images, and a token lasts fifteen minutes.
 
+### The `bundle-fetch` init container
+
+The chart renders it on the portal pod when `bundles.registry` is set (`deploy/helm/values.yaml`,
+gated by `templates/memex-portal/_bundles.tpl`, which fails `helm template` naming any key a
+half-declared block lacks):
+
+| key | meaning |
+|---|---|
+| `bundles.registry` | the registry host (`cr.meshweaver.cloud`); empty renders nothing, so an environment that has not opted in renders byte-identically |
+| `bundles.sources` | the source names to materialise, as the publisher named them (`[plugins]`) |
+| `bundles.identity` / `bundles.identityFile` | the framework identity to pull — the value the bake lane prints as `baked identity:`, or a one-line file on the data volume the init container reads at run time. One of the two is required: the identity is computed by the portal from its surface manifests (`FrameworkBuildIdentity`) and is not a file inside the image, so nothing in the ORAS container can derive it |
+| `bundles.image` | the ORAS image, pinned by digest |
+| `bundles.root` | the directory it fills; defaults to `config.memex_portal.PreWarm__PrebuiltBundleRoot`, so the fetch lands exactly where the pre-warm looks |
+| `portal.imagePullSecret` | required when the registry is set: the `kubernetes.io/dockerconfigjson` Secret that pulls the platform image is mounted as ORAS's registry config, and there is no second credential |
+
+For each source it resolves `plugins/<source>:<identity>` to its digest, pulls that digest's whole
+graph into a staging directory (every bundle's `.zip` and `.module.nupkg`, every sidecar under
+the name its layer is titled with — a sidecar a later publisher adds lands without a chart
+change), checks `_complete` against what landed, and only then renames the staging directory
+into place as `<root>/<identity>/<source>/`, so the pre-warm sees the publication whole or not at
+all. An absent tag is an unsealed publication: one log line, nothing written for that source,
+exit 0 — the pre-warm compiles that source as it does today. Any other failure — a denied pull,
+a network error, a listed bundle that did not land — exits 1 and holds the pod, because a fetch
+that could not complete must never read as "no bundles". A stale `bundles.identity` after a roll
+that changed the image is inert: the pre-warm finds no directory for its own identity and
+compiles. The script's ConfigMap is hashed into the pod template, so an edit to it rolls the
+pods as an image change would.
+
 ## Authorization: memex decides, the edge enforces
 
 The catalog's rule is unchanged: a caller may take a package when a grant entry within its term
 names it and the instance's plan covers the package's tier. The registry edge enforces the same
 rule at pull time without knowing what a plan is:
 
-* On **authentication**, the auth server's external check exchanges the key at
-  `/api/instances/token` with no scope; a `200` authenticates, a `401` refuses.
-* On **authorization** of `plugins/<source>/<package>`, the external check exchanges the key
-  again with `scope: ["<source>/<package>"]`. memex answers `200` with the effective scope when
-  the licence covers it and `403` when it does not — the same predicate the catalog and the
-  bundle download apply, tiers included. `plugins/<source>` (the index) is authorized by
-  `scope: ["<source>/*"]`, which memex grants only to a plan-less whole-source entry, so a
-  plan-scoped holder cannot take a publication whole.
-* `plugins/_releases` is readable by every authenticated instance.
-* Push is the publisher account and nothing else.
+* On **authentication**, docker_auth's `ext_auth` hook (`deploy/helm/files/registry-validate.sh`,
+  rendered into the auth server's ConfigMap) exchanges the key at `/api/instances/token` with no
+  scope. A `200` authenticates; a `401` or `403` refuses; anything else — a timeout, a 5xx, a body
+  without a `scope` array — is an error (exit 3), never a pass and never a quiet refusal that
+  would read as "wrong key". The `scope` array the exchange answers — the caller's current
+  licence entries, `Plugins/*`, `Reinsurance/UWDeepfield`, `Plugins/*@pro` — becomes the token's
+  labels, in the registry's lowercase name grammar: `package` holds `<source>/<package>` per
+  entry (`<source>/*` for a whole-source one), `source` holds `<source>` for a plan-less
+  whole-source entry only.
+* On **authorization**, the static ACL (`templates/registry/configmap.yaml`) matches those
+  labels, first match wins: `plugins/${labels:package}` grants `pull` on the bundle repositories
+  `plugins/<source>/<package>`; `plugins/${labels:source}` grants `pull` on the publication index
+  `plugins/<source>` — so a plan-scoped `Source/*@plan` reaches its source's bundle repositories
+  and never the publication whole, which carries every plan's bundles; every other object under
+  `plugins/` is denied before the image rule can see it.
+* `plugins/releases` and every image repository (`memex-portal-ai`, `memex-migration`, …) are
+  readable by every authenticated account; anonymous matches no rule.
+* Push is the publisher account — the one static user, checked before the hook — and nothing
+  else.
 
-Every decision is memex's, made at the moment of the pull; revoking a grant or a key takes
-effect at the next token exchange.
+The labels are the only carrier, because docker_auth's `ext_authz` hook receives the request —
+account, type, name, actions, labels — and not the credential, so it cannot ask memex anything
+at pull time; and a label never carries the key, because docker_auth logs every token's labels.
+Which package a plan-scoped entry covers is decided where the package's tier is known — the
+catalog and the landing — and the edge grants the source's bundle repositories, nothing above
+them. Every decision is memex's, made at login; revoking a grant or a key takes effect at the
+next token exchange, within a token's fifteen minutes.
 
 ## Publishing
 
-The bake lane pushes the publication with ORAS as the publisher after the bake and the link gate:
-every bundle manifest by digest, then the index by digest, then the tag `<identity>` — the tag
-move is the seal. It records the index digest in the publication it registers at
+`.github/scripts/push-bundle-publication.sh --registry <host> --source <name> --identity <id>
+--dir <publication dir> [--tag-run <run>] [--release <version>]` pushes one sealed publication —
+the directory `publish-bake-bundles.sh` writes for one source and one identity — with ORAS as the
+publisher, in the order that is the seal: every bundle manifest, tagged `<identity>` in
+`plugins/<source>/<package>` and copied by digest into `plugins/<source>`; the sidecar manifest;
+the index by digest; then the tags, `<identity>-<run>` (immutable) and `<identity>` LAST — the
+tag move is the seal, and until it moves nothing above is visible under the tag. It refuses a
+directory without `_complete`, or with a listed bundle or module absent, before the first push,
+and prints the index digest and one `(package, digest)` line per bundle. The bake lane calls it
+after the bake and the link gate and records the index digest in the publication it registers at
 `Hosting/PlatformBuilds` (`register-publication`), so the sealed set is a list of
 `(package, digest)` pairs and the catalog index carries `artifact:
 cr.meshweaver.cloud/plugins/<source>/<package>@sha256:…` per package.
@@ -140,6 +204,11 @@ registration request that scripted callers send, the keyed lane staying as it is
   seeded set as from the share copy.
 * A bundle whose bytes do not pass the `ModulePlatformLink` probe at landing leaves the previous
   version running (continuity), never an absent module.
+* `.github/scripts/test-bundle-registry.py` (chart-gate's `Bundle registry scripts (executed)`
+  job) executes the publisher, the init container's script and the `ext_auth` hook against the
+  real distribution and docker_auth images with the ConfigMap the chart renders, and a stub of
+  the key exchange: the materialised layout is diffed byte for byte against the publication, and
+  every account in the licence matrix is asserted for what it may pull and what it may not.
 
 ## Related
 

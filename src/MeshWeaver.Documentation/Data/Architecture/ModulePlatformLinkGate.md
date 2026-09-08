@@ -178,8 +178,32 @@ the newest generation of every module that loads, and keeps the one it has until
   up. Only when neither loads is the module incompatible, exactly as before. A generation whose
   assembly *loaded* and whose registration then threw (#2234's shape) is never swapped: two
   assemblies of one simple name cannot coexist in the default load context.
+- **The image-shipped copy is the last step (MeshWeaver#3735).** When the previous generation
+  does not load either — or the entry holds none — and the module is one the IMAGE also ships
+  (a `Modules:Assemblies` baseline entry the landed store entry displaced), the loader tries the
+  image's copy through the same probe and load, and on success registers a `FallbackModule` with
+  `RunsImageBaseline` — stderr line `'<name>' runs the image-shipped baseline (<path>) because
+  v1.3.0 (gen B) cannot load here: …`, status row `runs the image-shipped baseline; v1.3.0 (gen
+  B) landed but does not load here: …`, and `@image` (`FallbackModule.ImageBaselineGeneration`)
+  as its running generation everywhere a generation is recorded. The boot union
+  (`ComputeEffectiveModuleEntries`) carries the displaced baseline entry on the effective module
+  (`EffectiveModule.BaselineEntry`) and the portal resolves it through
+  `MeshBuilder.ResolveModulePath` WITHOUT the module root — the image's own closure, never the
+  landed tree — onto `ModuleInstallCandidate.ImageBaseline`. Until this step existed the
+  substitution happened on the DLL's existence alone, before anything was measured, so a
+  refused store generation SHADOWED the image copy that loads by construction: on
+  memex.systemorph.com (2026-09-08, image `3.0.0-ci.8079`) a two-week-old store generation of
+  `MeshWeaver.Blazor.Views` was refused — `requires 'MeshWeaver.Graph.AnchoredComment
+  (MeshWeaver.Graph)'`, a type the platform had since removed — the entry held no previous
+  generation, the image's copy was never tried, and every skinned control on the portal rendered
+  its fallback HTML. The probe did its job; the fallback order was one step short. An image copy
+  that does not load either leaves the module incompatible, with BOTH reasons on the record; a
+  generation that LOADED and then failed to install is named on stderr as the shape the image
+  copy cannot rescue (one assembly per simple name), never left as an absence that reads like
+  "the image had nothing".
 - **The GC keeps it.** `CollectGarbage` references `PreviousDirectory` exactly like `Directory`,
-  and the running generations the adoption records (below).
+  and the running generations the adoption records (below). The `@image` stand-in matches no
+  directory by construction, so it reclaims nothing on its account.
 - **The set records what runs.** The wave still proposes the head generation; the adoption
   (`ModuleSetStore.RecordAdoption` with `RunningGenerationsOf(set, fallbacks)`) records the
   generation each module actually loaded, `ModuleSetIndex.RunningGenerations` /
@@ -289,6 +313,7 @@ one of these states was previously mis-rendered as "restart required":
 | `Deferred` | landed, but in no proposed module set | the landing wave must complete |
 | **`Quarantined`** | **refused: its bytes need a platform this deployment is not running** | **a platform update — which is itself the restart that loads it** |
 | **`Fallbacks`** (MeshWeaver#3649) | **present and running its PREVIOUS generation; the newest one landed but does not load here** | **none — a build that loads here, or a platform update, takes over by itself** |
+| **`Fallbacks`, `@image`** (MeshWeaver#3735) | **present and running the IMAGE-SHIPPED copy; no landed generation loads here** — the row reads *runs the image-shipped baseline; vX (gen) landed but does not load here: …* | **none — the same; the health check names it, and a restart measures the same bytes and falls back again** |
 
 A quarantined module must never be reported as pending. Its assembly genuinely is not loaded, so
 the pending derivation finds it — and a restart re-runs the same measurement on the same bytes and
@@ -327,7 +352,14 @@ a loadable generation is landed, a generation built for a newer platform is shel
 boot composed as the portal composes it runs the previous one and reports it; both generations
 unloadable stays incompatible; the GC keeps the fallback and reclaims it after an uninstall; the
 adoption records what loaded; the projection onto the mesh's set carries the pointer; the
-activation report names the row and never calls it "restart required".
+activation report names the row and never calls it "restart required". The `#3735` section of the
+same file proves the image-shipped step with the image copy resolved through the REAL baseline
+resolver: the only landed generation is refused and the image copy runs, reported, recorded as
+`@image` on the adoption, `Present` for `Modules:Required`, and named on the activation report;
+a previous generation is tried BEFORE the image copy; an image copy that does not load either
+leaves the module incompatible with both reasons on the record (the negative control on the
+branch); an image entry listed but not shipped claims nothing; and a generation that loaded and
+then threw at install is not replaced by the image copy.
 
 The roll gate's half (MeshWeaver#3651) is `ModulePlatformSurfaceJsonTest` and `ReleaseLinkGateTest`
 in the same project — real modules, a real published root on disk, the running process's own

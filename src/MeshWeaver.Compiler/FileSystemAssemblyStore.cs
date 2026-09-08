@@ -45,12 +45,36 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         string rootDirectory,
         ILogger<FileSystemAssemblyStore> logger,
         int keepVersionsPerType = DefaultKeepVersionsPerType)
+        : this(rootDirectory, logger, keepVersionsPerType, AtomicFileWrite.OpenTempForWrite)
     {
+    }
+
+    /// <summary>
+    /// <see cref="FileSystemAssemblyStore(string, ILogger{FileSystemAssemblyStore}, int)"/> with the
+    /// staging-file writer injected — the seam a test uses to stand this store on a volume that
+    /// accepts a write and then does not keep it (a full share). Production never passes anything
+    /// but <see cref="AtomicFileWrite.OpenTempForWrite"/>.
+    /// </summary>
+    /// <param name="rootDirectory">The root directory under which compiled assemblies are cached.</param>
+    /// <param name="logger">The logger for cache hit/miss and write diagnostics.</param>
+    /// <param name="keepVersionsPerType">See the primary constructor.</param>
+    /// <param name="openForWrite">Opens a staging path for writing; see
+    /// <see cref="AtomicFileWrite.PublishBytesWith(string, byte[], Func{string, Stream})"/>.</param>
+    public FileSystemAssemblyStore(
+        string rootDirectory,
+        ILogger<FileSystemAssemblyStore> logger,
+        int keepVersionsPerType,
+        Func<string, Stream> openForWrite)
+    {
+        ArgumentNullException.ThrowIfNull(openForWrite);
         this.rootDirectory = rootDirectory;
         this.logger = logger;
         this.keepVersionsPerType = Math.Max(1, keepVersionsPerType);
+        this.openForWrite = openForWrite;
         Directory.CreateDirectory(rootDirectory);
     }
+
+    private readonly Func<string, Stream> openForWrite;
 
     /// <summary>How many of a type's most recent versions this store keeps per framework generation.</summary>
     public int KeepVersionsPerType => keepVersionsPerType;
@@ -122,6 +146,13 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     /// <param name="pdbBytes">The optional debug symbol (PDB) bytes; null or empty to skip.</param>
     /// <returns>An observable emitting the location of the cached assembly.</returns>
     public IObservable<AssemblyStoreLocation> PutWithLocation(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
+        // 🚨 Deferred, so the write — and its refusal — happen at SUBSCRIBE time and travel the
+        // subscriber's error channel. Eager evaluation would throw a ShortWriteException out of
+        // the CALL, before the compile pipeline's Catch/terminal handler is even wired, and the
+        // node would settle nothing.
+        => Observable.Defer(() => Observable.Return(PutWithLocationCore(nodeTypePath, version, assemblyBytes, pdbBytes)));
+
+    private AssemblyStoreLocation PutWithLocationCore(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes)
     {
         var dir = Path.Combine(rootDirectory, Sanitize(nodeTypePath));
         Directory.CreateDirectory(dir);
@@ -154,7 +185,7 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             logger.LogDebug(
                 "Assembly already at {DllPath} — skipping write (idempotent put, first-write-wins for ALC safety)",
                 existing.FullName);
-            return Observable.Return(new AssemblyStoreLocation(existing.FullName, FileSystemCollectionName, existingRel));
+            return new AssemblyStoreLocation(existing.FullName, FileSystemCollectionName, existingRel);
         }
 
         var dllPath = GetDllPath(nodeTypePath, version, assemblyBytes);
@@ -182,9 +213,17 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         //
         // Publish the PDB before the DLL: the DLL is the discovery key, so anything visible to
         // a reader is complete AND already has its symbols.
+        //
+        // 🚨 And a publication is DURABLE + VERIFIED, or it is refused (2026-09-08, memex, /data at
+        // 3 MiB free): PublishBytes flushes to disk and compares the length the volume kept with
+        // the bytes handed in, and throws ShortWriteException when they differ. The throw is the
+        // contract — it propagates out of this observable into the compile pipeline, which treats
+        // it as TERMINAL: no Release node, no version pointer, the previous build left in place.
+        // Swallowing it here and returning the path would re-create the very incident: a name in
+        // the discovery namespace whose bytes are not there.
         if (pdbBytes is { Length: > 0 })
-            AtomicFileWrite.PublishBytes(pdbPath, pdbBytes);
-        var published = AtomicFileWrite.PublishBytes(dllPath, assemblyBytes);
+            AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite);
+        var published = AtomicFileWrite.PublishBytesWith(dllPath, assemblyBytes, openForWrite);
         if (published)
             logger.LogInformation(
                 "Cached assembly at {DllPath} ({Bytes} bytes)", dllPath, assemblyBytes.Length);
@@ -201,7 +240,7 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         // grew — so it is the one that trims it.
         EvictSupersededVersions(dir, keep: dllPath);
 
-        return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
+        return new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath);
     }
 
     /// <summary>
