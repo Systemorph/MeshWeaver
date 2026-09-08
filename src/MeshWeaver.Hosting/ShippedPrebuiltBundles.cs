@@ -244,9 +244,134 @@ public static class ShippedPrebuiltBundles
                     "ShippedPrebuiltBundles: no CI-published bundles for framework identity "
                     + "{Identity} under {Root} — the sweep compiles instead",
                     identity, publishedRoot);
-            return SeedBundles(mesh, dir, () => CompletePublishedBundlesOf(dir, logger), logger)
-                .Select(tally => tally.Covered);
+
+            // 🚨 Modules:VersionStrictness (2026-09-08). Under Exact only this identity's directory
+            // is read — byte for byte what shipped before. Under Family / Minimum a source that
+            // this identity has NOT sealed is taken from the newest sealed publication of another
+            // identity the policy admits (same platform line / any line), and every assembly of
+            // such a bundle proves its platform links before it lands. See PrebuiltAdoptionPolicy.
+            var declined = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            var context = AdoptionContext.For(mesh, publishedRoot, logger) with
+            {
+                OnDeclined = path => declined.TryAdd(path, 0),
+            };
+            var exactSealed = SealedPublicationIndex.ReadFor(publishedRoot, identity, logger);
+            return SeedBundles(mesh, dir,
+                    () => CompletePublishedBundlesOf(dir, logger)
+                        .Concat(FallbackPublishedBundlesOf(publishedRoot, identity, exactSealed, context, logger))
+                        .ToList(),
+                    logger, context: context)
+                // 🚨 The publication and the SOURCES are one unit: hand what was sealed and what
+                // was declined to the sync layer (when one is registered), which brings the
+                // sources onto the sealed commit. See IPublicationSyncReconciler.
+                .SelectMany(tally =>
+                {
+                    var reconciler = mesh.ServiceProvider.GetService<IPublicationSyncReconciler>();
+                    if (reconciler is null)
+                        return Observable.Return(tally.Covered);
+                    return reconciler
+                        .Reconcile(identity, exactSealed, declined.Keys.ToImmutableArray())
+                        .Do(dispatched =>
+                        {
+                            if (dispatched > 0 || !declined.IsEmpty)
+                                logger?.LogInformation(
+                                    "ShippedPrebuiltBundles: {Declined} type(s) declined on their source "
+                                    + "fingerprint; the sync reconciler dispatched {Dispatched} import(s) "
+                                    + "to bring the sources onto the sealed commit",
+                                    declined.Count, dispatched);
+                        })
+                        .Select(_ => tally.Covered);
+                });
         });
+
+    /// <summary>
+    /// The bundles of OTHER identities the policy admits, for every source this identity has not
+    /// sealed itself: newest platform version first (the <c>_releases</c> markers name each
+    /// identity's version), sealed sources only, one publication per source name. Under
+    /// <see cref="VersionStrictness.Exact"/> this is empty. Runs on the seeding pool's blocking leg.
+    /// </summary>
+    private static IEnumerable<string> FallbackPublishedBundlesOf(
+        string publishedRoot, string liveIdentity, IReadOnlyList<SealedSource> exactSealed,
+        AdoptionContext context, ILogger? logger)
+    {
+        if (context.Strictness == VersionStrictness.Exact)
+            return [];
+        var sealedHere = exactSealed.Where(s => s.IsSealed).Select(s => s.Source)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = context.VersionByIdentity
+            .Where(kv => !string.Equals(kv.Key, liveIdentity, StringComparison.Ordinal))
+            .Where(kv => PrebuiltAdoptionPolicy
+                .Decide(context.Strictness, new PrebuiltAdoptionPolicy.Candidate(kv.Key, kv.Value, null), context.Live)
+                .Adopts)
+            .OrderByDescending(kv => kv.Value, Plugin.Packaging.NuGetVersionComparer.Instance)
+            .ToList();
+        var taken = new HashSet<string>(sealedHere, StringComparer.OrdinalIgnoreCase);
+        var bundles = new List<string>();
+        foreach (var (identity, version) in candidates)
+        {
+            var identityDir = Path.Combine(publishedRoot, identity);
+            if (!Directory.Exists(identityDir))
+                continue;
+            foreach (var sealedSource in SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
+            {
+                if (!sealedSource.IsSealed || !taken.Add(sealedSource.Source))
+                    continue;
+                var sourceDir = PublicationDirectoryOf(Path.Combine(identityDir, sealedSource.Source), logger);
+                var listed = CompletePublishedBundlesOf(identityDir, logger)
+                    .Where(b => string.Equals(Path.GetDirectoryName(b), sourceDir, StringComparison.Ordinal))
+                    .ToList();
+                if (listed.Count == 0)
+                    continue;
+                logger?.LogInformation(
+                    "ShippedPrebuiltBundles: '{Source}' is not sealed for this identity; taking its "
+                    + "publication sealed for platform {Version} (identity {Identity}) under "
+                    + "{Strictness} strictness — each assembly proves its platform links before it lands",
+                    sealedSource.Source, version, identity, context.Strictness);
+                bundles.AddRange(listed);
+            }
+        }
+        return bundles;
+    }
+
+    /// <summary>
+    /// Everything a tolerant adoption needs, resolved ONCE per sweep: the strictness, the live
+    /// side, the identity→version map, the running platform's type surface (built lazily — a
+    /// sweep that adopts only this identity's bundles never reads a single platform assembly),
+    /// and the witness a stale-source decline is reported through.
+    /// </summary>
+    private sealed record AdoptionContext(
+        VersionStrictness Strictness,
+        PrebuiltAdoptionPolicy.Live Live,
+        IReadOnlyDictionary<string, string> VersionByIdentity,
+        Lazy<ModulePlatformSurface> Surface,
+        Func<string, string?>? LiveDependencyIdOf,
+        string? LiveToolchainId)
+    {
+        /// <summary>Receives the path of every NodeType whose entry was declined on its source
+        /// fingerprint (#2813) — the reconciler's input.</summary>
+        public Action<string>? OnDeclined { get; init; }
+
+        public static AdoptionContext For(IMessageHub mesh, string? publishedRoot, ILogger? logger)
+            => new(
+                PrebuiltAdoptionPolicy.Resolve(mesh.ServiceProvider),
+                PrebuiltAdoptionPolicy.LiveOf(mesh.ServiceProvider),
+                SealedPublicationIndex.ReleasesOf(publishedRoot, logger),
+                new Lazy<ModulePlatformSurface>(
+                    () => ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory),
+                    LazyThreadSafetyMode.ExecutionAndPublication),
+                NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+                NodeTypeCompilationHelpers.ProcessToolchainId);
+
+        /// <summary>The identity/version/floor decision for one bundle manifest.</summary>
+        public AdoptionDecision Decide(Plugin.Packaging.BundleReader.Manifest manifest)
+            => PrebuiltAdoptionPolicy.Decide(
+                Strictness,
+                new PrebuiltAdoptionPolicy.Candidate(
+                    manifest.FrameworkMvid,
+                    manifest.FrameworkMvid is { Length: > 0 } id && VersionByIdentity.TryGetValue(id, out var v) ? v : null,
+                    manifest.Module?.MinMeshVersion),
+                Live);
+    }
 
     /// <summary>
     /// The sentinel-gated bundle set of a published identity directory: for each
@@ -607,7 +732,7 @@ public static class ShippedPrebuiltBundles
     private static IObservable<SeedTally> SeedBundles(
         IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger,
         ImmutableHashSet<string>? typePathFilter = null, Action<string>? onCovered = null,
-        Action<string>? onMatched = null)
+        Action<string>? onMatched = null, AdoptionContext? context = null)
         => Observable.Defer(() =>
         {
             // 🚨 #3129 — NO ADOPTION PASS STARTS ON A HUB THAT IS LEAVING. Every route into
@@ -705,7 +830,7 @@ public static class ShippedPrebuiltBundles
                                 .SelectMany(existing => bundles
                                     .Select(bundle => SeedBundle(
                                         mesh, pool, store, bundle, existing, logger, onCovered,
-                                        onMatched))
+                                        onMatched, context))
                                     .Concat()
                                     .Aggregate(default(SeedTally), (total, one) => total + one)
                                     .Do(tally =>
@@ -782,18 +907,33 @@ public static class ShippedPrebuiltBundles
         TypeSnapshot snapshot,
         ILogger? logger,
         Action<string>? onCovered = null,
-        Action<string>? onMatched = null)
+        Action<string>? onMatched = null,
+        AdoptionContext? context = null)
         => pool
             .InvokeBlocking(_ => Plugin.Packaging.BundleReader.ReadManifest(bundlePath))
             .SelectMany(manifest =>
             {
-                if (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is { } reason)
+                // The whole-bundle gate: the exact identity gate as before when no policy context
+                // is in play (the image's own bundles, the install-time re-seed); otherwise the
+                // strictness policy, whose Adopt may still require the per-assembly link check.
+                var decision = context is null || manifest is null
+                    ? (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is { } exactReason
+                        ? new AdoptionDecision(AdoptionVerdict.Decline, exactReason, LinkCheckRequired: false)
+                        : new AdoptionDecision(AdoptionVerdict.Adopt, "this framework identity", LinkCheckRequired: false))
+                    : context.Decide(manifest);
+                if (!decision.Adopts)
                 {
                     logger?.LogInformation(
                         "ShippedPrebuiltBundles: bundle {Bundle} DECLINED whole: {Reason} — "
-                        + "the sweep compiles instead", Path.GetFileName(bundlePath), reason);
+                        + "the sweep compiles instead", Path.GetFileName(bundlePath), decision.Reason);
                     return Observable.Return(default(SeedTally) with { BundlesDeclined = 1 });
                 }
+                // A tolerant adoption stamps LIVE dependency ids (the assembly the bytes bind to
+                // here), so "already current" and the stamp agree — see PrebuiltAdoptionPolicy.LiveStampOf.
+                IReadOnlyDictionary<string, string>? DependenciesToStamp(IReadOnlyDictionary<string, string>? recorded)
+                    => decision.LinkCheckRequired && context is not null
+                        ? PrebuiltAdoptionPolicy.LiveStampOf(recorded, context.LiveDependencyIdOf, context.LiveToolchainId)
+                        : recorded;
                 if (manifest!.Assemblies is not { Count: > 0 } assemblies)
                 {
                     // 🚨 On a require-prebuilt mesh an empty bundle is an ERROR, loudly named: the
@@ -850,7 +990,7 @@ public static class ShippedPrebuiltBundles
                 // of lookups across every type at startup is the cold burst this whole mechanism
                 // exists to remove. Each probe is a glob or a blob-exists.
                 return present
-                    .Select(entry => IsAlreadyCurrent(store, snapshot, mesh, entry, logger)
+                    .Select(entry => IsAlreadyCurrent(store, snapshot, mesh, entry, logger, DependenciesToStamp(entry.Dependencies))
                         .Select(current => (Entry: entry, Current: current)))
                     .Concat()
                     .ToList()
@@ -884,7 +1024,8 @@ public static class ShippedPrebuiltBundles
                                 .ReadFile(bundlePath, deviating))
                             .SelectMany(payload => SeedPayloads(
                                 mesh, bundlePath, manifest.FrameworkMvid,
-                                payload.Assemblies, alreadyCurrent, logger, onCovered));
+                                payload.Assemblies, alreadyCurrent, logger, onCovered,
+                                decision, context, ClosureOf(manifest), FileNamesOf(manifest)));
                     });
             })
             .Catch<SeedTally, Exception>(ex =>
@@ -915,7 +1056,8 @@ public static class ShippedPrebuiltBundles
         TypeSnapshot snapshot,
         IMessageHub mesh,
         Plugin.Packaging.BundleReader.AssemblyRef entry,
-        ILogger? logger)
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependenciesToStamp = null)
     {
         if (!snapshot.Nodes.TryGetValue(entry.NodePath, out var node))
             return Observable.Return(false);
@@ -941,7 +1083,7 @@ public static class ShippedPrebuiltBundles
             .Select(path => PrebuiltAssemblySeeder.IsAlreadyAdopted(
                 definition,
                 storeHasBytes: !string.IsNullOrEmpty(path),
-                entry.Dependencies,
+                dependenciesToStamp ?? entry.Dependencies,
                 liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
                 liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId))
             .Catch<bool, Exception>(ex =>
@@ -954,7 +1096,35 @@ public static class ShippedPrebuiltBundles
             });
     }
 
-    /// <summary>Seed the extracted payloads — the unchanged half of the pipeline.</summary>
+    /// <summary>The simple names of every assembly travelling in the bundle — the module's own
+    /// closure, out of the link check's denominator.</summary>
+    private static ImmutableHashSet<string> ClosureOf(Plugin.Packaging.BundleReader.Manifest manifest)
+    {
+        var names = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in manifest.Assemblies ?? [])
+            if (!string.IsNullOrEmpty(entry.Assembly))
+                names.Add(Path.GetFileNameWithoutExtension(entry.Assembly));
+        foreach (var file in manifest.Module?.Assemblies ?? [])
+            if (!string.IsNullOrEmpty(file))
+                names.Add(Path.GetFileNameWithoutExtension(file));
+        return names.ToImmutable();
+    }
+
+    /// <summary>Node path → the entry's assembly simple name (for the link report).</summary>
+    private static ImmutableDictionary<string, string> FileNamesOf(Plugin.Packaging.BundleReader.Manifest manifest)
+        => (manifest.Assemblies ?? [])
+            .Where(e => !string.IsNullOrEmpty(e.NodePath) && !string.IsNullOrEmpty(e.Assembly))
+            .GroupBy(e => e.NodePath, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(
+                g => g.Key, g => Path.GetFileNameWithoutExtension(g.First().Assembly),
+                StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Seed the extracted payloads. Under a tolerant <paramref name="decision"/> each assembly
+    /// first proves its platform links against the running process
+    /// (<see cref="ModulePlatformLink"/>); one that cannot load here is compiled from source
+    /// instead (or refused loudly on a require-prebuilt mesh), never adopted on faith.
+    /// </summary>
     private static IObservable<SeedTally> SeedPayloads(
         IMessageHub mesh,
         string bundlePath,
@@ -962,17 +1132,66 @@ public static class ShippedPrebuiltBundles
         IReadOnlyList<Plugin.Packaging.BundleReader.Payload> assemblies,
         int alreadyCurrent,
         ILogger? logger,
-        Action<string>? onCovered = null)
+        Action<string>? onCovered = null,
+        AdoptionDecision? decision = null,
+        AdoptionContext? context = null,
+        ImmutableHashSet<string>? closure = null,
+        ImmutableDictionary<string, string>? fileNames = null)
         => assemblies
-            .Select(a => PrebuiltAssemblySeeder
-                // 🚨 #2813 — a.SourceFingerprint is the producer's statement of which sources these
-                // bytes came from; the owning hub compares it against its own live set and refuses
-                // a provably-stale adoption. Null from a legacy bundle, which still adopts (as
-                // AdoptedUnverified).
-                .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, frameworkMvid, logger, a.Dependencies,
-                    a.SourceFingerprint)
-                .Take(1)
-                .Timeout(SeedBudget)
+            .Select(a => Observable.Defer(() =>
+                {
+                    var tolerant = decision?.LinkCheckRequired == true && context is not null;
+                    if (tolerant)
+                    {
+                        var moduleName = fileNames is not null && fileNames.TryGetValue(a.NodePath, out var n)
+                            ? n : a.NodePath;
+                        var link = ModulePlatformLink.Check(
+                            a.Assembly, moduleName, closure ?? ImmutableHashSet<string>.Empty,
+                            context!.Surface.Value);
+                        var verdict = PrebuiltAdoptionPolicy.AfterLink(decision!, link, context.Live);
+                        if (verdict.Verdict == AdoptionVerdict.Refuse)
+                        {
+                            logger?.LogCritical(
+                                "ShippedPrebuiltBundles: {NodePath} from {Bundle} REFUSED: {Reason}",
+                                a.NodePath, Path.GetFileName(bundlePath), verdict.Reason);
+                            return Observable.Return(false);
+                        }
+                        if (!verdict.Adopts)
+                        {
+                            logger?.LogInformation(
+                                "ShippedPrebuiltBundles: {NodePath} from {Bundle} not adopted: {Reason}",
+                                a.NodePath, Path.GetFileName(bundlePath), verdict.Reason);
+                            return Observable.Return(false);
+                        }
+                        logger?.LogInformation(
+                            "ShippedPrebuiltBundles: {NodePath} from {Bundle} adopted across identities: {Reason}",
+                            a.NodePath, Path.GetFileName(bundlePath), verdict.Reason);
+                    }
+                    // 🚨 #2813 — a.SourceFingerprint is the producer's statement of which sources
+                    // these bytes came from; the owning hub compares it against its own live set
+                    // and refuses a provably-stale adoption. Null from a legacy bundle, which still
+                    // adopts (as AdoptedUnverified). A tolerant adoption is seeded UNDER THE LIVE
+                    // identity with live dependency ids: the policy, not the producer, vouches for
+                    // the binding here, and the link check just measured it.
+                    return PrebuiltAssemblySeeder
+                        .SeedDetailed(mesh, a.NodePath, a.Assembly, a.Pdb,
+                            tolerant ? PrebuiltAssemblySeeder.LiveFrameworkMvid : frameworkMvid,
+                            logger,
+                            tolerant
+                                ? PrebuiltAdoptionPolicy.LiveStampOf(a.Dependencies, context!.LiveDependencyIdOf, context.LiveToolchainId)
+                                : a.Dependencies,
+                            a.SourceFingerprint)
+                        .Take(1)
+                        .Timeout(SeedBudget)
+                        .Do(outcome =>
+                        {
+                            if (outcome is PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSources
+                                or PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesCompileDispatched
+                                or PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesUnservable)
+                                context?.OnDeclined?.Invoke(a.NodePath);
+                        })
+                        .Select(outcome => outcome == PrebuiltAssemblySeeder.SeedOutcome.Adopted);
+                })
                 .Do(adopted =>
                 {
                     if (adopted)
