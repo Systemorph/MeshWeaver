@@ -95,7 +95,7 @@ own host, writing to its own blob container — and none of it is MeshWeaver cod
 
 | piece | image | what it does |
 |---|---|---|
-| the registry | `ghcr.io/distribution/distribution:3.0.0` (CNCF distribution, the reference implementation) | serves `/v2/…`; storage driver `azure`, authenticating as the namespace's **workload identity** (`credentials.type: default_credentials`) — no storage key anywhere; token auth pointed at the auth server |
+| the registry | `ghcr.io/distribution/distribution:3.1.1` (CNCF distribution, the reference implementation) | serves `/v2/…`; storage driver `azure`, authenticating as the namespace's **workload identity** (`credentials.type: default_credentials`) — no storage key anywhere; token auth pointed at the auth server |
 | the token server | `cesanta/docker_auth:1.14.0` | answers `https://cr.meshweaver.cloud/auth`; authenticates a caller and signs a bearer token the registry verifies against the same certificate |
 
 One Ingress on the host routes `/auth` to docker_auth and everything else to distribution
@@ -104,6 +104,13 @@ of megabytes). The token certificate and key, distribution's `http.secret` and t
 notification bearer are Key Vault objects, mounted through one SecretProviderClass into both
 pods. Values: `registry.*` in `deploy/helm/values.yaml`; a complete example the chart gate renders
 on every pull request: `deploy/helm/values.registry.example.yaml`.
+
+**🚨 The floor is distribution ≥ 3.1.0.** `credentials.type: default_credentials` reaches
+`DefaultAzureCredential` — the workload identity — only from 3.1.0 on; 3.0.0 dispatches it to the
+shared-key client and signs every storage request with an empty account key, whatever identity the
+pod carries. The symptom is a registry pod that never becomes ready, its storage health check
+logging `403 AuthenticationFailed … including the signature` (the shared-key error) while the
+config and the identity are both correct. The pin is 3.1.1.
 
 **Who may do what.** Two ways in, in the order docker_auth tries them:
 
