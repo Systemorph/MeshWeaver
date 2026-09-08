@@ -14,8 +14,8 @@ actually promises, and the account of the one that was promised by nobody.
 
 ## What `promote` publishes
 
-`main-cd.yml`'s `promote` job is the only writer of consumer-visible tags in this repository, and it
-writes exactly this set across the three repositories of the image set:
+`main-cd.yml`'s `promote` job is the only writer of consumer-visible tags in **continuous
+delivery**, and it writes exactly this set across the three repositories of the image set:
 
 | Tag | On | Written in | Kind |
 |---|---|---|---|
@@ -30,6 +30,12 @@ The three legs compute `$(Version)` from the same root `Directory.Build.props` i
 run, so `GITHUB_RUN_NUMBER` is shared and the three version strings are **equal by construction**.
 That is what makes "the version tag" a property of the *set* rather than of each image, and it is why
 one argument suffices to assert it on all three.
+
+There is exactly one other writer, and it obeys the same rule. An **official release**
+(`release.yml`) retags the promoted set `<short-sha>` → the clean `<version>` (e.g. `3.1.0`) on all
+three repositories, `memex-portal-ai` **last** — the same arming-write ordering phase C uses, for the
+same reason. So a release adds one more immutable pointer, applied symmetrically; it adds no floating
+tag, and since `28fc2da4b` it writes no `latest` at all.
 
 **There is no `memex-portal-ai:latest`, and that is the contract, not an omission.** The portal's
 moving pointer is `main`; its selectable pointer is `<version>`. Nothing in `.github/` writes a

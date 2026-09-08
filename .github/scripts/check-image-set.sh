@@ -31,10 +31,11 @@
 # missing that verify calls fine) or never heal a genuine hole. That is why the answer lives in
 # ONE file instead of being duplicated in two `run:` blocks — same reasoning as shard-assign.sh.
 #
-# 🚨 ADDING A FIFTH IMAGE touches THREE places, all in main-cd.yml plus this file:
+# 🚨 ADDING AN IMAGE TO THE SET touches THREE places, all in main-cd.yml plus this file:
 #   1. its own build job (push ONLY the staging tag),
 #   2. the `promote` job (identity tags in phase A, pointers in phase B),
-#   3. the list below — otherwise nothing ever asserts it shipped.
+#   3. the `REPOS` list below — otherwise nothing ever asserts it shipped. That list IS the count;
+#      it currently holds three repositories, and every assertion in this file iterates it.
 #
 # 🚨 ADDING A POINTER touches TWO: the `promote` phase that writes it, and the pointer list
 # under `--pointers` below. A tag whose only producer is a lane nobody asserts is not a contract, it
@@ -68,7 +69,7 @@
 #   az login && .github/scripts/check-image-set.sh 67cbbe0 7c640de --pointers 3.0.0-ci.8079
 #
 # Why the short SHA and not the version tag: every leg pushes the commit's short SHA, so it is the
-# one identity all four images share. The version tag (3.0.0-ci.<n>) is per-RUN, so it is not a
+# one identity every image of the set shares. The version tag (3.0.0-ci.<n>) is per-RUN, so it is not a
 # cross-image identity. (This note used to record a drift between legs computing 3.0.0-rc1.ci.<n>
 # and memex-portal-next hand-writing 3.0.0-ci.<n>. Both halves are gone: the rc line is retired —
 # every leg mints the clean shape, Doc/Architecture/ReleaseProcess §1 — and portal-next is no
