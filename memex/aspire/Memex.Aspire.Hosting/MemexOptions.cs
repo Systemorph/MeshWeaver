@@ -27,8 +27,25 @@ public sealed record MemexOptions
     /// <summary>Container registry + namespace holding the Memex images. Default GHCR / Systemorph.</summary>
     public string ImageRegistry { get; init; } = "ghcr.io/systemorph";
 
-    /// <summary>Image tag applied to all Memex images (portal, migration). Default <c>latest</c>.</summary>
-    public string ImageTag { get; init; } = "latest";
+    /// <summary>
+    /// Image tag applied to all Memex images (portal, migration). Default: the MAJOR-LINE POINTER of
+    /// this adapter's own version — <c>3-latest</c> for a 3.x adapter, <c>4-latest</c> for 4.x —
+    /// which CD moves to every sealed set of that major (across minors) and never to another major.
+    /// The registry also carries <c>&lt;major.minor&gt;-latest</c> and
+    /// <c>&lt;major.minor.patch&gt;-latest</c> for a narrower line, and every exact version; pick
+    /// one with <see cref="WithImage"/>. The portal starts on the pointer and its own self-updater
+    /// takes over from there, so the package version and the image version are independent.
+    /// </summary>
+    public string ImageTag { get; init; } = DefaultImageTag;
+
+    /// <summary>
+    /// <c>&lt;major&gt;-latest</c> for the major of the assembly this record ships in. Derived,
+    /// not typed, so a 4.x adapter cannot be published still naming <c>3-latest</c>. The assembly
+    /// version is stamped by the platform's Directory.Build.props; the <c>latest</c> fallback exists
+    /// only for an unstamped local build, never for a published package.
+    /// </summary>
+    public static string DefaultImageTag { get; } =
+        typeof(MemexOptions).Assembly.GetName().Version is { Major: > 0 } v ? $"{v.Major}-latest" : "latest";
 
     /// <summary>
     /// Use the <c>memex-portal-ai</c> image (co-hosted Claude Code + GitHub Copilot CLIs baked in)
