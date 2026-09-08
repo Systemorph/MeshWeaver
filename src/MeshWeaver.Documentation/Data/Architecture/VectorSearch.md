@@ -61,7 +61,12 @@ The query parser splits tokens into two buckets:
 | bare text | `TextSearch` | `laptop` |
 | `field:value` | `Filter` | `nodeType:Story` |
 
-When the parsed query has a non-empty `TextSearch` **and** an `IEmbeddingProvider` is registered, `PostgreSqlMeshQuery.QueryAsync` intercepts and routes through `PostgreSqlStorageAdapter.VectorSearchAsync`. Structured filters present in the same query are preserved on the WHERE clause of the vector query — see `PostgreSqlSqlGenerator.GenerateVectorSearchQuery`.
+When the parsed query has a non-empty `TextSearch` **and** an `IEmbeddingProvider` is registered, the query is ranked by cosine similarity on **both** routes a query can take:
+
+- **Pinned** (`namespace:X …`, or a path whose first segment names a partition): `PostgreSqlMeshQuery.QueryRowsAsync` intercepts and routes through `PostgreSqlStorageAdapter.VectorSearchAsync`. Structured filters present in the same query are preserved on the WHERE clause of the vector query — see `PostgreSqlSqlGenerator.GenerateVectorSearchQuery`.
+- **Unpinned** (the omnibox, the MCP `search` tool and the agent `Search` tool with no `namespace:`): `PostgreSqlPartitionedMeshQuery` embeds the term once and hands the vector to `PostgreSqlCrossSchemaQueryProvider.QueryAcrossSchemasSemanticAsync`, whose UNION gives every partition arm the same hybrid contract — eligible when the row carries an embedding *or* lexically matches the term on name/id/description, ranked by lexical tier then cosine distance, each arm capped at the top-K and merged by the outer ORDER BY (`GenerateCrossSchemaSelectQuery` with a `queryVector`).
+
+🚨 **Until MeshWeaver.Plugins#1493 (2026-09-08) the unpinned route was lexical only.** `GenerateTextSearchClause` demanded every whitespace-separated term as an ILIKE substring of name/path/description/node_type, AND-ed, so a natural-language query returned nothing mesh-wide while the same words pinned to one partition found their documents — measured on both production portals on 2026-09-07 (`asynchronous calls observable subscribe never await task namespace:Doc scope:descendants` → 3 hits; the same words unpinned → 0; the hit count shrank with every added word). The 80k stored embeddings were consulted exactly when a caller already knew where to look. A host with no embedding provider, and the Snowflake fan-out, keep the lexical contract — the table below describes a Postgres host with a provider.
 
 **Routing examples:**
 
@@ -92,7 +97,7 @@ ops.Search("laptop", basePath: "@graph");
 ops.Search("laptop");
 ```
 
-The vector path activates transparently when both conditions hold: a bare-text token is present in the query, and an embedding provider is registered in the DI container.
+The vector path activates transparently when both conditions hold: a bare-text token is present in the query, and an embedding provider is registered in the DI container — whether or not the query names a partition (see the two routes above).
 
 ---
 
