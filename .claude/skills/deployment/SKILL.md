@@ -42,12 +42,33 @@ machine, dev Macs included: `--bake-output` exists only in CI scripts, never in 
 `.targets`/`.props`/`.csproj`. The commands below are a quick reference, not a substitute for the
 doc.
 
-## The AKS route
+## 🚨 First: the memex API, not the cluster
+
+**Maintainer directive, 2026-09-08: every operation goes through the memex API — no direct `az` /
+`kubectl` access.** The control instance (`memex.meshweaver.cloud`, module `Hosting` from
+MeshWeaver.Plugins) exposes each of the recipes below as a `Hosting/InstanceAction` node whose
+answer is a node; the in-cluster operator and the monitoring stack hold the only credentials.
+Reach for the commands further down ONLY when the control plane itself is what is broken (the
+"break glass" section of the fleet guide, `get @Hosting/Guide`).
+
+| you want | create (MCP `create`, or POST the node) | read the answer at |
+|---|---|---|
+| roll `<id>` onto a tag | pin `pinnedImageTag` on `Deployments/<id>`, then `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` — or `{ "requestedAction": "Roll", "imageTag": "<tag>", "confirmation": "<id>" }` for the portal image alone | the action node's `state`/`log`; then a `Sample` |
+| what is it running, per replica (image, ready, restarts, started, its own `/health` + detail) | `{ "requestedAction": "Sample" }` | `Ops/Status/<id>` (`replicas[]`, `warnings[]`), the Deployment page's status strip |
+| the last hour's error lines | `{ "requestedAction": "Logs", "query": "fail:\|crit:\|Exception", "sinceMinutes": 60, "limit": 300 }` | the action node's `logQl` / `entryCount` / `truncated`; lines under `Ops/Logs`, `@Deployments/<id>/area/Logs` |
+| what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
+
+All nodes are `nodeType: Hosting/InstanceAction`, `content.$type: InstanceActionContent`,
+`content.deployment: "Deployments/<id>"`. The full table — including what each action does and
+which credential runs it — is the fleet guide's "Roll, restart, observe — the ops actions".
+
+## The AKS route (break glass — the control plane is what is broken)
 
 The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-resource-group>`,
 swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR
 `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via
-`az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`.**
+`az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`** — and only when
+the API above cannot answer.
 
 **On AKS a code update = the record's image pin + a `Roll` action.** What the operator then runs is
 build image → set image → restart (the AKS route does NOT use `tools/deploy.sh` or `aspire deploy`
@@ -137,8 +158,9 @@ wiring itself — a full restart costs 30–60 s and loses the dashboard auth to
 
 - [ ] Route chosen by target (AKS vs Container Apps) — no `tools/deploy.sh`/`aspire deploy` against
       AKS.
-- [ ] The operation was filed as a `Hosting/InstanceAction` on the control instance; any
-      `kubectl` you ran yourself is written up as break-glass, with its other half reconciled.
+- [ ] The operation was filed as a `Hosting/InstanceAction` on the control instance (Reconcile/Roll,
+      Sample, Logs, Audit); any `kubectl` you ran yourself is written up as break-glass, with its
+      other half reconciled.
 - [ ] Where `kubectl` was unavoidable, it was reached only through `az aks command invoke`.
 - [ ] No `deploy.sh` re-run for a code update.
 - [ ] The migration Job's log shows `Database migration completed. Version: N`.
