@@ -122,15 +122,33 @@ public sealed class PrebuiltBundleRetentionHostedService(
     }
 
     private IObservable<PrebuiltBundleSweepResult> RunPass(string root, IIoPool pool) =>
-        StampedIdentities().SelectMany(stamps =>
-            PrebuiltBundleStore.Sweep(
-                root,
-                PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                PrebuiltAdoptionPolicy.RunningPlatformVersion,
-                stamps,
-                retention,
-                pool,
-                logger));
+        StampedIdentities().Zip(PinnedReferences(), (stamps, pinned) => (stamps, pinned))
+            .SelectMany(refs =>
+                PrebuiltBundleStore.Sweep(
+                    root,
+                    PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                    PrebuiltAdoptionPolicy.RunningPlatformVersion,
+                    refs.stamps,
+                    refs.pinned,
+                    retention,
+                    pool,
+                    logger));
+
+    /// <summary>
+    /// Every platform build something outside this process pins — the union of every registered
+    /// <see cref="PinnedPlatformReferenceSource"/> (the Deployment records and the registered
+    /// instances' reports, on a control instance). Read fresh on every pass; a source that errors
+    /// aborts the pass, because a pin set that could not be read is incomplete.
+    /// </summary>
+    private IObservable<ImmutableList<PinnedPlatformReference>> PinnedReferences()
+    {
+        var sources = services.GetServices<PinnedPlatformReferenceSource>().ToImmutableList();
+        if (sources.IsEmpty)
+            return Observable.Return(ImmutableList<PinnedPlatformReference>.Empty);
+        return Observable.Concat(sources.Select(source => source().Take(1)))
+            .ToList()
+            .Select(lists => lists.SelectMany(l => l).ToImmutableList());
+    }
 
     /// <summary>
     /// Every framework identity a NodeType record's <c>CompiledFrameworkVersion</c> names — the
