@@ -16,26 +16,31 @@ namespace MeshWeaver.PluginCatalog;
 /// the install orchestrator (<c>CatalogLayoutAreas.InstallOrUpdate</c>) and the boot reconcile
 /// (<see cref="RegistryUpdateReconciler"/>).
 ///
-/// <para><b>The platform-floor gate holds at placement.</b> Landing verifies the module's
-/// declared <c>minMeshVersion</c> through <see cref="ModulePlatformFloor.DeclineReason(string?)"/>
-/// — the ONE notion of the module platform gate, shared with the serve and fetch sides. An
-/// unsatisfied floor REFUSES the landing (the observable errors, naming both versions); declined
-/// bytes never reach disk. The framework MVID the bundle was built against is recorded and logged
-/// as DIAGNOSTIC metadata only — modules bind by simple name, and their contract is API
-/// compatibility, not build identity (that strict gate belongs to the NodeType bake lane).</para>
+/// <para><b>The MEASURED platform gate holds at placement (#3538, #3648).</b> Landing links the
+/// module's entry assembly against the running platform's surface
+/// (<see cref="MeshWeaver.Mesh.ModulePlatformLink"/>) from memory, before a byte reaches disk: an
+/// unlinkable or unreadable module REFUSES the landing (the observable errors, naming the missing
+/// type); declined bytes never reach disk. The module's declared <c>minMeshVersion</c> floor is
+/// ADVISORY — <see cref="ModulePlatformFloor.DeclineReason(string?)"/> words it, the landing logs it
+/// (Information) and records it on the entry, and it decides nothing. It used to be the FIRST gate
+/// here, and that string comparison (<c>ci &lt; rc &lt; clean</c>) is what held every production
+/// portal on the morning build for all of 2026-09-07 while the link probe would have loaded every
+/// candidate. The framework MVID the bundle was built against is recorded and logged as
+/// metadata — modules bind by simple name, and their contract is what the probe measures, not
+/// build identity (that strict gate belongs to the NodeType bake lane).</para>
 ///
-/// <para><b>…except on the SHELF lane, where an unsatisfied floor HOLDS instead of refusing.</b>
+/// <para><b>…except on the SHELF lane, where an unlinkable module HOLDS instead of refusing.</b>
 /// <see cref="ShelveModule"/> is the PUBLISH path's entry (the registry stocking its warehouse):
-/// a warehouse may carry modules for platforms newer than itself, so above-floor bytes land and
-/// their activation entry is recorded — but nothing here loads them: boot re-applies the SAME
-/// floor gate per entry (<see cref="ModuleActivationBoot.ComputeEffectiveModuleEntries"/>) and
-/// skips a held entry loudly, until a platform update satisfies the floor and the very same boot
-/// check activates it. There is deliberately NO persisted "held" flag — held-ness is DERIVED from
-/// the recorded floor against the running platform at each decision point, so it can never go
-/// stale when the platform moves (the one-notion rule again). <see cref="LandModule"/> — the
-/// direct-adopt funnel — keeps refusing: an instance must never hold bytes its own next boot
-/// would try to load into an unsatisfied platform… which for the adopt path is the point of the
-/// install, so a hold there would be a package whose binary half silently never arrives.</para>
+/// a warehouse may carry modules for platforms newer than itself, so bytes this process cannot
+/// load land and their activation entry is recorded — the serve side lists them for consumers,
+/// whose own landing measures them against THEIR platform, and this process's boot runs the same
+/// probe (<c>MeshBuilder.InstallAssemblies</c>) and parks what it cannot load until a platform
+/// update makes it loadable. There is deliberately NO persisted "held" flag — held-ness is
+/// DERIVED from the bytes against the running platform at each decision point, so it can never
+/// go stale when the platform moves. <see cref="LandModule"/> — the direct-adopt funnel — keeps
+/// refusing: an instance must never hold bytes its own next boot would try to load into a
+/// platform that lacks their types… which for the adopt path is the point of the install, so a
+/// hold there would be a package whose binary half silently never arrives.</para>
 ///
 /// <para><b>The same-identity trap-door is refused too.</b> <c>MeshBuilder.ResolveModulePath</c>
 /// resolves <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c> BEFORE the app folder, so landing a
@@ -384,8 +389,8 @@ public sealed class ModuleLandingService : IDisposable
     public string BaseDirectory => baseDirectory;
 
     /// <summary>
-    /// Lands a module: verifies the declared platform floor, writes the assemblies atomically into
-    /// <c>modules/&lt;name&gt;/</c>, and appends/updates the activation entry in the
+    /// Lands a module: measures its link requirements against this platform, writes the assemblies
+    /// atomically into <c>modules/&lt;name&gt;/</c>, and appends/updates the activation entry in the
     /// <c>modules/activation.json</c> sidecar with <c>PendingRestart = true</c>. The module
     /// LOADS on the next restart (restart-as-activation) — nothing is loaded into the running
     /// process.
@@ -404,12 +409,13 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="version">The package version the bundle was served at — recorded on the
     /// activation entry so the auto-update reconcile can answer "already landed" without a
     /// download (<see cref="ModuleActivationEntry.Version"/>).</param>
-    /// <param name="minMeshVersion">The module's declared platform FLOOR — one of the two gates:
-    /// an unsatisfied floor (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) refuses the
-    /// landing. Null = no constraint declared, which is NOT the same as no constraint: the second
-    /// gate (<see cref="MeshWeaver.Mesh.ModulePlatformLink"/>, #3538) measures the module's actual
-    /// link requirements against this platform's surface and refuses bytes this process could not
-    /// load, whatever the floor says.</param>
+    /// <param name="minMeshVersion">The module's declared platform FLOOR — ADVISORY (#3648):
+    /// recorded on the activation entry and logged, naming both versions when it ranks above the
+    /// running platform (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>), never a
+    /// refusal. The ONE gate is the measured one (<see cref="MeshWeaver.Mesh.ModulePlatformLink"/>,
+    /// #3538): the module's actual link requirements against this platform's surface, which
+    /// refuses bytes this process could not load whatever the floor says — and lands bytes it can
+    /// load whatever the floor says.</param>
     public IObservable<Unit> LandModule(
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
@@ -421,41 +427,39 @@ public sealed class ModuleLandingService : IDisposable
         => pool.InvokeBlocking(_ =>
         {
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, holdAboveFloor: false);
+                staticAssets, holdUnloadable: false);
             return Unit.Default;
         })
         .Do(_ => AnnounceActivationChanged());
 
     /// <summary>
     /// Lands a module onto the REGISTRY SHELF (2026-08-22) — the publish path's entry, identical to
-    /// <see cref="LandModule"/> in every rule but one: an UNSATISFIED platform floor lands the
-    /// bytes and records the activation entry as HELD instead of refusing.
+    /// <see cref="LandModule"/> in every rule but one: a module the link probe says THIS process
+    /// cannot load lands its bytes and records the activation entry as HELD instead of refusing.
     ///
     /// <para><b>Why the two paths must differ.</b> The landing serves two roles: adopting a module
-    /// for THIS runtime (the install funnel — the floor refusal is exactly right there, declined
-    /// bytes must never reach a disk the next boot loads from), and STOCKING the registry's shelf
-    /// (the publish endpoint). Applying the adopt rule to the shelf produced a three-way deadlock,
-    /// measured in production 2026-08-22: modules extracted from the platform image declared
-    /// <c>minMeshVersion: 3.0.0-rc7</c>, the registry ran rc6 and 409'd every upload — while its
-    /// own <c>Modules:Required</c> gate held the rc7 rollout for exactly those absent modules.
-    /// The image doesn't ship them → only the registry can deliver them → the registry refuses to
-    /// even CARRY them until it updates → it can't update without them.</para>
+    /// for THIS runtime (the install funnel — the refusal is exactly right there, declined bytes
+    /// must never reach a disk the next boot loads from), and STOCKING the registry's shelf (the
+    /// publish endpoint). Applying the adopt rule to the shelf produced a three-way deadlock,
+    /// measured in production 2026-08-22, when the gate was still the declared floor: modules
+    /// extracted from the platform image declared <c>minMeshVersion: 3.0.0-rc7</c>, the registry
+    /// ran rc6 and 409'd every upload — while its own <c>Modules:Required</c> gate held the rc7
+    /// rollout for exactly those absent modules. The image doesn't ship them → only the registry
+    /// can deliver them → the registry refuses to even CARRY them until it updates → it can't
+    /// update without them. The declared floor itself decides nothing since #3648; the same
+    /// deadlock shape is still possible for bytes the registry genuinely cannot link, and the
+    /// shelf is what breaks it.</para>
     ///
-    /// <para><b>What "held" means mechanically — no new state, the existing gates ARE the hold.</b>
+    /// <para><b>What "held" means mechanically — no new state, the existing probe IS the hold.</b>
     /// The bytes go into a generation directory and the entry is recorded (enabled, floor
     /// included) exactly as for an active landing, so the serve side lists and serves them to
-    /// consumers, whose own fetch/land chain applies the floor against THEIR platform. This
-    /// process's boot does NOT load them: the per-entry floor gate in
-    /// <see cref="ModuleActivationBoot.ComputeEffectiveModuleEntries"/> skips the entry with a
-    /// loud line naming both versions — and flips it to loaded, on that same normal path, at the
-    /// first boot whose platform satisfies the floor (a platform update IS a restart, so no
-    /// separate reconcile is needed). The one deliberate difference in the record:
+    /// consumers, whose own landing measures them against THEIR platform. This process's boot
+    /// runs the same measurement in <c>MeshBuilder.InstallAssemblies</c> and parks what it cannot
+    /// load (<see cref="MeshWeaver.Mesh.IncompatibleModule"/>) — and loads it, on that same normal
+    /// path, at the first boot whose platform carries the types it needs (a platform update IS a
+    /// restart, so no separate reconcile is needed). The one deliberate difference in the record:
     /// <c>PendingRestart</c> is NOT raised for a held landing — a restart cannot activate it, and
-    /// a "restart required" no restart can clear is a false prompt
-    /// (<see cref="ModuleActivationStatus.NotYetLoaded(ModuleActivationList,
-    /// IReadOnlySet{string}, IReadOnlyDictionary{string, string}, Func{string, string},
-    /// Func{ModuleActivationEntry, bool})"/> excludes held entries for the same
-    /// reason).</para>
+    /// a "restart required" no restart can clear is a false prompt.</para>
     ///
     /// <para>Every other refusal is unchanged — in particular the app-closure same-identity
     /// trap-door still refuses even in shelf mode, because a held module DOES load eventually and
@@ -473,7 +477,7 @@ public sealed class ModuleLandingService : IDisposable
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null)
         => pool.InvokeBlocking(_ =>
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, holdAboveFloor: true))
+                staticAssets, holdUnloadable: true))
             .Do(_ => AnnounceActivationChanged());
 
     /// <summary>
@@ -561,7 +565,7 @@ public sealed class ModuleLandingService : IDisposable
         string? version,
         string? minMeshVersion,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
-        bool holdAboveFloor)
+        bool holdUnloadable)
     {
         foreach (var (relativePath, _) in staticAssets ?? [])
             ValidateAssetPath(relativePath, name);
@@ -581,31 +585,38 @@ public sealed class ModuleLandingService : IDisposable
                 $"Module '{name}': the assembly list does not contain its entry '{entryDll}' — "
                 + "such a folder could never load.", nameof(assemblies));
 
-        // 🚨 THE PLATFORM-FLOOR GATE, at placement — the same pure function the fetch and boot
-        // sides gate on (ModulePlatformFloor), so there is never a second notion of the module
-        // platform requirement. Deliberately NOT MVID equality: modules bind by simple name and
-        // their contract is API compatibility — the strict MVID gate is bake semantics and stays
-        // with the NodeType lane. On the ADOPT path, declining an unsatisfied floor is always
-        // safe; landing on faith is not: the missing API would surface only at the next boot, as
-        // a MissingMethodException with nothing connecting it to the install that caused it. On
-        // the SHELF path (holdAboveFloor — the publish endpoint, see ShelveModule) the same
-        // verdict HOLDS instead of refusing: the bytes land for CONSUMERS, whose own gates apply
-        // this very function against their platforms, while this process's boot keeps applying it
-        // per entry and so never loads what it records here.
-        //
-        // 🚨 #3538 — AND THE FLOOR THAT IS MEASURED RATHER THAN DECLARED. `minMeshVersion` is a
-        // CLAIM its author writes; the module's real requirement is the SET OF TYPES its bytes are
-        // linked against, which its own metadata states exactly. memex-cloud (core of 09-03)
-        // adopted a MeshWeaver.Graph.Views compiled on 09-06 against a Mesh.Contract carrying
-        // `CodeOutputCurrency` (added 09-04) because the declared floor `3.0.0-rc8` was satisfied
+        // 🚨 THE PLATFORM GATE, at placement — MEASURED, never declared (#3538, #3648).
+        // `minMeshVersion` is a CLAIM its author writes; the module's real requirement is the SET
+        // OF TYPES its bytes are linked against, which its own metadata states exactly. The claim
+        // has been wrong in both directions within one week: memex-cloud (core of 09-03) adopted a
+        // MeshWeaver.Graph.Views compiled on 09-06 against a Mesh.Contract carrying
+        // `CodeOutputCurrency` (added 09-04) because the declared floor `3.0.0-rc8` was SATISFIED
         // by the running `3.0.0-rc9.ci.7693` — every render of every code cell then threw
-        // TypeLoadException, for every user, until a human read a pod log. So the bytes are
-        // MEASURED against this platform's surface, from memory, BEFORE anything touches the disk:
-        // a refusal here costs no generation directory and leaves the previous generation running.
-        // The verdict is tri-state and `MayLoad` is true for Linkable ALONE — a check that could
-        // not be made parks the module exactly like one that failed.
-        var held = ModulePlatformFloor.DeclineReason(minMeshVersion) ?? LinkHoldReason();
-        if (held is not null && !holdAboveFloor)
+        // TypeLoadException until a human read a pod log (#3538); and on 2026-09-07 the same
+        // comparison (`ci < rc < clean`) REFUSED every module carrying an rc or 3.0.0 floor on
+        // every ci-built portal, holding the fleet on the morning build while every one of those
+        // modules would have linked. So the floor is ADVISORY — logged below, recorded on the
+        // entry, deciding nothing — and the bytes are MEASURED against this platform's surface,
+        // from memory, BEFORE anything touches the disk: a refusal here costs no generation
+        // directory and leaves the previous generation running. The verdict is tri-state and
+        // `MayLoad` is true for Linkable ALONE — a check that could not be made parks the module
+        // exactly like one that failed. Deliberately NOT MVID equality either: modules bind by
+        // simple name; the strict MVID gate is bake semantics and stays with the NodeType lane.
+        //
+        // On the ADOPT path a refusal is always safe and landing on faith is not: the missing type
+        // would surface only at the next boot, with nothing connecting it to the install that
+        // caused it. On the SHELF path (holdUnloadable — the publish endpoint, see ShelveModule)
+        // the same verdict HOLDS instead of refusing: the bytes land for CONSUMERS, whose own
+        // landing measures them against their platforms, while this process's boot runs the same
+        // probe and parks what it records here.
+        if (ModulePlatformFloor.DeclineReason(minMeshVersion) is { } advisory)
+            logger?.LogInformation(
+                "Module '{Name}' declares platform ≥ {Floor}; this deployment runs {Running} — "
+                + "advisory (#3648), the link probe decides at placement: {Advisory}",
+                name, minMeshVersion, ModulePlatformFloor.RunningVersion ?? "(unknown)", advisory);
+
+        var held = LinkHoldReason();
+        if (held is not null && !holdUnloadable)
         {
             logger?.LogWarning("Module '{Name}' REFUSED at landing: {Reason}", name, held);
             throw new InvalidOperationException($"Module '{name}' refused: {held}");
@@ -696,26 +707,27 @@ public sealed class ModuleLandingService : IDisposable
         // activation.d/<Name>.json removes the shared cell instead of guarding it — different
         // modules no longer share a path at all.
         ModuleActivationSidecar.WriteEntry(baseDirectory, entry);
-        // A HELD landing does not raise the restart signal: a restart cannot activate it (the boot
-        // gate skips the entry until the platform satisfies its floor), so "restart required"
-        // would be a prompt no restart can clear. The platform update that DOES satisfy the floor
+        // A HELD landing does not raise the restart signal: a restart cannot activate it (boot runs
+        // the same link probe on the same bytes and parks the entry again), so "restart required"
+        // would be a prompt no restart can clear. The platform update that DOES carry the types
         // is itself a restart, which activates the entry with no flag.
         if (held is null)
             ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
         if (held is null)
             logger?.LogInformation(
-                "Module '{Name}' LANDED into modules/{Generation}/ ({Count} assemblies, floor "
-                + "{MinMeshVersion}, platform {Running}; built against framework MVID "
-                + "{FrameworkMvid} — diagnostic) — activation recorded, RESTART REQUIRED to load it",
+                "Module '{Name}' LANDED into modules/{Generation}/ ({Count} assemblies, declared "
+                + "floor {MinMeshVersion} — advisory, platform {Running}; built against framework "
+                + "MVID {FrameworkMvid} — diagnostic) — activation recorded, RESTART REQUIRED to "
+                + "load it",
                 name, generation, assemblies.Count, minMeshVersion ?? "(none)",
                 ModulePlatformFloor.RunningVersion ?? "(unknown)", frameworkMvid ?? "(unrecorded)");
         else
             logger?.LogInformation(
                 "Module '{Name}' SHELVED into modules/{Generation}/ ({Count} assemblies) but HELD "
                 + "from local activation: {Reason}. It SERVES to consumers from here; this "
-                + "process's boot skips it until a platform update satisfies the floor, and that "
-                + "same boot then loads it",
+                + "process's boot parks it until a platform update carries the types it links "
+                + "against, and that same boot then loads it",
                 name, generation, assemblies.Count, held);
 
         return new ModuleLandingOutcome(Held: held is not null, HoldReason: held);
@@ -854,8 +866,11 @@ public sealed class ModuleLandingService : IDisposable
 /// "shelved, will serve" apart from "activated here" (2026-08-22).
 /// </summary>
 /// <param name="Held">True when the bytes landed but this process's own activation is HELD —
-/// the module's declared floor exceeds the running platform, so boot skips the entry until a
-/// platform update satisfies it. False = the ordinary landing: loads at the next restart.</param>
-/// <param name="HoldReason">Why the activation is held, naming both versions
-/// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>'s text), or null when not held.</param>
+/// the link probe measured the module as unloadable against the running platform (a type it
+/// links against is missing, or its metadata could not be read), so boot parks the entry until a
+/// platform update carries what it needs. False = the ordinary landing: loads at the next
+/// restart. 🚨 Since #3648 a declared <c>minMeshVersion</c> above the running platform does NOT
+/// hold — it is recorded and logged as an advisory, and bytes that link land unheld.</param>
+/// <param name="HoldReason">Why the activation is held, naming the missing type
+/// (<see cref="MeshWeaver.Mesh.ModuleLinkVerdict.Report"/>'s text), or null when not held.</param>
 public sealed record ModuleLandingOutcome(bool Held, string? HoldReason);

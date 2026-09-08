@@ -562,13 +562,16 @@ public static class PluginBundleEndpoints
                 {
                     // 🚨 The SHELF landing, not the adopt one (2026-08-22): publishing stocks the
                     // registry's warehouse, and a warehouse may carry modules for platforms NEWER
-                    // than itself. An above-floor upload therefore lands as HELD — bytes on the
-                    // shelf, served to consumers (whose own install path applies the floor
-                    // against THEIR platform), excluded from this instance's boot until a
-                    // platform update satisfies the floor — instead of the 409 that deadlocked
+                    // than itself. An upload whose bytes this instance cannot LINK therefore lands
+                    // as HELD — bytes on the shelf, served to consumers (whose own landing
+                    // measures them against THEIR platform), parked by this instance's boot until
+                    // a platform update carries the types — instead of the 409 that deadlocked
                     // extracted modules against the very platform update that needed them
-                    // (rc6→rc7, 2026-08-22). Real refusals (the app-closure same-identity
-                    // trap-door, malformed names) still surface as the observable's error.
+                    // (rc6→rc7, 2026-08-22). 🚨 A declared minMeshVersion above this instance's
+                    // platform no longer holds anything (#3648): it is recorded and logged as an
+                    // advisory, and bytes that link land unheld. Real refusals (the app-closure
+                    // same-identity trap-door, malformed names) still surface as the observable's
+                    // error.
                     outcome = (await landing.ShelveModule(
                         accepted.Module, accepted.Files,
                         frameworkMvid: accepted.FrameworkMvid,
@@ -595,22 +598,24 @@ public static class PluginBundleEndpoints
                     logger?.LogInformation(
                         "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
                         + "{Version}) — HELD from local activation ({Reason}); it serves from this "
-                        + "registry, and this instance loads it once its platform satisfies the floor",
+                        + "registry, and this instance loads it once its platform carries the types "
+                        + "it links against",
                         accepted.Module, plugin, accepted.Files.Count,
                         accepted.Version ?? "(unversioned)", outcome.HoldReason);
                 else
                     logger?.LogInformation(
                         "Module publish: landed '{Module}' for {Plugin} ({Files} file(s), version {Version}, "
-                        + "floor {Floor}) — it serves from this registry and loads here on the next restart",
+                        + "declared floor {Floor} — advisory) — it serves from this registry and loads "
+                        + "here on the next restart",
                         accepted.Module, plugin, accepted.Files.Count,
                         accepted.Version ?? "(unversioned)", accepted.MinMeshVersion ?? "(none)");
 
                 // 🚨 #3395 — a publish is a landing wave of one module, and a wave that does not
                 // propose its module set never activates ANYWHERE: boot loads the mesh's set, not
                 // the activation record it was derived from. Held or not, the set has to name it:
-                // a held entry is skipped by the platform-floor gate at boot exactly as before,
-                // and it must still be in the set for the boot AFTER a platform update to be able
-                // to load it (which is the whole shelf contract). Never fails the publish — an
+                // a held entry is parked by the link probe at boot exactly as before, and it must
+                // still be in the set for the boot AFTER a platform update to be able to load it
+                // (which is the whole shelf contract). Never fails the publish — an
                 // unproposable set leaves this instance on the set it is already on, the bytes
                 // still serve to consumers, and the next wave proposes again.
                 try

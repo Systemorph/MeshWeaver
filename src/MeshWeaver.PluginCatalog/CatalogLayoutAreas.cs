@@ -782,6 +782,17 @@ public static class CatalogLayoutAreas
                 .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
                            + "display: block; margin-top: 6px;"));
 
+        // 🚨 #3648 — what the module DECLARES, beside whatever state it is in, never instead of
+        // it. A declared minMeshVersion above the running platform used to be a hidden hold (boot
+        // skipped the entry, the card said nothing); now the entry loads or not on what the link
+        // probe measured, and this line says what its author claimed so the two can be compared.
+        // Localized like every other line on this card: platform-owned chrome follows the VIEWER.
+        if (activation.FloorAdvisoryForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } floor)
+            card = card.WithView(Controls.Body(
+                    $"ℹ️ {host.Localize("ui.moduleDeclaresNewerPlatform", floor.DeclaredFloor, floor.RunningVersion ?? "?")}")
+                .WithStyle("color: var(--neutral-foreground-hint, #605e5c); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
+
         return card;
     }
 

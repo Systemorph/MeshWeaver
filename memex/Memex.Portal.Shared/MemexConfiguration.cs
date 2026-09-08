@@ -195,17 +195,20 @@ public static class MemexConfiguration
             //
             // #1664 step 9 — the effective set is the appsettings baseline ∪ the ENABLED entries
             // of the modules/activation.json sidecar (store-installed modules landed by
-            // ModuleLandingService), deduped by name. Sidecar entries are guarded: a declared
-            // minMeshVersion FLOOR the running platform no longer satisfies (a rollback below the
-            // module's requirement) or a missing DLL SKIPS the entry with a loud stderr line —
-            // never a crash, the deployment must boot; the entry stays for when the platform
-            // moves forward again. A landed module's built-against framework identity is not a
-            // LOAD gate HERE — modules bind by simple name across platform builds, and the strict
-            // identity gate is the NodeType bake lane's. (It is not merely diagnostic either, since
-            // #3154: ModuleUpdateDecision compares it to tell a rebuild from a no-op, and #3211
-            // makes a bundle that states none unpublishable. That is the UPDATE question, not this
-            // one.) Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
-            // to Loki regardless).
+            // ModuleLandingService), deduped by name. Sidecar entries are guarded by ONE rule: a
+            // missing DLL SKIPS the entry with a loud stderr line — never a crash, the deployment
+            // must boot. 🚨 A declared minMeshVersion FLOOR above the running platform is NOT a
+            // skip since #3648 — it is announced on stdout as an advisory ("declares platform ≥
+            // X; running Y") and the entry is handed to the loader, whose link probe
+            // (MeshBuilder.InstallAssemblies) measures whether the bytes load. The floor skip is
+            // the line that held every production portal on the morning build for all of
+            // 2026-09-07 (ci < rc in the comparator) while every module would have linked. A
+            // landed module's built-against framework identity is not a LOAD gate here either —
+            // modules bind by simple name across platform builds, and the strict identity gate is
+            // the NodeType bake lane's. (It is not merely diagnostic, since #3154:
+            // ModuleUpdateDecision compares it to tell a rebuild from a no-op, and #3211 makes a
+            // bundle that states none unpublishable. That is the UPDATE question, not this one.)
+            // Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
             // 🚨 The SAME root ModuleLandingService writes (ModuleRoot) — never
             // AppContext.BaseDirectory directly. They must name one directory: a landed module
@@ -268,8 +271,8 @@ public static class MemexConfiguration
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 moduleAssemblies,
                 activationOnMeshSet,
-                // The ONE module platform gate (ModulePlatformFloor) — never a second notion of
-                // the module platform requirement.
+                // The ONE wording of the declared floor (ModulePlatformFloor) — ADVISORY since
+                // #3648: it names both versions for the line below and skips nothing.
                 ModulePlatformFloor.DeclineReason,
                 // 🚨 The entry's OWN landed directory SPECIFICALLY — modules/<Directory ?? name>/
                 // <name>.dll — never ResolveModulePath, whose BaseDirectory fallback would let a
@@ -282,7 +285,12 @@ public static class MemexConfiguration
                 // the deployment while its bytes sat correctly on disk (#1949).
                 entry => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry),
                 (module, reason) => Console.Error.WriteLine(
-                    $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
+                    $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"),
+                // 🚨 #3648 — stdout, not stderr: an advisory is not a fault. It says what the
+                // module's author claimed; the link probe in InstallAssemblies says whether it
+                // loads, and THAT line is the one to read when it does not.
+                (module, advisory) => Console.WriteLine(
+                    $"[ModuleActivation] store-installed module '{module}' {advisory}"));
             // 🚨 A LISTED-BUT-ABSENT module must never crash boot. `InstallAssemblies` does
             // `Assembly.LoadFrom`, which throws FileNotFoundException, so one stale line in
             // `Modules:Assemblies` takes the whole portal down before anything is serving —

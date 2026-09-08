@@ -26,6 +26,10 @@
     <ProjectReference Include="..\..\src\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Build\MeshWeaver.Plugin.Build.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
+    <!-- PlatformUpdateKeepsThePluginThenTakesTheRebuildTest drives the REAL module lane — landing
+         service, boot union, update decision — through a platform update (#3648): the maintainer's
+         "platform 1 + plugin A → platform 2 keeps A → plugin B lands and asks for the restart". -->
+    <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>
