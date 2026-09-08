@@ -90,14 +90,40 @@ data:
 #      only credential in values (a hash, committable; `htpasswd -nB {{ $r.publisherUsername }}`).
 #      A wrong password for THIS account is `WrongPass` and denies immediately — it never falls
 #      through to the key validator below.
-#   2. `ext_auth` — validate.sh, for EVERY OTHER account name: the password is a MeshWeaver
-#      instance key, validated by presenting it as a bearer to the portal's key→token exchange.
-#      docker_auth's contract (auth_server/authn/ext_auth.go): "<user> <password>" on stdin,
-#      exit 0 = allow, 1 = deny, 2 = no match (try the next authenticator), 3 = error.
+#   2. `ext_auth` — validate.sh (deploy/helm/files/registry-validate.sh), for EVERY OTHER account
+#      name: the password is a MeshWeaver instance key, validated by presenting it as a bearer to
+#      the portal's key→token exchange. docker_auth's contract (auth_server/authn/ext_auth.go):
+#      "<user> <password>" on stdin, exit 0 = allow, 1 = deny, 2 = no match (try the next
+#      authenticator), 3 = error — and on 0, a JSON `{"labels": {…}}` on stdout that the ACL can
+#      match with `${labels:<name>}` placeholders (auth_server/authz/acl.go).
 #
-# The ACL is then two lines: the publisher may push/pull/delete anything; any authenticated
-# account may pull anything; anonymous (account "") matches no rule and docker_auth denies by
-# default — there is no `account: ""` rule on purpose.
+# 🚨 Per-repository authorization of PLUGIN BUNDLES rides on those labels, and on nothing else
+# (Doc/Architecture/PluginBundlesInTheRegistry → "Authorization"). docker_auth 1.14.0 also has an
+# `ext_authz` hook, but it receives the marshalled request — account, type, name, actions, the
+# labels — and NOT the credential, so it cannot ask memex anything at authorization time; and a
+# label can never carry the key, because docker_auth logs every token's labels at Info. So the
+# validator asks memex ONCE, at login, for the caller's effective licence scope (the exchange's
+# `scope` array: `Plugins/*`, `Reinsurance/UWDeepfield`, `Plugins/*@pro`) and emits it as two
+# labels in the registry's lowercase name grammar:
+#   package   `<source>/<package>` per entry, `<source>/*` for a whole-source one → the bundle
+#             repositories `plugins/<source>/<package>`;
+#   source    `<source>` per PLAN-LESS whole-source entry only → the publication index
+#             `plugins/<source>`. A plan-scoped `Source/*@plan` licenses packages by tier and
+#             never the publication whole, so it yields no `source` label.
+#
+# The ACL, first match wins, and the order IS the policy:
+#   1. the publisher may push/pull/delete anything — CI, and nothing else;
+#   2. `plugins/releases` (a release's framework identity) — any authenticated account may pull;
+#   3. `plugins/<source>` — pull when the licence covers the source whole and plan-less;
+#   4. `plugins/<source>/<package>` — pull when the licence covers the package;
+#   5. everything else under `plugins/` — DENIED (an empty action set), so a plugin object the
+#      labels do not name never falls through to the image rule below;
+#   6. any other repository (memex-portal-ai, memex-migration, …) — any authenticated account may
+#      pull, exactly as before.
+# Anonymous (account "") matches no rule and docker_auth denies by default — there is no
+# `account: ""` rule on purpose. The pattern form: a bare pattern is a path glob (`*` does not
+# cross `/`, so `plugins/plugins/*` names one bundle repository, never the index), `/…/` is a
+# regular expression, and `${labels:<name>}` is tried against every value of that label.
 #
 # No TLS here: the pod is reached only through the Ingress, which terminates TLS for the host.
 ---
@@ -134,33 +160,25 @@ data:
       - match: {account: {{ $r.publisherUsername | quote }}}
         actions: ["push", "pull", "delete"]
         comment: "the publisher (CI) may push, pull and delete any repository"
+      - match: {account: "/.+/", name: "plugins/releases"}
+        actions: ["pull"]
+        comment: "a release's framework identity — any authenticated account may pull it"
+      - match: {account: "/.+/", name: "plugins/${labels:source}"}
+        actions: ["pull"]
+        comment: "the publication index of a source the caller's licence covers whole and plan-less"
+      - match: {account: "/.+/", name: "plugins/${labels:package}"}
+        actions: ["pull"]
+        comment: "a bundle repository the caller's licence covers (a whole-source entry expands to plugins/<source>/*)"
+      - match: {account: "/.+/", name: "/^plugins[/]/"}
+        actions: []
+        comment: "every other plugin object is denied — a plugin repository the labels do not name never reaches the image rule"
       - match: {account: "/.+/"}
         actions: ["pull"]
-        comment: "any authenticated account — an installation holding a valid instance key — may pull any repository"
-  # ext_auth hook. Reads "<user> <password>" from stdin (docker_auth writes them space-separated
-  # with NO trailing newline, so `read` returns non-zero at EOF while still assigning — hence no
-  # `set -e` and no test of read's status), validates the PASSWORD as an instance key against the
-  # portal, and maps the answer onto docker_auth's exit codes. The image is Alpine with busybox
-  # (no curl, no bash): busybox wget with -S prints the response status to stderr, which is the
-  # only thing read. Anything that is not a definite 200 or a definite 401/403 — DNS failure,
-  # timeout, a 5xx, a redirect chain ending elsewhere — is exit 3 (ERROR), never a pass and never
-  # a quiet deny that would read as "wrong key" to the caller.
+        comment: "any authenticated account — an installation holding a valid instance key — may pull any image repository"
+  # ext_auth hook — deploy/helm/files/registry-validate.sh, verbatim (shellchecked and executed
+  # by .github/scripts/test-bundle-registry.py against the real docker_auth image). It reads the
+  # exchange URL from MEMEX_VALIDATION_URL, which deployment-auth.yaml sets from
+  # registry.validationUrl; docker_auth execs the hook with its own environment.
   validate.sh: |
-    #!/bin/sh
-    # docker_auth ext_auth contract: stdin "<user> <password>", exit 0 allow / 1 deny / 3 error.
-    read -r user password
-    if [ -z "$password" ]; then
-      exit 1
-    fi
-    url={{ $r.validationUrl | quote }}
-    # POST to the portal's key→token exchange (an empty JSON body is a valid request, ~0.2 s) — NOT
-    # the plugin catalog, which renders in full: measured 14–18 s for a valid key, past the 10 s cap.
-    status=$(wget -T 10 -qS -O /dev/null --post-data='{}' --header='Content-Type: application/json' \
-      --header="Authorization: Bearer $password" "$url" 2>&1 \
-      | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | tail -n 1)
-    case "$status" in
-      200) exit 0 ;;
-      401|403) exit 1 ;;
-      *) echo "validate.sh: no definite answer from $url (status '$status')" >&2; exit 3 ;;
-    esac
+{{ .Files.Get "files/registry-validate.sh" | indent 4 }}
 {{- end }}

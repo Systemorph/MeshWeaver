@@ -96,3 +96,32 @@ jobs:
       - name: Assert the chart-drift comparator classifies each divergence correctly
         if: ${{ !cancelled() }}
         run: deploy/aks/scripts/test-chart-drift-compare.sh
+
+  # The three pieces of shell behind Doc/Architecture/PluginBundlesInTheRegistry — the publisher
+  # (.github/scripts/push-bundle-publication.sh), the `bundle-fetch` init container's script and
+  # docker_auth's ext_auth hook (deploy/helm/files/) — EXECUTED against the real distribution and
+  # docker_auth images with the ConfigMap THIS chart renders, and a stub of memex's key→token
+  # exchange. Without this the first execution of an edit to any of them is a production publish,
+  # a portal booting on a half-fetched shelf, or a registry that lets a plan-scoped licence pull a
+  # whole publication. It lives here rather than in the workflow-shell job because it needs the
+  # rendered chart (helm) beside docker; both are asserted by the harness's preflight, which fails
+  # RED naming what is missing. ORAS is installed from a pinned release (version + sha256).
+  #
+  # 🛡️ NO SKIP-TRAPDOOR: every input is in this repository or pinned by digest/checksum; no
+  # secret, no cluster; no `continue-on-error:`, no input-shaped `if:`, no path filter.
+  bundle-registry:
+    name: Bundle registry scripts (executed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.3
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Execute the publisher, the init container's fetch and the edge authorization
+        run: python3 .github/scripts/test-bundle-registry.py

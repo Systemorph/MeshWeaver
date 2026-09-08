@@ -1,0 +1,20 @@
+{{- $b := include "memex.bundles" . | fromYaml }}
+{{- if $b.enabled }}
+# The `bundle-fetch` init container's script — deploy/helm/files/bundle-fetch.sh, verbatim
+# (shellchecked and executed by .github/scripts/test-bundle-registry.py against a real
+# distribution registry holding a publication pushed by push-bundle-publication.sh). Rendered
+# only when bundles.registry is set; the Deployment hashes this object into its pod template so
+# an edit to the script rolls the pods like an image change would.
+---
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "memex-bundle-fetch"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+data:
+  bundle-fetch.sh: |
+{{ .Files.Get "files/bundle-fetch.sh" | indent 4 }}
+{{- end }}
