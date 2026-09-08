@@ -70,12 +70,13 @@
          Imported globally here so the ~330 existing call sites need no churn, and so exactly ONE
          implementation exists — a forward in the old namespace made every .Await(ct) ambiguous
          (CS0121) in the files that import both. -->
-    <!-- Excluded: the three test projects with no messaging dependency at all (they assert JSON,
-         image packing and browser E2E). A global using cannot resolve a namespace the project does
+    <!-- Excluded: the test projects with no messaging dependency at all (they assert JSON,
+         image packing, browser E2E, and the dependency-free Deployment record contract). A global using cannot resolve a namespace the project does
          not reference, so naming them is honest; adding a ProjectReference just to satisfy a using
          would be the wrong direction. -->
     <Using Include="MeshWeaver.Messaging"
            Condition="'$(MSBuildProjectName)' != 'MeshWeaver.Cli.Test'
+                  and '$(MSBuildProjectName)' != 'MeshWeaver.Deployment.Contract.Test'
                   and '$(MSBuildProjectName)' != 'MeshWeaver.Json.Test'
                   and '$(MSBuildProjectName)' != 'MeshWeaver.PluginImage.Test'
                   and '$(MSBuildProjectName)' != 'MeshWeaver.Portal.E2E.Test'

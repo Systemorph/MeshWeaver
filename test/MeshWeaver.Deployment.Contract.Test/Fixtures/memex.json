@@ -1,0 +1,475 @@
+{
+  "$type": "MeshNode",
+  "id": "memex",
+  "namespace": "Deployments",
+  "path": "Deployments/memex",
+  "mainNode": "Deployments/memex",
+  "name": "memex",
+  "description": "Systemorph company instance — client work, infra control, accounting.",
+  "nodeType": "Hosting/Deployment",
+  "state": "Active",
+  "content": {
+    "$type": "DeploymentContent",
+    "cluster": "memexaks-cluster",
+    "databaseServer": "memexaks-pg",
+    "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+    "pinnedImageTag": "3.0.0-ci.8131",
+    "keyVault": "Systemorph",
+    "owner": "Systemorph",
+    "host": "memex.systemorph.com",
+    "namespace": "memex",
+    "database": "memex",
+    "purpose": "Systemorph's own instance — client work, infrastructure control, accounting. Private to Systemorph staff. This is the control instance, and the natural home for the Deployments Space itself.",
+    "keyVaultSecretPrefix": "memexsystemorph-",
+    "configPath": "deployments/aks/memex",
+    "notes": "**Differences from the other two — resolved 2026-08-12** (they were an artifact of this environment predating version-controlled config, not decisions):\n\n- **`nodeSelector` + resources: to be normalised.** `deployments/aks/memex/portal-patch.json` now pins `workload=silos` and carries the memex-cloud envelope (requests 4 CPU / 8Gi, limits 6 / 16Gi). Applying it reschedules the pod, so it lands at the next deliberate apply, not by itself.\n- **Key Vault naming: deliberately KEPT.** SecretProviderClass `memex-kv` → secret `memex-kv-secrets` stays; renaming live objects buys consistency only and risks the secret mount.\n- **PVC `app.kubernetes.io/component` labels: applied 2026-08-12** to `memex-content` and `memex-data` (labelling a bound PVC is safe; it was an oversight at creation).\n\n2026-08-12: live Deployment was missing the chart's `preStop` drain (sleep 15) and ran 30s termination grace — every self-update roll dropped connections and cut Orleans shutdown short. Patched live to the chart's values (preStop + 120s grace); the chart owns them from here.\n\n2026-08-29: **`keyVaultSecretPrefix` changed `memex-` → `memexsystemorph-`.** Two reasons, both discovered while making teardown purge Key Vault by enumeration rather than by a hard-coded suffix list.\n\n1. `memex-` never held this instance's per-instance secrets. They are the UNPREFIXED legacy names in the vault (`ai-keyprotection-masterkey`, `Authentication-Microsoft-ClientSecret`, `github-oauth-clientsecret`, …). What `memex-` *does* match is `memex-connectionstring` and `memex-postgres-password` — INFRASTRUCTURE secrets that are not this instance's to delete. A prefix-enumerating teardown of memex would therefore have deleted exactly the two wrong secrets and missed every right one.\n\n2. `memex-` is a prefix that other instance prefixes can live under (a future `memex-dev` would be swallowed by it). `memexsystemorph-` matches the `memexcloud-` convention and cannot contain, or be contained by, another instance's prefix.\n\n🚨 NOTHING WAS RENAMED IN THE VAULT and nothing needs to be: no secret named `memex-*` belongs to this instance, so the new prefix simply stops pointing at other people's. The unprefixed legacy names stay as they are — moving them is a separate, live-affecting change.\n\n2026-09-06: **the bake gate is now declared HERE, and `deployments/aks/memex/values.gate.yaml` is deleted.** Measured on the live cluster the same day (`kubectl -n memex get deploy memex-portal-deployment -o json`):\n\n- container env `PreWarm__GateReadiness=true` — an inline `env:` entry owned by `kubectl-patch`, 2026-08-24T06:43:49Z. Nothing in this repo put it there.\n- ConfigMap `memex-portal-config`: `PreWarm__GateReadiness=\"false\"`, `PreWarm__DynamicTypes=\"false\"`, `PreWarm__BatchBake=\"\"`, `PreWarm__PrebuiltBundleRoot=\"\"`. An inline `env:` entry overrides `envFrom`, so the pod ran `true` while every committed file said `false`.\n- container env `PreWarm__BatchBake=true` and `PreWarm__PrebuiltBundleRoot=/data/prebuilt-bundles` — both owned by `kubectl-set`, 2026-09-03T17:14:02Z, and declared nowhere in the repo.\n- `strategy` maxSurge 1 / maxUnavailable 0, `progressDeadlineSeconds` 900, `revisionHistoryLimit` 3, startupProbe `/health` 5 s x 60. All four already match what the chart renders from these values — they need no keys here and none were added.\n\n🚨 **THE ARMING WAS NEVER REAL, and that is why `DynamicTypes` moves with it.** The deployed host (`MeshWeaver.Plugins/src/Memex.Portal.Distributed/Program.cs`, `gateBake = gateBakeConfigured && bakeSweepEnabled`) refuses to register the `nodetype_bake` health check when the sweep is off, forces `GatesReadiness` false, and logs at **Critical** that the gate \"has been DISARMED rather than left registered and permanently green\". The gate reads bake state that ONLY the `PreWarm__DynamicTypes` sweep writes — the unconditional prebuilt-bundle adoption writes none of it — so `GateReadiness=true` with `DynamicTypes=false` has protected nothing since 2026-08-24, silently. Persisting only the env var would have committed that same empty claim, so the record declares the whole pairing the chart, `deployments/aks/README.md` and `values.pearl.public.yaml` all state together: sweep on, gate on, batch bake on, and the startup budget raised to cover a cold bake (10 s x 1080 = 3 h; `progressDeadlineSeconds` follows it automatically as period x threshold + 600).\n\n**So the next `deploy` of memex is the one that actually arms the gate**, and it is a real behaviour change, not a no-op: the boot-time sweep turns on and the startup budget goes from 5 min to 3 h.\n\n2026-09-06, LATER THE SAME DAY — **that deploy ran (helm release `memex` v29, 11:24:20Z) and the gate is now ARMED AND ENFORCING.** Measured on the live cluster:\n\n- ConfigMap `memex-portal-config` now renders `PreWarm__GateReadiness=\"true\"`, `PreWarm__DynamicTypes=\"true\"`, `PreWarm__BatchBake=\"true\"`, `PreWarm__PrebuiltBundleRoot=\"/data/prebuilt-bundles\"`. `printenv` inside the running container reports the same, so the surviving inline `PreWarm__GateReadiness=true` is now REDUNDANT rather than shadowing — it agrees with `envFrom`.\n- The `nodetype_bake` health check is REGISTERED and it withheld `/health`. Pod `memex-portal-deployment-5fc89b764-sb7cz`: started 11:24:21Z, `nodetype_bake` **Unhealthy** (`NodeType bake in progress — enumerating dynamic NodeTypes`) 11:25:42Z→11:27:22Z, sweep `compiled=78 alreadyBaked=122 compileErrors=4 timedOut=0 skipped=3 contentBroken=1 faulted=0`, **Ready 11:27:33Z** — 3 m 12 s of held readiness with the old pod serving. Pod `…-dcdcq`: 11:27:33Z → Ready 11:29:05Z. No `DISARMED`, no `GATE NOT ARMED`, no `REFUSING READINESS`.\n- The remaining cluster action is `kubectl -n memex set env deployment/memex-portal-deployment PreWarm__GateReadiness-`, which now removes a redundant entry and leaves the pod ARMED. It is NOT the same act on memex-cloud, where the inline entry is `false` and removing it ARMS the gate.\n\n🚨 **The arming precondition stated above was over-stated, and this roll measured it.** A `previouslybroken` type CANNOT gate: `NodeTypeBakeEntry.WasHealthy` is false for `BakeState.PreviouslyBroken` and `NodeTypeBakeGateState.MarkOutcome` returns before recording anything when `!WasHealthyBeforeBake`, precisely so one abandoned NodeType cannot freeze every future deploy. memex armed with `previouslybroken=8` and `compileErrors=4` and was Ready in 3 m 12 s. What gates is a REGRESSION — a previously-healthy type that fails on this image, directly (`CompileError`) or as `UpstreamFailed` behind one that did. `TimedOut`, `UpstreamUnevaluated`, `NoSources` and `UpstreamContentBroken` never gate.\n\nNot folded in, deliberately: the live `readinessProbe`/`livenessProbe` `initialDelaySeconds` (20/60). Kubernetes suspends both probes until the startupProbe passes, so a delay measured from container start is dead config wherever a startupProbe exists. The chart is the authoritative side of that drift (MeshWeaver#2355 concluded the opposite three times). The live readiness path `/alive` is likewise not folded in: the chart moved readiness to its own `/ready` in MeshWeaver#3330 and a deploy is meant to apply that.\n\n2026-09-06: **the plugin-registry token has TWO env-key names and only one of them existed.** `values.memex.public.yaml` now maps the SAME vault object `PluginCatalog-RegistryToken` to a SECOND key, `PluginCatalog__Registries__0__Token`, alongside the legacy `PluginCatalog__RegistryToken`. Measured live the same day (key NAMES only): ConfigMap `memex-portal-config` carries `PluginCatalog__Registries__0__{Name,Ref,Url}` (the NAMED shape) with no token; Secret `memex-portal-secrets` carries only the LEGACY `PluginCatalog__RegistryToken`; Secret `memex-kv-secrets` carries ZERO `PluginCatalog*` keys; the inline container `env:` carries `PluginCatalog__RegistryToken`, `__RegistryUrl` and `__AutoUpdateByDefault` and NO `Registries__*`. So the per-registry token existed in no layer at all, `RegistryTokenResolver` resolved \"\", and `RegistryPackageSource.Request()` attaches the bearer only when it is non-empty — the poll `GET https://memex.meshweaver.cloud/api/plugins?ref=HEAD` went out with NO Authorization header and was refused 401 on **740 consecutive passes**. `RegistryTokenResolver.WithLegacyTokens` bridges the legacy key onto a sole/URL-matching named registry, but only on the paths that call it (boot reconcile, consent service); the Store's `Store/Publishing/Source/RegistryPackages.Reference` path in MeshWeaver.Plugins does not, which is the real fix for the class (MeshWeaver#3201). Diagnosis: session meshweaver-education-34 on Memex#164.\n\n🚨 THE MAPPING IS INDEX-POSITIONAL. `Registries__0__Token` binds to `pluginCatalog.registries[0]` by POSITION, not by name; reordering, inserting into or removing from that list silently re-points the token with no error anywhere, and the only symptom is another 401 storm. The list and the mapping move together. memex-cloud is deliberately excluded: it is the REGISTRY, configured with `pluginCatalog.sources[]` and no `registries:` at all, so an index-positional token would bind to nothing there.\n\n🚨 DRIFT TO CLOSE: this `keyVaultSecrets` block — the chart-owned SPC `memex-portal-keyvault`, added to the overlay by Memex#180 — is NOT on this record. The record's `keyVaultSecrets` still describes the LEGACY hand-made `memex-kv` class (rendered as the overlay's extraEnvFrom/extraVolumes pair), so a re-render from this record would DROP both PluginCatalog mappings and every comment around them. Folding the second class onto the record needs a record shape that can hold two SPCs; until then the overlay is ahead of the record for this block only.\n\n2026-09-06, CLOSED — **the record now holds BOTH classes, the whole env precedence stack, and the pod's sidecars.** The drift above was measured before it was closed: rendering the OLD record and diffing it structurally against the committed overlay gave **41 differences**, and every one was a silent loss. A re-render would have (1) replaced the chart-owned `memex-portal-keyvault` class with a `memex-kv` one, deleting BOTH PluginCatalog mappings — the registry-poll fix of that morning; (2) dropped `extraEnvFrom: memex-kv-secrets`, detaching all 13 keys of the hand-made class (the connection string, the GitHub App private key, the AI provider keys) from the pod; (3) ADDED a mapping for `memexsystemorph-PluginCatalog-RegistryToken`, a vault object that does not exist, which fails the whole CSI mount and leaves every new pod in ContainerCreating; and (4) dropped `Embedding__*` and `ModelCredit__InstanceTier`. What the record now carries, all measured read-only on the live cluster the same day (names and lengths only, never a value):\n\n- **`keyVaultSecrets`** = the chart-owned `memex-portal-keyvault` → Secret `memex-portal-keyvault`, mounted at `/mnt/kv-portal-keyvault`. It maps the ONE vault object `PluginCatalog-RegistryToken` onto TWO keys, which is the #3201 fix and which the projection used to REFUSE (`maps vault object X onto more than one key`). A key has one home; an object may have as many keys as the portal reads it under.\n- **`keyVaultSecretClasses[0]`** = the hand-made `memex-kv` → Secret `memex-kv-secrets` at `/mnt/kv-secrets`, with all 13 live mappings. Four of them were on no record and in no file: `GitHub__Webhook__Secret`, `Plugins__Registry__PublishToken`, `Hosting__PlatformWebhookSecret` and `Email__ClientSecret` (`memexsystemorph-Email-ClientSecret`, added to the live SPC by `kubectl patch` on 2026-08-30). The `PluginCatalog__RegistryToken` entry the record used to claim for this class was never in it: `memex-kv-secrets` carries ZERO `PluginCatalog*` keys.\n- **`vaultValuesKeys`** = the 11 keys of `memex-portal-secrets`, the chart's OWN Secret, rendered from the Key Vault values half (`helm-values-memex`) that no repository holds. Six of them are also supplied by `memex-kv-secrets`, which sits LATER in `envFrom` and therefore wins; without this list nothing said the chart's Secret carried them at all.\n- **`inlineEnv`** = the 16 entries `kubectl` set directly on the Deployment. These render NOTHING — `helm upgrade` does not remove an inline entry (three-way merge removes only what helm previously owned, measured 2026-09-03), so recording one neither creates nor deletes it. Recording them is what stops the record from disagreeing with the pod at every read. Two of them disagree with the ConfigMap and are therefore live behaviour no committed file states: `Features__Ai__Providers__AzureOpenAI=true` (ConfigMap says `false`) and `PluginCatalog__RegistryUrl` (ConfigMap renders it EMPTY, so the inline entry is the SOLE source, not a shadow). `Features__Ai__Clis__ClaudeCode` and `__Copilot` have no ConfigMap key at all.\n- **`gates`** = the `python` and `node` sidecars (`meshweaver.azurecr.io/meshweaver/{python,node}-gate:8aa1a79`), in the pod since a `kubectl patch` on 2026-08-24 and declared in no repository, while the chart has been able to render them from `grpc.gates` all along. The pod runs THREE containers; the record used to describe one.\n\n2026-09-06, CORRECTION to the above — **the `volumes` block was wrong, and the entry that closed the Key Vault drift did not close this.** Found by re-running the render-vs-live check over the FULL persistence set instead of only the CSI volumes; the hunk is taken from Memex#175, whose author measured it first (2026-09-03).\n\n- **`content` had no `claimName`, so the chart rendered NO content volume at all.** `deployment.yaml` gates every persistence entry on `{{- if and $spec $spec.claimName $spec.mountPath … }}`, so an entry without one is silently inert — while `Storage__BasePath: /mnt/content` stays set. A deploy from the record as it stood gave the portal a content path with nothing mounted at it. Fixed: `claimName: memex-content`.\n- **`size` said 128Gi; the PVC is 64Gi.** Measured: `kubectl -n memex get pvc` → `memex-content 64Gi`, `memex-data 16Gi`, `memex-users 32Gi`.\n- **`attachments` was a PHANTOM.** Namespace `memex` has no `memex-attachments` PVC (memex-cloud does), the live pod has no such volume and no `/mnt/attachments` mount. It rendered nothing only because it also lacked a `claimName` — inert *and* false. Removed.\n\n`postgres` stays as it is: the in-cluster Postgres StatefulSet is gated on `postgres.enabled` (false here) and does not read `persistence.postgres` at all, so that entry is inert BY DESIGN rather than by accident.\n\n🚨 The lesson generalises past this one field: a render that reproduces the SecretProviderClasses, the envFrom order and the CSI mounts can still omit an ordinary volume, because the two are gated by different conditions. The check now compares the whole volume and volumeMount set, and asserts that every persistence entry names a PVC that exists.\n\n🚨 STILL OPEN, and it will stall the next deploy of this namespace: the committed overlay declares `Embedding-ApiKey` → `Embedding__ApiKey` on `memex-portal-keyvault`, and **no secret of that name exists in Key Vault `Systemorph`** (measured 2026-09-06: `SecretNotFound`; the live SPC carries only the two PluginCatalog mappings, because that entry has not been deployed yet). A declared object the vault does not hold fails the WHOLE mount — the pod stays ContainerCreating, the old pod keeps serving and the rollout stalls. The record states the entry because it states the overlay's intent; provisioning the vault secret is what unblocks it. The same is true of `memexcloud-Embedding-ApiKey` on memex-cloud.\n\n2026-09-07 (Memex#202): **the record's `Embedding__*` half was three values behind the overlay it renders, and a re-render would have re-broken what PR #215 fixed.** PR #215 corrected only the two overlay files — `gh api repos/Systemorph/Memex/pulls/215/files` returns exactly two filenames — so the record kept declaring ``Embedding-ApiKey``, a Key Vault object that does not exist, plus `Embedding__Endpoint = https://s-meshweaver.cognitiveservices.azure.com/openai/v1` and `Embedding__Model = embed-v-4-0`. A declared vault object the vault does not hold fails the WHOLE CSI mount, so a render from this record would have left every new pod in ContainerCreating — the exact failure #202 was opened for, re-introduced by the mechanism this record IS.\n\nAll three now match the overlay: ``OpenRouter-ApiKey``, `https://openrouter.ai/api/v1`, `openai/text-embedding-3-small`. The reasoning for the OpenRouter object is the overlay's and is unchanged — embeddings and chat are ONE OpenRouter account, so a separate `Embedding-ApiKey` object would be a second copy of one secret to rotate, and a rotation that missed one would fail silently.\n\n🚨 **The class, not the instance.** Nothing could see this: `scripts/` held only drift, doc-links and image-pins, and no gate compared a record's declarations against the overlay it renders. `scripts/check-record-renders-overlay.py` now does, on every PR and every push to main, with no credential — it asserts that every `extraPortalConfig` key reaches `config.memex_portal` with the same value and that the `keyVaultSecrets` maps are identical in both directions. It cannot check whether a named vault object EXISTS (that needs a credential); it checks that the two halves of this repository agree, which is what silently came apart here.\n\n2026-09-08: **`volumes[].size` for `data` (`memex-data`) 16Gi → 128Gi — the share was FULL.** Measured 13:51Z: 16 GiB, 3 MiB free, while memex-cloud's `/data` ran 128 GiB with 28 GiB used. `/data` holds the DataProtection keys, the NodeType assembly cache and the NuGet cache; a full share stops every compile and every sign-in key rotation. Capacity is a RECORD property from this change on (MeshWeaver `hosting-pv-resize`, Plugins Hosting 1.14): `Reconcile` (and `Provision`) grow every declared claim to the record's size — grow-only, online on Azure Files, read back from the claim's status — and `Audit` reports a claim below its record under `volumeCapacityBelowRecord`. Until the operator image carrying the command is rolled, this record's 128Gi is a declaration the audit will show as drift; the number is what the claim SHOULD hold, never a measurement of what it does. No claim is created or shrunk by this: `memex-content` (64Gi) and `memex-users` (32Gi) are declared at their measured sizes.",
+    "repository": "https://github.com/Systemorph/Memex",
+    "helmRelease": "memex",
+    "databaseUsername": "memexadmin",
+    "inClusterPostgres": false,
+    "resources": {
+      "requests": {
+        "cpu": "4",
+        "memory": "8Gi"
+      },
+      "limits": {
+        "cpu": "6",
+        "memory": "16Gi"
+      }
+    },
+    "replicas": 2,
+    "volumes": [
+      {
+        "name": "content",
+        "claimName": "memex-content",
+        "mountPath": "/mnt/content",
+        "size": "64Gi",
+        "storageClass": "azurefile-memex",
+        "accessMode": "ReadWriteMany"
+      },
+      {
+        "name": "data",
+        "claimName": "memex-data",
+        "mountPath": "/data",
+        "size": "128Gi",
+        "storageClass": "azurefile-memex",
+        "accessMode": "ReadWriteMany"
+      },
+      {
+        "name": "postgres",
+        "size": "128Gi",
+        "storageClass": "managed-csi",
+        "accessMode": "ReadWriteOnce"
+      },
+      {
+        "name": "users",
+        "claimName": "memex-users",
+        "mountPath": "/mnt/users",
+        "size": "32Gi",
+        "storageClass": "azurefile-memex",
+        "accessMode": "ReadWriteMany"
+      }
+    ],
+    "ingress": {
+      "className": "webapprouting.kubernetes.azure.com",
+      "tlsSecret": "memex-tls",
+      "annotations": {
+        "nginx.ingress.kubernetes.io/proxy-buffer-size": "16k",
+        "nginx.ingress.kubernetes.io/proxy-buffers-number": "4"
+      },
+      "sessionAffinity": {
+        "enabled": true,
+        "cookieName": "MEMEX_AFFINITY",
+        "nginxAnnotations": {
+          "nginx.ingress.kubernetes.io/affinity": "cookie",
+          "nginx.ingress.kubernetes.io/affinity-mode": "persistent",
+          "nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+          "nginx.ingress.kubernetes.io/proxy-send-timeout": "3600",
+          "nginx.ingress.kubernetes.io/session-cookie-max-age": "172800",
+          "nginx.ingress.kubernetes.io/session-cookie-name": "MEMEX_AFFINITY"
+        },
+        "agicAnnotations": {
+          "appgw.ingress.kubernetes.io/cookie-based-affinity": "true",
+          "appgw.ingress.kubernetes.io/request-timeout": "3600"
+        }
+      }
+    },
+    "gitHubApp": {
+      "clientId": "Iv23liBtPCOxYjqyK3Yx",
+      "installationId": "144517285",
+      "installationOwner": "Systemorph"
+    },
+    "autoRecycleOnStaleBuild": true,
+    "requiredModules": [
+      "MeshWeaver.Blazor.Radzen.dll",
+      "MeshWeaver.Blazor.Analysis.dll",
+      "MeshWeaver.Blazor.EntityViews.dll",
+      "MeshWeaver.Blazor.GoogleMaps.dll",
+      "MeshWeaver.Speech.dll"
+    ],
+    "ai": {
+      "anthropic": {
+        "endpoint": "https://s-meshweaver.services.ai.azure.com/anthropic/",
+        "models": [
+          "claude-opus-4-7",
+          "claude-sonnet-4-6",
+          "claude-haiku-4-5"
+        ],
+        "enabled": true
+      },
+      "azureFoundry": {
+        "endpoint": "",
+        "models": [
+          "",
+          "",
+          ""
+        ]
+      },
+      "openRouter": {
+        "models": [
+          "z-ai/glm-5.3",
+          "moonshotai/kimi-k3",
+          "openai/gpt-5.2",
+          "openai/gpt-5-mini",
+          "google/gemini-3.1-pro-preview",
+          "google/gemini-3.7-flash",
+          "anthropic/claude-opus-5",
+          "anthropic/claude-sonnet-5",
+          "deepseek/deepseek-v4-pro",
+          "x-ai/grok-4.6",
+          "qwen/qwen3-max",
+          "qwen/qwen3.6-35b-a3b"
+        ]
+      },
+      "tiers": {
+        "heavy": "moonshotai/kimi-k3",
+        "standard": "z-ai/glm-5.3",
+        "light": "qwen/qwen3.6-35b-a3b",
+        "utility": "z-ai/glm-5.3"
+      }
+    },
+    "signIn": {
+      "provider": "Custom",
+      "enableDevLogin": false,
+      "microsoftClientId": "eed68df1-f267-4426-9dda-c0b43c68435b",
+      "microsoftTenantId": "3a01d7ac-3330-444d-942d-975eb491b5d6",
+      "googleClientId": "",
+      "linkedInClientId": ""
+    },
+    "email": {
+      "enabled": true,
+      "clientId": "f5d635fd-78e3-4bc6-b9d0-01a851d1ecbc",
+      "tenantId": "3a01d7ac-3330-444d-942d-975eb491b5d6",
+      "mailboxAddress": "memex@systemorph.com",
+      "useManagedIdentity": false,
+      "inboundEnabled": true,
+      "webhookBaseUrl": "https://memex.systemorph.com"
+    },
+    "telemetry": {
+      "otlpEndpoint": "http://otel-collector:4317",
+      "otlpProtocol": "grpc"
+    },
+    "operator": {
+      "enabled": true,
+      "namespace": "memex-ops",
+      "serviceAccount": "hosting-operator",
+      "image": "meshweaver.azurecr.io/hosting-operator:00dc0e8",
+      "environment": {
+        "AZURE_CLIENT_ID": "280fd351-ee78-4468-8f92-fb64f20a43f0",
+        "AZ_DNS_RESOURCE_GROUP": "dns",
+        "AZ_OIDC_ISSUER": "https://swedencentral.oic.prod-aks.azure.com/3a01d7ac-3330-444d-942d-975eb491b5d6/619052c2-c044-493e-b05a-b1bd12efbd06/",
+        "AZ_PORTAL_IDENTITY": "memexaks-portal-mi",
+        "AZ_RESOURCE_GROUP": "memex-aks-rg",
+        "INGRESS_IP": "74.241.238.18",
+        "PAYWALL_URL": "https://memex.systemorph.com/Deployments/{instance}/area/Suspended"
+      }
+    },
+    "startupProbe": {
+      "periodSeconds": 10,
+      "timeoutSeconds": 5,
+      "failureThreshold": 1080
+    },
+    "extraPortalConfig": {
+      "Embedding__Endpoint": "https://openrouter.ai/api/v1",
+      "Embedding__Model": "openai/text-embedding-3-small",
+      "Embedding__Provider": "OpenAICompatible",
+      "Features__Ai__Clis__ClaudeCode": "true",
+      "Features__Ai__Clis__Copilot": "true",
+      "Features__Ai__Providers__AzureOpenAI": "true",
+      "Features__Ai__Providers__OpenAI": "false",
+      "Features__Ai__Providers__OpenAICompatible": "false",
+      "Features__Ai__Providers__OpenRouter": "true",
+      "Hosting__Deployment": "memex",
+      "LogWatch__DefaultRepository": "Systemorph/MeshWeaver",
+      "LogWatch__Routes__0__Prefix": "MeshWeaver.",
+      "LogWatch__Routes__0__Repository": "Systemorph/MeshWeaver",
+      "LogWatch__Routes__1__Prefix": "Memex.",
+      "LogWatch__Routes__1__Repository": "Systemorph/Memex",
+      "ModelCredit__InstanceTier": "enterprise",
+      "PreWarm__BatchBake": "true",
+      "PreWarm__DynamicTypes": "true",
+      "PreWarm__GateReadiness": "true",
+      "PreWarm__PrebuiltBundleRoot": "/data/prebuilt-bundles"
+    },
+    "gates": [
+      {
+        "$type": "GateSpec",
+        "language": "node",
+        "enabled": true,
+        "image": "meshweaver.azurecr.io/meshweaver/node-gate:8aa1a79",
+        "address": "node/node-kernel"
+      },
+      {
+        "$type": "GateSpec",
+        "language": "python",
+        "enabled": true,
+        "image": "meshweaver.azurecr.io/meshweaver/python-gate:8aa1a79",
+        "address": "py/python-kernel"
+      }
+    ],
+    "pluginRepos": [
+      {
+        "name": "Plugins",
+        "url": "https://memex.meshweaver.cloud",
+        "isRegistrySource": false
+      }
+    ],
+    "preInstall": [],
+    "registryInstanceId": "memex",
+    "keyVaultSecrets": {
+      "$type": "KeyVaultSecretsSpec",
+      "vaultName": "Systemorph",
+      "tenantId": "3a01d7ac-3330-444d-942d-975eb491b5d6",
+      "identityClientId": "6c9dcc8d-d5b3-4545-afa1-209b33e8a1ba",
+      "name": "memex-portal-keyvault",
+      "syncedSecret": "memex-portal-keyvault",
+      "volumeName": "kv-portal-keyvault",
+      "mountPath": "/mnt/kv-portal-keyvault",
+      "secrets": [
+        {
+          "$type": "KeyVaultSecretRef",
+          "key": "PluginCatalog__RegistryToken",
+          "vaultSecret": "PluginCatalog-RegistryToken"
+        },
+        {
+          "$type": "KeyVaultSecretRef",
+          "key": "PluginCatalog__Registries__0__Token",
+          "vaultSecret": "PluginCatalog-RegistryToken"
+        },
+        {
+          "$type": "KeyVaultSecretRef",
+          "key": "Embedding__ApiKey",
+          "vaultSecret": "OpenRouter-ApiKey"
+        }
+      ]
+    },
+    "keyVaultSecretClasses": [
+      {
+        "$type": "KeyVaultSecretsSpec",
+        "vaultName": "Systemorph",
+        "tenantId": "3a01d7ac-3330-444d-942d-975eb491b5d6",
+        "identityClientId": "6c9dcc8d-d5b3-4545-afa1-209b33e8a1ba",
+        "name": "memex-kv",
+        "syncedSecret": "memex-kv-secrets",
+        "volumeName": "kv-secrets",
+        "mountPath": "/mnt/kv-secrets",
+        "secrets": [
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "Ai__KeyProtection__MasterKey",
+            "vaultSecret": "ai-keyprotection-masterkey"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "Bootstrap__Secret",
+            "vaultSecret": "bootstrap-secret"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "Authentication__Microsoft__ClientSecret",
+            "vaultSecret": "microsoft-clientsecret"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "ConnectionStrings__memex",
+            "vaultSecret": "memex-connectionstring"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "Authentication__LinkedIn__ClientSecret",
+            "vaultSecret": "linkedin-clientsecret"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "OpenRouter__ApiKey",
+            "vaultSecret": "OpenRouter-ApiKey"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "GitHub__OAuth__ClientSecret",
+            "vaultSecret": "github-oauth-clientsecret"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "GitHub__App__PrivateKey",
+            "vaultSecret": "github-app-privatekey"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "AzureFoundry__ApiKey",
+            "vaultSecret": "AzureFoundry-ApiKey"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "GitHub__Webhook__Secret",
+            "vaultSecret": "github-webhook-secret"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "Plugins__Registry__PublishToken",
+            "vaultSecret": "Plugins-Registry-PublishToken"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "Hosting__PlatformWebhookSecret",
+            "vaultSecret": "Hosting-PlatformWebhookSecret"
+          },
+          {
+            "$type": "KeyVaultSecretRef",
+            "key": "Email__ClientSecret",
+            "vaultSecret": "memexsystemorph-Email-ClientSecret"
+          }
+        ]
+      }
+    ],
+    "vaultValuesKeys": [
+      "Ai__KeyProtection__MasterKey",
+      "Anthropic__ApiKey",
+      "Authentication__Microsoft__ClientSecret",
+      "AzureFoundry__ApiKey",
+      "ConnectionStrings__memex",
+      "ConnectionStrings__orleans",
+      "LogWatch__IngestToken",
+      "MEMEX_PASSWORD",
+      "MEMEX_URI",
+      "OpenRouter__ApiKey",
+      "PluginCatalog__RegistryToken"
+    ],
+    "inlineEnv": [
+      {
+        "$type": "InlineEnvOverride",
+        "key": "PluginCatalog__RegistryToken",
+        "isSecret": true,
+        "shadows": "memex-portal-keyvault",
+        "reason": "The pre-vault copy, set by `kubectl set env` 2026-09-03. It outranks every envFrom, so the vault copy on memex-portal-keyvault stays dead until this is deleted — which is why the SECOND key (PluginCatalog__Registries__0__Token, unshadowed) is what actually fixed the poll. Deleting it is a Deployment-spec edit and a rollout, and the key must be rotated afterwards: it has sat in plaintext in a spec readable by anything that can `get deploy`.",
+        "retiredBy": "MeshWeaver#3404"
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "PluginCatalog__RegistryUrl",
+        "value": "https://memex.meshweaver.cloud",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": false,
+        "reason": "SOLE SOURCE, not a shadow in the usual direction: the ConfigMap renders this key EMPTY (the chart default; the instance uses the NAMED registry shape instead). Deleting this entry would blank the legacy single-registry URL rather than fall back to anything."
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "PluginCatalog__AutoUpdateByDefault",
+        "value": "true",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "Features__Ai__Clis__ClaudeCode",
+        "value": "true",
+        "reason": "SOLE SOURCE on the pod — the ConfigMap carries no such key, so nothing in any repository states that the Claude Code CLI harness is on. Precisely: the chart CAN render it (`config.yaml`, guarded by `{{ if hasKey .Values.config.memex_portal \"Features__Ai__Clis__ClaudeCode\" }}`), but no committed values file declares it, so nothing is rendered and the inline entry is the only source. Putting it in this record's `extraPortalConfig` is what would give it a ConfigMap home."
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "Features__Ai__Clis__Copilot",
+        "value": "true",
+        "reason": "SOLE SOURCE on the pod — as above, for the Copilot CLI harness: chart-renderable behind the same hasKey guard, declared by no committed file."
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "Features__Ai__Providers__AzureOpenAI",
+        "value": "true",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": false,
+        "reason": "🚨 DISAGREES. The ConfigMap renders `false` and the pod runs `true`: the AzureOpenAI provider is ON live while every committed file says it is off. Recorded rather than reconciled, because turning it off is a behaviour decision, not a tidy-up."
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "Features__Ai__Providers__AzureFoundry",
+        "value": "true",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "PreWarm__GateReadiness",
+        "value": "true",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true,
+        "reason": "Redundant since the 2026-09-06 11:24Z deploy rendered the same value. Removing it here leaves the gate ARMED — the opposite act to memex-cloud, where the inline entry reads `false` and removing it arms the gate."
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "PreWarm__BatchBake",
+        "value": "true",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "PreWarm__PrebuiltBundleRoot",
+        "value": "/data/prebuilt-bundles",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "Grpc__TrustedPort",
+        "value": "8082",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "ASPNETCORE_Kestrel__Endpoints__Http__Url",
+        "value": "http://0.0.0.0:8080",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "ASPNETCORE_Kestrel__Endpoints__Grpc__Url",
+        "value": "http://0.0.0.0:8081",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "ASPNETCORE_Kestrel__Endpoints__Grpc__Protocols",
+        "value": "Http2",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "ASPNETCORE_Kestrel__Endpoints__GrpcTrusted__Url",
+        "value": "http://127.0.0.1:8082",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      },
+      {
+        "$type": "InlineEnvOverride",
+        "key": "ASPNETCORE_Kestrel__Endpoints__GrpcTrusted__Protocols",
+        "value": "Http2",
+        "shadows": "memex-portal-config",
+        "agreesWithShadowed": true
+      }
+    ]
+  }
+}

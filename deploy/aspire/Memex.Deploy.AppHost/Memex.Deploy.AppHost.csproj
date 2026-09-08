@@ -15,12 +15,19 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\memex\aspire\Memex.Aspire.Hosting\Memex.Aspire.Hosting.csproj"
                       IsAspireProjectResource="false" />
+    <!-- The Deployment record the adapter builds on. The published package BUNDLES this assembly
+         (one PackageReference brings both); in-repo the adapter references it PrivateAssets=all,
+         so the AppHost names it directly — the same two assemblies a customer AppHost sees. -->
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Deployment.Contract\MeshWeaver.Deployment.Contract.csproj"
+                      IsAspireProjectResource="false" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" />
     <PackageReference Include="Aspire.Hosting.Docker" />
-    <PackageReference Include="Aspire.Hosting.Kubernetes" />
+    <!-- No Aspire.Hosting.Kubernetes: Aspire emits a Deployment RECORD (the record-out argument in
+         Program.cs), never a chart. The Hosting module renders Helm from the record (maintainer,
+         2026-09-08; core #3646). -->
     <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
   </ItemGroup>
 </Project>

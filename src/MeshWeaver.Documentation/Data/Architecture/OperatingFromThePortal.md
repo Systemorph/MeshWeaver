@@ -92,6 +92,11 @@ and how to reconcile it in the same session. Do not re-derive that list here —
 
 ## Related rules decided the same day
 
+- **The Deployment record is the ONE input.** Aspire and Helm render from it; the image receives
+  it as configuration (`Deployment:Record`); Aspire emits a record, never a chart. The record is
+  built fluently (`AddMemex("memex").WithImage(…).WithPluginRepo(…)`), the adapter's own copy of
+  it (`MemexOptions`) is gone, and generating the chart from Aspire (#3646) is retired —
+  [ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire).
 - **Volume capacity is a record property:** `volumes[].size` on the Deployment record is what a
   claim holds. `Provision` and `Reconcile` grow every declared claim to it through
   `hosting-pv-resize` (grow-only, read back from the claim's status, refuses a class that cannot

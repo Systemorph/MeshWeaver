@@ -36,6 +36,7 @@
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
+    <Project Path="src/MeshWeaver.Deployment.Contract/MeshWeaver.Deployment.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
     <Project Path="src/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
     <Project Path="src/MeshWeaver.Domain/MeshWeaver.Domain.csproj" />
@@ -78,6 +79,7 @@
     <Project Path="test/MeshWeaver.Cli.Test/MeshWeaver.Cli.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
+    <Project Path="test/MeshWeaver.Deployment.Contract.Test/MeshWeaver.Deployment.Contract.Test.csproj" />
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />

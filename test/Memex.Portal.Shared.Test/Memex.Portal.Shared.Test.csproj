@@ -19,6 +19,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
+    <!-- DeploymentPathsSupplyStorageTest asserts the Aspire lane's storage keys on the contract's
+         own derivation (DeploymentPortalConfig.PortalConfig) — the adapter no longer states them. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Deployment.Contract\MeshWeaver.Deployment.Contract.csproj" />
     <!-- SealedModuleCompositionTest drives the REAL `memex build plugin` sealed-module composition
          (MeshWeaver#3401) against the REAL registry endpoints in this project's TestServer. The
          defect is a client that reads a publication's index and then its bundles without pinning

@@ -1,0 +1,177 @@
+{
+  "$type": "MeshNode",
+  "id": "pearl",
+  "namespace": "Deployments",
+  "path": "Deployments/pearl",
+  "mainNode": "Deployments/pearl",
+  "name": "pearl",
+  "description": "Customer portal (Pearl Technology AG).",
+  "nodeType": "Hosting/Deployment",
+  "state": "Active",
+  "content": {
+    "$type": "DeploymentContent",
+    "host": "pearl.meshweaver.cloud",
+    "namespace": "pearl",
+    "cluster": "memexaks-cluster",
+    "database": "pearl",
+    "databaseServer": "memexaks-pg",
+    "imageRepository": "cr.meshweaver.cloud/memex-portal-ai",
+    "updatePolicy": "Stable",
+    "owner": "Pearl Technology AG",
+    "purpose": "Customer portal for Pearl Technology AG — trial deployment following the 2026-08-21 workshop.",
+    "status": "Provisioning",
+    "keyVault": "Systemorph",
+    "keyVaultSecretPrefix": "pearl-",
+    "configPath": "deployments/aks/pearl",
+    "repository": "https://github.com/Systemorph/Memex",
+    "dnsZone": "meshweaver.cloud",
+    "helmRelease": "pearl",
+    "backupStore": "Deployments/aks-db-backups",
+    "extraPortalConfig": {
+      "Hosting__Deployment": "pearl",
+      "Hosting__ReportTo": "https://memex.systemorph.com",
+      "PreWarm__BatchBake": "true",
+      "PreWarm__DynamicTypes": "true",
+      "PreWarm__GateReadiness": "true"
+    },
+    "pluginRepos": [
+      {
+        "$type": "PluginRepoMount",
+        "name": "Plugins",
+        "url": "https://memex.meshweaver.cloud",
+        "isRegistrySource": false
+      }
+    ],
+    "preInstall": [
+      "Essentials"
+    ],
+    "notes": "Record created for Memex#119. Resource envelope is the lighter customer-portal one (requests 2 CPU / 4Gi, limits 4 / 8Gi; PVCs data 16Gi, content 64Gi, attachments 32Gi, users 16Gi) — a customer portal with a lighter load than `memex-cloud`.\n\nThe four decisions Memex#119 §7 left open are now ANSWERED (2026-08-27), and this is what was decided:\n\n1. `preInstall: [\"Essentials\"]` — the basic plugins. `Essentials` is 'the platform's default skills, the chat / menu, pre-installed for everyone' and declares the baseline closure through `requires`: Agent, Store, Export, Observability, Mcp, Notifications, Mail, Teams, OpenAI, AzureFoundry, WebSearch, Indexing. Naming the one id keeps the record honest about the INTENT; the closure is resolved by the installer rather than frozen here. ⚠️ An empty `preInstall` would NOT have meant 'the baseline' — `InstanceSpec.InstallPatterns` returns no patterns for an empty list, so `PluginCatalog:InstallByDefault` renders nothing and the instance seeds nothing.\n\n2. `pluginRepos[0].name = \"Plugins\"` — NOT `pearl`. For a consumer mount the name is the REGISTRY's name (`PluginCatalog:Registries:0:Name`), and it is what a bare pre-install id is qualified against: `Essentials` becomes `Plugins/Essentials`. The catalog matches that against the package's own `Source` stamp and FAILS CLOSED when it cannot. A mount named after this instance would render `pearl/Essentials`, match nothing, and bring the portal up with an empty catalog and no error. `Plugins` is the source name memex-cloud stamps on the MeshWeaver.Plugins packages (asserted in Hosting/Deployment/Test). If Pearl Technology also needs the Education catalogue, that is a SECOND mount named `Education`.\n\n3. Idle policy — INDEFINITE, decided deliberately. `idleSuspendDays` and `idleTeardownDays` are both left unset, which the schema reads as 'never' (`DeploymentContent.IdleSuspendDays`, null = never). The instance therefore never lapses on its own: ending the two-month engagement is an explicit Suspend, taken by a person. Recorded here so the absence reads as a decision rather than an oversight.\n\n4. `database: pearl` per the customer brief, confirmed. The self-service `InstanceRequest` flow would derive `pearldb`; the divergence is accepted, not accidental.\n\n**2026-09-08 — provisioning from the fleet's own registry (Memex#119, MeshWeaver#3353, MeshWeaver.Plugins#1514, Memex#244).** `imageRepository` moved to `cr.meshweaver.cloud/memex-portal-ai` with `imagePullSecret: registry-pull` (the operator's `hosting-pull-secret` creates that Secret from the instance key in Key Vault); `pinnedImageTag: 3.0.0-ci.8080` is the build memex.meshweaver.cloud runs on 2026-09-08 08:0xZ (`/api/version` commit `67cbbe0ee` = CD #8080, ACR tag `3.0.0-ci.8080`); the `Stable` policy rolls it to the clean `3.0.0` when that exists. `volumes[].create: true` makes the chart render the four PersistentVolumeClaims itself (`persistence.<name>.create`, MeshWeaver#3696) — this is a NEW namespace, nothing was ever applied by hand there. `status: Provisioning`. Two decisions are deliberately OPEN and recorded here so the absence reads as a decision:\n\n1. **Email is DISABLED for the first boot** (`email.enabled: false`). The overlay had borrowed memex-cloud's Email client id and secret (Memex#119, 2026-09-03 comment); a customer portal must not send through the public instance's mail app. Pearl gets its own mail app registration before any invitation is sent — until then the NoOp sender is selected and invitations are NOT delivered.\n\n2. **No AI provider is configured.** The offer has Pearl Technology sourcing models through their own OpenRouter account; no key exists yet, so no provider is set and the AI stack stays off until a key is provisioned as the vault object `pearl-OpenRouter-ApiKey` and mapped here.",
+    "pinnedImageTag": "3.0.0-ci.8080",
+    "imagePullSecret": "registry-pull",
+    "replicas": 1,
+    "databaseUsername": "memexadmin",
+    "databaseConnectionSecret": "pearl-db-connection",
+    "resources": {
+      "requests": {
+        "cpu": "2",
+        "memory": "4Gi"
+      },
+      "limits": {
+        "cpu": "4",
+        "memory": "8Gi"
+      }
+    },
+    "volumes": [
+      {
+        "name": "data",
+        "claimName": "memex-data",
+        "mountPath": "/data",
+        "size": "16Gi",
+        "storageClass": "azurefile-memex",
+        "accessMode": "ReadWriteMany",
+        "create": true
+      },
+      {
+        "name": "content",
+        "claimName": "memex-content",
+        "mountPath": "/mnt/content",
+        "size": "64Gi",
+        "storageClass": "azurefile-memex",
+        "accessMode": "ReadWriteMany",
+        "create": true
+      },
+      {
+        "name": "attachments",
+        "claimName": "memex-attachments",
+        "mountPath": "/mnt/attachments",
+        "size": "32Gi",
+        "storageClass": "azurefile-memex",
+        "accessMode": "ReadWriteMany",
+        "create": true
+      },
+      {
+        "name": "users",
+        "claimName": "memex-users",
+        "mountPath": "/mnt/users",
+        "size": "16Gi",
+        "storageClass": "azurefile-memex",
+        "accessMode": "ReadWriteMany",
+        "create": true
+      }
+    ],
+    "ingress": {
+      "className": "webapprouting.kubernetes.azure.com",
+      "tlsSecret": "pearl-tls",
+      "annotations": {
+        "nginx.ingress.kubernetes.io/proxy-buffer-size": "16k",
+        "nginx.ingress.kubernetes.io/proxy-buffers-number": "4"
+      },
+      "sessionAffinity": {
+        "enabled": true,
+        "cookieName": "PEARL_AFFINITY",
+        "nginxAnnotations": {},
+        "agicAnnotations": {}
+      }
+    },
+    "keyVaultSecrets": {
+      "$type": "KeyVaultSecretsSpec",
+      "vaultName": "Systemorph",
+      "tenantId": "3a01d7ac-3330-444d-942d-975eb491b5d6",
+      "identityClientId": "6c9dcc8d-d5b3-4545-afa1-209b33e8a1ba",
+      "name": "pearl-portal-keyvault",
+      "syncedSecret": "pearl-portal-keyvault",
+      "volumeName": "kv-portal-keyvault",
+      "mountPath": "/mnt/kv-portal-keyvault",
+      "secrets": [
+        {
+          "$type": "KeyVaultSecretRef",
+          "key": "ConnectionStrings__memex",
+          "vaultSecret": "pearl-db-connection"
+        },
+        {
+          "$type": "KeyVaultSecretRef",
+          "key": "Ai__KeyProtection__MasterKey",
+          "vaultSecret": "pearl-Ai-KeyProtection-MasterKey"
+        },
+        {
+          "$type": "KeyVaultSecretRef",
+          "key": "Authentication__Microsoft__ClientSecret",
+          "vaultSecret": "pearl-Authentication-Microsoft-ClientSecret"
+        },
+        {
+          "$type": "KeyVaultSecretRef",
+          "key": "PluginCatalog__RegistryToken",
+          "vaultSecret": "pearl-PluginCatalog-RegistryToken"
+        },
+        {
+          "$type": "KeyVaultSecretRef",
+          "key": "PluginCatalog__Registries__0__Token",
+          "vaultSecret": "pearl-PluginCatalog-RegistryToken"
+        }
+      ]
+    },
+    "signIn": {
+      "provider": "Custom",
+      "microsoftClientId": "0bf432c4-acbe-4a61-96f3-b78742e341be",
+      "microsoftTenantId": "3a01d7ac-3330-444d-942d-975eb491b5d6"
+    },
+    "email": {
+      "enabled": false
+    },
+    "storage": {
+      "backend": "Filesystem",
+      "dataRoot": "/data",
+      "contentPath": "/mnt/content",
+      "contentName": "content",
+      "contentSourceType": "FileSystem",
+      "graphStorageType": "PostgreSql",
+      "claudeCodeConfigDirRoot": "/mnt/users"
+    },
+    "startupProbe": {
+      "periodSeconds": 10,
+      "timeoutSeconds": 5,
+      "failureThreshold": 1080,
+      "budgetSeconds": 10800
+    }
+  }
+}
