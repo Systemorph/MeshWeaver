@@ -1068,6 +1068,64 @@ nothing. The two together are what makes off-branch triggers destructive.
 Guarded by `WorkflowRunTriggerBranchFilterGuard`, which carries a control arm: if its block matcher
 ever stops recognising `workflow_run:`, it fails rather than passing having examined nothing.
 
+### 🚨 A CD run cancelled with ZERO jobs was evicted from the pending slot — the delivery it superseded is the run still in flight
+
+The section above is the *unfiltered* trigger, fixed on 2026-09-02. What remains — by design — is
+GitHub's own rule inside the filtered group: **one run executes, one waits, and every further
+arrival REPLACES the one waiting.** The replaced run reports `cancelled` with `run_attempt: 1` and
+**zero jobs**; the run in flight is untouched (`cancel-in-progress: false`). Read as "CD is being
+killed", this shape has now held a roll twice — 2026-08-30 on Build and Test (#2412, where it WAS a
+defect and got a per-commit group) and 2026-09-08 on `main-cd` (where it is the design) — each time
+while the run that mattered was executing normally.
+
+**Measured 2026-09-08, every `main-cd` run created between 09:00Z and 10:09Z** (REST:
+`actions/runs/<id>` for the timestamps and attempt, `…/runs/<id>/jobs` → `total_count`):
+
+| run | commit | conclusion | jobs | cancelled at | next arrival, created |
+|---|---|---|---|---|---|
+| 34207602172 | 3ee8dda6e | cancelled | 0 | 09:01:46 | 34207717540 @ 09:01:45 |
+| 34207717540 | 3ee8dda6e | cancelled | 0 | 09:04:10 | 34207938426 @ 09:04:08 |
+| 34207938426 | 3ee8dda6e | cancelled | 0 | 09:29:19 | 34210258845 @ 09:29:18 |
+| 34210258845 | 4e1a1b633 | cancelled | 0 | 09:33:37 | 34210667593 @ 09:33:36 |
+| 34210667593 | 4e1a1b633 | cancelled | 0 | 09:41:59 | 34211432040 @ 09:41:58 |
+| 34213195672 | 1c61ed3ae | cancelled | 0 | 10:06:05 | 34213625327 @ 10:06:03 |
+| 34213625327 | 6b2fe2a10 | cancelled | 0 | 10:08:46 | 34213872077 @ 10:08:44 |
+| 34206854855 | 765fb7f52 | **failure**, at its seal | 25 | — | in flight 08:52–09:45, never cancelled |
+| 34211432040 | 60449106f | in progress | > 0 | — | started 09:45:52, the second the run above completed |
+
+Seven cancellations, seven arrivals, each 1–2 s apart, `run_attempt: 1` on every one; the two runs
+that were executing ran to their seal. Nothing was starved: the pending slot always held the
+**newest** commit, and the commit order on `main` (3ee8dda6e → 4e1a1b633 → 60449106f → 1c61ed3ae →
+6b2fe2a10) is the arrival order, so every evicted run was an ancestor of the run that replaced it.
+(Three runs for one commit is the merge queue: Build and Test completes on the queue branch and on
+`main` for the same sha, and each completion is an arrival — no-ops that still hold the slot,
+#2490.)
+
+**The three things a cancelled run can be, told apart from the record alone:**
+
+| cause | `jobs` | timing | corroboration |
+|---|---|---|---|
+| evicted from the pending slot (this shape) | **0** | `updated_at` = the next arrival's `created_at` ± 2 s | the in-flight run of the same group is untouched |
+| the org's Actions budget or job ceiling | > 0, jobs cut mid-flight | no correlation with arrivals; runs in **every** repository of the org stop in the same minutes | a billing banner on the org — and here, `MeshWeaver.Plugins` runs in the same minutes executed normally |
+| a session or a person | any | no correlation with arrivals | seven cancellations 1–2 s after seven arrivals is not a hand |
+
+**What to do with one: nothing.** The commit it would have built is an ancestor of the commit the
+slot now holds, and the push lane builds that one next; if the push lane ever falls behind, the
+hourly reconcile targets the newest commit CI has vouched for (#3077). A cancelled run with zero
+jobs cannot have torn an image set or a publication — it never ran a step. **The conclusion that
+matters is the OTHER one in the same list**: a `failure` on a run that DID execute (34206854855
+above, red at its seal), which no amount of "the runs keep getting cancelled" explains.
+
+**Why `main-cd` keeps ONE group on the ref while Build and Test gives every main commit its own** —
+`MainRunsAreNeverCancelledGuard` holds both shapes, deliberately opposite, each with a control arm
+that fires on the other's expression: a test run for a landed commit is evidence nothing else
+produces, so evicting it loses the only build of that tree; a delivery run for a superseded commit
+produces images nobody will pull and a publication the next run re-seals, and two CD runs
+publishing the same framework identity at once is the overlap #3461 describes. So on `main-cd` the
+eviction IS the supersede rule, applied by GitHub in arrival order. The one thing GitHub does not
+check is ancestry: if Build and Test ever completed out of commit order, an older commit's run
+could evict a newer one's — and the reconcile's next tick covers that hour.
+
 ### The other direction: a CD red on main that means nothing
 
 The section above is delivery stopping behind green ticks. The inverse cost the same evening: the

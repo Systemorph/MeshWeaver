@@ -147,25 +147,39 @@ permissions:
   # MeshWeaver.Plugins CI can pull it with a GitHub token instead of ACR credentials.
   packages: write
 
-# Every green main merge ships its OWN image increment — CD runs never supersede each
-# other. The previous shared `main-cd` group dated from when this workflow also ROLLED
-# OUT deployments; delivery is pull-based now (installs self-update by comparing the
-# monotonic 3.0.0-ci.<n> version tag), so parallel image builds are safe: every tag is
-# distinct and nothing here mutates a live environment. Under the shared group GitHub's
-# one-pending-slot rule CANCELLED queued CD runs during merge bursts (6 cancelled runs
-# on 2026-08-07 alone), silently dropping release increments.
-# 🚨 SERIALIZE, and never cancel. The group used to be keyed on `github.run_id`, which is unique
-# per run — so it grouped each run with itself and serialized NOTHING. Two CD runs for the same
-# commit could therefore overlap, and because each one skipped when it saw "another CD run is
-# already in flight", BOTH deferred and NEITHER published. Observed 2026-08-19 on cb33558: a
-# workflow_run CD and a manual dispatch raced, both reported success, and no image was built —
-# a mutual deferral that reads exactly like a healthy skip.
+# 🚨 SERIALIZE, and never cancel the run in flight. The group used to be keyed on `github.run_id`,
+# which is unique per run — so it grouped each run with itself and serialized NOTHING. Two CD runs
+# for the same commit could therefore overlap, and because each one skipped when it saw "another
+# CD run is already in flight", BOTH deferred and NEITHER published. Observed 2026-08-19 on
+# cb33558: a workflow_run CD and a manual dispatch raced, both reported success, and no image was
+# built — a mutual deferral that reads exactly like a healthy skip. Keyed on the ref, ONE push-lane
+# run executes at a time, and `cancel-in-progress: false` matters as much as the group — a CD run
+# midway through pushing a multi-image set or sealing a publication must never be killed, or the
+# set is left incomplete, which is the very state the reconciler exists to repair.
 #
-# Keyed on the ref, concurrent runs QUEUE instead: the second waits for the first, then finds a
-# complete image set and exits with "nothing to reconcile", which is the honest no-op. And
-# `cancel-in-progress: false` matters as much as the group — a CD run that is midway through
-# pushing a multi-image set must never be killed, or the set is left incomplete, which is the
-# very state the reconciler exists to repair.
+# 🚨 WHAT "QUEUED" MEANS HERE — the run list will read as a defect, and it is not one. GitHub keeps
+# exactly ONE PENDING run per group, and every further arrival REPLACES it: the run that was
+# waiting is CANCELLED the second a newer one is created, and it reports `cancelled` having run
+# ZERO jobs (`run_attempt: 1`, `jobs.total_count: 0`, `updated_at` = the next arrival's
+# `created_at` ± 2 s). The run in flight is never touched. That is the supersede rule for this lane,
+# applied by GitHub in arrival order: a delivery for an older commit that has not started is worth
+# nothing once a newer commit's run is waiting — the newer run builds a superset — and if the push
+# lane ever falls behind, the hourly reconcile targets the newest commit CI has vouched for
+# (#3077). Measured 2026-09-08 09:00–10:09Z: seven such runs (3ee8dda6e ×3, 4e1a1b633 ×2,
+# 1c61ed3ae, 6b2fe2a10) were cancelled 1–2 s after the next arrival was created, jobs=0, while the
+# in-flight runs 765fb7f52 and 60449106f ran to their seal untouched — and the reading "CD keeps
+# getting killed" still held a roll for a morning. A zero-job cancellation cannot have torn a set
+# or a seal; the conclusion to read is the FAILURE on the run that did execute. Reading recipe, and
+# how to tell this from an account-budget kill or a hand:
+#   Doc/Architecture/ReadingCiSignals → "A CD run cancelled with ZERO jobs"
+#
+# Why NOT a per-commit group, the shape dotnet-test.yml uses so a main test run is never evicted
+# (MainRunsAreNeverCancelledGuard holds both shapes, deliberately opposite): a test run for a landed
+# commit is evidence nothing else produces, so evicting it loses the only build of that tree. A
+# delivery run for a superseded commit produces images nobody will pull and a publication the next
+# run re-seals — parallel image builds would be safe (every tag is distinct, delivery is pull-based),
+# but two CD runs publishing the SAME framework identity at once is the overlap #3461 describes,
+# and a per-commit push lane would add that writer on every merge burst.
 concurrency:
   # 🚨 The RECONCILE (schedule) has its own lane. It is the delivery path — dotnet-test.yml says
   # so where it justifies cancel-in-progress on main — and on 2026-08-27 it was STARVED by the

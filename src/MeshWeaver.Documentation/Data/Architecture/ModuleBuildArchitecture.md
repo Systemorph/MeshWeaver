@@ -405,6 +405,15 @@ run publishing between a newer run's `select` and its hand-over.
      22 of the last 25 main runs were cancelled with jobs=0."* **Nothing published for hours.**
      Protecting past-gates runs is what stops that: in a burst, every run that proves green still
      seals, so the fleet gets a publication roughly every gate-suite length instead of none.
+   * 🚨 **`jobs=0` alone is NOT the starvation signature — read the in-flight run beside it.**
+     Core's own `main-cd` keeps ONE group on the ref with `cancel-in-progress: false`, so GitHub
+     applies both guards itself: the run in flight (past its gates by construction) is never
+     touched, and a run still *waiting* is replaced by the next arrival, reporting `cancelled`
+     with zero jobs. Measured 2026-09-08: seven such evictions in an hour, both in-flight runs
+     sealed, nothing starved — the slot always held the newest commit. What GitHub does not check
+     is ancestry, and the hourly reconcile bounds that to one tick. Reading a zero-job
+     cancellation as #888 without an in-flight run that was killed is the misread to avoid:
+     [Reading CI Signals](../ReadingCiSignals) → "A CD run cancelled with ZERO jobs".
 2. **Only `push` → `main` supersedes `push` → `main`.** A `repository_dispatch` (the platform wave)
    and the `schedule` poll are never cancelled by this rule and never cancel anything — the #826
    rule, kept intact. Each `main` push keeps its own concurrency group keyed on the commit, so GitHub
