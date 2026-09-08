@@ -69,8 +69,10 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
     private static DateTimeOffset DaysAgo(int days) => Now - TimeSpan.FromDays(days);
 
-    private PrebuiltBundleSweepPlan PlanNow(string? liveVersion = "3.1.0-ci.9000", ImmutableHashSet<string>? stamps = null) =>
-        PrebuiltBundleStore.Plan(Live, liveVersion, PrebuiltBundleStore.Scan(root), stamps ?? [], retention, Now);
+    private PrebuiltBundleSweepPlan PlanNow(
+        string? liveVersion = "3.1.0-ci.9000", ImmutableHashSet<string>? stamps = null,
+        ImmutableList<PinnedPlatformReference>? pinned = null) =>
+        PrebuiltBundleStore.Plan(Live, liveVersion, PrebuiltBundleStore.Scan(root), stamps ?? [], pinned ?? [], retention, Now);
 
     private static string[] Ids(PrebuiltBundleSweepPlan plan) => plan.Collectable.Select(i => i.Identity).OrderBy(i => i, StringComparer.Ordinal).ToArray();
 
@@ -191,6 +193,76 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Ids(plan).Should().Equal("s-dead");
     }
 
+    /// <summary>
+    /// 🚨 The registry case: pearl is pinned to 3.0.0-ci.8080, a closed line and far outside the
+    /// newest ten, and pulls exactly that identity's seal over the HTTP prebuilt surface. The
+    /// Deployment record's pin reaches the identity through the _releases marker, and that keeps it
+    /// — and its marker — whatever the line and recency rules say.
+    /// </summary>
+    [Fact]
+    public void AnIdentityADeploymentRecordPins_IsKept_ViaItsReleaseMarker_RegardlessOfLineAndRecency()
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Marker("3.0.0", "s-rel"); Sealed("s-rel", "plugins", DaysAgo(100));
+        Marker("3.0.0-ci.8080", "s-8080"); Sealed("s-8080", "plugins", DaysAgo(120));
+        Marker("3.0.0-ci.8081", "s-8081"); Sealed("s-8081", "plugins", DaysAgo(110));
+        Marker("3.1.0-ci.1", "s-a"); Sealed("s-a", "plugins", DaysAgo(3));
+        Marker("3.1.0-ci.2", "s-b"); Sealed("s-b", "plugins", DaysAgo(2));
+
+        // The pin is written as an IMAGE TAG, the way a Deployment record carries it.
+        var plan = PlanNow(liveVersion: "4.0.0-ci.1",
+            pinned: [new PinnedPlatformReference("Deployment Deployments/pearl", "memex-portal-ai:3.0.0-ci.8080", null)]);
+
+        plan.Protected["s-8080"].Should().Contain("pinned by Deployment Deployments/pearl at 3.0.0-ci.8080");
+        Ids(plan).Should().Equal("s-8081");
+        plan.CollectableMarkers.Select(m => m.Version).Should().Equal("3.0.0-ci.8081");
+        plan.UnresolvedPins.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AnIdentityARegisteredInstanceReports_IsKeptDirectly_WithoutAMarker()
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Sealed("s-remote", "plugins", DaysAgo(400));
+        Sealed("s-old", "plugins", DaysAgo(400));
+        Sealed("s-u1", "plugins", DaysAgo(2));
+
+        var plan = PlanNow(pinned: [new PinnedPlatformReference("instance report Deployments/Modules/atioz", "3.0.0-ci.7000+abc", "s-remote")]);
+
+        plan.Protected["s-remote"].Should().Contain("pinned by instance report");
+        plan.Protected["s-remote"].Should().Contain("3.0.0-ci.7000");
+        Ids(plan).Should().Equal("s-old");
+    }
+
+    [Fact]
+    public void APinnedVersionNoMarkerNames_KeepsNothing_AndTheLedgerSaysSo()
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Sealed("s-old", "plugins", DaysAgo(500));
+        Sealed("s-recent", "plugins", DaysAgo(2));
+
+        var pinned = ImmutableList.Create(new PinnedPlatformReference("Deployment Deployments/ghost", "3.0.0-ci.1", null));
+        var plan = PlanNow(pinned: pinned);
+
+        plan.UnresolvedPins.Should().Equal("Deployment Deployments/ghost=3.0.0-ci.1");
+        Ids(plan).Should().Equal("s-old");
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention with { Delete = false }, Now);
+        File.ReadAllText(PrebuiltBundleStore.LedgerPathOf(root))
+            .Should().Contain("pins mapping to no marker (keep nothing): Deployment Deployments/ghost=3.0.0-ci.1");
+        result.Plan!.UnresolvedPins.Should().HaveCount(1);
+    }
+
+    [Theory]
+    [InlineData("memex-portal-ai:3.0.0-ci.8080", "3.0.0-ci.8080")]
+    [InlineData("meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8080@sha256:abc", "3.0.0-ci.8080")]
+    [InlineData("3.1.0+deadbeef", "3.1.0")]
+    [InlineData("  ", null)]
+    public void PlatformVersionLine_ReducesAPinToTheMarkerName(string pin, string? expected)
+    {
+        PlatformVersionLine.Normalize(pin).Should().Be(expected);
+    }
+
     // ---- fail closed --------------------------------------------------------------------------
 
     [Fact]
@@ -251,7 +323,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Marker("3.0.0-ci.3", "s-coming", writtenAt: Now - TimeSpan.FromMinutes(1));
 
         var removed = new System.Collections.Generic.List<string>();
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "4.0.0-ci.1", [], retention, Now,
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "4.0.0-ci.1", [], [], retention, Now,
             deleteDirectory: dir => { removed.Add(Path.GetFileName(dir)); Directory.Delete(dir, true); });
 
         result.Deleted.Should().BeTrue();
@@ -281,7 +353,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-old", "plugins", DaysAgo(500));
         Sealed("s-recent", "plugins", DaysAgo(2));
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], retention with { Delete = false }, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = false }, Now);
 
         result.Deleted.Should().BeFalse();
         result.Plan!.Collectable.Select(i => i.Identity).Should().Equal("s-old");
@@ -297,7 +369,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-b", "plugins", DaysAgo(400));
         Sealed("s-recent", "plugins", DaysAgo(2));
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], retention, Now,
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("s-a", StringComparison.Ordinal))
@@ -313,7 +385,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     [Fact]
     public void SweepCore_AnAbsentRoot_CollectsNothing()
     {
-        var result = PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], retention, Now);
+        var result = PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now);
         result.Plan.Should().BeNull();
         result.AbortReason.Should().Contain("does not exist");
     }
