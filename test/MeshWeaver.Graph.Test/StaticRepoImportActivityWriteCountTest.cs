@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
@@ -277,10 +278,10 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
                 {
                     Content = new MarkdownContent { Content = $"# Page {i}\n\nedited on the server" }
                 })
-                .FirstAsync().Timeout(30.Seconds());
+                .FirstAsync().Timeout(TestTimeouts.Convergence);
             await Mesh.GetWorkspace().GetMeshNodeStream(path)
                 .Where(n => n is not null && ImportConflictPolicy.IsHumanEdit(n))
-                .FirstAsync().Timeout(30.Seconds());
+                .FirstAsync().Timeout(TestTimeouts.Convergence);
         }
 
         // Same paths, different content → new fingerprint (no short-circuit) and a REAL conflict on
