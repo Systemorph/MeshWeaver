@@ -263,6 +263,7 @@ public class ReleaseAvailabilityService(
             .Observe(pool, publishedRoot, version, logger)
             .Select(observation => ReleaseAvailability.IsUpdatable(
                 observation.Target, required, observation.Artifacts))
+            .Do(LogAdvisories)
             .Select(verdict => verdict.IsUpdatable && condemned?.Invoke(version) is { } refusal
                 // Folded into the SAME verdict shape rather than kept beside it, so the walk has
                 // one notion of "this candidate is out" and the refusal travels with its reason.
@@ -390,7 +391,25 @@ public class ReleaseAvailabilityService(
                 : PublishedBundleCatalogue
                     .Observe(pool, publishedRoot, targetVersion, logger)
                     .Select(observation => ReleaseAvailability.IsUpdatable(
-                        observation.Target, required, observation.Artifacts)));
+                        observation.Target, required, observation.Artifacts))
+                    .Do(LogAdvisories));
+    }
+
+    /// <summary>
+    /// 🚨 #3648 — the declared floors SAY something and decide nothing, so they are logged
+    /// (Information) beside the verdict rather than folded into it. On 2026-09-07 these exact
+    /// sentences were the HOLD reasons ("77 plugins required … every one declined"); now they are
+    /// what an operator reads to know which modules claim a platform the target does not rank
+    /// above, while the roll proceeds on what is measured.
+    /// </summary>
+    private void LogAdvisories(UpdatabilityVerdict verdict)
+    {
+        if (verdict.Advisories.IsDefaultOrEmpty)
+            return;
+        logger?.LogInformation(
+            "[ReleaseGate] {Count} declared module floor(s) rank above the target — advisory only, "
+            + "never a hold (#3648): {Advisories}",
+            verdict.Advisories.Length, string.Join("; ", verdict.Advisories));
     }
 
     /// <summary>Why an empty denominator is a hold rather than a pass — see the call site.</summary>
@@ -450,7 +469,13 @@ public class ReleaseAvailabilityService(
                     .Select(manifest => new RequiredPackage(
                         manifest.Id,
                         manifest.Id,
-                        LiveFloorOf(manifest.MinMeshVersion),
+                        // 🚨 #3648 — the declared floor passes through AS DECLARED. It used to
+                        // be filtered to "only when the running platform already satisfies it"
+                        // (LiveFloorOf), a regression-check reading that still held every
+                        // production portal on 2026-09-07: the predicate treated an unmet floor
+                        // as a BLOCKER. It is an advisory now (UpdatabilityVerdict.Advisories),
+                        // so there is nothing to protect the verdict from.
+                        manifest.MinMeshVersion,
                         floor.Bundles.Contains(manifest.Id)))
                     .ToImmutableArray();
                 // 🚨 PRINT THE DENOMINATOR. A completeness gate whose expected count nobody can
@@ -466,21 +491,6 @@ public class ReleaseAvailabilityService(
                     string.Join(", ", required.Where(p => p.HasContent).Select(p => p.Name).Order(StringComparer.Ordinal)));
                 return required;
             });
-
-    /// <summary>
-    /// A module's floor, but only when the RUNNING platform already satisfies it — otherwise null.
-    ///
-    /// <para>🚨 The same regression rule the content half uses, for the same reason. SemVer puts
-    /// <c>3.0.0-rc4.ci.4049</c> BELOW <c>3.0.0</c>, so a module declaring <c>minMeshVersion:
-    /// 3.0.0</c> is below floor on every <c>-rc</c> platform — including the one prod runs. Judged
-    /// absolutely it would hold that environment on every release forever; judged as a regression
-    /// it holds only a roll that would newly break a module that works today. Since self-update
-    /// rolls strictly forward (<c>VersionSelect.IsNewer</c> has already passed), a floor met today
-    /// is met by the target too — so this fires exactly where it should, on a ROLLBACK below a
-    /// module's declared floor.</para>
-    /// </summary>
-    private static string? LiveFloorOf(string? minMeshVersion) =>
-        ModulePlatformFloor.DeclineReason(minMeshVersion) is null ? minMeshVersion : null;
 
     /// <summary>
     /// This environment's install records — the same query the bundle index serves from, so the

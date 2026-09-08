@@ -33,8 +33,15 @@ public enum ModuleUpdateAction
     /// <summary>The landed module already matches the registry's bundle — nothing travels.</summary>
     SkipUpToDate,
 
-    /// <summary>The bundle's declared <c>minMeshVersion</c> FLOOR exceeds the running platform —
-    /// skipped silently-with-log; the bundle becomes installable after the platform updates.</summary>
+    /// <summary>
+    /// 🚨 RETIRED by #3648 — nothing produces this any more. It meant "the bundle's declared
+    /// <c>minMeshVersion</c> floor exceeds the running platform, skipped", and on 2026-09-07 that
+    /// skip is what held every production portal on the morning build: the comparator ranks
+    /// <c>ci &lt; rc</c>, so an <c>rc</c> floor could never be satisfied by any <c>ci</c> build. The
+    /// floor is advisory now (<see cref="Land"/> carries the sentence in its reason) and the link
+    /// probe at landing decides. The member stays so a verdict serialized by an older build keeps
+    /// its ordinal and a caller compiled against it keeps compiling.
+    /// </summary>
     SkipPlatformBelowFloor,
 
     /// <summary>The deployment's update policy declines unattended landing (Stable/None).</summary>
@@ -62,46 +69,52 @@ public sealed record ModuleUpdateVerdict(ModuleUpdateAction Action, string? Reas
 /// so the reconciler's behaviour is pinnable without a registry, a filesystem, or a mesh
 /// (#1664 Slice C). Every input is a fact the caller already holds; nothing here fetches.
 ///
-/// <para><b>The platform gate is a semver FLOOR, never MVID equality.</b> Modules are ordinary
-/// .NET assemblies binding by simple name — their contract is API compatibility, which
-/// <c>minMeshVersion</c> expresses. A bundle built against an OLDER platform whose floor this
-/// deployment satisfies LANDS (the ex-post Store install across platform versions the lane exists
-/// for); MVID equality is bake semantics and stays with the NodeType assembly lane.</para>
+/// <para>🚨 <b>No platform gate here at all (#3648).</b> This decision used to skip a bundle whose
+/// declared <c>minMeshVersion</c> floor exceeded the running platform. That string comparison held
+/// every production portal on 2026-09-07 (see <see cref="ModulePlatformFloor"/>), so the floor is
+/// ADVISORY: it is worded into the <see cref="ModuleUpdateAction.Land"/> reason and logged, and
+/// whether the bytes can load is MEASURED where the bytes are — the link probe in
+/// <see cref="ModuleLandingService"/> at placement, and <c>MeshBuilder.InstallAssemblies</c> at
+/// boot. MVID equality was never the gate either: modules are ordinary .NET assemblies binding by
+/// simple name, and a bundle built against an OLDER platform LANDS (the ex-post Store install
+/// across platform versions the lane exists for).</para>
 ///
-/// <para>🚨 <b>The floor decides whether a bundle MAY land; the framework identity decides whether
-/// there is anything NEW to land</b> (Plugins#931 consumer half). Those are different questions and
-/// conflating them is what produced the defect: a module's published version encodes its CONTENT
-/// only, so a rebuild of the same source against a new platform republishes under the SAME version
-/// — and a consumer holding the old bytes answered "already landed" and skipped an update it
-/// needed. Measured in Plugins#723: after a platform identity flip the updater went quiet with no
-/// new <c>MeshWeaver.AI.OpenAI</c> build because its version had not moved, the pre-flip build then
+/// <para>🚨 <b>The framework identity decides whether there is anything NEW to land</b>
+/// (Plugins#931 consumer half). A module's published version encodes its CONTENT only, so a rebuild
+/// of the same source against a new platform republishes under the SAME version — and a consumer
+/// holding the old bytes answered "already landed" and skipped an update it needed. Measured in
+/// Plugins#723: after a platform identity flip the updater went quiet with no new
+/// <c>MeshWeaver.AI.OpenAI</c> build because its version had not moved, the pre-flip build then
 /// crash-looped in DI on the new platform (<c>OpenAICompatibleModelSync</c> could not resolve
 /// <c>ProviderModelLister</c>, whose registration had moved), and the fleet was held on an old
 /// image. So <see cref="ModuleUpdateAction.SkipUpToDate"/> means <i>this content against this
-/// framework</i>, never <i>this content</i>. The floor is unchanged and still never MVID equality:
-/// an identity difference makes a bundle NEWER, never UNINSTALLABLE.</para>
+/// framework</i>, never <i>this content</i>. An identity difference makes a bundle NEWER, never
+/// UNINSTALLABLE.</para>
 /// </summary>
 public static class ModuleUpdateDecision
 {
     /// <summary>
     /// Decides for one module-declaring installed package.
     ///
-    /// <para>Order matters and is deliberate: no-bundle before the floor gate (a registry that
-    /// serves nothing for this package declares no floor to check), the floor gate before
-    /// everything stateful (an uninstallable bundle makes every other question moot — and the
-    /// skip is silent-with-log, becoming relevant when the platform updates), the uninstalled
-    /// check before up-to-date (a disabled entry may still carry the served version, and "up to
-    /// date" would misname the operator's choice), and the policy LAST — so a policy skip is only
-    /// ever reported when an update genuinely would have landed.</para>
+    /// <para>Order matters and is deliberate: no-bundle first (a registry that serves nothing for
+    /// this package has nothing to decide about), the uninstalled check before up-to-date (a
+    /// disabled entry may still carry the served version, and "up to date" would misname the
+    /// operator's choice), and the policy LAST — so a policy skip is only ever reported when an
+    /// update genuinely would have landed. There is no floor step (#3648): a bundle whose declared
+    /// floor exceeds the running platform proceeds to <see cref="ModuleUpdateAction.Land"/> with the
+    /// advisory in its reason, and the landing's link probe decides.</para>
     /// </summary>
     /// <param name="bundleVersion">The version the registry's bundle index serves for this package,
     /// or null when it lists no bundle.</param>
     /// <param name="bundleMinMeshVersion">The bundle's declared platform floor, as the index
-    /// surfaces it. Null = no constraint.</param>
-    /// <param name="platformGate">Returns WHY a declared floor is not satisfied by the running
-    /// platform, or null when it is — production passes
-    /// <see cref="ModulePlatformFloor.DeclineReason(string?)"/> so there is never a second notion
-    /// of the module platform requirement.</param>
+    /// surfaces it. Null = none declared. ADVISORY (#3648): it is worded into the verdict's reason
+    /// and never decides it.</param>
+    /// <param name="platformGate">Words the advisory — returns the sentence naming both versions
+    /// when the declared floor exceeds the running platform, or null when it does not; production
+    /// passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/> so there is never a second
+    /// wording of the floor. 🚨 Its answer NEVER changes the action (#3648): the parameter stays
+    /// so callers compiled against the previous platform keep binding, and so the log line can say
+    /// "declares platform ≥ X; running Y" without a second comparison.</param>
     /// <param name="landed">This deployment's activation entry for the module, or null when it was
     /// never landed (which includes "installed before the module lane existed" — those heal by
     /// landing).</param>
@@ -171,8 +184,12 @@ public static class ModuleUpdateDecision
             return new(ModuleUpdateAction.SkipNoBundle,
                 "the registry lists no bundle for this package");
 
-        if (platformGate(bundleMinMeshVersion) is { } belowFloor)
-            return new(ModuleUpdateAction.SkipPlatformBelowFloor, belowFloor);
+        // 🚨 #3648 — the floor is ADVISORY. A step here used to answer SkipPlatformBelowFloor when
+        // the declared floor exceeded the running platform; on 2026-09-07 that string comparison
+        // (ci < rc < clean) declined every candidate on every production portal for a day while
+        // the measured link probe would have loaded each of them. The sentence still rides the
+        // Land reason so the log says what the module claims; nothing branches on it.
+        var advisory = platformGate(bundleMinMeshVersion);
 
         if (landed is { Enabled: false })
             return new(ModuleUpdateAction.SkipUninstalled,
@@ -208,7 +225,8 @@ public static class ModuleUpdateDecision
                 return new(ModuleUpdateAction.Land,
                     $"version {bundleVersion} is recorded as landed but its assembly is ABSENT — "
                     + "the landing never completed or its bytes were lost; re-landing (no restart "
-                    + "would have fixed it, and nothing else would ever have looked again)");
+                    + "would have fixed it, and nothing else would ever have looked again)"
+                    + WithAdvisory(advisory));
 
             var landedMvid = string.IsNullOrWhiteSpace(landed!.FrameworkMvid)
                 ? null : landed.FrameworkMvid;
@@ -229,7 +247,7 @@ public static class ModuleUpdateDecision
                     + $"{landedMvid ?? "(unrecorded)"} while the registry serves that same version "
                     + $"built against {servedMvid} — same content, different platform build; "
                     + "re-landing so this deployment holds the artifact for the framework it is "
-                    + "being served");
+                    + "being served" + WithAdvisory(advisory));
 
             return new(ModuleUpdateAction.SkipUpToDate,
                 servedMvid is null
@@ -259,8 +277,14 @@ public static class ModuleUpdateDecision
             return new(ModuleUpdateAction.SkipPolicy, policyDecline);
 
         return new(ModuleUpdateAction.Land,
-            landed is null
+            (landed is null
                 ? $"never landed here — landing {bundleVersion}"
-                : $"landing {bundleVersion} (current: {landed.Version ?? "unknown"})");
+                : $"landing {bundleVersion} (current: {landed.Version ?? "unknown"})")
+            + WithAdvisory(advisory));
     }
+
+    /// <summary>The floor's sentence as a suffix on a Land reason, or nothing when the running
+    /// platform satisfies the declared floor (or none is declared).</summary>
+    private static string WithAdvisory(string? advisory) =>
+        advisory is null ? string.Empty : $"; {advisory}";
 }

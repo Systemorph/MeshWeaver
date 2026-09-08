@@ -58,9 +58,13 @@ public sealed record ModuleActivationEntry
     public string? FrameworkMvid { get; init; }
 
     /// <summary>The module's declared platform FLOOR (<c>minMeshVersion</c>) as recorded at
-    /// landing. Boot SKIPS the entry — loudly, never a crash — when the running platform no
-    /// longer satisfies it (a rollback below the floor); absent = no constraint. The one gate is
-    /// <see cref="ModulePlatformFloor.DeclineReason(string?)"/>.</summary>
+    /// landing — ADVISORY since #3648. Boot used to SKIP the entry when the running platform did
+    /// not satisfy it; it no longer does (that string comparison held every production portal on
+    /// 2026-09-07 while the bytes would have loaded). The floor is worded onto the boot log and
+    /// the status surfaces as "declares platform ≥ X; running Y"
+    /// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) and decides nothing; whether the
+    /// entry loads is measured by the link probe in <c>MeshBuilder.InstallAssemblies</c>. Absent =
+    /// none declared.</summary>
     public string? MinMeshVersion { get; init; }
 
     /// <summary>The package version the landed bundle was served at (the module package's released
@@ -440,14 +444,15 @@ public sealed record EffectiveModule(string Entry, ModuleActivationEntry? Landed
 
 /// <summary>
 /// The boot-time union of #1664 step 9: appsettings baseline ∪ enabled persisted store installs,
-/// deduped by module name, with the two skip rules (missing DLL, unsatisfied platform floor)
-/// applied loudly — extracted PURE so the computation is unit-testable without booting a portal.
+/// deduped by module name, with the one skip rule (missing DLL) applied loudly and the declared
+/// platform floor announced as an advisory (#3648) — extracted PURE so the computation is
+/// unit-testable without booting a portal.
 /// </summary>
 public static class ModuleActivationBoot
 {
     /// <summary>
     /// Rewrites the activation list onto THE module set the mesh runs (#3395) — the convergence
-    /// step, applied before <see cref="ComputeEffectiveModuleEntries"/> so the union it computes is
+    /// step, applied before <see cref="ComputeEffectiveModuleEntries(IReadOnlyList{string}, ModuleActivationList, Func{string, string}, Func{ModuleActivationEntry, bool}, Action{string, string}, Action{string, string})"/> so the union it computes is
     /// the mesh's set rather than this process's own snapshot of a moving record.
     ///
     /// <para>🚨 <b>Why the raw record is not what a boot should load.</b> Landing moves each
@@ -571,6 +576,21 @@ public static class ModuleActivationBoot
     }
 
     /// <summary>
+    /// The pre-#3648 shape, kept as a real overload so a host or module compiled against the
+    /// previous platform still binds (an optional parameter is a compile-time default, not a
+    /// binary one: dropping the five-argument method would surface as MissingMethodException at
+    /// the caller's first boot). Forwards with no advisory channel.
+    /// </summary>
+    public static ImmutableList<EffectiveModule> ComputeEffectiveModuleEntries(
+        IReadOnlyList<string>? baselineEntries,
+        ModuleActivationList? persisted,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedModuleDllExists,
+        Action<string, string>? onSkipped) =>
+        ComputeEffectiveModuleEntries(baselineEntries, persisted, platformGate, landedModuleDllExists,
+            onSkipped, onAdvisory: null);
+
+    /// <summary>
     /// Computes the effective module list the boot loader feeds to
     /// <c>MeshBuilder.InstallAssemblies</c> (after per-module <see cref="ResolveLoadPath"/>).
     ///
@@ -589,23 +609,28 @@ public static class ModuleActivationBoot
     ///     entries only).</item>
     ///   <item>Each ENABLED persisted entry appends as <c>&lt;Name&gt;.dll</c> unless: it
     ///     duplicates a baseline (or earlier persisted) module name — dedupe, silent, the module
-    ///     is simply already activated; its recorded <see cref="ModuleActivationEntry.MinMeshVersion"/>
-    ///     floor is refused by <paramref name="platformGate"/> (the platform rolled BACK below
-    ///     the module's declared requirement — SKIPPED with a loud report, the entry stays for
-    ///     when the platform moves forward again); or its LANDED DLL is missing per
+    ///     is simply already activated; or its LANDED DLL is missing per
     ///     <paramref name="landedModuleDllExists"/> (a lost volume / manual deletion — SKIPPED
     ///     loudly; a same-named app-closure DLL does not count). A skip is never a crash: the
     ///     deployment must boot. A landed module's MVID is deliberately NOT a skip condition —
-    ///     modules bind by simple name across platform builds; the recorded MVID is diagnostic.</item>
+    ///     modules bind by simple name across platform builds; the recorded MVID is diagnostic.
+    ///     🚨 Nor is its recorded <see cref="ModuleActivationEntry.MinMeshVersion"/> floor, since
+    ///     #3648: an entry whose declared floor ranks above the running platform is handed to the
+    ///     loader like any other, with the claim ANNOUNCED through <paramref name="onAdvisory"/>;
+    ///     whether it loads is measured by the link probe in <c>MeshBuilder.InstallAssemblies</c>.
+    ///     (It used to be SKIPPED on that string, which is how every production portal was held on
+    ///     the morning build for all of 2026-09-07.)</item>
     ///   <item>Disabled entries (uninstalled) contribute nothing and report nothing.</item>
     /// </list>
     /// </summary>
     /// <param name="baselineEntries">The raw <c>Modules:Assemblies</c> values (may be null/empty).</param>
     /// <param name="persisted">The sidecar list (may be null).</param>
-    /// <param name="platformGate">Returns WHY a recorded platform FLOOR is not satisfied by the
-    /// running platform, or null when it is (an absent floor is always satisfied) — production
-    /// passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/> so there is never a second
-    /// notion of the module platform requirement.</param>
+    /// <param name="platformGate">Words the declared-floor ADVISORY — the sentence naming both
+    /// versions when an entry's recorded floor ranks above the running platform, or null;
+    /// production passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/> so there is never
+    /// a second wording. 🚨 Its answer skips NOTHING (#3648): it is delivered through
+    /// <paramref name="onAdvisory"/> for the entries that DO become effective. The parameter keeps
+    /// its position so callers compiled against the previous platform keep binding.</param>
     /// <param name="landedModuleDllExists">Whether a persisted module's LANDED entry DLL exists —
     /// called with the ENTRY, never with the bare name, because the entry is what says WHERE its
     /// bytes are: <see cref="ModuleActivationEntry.Directory"/> names the generation directory
@@ -619,12 +644,17 @@ public static class ModuleActivationBoot
     /// at landing.</param>
     /// <param name="onSkipped">The loud channel: called once per skipped persisted entry with
     /// (module name, reason).</param>
+    /// <param name="onAdvisory">The advisory channel (#3648): called once per EFFECTIVE persisted
+    /// entry whose declared floor <paramref name="platformGate"/> words as above the running
+    /// platform, with (module name, the sentence). Never for a skipped entry — the skip line
+    /// already names it — and never a reason to skip.</param>
     public static ImmutableList<EffectiveModule> ComputeEffectiveModuleEntries(
         IReadOnlyList<string>? baselineEntries,
         ModuleActivationList? persisted,
         Func<string?, string?> platformGate,
         Func<ModuleActivationEntry, bool> landedModuleDllExists,
-        Action<string, string>? onSkipped = null)
+        Action<string, string>? onSkipped = null,
+        Action<string, string>? onAdvisory = null)
     {
         var effective = ImmutableList.CreateBuilder<EffectiveModule>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -646,11 +676,11 @@ public static class ModuleActivationBoot
             if (overrides.ContainsKey(module.Name))
                 continue; // first ENABLED entry of a name wins, as it always has
 
-            if (platformGate(module.MinMeshVersion) is { } reason)
-            {
-                onSkipped?.Invoke(module.Name, reason);
-                continue;
-            }
+            // 🚨 #3648 — no floor skip. `if (platformGate(module.MinMeshVersion) is { } reason)
+            // { onSkipped(...); continue; }` stood here, and it is the line that kept every
+            // rc-floored module off every ci-built portal for all of 2026-09-07. The declared
+            // floor is announced below for the entries that become effective; whether they LOAD
+            // is measured by the link probe in MeshBuilder.InstallAssemblies, on the bytes.
 
             if (!landedModuleDllExists(module))
             {
@@ -662,6 +692,8 @@ public static class ModuleActivationBoot
             }
 
             overrides[module.Name] = module;
+            if (platformGate(module.MinMeshVersion) is { } advisory)
+                onAdvisory?.Invoke(module.Name, advisory);
         }
 
         // ── Pass 2: the baseline, in its own order, with a usable override substituted IN PLACE ──
