@@ -192,6 +192,19 @@ concurrency:
 
 env:
   ACR: meshweaver.azurecr.io
+  # 🚨 THE FLEET'S OWN REGISTRY (Doc/Architecture/ContainerRegistryInMemex, #3353). Every image
+  # this workflow publishes and every bundle publication it seals reaches cr.meshweaver.cloud AS
+  # WELL AS ACR — the same manifest, verified by digest readback (mirror-image-to-registry.sh), in
+  # the same job right after the ACR push. Every installation except the one hosting the registry
+  # pulls from cr, so a publication that reached ACR alone is invisible to them; ACR stays because
+  # memex.meshweaver.cloud (the host of the registry pods) keeps pulling from it by design — the
+  # bootstrap constraint. The publisher is docker_auth's ONE static account
+  # (`registry.publisher.username` in the chart); its password is secrets.MW_REGISTRY_PUBLISHER_PASSWORD
+  # (Key Vault 'Systemorph' → memexcloud-Registry-PublisherPassword), asserted RED by `preflight`.
+  # The bundle lane (node-repo-publish-bake.yml) carries the same host as its `bundle-registry`
+  # default; keep the two equal.
+  REGISTRY: cr.meshweaver.cloud
+  REGISTRY_PUBLISHER: publisher
   AKS_RG: <aks-resource-group>
   AKS_CLUSTER: <aks-cluster>
 
@@ -308,6 +321,7 @@ jobs:
           DEPENDENT_DISPATCH_APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
           DEPENDENT_DISPATCH_APP_PRIVATE_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          MW_REGISTRY_PUBLISHER_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: |
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login")
@@ -318,6 +332,13 @@ jobs:
           [ -n "$DEPENDENT_DISPATCH_APP_ID" ]          || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID          GitHub App whose installation token reads the Plugins content tree for plugins-modules / plugins-bake (content-app-id) — NOT a dispatch credential: core dispatches to no repository")
           [ -n "$DEPENDENT_DISPATCH_APP_PRIVATE_KEY" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY that App's private key, PEM")
           [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares the Plugins publication is sealed to (<account>/<share>…)")
+          # 🚨 The fleet registry's publisher password. Every image job and every bake job pushes
+          # to cr.meshweaver.cloud with it, so an unset value is a delivery that reaches ACR and
+          # not the fleet — asserted here, RED, never discovered as `unauthorized` three jobs later.
+          # Provisioned in BOTH secret stores: a Dependabot-triggered run reads Settings → Secrets →
+          # Dependabot, never the Actions store, so a secret set on the Actions tab alone reads
+          # EMPTY there (AGENTS.md; Doc/Architecture/DependabotSecretStore).
+          [ -n "$MW_REGISTRY_PUBLISHER_PASSWORD" ]     || missing+=("secrets.MW_REGISTRY_PUBLISHER_PASSWORD     the fleet registry's publisher password (cr.meshweaver.cloud, docker_auth's one static account 'publisher'; the value is Key Vault 'Systemorph' → memexcloud-Registry-PublisherPassword, whose bcrypt hash the chart carries as registry.publisher.passwordBcrypt). Set it in BOTH stores: gh secret set MW_REGISTRY_PUBLISHER_PASSWORD --repo Systemorph/MeshWeaver (Actions) AND gh secret set MW_REGISTRY_PUBLISHER_PASSWORD --app dependabot --repo Systemorph/MeshWeaver (Dependabot)")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::CD cannot deliver a release event — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -1164,6 +1185,22 @@ jobs:
           done
           echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
+      # 🚨 THE SAME MANIFEST, TO THE FLEET'S OWN REGISTRY — right after the ACR push, in this job
+      # (Doc/Architecture/ContainerRegistryInMemex). Still the staging tag only: a name no consumer
+      # selects, on cr exactly as on ACR, so the all-or-nothing gate `promote` applies is unchanged
+      # — promote mirrors every consumer-visible tag to cr the same way. The digest is read BACK
+      # off cr and compared to ACR's; a mismatch fails this leg RED, because a digest-pinned
+      # consumer (MW_IMAGE_DIGEST, platform-image-digest) must resolve the identical object on
+      # either registry. Login is by the publisher account; its password is asserted by preflight.
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: Mirror portal-ai (staging tag) to the fleet registry — same manifest, digest verified
+        run: >
+          .github/scripts/mirror-image-to-registry.sh
+          "${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
+          "${{ env.REGISTRY }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
       # 🚨 The publish SUCCEEDING is not evidence the image identifies itself correctly — that is
       # exactly the state that shipped for a week (see the version note above). So the version is
       # read back out of the pushed image config, per architecture, before anything selectable is
@@ -1310,6 +1347,16 @@ jobs:
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
+      # The same manifest to the fleet registry, digest verified — see the portal leg's note.
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: Mirror migration (staging tag) to the fleet registry — same manifest, digest verified
+        run: >
+          .github/scripts/mirror-image-to-registry.sh
+          "${{ env.ACR }}/memex-migration:${{ needs.gate.outputs.staging_tag }}"
+          "${{ env.REGISTRY }}/memex-migration:${{ needs.gate.outputs.staging_tag }}"
 
   # The MeshWeaver.Plugins PR gate image: `mw-plugin-test` (tools/MeshWeaver.PluginTester)
   # imports a node-repo checkout into a fresh in-process mesh, asserts every NodeType compiles,
@@ -1430,6 +1477,16 @@ jobs:
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=mw-plugin-test
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
+      # The same manifest to the fleet registry, digest verified — see the portal leg's note.
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: Mirror mw-plugin-test (staging tag) to the fleet registry — same manifest, digest verified
+        run: >
+          .github/scripts/mirror-image-to-registry.sh
+          "${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}"
+          "${{ env.REGISTRY }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}"
 
   # 🚨 portal-next is NOT built here any more. Its sources and its image lane live in
   # MeshWeaver.Plugins (MeshWeaver#2169). It is publishable from there independently because
@@ -1480,15 +1537,26 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # 🚨 THE FLEET REGISTRY IS A THIRD AUDIENCE OF EVERY PHASE BELOW (Doc/Architecture/
+      # ContainerRegistryInMemex). Each image leg mirrored its staging tag to cr; every
+      # consumer-visible tag a phase writes on ACR is written on cr in the same phase, from the
+      # same staging source, through mirror-image-to-registry.sh — which reads the digest back off
+      # cr and fails RED when it is not ACR's. A self-updater on a cr-consuming installation lists
+      # cr's `memex-portal-ai` tags, so the arming write of phase C is an arming write there too.
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: "Phase A — identity tags (everything except the portal's version)"
         run: |
           set -euo pipefail
-          promote() { # promote <repo> <tag>...
+          promote() { # promote <repo> <tag>...   — ACR, then the same tags on cr (digest verified)
             local repo="$1"; shift
-            local args=()
-            for t in "$@"; do args+=(--tag "${{ env.ACR }}/$repo:$t"); done
+            local args=() mirror=()
+            for t in "$@"; do args+=(--tag "${{ env.ACR }}/$repo:$t"); mirror+=("${{ env.REGISTRY }}/$repo:$t"); done
             echo "→ $repo: $*"
             docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/$repo:$STAGING"
+            .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$STAGING" "${mirror[@]}"
           }
           promote memex-migration   "$V_MIGRATION" "$SHA"
           promote mw-plugin-test    "$V_PLUGIN"    "$SHA"
@@ -1513,12 +1581,15 @@ jobs:
           for repo in memex-migration memex-portal-ai; do
             echo "→ $repo: main"
             docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"
+            .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$STAGING" "${{ env.REGISTRY }}/$repo:main"
           done
           # `latest` is what MeshWeaver.Plugins pins as MW_TEST_IMAGE.
           docker buildx imagetools create \
             --tag "${{ env.ACR }}/mw-plugin-test:main" \
             --tag "${{ env.ACR }}/mw-plugin-test:latest" \
             "${{ env.ACR }}/mw-plugin-test:$STAGING"
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/mw-plugin-test:$STAGING" \
+            "${{ env.REGISTRY }}/mw-plugin-test:main" "${{ env.REGISTRY }}/mw-plugin-test:latest"
           # MIRROR the ACR index to GHCR — never a second `dotnet publish`. Two independent builds
           # of one commit are two independent compilations, so the bits the plugins repo gates on
           # from GHCR would not provably be the bits validated in ACR (and it measured 411 s on top
@@ -1543,16 +1614,21 @@ jobs:
           # SelfUpdateHostedService reads memex-portal-ai's tags and rolls the portal AND the
           # migration Deployment to the newest ^\d+\.\d+\.\d+ one. Everything it will need — the
           # matching memex-migration:$V_MIGRATION — is already tagged by phase A. Do not move
-          # this step, and do not add anything after it.
+          # this step, and do not add anything after it — the ONE write that follows inside it is
+          # the same arming PUT for the fleet registry's audience: an installation consuming cr
+          # lists cr's tags, and everything IT will need (phase A's migration version, phase B's
+          # pointers) is already on cr by the same ordering.
           echo "→ memex-portal-ai: $V_PORTAL  (arming the self-updater)"
           docker buildx imagetools create \
             --tag "${{ env.ACR }}/memex-portal-ai:$V_PORTAL" \
             "${{ env.ACR }}/memex-portal-ai:$STAGING"
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-portal-ai:$STAGING" \
+            "${{ env.REGISTRY }}/memex-portal-ai:$V_PORTAL"
           {
             echo "### Promoted \`$SHA\` → $V_PORTAL"
-            echo "- memex-portal-ai \`$V_PORTAL\`, \`$SHA\`, \`main\`"
-            echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\`"
-            echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR)"
+            echo "- memex-portal-ai \`$V_PORTAL\`, \`$SHA\`, \`main\` (ACR + ${{ env.REGISTRY }})"
+            echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\` (ACR + ${{ env.REGISTRY }})"
+            echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR + ${{ env.REGISTRY }})"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: "Phase D — the line pointers: <major>-latest, <major.minor>-latest, <major.minor.patch>-latest (ACR + GHCR)"
         run: |
@@ -1569,13 +1645,14 @@ jobs:
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           for pair in "memex-migration:$V_MIGRATION" "memex-portal-ai:$V_PORTAL"; do
             repo="${pair%%:*}"; ver="${pair#*:}"
-            args=(); gargs=()
-            for t in $(line_tags "$ver"); do args+=(--tag "${{ env.ACR }}/$repo:$t"); gargs+=(--tag "ghcr.io/$NS/$repo:$t"); done
-            echo "→ $repo: $(line_tags "$ver")  (ACR, then GHCR — the adapter's default registry)"
+            args=(); gargs=(); margs=()
+            for t in $(line_tags "$ver"); do args+=(--tag "${{ env.ACR }}/$repo:$t"); gargs+=(--tag "ghcr.io/$NS/$repo:$t"); margs+=("${{ env.REGISTRY }}/$repo:$t"); done
+            echo "→ $repo: $(line_tags "$ver")  (ACR, then GHCR — the adapter's default registry — then ${{ env.REGISTRY }})"
             docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/$repo:$STAGING"
             docker buildx imagetools create "${gargs[@]}" --tag "ghcr.io/$NS/$repo:$ver" "${{ env.ACR }}/$repo:$STAGING"
+            .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$STAGING" "${margs[@]}"
           done
-          echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL") (ACR + GHCR)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL") (ACR + GHCR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
 
   # ────────── BAKE THE PLATFORM'S OWN CONTENT *IN THE SHIPPED IMAGE*, THEN PUBLISH ──────────
   # #1660 WS3 delivery, corrected by #1725. The portals adopt a prebuilt NodeType bundle only when
@@ -2065,6 +2142,9 @@ jobs:
           # repository. Stated explicitly rather than left to the script's fallback, so no live
           # publisher depends on a default that is only right by coincidence (MeshWeaver#3583).
           BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
+          # The exact publication, materialised locally AFTER every share sealed — the directory
+          # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).
+          BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
         run: |
           set -euo pipefail
           # The third argument is the CONTENT identity (the commit this bake was taken from).
@@ -2087,6 +2167,41 @@ jobs:
             echo "- source: \`meshweaver-content\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
             echo "- release marker: \`_releases/${RELEASE_VERSION}\` — environments may now be rolled to it"
           } >> "$GITHUB_STEP_SUMMARY"
+      # ───────── THE SAME SEALED SET, TO THE FLEET REGISTRY (Doc/Architecture/PluginBundlesInTheRegistry) ─────────
+      # After the share seal succeeded — never before, and never instead: the share copy stays
+      # until every consumer reads the registry (bundle-fetch reads cr; ShippedPrebuiltBundles
+      # still reads the share). The directory pushed is the one publish-bake-bundles.sh
+      # materialised from its own verified upload plan (BAKE_PUBLICATION_DIR), so the registry
+      # and the shares hold ONE set. `--skip-if-published` is the registry's sealed-skip, keyed on
+      # content × identity exactly as the share's; `--release` records this run's version →
+      # identity at plugins/releases:<version> on every run, like the share's marker; the
+      # immutable `<identity>-<run>` tag is this run's id. The index digest is printed as
+      # `bundle-publication: index=…` — the record the platform build POSTs below carries no field
+      # for it yet (see the design page's Publishing section).
+      - name: Install ORAS (pinned)
+        run: bash .github/scripts/install-oras.sh
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: "Push the sealed publication to the fleet registry (plugins/meshweaver-content:<identity>)"
+        id: registry-publication
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
+        run: |
+          set -euo pipefail
+          [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to ${{ env.REGISTRY }}."; exit 1; }
+          IDENTITY=$(cat "$BAKE_DIR/framework-mvid.txt")
+          LOG="${RUNNER_TEMP:-/tmp}/registry-publication.log"
+          # `set -o pipefail` above: the publisher's exit code survives the tee.
+          .github/scripts/push-bundle-publication.sh \
+            --registry "${{ env.REGISTRY }}" --source meshweaver-content \
+            --identity "$IDENTITY" --dir "$BAKE_PUBLICATION_DIR" \
+            --tag-run "$GITHUB_RUN_ID" --release "$RELEASE_VERSION" --skip-if-published 2>&1 | tee "$LOG"
+          index=$(sed -n 's/^bundle-publication: index=\([^ ]*\).*/\1/p' "$LOG" | tail -n 1)
+          case "$index" in sha256:*) ;; *) echo "::error::the publisher printed no index digest (got '${index:-<nothing>}') — the publication cannot be named, so it is not published"; exit 1 ;; esac
+          echo "- fleet registry: \`${{ env.REGISTRY }}/plugins/meshweaver-content:$IDENTITY\` = \`$index\`; release identity at \`plugins/releases:${RELEASE_VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
       # 🚨 CD's own consumption of the release gate (#1754). The three paths that roll a version
       # must read ONE verdict, and this is CD's: assert — against the artifact store, through the
       # same script the build gate uses — that the release just armed resolves an identity and
@@ -2514,6 +2629,10 @@ jobs:
       # answers 2xx and the watcher drops every delivery as unverifiable), which is why the preflight
       # asserts it and why it must actually reach this lane.
       webhook-secret: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
+      # The fleet registry's publisher — the lane pushes the sealed `plugins` publication to
+      # cr.meshweaver.cloud after the share seal (its `bundle-registry` default is the same host
+      # as env.REGISTRY above). Asserted by `preflight` here AND by the lane's own preflight, RED.
+      bundle-registry-publisher-password: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
 
   verify-images:
     name: "Verify every image shipped"
