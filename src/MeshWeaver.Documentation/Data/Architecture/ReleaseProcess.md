@@ -128,12 +128,14 @@ two places it is compared are diverging, and only one of them keeps a verdict:**
 | | who compares | verdict |
 |---|---|---|
 | **Authoring / pack time** | `.github/scripts/check-module-platform-floor.py`, MeshWeaver.Plugins' `check-module-floors.py` | **an ERROR.** A floor above the platform the bundle is built against is unsatisfiable by construction, and the lane refuses it. This is where the ordering above bites, and it is the gate that reddened the Plugins pull requests. |
-| **Runtime** | `ModulePlatformLink.Check` plus the actual load | **measured, never declared.** [Issue #3648](https://github.com/Systemorph/MeshWeaver/issues/3648) makes the declared floor *advisory* at all eight of its runtime decision points — logged, shown on the module's status row, deciding nothing — so it no longer refuses, holds or skips anything. |
+| **Runtime** | `ModulePlatformLink.Check` plus the actual load | **not this page's to state, and moving.** [Issue #3648](https://github.com/Systemorph/MeshWeaver/issues/3648) is removing the declared floor from all eight of its runtime decision points, leaving only the measured check and the load itself; while it is open, a miss still holds. Read the current answer where #3648 lands it — never off this page. |
 
 So read the `HOLDING …` line above as a **measurement of what happened on 2026-09-07**, never as the
-contract: that hold is exactly what #3648 removes. What survives unchanged is the **pack-time**
+contract: that hold is precisely what #3648 is removing, and this page deliberately does not restate
+a runtime rule that another change owns. What survives unchanged either way is the **pack-time**
 question, and there the comparison is not merely retained but pinned — the script must agree with
 `NuGetVersionComparer` exactly, which `ModulePlatformFloorScriptParityTest` enforces case by case.
+That is the half the ordering rule on this page is about.
 
 **Retiring the rc line removes the LABEL half of the trap by construction** — with one pre-release
 identifier in the whole scheme there is no label left to sort against.
@@ -300,8 +302,8 @@ package** — in-mesh source compiles against the platform *image*, module bundl
 closures, and satellite repositories build inside `mw-plugin-test`
 ([PluginPackaging](/Doc/Architecture/PluginPackaging),
 [ModuleBuildArchitecture](/Doc/Architecture/ModuleBuildArchitecture)). The packages already
-published were **retired and unlisted** on 2026-09-07 — forty-three ids, every one stalled at
-`rc7`/`rc8`/`rc9`. Exactly two packages survive, both entry points rather than platform bytes:
+published were **retired and unlisted** on 2026-09-07 — forty-three ids, thirty-nine stalled at
+`rc13`, three at `rc8` and one at `rc7`. Exactly two packages survive, both entry points rather than platform bytes:
 `MeshWeaver.Aspire.Hosting.Memex` and `MeshWeaver.MemexTemplate`, published from
 `publish-packages.yml` on this same `v*.*.*` tag. Unlisting does not erase: existing exact-version
 pins keep resolving. See [NuGet Package Retirement](/Doc/Architecture/NuGetPackageRetirement) for the

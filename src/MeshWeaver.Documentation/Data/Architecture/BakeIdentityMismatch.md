@@ -167,7 +167,7 @@ from `$(PlatformVersion)` plus the SDK's `+$(SourceRevisionId)`, unconditionally
 
 | group | guarded? | what it decides |
 |---|---|---|
-| `_VersionNumeric`, `_CiSep` | no | pure functions of `$(PlatformVersion)` |
+| `_VersionNumeric` | no | a pure function of `$(PlatformVersion)` (its sibling `_CiSep` was retired with the rc line — the `-ci.` separator is now a literal, see [ReleaseProcess](/Doc/Architecture/ReleaseProcess) §1) |
 | `$(Version)` | `'$(Version)' == ''` | the **publishable** string: NuGet version, image tag, `MESHWEAVER_PLATFORM_VERSION` |
 | `InformationalVersion`, `AssemblyVersion`, `FileVersion` | **no** | the **compiled** attributes — inputs to the framework identity |
 
