@@ -2,9 +2,19 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using MeshWeaver.PluginCatalog;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -229,5 +239,495 @@ public class ConfiguredModuleActivationTest
     {
         // One source, no overrides — today's default, and it must stay silent.
         Assert.Empty(MeshBuilderModuleActivation.ShadowedRequired(Config(ImageBaseline)));
+    }
+
+    // ───────── #3649: a generation that cannot load here falls back to the previous one ─────────
+    //
+    // Rule R1 of the module adoption policy (maintainer, 2026-09-07): an installation runs the
+    // newest generation of every module that LOADS, and keeps the one it has until a newer one
+    // does. Before this, a landed generation the link probe refused left the module ABSENT unless
+    // the image shipped a baseline copy — a Store-only module has none — and the shelved landing
+    // overwrote the only reference to the loadable generation, which the next GC pass then took
+    // away. Every test here lands REAL assemblies through the REAL landing service, boots the way
+    // MemexConfiguration.ConfigureMemexMesh boots, and drives the REAL loader.
+
+    /// <summary>The platform assembly the stand-in impersonates — a real one this process has
+    /// loaded, so the probe measures against the copy a module would actually bind to.</summary>
+    private const string ContractAssembly = "MeshWeaver.Mesh.Contract";
+
+    /// <summary>A type no build of <see cref="ContractAssembly"/> has ever carried: what a module
+    /// compiled against a platform three days ahead links to.</summary>
+    private const string FutureType = "MeshWeaver.Mesh.CodeOutputCurrencyFromTheFuture";
+
+    private const string PackagePath = "Plugins/fallback-pack";
+
+    /// <summary>
+    /// 🚨 THE repro of #3649. A loadable generation is landed, then a generation built for a NEWER
+    /// platform is shelved over it (the registry lane, where an unloadable module holds instead
+    /// of refusing). Boot refuses the shelved generation, loads the previous one, and says so —
+    /// and the module is PRESENT, never incompatible.
+    /// </summary>
+    [Fact]
+    public async Task WhenTheNewestGenerationCannotLoadHere_ThePreviousOneLoads_AndIsReported()
+    {
+        using var deployment = new Deployment();
+        var a = await Land(deployment, ModuleBuiltAgainstThisPlatform(deployment.Module), "1.2.3");
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+
+        // The landing kept the displaced generation as the fallback, with its version.
+        var entry = Entry(deployment);
+        Assert.Equal(b, entry.Directory);
+        Assert.Equal(a, entry.PreviousDirectory);
+        Assert.Equal("1.2.3", entry.PreviousVersion);
+
+        var (services, _) = Boot(deployment);
+
+        var installed = Assert.Single(services.GetServices<InstalledModuleAssembly>(),
+            m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
+        Assert.Equal(a, Path.GetFileName(Path.GetDirectoryName(installed.Assembly.Location)));
+
+        var fallback = Assert.Single(services.GetServices<FallbackModule>());
+        Assert.Equal(deployment.Module, fallback.Name);
+        Assert.Equal(b, fallback.Generation);
+        Assert.Equal(a, fallback.PreviousGeneration);
+        Assert.Equal("1.3.0", fallback.Version);
+        Assert.Equal("1.2.3", fallback.PreviousVersion);
+        // The report names both generations and the type the newest one wanted — the sentence the
+        // incident was missing.
+        Assert.StartsWith(
+            $"'{deployment.Module}' runs its previous generation v1.2.3 ({a}) because v1.3.0 ({b}) "
+            + "cannot load here:", fallback.Report(), StringComparison.Ordinal);
+        Assert.Contains(FutureType, fallback.Reason, StringComparison.Ordinal);
+
+        // 🚨 Present, not incompatible: nothing registers the module as degraded.
+        Assert.Empty(services.GetServices<IncompatibleModule>());
+    }
+
+    /// <summary>
+    /// The other half of "as today": when NO generation loads here, the module is incompatible
+    /// exactly as it was before #3649 — named, refused before load, contributing nothing.
+    /// </summary>
+    [Fact]
+    public async Task WhenNoGenerationLoadsHere_TheModuleIsIncompatible_AsBefore()
+    {
+        using var deployment = new Deployment();
+        var first = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.1");
+        Assert.Equal(first, Entry(deployment).PreviousDirectory);
+
+        var (services, _) = Boot(deployment);
+
+        Assert.Empty(services.GetServices<FallbackModule>());
+        var parked = Assert.Single(services.GetServices<IncompatibleModule>());
+        Assert.Equal(deployment.Module, parked.Name);
+        Assert.True(parked.RefusedBeforeLoad);
+        Assert.Contains(FutureType, parked.Report(), StringComparison.Ordinal);
+        Assert.DoesNotContain(services.GetServices<InstalledModuleAssembly>(),
+            m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 Two unloadable landings in a row must not push the loadable generation out of reach. The
+    /// landing MEASURES the generation it displaces: when that one cannot load here and holds a
+    /// fallback of its own, the fallback carries forward — so the entry keeps pointing at the one
+    /// generation that runs, and boot runs it.
+    /// </summary>
+    [Fact]
+    public async Task TwoUnloadableLandingsInARow_KeepTheLoadableGenerationAsTheFallback()
+    {
+        using var deployment = new Deployment();
+        var a = await Land(deployment, ModuleBuiltAgainstThisPlatform(deployment.Module), "1.2.3");
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        var c = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.1");
+
+        var entry = Entry(deployment);
+        Assert.Equal(c, entry.Directory);
+        Assert.Equal(a, entry.PreviousDirectory);
+        Assert.Equal("1.2.3", entry.PreviousVersion);
+
+        var (services, _) = Boot(deployment);
+        Assert.Equal(a, Assert.Single(services.GetServices<FallbackModule>()).PreviousGeneration);
+    }
+
+    /// <summary>
+    /// 🚨 The fallback generation is REFERENCED: the GC keeps it while it is the one that loads.
+    /// Reclaiming it is precisely how a shelved landing used to take a working module away for
+    /// good. The negative control — an uninstall clears the references and both go — is what
+    /// keeps this from passing by never collecting anything.
+    /// </summary>
+    [Fact]
+    public async Task GarbageCollection_KeepsTheFallbackGeneration()
+    {
+        using var deployment = new Deployment();
+        var a = await Land(deployment, ModuleBuiltAgainstThisPlatform(deployment.Module), "1.2.3");
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+
+        ModuleLandingService.CollectGarbage(deployment.Root, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+
+        Assert.True(Directory.Exists(deployment.GenerationDirectory(a)),
+            "the previous generation — the only one that loads here — was reclaimed");
+        Assert.True(Directory.Exists(deployment.GenerationDirectory(b)));
+
+        await deployment.Landing.RemoveModule(deployment.Module).Timeout(TestTimeouts.Convergence).Await();
+        ModuleLandingService.CollectGarbage(deployment.Root, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+
+        Assert.False(Directory.Exists(deployment.GenerationDirectory(a)));
+        Assert.False(Directory.Exists(deployment.GenerationDirectory(b)));
+    }
+
+    /// <summary>
+    /// The mesh's set still PROPOSES the head generation — that is what the wave landed — but the
+    /// ADOPTION records what the replica actually loaded, so a reader of the set records learns
+    /// what runs, the GC references it, and the mesh-set line says so.
+    /// </summary>
+    [Fact]
+    public async Task TheAdoptedSet_RecordsTheGenerationThatActuallyLoaded()
+    {
+        using var deployment = new Deployment();
+        var a = await Land(deployment, ModuleBuiltAgainstThisPlatform(deployment.Module), "1.2.3");
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        var proposed = await deployment.Landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await();
+        Assert.NotNull(proposed);
+        Assert.Equal(b, proposed.Generations[deployment.Module]);
+
+        Boot(deployment);
+
+        var index = ModuleSetStore.Read(deployment.Root);
+        Assert.NotNull(index.Current);
+        Assert.False(index.ConvergencePending);
+        Assert.Equal(b, index.Current.Generations[deployment.Module]);
+        Assert.Equal(a, index.RunningGenerations[deployment.Module]);
+        Assert.Equal(a, Assert.Single(index.FallbackGenerations).Value);
+        Assert.Contains(a, ModuleSetStore.ReferencedGenerations(index));
+        Assert.Contains("PREVIOUS generation", ModuleSetStore.Describe(index), StringComparison.Ordinal);
+        Assert.Contains(a, ModuleSetStore.Describe(index), StringComparison.Ordinal);
+
+        // …and the GC, which reads the set records, keeps it on that evidence alone.
+        ModuleLandingService.CollectGarbage(deployment.Root, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+        Assert.True(Directory.Exists(deployment.GenerationDirectory(a)));
+    }
+
+    /// <summary>An uninstall clears BOTH pointers: a disabled entry must not keep either
+    /// generation referenced, or the GC could never reclaim them.</summary>
+    [Fact]
+    public async Task Uninstall_ClearsBothGenerationPointers()
+    {
+        using var deployment = new Deployment();
+        var a = await Land(deployment, ModuleBuiltAgainstThisPlatform(deployment.Module), "1.2.3");
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+
+        await deployment.Landing.RemoveModule(deployment.Module).Timeout(TestTimeouts.Convergence).Await();
+
+        var entry = Entry(deployment);
+        Assert.False(entry.Enabled);
+        Assert.Null(entry.Directory);
+        Assert.Null(entry.PreviousDirectory);
+        Assert.Null(entry.PreviousVersion);
+        Assert.Null(entry.PreviousFrameworkMvid);
+        Assert.False(Directory.Exists(deployment.GenerationDirectory(a)));
+        Assert.False(Directory.Exists(deployment.GenerationDirectory(b)));
+    }
+
+    /// <summary>
+    /// The projection onto the mesh's set carries the fallback pointer with the entry, and drops
+    /// it only when it names the set's own generation (the mid-wave shape: the entry moved to D
+    /// with the set's G as its fallback — G is the head now and needs no fallback to itself).
+    /// </summary>
+    [Fact]
+    public void TheProjectionOntoTheMeshSet_CarriesTheFallbackPointer_UnlessItNamesTheSetsGeneration()
+    {
+        const string name = "MeshWeaver.Test.Projected";
+        var set = new ModuleSet(1, "set-1",
+            ImmutableSortedDictionary.CreateRange(StringComparer.OrdinalIgnoreCase,
+                [KeyValuePair.Create(name, name + "@g")]),
+            DateTime.UtcNow);
+
+        static ModuleActivationList Record(string head, string previous) => new()
+        {
+            Entries =
+            [
+                new ModuleActivationEntry
+                {
+                    Name = name, Directory = head, PreviousDirectory = previous, PreviousVersion = "1.0.0",
+                },
+            ],
+        };
+
+        var midWave = ModuleActivationBoot.ProjectOntoMeshSet(Record(name + "@d", name + "@g"), set)
+            .Entries.Single();
+        Assert.Equal(name + "@g", midWave.Directory);
+        Assert.Null(midWave.PreviousDirectory);
+        Assert.Null(midWave.PreviousVersion);
+
+        var carried = ModuleActivationBoot.ProjectOntoMeshSet(Record(name + "@d", name + "@a"), set)
+            .Entries.Single();
+        Assert.Equal(name + "@g", carried.Directory);
+        Assert.Equal(name + "@a", carried.PreviousDirectory);
+        Assert.Equal("1.0.0", carried.PreviousVersion);
+    }
+
+    /// <summary>
+    /// A module running its previous generation is a NAMED ROW on the activation report, never
+    /// "restart required" (a restart re-measures the same bytes and falls back again) and never
+    /// "not running here" (it is running). Without the loader's record the same state reads as an
+    /// ordinary pending update — the false prompt the record exists to remove — and once the
+    /// record has moved past the refused generation, a restart genuinely tries something new and
+    /// the module is pending again.
+    /// </summary>
+    [Fact]
+    public async Task TheActivationReport_NamesAFallback_AndNeverCallsItRestartRequired()
+    {
+        using var deployment = new Deployment();
+        var a = await Land(deployment, ModuleBuiltAgainstThisPlatform(deployment.Module), "1.2.3");
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        var (services, _) = Boot(deployment);
+        var fallbacks = services.GetServices<FallbackModule>().ToArray();
+        var loaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { deployment.Module };
+        var generations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [deployment.Module] = a,
+        };
+
+        var report = new PendingModuleActivations(deployment.Root) { FallbackModules = fallbacks }
+            .Read(loaded, generations);
+
+        Assert.False(report.IsUndetermined, report.UndeterminedReason);
+        Assert.True(report.HasFallbacks);
+        var row = Assert.Single(report.Fallbacks);
+        Assert.Equal(deployment.Module, row.Name);
+        Assert.Equal(PackagePath, row.PackagePath);
+        Assert.Equal(a, row.PreviousGeneration);
+        Assert.Equal(b, row.Generation);
+        Assert.Equal("1.2.3", row.PreviousVersion);
+        Assert.Equal("1.3.0", row.Version);
+        Assert.StartsWith($"runs v1.2.3 ({a}); v1.3.0 ({b}) landed but does not load here:",
+            row.Reason, StringComparison.Ordinal);
+        Assert.Same(row, report.FallbackForPackage(PackagePath));
+        Assert.Null(report.FallbackForPackage(null));
+        Assert.False(report.HasPending, "a restart re-measures the same bytes and falls back again");
+        Assert.False(report.IsPendingForPackage(PackagePath));
+        Assert.False(report.HasQuarantined, "it is running");
+        Assert.Contains("PREVIOUS generation", report.Describe(), StringComparison.Ordinal);
+
+        var blind = new PendingModuleActivations(deployment.Root).Read(loaded, generations);
+        Assert.True(blind.HasPending, "without the loader's record the state reads as an ordinary update");
+
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.1");
+        var movedOn = new PendingModuleActivations(deployment.Root) { FallbackModules = fallbacks }
+            .Read(loaded, generations);
+        Assert.True(movedOn.HasPending, "the record moved past the refused generation — a restart tries the new one");
+        Assert.True(movedOn.HasFallbacks);
+    }
+
+    /// <summary>
+    /// A REQUIRED module running its previous generation is <see cref="RequiredModuleState.Present"/>:
+    /// the readiness probe stays Healthy on a fallback. Classified off the real loader's output —
+    /// the loaded set and the incompatible set it registered — so the verdict cannot agree with
+    /// itself while the loader diverges.
+    /// </summary>
+    [Fact]
+    public async Task ARequiredModuleRunningItsPreviousGeneration_IsPresent()
+    {
+        using var deployment = new Deployment();
+        await Land(deployment, ModuleBuiltAgainstThisPlatform(deployment.Module), "1.2.3");
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        var (services, _) = Boot(deployment);
+
+        var verdicts = RequiredModuleStatus.Classify(
+            requiredEntries: [deployment.Module + ".dll"],
+            baselineEntries: [],
+            loadedAssemblyNames: services.GetServices<InstalledModuleAssembly>()
+                .Select(m => m.Assembly.GetName().Name!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase),
+            resolvesFromDeployment: _ => false,
+            activation: ModuleActivationSidecar.Read(deployment.Root),
+            landedDllExists: entry => ModuleActivationBoot.LandedModuleDllExists(deployment.Root, entry),
+            platformGate: _ => null,
+            incompatibleModules: [.. services.GetServices<IncompatibleModule>()]);
+
+        var verdict = Assert.Single(verdicts);
+        Assert.Equal(deployment.Module, verdict.Name);
+        Assert.Equal(RequiredModuleState.Present, verdict.State);
+        Assert.Empty(RequiredModuleStatus.Incompatible(verdicts));
+        Assert.Empty(RequiredModuleStatus.ExpectedLater(verdicts));
+    }
+
+    // ───────────────────────────────────────────────────────────── harness
+
+    /// <summary>A per-test deployment root with the REAL landing service over it. The module name
+    /// is unique per test: the loader puts what it loads into the default load context, and two
+    /// different assemblies of one simple name cannot both live there.</summary>
+    private sealed class Deployment : IDisposable
+    {
+        public string Root { get; } =
+            Path.Combine(Path.GetTempPath(), "mw-fallback-" + Guid.NewGuid().ToString("N"));
+
+        public string PinRoot => Path.Combine(Root, "pinned");
+
+        public string Module { get; } = "MeshWeaver.Test.Fallback" + Guid.NewGuid().ToString("N")[..8];
+
+        public ModuleLandingService Landing { get; }
+
+        public Deployment()
+        {
+            Directory.CreateDirectory(Root);
+            Landing = new ModuleLandingService(baseDirectory: Root);
+        }
+
+        public string GenerationDirectory(string generation) => Path.Combine(Root, "modules", generation);
+
+        public void Dispose()
+        {
+            Landing.Dispose();
+            try { Directory.Delete(Root, recursive: true); }
+            catch { /* temp cleanup is the OS's problem, never a test failure */ }
+        }
+    }
+
+    private static ModuleActivationEntry Entry(Deployment deployment) =>
+        ModuleActivationSidecar.Read(deployment.Root).Entries
+            .Single(e => string.Equals(e.Name, deployment.Module, StringComparison.Ordinal));
+
+    /// <summary>Lands a generation on the ADOPT path (refuses what cannot load) and returns its
+    /// generation directory leaf.</summary>
+    private static async Task<string> Land(Deployment deployment, byte[] bytes, string version)
+    {
+        await deployment.Landing.LandModule(
+                deployment.Module, [(deployment.Module + ".dll", bytes)],
+                packagePath: PackagePath, version: version)
+            .Timeout(TestTimeouts.Convergence).Await();
+        return Entry(deployment).Directory!;
+    }
+
+    /// <summary>Lands a generation on the SHELF path (holds what cannot load) and returns its
+    /// generation directory leaf. Asserts it was held — every shelved generation here is one
+    /// built for a newer platform.</summary>
+    private static async Task<string> Shelve(Deployment deployment, byte[] bytes, string version)
+    {
+        var outcome = await deployment.Landing.ShelveModule(
+                deployment.Module, [(deployment.Module + ".dll", bytes)],
+                packagePath: PackagePath, version: version)
+            .Timeout(TestTimeouts.Convergence).Await();
+        Assert.True(outcome.Held, "the shelved generation was expected to be unloadable here");
+        return Entry(deployment).Directory!;
+    }
+
+    /// <summary>
+    /// One replica's boot, composed EXACTLY as <c>MemexConfiguration.ConfigureMemexMesh</c>
+    /// composes it — read the record, read the mesh's sets, project, compute the union, pin the
+    /// head generation, hand the loader a LAZY pin of the previous one, install, record the
+    /// adoption off what the loader registered. Re-deriving any of it here would let this test
+    /// agree with itself while the portal diverges.
+    /// </summary>
+    private static (IServiceProvider Services, ModuleSetIndex Sets) Boot(Deployment deployment)
+    {
+        var root = deployment.Root;
+        var persisted = ModuleActivationSidecar.Read(root);
+        var sets = ModuleSetStore.Read(root);
+        var onMeshSet = ModuleActivationBoot.ProjectOntoMeshSet(
+            persisted,
+            sets.Proposed,
+            onDeferred: null,
+            landedDllExists: entry => ModuleActivationBoot.LandedModuleDllExists(root, entry));
+        var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+            baselineEntries: null,
+            onMeshSet,
+            ModulePlatformFloor.DeclineReason,
+            entry => ModuleActivationBoot.LandedModuleDllExists(root, entry));
+        var candidates = effective
+            .Select(module =>
+            {
+                var landed = module.Landed!;
+                var previous = ModuleActivationBoot.PreviousGeneration(landed) is { } older
+                               && ModuleActivationBoot.LandedModuleDllExists(root, older)
+                    ? older
+                    : null;
+                return new ModuleInstallCandidate(
+                    ModuleGenerationPin.PinnedLoadPath(root, landed, deployment.PinRoot))
+                {
+                    Version = landed.Version,
+                    PreviousVersion = previous?.Version,
+                    Previous = previous is null
+                        ? null
+                        : () => ModuleGenerationPin.PinnedLoadPath(root, previous, deployment.PinRoot),
+                };
+            })
+            .ToArray();
+
+        var services = new ServiceCollection();
+        var builder = new MeshBuilder(configure => configure(services), new Address("mesh", "test"));
+        builder.InstallModules(candidates);
+        var provider = services.BuildServiceProvider();
+
+        if (sets.Proposed is { } adopted)
+            ModuleSetStore.RecordAdoption(root, adopted,
+                ModuleSetStore.RunningGenerationsOf(adopted, provider.GetServices<FallbackModule>()),
+                adoptedBy: "replica");
+        return (provider, sets);
+    }
+
+    /// <summary>A module compiled against a STAND-IN <see cref="ContractAssembly"/> carrying
+    /// <see cref="FutureType"/> — the memex-cloud shape: same assembly simple name as one this
+    /// process has loaded, and that copy does not have the type.</summary>
+    private static byte[] ModuleBuiltAgainstAFuturePlatform(string moduleName)
+    {
+        var future = Emit(ContractAssembly, """
+            namespace MeshWeaver.Mesh;
+            /// <summary>The type a newer platform has and this one does not.</summary>
+            public enum CodeOutputCurrencyFromTheFuture { Unknown, Current, Stale }
+            """, excludeReference: ContractAssembly);
+
+        return Emit(moduleName, """
+            using MeshWeaver.Mesh;
+            public static class CodeViews
+            {
+                public static string BuildContent(CodeOutputCurrencyFromTheFuture currency)
+                    => currency.ToString();
+            }
+            """,
+            excludeReference: ContractAssembly,
+            extra: MetadataReference.CreateFromImage(future));
+    }
+
+    /// <summary>A module compiled against the REAL contract this process runs — the generation
+    /// that loads.</summary>
+    private static byte[] ModuleBuiltAgainstThisPlatform(string moduleName) =>
+        Emit(moduleName, """
+            using MeshWeaver.Mesh;
+            public static class CodeViews
+            {
+                public static string BuildContent(MeshNode node) => node.Id;
+            }
+            """);
+
+    /// <summary>Compiles one source file into an assembly named <paramref name="assemblyName"/>,
+    /// against this process's own reference set.</summary>
+    private static byte[] Emit(
+        string assemblyName, string source, string? excludeReference = null,
+        MetadataReference? extra = null)
+    {
+        var platform = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? string.Empty)
+            .Split(Path.PathSeparator)
+            .Where(p => p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(p))
+            .Where(p => excludeReference is null
+                        || !string.Equals(Path.GetFileNameWithoutExtension(p), excludeReference,
+                            StringComparison.OrdinalIgnoreCase))
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
+            .ToList();
+        if (extra is not null)
+            platform.Add(extra);
+
+        var compilation = CSharpCompilation.Create(
+            assemblyName,
+            [CSharpSyntaxTree.ParseText(source)],
+            platform,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        using var buffer = new MemoryStream();
+        var result = compilation.Emit(buffer);
+        Assert.True(result.Success, string.Join(
+            Environment.NewLine,
+            result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return buffer.ToArray();
     }
 }
