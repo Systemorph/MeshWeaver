@@ -61,9 +61,11 @@ public class FluentBuilderTest
     public void TheSameRecordRendersTheSameKeysForHelmAndForAspire()
     {
         // The two renderers differ in exactly the ways PortalConfigOptions names: Helm emits the
-        // MEMEX_* database keys from the record (Aspire's Postgres resource injects its own), and
-        // Aspire emits the plugin-catalog boot wiring as env (Helm hands the same entries to the
-        // operator's catalog config file). Everything else is one derivation, key for key.
+        // MEMEX_* database keys from the record (Aspire's Postgres resource injects its own) and
+        // the in-cluster Mcp__BaseUrl (the adapter sets that key to the endpoint Aspire allocates,
+        // so the derivation emits nothing for it — never a blank); Aspire emits the plugin-catalog
+        // boot wiring as env (Helm hands the same entries to the operator's catalog config file).
+        // Everything else is one derivation, key for key.
         var record = DeploymentRecordJson.ReadFile(Path.Combine(AppContext.BaseDirectory, "Fixtures", "memex.json"));
         var helm = DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm);
         var aspire = DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Aspire(mcpBaseUrl: null));
@@ -71,17 +73,18 @@ public class FluentBuilderTest
         var helmOnly = helm.Keys.Except(aspire.Keys).ToList();
         var aspireOnly = aspire.Keys.Except(helm.Keys).ToList();
 
-        Assert.True(helmOnly.All(k => k.StartsWith("MEMEX_", StringComparison.Ordinal)),
-            "keys Helm renders and Aspire does not, beyond the database keys: " + string.Join(", ", helmOnly));
+        Assert.False(aspire.ContainsKey("Mcp__BaseUrl"), "the Aspire view must not emit a blank Mcp__BaseUrl — the adapter owns that key");
+        Assert.True(helmOnly.All(k => k.StartsWith("MEMEX_", StringComparison.Ordinal) || k == "Mcp__BaseUrl"),
+            "keys Helm renders and Aspire does not, beyond the database keys and the in-cluster MCP URL: " + string.Join(", ", helmOnly));
         Assert.True(aspireOnly.All(k => k.StartsWith("PluginCatalog__", StringComparison.Ordinal)),
             "keys Aspire renders and Helm does not, beyond the catalog boot wiring: " + string.Join(", ", aspireOnly));
         Assert.True(helmOnly.Count > 0 && aspireOnly.Count > 0, "the memex record should exercise both documented differences");
 
         var shared = helm.Keys.Intersect(aspire.Keys).ToList();
-        var differing = shared.Where(k => k != "Mcp__BaseUrl" && helm[k] != aspire[k]).ToList();
+        var differing = shared.Where(k => helm[k] != aspire[k]).ToList();
         Assert.True(shared.Count > 40, $"only {shared.Count} shared keys — the memex record renders far more");
         Assert.True(differing.Count == 0,
-            "shared keys whose value differs between the renderers (only Mcp__BaseUrl may): " + string.Join(", ", differing));
+            "shared keys whose value differs between the renderers: " + string.Join(", ", differing));
     }
 
     [Fact]

@@ -112,7 +112,8 @@ public static class MemexHostingExtensions
             context.EnvironmentVariables[DeploymentRecordJson.EnvironmentKey] = DeploymentRecordJson.Write(r);
             foreach (var (key, value) in DeploymentPortalConfig.PortalConfig(r, PortalConfigOptions.Aspire(mcpBaseUrl: null)))
                 context.EnvironmentVariables[key] = value;
-            // The MCP back-connection URL is the endpoint Aspire allocates (substituted at publish).
+            // The MCP back-connection URL is the endpoint Aspire allocates (substituted at publish);
+            // the derivation above deliberately emits nothing for it (PortalConfigOptions.Aspire).
             context.EnvironmentVariables["Mcp__BaseUrl"] = resource.GetEndpoint("http");
             // Orleans clustering as the feature flag the Distributed host reads.
             context.EnvironmentVariables["Features__Orleans__Clustering"] = DeploymentPortalConfig.OrleansClustering(r);
@@ -284,13 +285,29 @@ public static class MemexHostingExtensions
     private static void SyncReplicas(IResourceBuilder<MemexPortalResource> portal, DeploymentContent record) =>
         portal.WithAnnotation(new ReplicaAnnotation(record.Replicas is > 0 ? record.Replicas.Value : 1), ResourceAnnotationMutationBehavior.Replace);
 
+    /// <summary>
+    /// The container's named volumes ARE the record's volumes: one Docker volume
+    /// (<c>{resource}-{volume.Name}</c>) per declared mount path, and a mount derived earlier from
+    /// a volume the record no longer declares is removed — the model never diverges from the
+    /// record. A mount the caller added through Aspire's own <c>WithVolume</c>/<c>WithBindMount</c>
+    /// (a source not carrying this resource's prefix) is left alone.
+    /// </summary>
     private static void SyncVolumes(IResourceBuilder<MemexPortalResource> portal, DeploymentContent record)
     {
+        var prefix = $"{portal.Resource.Name}-";
+        var desired = record.Volumes
+            .Where(v => !string.IsNullOrWhiteSpace(v.MountPath))
+            .ToDictionary(v => v.MountPath!, v => prefix + v.Name, StringComparer.Ordinal);
+
+        foreach (var stale in portal.Resource.Annotations.OfType<ContainerMountAnnotation>()
+                     .Where(m => m.Type == ContainerMountType.Volume && m.Source is { } s && s.StartsWith(prefix, StringComparison.Ordinal))
+                     .Where(m => !desired.TryGetValue(m.Target, out var source) || source != m.Source)
+                     .ToList())
+            portal.Resource.Annotations.Remove(stale);
+
         var mounted = portal.Resource.Annotations.OfType<ContainerMountAnnotation>().Select(m => m.Target).ToHashSet(StringComparer.Ordinal);
-        foreach (var volume in record.Volumes)
-        {
-            if (string.IsNullOrWhiteSpace(volume.MountPath) || mounted.Contains(volume.MountPath)) continue;
-            ContainerResourceBuilderExtensions.WithVolume(portal, $"{portal.Resource.Name}-{volume.Name}", volume.MountPath);
-        }
+        foreach (var (mountPath, source) in desired)
+            if (!mounted.Contains(mountPath))
+                ContainerResourceBuilderExtensions.WithVolume(portal, source, mountPath);
     }
 }

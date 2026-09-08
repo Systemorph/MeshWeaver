@@ -124,7 +124,7 @@ discovered:
 | Difference | Helm (`PortalConfigOptions.Helm`) | Aspire (`PortalConfigOptions.Aspire(mcpBaseUrl)`) |
 |---|---|---|
 | Database keys (`MEMEX_*`) | from the record (`DatabaseServer`, `DatabaseHost`, …) | not emitted — the Aspire Postgres resource injects `ConnectionStrings__memex` / `__orleans` |
-| `Mcp__BaseUrl` | the in-cluster portal Service | the endpoint Aspire allocates (substituted at publish) |
+| `Mcp__BaseUrl` | the in-cluster portal Service | not emitted by the derivation (never a blank) — the adapter sets the key to the endpoint Aspire allocates, substituted at publish |
 | Plugin-catalog boot wiring (`PluginCatalog__*`) | the operator's catalog config file, not the ConfigMap | emitted as environment — Aspire has no second file |
 
 `FluentBuilderTest.TheSameRecordRendersTheSameKeysForHelmAndForAspire` renders the real `memex`

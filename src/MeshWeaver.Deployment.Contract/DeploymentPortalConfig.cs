@@ -330,7 +330,7 @@ public static class DeploymentPortalConfig
             Set("MEMEX_USERNAME", DatabaseUsername(d));
         }
         Set("ASPNETCORE_HTTP_PORTS", HttpPort(d).ToString());
-        Set("Mcp__BaseUrl", options.McpBaseUrl ?? $"http://{PortalService}:{HttpPort(d)}");
+        Set("Mcp__BaseUrl", options.McpBaseUrl ?? (options.InClusterMcpBaseUrl ? $"http://{PortalService}:{HttpPort(d)}" : null));
 
         var s = d.Storage ?? new StorageLayout();
         Set("Deployment__Backend", s.Backend);
@@ -442,13 +442,18 @@ public static class DeploymentPortalConfig
 /// is the endpoint Aspire allocates.
 /// </summary>
 /// <param name="DatabaseKeys">Emit the <c>MEMEX_*</c> database keys (Helm: yes; Aspire: no — the Postgres resource supplies them).</param>
-/// <param name="McpBaseUrl">The MCP back-connection URL to emit; null = the in-cluster portal Service.</param>
+/// <param name="McpBaseUrl">The MCP back-connection URL to emit, when the caller knows it as text.</param>
+/// <param name="InClusterMcpBaseUrl">When <paramref name="McpBaseUrl"/> is null: derive it from the in-cluster portal Service (Helm: yes; Aspire: no — the adapter sets the key to the endpoint Aspire allocates, which is not text until publish, so the derivation emits NOTHING rather than a blank).</param>
 /// <param name="IncludeBootEntries">Emit the plugin-catalog wiring (<c>PluginCatalog__*</c>) as portal keys (Aspire: yes; Helm: no — the operator's catalog config file carries the same entries).</param>
-public sealed record PortalConfigOptions(bool DatabaseKeys, string? McpBaseUrl, bool IncludeBootEntries)
+public sealed record PortalConfigOptions(bool DatabaseKeys, string? McpBaseUrl, bool InClusterMcpBaseUrl, bool IncludeBootEntries)
 {
     /// <summary>The chart's view: database keys from the record, the in-cluster Service as the MCP base URL, catalog wiring via the catalog file.</summary>
-    public static PortalConfigOptions Helm { get; } = new(DatabaseKeys: true, McpBaseUrl: null, IncludeBootEntries: false);
+    public static PortalConfigOptions Helm { get; } = new(DatabaseKeys: true, McpBaseUrl: null, InClusterMcpBaseUrl: true, IncludeBootEntries: false);
 
-    /// <summary>The Aspire view: no database keys (the Postgres resource injects them); the MCP base URL is the allocated endpoint the adapter supplies; catalog wiring as env.</summary>
-    public static PortalConfigOptions Aspire(string? mcpBaseUrl) => new(DatabaseKeys: false, McpBaseUrl: mcpBaseUrl ?? "", IncludeBootEntries: true);
+    /// <summary>
+    /// The Aspire view: no database keys (the Postgres resource injects them); the MCP base URL is
+    /// <paramref name="mcpBaseUrl"/> when given as text, else NOT emitted here — the adapter sets
+    /// <c>Mcp__BaseUrl</c> to the endpoint reference Aspire allocates; catalog wiring as env.
+    /// </summary>
+    public static PortalConfigOptions Aspire(string? mcpBaseUrl) => new(DatabaseKeys: false, McpBaseUrl: mcpBaseUrl, InClusterMcpBaseUrl: false, IncludeBootEntries: true);
 }

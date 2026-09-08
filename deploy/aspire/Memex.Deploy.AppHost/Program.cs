@@ -29,13 +29,25 @@ var cfg = builder.Configuration;
 var mode = cfg["mode"]?.ToLowerInvariant() ?? "compose";
 var ha = mode.EndsWith("-ha", StringComparison.Ordinal);
 
-if (mode == "azure")
+// The modes are a closed set: an unknown one (including the retired `kubernetes[-ha]`) must not
+// silently render a Compose file — that is the wrong artifact with no signal.
+switch (mode)
 {
-    builder.AddAzureContainerAppEnvironment("memex-aca");
-}
-else
-{
-    builder.AddDockerComposeEnvironment("self-host");
+    case "compose":
+    case "compose-ha":
+        builder.AddDockerComposeEnvironment("self-host");
+        break;
+    case "azure":
+        builder.AddAzureContainerAppEnvironment("memex-aca");
+        break;
+    case "kubernetes":
+    case "kubernetes-ha":
+        throw new InvalidOperationException(
+            $"--mode {mode} is retired: Aspire emits a Deployment record, never a chart. Run with "
+            + "--record-out <path> and hand the record to the control instance's Provision action "
+            + "(Doc/Architecture/ConfiguringAnInstanceFromAspire).");
+    default:
+        throw new InvalidOperationException($"unknown --mode '{mode}'; expected compose, compose-ha or azure.");
 }
 
 var registry = (cfg["Parameters:image-registry"] ?? MemexOptions.DefaultImageRegistry).TrimEnd('/');
