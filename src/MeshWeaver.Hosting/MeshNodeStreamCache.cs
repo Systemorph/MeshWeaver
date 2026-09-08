@@ -2453,7 +2453,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // on the spot, which is precisely the connect-after-teardown race — a Connect() that queued its
     // subscribe an instant before Dispose() ran is cancelled before the pool dequeues it (Rx's
     // scheduled work item checks its cancellation before invoking). The Defer's own guard below
-    // covers the sliver in which the pool has already started it.
+    // covers the sliver in which the pool has already started it. The registration itself is
+    // `OwnedConnectionExtensions.AutoConnectOwnedBy` — the one spelling for a rooted connection,
+    // ratcheted by RootedRxConnectionRatchetGuard.
     private readonly System.Reactive.Disposables.CompositeDisposable _queryConnections = new();
 
     /// <summary>Test probe: synced-query upstream connections this cache currently holds.</summary>
@@ -2529,9 +2531,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // first subscriber's thread (TaskPoolScheduler thanks to
             // SubscribeOn), constructs the SyncedQueryMeshNodes, and the
             // Replay(1) caches its emissions for all later subscribers.
-            // The upstream connection AutoConnect hands back — captured so the fault arm below can
-            // release exactly this chain's connection, and so Dispose() can release them all.
-            IDisposable? connection = null;
             var stream = Observable.Defer(() =>
                 {
                     // 🚨 This factory runs on the POOL, whenever the pool gets to it — so it is the
@@ -2595,15 +2594,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // write sees the STALE cached snapshot. AutoConnect(1)
                 // keeps the upstream connected forever once first subscribed.
                 //
-                // 🚨 The connection is REGISTERED, not dropped (see _queryConnections): AutoConnect
+                // 🚨 The connection is OWNED, not dropped (see _queryConnections): AutoConnect
                 // itself never disposes it, and the connect it triggers is a pool-queued subscribe
-                // that no teardown phase joins. Registering it after the cache's Dispose() disposes
-                // it on the spot — the late-connect race resolved by construction.
-                .AutoConnect(1, c =>
-                {
-                    connection = c;
-                    _queryConnections.Add(c);
-                });
+                // that no teardown phase joins. AutoConnectOwnedBy registers the handle with the
+                // cache's registry, drops it again when the chain terminates (a faulted-then-
+                // rebuilt query never accumulates dead handles), disposes it on the spot when it
+                // arrives after the cache's Dispose() — the late-connect race resolved by
+                // construction — and refuses a subscriber that arrives after the release.
+                .AutoConnectOwnedBy(_queryConnections, nameof(MeshNodeStreamCache));
                 // ReplaySubject (backing Replay(1)) already serialises
                 // OnNext/Subscribe internally — no .Synchronize() needed.
                 // Adding it would route every emission through an additional
@@ -2641,14 +2639,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // fails against a sibling set's chain, so the poisoned one is replayed forever —
             // #1316 undone) or OVER-EVICT (drop a healthy set that merely shares the id).
             var connected = stream;
-            stream = connected.Do(_ => { }, ex =>
-            {
-                EvictFaultedQuery(id, signature, stream, ex);
-                // A terminal chain's connection has nothing left to hold — release it so the
-                // registry tracks LIVE connections only (a faulted-then-rebuilt query would
-                // otherwise accumulate one dead handle per fault for the life of the process).
-                ReleaseQueryConnection(connection);
-            });
+            // (The faulted chain's CONNECTION needs no release here: AutoConnectOwnedBy drops a
+            // terminated chain's handle from _queryConnections itself, so the registry tracks
+            // LIVE connections only.)
+            stream = connected.Do(_ => { }, ex => EvictFaultedQuery(id, signature, stream, ex));
 
             // Index the new stream under its SIGNATURE and make it the id's latest. Existing
             // signatures are preserved, so a caller still holding the previous declaration keeps
@@ -2713,26 +2707,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             + "Replay(1) had latched the terminal error and would have replayed it to every future "
             + "subscriber for the life of the process. The next GetQuery('{QueryId}') for that query set "
             + "opens a fresh upstream instead.", id, signature, id);
-    }
-
-    /// <summary>
-    /// Releases one synced-query chain's upstream connection and drops it from
-    /// <see cref="_queryConnections"/>. <c>Remove</c> disposes a registered handle; a handle the
-    /// registry no longer holds (the registry was disposed first, which already disposed it) is
-    /// disposed again harmlessly — Rx disposables are idempotent.
-    /// </summary>
-    private void ReleaseQueryConnection(IDisposable? connection)
-    {
-        if (connection is null) return;
-        try
-        {
-            if (!_queryConnections.Remove(connection))
-                connection.Dispose();
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "MeshNodeStreamCache: error releasing a synced-query connection");
-        }
     }
 
     /// <summary>

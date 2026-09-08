@@ -1,6 +1,8 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.GitSync;
@@ -44,7 +46,7 @@ public sealed class GitHubRepoIdentityResolver(
     GitHubCredentialService credentials,
     GitHubAppTokenService? appTokens = null,
     TimeProvider? timeProvider = null,
-    ILogger<GitHubRepoIdentityResolver>? logger = null)
+    ILogger<GitHubRepoIdentityResolver>? logger = null) : IDisposable
 {
     /// <summary>
     /// How long a resolved identity is trusted before it is looked up again. Long enough that a
@@ -60,14 +62,21 @@ public sealed class GitHubRepoIdentityResolver(
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
     private readonly PromiseCache<string, Resolution> cache = new(StringComparer.OrdinalIgnoreCase);
 
+    // Every in-flight lookup's upstream connection, released with this singleton (the container
+    // disposes it). A lookup is a one-shot, so a handle normally leaves the registry the moment
+    // its GitHub round-trip settles; what this owns is the one that has NOT settled when the host
+    // goes down — its credential read and pool leaf are unsubscribed rather than left to complete
+    // against a disposed container, and a Resolve() after that is refused rather than parked.
+    private readonly CompositeDisposable lookups = new();
+
     /// <summary>
     /// How many GitHub lookups this resolver has actually performed. Diagnostics only — a test uses
     /// it to prove the cache serves repeat callers without a second call, and that an EXPIRED entry
     /// costs a fresh one.
     /// </summary>
-    public int LookupCount => lookups;
+    public int LookupCount => lookupCount;
 
-    private int lookups;
+    private int lookupCount;
 
     /// <summary>
     /// The canonical identity of <paramref name="repositoryUrl"/>, or <see langword="null"/> when it
@@ -104,10 +113,11 @@ public sealed class GitHubRepoIdentityResolver(
     }
 
     /// <summary>One real GitHub lookup, stamped with the time it settled and shared by every
-    /// concurrent caller (<c>Replay(1).AutoConnect(1)</c> — the promise runs once).</summary>
+    /// concurrent caller (<c>Replay(1)</c> connected once, owned by this resolver — the promise
+    /// runs once and dies with the resolver).</summary>
     private IObservable<Resolution> Lookup(string repositoryUrl, string? userId) =>
         ResolveToken(userId)
-            .Do(_ => Interlocked.Increment(ref lookups))
+            .Do(_ => Interlocked.Increment(ref lookupCount))
             .SelectMany(token => repoClient.GetCanonicalRepository(repositoryUrl, token))
             .Select(id => id is { IsComplete: true } ? id : null)
             .Catch((Exception ex) =>
@@ -125,7 +135,10 @@ public sealed class GitHubRepoIdentityResolver(
             })
             .Select(id => new Resolution(clock.GetUtcNow(), id))
             .Replay(1)
-            .AutoConnect(1);
+            .AutoConnectOwnedBy(lookups, nameof(GitHubRepoIdentityResolver));
+
+    /// <summary>Releases every lookup still in flight; a <see cref="Resolve"/> after this is refused.</summary>
+    public void Dispose() => lookups.Dispose();
 
     /// <summary>
     /// Parses a stored repository url to its <c>owner/repo</c> identity, or null when it cannot be

@@ -277,6 +277,22 @@ EventCalendar bug. Application code that writes MUST carry a real user identity 
 > AccessContext is gone** and wrap the write in `SwitchAccessContext`/`ImpersonateAsSystem`. If you
 > don't, it fails closed, you swallow it, and something upstream retries it into a storm.
 
+## Rooted connections: a `Connect()` handle belongs to an OWNER
+
+**A bare `.AutoConnect(1)` or a dropped `.Connect()` in `src/` is a defect, and
+`RootedRxConnectionRatchetGuard` reds it with no allow-list escape.** The handle `Connect()`
+returns is the only way to close the upstream; `AutoConnect` keeps it inside the operator, so the
+owner's `Dispose()` cannot reach it — and a `Defer(…).SubscribeOn(TaskPool)` chain's connect is a
+*queued* subscribe that no teardown phase joins, so it runs after the scope has closed (11
+disposed-scope stragglers in Plugins run 34222933802, every one this shape). Spell it
+`.Replay(1).AutoConnectOwnedBy(hub | compositeDisposableField, nameof(Owner))` or
+`.Publish().ConnectOwnedBy(owner)` (`MeshWeaver.Messaging.OwnedConnectionExtensions`): released
+with the owner, a queued connect cancelled, a late subscriber refused with
+`ObjectDisposedException`. `RefCount()` is subscriber-owned and is instead INVENTORIED with a
+reason in `test/RootedRxConnectionSites.allow`. Full reference:
+[HubDisposalModel.md](../../../src/MeshWeaver.Documentation/Data/Architecture/HubDisposalModel.md)
+→ "Rooted Rx connections".
+
 ## Cold observables: Subscribe is mandatory
 
 Writes are **cold** — the side effect runs on `Subscribe`, not on call. A composed write you never
