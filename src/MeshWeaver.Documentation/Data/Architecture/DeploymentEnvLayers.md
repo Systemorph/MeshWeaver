@@ -121,6 +121,75 @@ hold a plugin-registry instance key inline, in plaintext, readable by anything t
 `HelmValues.Problems`, so the one shape that would put a live token into a git-synced node fails the
 render instead of shipping.
 
+### Retiring a shadow takes two steps, and the SECOND one is what changes the pod
+
+Recording a shadow does not clear it. Clearing one is two acts in a fixed order, and either alone
+leaves the pod exactly where it was:
+
+1. **give the key a declared home** — a `keyVaultSecrets` mapping, so the vault-synced Secret
+   carries it. This changes nothing observable: the inline entry still outranks every `envFrom`.
+2. **remove the inline entry** — `kubectl -n <ns> set env deployment/<name> <KEY>-`. This is the
+   step that changes which value the pod reads, and it rolls the Deployment.
+
+The trap is doing step 2 first, or doing step 2 without measuring what the pod falls through *to*.
+`PluginCatalog__RegistryToken` is the worked example (MeshWeaver#3201). Its inline entry stood over
+a chart Secret carrying a **different**, also-valid instance key — a key registered to another
+instance, with strictly more scope. Removing the inline entry before step 1 would not have restored
+a status quo; it would have silently switched the portal onto a different registered identity on one
+portal and left the other with no key at all.
+
+**So the precondition for step 2 is a measured EQUALITY, not a hope.** Before removing an inline
+credential entry, compare it against the source it will fall through to and require the answer
+`EQUAL`:
+
+🚨 **Be precise about where the value travels — this is the part that is easy to state wrongly.**
+`kubectl` is a *client*: both the inline `env:` value (read from the Deployment spec) and the Secret
+data cross the Kubernetes API to **wherever `kubectl` runs**. What the snippet below buys is that
+neither value is ever *printed, logged or persisted* — only a verdict and a length are emitted. That
+is a real and worthwhile property, and it is a different one from "the value stayed in the cluster".
+
+The in-cluster claim is true only of the route this cluster actually allows. It is private, so
+`kubectl` is reachable **only** through `az aks command invoke`, which uploads the script, runs it in
+a pod on the cluster, and returns that pod's *stdout*. Run that way the credential is read
+API-server-side and only the verdict crosses back. Run the same snippet from a laptop and the
+credential lands in that laptop's shell process — same commands, different boundary. Say which one
+you used.
+
+```sh
+# Run through `az aks command invoke -f eq.sh --command "sh eq.sh"`, so the read happens in-cluster
+# and only these verdict lines come back. Nothing here prints a value under any route.
+inline() { kubectl -n "$1" get deploy <deployment> -o go-template='{{range .spec.template.spec.containers}}{{if eq .name "<container>"}}{{range .env}}{{if eq .name "<KEY>"}}{{.value}}{{end}}{{end}}{{end}}{{end}}'; }
+sec()    { kubectl -n "$1" get secret "$2" -o go-template="{{index .data \"$3\"}}" | base64 -d; }
+A=$(inline <ns>); B=$(sec <ns> <synced-secret> <KEY>)
+[ "$A" = "$B" ] && echo "EQUAL (len ${#A})" || echo "DIFFER (a=${#A} b=${#B})"
+```
+
+`DIFFER` means step 1 is not done — promote the **in-use** value into the vault first, never the
+other one, and never mint a replacement as part of a cleanup.
+
+Three further things this key showed, each of which generalises:
+
+- **Precedence within `envFrom` decides which copy is the fall-through.** On `memex` the order is
+  ConfigMap, `memex-portal-secrets`, `memex-portal-keyvault`, `memex-kv-secrets`; last wins, so the
+  vault-synced class outranks the chart's Secret. That is why a chart Secret carrying a *stale* copy
+  of a key is inert rather than dangerous — but also why deleting the vault class, not the chart
+  one, is the change that would silently swap identities.
+- **Check every container, not the portal.** The language gate sidecars carry no `envFrom` at all —
+  the chart renders exactly `MESH_GRPC_URL` and `MESH_GATE_ADDRESS` on them, because reaching the
+  loopback gRPC endpoint *is* their authentication. A whole-Deployment `kubectl set env` had
+  nevertheless copied the portal's twelve inline entries onto both of them, credential included. A
+  `set env <KEY>-` defaults to every container, which is right here (the chart declares no such key
+  on a gate, so removal restores the declared shape) and would be wrong for a key a sidecar reads.
+- **Removing the shadow is not the remediation.** A credential that has sat in plaintext in a
+  Deployment spec is disclosed to everything that could `get deploy` in that namespace, whether or
+  not anyone read it. Retiring the shadow stops the *next* reader; rotating the key at its issuer is
+  what closes the disclosure, and it is a separate, deliberate act with its own blast radius.
+
+🚨 **Step 2 rolls the Deployment, so it is subject to whatever else is rolling.** `set env` mutates
+the pod template, which creates a new ReplicaSet and supersedes an in-flight rollout. Read
+`kubectl rollout status` first and hold if a deploy is already in progress — a cleanup that ejects a
+release roll costs more than the shadow it clears.
+
 ## What else the record gained
 
 - **`gates`** — the language gate sidecars (`python`, `node`, `pandas`). The chart has been able to
