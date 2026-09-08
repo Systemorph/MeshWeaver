@@ -156,7 +156,7 @@ public class RendererParityTest
             .WithOwner("owner", "purpose")
             .WithConfigRepository("Systemorph/Memex", "environments/portal")
             .WithGrafana("https://grafana.example.com")
-            .WithDatabase("portal", server: "pg-portal", username: "memex", host: "pg-portal.postgres.database.azure.com", port: 5432, connectionSecret: "portal-pg-connection")
+            .WithDatabase("portal", server: "pg-portal", username: "memex", host: "pg-portal.example.internal", port: 5432, connectionSecret: "portal-pg-connection")
             .WithImage("ghcr.io/systemorph/memex-portal-ai", tag: "3.1.0", pullSecret: "ghcr-pull")
             .WithUpdatePolicy("stable").WithMinRollInterval("00:30:00").WithAutoRecycleOnStaleBuild(true)
             .WithPluginRepo("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", gitRef: "main")
