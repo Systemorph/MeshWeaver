@@ -42,8 +42,10 @@ gate exists.
     `gen-manifests.py` hashes a mixed package's own `src/` project into its `moduleVersion` too.
     What remains is narrower and still fatal: the version covers the module's OWN project, while
     the CONTAINER pack path copies every MODULE-OWNED `MeshWeaver.*` sibling INTO the bundle
-    (`module-owned-platform.sh`: in this repo's `src/`, absent from `src/platform-shipped.txt`,
-    therefore nowhere in the image's `/app`). Measured on MeshWeaver.Plugins 2026-09-01:
+    (`module-owned-platform.sh`: in this repo's `src/`, and MEASURED as absent from the pinned
+    platform host — its app closure, its surface manifest and its seeded `modules/<Name>/` lane;
+    MeshWeaver#3732 replaced the declared `src/platform-shipped.txt` reading with that measurement).
+    Measured on MeshWeaver.Plugins 2026-09-01:
     `MeshWeaver.Blazor` rides in SEVEN published bundles and not one of their `manifest.lock`s
     hashes a byte of it. So version equality still does not imply byte equality, and "the registry
     already serves this version" is still NOT evidence the published bundle matches HEAD.
