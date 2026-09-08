@@ -264,6 +264,25 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
 
         var beforeAttempts = await AttemptIds(partition);
 
+        // 🚨 Only a HUMAN's write is a server edit (ImportConflictPolicy.IsHumanEdit, 2026-09-08):
+        // the first import's own writes carry the system identity and are NOT preserved — that was
+        // the defect that kept repo-deleted files alive on memex.systemorph.com. So the conflict this
+        // phase measures has to be a person's: edit every page as the signed-in test user (DevLogin
+        // "Roland") before the re-import, which stamps LastModifiedBy with a user and a fresh clock.
+        foreach (var i in Enumerable.Range(0, items))
+        {
+            var path = $"{partition}/Page{i}";
+            await Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Update(n => n with
+                {
+                    Content = new MarkdownContent { Content = $"# Page {i}\n\nedited on the server" }
+                })
+                .FirstAsync().Timeout(30.Seconds());
+            await Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Where(n => n is not null && ImportConflictPolicy.IsHumanEdit(n))
+                .FirstAsync().Timeout(30.Seconds());
+        }
+
         // Same paths, different content → new fingerprint (no short-circuit) and a REAL conflict on
         // every node (past the unchanged-token skip, which logs nothing).
         source.Nodes = Pages(partition, items, "v2");
