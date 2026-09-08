@@ -213,8 +213,12 @@ When you move a project, in the same change set:
    only to ship the bits, which are the easiest to mistake for a real dependency (a
    warnings-as-errors build of the consumer will tell you: if it still compiles clean, there was no
    code dependency);
-3. if the moved project still ships in the image, add it to `src/platform-shipped.txt` in plugins,
-   or its bundles will carry a second copy beside `/app`'s;
+3. if the moved project still ships in the image, the pack lane now MEASURES that off the pinned
+   image rather than taking your word for it, so no list entry is required — but the measurement is
+   only as current as the image the lane pins, and it is not armed at all in a lane that pins no
+   image, so state the move in the change set anyway. (`src/platform-shipped.txt` remains as a
+   declaration the lane compares against and warns about; it decides nothing. See
+   [The Platform-Shipped Witness](../PlatformShippedWitness).)
 4. add it to the plugins host build list in `ci.yml` — it is explicit, not a glob, exactly so a
    moved project cannot silently stop being built;
 5. move its tests, and **split any test that spans the boundary** rather than moving it whole —
