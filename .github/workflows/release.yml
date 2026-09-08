@@ -189,7 +189,7 @@ jobs:
           fi
           case "$CI_VERSION" in
             "$VERSION-ci."*) ;;
-            *) echo "::error::the promoted set for $SHORT is $CI_VERSION, not a $VERSION-ci.<n> build — it was built under a different PlatformVersion than the tag claims. Tag a commit built on the $VERSION line."; exit 1 ;;
+            *) echo "::error::the promoted set for $SHORT is $CI_VERSION, not a $VERSION-ci.<n> build. Either it was built under a different PlatformVersion than the tag claims, or it predates the two-shape scheme (a retired '<line>-<label>.ci.<n>' set — see Doc/Architecture/ReleaseProcess §1), which cannot be promoted under a clean tag. Tag a commit built on the $VERSION line."; exit 1 ;;
           esac
           PAIR=$(grep -E "^${SHORT}-p[0-9a-f]{7}$" <<<"$tags" | head -1 || true)
           if [ -z "$PAIR" ]; then

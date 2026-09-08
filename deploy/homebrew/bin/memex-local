@@ -62,7 +62,7 @@ readonly PORTAL_BASE_REF="${PORTAL_BASE_REGISTRY}/memex-portal-ai-base:local"
 readonly PORTAL_BASE_REGISTRY_CONTAINER="memex-registry"
 # ACR source (Option A — §3). Override the tag with `update --acr --tag <tag>`.
 readonly ACR="meshweaver.azurecr.io"
-# 🚨 The registry has never published a `latest` tag — CD writes `main`, `3.0.0-rc1.ci.<n>` and the
+# 🚨 The registry has never published a `latest` tag — CD writes `main`, `3.0.0-ci.<n>` and the
 # git sha. Defaulting to `latest` made `update --from-acr` fail with a bare
 # "meshweaver.azurecr.io/memex-portal-ai:latest: not found" that reads like broken credentials.
 # `main` is the moving tag CD advances on every merge, which is what "update from ACR" means.
