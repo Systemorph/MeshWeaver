@@ -660,6 +660,262 @@ public class ConfiguredModuleActivationTest
         Assert.Empty(RequiredModuleStatus.ExpectedLater(verdicts));
     }
 
+    // ───────── #3735: when no landed generation loads, the IMAGE-SHIPPED copy runs ─────────
+    //
+    // memex.systemorph.com, 2026-09-08, image 3.0.0-ci.8079: the module set pinned a two-week-old
+    // store generation of MeshWeaver.Blazor.Views — an assembly the image ALSO ships. The link
+    // probe refused it at boot (`requires 'MeshWeaver.Graph.AnchoredComment (MeshWeaver.Graph)'`,
+    // a type the platform had since removed), the entry held no previous generation, and the
+    // image's own copy was never tried: the boot union had substituted the store entry in place
+    // of the baseline entry before anything was measured. Every skinned control on the portal
+    // rendered its FallbackHtml. Rule R1 — "run the newest thing that loads" — has a third step:
+    // newest → previous generation → the image-shipped copy → absent, each one measured.
+
+    /// <summary>
+    /// 🚨 THE repro of #3735. A generation built for a newer platform is the ONLY landed one, and
+    /// the image ships the module. Boot refuses the landed generation, runs the image copy, and
+    /// records a fallback that says so — present, never incompatible.
+    /// </summary>
+    [Fact]
+    public async Task WhenNoLandedGenerationLoads_AndTheImageShipsTheModule_TheImageCopyRuns_AndIsReported()
+    {
+        using var deployment = new Deployment();
+        var imageCopy = deployment.ShipInImage(ModuleBuiltAgainstThisPlatform(deployment.Module));
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        Assert.Null(Entry(deployment).PreviousDirectory);
+
+        var (services, _) = Boot(deployment);
+
+        // What runs is the IMAGE's bytes, resolved through the real baseline resolver.
+        var installed = Assert.Single(services.GetServices<InstalledModuleAssembly>(),
+            m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
+        Assert.Equal(Path.GetFullPath(imageCopy), Path.GetFullPath(installed.Assembly.Location));
+
+        var fallback = Assert.Single(services.GetServices<FallbackModule>());
+        Assert.True(fallback.RunsImageBaseline);
+        Assert.Equal(deployment.Module, fallback.Name);
+        Assert.Equal(b, fallback.Generation);
+        Assert.Equal(FallbackModule.ImageBaselineGeneration, fallback.PreviousGeneration);
+        Assert.Equal("1.3.0", fallback.Version);
+        Assert.Null(fallback.PreviousVersion);
+        Assert.StartsWith(
+            $"'{deployment.Module}' runs the image-shipped baseline ({imageCopy}) because v1.3.0 ({b}) "
+            + "cannot load here:", fallback.Report(), StringComparison.Ordinal);
+        Assert.Contains(FutureType, fallback.Reason, StringComparison.Ordinal);
+
+        // 🚨 Present, not incompatible — the whole point: the refused generation must not SHADOW
+        // the baseline that works.
+        Assert.Empty(services.GetServices<IncompatibleModule>());
+
+        // The boot wrote the marker for the refused head, exactly as a previous-generation
+        // fallback does, so the reconcile re-examines every new build of its version (#3650).
+        var marker = ModuleActivationSidecar.ReadUnloadable(deployment.Root, deployment.Module);
+        Assert.NotNull(marker);
+        Assert.Equal(b, marker!.Generation);
+    }
+
+    /// <summary>
+    /// The health check names it: the activation report carries the row with the image stand-in
+    /// as the running generation, the fallback is not "restart required" (a restart measures the
+    /// same bytes and falls back again) and not quarantined (it is running), and the one line
+    /// every surface renders says which module runs the image baseline and why.
+    /// </summary>
+    [Fact]
+    public async Task TheActivationReport_NamesAnImageBaselineFallback_AndNeverCallsItRestartRequired()
+    {
+        using var deployment = new Deployment();
+        deployment.ShipInImage(ModuleBuiltAgainstThisPlatform(deployment.Module));
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        var (services, _) = Boot(deployment);
+        var fallbacks = services.GetServices<FallbackModule>().ToArray();
+        var loaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { deployment.Module };
+        // The image copy's directory leaf is the module's NAME (modules/<name>/), which is what
+        // LoadedModuleGenerations reads off the loaded assembly — and it is not the set's
+        // generation, so without the loader's record this reads as a pending update.
+        var generations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [deployment.Module] = deployment.Module,
+        };
+
+        var report = new PendingModuleActivations(deployment.Root) { FallbackModules = fallbacks }
+            .Read(loaded, generations);
+
+        Assert.False(report.IsUndetermined, report.UndeterminedReason);
+        var row = Assert.Single(report.Fallbacks);
+        Assert.Equal(deployment.Module, row.Name);
+        Assert.Equal(PackagePath, row.PackagePath);
+        Assert.Equal(FallbackModule.ImageBaselineGeneration, row.PreviousGeneration);
+        Assert.Equal(b, row.Generation);
+        Assert.Equal("1.3.0", row.Version);
+        Assert.StartsWith($"runs the image-shipped baseline; v1.3.0 ({b}) landed but does not load here:",
+            row.Reason, StringComparison.Ordinal);
+        Assert.Contains(FutureType, row.Reason, StringComparison.Ordinal);
+        Assert.False(report.HasPending, "a restart re-measures the same bytes and falls back again");
+        Assert.False(report.IsPendingForPackage(PackagePath));
+        Assert.False(report.HasQuarantined, "it is running");
+        Assert.Contains("image-shipped baseline", report.Describe(), StringComparison.Ordinal);
+        Assert.Contains(deployment.Module, report.Describe(), StringComparison.Ordinal);
+
+        var blind = new PendingModuleActivations(deployment.Root).Read(loaded, generations);
+        Assert.True(blind.HasPending, "without the loader's record the state reads as an ordinary update");
+    }
+
+    /// <summary>
+    /// The set records what runs: the adoption carries the image stand-in as the module's running
+    /// generation, the index reads it back as a fallback, the mesh-set line names it, and the GC —
+    /// which reads the same records — neither trips over the stand-in nor reclaims the head.
+    /// </summary>
+    [Fact]
+    public async Task TheAdoptedSet_RecordsTheImageBaseline_WhenItRuns()
+    {
+        using var deployment = new Deployment();
+        deployment.ShipInImage(ModuleBuiltAgainstThisPlatform(deployment.Module));
+        var b = await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        var proposed = await deployment.Landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await();
+        Assert.NotNull(proposed);
+        Assert.Equal(b, proposed.Generations[deployment.Module]);
+
+        Boot(deployment);
+
+        var index = ModuleSetStore.Read(deployment.Root);
+        Assert.NotNull(index.Current);
+        Assert.Equal(b, index.Current.Generations[deployment.Module]);
+        Assert.Equal(FallbackModule.ImageBaselineGeneration, index.RunningGenerations[deployment.Module]);
+        Assert.Equal(FallbackModule.ImageBaselineGeneration, Assert.Single(index.FallbackGenerations).Value);
+        Assert.Contains(FallbackModule.ImageBaselineGeneration, ModuleSetStore.Describe(index), StringComparison.Ordinal);
+        Assert.Contains("image-shipped baseline", ModuleSetStore.Describe(index), StringComparison.Ordinal);
+
+        ModuleLandingService.CollectGarbage(deployment.Root, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+        Assert.True(Directory.Exists(deployment.GenerationDirectory(b)), "the head is still the entry's generation");
+    }
+
+    /// <summary>
+    /// A required module running the image copy is <see cref="RequiredModuleState.Present"/>:
+    /// classified off the real loader's output, with the image listing the module — the exact
+    /// combination that used to classify Incompatible and stall a rollout over a module the image
+    /// had a working copy of.
+    /// </summary>
+    [Fact]
+    public async Task ARequiredModuleRunningTheImageBaseline_IsPresent()
+    {
+        using var deployment = new Deployment();
+        deployment.ShipInImage(ModuleBuiltAgainstThisPlatform(deployment.Module));
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+        var (services, _) = Boot(deployment);
+
+        var verdicts = RequiredModuleStatus.Classify(
+            requiredEntries: [deployment.ImageEntry],
+            baselineEntries: [deployment.ImageEntry],
+            loadedAssemblyNames: services.GetServices<InstalledModuleAssembly>()
+                .Select(m => m.Assembly.GetName().Name!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase),
+            resolvesFromDeployment: _ => false,
+            activation: ModuleActivationSidecar.Read(deployment.Root),
+            landedDllExists: entry => ModuleActivationBoot.LandedModuleDllExists(deployment.Root, entry),
+            platformGate: _ => null,
+            incompatibleModules: [.. services.GetServices<IncompatibleModule>()]);
+
+        var verdict = Assert.Single(verdicts);
+        Assert.Equal(RequiredModuleState.Present, verdict.State);
+        Assert.Empty(RequiredModuleStatus.Incompatible(verdicts));
+    }
+
+    /// <summary>
+    /// The ORDER: a previous landed generation is tried before the image copy. R1 says "the newest
+    /// thing that loads", and a previous generation is newer than the image's copy by construction
+    /// (it was installed over it).
+    /// </summary>
+    [Fact]
+    public async Task ThePreviousGeneration_IsTriedBeforeTheImageBaseline()
+    {
+        using var deployment = new Deployment();
+        deployment.ShipInImage(ModuleBuiltAgainstThisPlatform(deployment.Module));
+        var a = await Land(deployment, ModuleBuiltAgainstThisPlatform(deployment.Module), "1.2.3");
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+
+        var (services, _) = Boot(deployment);
+
+        var fallback = Assert.Single(services.GetServices<FallbackModule>());
+        Assert.False(fallback.RunsImageBaseline);
+        Assert.Equal(a, fallback.PreviousGeneration);
+        var installed = Assert.Single(services.GetServices<InstalledModuleAssembly>(),
+            m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
+        Assert.Equal(a, Path.GetFileName(Path.GetDirectoryName(installed.Assembly.Location)));
+    }
+
+    /// <summary>
+    /// 🚨 Negative control on the branch: the image copy is MEASURED like every other step, not
+    /// registered because it exists. An image copy that cannot load either leaves the module
+    /// incompatible — named, refused before load, with every step's reason on the record — and
+    /// nothing is installed. Without this a fallback that registered the image copy blindly would
+    /// pass the test above.
+    /// </summary>
+    [Fact]
+    public async Task AnImageCopyThatDoesNotLoadEither_LeavesTheModuleIncompatible_NamingBothReasons()
+    {
+        using var deployment = new Deployment();
+        deployment.ShipInImage(ModuleBuiltAgainstAFuturePlatform(deployment.Module));
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+
+        var (services, _) = Boot(deployment);
+
+        Assert.Empty(services.GetServices<FallbackModule>());
+        var parked = Assert.Single(services.GetServices<IncompatibleModule>());
+        Assert.Equal(deployment.Module, parked.Name);
+        Assert.True(parked.RefusedBeforeLoad);
+        Assert.Contains("image-shipped baseline cannot load here either", parked.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(services.GetServices<InstalledModuleAssembly>(),
+            m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The other negative control: a Store-only module (the image ships nothing) whose only
+    /// generation does not load is absent and reported — today's behaviour, preserved. The image
+    /// entry is listed but NOT shipped, which is the listed-but-absent shape: nothing to fall
+    /// back to, and nothing claimed.
+    /// </summary>
+    [Fact]
+    public async Task WhenTheImageListsTheModuleButDoesNotShipIt_TheModuleStaysIncompatible()
+    {
+        using var deployment = new Deployment();
+        var shipped = deployment.ShipInImage(ModuleBuiltAgainstThisPlatform(deployment.Module));
+        File.Delete(shipped);   // listed under Modules:Assemblies, no bytes — the rc5 shape
+        await Shelve(deployment, ModuleBuiltAgainstAFuturePlatform(deployment.Module), "1.3.0");
+
+        var (services, _) = Boot(deployment);
+
+        Assert.Empty(services.GetServices<FallbackModule>());
+        var parked = Assert.Single(services.GetServices<IncompatibleModule>());
+        Assert.True(parked.RefusedBeforeLoad);
+        Assert.DoesNotContain("image-shipped baseline", parked.Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 The shape the fallback CANNOT reach, pinned so nobody reads the absent module as "the
+    /// image had nothing": a generation whose assembly LOADED and whose install then threw
+    /// (#2234) holds its simple name in the default load context, and the image copy of the same
+    /// name cannot be loaded beside it. The module is incompatible — the install exception on the
+    /// record, not a link refusal — and no fallback is claimed. A loader that reported the image
+    /// copy as running here would be lying: the bytes in the process are the broken generation's.
+    /// </summary>
+    [Fact]
+    public async Task AGenerationThatLoadedAndThenFailedToInstall_IsNotReplacedByTheImageCopy()
+    {
+        using var deployment = new Deployment();
+        deployment.ShipInImage(ModuleBuiltAgainstThisPlatform(deployment.Module));
+        await Land(deployment, ModuleThatThrowsAtInstall(deployment.Module), "1.3.0");
+
+        var (services, _) = Boot(deployment);
+
+        Assert.Empty(services.GetServices<FallbackModule>());
+        var broken = Assert.Single(services.GetServices<IncompatibleModule>());
+        Assert.Equal(deployment.Module, broken.Name);
+        Assert.False(broken.RefusedBeforeLoad);
+        Assert.Equal("Void MeshWeaver.Mesh.Gone..ctor()", broken.MissingMember);
+        Assert.DoesNotContain(services.GetServices<InstalledModuleAssembly>(),
+            m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
+    }
+
     // ───────────────────────────────────────────────────────────── harness
 
     /// <summary>A per-test deployment root with the REAL landing service over it. The module name
@@ -684,11 +940,42 @@ public class ConfiguredModuleActivationTest
 
         public string GenerationDirectory(string generation) => Path.Combine(Root, "modules", generation);
 
+        /// <summary>
+        /// The IMAGE's copy of the module — the <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c>
+        /// publish layout under this process's OWN base directory, which is where
+        /// <c>MeshBuilder.ResolveModulePath</c> (no module root) looks for a baseline entry. Written
+        /// there, not under <see cref="Root"/>, so the boot below resolves it through the REAL
+        /// resolver the portal uses, and the module's unique name keeps tests apart.
+        /// </summary>
+        public string ImageDirectory => Path.Combine(AppContext.BaseDirectory, "modules", Module);
+
+        /// <summary>The raw <c>Modules:Assemblies</c> entry the image would list for this module.</summary>
+        public string ImageEntry => Module + ".dll";
+
+        /// <summary>Whether <see cref="ShipInImage"/> was called — the boot lists the module under
+        /// <c>Modules:Assemblies</c> exactly when it was.</summary>
+        public bool ShipsInImage { get; private set; }
+
+        /// <summary>Makes the image ship <paramref name="bytes"/> as this module, and returns the
+        /// entry DLL path the resolver answers.</summary>
+        public string ShipInImage(byte[] bytes)
+        {
+            Directory.CreateDirectory(ImageDirectory);
+            var dll = Path.Combine(ImageDirectory, ImageEntry);
+            File.WriteAllBytes(dll, bytes);
+            ShipsInImage = true;
+            return dll;
+        }
+
         public void Dispose()
         {
             Landing.Dispose();
             try { Directory.Delete(Root, recursive: true); }
             catch { /* temp cleanup is the OS's problem, never a test failure */ }
+            if (!ShipsInImage)
+                return;
+            try { Directory.Delete(ImageDirectory, recursive: true); }
+            catch { /* same */ }
         }
     }
 
@@ -741,7 +1028,10 @@ public class ConfiguredModuleActivationTest
             onDeferred: null,
             landedDllExists: entry => ModuleActivationBoot.LandedModuleDllExists(root, entry));
         var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
-            baselineEntries: null,
+            // The image's Modules:Assemblies list — naming the module exactly when the image
+            // ships it (#3735), so the union substitutes the landed entry in the baseline's slot
+            // and carries the displaced entry along, as the portal's does.
+            baselineEntries: deployment.ShipsInImage ? [deployment.ImageEntry] : null,
             onMeshSet,
             ModulePlatformFloor.DeclineReason,
             entry => ModuleActivationBoot.LandedModuleDllExists(root, entry));
@@ -761,6 +1051,14 @@ public class ConfiguredModuleActivationTest
                     Previous = previous is null
                         ? null
                         : () => ModuleGenerationPin.PinnedLoadPath(root, previous, deployment.PinRoot),
+                    // #3735 — the image copy, through the SAME resolver the portal uses for a
+                    // baseline entry (no module root: the image's own closure, never the landed
+                    // tree), so the test cannot agree with itself while the portal diverges.
+                    ImageBaseline = module.BaselineEntry is { } baseline
+                                    && MeshBuilder.ResolveModulePath(baseline) is { } imageCopy
+                                    && File.Exists(imageCopy)
+                        ? imageCopy
+                        : null,
                 };
             })
             .ToArray();
@@ -816,6 +1114,23 @@ public class ConfiguredModuleActivationTest
             public static class CodeViews
             {
                 public static string BuildContent(MeshNode node) => node.Id;
+            }
+            """);
+
+    /// <summary>A module built against THIS platform whose provider attribute THROWS when its
+    /// nodes are materialised — #2234's shape: the assembly loads, the install fails. The
+    /// exception is the literal MissingMethodException wording, so the record extracts the
+    /// member exactly as it did on memex-cloud.</summary>
+    private static byte[] ModuleThatThrowsAtInstall(string moduleName) =>
+        Emit(moduleName, """
+            using System;
+            using System.Collections.Generic;
+            using MeshWeaver.Mesh;
+            [assembly: ThrowingModule]
+            public sealed class ThrowingModuleAttribute : MeshNodeProviderAttribute
+            {
+                public override IEnumerable<MeshNode> Nodes =>
+                    throw new MissingMethodException("Method not found: 'Void MeshWeaver.Mesh.Gone..ctor()'.");
             }
             """);
 

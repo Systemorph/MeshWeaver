@@ -157,7 +157,13 @@ saying so on stderr and, once the pipeline is up, as a Warning. The GC reference
 generation like the head one; the mesh-set adoption records the generation that actually loaded;
 the status row reads *"runs v1.2.3 (gen A); v1.3.0 (gen B) landed but does not load here: …"*, the
 readiness probe stays Healthy, and nothing says "restart required" (a restart falls back again).
-Only when no generation loads is the module incompatible, as before; an uninstall clears both
+**The image-shipped copy is the last step (MeshWeaver#3735):** when no landed generation loads and
+the image ships the module (the `Modules:Assemblies` entry the store entry displaced — carried as
+`EffectiveModule.BaselineEntry`, resolved onto `ModuleInstallCandidate.ImageBaseline`), the image's
+copy runs, recorded as `@image` and worded *"runs the image-shipped baseline; v1.3.0 (gen B) landed
+but does not load here: …"*. Before that step a refused store generation shadowed the image copy
+that loads by construction (memex.systemorph.com, 2026-09-08 — every skinned control on its
+fallback HTML). Only when nothing loads is the module incompatible, as before; an uninstall clears both
 pointers. This is rule R1 of the [Module Adoption Policy](../ModuleAdoptionPolicy): *an
 installation runs the newest generation of every module that loads, and keeps the one it has until
 a newer one does.*

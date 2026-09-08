@@ -172,11 +172,17 @@ public record MeshBuilder
     /// same probe and load; when it succeeds the module is installed from it and recorded as a
     /// <see cref="FallbackModule"/> — present, running, and behind — with one
     /// <c>[MeshWeaver.Mesh.FallbackModule]</c> line on stderr naming both generations and why.
-    /// Only when neither loads is the module an <see cref="IncompatibleModule"/>, exactly as
-    /// before. 🚨 A generation whose assembly LOADED and whose registration then threw (#2234's
-    /// shape) is never swapped for the previous one: two assemblies of one simple name cannot
-    /// coexist in the default load context, so the fallback exists only for a newest generation
-    /// that never made it into the process — which is the link probe's case, the whole of #3649.</para>
+    /// When that one does not load either — or the candidate holds none — and the candidate names
+    /// an <see cref="ModuleInstallCandidate.ImageBaseline"/>, the IMAGE-SHIPPED copy of the module
+    /// goes through the same probe and load and is recorded as a <see cref="FallbackModule"/>
+    /// with <see cref="FallbackModule.RunsImageBaseline"/> (#3735). Only when nothing loads is
+    /// the module an <see cref="IncompatibleModule"/>, exactly as before — with the reasons of
+    /// every step it tried on the record. 🚨 A generation whose assembly LOADED and whose
+    /// registration then threw (#2234's shape) is never swapped for the previous one or the image
+    /// copy: two assemblies of one simple name cannot coexist in the default load context, so the
+    /// fallback exists only for a generation that never made it into the process — the link
+    /// probe's case, the whole of #3649 and #3735. That shape is named on stderr when an image
+    /// copy exists, so nobody reads the absent module as "the image had nothing".</para>
     /// </summary>
     /// <param name="modules">The candidates, in install order.</param>
     /// <returns>The builder for method chaining.</returns>
@@ -247,41 +253,92 @@ public record MeshBuilder
             // and the generation that DID load last time was unreferenced and reclaimed by the
             // next GC pass. Rule R1: an installation runs the newest generation that LOADS, and
             // keeps the one it has until a newer one does.
+            //
+            // 🚨 #3735 — and the fallback ORDER has a third step. "Unless the image shipped a
+            // baseline copy" above was never true: the boot union substitutes the landed entry IN
+            // PLACE of the same-named Modules:Assemblies entry before anything is measured, so a
+            // refused store generation SHADOWED the image copy that loads by construction. On
+            // memex.systemorph.com (2026-09-08) a two-week-old store generation of
+            // MeshWeaver.Blazor.Views was refused for a type the platform had since removed, the
+            // image's own copy was never tried, and every skinned control rendered its fallback
+            // HTML — a client-visible outage caused by a module set that "contributed nothing"
+            // over a baseline that would have worked. The order is: newest → the previous landed
+            // generation → the image-shipped copy → absent (reported), and every step is
+            // MEASURED by the same probe and load as the one before it.
+            var reason = newest.Refused!.Error;
             var previous = newest.NeverLoaded ? ResolvePrevious(module) : null;
             if (previous is not null)
             {
                 // The previous generation lives in its own directory, which the surface above
                 // does not carry: a fresh one for the retry, so a sibling module it references is
                 // measured as present rather than as an absent platform assembly.
-                var previousDirectory = Path.GetDirectoryName(Path.GetFullPath(previous));
-                var retry = TryLoad(previous, ModulePlatformSurface.OfRunningProcess([
-                    AppContext.BaseDirectory,
-                    .. probeDirectories,
-                    .. string.IsNullOrEmpty(previousDirectory) ? [] : new[] { previousDirectory },
-                ]));
+                var retry = TryLoad(previous, SurfaceIncluding(probeDirectories, previous));
                 if (retry.Loaded is not null)
                 {
                     pending.Add(retry.Loaded);
-                    var fallback = new FallbackModule(
-                        newest.Refused!.Name, module.Location, previous, newest.Refused.Error)
+                    fallbacks.Add(ReportFallback(new FallbackModule(
+                        newest.Refused.Name, module.Location, previous, reason)
                     {
                         Version = module.Version,
                         PreviousVersion = module.PreviousVersion,
-                    };
-                    // stderr, once per boot: the logging pipeline does not exist yet (see
-                    // ReportIncompatible). The portal re-logs it as a Warning once it does.
-                    Console.Error.WriteLine($"[MeshWeaver.Mesh.FallbackModule] {fallback.Report()}");
-                    fallbacks.Add(fallback);
+                    }));
                     continue;
                 }
 
                 Console.Error.WriteLine(
-                    $"[MeshWeaver.Mesh.FallbackModule] '{newest.Refused!.Name}': the previous "
-                    + $"generation '{previous}' cannot load here either ({retry.Refused!.Error}) — "
-                    + "no generation of this module loads on this platform, so it is absent.");
+                    $"[MeshWeaver.Mesh.FallbackModule] '{newest.Refused.Name}': the previous "
+                    + $"generation '{previous}' cannot load here either ({retry.Refused!.Error}).");
+                reason += $"; the previous generation '{Path.GetFileName(Path.GetDirectoryName(previous))}' "
+                    + $"cannot load here either: {retry.Refused.Error}";
+                // A previous generation that LOADED and then failed to materialise holds the
+                // simple name now; nothing else of that name can enter the process (see
+                // LoadAttempt.NeverLoaded), so the image copy is out of reach exactly like it
+                // would be after the newest one loaded.
+                if (!retry.NeverLoaded)
+                {
+                    ReportBaselineOutOfReach(module, newest.Refused.Name);
+                    incompatible.Add(Report(newest.Refused with { Error = reason }));
+                    continue;
+                }
             }
 
-            incompatible.Add(Report(newest.Refused!));
+            if (newest.NeverLoaded && ResolveImageBaseline(module) is { } baseline)
+            {
+                var image = TryLoad(baseline, SurfaceIncluding(probeDirectories, baseline));
+                if (image.Loaded is not null)
+                {
+                    pending.Add(image.Loaded);
+                    fallbacks.Add(ReportFallback(new FallbackModule(
+                        newest.Refused.Name, module.Location, baseline, reason)
+                    {
+                        Version = module.Version,
+                        RunsImageBaseline = true,
+                    }));
+                    continue;
+                }
+
+                // An image copy that does not load is a build defect of the image itself, which is
+                // a different fault from the store generation's — said separately, and the module
+                // is absent as before.
+                Console.Error.WriteLine(
+                    $"[MeshWeaver.Mesh.FallbackModule] '{newest.Refused.Name}': the image-shipped "
+                    + $"baseline '{baseline}' cannot load here either ({image.Refused!.Error}) — "
+                    + "no generation of this module loads on this platform, so it is absent.");
+                reason += $"; the image-shipped baseline cannot load here either: {image.Refused.Error}";
+            }
+            else if (!newest.NeverLoaded)
+            {
+                ReportBaselineOutOfReach(module, newest.Refused.Name);
+            }
+            else
+            {
+                Console.Error.WriteLine(
+                    $"[MeshWeaver.Mesh.FallbackModule] '{newest.Refused.Name}': no previous "
+                    + "generation and no image-shipped baseline loads here — no generation of this "
+                    + "module loads on this platform, so it is absent.");
+            }
+
+            incompatible.Add(Report(newest.Refused with { Error = reason }));
         }
 
         // 🚨 A node's GlobalServiceConfigurations delegate is invoked IMMEDIATELY by
@@ -490,6 +547,65 @@ public record MeshBuilder
                 + $"{exception.Message}) — no fallback is attempted.");
             return null;
         }
+    }
+
+    /// <summary>
+    /// The image-shipped copy of a candidate's module, when the image ships one AND it is on disk
+    /// — the last step of the fallback order (#3735). Null otherwise. A candidate that names a
+    /// baseline which is not there is the listed-but-absent shape the boot already skips loudly
+    /// for baseline entries; here it simply means there is nothing to fall back to.
+    /// </summary>
+    private static string? ResolveImageBaseline(ModuleInstallCandidate module) =>
+        !string.IsNullOrWhiteSpace(module.ImageBaseline) && File.Exists(module.ImageBaseline)
+            ? module.ImageBaseline
+            : null;
+
+    /// <summary>
+    /// The link-probe surface for a fallback attempt: the application closure, every directory
+    /// this batch loads from, and the directory of <paramref name="candidate"/> itself — which the
+    /// batch surface does not carry, so a sibling module the candidate references is measured as
+    /// present rather than as an absent platform assembly.
+    /// </summary>
+    private static ModulePlatformSurface SurfaceIncluding(string[] probeDirectories, string candidate)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(candidate));
+        return ModulePlatformSurface.OfRunningProcess([
+            AppContext.BaseDirectory,
+            .. probeDirectories,
+            .. string.IsNullOrEmpty(directory) ? [] : new[] { directory },
+        ]);
+    }
+
+    /// <summary>
+    /// Writes a fallback to stderr and hands it back for registration — once per boot, because
+    /// the logging pipeline does not exist yet (see <see cref="ReportIncompatible"/>). The portal
+    /// re-logs it as a Warning once it does.
+    /// </summary>
+    private static FallbackModule ReportFallback(FallbackModule fallback)
+    {
+        Console.Error.WriteLine($"[MeshWeaver.Mesh.FallbackModule] {fallback.Report()}");
+        return fallback;
+    }
+
+    /// <summary>
+    /// Says why the image-shipped copy could NOT take over for a module whose generation LOADED
+    /// and then failed to install (#2234's shape): the default load context holds one assembly
+    /// per simple name, so once the store generation is in, the image's copy of the same name
+    /// cannot be loaded beside it. Silent otherwise — a candidate with no image baseline has
+    /// nothing to say here. Not a band-aid on the constraint, a NAME for it: the operator reads
+    /// "the image copy would have worked, and this is why it did not run" instead of an
+    /// incompatible module whose baseline is simply not mentioned.
+    /// </summary>
+    private static void ReportBaselineOutOfReach(ModuleInstallCandidate module, string name)
+    {
+        if (string.IsNullOrWhiteSpace(module.ImageBaseline))
+            return;
+        Console.Error.WriteLine(
+            $"[MeshWeaver.Mesh.FallbackModule] '{name}': the image ships a baseline copy "
+            + $"('{module.ImageBaseline}'), but the landed generation LOADED before it failed to "
+            + "install, and the default load context holds one assembly per simple name — the "
+            + "image copy cannot be loaded beside it, so the module is absent until the next "
+            + "restart measures a generation that does not load at all, or one that installs.");
     }
 
     /// <summary>
