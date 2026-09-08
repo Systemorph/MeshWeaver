@@ -90,6 +90,30 @@ public sealed class SetupStrings(string? locale)
     /// <param name="plan">The plan name.</param>
     public string PlanIs(string plan) => Get("setup.planIs", plan);
 
+    // ── Phase one: ownership + consent ─────────────────────────────────────────────────────────
+    /// <summary>The ownership section heading.</summary>
+    public string OwnershipHeading => Get("setup.ownership.heading");
+    /// <summary>Why ownership is collected before an id is claimed.</summary>
+    public string OwnershipHelp => Get("setup.ownership.help");
+    /// <summary>The organisation field label.</summary>
+    public string CompanyLabel => Get("setup.ownership.company");
+    /// <summary>The owner-name field label.</summary>
+    public string OwnerNameLabel => Get("setup.ownership.ownerName");
+    /// <summary>The owner-email field label.</summary>
+    public string OwnerEmailLabel => Get("setup.ownership.ownerEmail");
+    /// <summary>What the email is used for.</summary>
+    public string OwnerEmailHelp => Get("setup.ownership.ownerEmail.help");
+    /// <summary>The consent checkbox label, which the document links follow.</summary>
+    public string ConsentLabel => Get("setup.ownership.consent");
+    /// <summary>The privacy statement's link text.</summary>
+    public string PrivacyStatement => Get("setup.ownership.consent.privacy");
+    /// <summary>The platform terms' link text.</summary>
+    public string PlatformTerms => Get("setup.ownership.consent.terms");
+    /// <summary>What accepting means.</summary>
+    public string ConsentHelp => Get("setup.ownership.consent.help");
+    /// <summary>The registry section heading.</summary>
+    public string RegistryHeading => Get("setup.registry.heading");
+
     // ── Step: plugins ──────────────────────────────────────────────────────────────────────────
     /// <summary>The plugins section heading.</summary>
     public string PackagesHeading => Get("setup.packages.heading");
@@ -204,6 +228,15 @@ public sealed class SetupStrings(string? locale)
     /// <summary>Registered, but the issued key could not be persisted — and the id is now claimed.</summary>
     /// <param name="id">The id that was claimed.</param>
     public string ProblemKeyUnstorable(string id) => Get("setup.problem.keyUnstorable", id);
+
+    /// <summary>No organisation was given.</summary>
+    public string ProblemNoCompany => Get("setup.problem.noCompany");
+    /// <summary>No owner name was given.</summary>
+    public string ProblemNoOwnerName => Get("setup.problem.noOwnerName");
+    /// <summary>No usable owner email was given.</summary>
+    public string ProblemNoOwnerEmail => Get("setup.problem.noOwnerEmail");
+    /// <summary>Consent was not accepted — nothing is sent until it is.</summary>
+    public string ProblemNoConsent => Get("setup.problem.noConsent");
 
     // ── Warnings ───────────────────────────────────────────────────────────────────────────────
     /// <summary>The developer login is on with no platform admin named.</summary>

@@ -215,6 +215,27 @@ public sealed record InstanceIdentitySelection
     /// <summary>The human-readable name the operator typed. Never used as an identifier.</summary>
     public string Name { get; init; } = "";
 
+    /// <summary>
+    /// Who this instance belongs to, as the person setting it up stated — sent with the registration
+    /// and kept here so the record survives the restart that follows.
+    ///
+    /// <para>Collected BEFORE the register call, because the requirement's order is "collect the
+    /// ownership, then get the id and credentials": an id issued against no owner is one the
+    /// registry cannot attribute later, and ids are never re-issued.</para>
+    /// </summary>
+    public InstanceOwnershipSelection? Ownership { get; init; }
+
+    /// <summary>
+    /// Evidence that a human accepted the privacy statement and the platform terms here, before this
+    /// instance registered.
+    ///
+    /// <para>🚨 The wizard registers by calling the endpoint DIRECTLY, which does not enforce
+    /// consent — the gate lives in <c>InstanceAutoRegistrationService</c>, on the boot path the
+    /// wizard does not take. Recording it here is what stops the wizard being a way around a gate
+    /// every other lane passes through.</para>
+    /// </summary>
+    public InstanceConsentSelection? Consent { get; init; }
+
     /// <summary>The registry this instance registered with (e.g. <c>https://memex.meshweaver.cloud</c>).</summary>
     public string RegistryUrl { get; init; } = "";
 
@@ -238,4 +259,37 @@ public sealed record InstanceIdentitySelection
     [JsonIgnore]
     public bool IsRegistered =>
         !string.IsNullOrWhiteSpace(Id) && !string.IsNullOrWhiteSpace(RegistryUrl);
+}
+
+/// <summary>The ownership record the first-run wizard collects. Every field is required THERE — see
+/// <c>InstanceOwnership</c> for why the registry itself accepts less.</summary>
+public sealed record InstanceOwnershipSelection
+{
+    /// <summary>The organisation this instance belongs to.</summary>
+    public string Company { get; init; } = "";
+
+    /// <summary>The name of the person setting it up.</summary>
+    public string OwnerName { get; init; } = "";
+
+    /// <summary>Their email — how the registry reaches the owner about the id it issued.</summary>
+    public string OwnerEmail { get; init; } = "";
+}
+
+/// <summary>
+/// The consent a human gave at first run, with WHAT they accepted pinned by hash.
+///
+/// <para>The hashes are the point. "Someone ticked a box" is not evidence; "this person accepted
+/// THESE documents at THIS time" is what an ownership record has to be able to show later, and it is
+/// the shape <c>InstanceConsent</c> already stores.</para>
+/// </summary>
+public sealed record InstanceConsentSelection
+{
+    /// <summary>When they accepted.</summary>
+    public DateTimeOffset AcceptedAt { get; init; }
+
+    /// <summary>Hash of the privacy statement shown.</summary>
+    public string? PrivacyStatementHash { get; init; }
+
+    /// <summary>Hash of the platform terms shown.</summary>
+    public string? TermsHash { get; init; }
 }

@@ -123,13 +123,7 @@ public class SetupIdentityPhaseTest : IDisposable
             .Match(html, @"name=""identity\.id""[^>]*value=""(?<id>[^""]+)""").Groups["id"].Value;
 
         var response = await client.PostAsync("/setup/identity", new FormUrlEncodedContent(
-            new Dictionary<string, string>
-            {
-                ["token"] = TokenOf(app),
-                ["identity.name"] = "Roland laptop",
-                ["identity.id"] = id,
-                ["identity.registry"] = "https://registry.example",
-            }));
+            Ownership(TokenOf(app), id, "Roland laptop")));
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
 
@@ -185,13 +179,7 @@ public class SetupIdentityPhaseTest : IDisposable
         var id = System.Text.RegularExpressions.Regex
             .Match(page, @"name=""identity\.id""[^>]*value=""(?<id>[^""]+)""").Groups["id"].Value;
         await client.PostAsync("/setup/identity", new FormUrlEncodedContent(
-            new Dictionary<string, string>
-            {
-                ["token"] = TokenOf(app),
-                ["identity.name"] = "<script>alert('x')</script>",
-                ["identity.id"] = id,
-                ["identity.registry"] = "https://registry.example",
-            }));
+            Ownership(TokenOf(app), id, "<script>alert('x')</script>")));
 
         var html = await client.GetStringAsync("/setup");
 
@@ -255,13 +243,7 @@ public class SetupIdentityPhaseTest : IDisposable
         var client = app.GetTestClient();
 
         var response = await client.PostAsync("/setup/identity", new FormUrlEncodedContent(
-            new Dictionary<string, string>
-            {
-                ["token"] = TokenOf(app),
-                ["identity.name"] = "Taken",
-                ["identity.id"] = Guid.NewGuid().ToString("d"),
-                ["identity.registry"] = "https://registry.example",
-            }));
+            Ownership(TokenOf(app), Guid.NewGuid().ToString("d"), "Taken")));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var html = await response.Content.ReadAsStringAsync();
@@ -309,6 +291,120 @@ public class SetupIdentityPhaseTest : IDisposable
     }
 
     [Fact]
+    public async Task TheOwnershipRecord_ReachesTheRegistry_WithTheConsentEvidence()
+    {
+        // "Collect data on the ownership of the instance (company, owner's name, owner's email),
+        // and then he gets his id and credentials" — this is that order, on the wire.
+        using var app = BuildApp();
+        var client = app.GetTestClient();
+        await RegisterAsync(app, client);
+
+        var sent = Assert.Single(registry.Registrations);
+        Assert.Equal("Contoso AG", sent.Company);
+        Assert.Equal("Roland Buergi", sent.OwnerName);
+        Assert.Equal("roland@contoso.example", sent.OwnerEmail);
+
+        // The consent travels as EVIDENCE — who accepted, when, and which documents by hash. A
+        // boolean could not answer "accepted what?" later, which is the only question that matters.
+        Assert.NotNull(sent.Consent);
+        Assert.Equal("Roland Buergi", sent.Consent!.AcceptedByName);
+        Assert.Equal("roland@contoso.example", sent.Consent.AcceptedByEmail);
+        Assert.False(string.IsNullOrWhiteSpace(sent.Consent.PrivacyStatementHash));
+        Assert.False(string.IsNullOrWhiteSpace(sent.Consent.TermsHash));
+        Assert.NotEqual(default, sent.Consent.AcceptedAt);
+    }
+
+    [Fact]
+    public async Task TheOwnershipRecord_SurvivesOnTheManifest()
+    {
+        // It has to outlive the restart: the wizard writes it before registering, and the configured
+        // boot is a different process with no memory of the form.
+        using var app = BuildApp();
+        await RegisterAsync(app, app.GetTestClient());
+
+        var identity = InstanceManifest.Read(root)!.Identity!;
+        Assert.Equal("Contoso AG", identity.Ownership!.Company);
+        Assert.Equal("Roland Buergi", identity.Ownership.OwnerName);
+        Assert.Equal("roland@contoso.example", identity.Ownership.OwnerEmail);
+        Assert.False(string.IsNullOrWhiteSpace(identity.Consent!.PrivacyStatementHash));
+    }
+
+    [Theory]
+    [InlineData("identity.company")]
+    [InlineData("identity.ownerName")]
+    [InlineData("identity.ownerEmail")]
+    [InlineData("identity.consent")]
+    public async Task WithoutOwnershipOrConsent_NOTHING_IsRegistered(string omitted)
+    {
+        // 🚨 Refused BEFORE the registry call, every one of them. An id claimed for a submission
+        // that was going to be rejected anyway is an id burnt for nothing — and ids are global and
+        // never re-issued, so "we can just try again" costs a real one every time.
+        using var app = BuildApp();
+        var client = app.GetTestClient();
+        var html = await client.GetStringAsync("/setup");
+        var id = System.Text.RegularExpressions.Regex
+            .Match(html, @"name=""identity\.id""[^>]*value=""(?<id>[^""]+)""").Groups["id"].Value;
+
+        var form = Ownership(TokenOf(app), id, "Roland laptop");
+        form.Remove(omitted);
+
+        var response = await client.PostAsync("/setup/identity", new FormUrlEncodedContent(form));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(registry.Registrations);
+        Assert.Null(InstanceManifest.Read(root)?.Identity);
+    }
+
+    [Theory]
+    [InlineData("not-an-email")]
+    [InlineData("@contoso.example")]
+    [InlineData("roland@")]
+    [InlineData("roland@contoso")]
+    public async Task AnUnusableOwnerEmail_IsRefused(string email)
+    {
+        // The email is how the registry reaches the owner about an id it has issued permanently.
+        // A typo there is not recoverable from the registry's side.
+        using var app = BuildApp();
+        var client = app.GetTestClient();
+        var html = await client.GetStringAsync("/setup");
+        var id = System.Text.RegularExpressions.Regex
+            .Match(html, @"name=""identity\.id""[^>]*value=""(?<id>[^""]+)""").Groups["id"].Value;
+
+        var form = Ownership(TokenOf(app), id, "Roland laptop");
+        form["identity.ownerEmail"] = email;
+
+        var response = await client.PostAsync("/setup/identity", new FormUrlEncodedContent(form));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(registry.Registrations);
+    }
+
+    [Fact]
+    public async Task AValidEmail_IsAccepted()
+        // The negative control for the four above: without it they would all pass on a rule that
+        // simply refuses everything.
+        => await RegisterAsync(BuildApp(), BuildApp().GetTestClient());
+
+    [Fact]
+    public async Task TheConsentTick_IsNotCarriedBackOnAReRender()
+    {
+        // An acceptance the person did not make on THIS submission is not an acceptance. Every
+        // other field comes back so they need not retype it; this one must be affirmed again.
+        using var app = BuildApp();
+        var client = app.GetTestClient();
+        var html = await client.GetStringAsync("/setup");
+        var id = System.Text.RegularExpressions.Regex
+            .Match(html, @"name=""identity\.id""[^>]*value=""(?<id>[^""]+)""").Groups["id"].Value;
+
+        var form = Ownership(TokenOf(app), id, "");   // nameless ⇒ refused ⇒ re-rendered
+        var response = await client.PostAsync("/setup/identity", new FormUrlEncodedContent(form));
+        var page = await response.Content.ReadAsStringAsync();
+
+        Assert.Contains("Contoso AG", page);                       // carried back
+        Assert.DoesNotMatch(@"name=""identity\.consent""[^>]*\bchecked\b", page);
+    }
+
+    [Fact]
     public async Task ANamelessInstance_IsRefused_BeforeAnyIdIsClaimed()
     {
         using var app = BuildApp();
@@ -328,19 +424,28 @@ public class SetupIdentityPhaseTest : IDisposable
         Assert.Empty(registry.Registrations);
     }
 
+    /// <summary>A complete phase-one submission. Ownership and consent are REQUIRED, so every
+    /// helper carries them — a post without them is refused, which is what the dedicated tests
+    /// below assert.</summary>
+    private static Dictionary<string, string> Ownership(string token, string id, string name) => new()
+    {
+        ["token"] = token,
+        ["identity.name"] = name,
+        ["identity.id"] = id,
+        ["identity.registry"] = "https://registry.example",
+        ["identity.company"] = "Contoso AG",
+        ["identity.ownerName"] = "Roland Buergi",
+        ["identity.ownerEmail"] = "roland@contoso.example",
+        ["identity.consent"] = "on",
+    };
+
     private async Task RegisterAsync(WebApplication app, HttpClient client)
     {
         var html = await client.GetStringAsync("/setup");
         var id = System.Text.RegularExpressions.Regex
             .Match(html, @"name=""identity\.id""[^>]*value=""(?<id>[^""]+)""").Groups["id"].Value;
         await client.PostAsync("/setup/identity", new FormUrlEncodedContent(
-            new Dictionary<string, string>
-            {
-                ["token"] = TokenOf(app),
-                ["identity.name"] = "Roland laptop",
-                ["identity.id"] = id,
-                ["identity.registry"] = "https://registry.example",
-            }));
+            Ownership(TokenOf(app), id, "Roland laptop")));
     }
 
     private WebApplication BuildAppWith(FakeRegistry fake, bool keepRoot = false)

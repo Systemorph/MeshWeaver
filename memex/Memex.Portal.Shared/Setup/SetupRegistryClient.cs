@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using MeshWeaver.Mesh;
 using MeshWeaver.PluginCatalog;
 
 namespace Memex.Portal.Shared.Setup;
@@ -49,6 +50,8 @@ public sealed class SetupRegistryClient(HttpClient http)
     public async Task<InstanceRegistrationPayloads.Response> RegisterAsync(
         string registryUrl, string instanceId, string displayName,
         string? bootstrapKey = null, string? homeUrl = null,
+        InstanceOwnershipSelection? ownership = null,
+        InstanceConsentSelection? consent = null,
         CancellationToken cancellationToken = default)
     {
         var url = Combine(registryUrl, InstanceRegistrationPayloads.Route);
@@ -57,7 +60,23 @@ public sealed class SetupRegistryClient(HttpClient http)
             InstanceId: instanceId,
             DisplayName: displayName ?? "",
             Description: "",
-            HomeUrl: homeUrl ?? "");
+            HomeUrl: homeUrl ?? "")
+        {
+            // 🚨 INIT PROPERTIES, never constructor arguments — the record is shared verbatim by
+            // both sides of the wire, so a positional change is a binary break that aborts a host in
+            // either roll direction. A registry that predates these fields simply ignores them.
+            Company = ownership?.Company,
+            OwnerName = ownership?.OwnerName,
+            OwnerEmail = ownership?.OwnerEmail,
+            Consent = consent is null ? null : new InstanceRegistrationPayloads.InstanceConsentEvidence
+            {
+                AcceptedAt = consent.AcceptedAt,
+                AcceptedByName = ownership?.OwnerName,
+                AcceptedByEmail = ownership?.OwnerEmail,
+                PrivacyStatementHash = consent.PrivacyStatementHash,
+                TermsHash = consent.TermsHash,
+            },
+        };
 
         HttpResponseMessage response;
         try
