@@ -67,11 +67,14 @@ public sealed class UpstreamPassthroughResult(HttpResponseMessage upstream) : IR
     }
 
     /// <summary>Headers an OCI client depends on. <c>Docker-Content-Digest</c> is how a client
-    /// verifies it got the bytes it asked for, and dropping it silently breaks digest pinning.</summary>
+    /// verifies it got the bytes it asked for, and dropping it silently breaks digest pinning.
+    /// <c>Link</c> is the <c>tags/list</c> continuation (a RELATIVE URL, so it resolves against
+    /// the mirror) — without it a paginated listing ends after its first page and reads as
+    /// complete.</summary>
     private static readonly string[] ForwardedHeaders =
     [
         "Docker-Content-Digest", "Content-Type", "Content-Length",
-        "Accept-Ranges", "Content-Range", "ETag", "Docker-Distribution-Api-Version",
+        "Accept-Ranges", "Content-Range", "ETag", "Docker-Distribution-Api-Version", "Link",
     ];
 
     /// <inheritdoc />

@@ -52,6 +52,13 @@ spec:
         app.kubernetes.io/instance: "{{ .Release.Name }}"
     spec:
       restartPolicy: "Never"
+{{- /* The same pull credential the portal Deployment carries (portal.imagePullSecret): the
+       migration image is the OTHER platform image, pulled from the same registry. Rendered only
+       when set. MeshWeaver#3353. */}}
+{{- if (.Values.portal).imagePullSecret }}
+      imagePullSecrets:
+        - name: "{{ .Values.portal.imagePullSecret }}"
+{{- end }}
       initContainers:
         # Postgres and the migration can start concurrently on a fresh install; gate on Postgres
         # TCP readiness so the migration doesn't fail-fast before the DB accepts connections.

@@ -1,0 +1,49 @@
+{{- /*
+The portal's PersistentVolumeClaims — rendered ONLY for a `persistence.<name>` entry that says
+`create: true` (MeshWeaver#3353).
+
+🚨 WHY OPT-IN, AND WHY THE DEFAULT IS ABSENT. Until now the chart rendered NO PVC at all:
+`persistence.<name>.claimName` names a claim SOMETHING ELSE created, and on memex / memex-cloud
+that something was a laptop applying deploy/aks/manifests/portal-pvcs.yaml once. Those objects are
+unmanaged by helm, so a chart that started rendering `memex-data` on those namespaces would fail
+the next upgrade on "resource already exists" — `create` therefore MUST default to absent/false,
+and the existing environments never set it. The case it exists for is a record-driven Provision of
+a NEW instance by the Hosting operator: with no claim rendered, a new namespace got emptyDir (no
+claimName → the Memex#134 data-loss shape) or pods stuck Pending on a claim that did not exist.
+
+`size` and `storageClass` are REQUIRED when `create` is true and fail the render NAMING THE ENTRY:
+a claim of some default size on the cluster's default class is a claim on the wrong tier that
+looks fine until the volume is full or ReadWriteOnce pins the second replica. `accessMode`
+defaults to ReadWriteMany because every claim the portal mounts is shared state across replicas
+(check-chart-invariants #3 asserts it when the replica floor is above one).
+
+`helm.sh/resource-policy: keep`: an uninstall — or a `create` flipped back to false — leaves the
+claim and its data in place. Deleting data is an operator's explicit act, never a side effect of
+a release going away.
+
+An entry with no claimName is never rendered (`postgres` in values.aks.yaml is sizing information
+for the StatefulSet, not a portal claim).
+*/ -}}
+{{- range $name, $spec := .Values.persistence }}
+{{- if and $spec $spec.create $spec.claimName }}
+---
+apiVersion: "v1"
+kind: "PersistentVolumeClaim"
+metadata:
+  name: "{{ $spec.claimName }}"
+  labels:
+    app.kubernetes.io/name: "{{ $.Chart.Name }}"
+    app.kubernetes.io/component: "memex-portal"
+    app.kubernetes.io/instance: "{{ $.Release.Name }}"
+    meshweaver.io/volume: "{{ $name }}"
+  annotations:
+    helm.sh/resource-policy: "keep"
+spec:
+  accessModes:
+    - "{{ $spec.accessMode | default "ReadWriteMany" }}"
+  storageClassName: "{{ required (printf "persistence.%s.storageClass is required when persistence.%s.create is true — a claim on the cluster's default class is a claim on the wrong tier (the portal's shared volumes need a ReadWriteMany class such as azurefile-memex)" $name $name) $spec.storageClass }}"
+  resources:
+    requests:
+      storage: "{{ required (printf "persistence.%s.size is required when persistence.%s.create is true — the chart will not guess a volume size" $name $name) $spec.size }}"
+{{- end }}
+{{- end }}

@@ -146,7 +146,7 @@ internal sealed class FakeUpstreamRegistry : HttpMessageHandler
                 || path == $"/v2/{repository}/manifests/{ManifestDigest}")
                 return Task.FromResult(Manifest(request));
             if (path == $"/v2/{repository}/tags/list")
-                return Task.FromResult(Json($$"""{"name":"{{repository}}","tags":["ci.7794","latest"]}"""));
+                return Task.FromResult(TagsList(repository, uri.Query));
             // 🚨 Only the digests this registry actually HOLDS. A fixture that answered every
             // sha256 path with the same bytes could not tell "does not exist" apart from
             // "exists" — which is one of the four outcomes under test.
@@ -227,6 +227,35 @@ internal sealed class FakeUpstreamRegistry : HttpMessageHandler
         };
         response.Content.Headers.ContentLength = LayerBytes.Length;
         response.Headers.AcceptRanges.Add("bytes");
+        return response;
+    }
+
+    /// <summary>The tags this registry holds, in the lexical order a registry lists them.</summary>
+    public static readonly string[] Tags = ["ci.7794", "latest"];
+
+    /// <summary>
+    /// <c>tags/list</c>, paginated the way ACR paginates it: with <c>?n=</c> the answer is at most
+    /// <c>n</c> tags after <c>?last=</c>, and a page that is not the last names the next one in a
+    /// RELATIVE <c>Link</c> header. Without <c>n</c> every tag is returned in one answer.
+    ///
+    /// <para>🚨 A fixture that ignored the query would make "the mirror forwards the query string"
+    /// unobservable: every page would carry every tag and a mirror that dropped <c>?last=</c> would
+    /// pass, while against ACR it serves the oldest hundred tags to every caller forever.</para>
+    /// </summary>
+    private static HttpResponseMessage TagsList(string repository, string query)
+    {
+        var parameters = System.Web.HttpUtility.ParseQueryString(query);
+        var n = int.TryParse(parameters["n"], out var parsed) ? parsed : Tags.Length;
+        var last = parameters["last"];
+        var remaining = last is null
+            ? Tags
+            : Tags.SkipWhile(t => t != last).Skip(1).ToArray();
+        var page = remaining.Take(n).ToArray();
+        var response = Json(
+            $$"""{"name":"{{repository}}","tags":[{{string.Join(",", page.Select(t => $"\"{t}\""))}}]}""");
+        if (page.Length < remaining.Length)
+            response.Headers.TryAddWithoutValidation(
+                "Link", $"</v2/{repository}/tags/list?n={n}&last={page[^1]}>; rel=\"next\"");
         return response;
     }
 

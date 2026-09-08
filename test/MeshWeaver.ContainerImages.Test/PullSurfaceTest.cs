@@ -231,6 +231,43 @@ public class PullSurfaceTest
         Assert.Contains("ci.7794", await response.Content.ReadAsStringAsync());
     }
 
+    /// <summary>
+    /// 🚨 <c>tags/list</c> is the one pull route the Distribution API PAGINATES, and the page is
+    /// chosen by the query string. ACR pages at 100 tags in lexical order, so a mirror that dropped
+    /// <c>?n=</c>/<c>?last=</c> answered every caller with the OLDEST hundred and could never be
+    /// walked past them — the self-updater listing 500 builds through it would never see the newest
+    /// and print the up-to-date sentence forever (#3353). The query goes up, the relative
+    /// <c>Link</c> continuation comes back, and following it against the MIRROR reaches the rest.
+    /// </summary>
+    [Fact]
+    public async Task TagsListIsPaginated_ThroughTheMirror()
+    {
+        var upstream = new FakeUpstreamRegistry();
+        using var app = await BuildMirror(upstream);
+        var client = Authenticated(app);
+
+        var first = await client.GetAsync($"/v2/{FakeUpstreamRegistry.Repository}/tags/list?n=1");
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var firstBody = await first.Content.ReadAsStringAsync();
+        Assert.Contains(FakeUpstreamRegistry.Tags[0], firstBody);
+        Assert.DoesNotContain(FakeUpstreamRegistry.Tags[1], firstBody);
+        Assert.True(first.Headers.TryGetValues("Link", out var links),
+            "the first of two pages must name the second in a Link header, or a caller reads one page as the whole listing");
+        var next = links.Single();
+        var match = System.Text.RegularExpressions.Regex.Match(next, "<([^>]+)>");
+        Assert.True(match.Success, next);
+
+        // Relative, so it resolves against the mirror — never against the upstream host.
+        var second = await client.GetAsync(match.Groups[1].Value);
+
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        var secondBody = await second.Content.ReadAsStringAsync();
+        Assert.Contains(FakeUpstreamRegistry.Tags[1], secondBody);
+        Assert.DoesNotContain(FakeUpstreamRegistry.Tags[0], secondBody);
+        Assert.False(second.Headers.Contains("Link"), "the last page names no successor");
+    }
+
     [Fact]
     public async Task ABlobIsServedWhole_AndByteForByte()
     {

@@ -70,6 +70,14 @@ public static class SelfUpdateConfiguration
                 // lost the module could not update anything, including re-installing the module.
                 services.TryAddSingleton<IAcrTagLister, UnavailableUpdateMechanics.NoRegistry>();
                 services.TryAddSingleton<IDeploymentUpdater, UnavailableUpdateMechanics.DetectOnly>();
+                // The OCI Distribution lister for an install whose SelfUpdate:Registry is NOT an
+                // Azure Container Registry — the read-through mirror another installation serves
+                // (#3353). Registered by the PLATFORM, not the AKS module: it needs no Azure SDK
+                // and no Kubernetes, only the plugin-registry credential this install already
+                // holds, and the poller selects it by registry host at check time. The
+                // IAcrTagLister above (module-supplied or the NoRegistry fallback) stays exactly
+                // what it was for an ACR host.
+                services.AddSingleton<OciTagLister>();
                 services.AddHostedService<SelfUpdateHostedService>();
             }
             return services;

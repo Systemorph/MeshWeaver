@@ -1,0 +1,34 @@
+# The values a RECORD-DRIVEN PROVISION of a mirror-consuming instance renders (MeshWeaver#3353) —
+# layered on deploy/helm/values.yaml by check-chart-invariants.sh as its fourth combination.
+#
+# 🚨 A FIXTURE, not a deployment. No real environment is described here; its job is to switch on
+# every template branch the default chart leaves dark — the pull secret on both platform pods, the
+# mirror registry key, the chart-created PersistentVolumeClaims — so the render gate can assert
+# them. Without it those branches render on no combination in this repo and a regression in any
+# of them is invisible until a real Provision fails in a namespace nobody can see.
+#
+# The three things a consumer sets, and nothing else (the mirror INSTANCE sets containerImages,
+# which is exercised by the values it lives on — memex-cloud — and is asserted here only in the
+# sense that a consumer renders NO ContainerImages__ key):
+selfUpdate:
+  registry: "mirror.example.test"
+portal:
+  imagePullSecret: "registry-pull"
+persistence:
+  data:
+    claimName: "memex-data"
+    create: true
+    size: "16Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+  content:
+    claimName: "memex-content"
+    create: true
+    size: "128Gi"
+    storageClass: "azurefile-memex"
+    mountPath: "/mnt/content"
+  # An entry WITHOUT `create` keeps today's behaviour: the claim is mounted, never rendered.
+  users:
+    claimName: "memex-users"
+    size: "32Gi"
+    storageClass: "azurefile-memex"
