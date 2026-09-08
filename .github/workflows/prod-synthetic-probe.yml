@@ -7,11 +7,61 @@
 #   is the documented NEGATIVE control (it proves gate+resolver, crosses nothing) and is
 #   deliberately NOT used here. The Store page adds a Blazor-shell 200 as a secondary signal.
 #
+# 🚨 WHAT THIS FILE MAY NOT CONTAIN, and why it used to (#3578).
+#   Until 2026-09-08 the matrix paired each portal with a hard-coded asset of an INSTALLED PACKAGE:
+#   memex.meshweaver.cloud ↔ AgenticEngineering, memex.systemorph.com ↔ AgenticPrimer. AgenticPrimer
+#   is not installed on the staff portal and never was, so the probe was RED for eight days for a
+#   true statement about a healthy portal — and a check red in an empty room trains everyone to
+#   ignore it, which is the same defect as a gate that skips.
+#
+#   That was broken by construction, not by accident. A per-deployment install decision is not a
+#   property of the platform: the moment the fleet has two portals with different content, an
+#   assertion naming one portal's packages is wrong on the other, and nothing in this repo can even
+#   see which is which (the deployment inventory is deliberately private — see chart-drift.yml and
+#   Doc/Architecture/DeploymentInventory). So this file must never again name a package, a space or
+#   a course. It names HOSTS. Everything it asserts is either shipped by the platform image or read
+#   from the deployment at probe time.
+#
+# THE THREE ASSERTIONS, and what each is honestly worth:
+#
+#   1. PLATFORM FLOOR — /api/content/Doc/Architecture/content/platform-overview.svg.
+#      Present on every deployment BY CONSTRUCTION: the bytes are an EmbeddedResource in
+#      MeshWeaver.Documentation, AddDocumentation maps every Doc/* child a `content` collection with
+#      isStatic: true (which is what publishes it on this route at all), and Doc/_Policy sets
+#      PublicRead. It resolves through ContentFileResolver exactly like a package asset — the same
+#      longest-node-prefix match and the same collection-config GetDataRequest to the owning hub —
+#      so it crosses the hop this probe exists to watch, while depending on no install decision.
+#      This is the only assertion that can answer "is the route healthy".
+#
+#   2. NEGATIVE CONTROL — a path under the same route that cannot exist, which must answer 404.
+#      🚨 This is the assertion whose absence made #3578 unreadable. The old probe sampled ONE url
+#      three times and reported "content route unhealthy — 3/3 samples failed". Three samples of one
+#      url cannot distinguish "this asset is missing" from "the route is down", and the issue was
+#      filed on exactly that wrong inference. With a control, a 404 that is DISCRIMINATING (the
+#      bogus path also 404s) proves the route works and the target is absent, while a route that
+#      404s or 5xxes everything is a different verdict with a different message.
+#
+#   3. THE DEPLOYMENT'S OWN DECLARATION — /sitemap.xml.
+#      The one unauthenticated surface that says what THIS deployment serves: SeoEndpoints enumerates
+#      every top-level Store/Plugin, Store/Catalog and Space root that passes AnonymousGate, per-node
+#      fail-closed. Measured 2026-09-08: 79 roots on memex.systemorph.com (no AgenticPrimer), 101 on
+#      memex.meshweaver.cloud (with it) — i.e. it already encodes the difference this file used to
+#      guess at. The probe samples roots the deployment ITSELF named, so a portal is only ever held
+#      to its own claims, and content installed later is covered with no edit here.
+#
+#      🚨 AN EMPTY DENOMINATOR IS A FAILURE, NOT A PASS. A sitemap that is unreachable, unparseable
+#      or lists zero roots means the declaration could not be read — so nothing was checked. A loop
+#      over an empty list exits 0 having asserted nothing, which is the "green on no evidence" shape
+#      AGENTS.md forbids; the count is asserted BEFORE the loop and printed either way, so a zero is
+#      readable rather than silent.
+#
 # HOW it fails (no skip-trapdoors, per AGENTS "a gate never tests its own inputs"):
-#   - no secrets, no `if:` on configuration — the probe always runs;
-#   - 3 samples per endpoint, fail on ≥2 failures — a single transient blip does not page,
-#     the #1729-class wedge (5/10 hangs) reliably does;
-#   - every terminal state is loud: the job fails RED naming the exact URL, samples and codes.
+#   - no secrets, no `if:` on configuration, no credential — the probe always runs, on every portal;
+#   - every input it reads is asserted before it is used, and a read that fails is a FAILURE, never
+#     an absence of findings;
+#   - each verdict names what it means: a route wedge, a portal contradicting its own sitemap, and
+#     an unreadable declaration are three different reds with three different messages, so the next
+#     reader does not start where #3578's reader had to.
 #   A failed scheduled run e-mails the workflow's last committer; the run summary carries the
 #   evidence. Silence == all portals healthy, and (unlike a log-based watcher) a probe that
 #   cannot reach the portal at all is a FAILURE, never a skip.
@@ -24,41 +74,168 @@ on:
 
 permissions: {}
 
+env:
+  # Shipped in the portal image, published on the content route, anonymous-readable. Never a package.
+  PLATFORM_ASSET: /api/content/Doc/Architecture/content/platform-overview.svg
+  # Same route, cannot exist. The node segment is what makes it unresolvable, so this stays a 404
+  # even if the Doc partition itself is healthy.
+  ABSENT_ASSET: /api/content/__probe_absent__/content/__absent__.svg
+
 jobs:
   probe:
+    name: "Probe ${{ matrix.portal }}"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - portal: memex.meshweaver.cloud
-            content: /api/content/AgenticEngineering/content/og.png
-          - portal: memex.systemorph.com
-            content: /api/content/AgenticPrimer/content/og.png
+        # HOSTS ONLY. Anything content-shaped here is the #3578 defect coming back.
+        portal:
+          - memex.meshweaver.cloud
+          - memex.systemorph.com
     steps:
-      - name: Probe content route (3 samples, fail on >=2 bad)
+      - name: Content route — platform floor, with a negative control
+        env:
+          PORTAL: ${{ matrix.portal }}
         run: |
-          set -u
-          url="https://${{ matrix.portal }}${{ matrix.content }}"
-          bad=0
+          set -euo pipefail
+          pos="https://${PORTAL}${PLATFORM_ASSET}"
+          neg="https://${PORTAL}${ABSENT_ASSET}"
+          pos_absent=0   # the platform asset answered a clean 404 — present/absent, not up/down
+          neg_wrong=0    # the impossible path did NOT answer 404 — the route is not discriminating
+          route_bad=0    # anything that is neither 200 nor 404 — a wedge, a 5xx, a timeout
           for i in 1 2 3; do
-            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || echo 000)
-            echo "sample $i: $code  $url" | tee -a "$GITHUB_STEP_SUMMARY"
-            if [ "$code" != "200" ]; then bad=$((bad+1)); fi
+            # 🚨 `code=$(curl … || echo 000)` CONCATENATES: on a timeout curl prints its own `000`
+            # AND fails, so the capture reads `000000` — a six-digit status nobody can look up, in
+            # the one situation where the message is all the reader has. Assign, then override.
+            pcode=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$pos") || pcode=000
+            ncode=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$neg") || ncode=000
+            echo "round $i: platform=$pcode  absent-control=$ncode" | tee -a "$GITHUB_STEP_SUMMARY"
+            case "$pcode" in
+              200) ;;
+              404) pos_absent=$((pos_absent + 1)) ;;
+              *)   route_bad=$((route_bad + 1)) ;;
+            esac
+            [ "$ncode" = "404" ] || neg_wrong=$((neg_wrong + 1))
             sleep 2
           done
-          if [ "$bad" -ge 2 ]; then
-            echo "::error::content route unhealthy on ${{ matrix.portal }} — $bad/3 samples failed for $url"
+
+          # Order matters: a route verdict outranks a content verdict, because a wedged route makes
+          # every content answer meaningless. Only when the control proves the route discriminates
+          # does a 404 on the platform asset mean what it says.
+          if [ "$route_bad" -ge 2 ] || [ "$neg_wrong" -ge 2 ]; then
+            echo "::error::content route unhealthy on ${PORTAL} — $route_bad/3 non-200/404 on $pos," \
+                 "and the impossible path $neg failed to answer 404 in $neg_wrong/3 samples." \
+                 "A route that does not discriminate present from absent is the wedge this probe watches for."
             exit 1
           fi
-      - name: Probe Store page
+          if [ "$pos_absent" -ge 2 ]; then
+            echo "::error::${PORTAL} does not serve the platform content asset $pos ($pos_absent/3 samples 404)," \
+                 "while the impossible path correctly 404s — so the route works and this asset is missing." \
+                 "It ships in the portal image (MeshWeaver.Documentation EmbeddedResource, Doc/* content" \
+                 "collection, isStatic), so a 404 here means the Doc partition did not land on this deployment."
+            exit 1
+          fi
+          echo "content route OK on ${PORTAL} (platform asset 200, impossible path 404)"
+
+      - name: Declared content — read the deployment's sitemap, then hold it to it
+        env:
+          PORTAL: ${{ matrix.portal }}
         run: |
-          set -u
-          url="https://${{ matrix.portal }}/Store"
-          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || echo 000)
+          set -euo pipefail
+          map="https://${PORTAL}/sitemap.xml"
+          body=$(mktemp)
+          code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 30 "$map") || code=000
+          if [ "$code" != "200" ]; then
+            echo "::error::GET $map -> HTTP $code. This portal's declaration of what it serves could" \
+                 "not be read, so NOTHING about its content was checked. That is a failure, not an" \
+                 "absence of findings — /sitemap.xml is anonymous and unconditional on a healthy portal."
+            exit 1
+          fi
+
+          # 🚨 A 200 IS NOT A SITEMAP. Measured 2026-09-08: the portal's SPA fallback answers 200
+          # text/html for any unrouted path, so "the sitemap endpoint is gone" arrives looking
+          # exactly like "the sitemap is empty" — and the second reads as a portal that publishes
+          # nothing rather than as a probe that could not find its input. Assert the SHAPE, so the
+          # two get different messages. (Found by falsifying this step, not by review.)
+          if ! grep -q '<urlset' "$body"; then
+            echo "::error::GET $map returned HTTP 200 but the body is not a sitemap (no <urlset>)." \
+                 "That is what an unrouted path looks like on this portal — the SPA fallback serves" \
+                 "200 text/html for anything it does not recognise. The declaration was NOT read, so" \
+                 "nothing about this portal's content was checked."
+            exit 1
+          fi
+
+          # One <loc> per declared public root. `grep` exits 1 on no match, which under `set -e`
+          # would kill the step before the zero could be REPORTED — and "the step died" and "the
+          # portal declares nothing" must not look the same. So the no-match case is made explicit
+          # and falls through to the denominator assertion below, which says so by name.
+          locs=$(grep -oE '<loc>[^<]+</loc>' "$body" | sed -e 's|<loc>||' -e 's|</loc>||' || true)
+          roots=()
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            roots+=("$line")
+          done < <(printf '%s\n' "$locs")
+          count=${#roots[@]}
+          echo "sitemap declares $count public root(s) on ${PORTAL}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # 🚨 THE DENOMINATOR, ASSERTED BEFORE IT IS USED. Zero roots would make every loop below
+          # a no-op and the step would exit 0 having verified nothing.
+          if [ "$count" -eq 0 ]; then
+            echo "::error::${PORTAL} served a well-formed sitemap that declares ZERO public roots." \
+                 "Either the portal publishes nothing anonymously or SeoEndpoints' candidate query" \
+                 "came back empty; either way this probe checked no content and must not read green."
+            exit 1
+          fi
+
+          # Deterministic and spread: first, middle, last. Deterministic so a red is reproducible;
+          # spread so the sample is not the same three alphabetically-first names on every portal.
+          # 🚨 Built with `if`, never `[ … ] && idx+=(…)`: under `set -e` a false test is the last
+          # command of the AND-list, so the list fails and the step exits — silently turning a small
+          # sitemap into a dead step rather than a smaller sample.
+          idx=(0)
+          if [ "$count" -gt 2 ]; then idx+=( "$((count / 2))" ); fi
+          if [ "$count" -gt 1 ]; then idx+=( "$((count - 1))" ); fi
+
+          failed=0
+          checked=0
+          for i in "${idx[@]}"; do
+            url=${roots[i]}
+            checked=$((checked + 1))
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url") || code=000
+            if [ "$code" != "200" ]; then
+              # One retry, and only for a root that already failed: a single slow Blazor render is
+              # not a portal defect, but a root that fails twice is the portal contradicting itself.
+              sleep 3
+              code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url") || code=000
+            fi
+            echo "declared[$i]: $code  $url" | tee -a "$GITHUB_STEP_SUMMARY"
+            [ "$code" = "200" ] || failed=$((failed + 1))
+          done
+
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::sampled ZERO of ${PORTAL}'s $count declared roots — the sample index was" \
+                 "empty, so this step asserted nothing."
+            exit 1
+          fi
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::${PORTAL} does not serve $failed of the $checked declared root(s) sampled" \
+                 "from its own /sitemap.xml (of $count declared). The portal is contradicting its own" \
+                 "declaration — this is content the deployment says it publishes, not a target this" \
+                 "workflow guessed at."
+            exit 1
+          fi
+          echo "all $checked sampled root(s) of $count declared serve 200 on ${PORTAL}"
+
+      - name: Probe Store page
+        env:
+          PORTAL: ${{ matrix.portal }}
+        run: |
+          set -eu
+          url="https://${PORTAL}/Store"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url") || code=000
           echo "Store: $code  $url" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$code" != "200" ]; then
-            echo "::error::Store page returned $code on ${{ matrix.portal }}"
+            echo "::error::Store page returned $code on ${PORTAL}"
             exit 1
           fi
