@@ -79,6 +79,12 @@ refuses "kv-rotate needs --vault"          "missing required flag --vault"      
 refuses "kv-rotate needs --namespace"      "missing required flag --namespace"  hosting-kv-rotate --vault V
 refuses "pv-purge needs --namespace"       "missing required flag --namespace"  hosting-pv-purge
 refuses "pv-purge rejects unknown flags"   "unknown argument"                   hosting-pv-purge --namespace n --nope 1
+refuses "pv-resize needs --namespace"      "missing required flag --namespace"  hosting-pv-resize --claim c --size 1Gi
+refuses "pv-resize needs --claim"          "missing required flag --claim"      hosting-pv-resize --namespace n --size 1Gi
+refuses "pv-resize needs --size"           "missing required flag --size"       hosting-pv-resize --namespace n --claim c
+refuses "pv-resize rejects unknown flags"  "unknown argument"                   hosting-pv-resize --namespace n --claim c --size 1Gi --nope 1
+refuses "pv-resize rejects a non-quantity" "is not a whole binary quantity"     hosting-pv-resize --namespace n --claim c --size 128
+refuses "pv-resize rejects a decimal unit" "is not a whole binary quantity"     hosting-pv-resize --namespace n --claim c --size 128G
 refuses "dns needs a mode"                 "must be 'upsert' or 'delete'"       hosting-dns --zone z --host h
 refuses "redirect needs a mode"            "must be 'suspend' or 'restore'"     hosting-redirect --namespace n
 refuses "deploy needs --release"           "missing required flag --release"    hosting-deploy --namespace n --database d
@@ -165,6 +171,10 @@ refuses_hard "namespace with a shell metacharacter" "is not a plain name" \
   hosting-kv-ensure --vault V --namespace 'n; rm -rf /'
 refuses_hard "pv-purge namespace with a metacharacter" "is not a plain name" \
   hosting-pv-purge --namespace 'n; kubectl delete pv --all'
+refuses_hard "pv-resize claim with a metacharacter"    "is not a plain name" \
+  hosting-pv-resize --namespace n --claim 'c; kubectl delete pvc --all' --size 1Gi
+refuses_hard "pv-resize size with a metacharacter"     "is not a whole binary quantity" \
+  hosting-pv-resize --namespace n --claim c --size '1Gi"}}}; rm -rf /'
 refuses_hard "kv-rotate namespace with a metacharacter" "is not a plain name" \
   hosting-kv-rotate --vault V --namespace 'n; rm -rf /' --synced-secret s
 refuses_hard "kv-rotate prefix with a metacharacter"    "is not a plain name" \
@@ -303,6 +313,88 @@ case "$out" in *"DRY-RUN would run"*) ok "a dry run narrates what it would do" ;
   *) bad "a dry run narrates" "said: ${out}" ;; esac
 
 echo
+echo "── hosting-pv-resize: capacity is a record property ──────────────"
+# The stub answers the command's reads from a per-scenario fixture and RECORDS the writes, so
+# the decisions — never shrink, never patch a class that cannot expand, patch once, read the
+# capacity back — are asserted without a cluster. Whether Azure Files actually grows is proven
+# by the first real run; that it grows ONLINE is the reason the fleet's class is azurefile.
+PV_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/pv-resize" && pwd)"
+PV_FIXTURES="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/pv-resize" && pwd)"
+pv_resize() {  # pv_resize <scenario> <size> [env…] — runs against a fresh state dir; sets $_pv_out $_pv_rc $_pv_log
+  local scenario="$1" size="$2"; shift 2
+  _pv_state="$(mktemp -d)"
+  _pv_out="$(env "$@" PATH="$PV_STUBS:$PATH" HOSTING_PV_FIXTURE="$PV_FIXTURES/$scenario" HOSTING_PV_STATE="$_pv_state" \
+    HOSTING_RESIZE_ATTEMPTS=2 HOSTING_RESIZE_INTERVAL=0 \
+    hosting-pv-resize --namespace memex --claim memex-data --size "$size" 2>&1)"; _pv_rc=$?
+  _pv_log="$(cat "$_pv_state/log" 2>/dev/null || true)"
+  rm -rf "$_pv_state"
+}
+
+pv_resize grows 128Gi
+[ "$_pv_rc" -eq 0 ] && ok "a smaller claim is grown to the record's size" \
+  || bad "a smaller claim is grown" "exited ${_pv_rc}: ${_pv_out}"
+case "$_pv_log" in *'patch pvc memex-data --type merge -p {"spec":{"resources":{"requests":{"storage":"128Gi"}}}}'*) ok "the patch carries exactly the requested storage" ;;
+  *) bad "the patch carries the requested storage" "kubectl saw: ${_pv_log}" ;; esac
+[ "$(printf '%s\n' "$_pv_log" | grep -c 'patch pvc')" = "1" ] && ok "…and is written ONCE" \
+  || bad "the patch is written once" "kubectl saw: ${_pv_log}"
+case "$_pv_out" in *"::hosting:: pv_capacity=128Gi"*) ok "the capacity reported is the one READ BACK from status, not the request" ;;
+  *) bad "the capacity is read back" "said: ${_pv_out}" ;; esac
+case "$_pv_out" in *"::hosting:: pv_resized=1"*) ok "…and the run says it resized" ;;
+  *) bad "the run says it resized" "said: ${_pv_out}" ;; esac
+
+pv_resize already 128Gi
+[ "$_pv_rc" -eq 0 ] && ok "a claim already at the record's size is a successful no-op (idempotent plan step)" \
+  || bad "already-at-size is a no-op" "exited ${_pv_rc}: ${_pv_out}"
+case "$_pv_log" in *"patch pvc"*) bad "a no-op writes nothing" "kubectl saw: ${_pv_log}" ;; *) ok "a no-op writes nothing" ;; esac
+case "$_pv_out" in *"::hosting:: pv_resized=0"*) ok "…and says so" ;; *) bad "the no-op says so" "said: ${_pv_out}" ;; esac
+
+# 🚨 The refusals, each BEFORE any write.
+pv_resize already 64Gi
+[ "$_pv_rc" -ne 0 ] && ok "a record SMALLER than the claim is refused — a volume cannot shrink" \
+  || bad "shrink is refused" "exited 0: ${_pv_out}"
+case "$_pv_out" in *"cannot shrink"*"Correct the record"*) ok "…naming the record as the thing to fix" ;;
+  *) bad "the shrink refusal names the fix" "said: ${_pv_out}" ;; esac
+case "$_pv_log" in *"patch pvc"*) bad "a refused shrink writes nothing" "kubectl saw: ${_pv_log}" ;; *) ok "a refused shrink writes nothing" ;; esac
+
+pv_resize no-expansion 128Gi
+[ "$_pv_rc" -ne 0 ] && ok "a class without allowVolumeExpansion is refused" \
+  || bad "non-expandable class is refused" "exited 0: ${_pv_out}"
+case "$_pv_out" in *"does not allow volume expansion"*) ok "…saying which class and why" ;;
+  *) bad "the class refusal says why" "said: ${_pv_out}" ;; esac
+case "$_pv_log" in *"patch pvc"*) bad "a refused class writes nothing" "kubectl saw: ${_pv_log}" ;; *) ok "a refused class writes nothing" ;; esac
+
+pv_resize absent 128Gi
+[ "$_pv_rc" -ne 0 ] && ok "an absent claim is refused — this command never creates one" \
+  || bad "absent claim is refused" "exited 0: ${_pv_out}"
+case "$_pv_out" in *"never creates one"*) ok "…and says creation is the chart's job" ;;
+  *) bad "the absent refusal points at the chart" "said: ${_pv_out}" ;; esac
+
+pv_resize pending 128Gi
+[ "$_pv_rc" -ne 0 ] && ok "an unbound claim is refused — nothing behind it to grow" \
+  || bad "unbound claim is refused" "exited 0: ${_pv_out}"
+
+# The two outcomes of waiting that are not "grown": a filesystem resize the next pod completes
+# (reported, exit 0), and a provisioner that never acted (stuck, exit non-zero — never a pass).
+pv_resize filesystem-pending 128Gi
+[ "$_pv_rc" -eq 0 ] && ok "a FileSystemResizePending claim is reported as pending, not as failed" \
+  || bad "filesystem-pending is reported" "exited ${_pv_rc}: ${_pv_out}"
+case "$_pv_out" in *"::hosting:: pv_resize=filesystem-pending"*) ok "…on its own ::hosting:: line" ;;
+  *) bad "filesystem-pending has a machine line" "said: ${_pv_out}" ;; esac
+
+pv_resize stuck 128Gi
+[ "$_pv_rc" -ne 0 ] && ok "a claim that never grows is a FAILED step, not a timed-out pass" \
+  || bad "a stuck resize fails" "exited 0: ${_pv_out}"
+case "$_pv_out" in *"still reports 16Gi after 2 attempt"*) ok "…naming what it last read and how long it waited" ;;
+  *) bad "the stuck failure names its reading" "said: ${_pv_out}" ;; esac
+
+# A dry run reads for real, narrates the patch and writes nothing.
+pv_resize grows 128Gi HOSTING_DRY_RUN=true
+[ "$_pv_rc" -eq 0 ] && ok "a dry run succeeds" || bad "a dry run succeeds" "exited ${_pv_rc}: ${_pv_out}"
+case "$_pv_log" in *"patch pvc"*) bad "a dry run writes nothing" "kubectl saw: ${_pv_log}" ;; *) ok "a dry run writes nothing" ;; esac
+case "$_pv_out" in *"DRY-RUN would run"*"patch pvc"*) ok "…and narrates the patch it would write" ;;
+  *) bad "a dry run narrates the patch" "said: ${_pv_out}" ;; esac
+
+echo
 echo "── hosting-audit: what lives only on the cluster ─────────────────"
 # The stubs are NOT mocks of helm/kubectl — they answer the audit's read-only calls from fixture
 # files so the DETECTION can be asserted without a cluster. What a fixture cannot prove (that a
@@ -352,7 +444,15 @@ else
   check_report "unmanaged secrets the pod reads"      '.unmanagedSecrets == ["memex-email-secret","memex-extra-secret"]'
   check_report "plain secret-shaped entries, all containers" '.plainSecretEntries | index("env:memex-portal:PluginCatalog__RegistryToken") and index("env:node-gate:GATE_API_KEY") and index("configmap:memex-portal-config/Hosting__ModuleReportSecret")'
   check_report "the audited revision is recorded"     '.helmRevision == 42 and .managedObjectCount == 6'
+  # The record's volumes reach helm as the release's persistence values; a claim below its declared
+  # size is a finding of its own. content matches (64Gi = 64Gi) and postgres names no claim, so
+  # exactly ONE entry — and it carries the two sizes, never a value of anything.
+  check_report "a claim below the record's size is a finding" \
+    '.volumeCapacityBelowRecord == [{"volume":"data","claimName":"memex-data","declared":"128Gi","live":"16Gi"}]'
+  check_report "…counted in the total"                 '.findingCount == (.envLiveOnly|length) + (.envManifestOnly|length) + (.envFromLiveOnly|length) + (.volumesLiveOnly|length) + (.mountsLiveOnly|length) + (.containersLiveOnly|length) + (.podAnnotationsLiveOnly|length) + (.podSpecDiffs|length) + ([.configMaps[] | (.liveOnlyKeys|length) + (.manifestOnlyKeys|length) + (.differingKeys|length) + (if .missingLive then 1 else 0 end)] | add) + ([.unmanagedObjects[].names | length] | add) + (.unmanagedSecrets|length) + (.plainSecretEntries|length) + (.volumeCapacityBelowRecord|length)'
 fi
+case "$out" in *"volume below record     data (memex-data): live=16Gi record=128Gi"*) ok "the human summary names the claim and both sizes" ;;
+  *) bad "the human summary names the claim" "said: ${out}" ;; esac
 # 🚨 The most important assertion of the section: names only. The fixture's secret VALUES must
 # never appear anywhere in the output — the report lands on a node a page renders.
 case "$out" in
@@ -374,6 +474,13 @@ if printf '%s' "$report" | jq -e '.skippedKinds == ["scaledobject"]' >/dev/null 
   ok "an unserved kind is recorded as skipped, not silently absent"
 else
   bad "an unserved kind is recorded as skipped" "report: $(printf '%s' "$report" | jq -c .skippedKinds 2>/dev/null)"
+fi
+# The clean fixture declares data at 16Gi and its chart-rendered claim holds 16Gi: at-size is not
+# a finding, and the category is PRESENT and empty — a reader must never mistake "absent" for "0".
+if printf '%s' "$report" | jq -e '.volumeCapacityBelowRecord == []' >/dev/null 2>&1; then
+  ok "a claim at its declared size is not a finding"
+else
+  bad "a claim at its declared size is not a finding" "report: $(printf '%s' "$report" | jq -c .volumeCapacityBelowRecord 2>/dev/null)"
 fi
 
 # Read-only: a dry run audits for real — same report, same verdict.

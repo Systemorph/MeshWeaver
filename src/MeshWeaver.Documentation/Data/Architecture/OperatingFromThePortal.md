@@ -81,7 +81,9 @@ and how to reconcile it in the same session. Do not re-derive that list here —
 1. **Is there an action kind for it?** `set image` + rollout → `Roll`; `rollout restart` →
    `Restart`; `scale --replicas=0` → `Suspend`; `helm upgrade` → `HelmRelease deploy` (today) /
    the record pin + `Roll`; "make the cluster match the record" → `Reconcile`; "what is drifting?"
-   → `Audit`. Use the action. The kubectl line is what the operator runs for you.
+   → `Audit`; `patch pvc … storage` → `volumes[].size` on the record + `Reconcile` (the operator's
+   `hosting-pv-resize`, which never shrinks and reads the capacity back). Use the action. The
+   kubectl line is what the operator runs for you.
 2. **Is it a read the API does not answer yet?** (the three above) Take it read-only, name it as
    break-glass in what you write down, and file the gap against the Hosting package rather than
    leaving the recipe as the procedure.
@@ -90,6 +92,12 @@ and how to reconcile it in the same session. Do not re-derive that list here —
 
 ## Related rules decided the same day
 
+- **Volume capacity is a record property:** `volumes[].size` on the Deployment record is what a
+  claim holds. `Provision` and `Reconcile` grow every declared claim to it through
+  `hosting-pv-resize` (grow-only, read back from the claim's status, refuses a class that cannot
+  expand); `Audit` reports a claim that has fallen below its record. The 16Gi `/data` share that
+  measured FULL on `memex.systemorph.com` at 13:51Z that day is the case —
+  [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Volume capacity is a record property".
 - **A platform roll must not need every satellite re-baked first:** `Modules:VersionStrictness`
   (`Exact` / `Family` / `Minimum`, dev = `Minimum`) and "a sealed publication syncs its own sources"
   — [ModuleVersioning](/Doc/Architecture/ModuleVersioning),

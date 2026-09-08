@@ -36,7 +36,13 @@
 #   * Secrets the live pod reads (envFrom, secretKeyRef, secret volumes) that are neither
 #     chart-managed nor CSI-synced;
 #   * entries whose NAME looks like a secret (token|secret|key|password) carried as a PLAIN value —
-#     inline env on the pod, or a key in a chart ConfigMap.
+#     inline env on the pod, or a key in a chart ConfigMap;
+#   * a PersistentVolumeClaim whose live capacity is BELOW the size the Deployment record declares
+#     for it (the record's volumes[] reach helm as the release's `persistence` values). The one
+#     record-vs-live comparison here, because the manifest cannot show it: the portal's claims on
+#     this fleet are not helm-managed, so a bigger `size` on the record changes nothing until
+#     hosting-pv-resize applies it — capacity is a record property, and this is what says when the
+#     cluster has not caught up (measured 2026-09-08: memex-data declared 16Gi, full at 3 MiB free).
 #
 # THE OUTPUT is the human summary plus the machine lines the mesh's Hosting plugin parses:
 #   ::hosting:: audit_verdict=clean|drift   ::hosting:: audit_findings=N   ::hosting:: audit=<base64 JSON>
@@ -89,6 +95,10 @@ status="$(hosting::read helm status "$release" -n "$namespace" -o json 2>"$work/
   || hosting::die "no helm release '${release}' in namespace '${namespace}' ($(tr -d '\n' < "$work/err")). An audit compares the cluster against a release's manifest; with no release there is nothing to compare against, and reporting the namespace as 'unmanaged' would be a confident wrong answer."
 revision="$(printf '%s' "$status" | jq -r '.version // empty')"
 chart="$(printf '%s' "$status" | jq -r '.chart.metadata.version // empty')"
+# The THIRD thing that leaves the release object, and the only part of `config` that does: the
+# record's volumes as HelmValues rendered them (claimName + size per volume — names and sizes, no
+# value of anything). It is what a claim's live capacity is measured against below.
+persistence="$(printf '%s' "$status" | jq -c '.config.persistence // {}')"
 [ -n "$revision" ] || hosting::die "helm status answered for '${release}' but named no revision — refusing to audit against a release the output cannot identify"
 hosting::log "release   ${release} in ${namespace} — revision ${revision}${chart:+, chart ${chart}}"
 
@@ -144,6 +154,7 @@ if ! jq -n \
       --argjson revision "$revision" --arg chart "$chart" \
       --arg auditedAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
       --arg skipped "$skipped" \
+      --argjson persistence "$persistence" \
       -f "$AUDIT_JQ" > "$work/report.json" 2>"$work/err"; then
   hosting::die "the audit could not be computed: $(sed -e 's/^jq: error (at <unknown>): //' "$work/err" | tr -d '\n')"
 fi
@@ -172,6 +183,7 @@ jq -r '.podSpecDiffs[] | "  pod spec differs        \(.field): live=\(.live) man
 jq -r '.configMaps[] | select(.missingLive or ((.liveOnlyKeys|length) + (.manifestOnlyKeys|length) + (.differingKeys|length)) > 0)
   | "  ConfigMap \(.name): " + (if .missingLive then "MISSING live" else "live-only keys [\(.liveOnlyKeys|join(" "))] manifest-only keys [\(.manifestOnlyKeys|join(" "))] value-differs [\(.differingKeys|join(" "))]" end)' "$work/report.json"
 jq -r '.unmanagedObjects[] | "  unmanaged \(.kind) (\(.names|length)): \(.names|join(" "))"' "$work/report.json"
+jq -r '.volumeCapacityBelowRecord[] | "  volume below record     \(.volume) (\(.claimName)): live=\(.live) record=\(.declared)"' "$work/report.json"
 say_list "🚨 unmanaged secrets the pod reads" '.unmanagedSecrets'
 say_list "🚨 secret-shaped entries carried as PLAIN values" '.plainSecretEntries'
 say_list "kinds skipped (not served)" '.skippedKinds'
