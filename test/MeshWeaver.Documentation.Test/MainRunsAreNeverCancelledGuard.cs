@@ -148,6 +148,130 @@ public class MainRunsAreNeverCancelledGuard
             + "group must depend on the ref only.");
     }
 
+    private const string DeliveryWorkflow = ".github/workflows/main-cd.yml";
+
+    /// <summary>
+    /// 🚚 <b>DELIVERY is the mirror image of Build and Test, on purpose</b> — and a "tidy-up" that
+    /// makes the two workflows agree breaks one of them.
+    ///
+    /// <para><c>main-cd.yml</c> keeps ONE concurrency group on the ref for its push lane, so GitHub
+    /// itself applies the supersede rule: the run in flight — past its gates by construction, mid
+    /// image push or mid seal — is never touched (<c>cancel-in-progress: false</c>), and a run that
+    /// is still WAITING is replaced by the next arrival, reporting <c>cancelled</c> with zero jobs.
+    /// Measured 2026-09-08 09:00–10:09Z: seven such evictions (3ee8dda6e ×3, 4e1a1b633 ×2,
+    /// 1c61ed3ae, 6b2fe2a10), each 1–2 s after the next arrival was created, while both in-flight
+    /// runs (765fb7f52, 60449106f) ran to their seal. Read as "CD keeps getting killed" it held a
+    /// roll for a morning; it is the designed shape, and this guard holds its three halves:</para>
+    /// <list type="number">
+    ///   <item><description><c>cancel-in-progress</c> is false for EVERY event that reaches this
+    ///   workflow — a killed in-flight run leaves a torn image set or an unsealed publication, the
+    ///   very state the reconciler exists to repair.</description></item>
+    ///   <item><description>The reconcile (<c>schedule</c>) has its OWN group — sharing the push
+    ///   lane's slot starved it (#2490: six no-op push runs held the slot and the cron never
+    ///   fired).</description></item>
+    ///   <item><description>Two push-lane deliveries share ONE group — a per-commit group (the
+    ///   Build and Test shape above) would let two CD runs publish the same framework identity
+    ///   concurrently, the overlap #3461 describes, on every merge burst.</description></item>
+    /// </list>
+    /// </summary>
+    [Fact]
+    public void Delivery_NeverKillsTheRunInFlight_AndKeepsTheReconcileInItsOwnLane()
+    {
+        var body = File.ReadAllText(Path.Combine(FindRepoRoot(), DeliveryWorkflow));
+
+        var problems = DeliveryConcurrencyProblems(
+            ExtractConcurrencyValue(body, "cancel-in-progress"),
+            ExtractConcurrencyValue(body, "group"));
+
+        Assert.True(problems.Count == 0, $"{DeliveryWorkflow}: {string.Join(" | ", problems)}");
+    }
+
+    /// <summary>
+    /// 🚨 The control arm for the delivery invariant: each half, mutated the way a rewrite would
+    /// plausibly mutate it, must FIRE — and the shipped pair must stay silent. Without these rows
+    /// the fact above could pass on a helper that finds no problem in anything.
+    /// </summary>
+    [Theory]
+    // The shipped pair: silent.
+    [InlineData("false", "main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}", "")]
+    // The flag flipped, as a literal and as an expression that spares only the reconcile.
+    [InlineData("true", "main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}", "run in flight")]
+    [InlineData("${{ github.event_name != 'schedule' }}", "main-cd-${{ github.event_name == 'schedule' && 'reconcile' || github.ref }}", "run in flight")]
+    // The reconcile folded back into the push lane's group (#2490's shape).
+    [InlineData("false", "main-cd-${{ github.ref }}", "reconcile")]
+    // A per-run or per-commit group: serializes nothing, every delivery publishes concurrently.
+    [InlineData("false", "main-cd-${{ github.run_id }}", "its own group")]
+    [InlineData("false", "main-cd-${{ github.sha }}", "its own group")]
+    public void DeliveryGuard_FiresOnEachMutation_AndStaysSilentOnTheShippedShape(string cancel, string group, string expectedProblem)
+    {
+        var problems = DeliveryConcurrencyProblems(cancel, group);
+
+        if (expectedProblem.Length == 0)
+            Assert.Empty(problems);
+        else
+            Assert.Contains(problems, p => p.Contains(expectedProblem, StringComparison.Ordinal));
+    }
+
+    private static string ExtractConcurrencyValue(string body, string key)
+    {
+        var match = Regex.Match(body, @"^\s*" + Regex.Escape(key) + @":\s*(?<value>.+?)\s*$", RegexOptions.Multiline);
+
+        Assert.True(match.Success,
+            $"{DeliveryWorkflow} no longer declares concurrency.{key} — this guard can no longer see "
+            + "it; re-point or delete it deliberately rather than letting it rot.");
+
+        return match.Groups["value"].Value;
+    }
+
+    /// <summary>
+    /// The delivery invariant as a pure function of the two expressions, so the fact reads the
+    /// real file and the theory feeds it mutations — one judge, two arms.
+    /// </summary>
+    private static List<string> DeliveryConcurrencyProblems(string cancelExpression, string groupExpression)
+    {
+        var problems = new List<string>();
+
+        foreach (var eventName in new[] { "workflow_run", "schedule", "workflow_dispatch" })
+        {
+            var cancels = Evaluate(cancelExpression, new Dictionary<string, string>
+            {
+                ["github.event_name"] = eventName,
+                ["github.ref"] = "refs/heads/main",
+            });
+
+            if (cancels)
+                problems.Add(
+                    $"cancel-in-progress '{cancelExpression}' evaluates TRUE for a {eventName} run — the "
+                    + "run in flight (mid image push or mid seal) would be killed, leaving a torn set");
+        }
+
+        string GroupFor(string eventName, string sha, string runId) => EvaluateValue(groupExpression,
+            new Dictionary<string, string>
+            {
+                ["github.event_name"] = eventName,
+                ["github.ref"] = "refs/heads/main",
+                ["github.sha"] = sha,
+                ["github.run_id"] = runId,
+            });
+
+        var firstDelivery = GroupFor("workflow_run", "aaaaaaaaaaaa", "1001");
+        var secondDelivery = GroupFor("workflow_run", "bbbbbbbbbbbb", "1002");
+        var reconcile = GroupFor("schedule", "aaaaaaaaaaaa", "1003");
+
+        if (reconcile == firstDelivery)
+            problems.Add(
+                $"group '{groupExpression}' puts the reconcile in the push lane's group ('{reconcile}') — "
+                + "six no-op push runs held that slot on 2026-08-27 and the cron never fired (#2490)");
+
+        if (firstDelivery != secondDelivery)
+            problems.Add(
+                $"group '{groupExpression}' gives every delivery its own group ('{firstDelivery}' vs "
+                + $"'{secondDelivery}') — two CD runs would publish one framework identity concurrently "
+                + "on every merge burst (#3461)");
+
+        return problems;
+    }
+
     /// <summary>
     /// 🚨 The evaluator is code, so it gets the same treatment every gate here does: rows that
     /// prove it can return BOTH answers, including the inverted expression that defeated the
