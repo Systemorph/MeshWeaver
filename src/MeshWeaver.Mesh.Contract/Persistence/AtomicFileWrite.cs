@@ -91,7 +91,27 @@ public static class AtomicFileWrite
     /// replace-on-rename is not something the AKS assembly-cache share guarantees.
     /// </remarks>
     public static bool PublishBytes(string filePath, byte[] bytes)
+        => PublishBytesWith(filePath, bytes, OpenTempForWrite);
+
+    /// <summary>
+    /// <see cref="PublishBytes(string, byte[])"/> with the staging file's writer injected — the
+    /// seam a test uses to stand in for a volume that accepts a write and then does not keep it.
+    /// A distinct NAME rather than an overload: an added overload turns every dependent's
+    /// <c>&lt;see cref="PublishBytes"/&gt;</c> into CS0419 under <c>-warnaserror</c>, in this repo
+    /// and in every satellite the next pin move reaches.
+    /// </summary>
+    /// <param name="filePath">Final path the bytes are published under.</param>
+    /// <param name="bytes">Bytes to write.</param>
+    /// <param name="openTemp">Opens the staging path for writing. Production passes a plain
+    /// <see cref="FileStream"/> (see <see cref="OpenTempForWrite"/>); a test passes a stream that
+    /// drops bytes past a cap, or whose flush faults, to reproduce a full share.</param>
+    /// <returns>See <see cref="PublishBytes(string, byte[])"/>.</returns>
+    /// <exception cref="ShortWriteException">The volume kept fewer bytes than were written — the
+    /// publication is REFUSED, the staging file removed, and the target never appears.</exception>
+    public static bool PublishBytesWith(string filePath, byte[] bytes, Func<string, Stream> openTemp)
     {
+        ArgumentNullException.ThrowIfNull(openTemp);
+
         // Checked BEFORE any IO, which is what makes the catch filter below precise rather than a
         // blanket "an IOException with the target present must have been the race". Having
         // established here that the target did NOT exist, the only way it can exist by the time
@@ -103,13 +123,16 @@ public static class AtomicFileWrite
         var tempPath = TempPathFor(filePath);
         try
         {
-            File.WriteAllBytes(tempPath, bytes);
+            WriteDurably(tempPath, bytes, openTemp);
             // overwrite:false → File.Move throws IOException when the target already exists.
             // That is the race being handled, not an error: the winner's bytes stay published.
             File.Move(tempPath, filePath, overwrite: false);
             return true;
         }
-        catch (IOException) when (File.Exists(filePath))
+        // 🚨 A short write is never "the other writer won": on a full volume the other writer's
+        // file is short too, and returning false would hand the caller a name whose bytes are
+        // not there. The filter keeps the race branch for the RENAME alone.
+        catch (IOException ex) when (ex is not ShortWriteException && File.Exists(filePath))
         {
             TryDelete(tempPath);
             return false;
@@ -119,6 +142,57 @@ public static class AtomicFileWrite
             TryDelete(tempPath);
             throw;
         }
+    }
+
+    /// <summary>
+    /// The production writer for the staging file: a plain <see cref="FileStream"/> that creates
+    /// the (unique, never pre-existing) temp name. Public so a caller that injects its own writer
+    /// in one arm of an experiment can name the real one in the other.
+    /// </summary>
+    /// <param name="tempPath">The staging path <see cref="TempPathFor"/> minted.</param>
+    /// <returns>A writable stream over the staging file.</returns>
+    public static Stream OpenTempForWrite(string tempPath)
+        => new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+            bufferSize: 64 * 1024);
+
+    /// <summary>
+    /// 🚨 <b>Write, flush TO DISK, close, then prove the volume kept every byte — a write that
+    /// "succeeds" is not a publication until the bytes are known to be there.</b>
+    ///
+    /// <para>Measured on <c>memex.systemorph.com</c>, 2026-09-08, with <c>/data</c> — the
+    /// ReadWriteMany Azure Files share holding the assembly cache — at <b>3 MiB free of 16 GiB</b>:
+    /// every recompile of <c>Hosting/InstanceAction</c> wrote its DLL "successfully", renamed it
+    /// into the discovery namespace, minted a Release node naming it, and then the SAME pod
+    /// failed to load it with <c>BadImageFormatException: Bad IL format</c>. Nothing in the
+    /// pipeline had lied: the previous implementation was <c>File.WriteAllBytes</c> + rename, and
+    /// on a Linux CIFS mount <c>write(2)</c> lands in the page cache and returns success — the
+    /// <c>ENOSPC</c> from the server only surfaces on writeback, i.e. at <c>fsync</c> or
+    /// <c>close</c>. .NET's <c>SafeFileHandle</c> discards <c>close(2)</c>'s return value, so a
+    /// full share published a truncated PE image under a complete-looking name, three times in
+    /// two minutes, and each load-and-delete cycle triggered the next compile.</para>
+    ///
+    /// <para>Two independent witnesses, because filesystems differ in which one they honour:
+    /// <see cref="FileStream.Flush(bool)"/> with <c>flushToDisk</c> is the <c>fsync</c> that
+    /// surfaces a writeback error as an <see cref="IOException"/> where the kernel reports one;
+    /// and the length on disk after close is compared with the bytes handed in, which catches a
+    /// volume that dropped bytes without reporting it at all. Either mismatch refuses the
+    /// publication — the staging file is removed by the caller and the target never appears.</para>
+    /// </summary>
+    private static void WriteDurably(string tempPath, byte[] bytes, Func<string, Stream> openTemp)
+    {
+        using (var stream = openTemp(tempPath))
+        {
+            stream.Write(bytes, 0, bytes.Length);
+            if (stream is FileStream file)
+                file.Flush(flushToDisk: true);
+            else
+                stream.Flush();
+        }
+
+        var landed = new FileInfo(tempPath);
+        var landedBytes = landed.Exists ? landed.Length : -1;
+        if (landedBytes != bytes.Length)
+            throw new ShortWriteException(tempPath, bytes.Length, landedBytes, VolumeCapacity.Of(tempPath));
     }
 
     /// <summary>

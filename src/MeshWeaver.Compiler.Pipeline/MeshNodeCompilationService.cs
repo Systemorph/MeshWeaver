@@ -1305,6 +1305,29 @@ internal class MeshNodeCompilationService(
             .Timeout(uploadBound)
             .Catch<NodeCompilationResult?, Exception>(ex =>
             {
+                // 🚨 THE BYTES DID NOT LAND ⇒ THE COMPILE FAILED (memex, 2026-09-08). An IOException
+                // out of the store — and ShortWriteException in particular — says the file the
+                // record would name is not there, or not whole. The "settles Ok with a warning"
+                // contract below was written for a blob endpoint that was UNREACHABLE while the
+                // local emit still served this silo; it is the wrong answer for a store that
+                // ACCEPTED the write and kept 3 MiB of it. With /data full, that contract minted
+                // three Release nodes in two minutes for three DLLs the same pod could not load,
+                // and each corrupt-delete cycle triggered the next compile. So this class of
+                // fault is TERMINAL: it propagates as the compile's error, ApplyCompileFailure
+                // writes Error with the disk numbers, TryCreateReleaseNode is skipped, and the
+                // previous build's coordinates stay in place. The park registry then bounds the
+                // retries (it is a non-deterministic infra fault), so a volume freed within the
+                // bound self-heals and one that is not parks the type with the reason on it.
+                if (ex is IOException storeFault)
+                {
+                    logger.LogError(storeFault,
+                        "AssemblyStore REFUSED the publication for {NodePath}@v{Version}: the compiled "
+                        + "bytes did not land, so the compile is FAILED and no Release is minted",
+                        node.Path, version);
+                    return Observable.Throw<NodeCompilationResult?>(
+                        new AssemblyPublicationException(node.Path, version, storeFault, result.Log));
+                }
+
                 logger.LogWarning(ex,
                     "AssemblyStore upload failed for {NodePath}@v{Version}; compile still succeeded locally",
                     node.Path, version);
@@ -1580,11 +1603,16 @@ internal class MeshNodeCompilationService(
                     // first-build kickoff (gated on Status==null) does NOT retry. Recording the
                     // assemblyLocation here was the wedge: it read as success (Status=Ok) while the
                     // per-node hub could not actually activate against it → Subscribe parked.
+                    // The WHY rides with the verdict: a 4 KiB file on a share with 3 MiB free is a
+                    // full volume, not "a missing dependency", and the record is where the
+                    // operator reads it (memex, 2026-09-08).
+                    var detail = context.LastLoadFailure
+                        ?? "the build is not usable (corrupt cached .dll or a missing dependency)";
                     return new NodeCompilationResult(null, [],
                         AppendError(log,
-                            $"Failed to load assembly at {assemblyLocation} — the build is not usable " +
-                            "(corrupt cached .dll or a missing dependency).",
-                            "activity.compile.assemblyUnloadable", ("path", assemblyLocation)),
+                            $"Failed to load assembly at {assemblyLocation} — {detail}",
+                            "activity.compile.assemblyUnloadable",
+                            ("path", assemblyLocation), ("detail", detail)),
                         compiledSources);
                 }
 

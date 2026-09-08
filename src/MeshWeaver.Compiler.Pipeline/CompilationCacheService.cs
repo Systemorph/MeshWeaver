@@ -7,6 +7,7 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.Compiler;
+using MeshWeaver.Mesh.Persistence;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -536,6 +537,16 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         => _disposed || (_unloading && Volatile.Read(ref _pins) == 0);
 
     /// <summary>
+    /// Why the most recent <see cref="LoadNodeAssembly"/> answered <c>null</c> — the file was
+    /// absent, older than the framework, or a <see cref="BadImageFormatException"/> with the file's
+    /// length and the volume's capacity — so the compile verdict the record carries names the
+    /// cause instead of a generic "corrupt cached .dll or a missing dependency". <c>null</c> until a
+    /// load has failed; a later successful load does not clear it (the loaded assembly is the
+    /// answer then, and this is never consulted).
+    /// </summary>
+    public string? LastLoadFailure { get; private set; }
+
+    /// <summary>
     /// Loads the node's assembly from disk.
     /// </summary>
     public Assembly? LoadNodeAssembly()
@@ -558,6 +569,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
             if (string.IsNullOrEmpty(_dllPath) || !File.Exists(_dllPath))
             {
+                LastLoadFailure = $"No file at '{_dllPath}'.";
                 _logger?.LogDebug("DLL not found at {DllPath}", _dllPath);
                 return null;
             }
@@ -570,6 +582,9 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
                 var frameworkLastWrite = File.GetLastWriteTimeUtc(frameworkLocation);
                 if (dllLastWrite < frameworkLastWrite)
                 {
+                    LastLoadFailure =
+                        $"The file at '{_dllPath}' ({dllLastWrite:O}) predates the framework "
+                        + $"({frameworkLastWrite:O}) and was deleted for regeneration.";
                     _logger?.LogInformation("Cached assembly at {DllPath} is older than framework, deleting for regeneration", _dllPath);
                     try
                     {
@@ -598,6 +613,21 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             }
             catch (BadImageFormatException ex)
             {
+                // 🚨 Record WHY, with the numbers, before the file is gone: the caller turns a null
+                // here into the compile verdict the NodeType record carries, and "corrupt cached
+                // .dll or a missing dependency" told nobody that the file was 4 KiB on a share
+                // with 3 MiB free (memex, 2026-09-08). The length and the volume's capacity are
+                // exactly what distinguish a full volume from a genuinely bad image.
+                var info = new FileInfo(_dllPath);
+                long? length = info.Exists ? info.Length : null;
+                var capacity = VolumeCapacity.Of(_dllPath);
+                LastLoadFailure =
+                    $"{ex.GetType().Name}: {ex.Message} The file was "
+                    + (length is { } l ? $"{l:N0} byte(s)" : "unreadable")
+                    + (capacity is { } c
+                        ? $"; the volume holding it has {c.FreeMiB:N0} MiB free of {c.TotalMiB:N0} MiB."
+                        : ".")
+                    + " It was deleted so the next compile can publish a whole one.";
                 _logger?.LogWarning(ex, "Corrupted assembly at {DllPath}, deleting for regeneration", _dllPath);
                 try
                 {

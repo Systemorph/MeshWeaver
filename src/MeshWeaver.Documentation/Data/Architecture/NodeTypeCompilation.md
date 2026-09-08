@@ -524,6 +524,77 @@ Releases are MeshNodes at `{nodeTypePath}/Release/{version}`, with content type
 `NodeTypeDefinition.LatestReleasePath` always points at the most recent release;
 the full release history is the set of `Release/*` children.
 
+### 🚨 A publication is durable and verified, or it is REFUSED — a full volume publishes nothing
+
+**Measured on `memex.systemorph.com`, 2026-09-08.** `/data` — the ReadWriteMany Azure Files share
+holding `/data/assembly-cache`, the module generations and the prebuilt bundles — sat at **3 MiB
+free of 16 GiB**. Every recompile of `Hosting/InstanceAction` then went through *unchanged*: Roslyn
+emitted into the pod-local `.mesh-cache`, the emit was digest-verified there, the bytes were copied
+into the store, the terminal write minted `Release/20260908133359-…` naming the copy, and the same
+pod's first load of that copy failed with `BadImageFormatException: Bad IL format`. The reader
+deleted the fragment "for regeneration", the next activation's store miss compiled again, and the
+cycle produced three Releases (v851, v855, v859) in two minutes for bytes that were never there —
+while the `InstanceAction` node behind a live deployment restart stayed an untyped `JsonElement` on
+both replicas.
+
+Nothing in the pipeline had lied; it had simply never asked. The store copy was
+`File.WriteAllBytes` + rename. On a Linux CIFS mount `write(2)` lands in the page cache and returns
+success; the server's `ENOSPC` surfaces only on **writeback** — at `fsync` or `close` — and .NET's
+`SafeFileHandle` discards `close(2)`'s return value. So the rename published a short file under a
+complete-looking, content-hashed name, and `PublishBytes`'s first-publish-wins rule then guaranteed
+nobody could ever replace it: an existing name is "identical bytes by construction".
+
+**The rule now.** A store publication (`AtomicFileWrite.PublishBytes`, which
+`FileSystemAssemblyStore.PutWithLocation` writes through) is:
+
+1. written to the staging name, **flushed to disk** (`FileStream.Flush(flushToDisk: true)` — the
+   `fsync` that surfaces a writeback error where the kernel reports one), closed;
+2. **read back by length** and compared with the bytes handed in — which catches a volume that
+   dropped bytes without reporting anything at all;
+3. renamed into the discovery namespace **only when both agree**. Otherwise the staging file is
+   removed, the target never appears, and a `ShortWriteException` carries the path, the bytes
+   written, the bytes the volume kept, and the volume's free/total space.
+
+A short write is deliberately **not** read as "the concurrent writer won": on a full volume the
+other replica's file is short too, so `PublishBytes` throws rather than answering `false` there.
+
+**The refusal is the compile's verdict.** `UploadToStoreIfNeeded` treats an `IOException` out of the
+store as TERMINAL (`AssemblyPublicationException`, carrying the compile's transcript): the terminal
+handler writes `CompilationStatus.Error` with the refusal and the disk numbers as
+`CompilationError`, skips `TryCreateReleaseNode`, stamps no `LastCompiledVersion` and no assembly
+coordinates, and leaves the previous build's coordinates in place. The activity reads **"Assembly
+NOT PUBLISHED — Roslyn produced it, but the assembly store did not keep the bytes"**, never "Roslyn
+failed" — the reader must be sent to the disk, not to the source. Because it is an infra fault, the
+park registry classifies it as non-deterministic: retried within its bound (a volume freed in time
+self-heals), then parked with the reason on the record. The "settles Ok with a warning" contract
+stays for what it was written for — a blob endpoint that TIMED OUT while the local emit still served
+this silo — and for nothing that reports "accepted" over bytes that are not there.
+
+**The reader names what it found.** `NodeAssemblyLoadContext.LoadNodeAssembly` still deletes a file
+that fails to load (a fragment under a content-hashed name blocks every republication of those
+bytes), but records **why** on `LastLoadFailure` — the exception, the file's length, the volume's
+capacity — and `CompileResultFromAssembly` puts that on the verdict instead of "corrupt cached .dll
+or a missing dependency". A 4 KiB file on a share with 3 MiB free is a full volume; the record now
+says so.
+
+**And `/health` says it first.** `storage_capacity` (Memex.Portal.ServiceDefaults, over the pure
+`StorageCapacityHealth.Evaluate`) reports the volume behind the `FileSystemAssemblyStore` root as
+**Degraded** — never Unhealthy: a replica on a full share still serves every page whose bytes are
+loaded, and pulling it would turn "cannot compile" into "cannot serve" — when free space is below
+`AssemblyCache:MinimumFreeMiB` (default 256 MiB), naming the path and the numbers.
+
+**Recovery is operational, not a redeploy:** free space on the volume (the prebuilt-bundle
+identity directories are the usual growth; see the retention work tracked separately), then press
+Compile on the parked type — or wait for the park registry's bounded re-drive if the space came
+back within it. What this change does NOT do: it does not verify an *existing* content-hashed file
+at put time (a fragment from before this change is caught at load, above), and it does not reach
+`AtomicFileWrite.PublishAsync`, the stream-to-path download path, which has no expected length to
+compare against.
+
+Pinned by `ShortWriteIsNotAPublicationTest` (the writer, the store, the reader, the health verdict —
+each arm with a production-writer control) and `FullShareRefusesTheCompileTest` (the record a real
+mesh writes: `Error` with the numbers, no Release, no pointer, "NOT PUBLISHED" on the activity).
+
 ---
 
 ## Pinning an instance to a fixed release
