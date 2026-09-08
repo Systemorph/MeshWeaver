@@ -390,9 +390,12 @@ run publishing between a newer run's `select` and its hand-over.
 
 ### The two guards, and the two failures they come from
 
-1. **A run past its gates is never cancelled.** Once a superseded run has cleared the gate suite and
-   entered bundling / `publish-bake`, it finishes and publishes; the newer run publishes after it,
-   newest identity last. Two reasons, both measured:
+1. **A run that has begun publishing is never cancelled.** Once a superseded run has entered
+   `publish-bake`, it finishes and seals; the newer run seals after it, newest identity last. Only
+   the hand-over is protected — not select, build or pack: their outputs are content-addressed, so
+   the next run reuses identical builds from the ledger and cancelling there loses nothing (a
+   guard that also matched the bundle stages would protect every run from its first minute and
+   cancel none — measured on the live queue while this was written). Two reasons, both measured:
    * **Torn seals (Plugins#826).** A scheduled poll cancelled a framework-released dispatch *"with
      all 29 bundle jobs running — one of them MID publish-bake, leaving a torn, unsealed
      publication."*
