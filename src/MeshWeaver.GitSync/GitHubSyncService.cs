@@ -474,7 +474,12 @@ public sealed class GitHubSyncService
                                 // a fingerprint-matched no-op (#677), never on one that preserved
                                 // server-newer nodes (#675).
                                 advanceHorizon: mayAdvance && !skipped,
-                                sourceId)
+                                sourceId,
+                                // A retirement the import HELD (a NodeType the repository dropped
+                                // while the mesh still has instances) is drift the sync cannot close
+                                // by itself — it is stated on the config, where the settings tab and
+                                // the status surface read it, not only in the activity log.
+                                note: HeldNote(x.Result))
                             .Select(_ => x.Result);
                     });
             });
@@ -514,6 +519,24 @@ public sealed class GitHubSyncService
         => result.Preserved == 0
            && result.Failed == 0
            && !string.Equals(result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The <see cref="GitHubSyncConfig.LastSyncNote"/> an import earns when it HELD a NodeType the
+    /// repository retired while the mesh still holds instances of it
+    /// (<see cref="StaticRepoImportResult.HeldNodeTypePaths"/>) — the in-mesh content the
+    /// repository does not hold, named where an operator looks for the source's state. <c>null</c>
+    /// when nothing was held, which also clears an older note (a note describes the LAST attempt
+    /// only). Pure.
+    /// </summary>
+    /// <param name="result">The import's outcome.</param>
+    internal static string? HeldNote(StaticRepoImportResult result)
+        => result.HeldNodeTypePaths.Count == 0
+            ? null
+            : $"{result.HeldNodeTypePaths.Count} NodeType(s) the repository no longer carries are held "
+              + "for their remaining instances (pending retirement — not pruned): "
+              + string.Join(", ", result.HeldNodeTypePaths)
+              + ". Retype or delete the instances in the mesh, or restore the type in the repository; "
+              + "the next sync completes whichever you chose.";
 
     /// <summary>
     /// Asks GitHub — LIVE, nothing stored — for the configured branch's current HEAD commit,

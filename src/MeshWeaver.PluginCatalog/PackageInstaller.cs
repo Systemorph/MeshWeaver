@@ -3145,7 +3145,7 @@ public static class PackageInstaller
                     .Select(p => p!)
                     .ToImmutableHashSet(StringComparer.Ordinal);
 
-                return PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, options, logger)
+                return PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, manifest.Id, options, logger)
                     .Do(pruned =>
                     {
                         if (pruned.Count > 0)
@@ -3176,54 +3176,77 @@ public static class PackageInstaller
     /// </summary>
     private static IObservable<ImmutableList<string>> PruneRemovedNodes(
         IMessageHub hub, IMeshService? meshService, IStorageAdapter? persistence,
-        IReadOnlyCollection<string> removedNodePaths, JsonSerializerOptions options, ILogger? logger)
+        IReadOnlyCollection<string> removedNodePaths, string retiredBy,
+        JsonSerializerOptions options, ILogger? logger)
     {
         if (meshService is null || removedNodePaths.Count == 0)
             return Observable.Return(ImmutableList<string>.Empty);
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // READ EVERYTHING FIRST, then decide, then delete. The instance probe below has to run over
+        // the candidates BEFORE any of them is deleted — its answer decides which of them may be.
         return removedNodePaths
             .Select(path => (persistence is not null
                     ? persistence.Read(path, options).Take(1)
                     : Observable.Return<MeshNode?>(null))
-                .SelectMany(current =>
-                    current is not null && current.SyncBehavior != SyncBehavior.Include
-                        ? Observable.Return<(string? Deleted, MeshNode? Node)>((null, current))
-                        // Sealed at Subscribe (RunAsSystem), never Observable.Using(ImpersonateAsSystem):
-                        // impersonation is an AsyncLocal store/restore pair, and Using disposes on the
-                        // TERMINATING thread — for a cross-hub delete, the owning hub's response thread,
-                        // not the one that opened the scope — which latches system-security onto whatever
-                        // runs next on the subscribing thread (#1790).
-                        : accessService.RunAsSystem(() => meshService.DeleteNode(path))
-                            .Take(1)
-                            .Select(deleted => (Deleted: deleted ? path : null, Node: current)))
-                .Catch<(string? Deleted, MeshNode? Node), Exception>(ex =>
+                .Select(current => (Path: path, Node: current))
+                .Catch<(string Path, MeshNode? Node), Exception>(ex =>
                 {
-                    logger?.LogWarning(ex, "Pruning removed node {Path} failed.", path);
-                    return Observable.Return<(string? Deleted, MeshNode? Node)>((null, null));
+                    logger?.LogWarning(ex, "Reading removed node {Path} before pruning it failed.", path);
+                    return Observable.Return<(string Path, MeshNode? Node)>((path, null));
                 }))
             .ToObservable().Concat().ToList()
-            .SelectMany(outcomes =>
+            .SelectMany(candidates =>
             {
-                var deleted = outcomes
-                    .Where(o => o.Deleted is not null)
-                    .Select(o => o.Deleted!)
-                    .ToImmutableList();
-                // 🚨 A PRUNED NODETYPE TAKES ITS INSTANCES' RENDERER WITH IT (#2993, hole B). The
-                // prune is intended — "whatever the repo no longer ships is removed from the
-                // installed partition" is this method's whole contract, and the
-                // 2026-08-28 What's New entry says so — but an instance whose type resolves to
-                // nothing has no per-node hub: it reads as Unavailable on a timeout, renders empty,
-                // and never reaches a verdict, with nothing naming the type that went away. So the
-                // deletion is REPORTED rather than blocked. Probed off the nodes this pass actually
-                // read and actually deleted (instances are unaffected by the deletion, so probing
-                // after it is as accurate as probing before), and only for the NodeType definitions
-                // among them — zero queries for the overwhelming majority of installs.
-                var prunedNodes = outcomes
-                    .Where(o => o.Deleted is not null && o.Node is not null)
-                    .Select(o => o.Node!)
+                var readNodes = candidates
+                    .Where(c => c.Node is not null)
+                    .Select(c => c.Node!)
                     .ToArray();
-                return NodeTypeInstanceProbe.ProbeAndReport(hub, prunedNodes, logger)
-                    .Select(_ => deleted);
+                // 🚨 A PRUNED NODETYPE TAKES ITS INSTANCES' RENDERER WITH IT — SO IT IS NOT PRUNED
+                // (#2993 hole B; refused since 2026-09-08, the same rule as the static importer's
+                // prune). "Whatever the repo no longer ships is removed from the installed
+                // partition" stays this method's contract for everything EXCEPT a NodeType that
+                // still has instances: deleting that leaves the instances with no per-node hub —
+                // they read as Unavailable and render empty — and a package update that lands
+                // before the instances were retyped is exactly the stale-delivery shape that took
+                // a client's record dark on memex.systemorph.com. The type is held (stamped
+                // PendingRetirement, named at Warning) and the next update completes the
+                // retirement once the instances are gone. Zero queries for the overwhelming
+                // majority of updates, which remove no NodeType at all.
+                return NodeTypeInstanceProbe.Probe(hub, readNodes, logger).SelectMany(held =>
+                {
+                    var heldPaths = held.Select(h => h.NodeTypePath).ToImmutableList();
+                    NodeTypeInstanceProbe.Report(held, logger);
+                    var keep = NodeTypeInstanceProbe.WithoutHeld(readNodes, heldPaths)
+                        .Select(n => n.Path)
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                    var deletions = candidates
+                        // A node this pass could not read is still deleted by path (the prior
+                        // behaviour): a read failure is not evidence the node is a type.
+                        .Where(c => c.Node is null || keep.Contains(c.Path))
+                        .Select(c => c.Node is { } current && current.SyncBehavior != SyncBehavior.Include
+                            // Read-before-delete: a CLAIMED node is the user's, not the repo's.
+                            ? Observable.Return<string?>(null)
+                            // Sealed at Subscribe (RunAsSystem), never Observable.Using(ImpersonateAsSystem):
+                            // impersonation is an AsyncLocal store/restore pair, and Using disposes on the
+                            // TERMINATING thread — for a cross-hub delete, the owning hub's response thread,
+                            // not the one that opened the scope — which latches system-security onto whatever
+                            // runs next on the subscribing thread (#1790).
+                            : accessService.RunAsSystem(() => meshService.DeleteNode(c.Path))
+                                .Take(1)
+                                .Select(deleted => deleted ? c.Path : null)
+                                .Catch<string?, Exception>(ex =>
+                                {
+                                    logger?.LogWarning(ex, "Pruning removed node {Path} failed.", c.Path);
+                                    return Observable.Return<string?>(null);
+                                }))
+                        .ToObservable().Concat().ToList()
+                        .Select(deleted => deleted
+                            .Where(d => d is not null)
+                            .Select(d => d!)
+                            .ToImmutableList());
+                    return NodeTypeInstanceProbe.Hold(hub, held, retiredBy, logger)
+                        .SelectMany(_ => deletions);
+                });
             });
     }
 
@@ -3339,7 +3362,7 @@ public static class PackageInstaller
         // removedNodePaths is already restricted to previously-installed paths, so a user-ADDED
         // node was never a prune candidate to begin with.
         IObservable<ImmutableList<string>> Prune() =>
-            PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, options, logger);
+            PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, manifest.Id, options, logger);
 
         // 🚨 The declared access is re-asserted BEFORE the delta's writes, not after them (#1758).
         // An UPDATE re-asserts it at all so a package that only just flipped its declaration (or
