@@ -219,19 +219,16 @@ public static class VersionSelect
         return
         [
             .. parsed
-                // 🚨 THE ORDER, and the whole of #3542. Lineage first: a continuous build is ranked by
-                // the run number that published it, so a mislabelled line can never outrank a later
-                // sealed set. Promotion tags (a clean release, which has no run number of its own)
-                // follow, ordered among themselves by SemVer — which is the only key they share, and
-                // the correct one for a deliberate human act. Keeping them in a separate band is what
-                // makes this a TOTAL order: mixing the two keys pairwise is not transitive (a slip tag
-                // A beats a release C beats a sealed tag B beats A), and an intransitive comparer hands
-                // a sort an arbitrary answer.
-                .OrderByDescending(x => x.ordinal.HasValue)
-                .ThenByDescending(x => x.ordinal ?? 0L)
-                // The SAME SemVer implementation the shared comparison uses, so the band ordering and
-                // PlatformReleaseOrder.Compare can never disagree about two promotion tags.
-                .ThenByDescending(x => x.tag, NuGetVersionComparer.Instance)
+                // 🚨 THE ORDER, and the whole of #3542 — and it is NOT defined here. Lineage first:
+                // a continuous build is ranked by the run number that published it, so a mislabelled
+                // line can never outrank a later sealed set; promotion tags (a clean release, which
+                // has no run number of its own) follow, ordered among themselves by SemVer. That
+                // banding is what makes it a TOTAL order, and it is shared with every other caller
+                // that ranks platform builds — the release-marker index, the bundle sweep and the
+                // retention plan all read the same `_releases/<version>` names this reads tags. A
+                // second private copy of "which build is newest" is how #3542 came back at another
+                // call site while this one was already fixed.
+                .OrderByDescending(x => x.tag, PlatformReleaseOrder.Newest)
                 .Select(x => x.tag),
         ];
     }
@@ -239,7 +236,7 @@ public static class VersionSelect
     /// <summary>The structural filter every reader of a tag listing applies: drop the per-RID images,
     /// the git-sha / <c>main</c> pointers and the moving <c>-latest</c> pointers, keep what parses
     /// as a platform version.</summary>
-    private static IEnumerable<(string tag, NuGetVersion ver, long? ordinal)> Parse(
+    private static IEnumerable<(string tag, NuGetVersion ver)> Parse(
         IEnumerable<string> tags) =>
         tags
             .Where(t => !RuntimeIdentifierSuffix.IsMatch(t))   // exclude per-RID image tags; keep the manifest list
@@ -247,7 +244,7 @@ public static class VersionSelect
             .Where(t => PlatformVersionTag.IsMatch(t))         // exclude bare git-sha / `main` tags (see PlatformVersionTag)
             .Select(t => (tag: t, ver: NuGetVersion.TryParse(t, out var v) ? v : null))
             .Where(x => x.ver is not null)
-            .Select(x => (x.tag, ver: x.ver!, ordinal: PlatformReleaseOrder.BuildOrdinal(x.tag)));
+            .Select(x => (x.tag, ver: x.ver!));
 
     /// <summary>An UNVERIFIED edge/pre-merge build — identified by an <c>edge</c> SemVer pre-release
     /// label (e.g. <c>3.0.0-edge.51</c>). Verified CD builds use <c>-ci.&lt;n&gt;</c> or a clean release,

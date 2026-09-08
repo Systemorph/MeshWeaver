@@ -7,7 +7,12 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Self-Update Target Selection
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** The floor table below stops mattering: `ModulePlatformFloor.DeclineReason` becomes advisory at every runtime decision point, and "declared floors are not going away, so do not design as if they were" is superseded — they stay as pack-time authoring lint only. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) lands; this page is rewritten by that change.
+> ✅ **Settled, 2026-09-08.** [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) landed:
+> `ModulePlatformFloor.DeclineReason` is **advisory** at every runtime decision point (see
+> [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy), rule R2 — whether a module loads
+> is MEASURED by the link probe, never declared by a version string), and it remains a pack-time
+> authoring lint. §4 below is rewritten accordingly. The floors themselves moved off the retired rc
+> line the day before (MeshWeaver.Plugins#1447 — 42 packages, plus a gate that refuses a new one).
 
 **A version string is a LABEL a human maintains. The CD run number is the ORDER a machine
 produced. The self-updater must rank candidates by the second, because the first can be wrong —
@@ -168,84 +173,106 @@ reached only once the newer set is empty.
 - A strand with nothing eligible to recover to reports `SelfUpdateOutcome.InstalledTagWithdrawn` at
   Warning, naming the operator's move. Nothing in the process can fix that one.
 
-## 4. The same wrong assumption has a SECOND call site
+## 4. Fixing the selector moved the trap — FOUR readers rank platform builds
 
-`ModulePlatformFloor.DeclineReason` decides whether a module bundle may land: it declines when
-`NuGetVersionComparer.Instance.Compare(runningVersion, minMeshVersion) < 0`. That is pure SemVer, and
-SemVer §11.4 compares pre-release identifiers as text — so `"ci"` < `"rc"`, and a floor of
-`3.0.0-rc8` is unsatisfiable by **every** `3.0.0-ci.N`. Measured 2026-09-07 against the real comparer
-(`Compare(running, floor) < 0` ⇒ DECLINED):
+The selector was fixed on 2026-09-07. On 2026-09-08 the same wrong assumption reappeared one layer
+down, in code written that day: the **release markers**. `publish-bake-bundles.sh` writes
+`_releases/<platform-version>` on every run — one file per publication, its NAME the exact version
+string that publication was labelled with, its CONTENT the framework identity — and three new
+readers ranked those names by SemVer.
 
-| running \ floor | `3.0.0-rc4` | `3.0.0-rc8` | `3.0.0-rc9` | `3.0.0` |
-|---|---|---|---|---|
-| `3.0.0-ci.1` | DECLINED | DECLINED | DECLINED | DECLINED |
-| `3.0.0-ci.7989` | DECLINED | DECLINED | DECLINED | DECLINED |
-| `3.0.0-ci.999999999` | DECLINED | DECLINED | DECLINED | DECLINED |
-| `3.0.0` | ok | ok | ok | ok |
-| `3.1.0-ci.1` | ok | ok | ok | ok |
+| Reader | What it ranks | What a mislabelled or retired label does to it |
+|---|---|---|
+| `VersionSelect.PickTargets` | registry tags | rolled both AKS portals onto a withdrawn `3.1.0` build (§1) |
+| `SealedPublicationIndex.ReleasesOf` | markers → identity → its newest version | places an identity on a stale platform LINE |
+| `ShippedPrebuiltBundles.FallbackPublishedBundlesOf` | which sealed publication a tolerant adoption takes | adopts a three-day-old bake over the newest sealed one |
+| `PrebuiltBundleStore.Plan` (retention) | which publications survive the sweep | **protects the stale publication and deletes the newest** |
 
-Note the last column: a **clean `3.0.0` floor is refused too**, because a pre-release ranks below its
-own release. So it is not only the ~20 packages carrying retired `rc4`..`rc9` floors — a package
-declaring the current line's clean version is equally un-landable while the fleet runs `3.0.0-ci.N`.
-On both AKS portals at 08:20Z the observed line was:
+The markers carry exactly the strings the tags did, so the same two members lose to nothing:
+`3.1.0-ci.7841` (the withdrawn slip) and `3.0.0-rc9.ci.7824` (the retired line, where SemVer §11.4
+compares the identifiers `ci` and `rc9` as **text**) both outrank the later, sealed `3.0.0-ci.8130`
+for ever. The last row is the one that costs bytes rather than a listing: retention decides what to
+**delete**, so a label that sorts above a later run does not merely mis-rank — it keeps the stale
+publication and collects the one the running platform actually adopts.
 
-```
-HOLDING 3.0.0-ci.7989 — AI: the module requires platform 3.0.0-rc8 or newer
-                         but this deployment runs 3.0.0-ci.7989
-```
+### The order is defined once — `PlatformReleaseOrder.Newest`
 
-### 🚨 …but "newer than" and "satisfies the floor of" are NOT the same predicate
+Three keys, lexicographically, each a total order on its own:
 
-The tempting conclusion is "make the floor use this page's comparison". **That is measured to be
-wrong, and the counter-example is one line up in this very design.** For an updater, `3.0.0` MUST
-outrank `3.0.0-ci.7977` — otherwise a Stable install running a continuous build can never take the
-clean release it is waiting for, which is the regression §2 exists to avoid. For a floor, the same
-two strings must give the OPPOSITE answer: a `3.0.0` floor must be *satisfied* by `3.0.0-ci.7977`.
+1. **the band** — a version carrying a `BuildOrdinal` outranks one that does not (a build the machine
+   published outranks a string nobody can place);
+2. **the run number**, within the lineage band — the line in front of it is ignored, which is
+   precisely what makes a mislabelled line lose;
+3. **SemVer**, as the tie-break inside the lineage band and as the whole of the order in the
+   promotion band, where the version string is the only key the members share.
 
-Same two strings, opposite required answers. So the shareable part is the **key**
-(`PlatformReleaseOrder.BuildOrdinal` — the lineage), not the **predicate**. Forcing one predicate to
-serve both would fix the floor by breaking the update path.
+🚨 **It is a comparer and `Compare` is deliberately not.** Pairwise, the three members form a CYCLE:
+the slip `3.1.0-ci.7841` beats the promotion `3.0.0` (SemVer), the promotion beats the sealed
+`3.0.0-ci.8130` (SemVer, a release outranks its pre-releases), and the sealed tag beats the slip
+(run number). A sort handed a cycle answers arbitrarily — which is how a "fixed" ordering keeps
+picking the wrong build. Banding removes it, and `PlatformReleaseOrderTest` runs the cycle through
+every input permutation so a stable-sort accident cannot hide a regression.
 
-The overlap that *does* exist is the **same-line** case, and there the two must agree exactly: two
-builds of one line compare by build number, numerically. Once the declared floors name a
-`3.0.0-ci.<n>` (MeshWeaver.Plugins#1447) that is the whole of the shared surface, and
-`VersionSelectTest.SameLineBuildsCompareNumerically_TheOneCaseTheFloorAlsoAsks` pins this side of it.
+### 🚨 …and why the FLOOR is still not this predicate
 
-🚨 **Declared floors are not going away, so do not design as if they were.** The measured link probe
-(core #3552) reads `ModulePlatformFloor.DeclineReason(minMeshVersion) ?? LinkHoldReason()` — the probe
-short-circuits *behind* the declared floor and never runs unless the declared floor already passes.
-The declared floor still gates first.
+The tempting conclusion is "make the declared `minMeshVersion` floor use this comparison too".
+**That is measured to be wrong, and the counter-example is one section up.** For an updater, `3.0.0`
+MUST outrank `3.0.0-ci.7977` — otherwise a Stable install running a continuous build can never take
+the clean release it is waiting for (§2). For a floor, the same two strings must give the OPPOSITE
+answer: a `3.0.0` floor must be *satisfied* by `3.0.0-ci.7977`. Same two strings, opposite required
+answers, so the shareable part is the **key** (`BuildOrdinal`), never the **predicate**.
 
-That is why `PlatformReleaseOrder` lives in `MeshWeaver.Plugin.Packaging`, beside
-`NuGetVersionComparer` and in the lowest assembly both `MeshWeaver.PluginCatalog` (which owns
-`ModulePlatformFloor`) and `Memex.Portal.Shared` (which owns `VersionSelect`) already reference
-directly — the key is in reach of whoever writes the floor's own predicate, and neither call site
-carries a private idea of lineage. `PlatformReleaseOrderTest` pins the boundary so the floor decision
-is taken knowingly rather than by reusing the update one.
+The floor's own answer was settled elsewhere, and by two changes on consecutive days rather than by
+a comparator:
+
+- **The data moved.** MeshWeaver.Plugins#1447 (2026-09-07) took 42 packages off the retired rc line —
+  they now declare `3.0.0-ci.7845`, the first build of the ci line, which every existing platform
+  satisfies — and added `check-module-floors.py`, which refuses a new floor naming an rc. Both sides
+  of every floor comparison are now on one convention, where SemVer is right by construction.
+- **The decision moved.** [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) (2026-09-08)
+  made the declared floor **advisory** at every runtime decision point: whether a module loads is
+  measured by the type-level link probe, never declared by a version string
+  ([Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy), rule R2). It survives as a
+  pack-time authoring lint and as a sentence on the status surfaces.
+
+So `PlatformReleaseOrder` lives in `MeshWeaver.Plugin.Packaging`, beside `NuGetVersionComparer` and in
+the lowest assembly `MeshWeaver.Hosting`, `MeshWeaver.PluginCatalog` and `Memex.Portal.Shared` all
+reference directly. `PlatformReleaseOrderTest.ThePreReleaseLabelIsTextToSemVer_WhichIsWhyTheFloorNeedsItsOwnPredicate`
+pins the boundary so the floor decision is taken knowingly rather than by reusing the update one.
 
 ## 5. What this does NOT fix
 
 - **The withdrawn tags themselves.** Ordering makes them lose; it does not remove them. Measured
-  2026-09-07 (`az acr repository show-tags -n meshweaver --repository memex-portal-ai`): **1268 tags —
-  798 `staging-*`, 48 `3.0.0-ci.*`, ZERO `3.1.0-*`, ZERO `rc*`.** The slip tags and the whole retired
-  rc line are already untagged from all three repositories (manifests kept, reachable via
-  `staging-*`), so the 2026-09-07 trap has no tag left to fire on. A future slip needs the same
-  maintainer action — the selector's job is to make the slip harmless while its tags are still there.
-- **The policy record losing its own policy** under its bookkeeping writes (issue #3542, proposal 3).
+  2026-09-08 (`az acr repository show-tags -n meshweaver --repository memex-portal-ai`): **1403 tags,
+  of which 97 survive the structural filters — every one of them `3.0.0-ci.<n>`, ZERO `3.1.0-*`,
+  ZERO `rc*`, so ZERO outrank the newest sealed set (`3.0.0-ci.8130`) under either comparator.** That
+  zero is the product of a hand deletion (issue #3542, proposal 4), not of the ordering: the slip
+  tags and the whole retired rc line were untagged by an operator on 2026-09-07. A future slip needs
+  the same action — the ordering's job is to make the slip HARMLESS while its tags are still there.
+  🚨 The `_releases/` markers are the same set of labels and are **not** covered by that deletion;
+  retention removes a pre-release marker only when the identity it names is collected.
+- **The policy record losing its own policy** under its bookkeeping writes (issue #3542, proposal 3 —
+  settled by #3619 for the clobber, still open for the `[MergeGuard]` refusals).
 - **"Installed" is what the pod RUNS.** This reads `ShippedReleaseSeed.InstalledPlatformVersion` —
   the injected `MESHWEAVER_PLATFORM_VERSION`, never the record's `LatestAvailableTag`, which after a
   manual roll-back kept naming a version no pod ran.
 
 ## Where it lives
 
-- `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs` — the lineage key (`BuildOrdinal`) and the
-  update predicate (`Compare` / `IsNewer`), in the lowest assembly both call sites reach.
-- `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` — the tag-shape filters, the policy, the
-  total order a heterogeneous listing needs, `CheckInstalledTag` and `SelectCandidates`. Pure; no hub,
-  no registry, no Rx.
+- `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs` — the lineage key (`BuildOrdinal`), the
+  pairwise update predicate (`Compare` / `IsNewer`) and the total order every ranking caller shares
+  (`Newest`), in the lowest assembly all of them reach.
+- `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` — the tag-shape filters, the policy,
+  `CheckInstalledTag` and `SelectCandidates`. Pure; no hub, no registry, no Rx.
 - `memex/Memex.Portal.Shared/SelfUpdate/SelfUpdateHostedService.cs` — `RunOnce` / `NothingToRoll`.
-- `test/MeshWeaver.Graph.Test/PlatformReleaseOrderTest.cs` — the lineage key, the incident, and the
-  measured floor boundary.
+- `src/MeshWeaver.Hosting/SealedPublicationIndex.cs` — identity → its newest published version.
+- `src/MeshWeaver.Hosting/ShippedPrebuiltBundles.cs` — which sealed publication a tolerant adoption
+  takes (`Modules:VersionStrictness`, [Module Versioning](/Doc/Architecture/ModuleVersioning)).
+- `src/MeshWeaver.Hosting/PrebuiltBundleRetention.cs` — the sweep plan, i.e. what is deleted.
+- `test/MeshWeaver.Graph.Test/PlatformReleaseOrderTest.cs` — the lineage key, the incident, the total
+  order and its transitivity, and the measured floor boundary.
+- `test/MeshWeaver.Hosting.Test/SealedPublicationLineageTest.cs` — the markers: the index and the
+  sweep, each in both directions.
 - `test/Memex.Portal.Shared.Test/VersionSelectTest.cs` — the ordering and the three-valued check.
 - `test/Memex.Portal.Shared.Test/SelfUpdateStrandRecoveryTest.cs` — the poller, against a real mesh.
 
