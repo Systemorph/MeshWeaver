@@ -135,6 +135,17 @@ public sealed class PluginBundleClient
         /// rule <c>BundleReader.AssemblyRef.SourceFingerprint</c> follows).</para>
         /// </summary>
         public string? FrameworkMvid { get; init; }
+
+        /// <summary>
+        /// The digest-addressed OCI reference of this bundle in the fleet's registry —
+        /// <c>cr.meshweaver.cloud/plugins/&lt;source&gt;/&lt;package&gt;@sha256:…</c> — when the
+        /// registry has pushed it there (<c>Doc/Architecture/PluginBundlesInTheRegistry</c>). With
+        /// one, the bytes are fetched from the OCI registry by digest and verified against it; with
+        /// null (a registry that has not pushed this bundle, or predates the field) the HTTP route
+        /// <see cref="Url"/> is taken exactly as before. Additive, an INIT property for the same
+        /// binary-compatibility reason as <see cref="FrameworkMvid"/>.
+        /// </summary>
+        public string? Artifact { get; init; }
     }
 
     /// <summary>
@@ -228,7 +239,7 @@ public sealed class PluginBundleClient
                         + "instance, and this is not one of them");
                 }
 
-                return Download(pluginId, bundle.Version)
+                return Download(pluginId, bundle)
                     .SelectMany(result => result.Bytes is null
                         ? Miss(pluginId, result.Kind, result.Reason)
                         : SeedAll(pluginId, result.Bytes));
@@ -357,12 +368,13 @@ public sealed class PluginBundleClient
                         _logger?.LogInformation(
                             "Module '{Module}' of {Plugin}: {Reason}",
                             moduleName, pluginId, verdict.Reason);
-                        return Download(pluginId, bundle!.Version)
+                        var advertised = bundle!;
+                        return Download(pluginId, advertised)
                             .SelectMany(result => result.Bytes is null
                                 ? Miss(pluginId, result.Kind, result.Reason)
                                 : LandFromBundle(
-                                    pluginId, moduleName, packagePath, bundle.Version, result.Bytes,
-                                    bundle.FrameworkMvid));
+                                    pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
+                                    advertised.FrameworkMvid));
                     })))
             .Catch((Exception ex) =>
             {
@@ -482,7 +494,90 @@ public sealed class PluginBundleClient
     /// </summary>
     private sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null);
 
-    private IObservable<FetchResult> Download(string pluginId, string version) =>
+    /// <summary>
+    /// The bytes of <paramref name="bundle"/>: from the fleet's OCI registry by digest when the
+    /// index names an <see cref="BundleRef.Artifact"/>, from the registry's HTTP bundle route
+    /// otherwise — the pre-artifact path, byte for byte.
+    /// </summary>
+    private IObservable<FetchResult> Download(string pluginId, BundleRef bundle) =>
+        bundle.Artifact is { Length: > 0 } artifact
+            ? DownloadArtifact(pluginId, bundle.Version, artifact)
+            : DownloadOverHttp(pluginId, bundle.Version);
+
+    /// <summary>
+    /// The artifact path (<c>Doc/Architecture/PluginBundlesInTheRegistry</c>): the manifest by
+    /// digest, then its <see cref="OciRegistryClient.BundleLayerMediaType"/> layer by digest, both
+    /// verified by <see cref="OciRegistryClient"/> — so what lands is provably the archive the
+    /// publication sealed. The credential is the one this client already holds for the plugin
+    /// registry that advertised the artifact; the registry edge validates it at that registry's
+    /// token route.
+    ///
+    /// <para>🚨 There is no HTTP fallback on this path. A digest mismatch is a REFUSAL — the
+    /// registry served bytes that are not the artifact, and the only correct outcome is that nothing
+    /// lands (<see cref="BundleAdoptionKind.ArtifactRefused"/>). A transport failure is a miss
+    /// (<see cref="BundleAdoptionKind.FetchFailed"/>) like any other: logged, counted, and the
+    /// consumer compiles or keeps what it has, exactly as for an HTTP failure.</para>
+    /// </summary>
+    private IObservable<FetchResult> DownloadArtifact(string pluginId, string version, string artifact)
+    {
+        if (!OciReference.TryParse(artifact, out var reference) || reference!.Digest is null)
+        {
+            _logger?.LogWarning(
+                "Bundle for {Plugin}@{Version}: the index names artifact '{Artifact}', which is not a "
+                + "digest-addressed OCI reference (<registry>/<repository>@sha256:…) — {Consequence}",
+                pluginId, version, artifact, MissConsequence("will compile"));
+            return Observable.Return(new FetchResult(null, BundleAdoptionKind.FetchFailed,
+                $"the advertised artifact reference '{artifact}' is not digest-addressed"));
+        }
+
+        return Observable.Defer(() =>
+        {
+            var client = new OciRegistryClient(
+                _hub, reference.Registry, Observable.Return(_token),
+                httpClientName: InstanceRegistrationClient.BundleHttpClientName, logger: _logger);
+            // Dropped, never landed, when the transfer faults: ToArray is read only after the
+            // receipt, which the client emits only once the bytes hashed to the layer's digest.
+            var buffer = new MemoryStream();
+            return client.GetManifest(reference.Repository, reference.Digest)
+                .SelectMany(manifest =>
+                {
+                    var layer = manifest.Layers.FirstOrDefault(l => string.Equals(
+                        l.MediaType, OciRegistryClient.BundleLayerMediaType, StringComparison.OrdinalIgnoreCase));
+                    if (layer is null)
+                        return Observable.Throw<FetchResult>(new InvalidOperationException(
+                            $"the manifest {reference.Digest} at {reference.Registry}/{reference.Repository} "
+                            + $"carries no {OciRegistryClient.BundleLayerMediaType} layer"));
+                    return client.GetBlob(reference.Repository, layer.Digest, () => buffer)
+                        .Select(receipt =>
+                        {
+                            _logger?.LogInformation(
+                                "Bundle for {Plugin}@{Version}: {Bytes} byte(s) fetched from {Artifact}, "
+                                + "digest-verified", pluginId, version, receipt.Size, artifact);
+                            return new FetchResult(buffer.ToArray(), BundleAdoptionKind.Adopted);
+                        });
+                });
+        })
+        .Catch((OciDigestMismatchException ex) =>
+        {
+            _logger?.LogWarning(
+                "Bundle for {Plugin}@{Version} from {Artifact} REFUSED — the registry served bytes "
+                + "hashing to {Actual}, not {Expected}; nothing landed. {Consequence}",
+                pluginId, version, artifact, ex.Actual, ex.Expected, MissConsequence("will compile"));
+            return Observable.Return(new FetchResult(null, BundleAdoptionKind.ArtifactRefused, ex.Message));
+        })
+        .Catch((Exception ex) =>
+        {
+            // Not thrown, for the same reason the HTTP route does not throw: a registry that is
+            // down or refusing must not fail the INSTALL that asked. Cause in the message (Plugins#959).
+            _logger?.LogWarning(ex,
+                "Bundle fetch for {Plugin}@{Version} from {Artifact} failed — {Consequence}. Cause: {Cause}",
+                pluginId, version, artifact, MissConsequence("will compile"), ex.Message);
+            return Observable.Return(new FetchResult(null, BundleAdoptionKind.FetchFailed,
+                $"artifact fetch from {artifact} failed: {ex.Message}"));
+        });
+    }
+
+    private IObservable<FetchResult> DownloadOverHttp(string pluginId, string version) =>
         _httpPool.Invoke(async ct =>
         {
             // 🚨 The consumer asks IN ITS OWN LANE (#1751): the registry resolves each NodeType's
