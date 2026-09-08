@@ -623,6 +623,7 @@
   "ui.updateHeldUnknown": "⏸️ **Update auf `{0}` wird zurückgehalten** — die Verfügbarkeit konnte NICHT ermittelt werden, und das ist keine Freigabe. Das ist ein Verfügbarkeitsproblem, kein inkompatibles Release.",
   "ui.updateHeldAt": "_(zurückgehalten {0})_",
   "ui.updateHeldManual": "⏸️ Nicht angewendet: die Release-Verfügbarkeitsprüfung hält `{0}` zurück.",
+  "ui.updateAdvisories": "ℹ️ **Was die Release-Prüfung zu `{0}` gemeldet hat, ohne es zurückzuhalten:** das sind Kosten und Unbekannte, die das Update in Kauf nimmt, keine Gründe für eine Ablehnung — ein Paket ohne vorgebauten Bake für diesen Build wird beim Start des neuen Builds kompiliert; ob ein Modul lädt, dessen Ladbarkeit nicht gemessen werden konnte, entscheidet die Plattform selbst beim Start und behält die vorherige Version, wenn die neue nicht lädt.",
   "ui.updateRefreshHint": "Aktualisieren, um auf dem neuen Build weiterzuarbeiten.",
   "ui.updateVerifiedAtLine": "_(verifiziert {0}, Image `{1}`)_",
   "ui.updateMoreFailures": "(+{0} weitere)",

@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using MeshWeaver.Compiler;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -14,35 +16,55 @@ namespace MeshWeaver.PluginCatalog;
 /// this class decides. That is what lets an in-process service, an HTTP endpoint and a CI step
 /// reach the identical verdict without three copies of the reasoning.</para>
 ///
-/// <para><b>"Available" has exactly two forms</b>, and they are gated differently on purpose:</para>
+/// <para>🚨 <b>What holds a roll, since #3651 (maintainer rule of 2026-09-07,
+/// <c>Doc/Architecture/ModuleAdoptionPolicy</c>): a module that provably cannot LOAD on the target
+/// — and nothing declared.</b> Two lanes, judged differently on purpose:</para>
 /// <list type="number">
 /// <item><description><b>Content package</b> — a published, SEALED bake under the TARGET release's
 /// framework identity (<c>prebuilt-bundles/&lt;identity&gt;/&lt;source&gt;/</c>, with its
 /// <c>_complete</c> sentinel written strictly last). Absent ⇒ the instance Roslyn-compiles that
-/// content at boot, which is the regression (#1347 → #1660) the bake lane exists to prevent, and
-/// a type that fails to compile parks its hub for the whole activation budget. The identity match
-/// is EXACT — the strict-MVID rule of <c>PrebuiltAssemblySeeder.DeclineReason</c> — and it is
-/// expressed here as "the bundle is sealed under the target's identity", never re-derived.</description></item>
-/// <item><description><b>Compiled module</b> — 🚨 NOT gated by its declared <c>MinMeshVersion</c>
-/// floor since #3648. That floor used to be a BLOCKER (<c>ModuleFloorExceedsTarget</c>), and on
-/// 2026-09-07 it declined all 11 candidate releases on memex-cloud ("77 plugins required … every
-/// one declined") because the comparator ranks <c>ci &lt; rc &lt; clean</c> and every installed
-/// record carried an <c>rc</c> or <c>3.0.0</c> floor — while every candidate would have loaded.
-/// A floor the target does not satisfy is now an <see cref="UpdatabilityVerdict.Advisories">
-/// advisory</see> beside the verdict, never a reason in <see cref="UpdatabilityVerdict.IsUpdatable"/>;
-/// whether a module loads is measured at landing and at boot by the link probe
-/// (<c>Doc/Architecture/ModuleAdoptionPolicy</c>, rule R2). MVID equality was never the module
-/// gate either — modules bind by simple name.</description></item>
+/// content at boot. 🚨 That is a COST, reported as <see cref="UpdatabilityVerdict.BootCompiles"/>
+/// ("would recompile at boot: education, crm") — never a hold: the compile is the same code path
+/// every pull request of that content already proves green, and on 2026-09-07 holding on it would
+/// have kept memex-cloud on 8009 a second day because the satellites had not baked for the new
+/// identity yet. <see cref="ReleaseGatePolicy.RequirePrebuilt"/> (the instance's
+/// <c>Modules:RequirePrebuilt</c>) is the opt-in STRICT mode in which a missing bake still holds —
+/// there a boot compile is refused by the seeder, so the roll would park. The identity match is
+/// EXACT — the strict-MVID rule of <c>PrebuiltAssemblySeeder.DeclineReason</c> — and it is
+/// expressed here as "the bundle is sealed under the target's identity", never re-derived. A
+/// sealed set that is INCONSISTENT (#3175) stays a hold: a torn publication is refused whole.</description></item>
+/// <item><description><b>Compiled module</b> — MEASURED. A module with a build published for the
+/// target identity (the identity's sealed module set carries it) will be adopted and needs no
+/// check. A module with no such build keeps its landed generation across the roll, so that
+/// generation's bytes are linked against the TARGET's type surface
+/// (<see cref="ModulePlatformLink.Check(string, ModulePlatformSurface)"/> over the
+/// <see cref="ReleaseArtifacts.PlatformSurface"/> the publication carries): <c>Unlinkable</c> is
+/// <see cref="PackageAvailabilityKind.ModuleUnloadable"/> — THE hold, naming the module and the
+/// missing type; <c>Linkable</c> clears; <c>Indeterminate</c> (no surface published, unreadable
+/// bytes) is REPORTED on <see cref="UpdatabilityVerdict.Advisories"/> and is neither clearance nor
+/// a hold — the boot-time probe, the keep-the-previous-generation fallback and the readiness stall
+/// are the safety net. 🚨 NOT the declared <c>MinMeshVersion</c> floor: that was a BLOCKER until
+/// #3648 and on 2026-09-07 it declined all 11 candidate releases on memex-cloud ("77 plugins
+/// required … every one declined") because the comparator ranks <c>ci &lt; rc &lt; clean</c> —
+/// while every candidate would have loaded. The floor is worded onto
+/// <see cref="UpdatabilityVerdict.Advisories"/> and decides nothing.</description></item>
 /// </list>
 ///
-/// <para>🚨 <b>It fails SAFE.</b> "Cannot determine" is NOT "clear to proceed". When the target's
-/// framework identity cannot be resolved, or the artifact store could not be read, every package
-/// answers <see cref="PackageAvailabilityKind.Indeterminate"/> and the verdict is NOT updatable —
-/// with a reason that says so in those words. An availability failure is never dressed up as a
-/// compatibility verdict: <see cref="PackageAvailabilityKind.Indeterminate"/> and
-/// <see cref="PackageAvailabilityKind.ContentBakeMissing"/> are different answers to different
+/// <para>🚨 <b>It fails SAFE where it cannot see the STORE.</b> "Cannot determine" is NOT "clear to
+/// proceed". When the target's framework identity cannot be resolved, or the artifact store could
+/// not be read, every package answers <see cref="PackageAvailabilityKind.Indeterminate"/> and the
+/// verdict is NOT updatable — with a reason that says so in those words. An availability failure
+/// is never dressed up as a compatibility verdict: <see cref="PackageAvailabilityKind.Indeterminate"/>
+/// and <see cref="PackageAvailabilityKind.ModuleUnloadable"/> are different answers to different
 /// questions, and a caller that cannot tell them apart cannot tell an outage from an incompatible
-/// release.</para>
+/// release. The one Indeterminate that does NOT hold is the LINK check's — a missing
+/// <c>platform-surface.json</c> is a publication that predates #3651, and holding every roll on it
+/// would freeze the fleet exactly as the floors did; it is reported instead.</para>
+///
+/// <para>Everything here is PURE: the caller supplies the target, the packages, and an
+/// <see cref="ReleaseArtifacts">observation</see> that already carries the link measurements
+/// (<see cref="ModuleLinkObservation.Measure"/> reads the landed bytes; this class never does IO),
+/// so an in-process service, an HTTP endpoint and a CI step reach the identical verdict.</para>
 /// </summary>
 public static class ReleaseAvailability
 {
@@ -60,7 +82,28 @@ public static class ReleaseAvailability
         ReleaseTarget target,
         IEnumerable<RequiredPackage> packages,
         ReleaseArtifacts artifacts)
+        => IsUpdatable(target, packages, artifacts, ReleaseGatePolicy.Default);
+
+    /// <summary>
+    /// As the three-argument overload, under an explicit <paramref name="policy"/> — the instance's
+    /// <c>Modules:RequirePrebuilt</c> decides whether a missing content bake is the cost it is
+    /// everywhere else (reported, the roll proceeds) or the hold a strict instance opts into. 🚨 An
+    /// overload, not an optional parameter: the three-argument signature is binary API for every
+    /// host compiled against the previous platform.
+    /// </summary>
+    /// <param name="target">The candidate release.</param>
+    /// <param name="packages">What must survive the roll.</param>
+    /// <param name="artifacts">What the artifact stores were observed to hold for that target,
+    /// including the link measurements of every landed module
+    /// (<see cref="ModuleLinkObservation.Measure"/>).</param>
+    /// <param name="policy">The instance's gate policy.</param>
+    public static UpdatabilityVerdict IsUpdatable(
+        ReleaseTarget target,
+        IEnumerable<RequiredPackage> packages,
+        ReleaseArtifacts artifacts,
+        ReleaseGatePolicy policy)
     {
+        ArgumentNullException.ThrowIfNull(policy);
         var required = packages?.ToImmutableArray() ?? [];
 
         // The observation itself is unusable: say THAT, once, about every package. Answering
@@ -74,11 +117,16 @@ public static class ReleaseAvailability
                     p.Name, PackageAvailabilityKind.Indeterminate, blocked))],
                 blocked);
 
-        var verdicts = required
-            .Select(p => Evaluate(p, target, artifacts))
+        var evaluated = required
+            .Select(p => Evaluate(p, target, artifacts, policy))
             .ToImmutableArray();
+        var verdicts = evaluated.Select(e => e.Availability).ToImmutableArray();
 
         var blockers = verdicts.Where(v => !v.IsAvailable).ToImmutableArray();
+        var bootCompiles = verdicts
+            .Where(v => v is { Kind: PackageAvailabilityKind.ContentBakeMissing, IsAdvisory: true })
+            .Select(v => v.Package)
+            .ToImmutableArray();
         return new UpdatabilityVerdict(
             blockers.Length == 0,
             verdicts,
@@ -86,9 +134,27 @@ public static class ReleaseAvailability
                 ? null
                 : string.Join("; ", blockers.Select(b => $"{b.Package}: {b.Reason}")))
         {
-            Advisories = [.. required.Select(p => FloorAdvisory(p, target)).OfType<string>()],
+            Advisories =
+            [
+                .. bootCompiles.IsEmpty
+                    ? []
+                    : new[] { BootCompileAdvisory(bootCompiles, target) },
+                .. evaluated.Select(e => e.LinkAdvisory).OfType<string>(),
+                .. required.Select(p => FloorAdvisory(p, target)).OfType<string>(),
+            ],
+            BootCompiles = bootCompiles,
         };
     }
+
+    /// <summary>
+    /// The one line that names every package the instance would Roslyn-compile at boot on the
+    /// target — "would recompile at boot: education, crm". A cost the operator reads, never a
+    /// reason in <see cref="UpdatabilityVerdict.IsUpdatable"/> (outside
+    /// <see cref="ReleaseGatePolicy.RequirePrebuilt"/>).
+    /// </summary>
+    private static string BootCompileAdvisory(ImmutableArray<string> packages, ReleaseTarget target) =>
+        $"would recompile at boot on {Describe(target)} (no sealed content bake for framework "
+        + $"identity {target.FrameworkIdentity}): {string.Join(", ", packages)}";
 
     /// <summary>
     /// The declared-floor ADVISORY for one package against the target (#3648): the sentence naming
@@ -122,30 +188,117 @@ public static class ReleaseAvailability
         return null;
     }
 
-    private static PackageAvailability Evaluate(
-        RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts)
+    /// <summary>One package's answer plus the link ADVISORY it may carry — the sentence for a link
+    /// check that could not be made, which rides beside the verdict rather than inside it.</summary>
+    private readonly record struct Evaluation(PackageAvailability Availability, string? LinkAdvisory);
+
+    private static Evaluation Evaluate(
+        RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts, ReleaseGatePolicy policy)
     {
         // 🚨 #3648 — no floor step. "Modules first: a floor that EXCEEDS the target is a definite
         // incompatibility" stood here and answered ModuleFloorExceedsTarget; it was not definite,
         // it was a string order (ci < rc < clean), and it held every production portal on
         // 2026-09-07. The floor is reported as an advisory by IsUpdatable; this evaluation asks
-        // only what the artifact stores can answer — is the bake there, and is the sealed set
-        // consistent.
+        // what the artifact stores can answer — is the bake there, is the sealed set consistent —
+        // and what the landed bytes can answer: would the module LOAD on the target.
+
+        // 🚨 THE MODULE LANE FIRST (#3651): an unloadable module is the one hold on this lane, and
+        // it must not be shadowed by a content advisory on the same package (a MIXED package —
+        // content plus a compiled module — is the MeshWeaver.SocialMedia shape).
+        var (unloadable, linkAdvisory) = ModuleLane(package, target, artifacts);
+        if (unloadable is not null)
+            return new Evaluation(unloadable, null);
 
         if (package.HasContent && !artifacts.SealedBundles.Contains(package.BundleName))
-            return new PackageAvailability(
-                package.Name,
-                PackageAvailabilityKind.ContentBakeMissing,
-                $"no sealed content bake for framework identity {target.FrameworkIdentity} — the "
-                + $"bundle '{package.BundleName}' is not published for release {target.Version}, so "
-                + "this instance would recompile it at boot");
+            // 🚨 ADVISORY, not a hold, since #3651: a boot compile is a cost the operator reads
+            // ("would recompile at boot: …"), and the same compile every PR of that content already
+            // proved green. Only a Modules:RequirePrebuilt instance — where the seeder REFUSES the
+            // compile and the type would park — keeps it as the hold it used to be everywhere.
+            return new Evaluation(
+                new PackageAvailability(
+                    package.Name,
+                    PackageAvailabilityKind.ContentBakeMissing,
+                    $"no sealed content bake for framework identity {target.FrameworkIdentity} — the "
+                    + $"bundle '{package.BundleName}' is not published for release {target.Version}, so "
+                    + "this instance would recompile it at boot"
+                    + (policy.RequirePrebuilt
+                        ? $" — and {PrebuiltAssemblySeeder.RequirePrebuiltConfigKey} refuses a boot "
+                          + "compile on this instance, so the roll is held"
+                        : " (a cost, not a hold — #3651)"))
+                {
+                    IsAdvisory = !policy.RequirePrebuilt,
+                },
+                linkAdvisory);
 
         // 🚨 PRESENT is not CONSISTENT (#3175). A sealed bundle is adoptable only if the module
         // bytes its NodeTypes were built against are the module bytes sealed for the SAME identity.
         if (package.HasContent && SealedSetProblem(package, target, artifacts) is { } inconsistent)
-            return inconsistent;
+            return new Evaluation(inconsistent, linkAdvisory);
 
-        return new PackageAvailability(package.Name, PackageAvailabilityKind.Available, null);
+        return new Evaluation(
+            new PackageAvailability(package.Name, PackageAvailabilityKind.Available, null),
+            linkAdvisory);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The measured module gate (#3651).</b> For a package that ships a compiled module:
+    /// <list type="bullet">
+    /// <item><description>a build published for the target identity (the identity's sealed module
+    /// set DECLARES the module) will be adopted at the roll — nothing to check here; the sealed-set
+    /// consistency rule already judged those bytes;</description></item>
+    /// <item><description>no such build, and nothing landed on this instance — nothing will be
+    /// loaded, nothing to hold on;</description></item>
+    /// <item><description>no such build, and a landed generation — that generation keeps running
+    /// across the roll, so its bytes were linked against the target's surface
+    /// (<see cref="ReleaseArtifacts.ModuleLinks"/>): <c>Unlinkable</c> HOLDS as
+    /// <see cref="PackageAvailabilityKind.ModuleUnloadable"/>, naming the module and the missing
+    /// types; <c>Linkable</c> clears; <c>Indeterminate</c> — or no measurement at all, which is
+    /// what a publication without <c>platform-surface.json</c> yields — is REPORTED as an advisory
+    /// and decides nothing.</description></item>
+    /// </list>
+    /// Returns the hold, or the advisory, or neither.
+    /// </summary>
+    private static (PackageAvailability? Unloadable, string? Advisory) ModuleLane(
+        RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts)
+    {
+        if (string.IsNullOrWhiteSpace(package.ModuleName))
+            return (null, null);
+        if (artifacts.Modules?.MvidByModule.ContainsKey(package.ModuleName) == true)
+            return (null, null);
+        if (string.IsNullOrWhiteSpace(package.LandedModulePath))
+            return (null, null);
+
+        if (!artifacts.ModuleLinks.TryGetValue(package.Name, out var link))
+            return (null,
+                $"{package.Name}: whether its landed module {package.ModuleName} loads on "
+                + $"{Describe(target)} could not be determined — "
+                + (artifacts.PlatformSurfaceDetail
+                   ?? "the landed generation was not measured against the target's surface")
+                + ". Reported, not a hold: the boot-time link probe decides, and a generation that "
+                + "does not load is kept out while the previous one keeps serving");
+
+        return link.State switch
+        {
+            ModuleLinkState.Linkable => (null, null),
+            ModuleLinkState.Unlinkable => (
+                new PackageAvailability(
+                    package.Name,
+                    PackageAvailabilityKind.ModuleUnloadable,
+                    $"its landed module {package.ModuleName} cannot load on {Describe(target)} "
+                    + $"(framework identity {target.FrameworkIdentity}): no build of it is published "
+                    + "for that identity, and the landed generation references "
+                    + string.Join(", ", link.MissingTypes)
+                    + ", which the target does not carry — loading it there throws "
+                    + "TypeLoadException at the first render that touches it. The roll is held until "
+                    + "a build of the module for this platform is published, or the module is "
+                    + "uninstalled"),
+                null),
+            _ => (null,
+                $"{package.Name}: whether its landed module {package.ModuleName} loads on "
+                + $"{Describe(target)} could not be determined ({link.Detail}). Reported, not a "
+                + "hold: the boot-time link probe decides, and a generation that does not load is "
+                + "kept out while the previous one keeps serving"),
+        };
     }
 
     /// <summary>
@@ -264,7 +417,37 @@ public sealed record ReleaseTarget(string? Version, string? FrameworkIdentity);
 /// for a module-only package, which this gate then has nothing to hold on — its loadability is
 /// measured at landing and at boot, not here.</param>
 public sealed record RequiredPackage(
-    string Name, string BundleName, string? MinMeshVersion = null, bool HasContent = true);
+    string Name, string BundleName, string? MinMeshVersion = null, bool HasContent = true)
+{
+    /// <summary>
+    /// The compiled module this package ships, by assembly simple name (the install record's
+    /// <c>module</c> field), or null for a content-only package. Init-only rather than positional
+    /// (#3651): the constructor is binary API for hosts compiled against the previous platform.
+    /// </summary>
+    public string? ModuleName { get; init; }
+
+    /// <summary>
+    /// The entry DLL of the module's ACTIVE landed generation on this instance
+    /// (<c>modules/&lt;name&gt;@&lt;gen&gt;/&lt;name&gt;.dll</c>, through the one resolution rule
+    /// <c>ModuleActivationBoot.LandedDllPath</c>), or null when nothing is landed. This is what
+    /// keeps running across a roll to a target that publishes no build of the module — so it is
+    /// what <see cref="ModuleLinkObservation.Measure"/> links against the target's surface.
+    /// </summary>
+    public string? LandedModulePath { get; init; }
+}
+
+/// <summary>
+/// The instance's gate policy (#3651): what a missing content bake MEANS on this deployment.
+/// </summary>
+/// <param name="RequirePrebuilt">The instance's <c>Modules:RequirePrebuilt</c> — the opt-in strict
+/// mode in which the seeder refuses a boot compile and parks the type, so a missing bake is a
+/// hold rather than a cost. Off everywhere by default (<c>PrebuiltAssemblySeeder.RequirePrebuilt</c>
+/// reads it; absent means off).</param>
+public sealed record ReleaseGatePolicy(bool RequirePrebuilt)
+{
+    /// <summary>The fleet default: a missing bake is reported and the roll proceeds.</summary>
+    public static ReleaseGatePolicy Default { get; } = new(RequirePrebuilt: false);
+}
 
 /// <summary>
 /// What the artifact stores were OBSERVED to hold for one target release. Deliberately a value:
@@ -294,6 +477,31 @@ public sealed record ReleaseArtifacts(
     /// none, in which case there is nothing to check and presence decides.</summary>
     public ImmutableArray<BundleDependencyRecord> DependencyRecords { get; init; } = [];
 
+    /// <summary>
+    /// 🚨 The TARGET platform's type surface (#3651) — <c>platform-surface.json</c>, written by the
+    /// bake inside the target image and published beside <c>_complete</c>, read back through
+    /// <see cref="ModulePlatformSurface.FromJson"/>. What a landed module's bytes are linked
+    /// against to answer "would it load there" without the target running anywhere. Null when no
+    /// sealed source under the identity carries one, or none parses — then
+    /// <see cref="PlatformSurfaceDetail"/> says which, and every link check is Indeterminate:
+    /// reported, never a hold and never clearance.
+    /// </summary>
+    public ModulePlatformSurface? PlatformSurface { get; init; }
+
+    /// <summary>Why <see cref="PlatformSurface"/> is null, in one sentence — a publication that
+    /// predates #3651, or a document that did not parse. Null when the surface was read.</summary>
+    public string? PlatformSurfaceDetail { get; init; }
+
+    /// <summary>
+    /// The link measurements (#3651) — package name → the verdict of linking that package's
+    /// LANDED module generation against <see cref="PlatformSurface"/>, produced by
+    /// <see cref="ModuleLinkObservation.Measure"/> so this value stays pure. A package with no
+    /// entry was not measured (no surface, no landed module, or the caller skipped the step); the
+    /// rule reads that as Indeterminate for the link check only.
+    /// </summary>
+    public ImmutableDictionary<string, ModuleLinkVerdict> ModuleLinks { get; init; } =
+        ImmutableDictionary<string, ModuleLinkVerdict>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>An observation that failed — the fail-safe constructor.</summary>
     public static ReleaseArtifacts Unreadable(string reason) =>
         new(ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase), reason);
@@ -320,7 +528,10 @@ public enum PackageAvailabilityKind
     Available,
 
     /// <summary>No sealed content bake exists under the target's framework identity, so the
-    /// instance would Roslyn-compile this package's NodeTypes at boot.</summary>
+    /// instance would Roslyn-compile this package's NodeTypes at boot. 🚨 ADVISORY since #3651 —
+    /// <see cref="PackageAvailability.IsAdvisory"/> is true and the package counts as available —
+    /// except under <see cref="ReleaseGatePolicy.RequirePrebuilt"/>, where the boot compile the
+    /// seeder would refuse makes it the hold it used to be everywhere.</summary>
     ContentBakeMissing,
 
     /// <summary>
@@ -359,6 +570,17 @@ public enum PackageAvailabilityKind
     /// published SET, not an absence and not an unreadability. Appended, never inserted.
     /// </summary>
     SealedSetInconsistent,
+
+    /// <summary>
+    /// 🚨 <b>THE hold on the module lane (#3651).</b> The package's landed module generation —
+    /// which keeps running across the roll because no build of it is published for the target
+    /// identity — references a type the target's platform surface does not carry
+    /// (<see cref="ModuleLinkState.Unlinkable"/>). Loading it there throws
+    /// <c>TypeLoadException</c> at the first render that touches it (#3538). MEASURED on the bytes,
+    /// never declared; a definite incompatibility, like <see cref="SealedSetInconsistent"/>. The
+    /// reason names the module and the missing types. Appended, never inserted.
+    /// </summary>
+    ModuleUnloadable,
 }
 
 /// <summary>
@@ -402,8 +624,18 @@ public sealed record BundleDependencyRecord(
 /// <param name="Reason">Why, in one sentence — null only when available.</param>
 public sealed record PackageAvailability(string Package, PackageAvailabilityKind Kind, string? Reason)
 {
-    /// <summary>Whether this package clears the gate.</summary>
-    public bool IsAvailable => Kind == PackageAvailabilityKind.Available;
+    /// <summary>
+    /// 🚨 True when <see cref="Kind"/> is a COST the operator reads rather than a hold (#3651):
+    /// a <see cref="PackageAvailabilityKind.ContentBakeMissing"/> outside
+    /// <see cref="ReleaseGatePolicy.RequirePrebuilt"/>. The kind and the reason stay exactly what
+    /// they were, so the Updates tab and the API can still say "would recompile at boot"; only
+    /// whether it decides the roll changes. Init-only: the positional constructor is binary API.
+    /// </summary>
+    public bool IsAdvisory { get; init; }
+
+    /// <summary>Whether this package clears the gate — available, or an advisory that names a
+    /// cost and decides nothing.</summary>
+    public bool IsAvailable => Kind == PackageAvailabilityKind.Available || IsAdvisory;
 }
 
 /// <summary>
@@ -461,18 +693,34 @@ public sealed record UpdatabilityVerdict(
     public IEnumerable<PackageAvailability> Blockers => Packages.Where(p => !p.IsAvailable);
 
     /// <summary>
-    /// 🚨 What the verdict SAYS without deciding on it (#3648): one line per installed module
-    /// whose declared <c>minMeshVersion</c> floor the target release does not satisfy, naming both
-    /// versions. Logged by every caller and surfaced beside <see cref="HoldReason"/>; by
-    /// construction never a reason in <see cref="IsUpdatable"/> or a member of
-    /// <see cref="Blockers"/> — whether a module loads on the target is measured by the link
-    /// probe at landing and boot, and a version string was the wrong instrument (every production
-    /// portal held on 2026-09-07). Empty when every declared floor is satisfied or none is
-    /// declared. An init-only property, not a positional parameter: replacing a public record's
-    /// constructor signature is what <see cref="MissingMethodException"/>-aborts a host compiled
-    /// against the previous platform.
+    /// 🚨 What the verdict SAYS without deciding on it — logged by every caller, recorded on the
+    /// policy node and shown on the Updates tab beside <see cref="HoldReason"/>; by construction
+    /// never a reason in <see cref="IsUpdatable"/> or a member of <see cref="Blockers"/>. Three
+    /// kinds of line, in this order:
+    /// <list type="bullet">
+    /// <item><description>the boot-compile cost (#3651): "would recompile at boot on X: education,
+    /// crm" — the packages in <see cref="BootCompiles"/>, one line;</description></item>
+    /// <item><description>a link check that could NOT be made (#3651): the target published no
+    /// <c>platform-surface.json</c>, or the landed bytes were unreadable — reported, neither
+    /// clearance nor a hold, because the boot-time probe and the keep-the-previous-generation
+    /// fallback are the safety net;</description></item>
+    /// <item><description>a declared <c>minMeshVersion</c> floor the target does not rank above
+    /// (#3648), naming both versions — a version string was the wrong instrument (every
+    /// production portal held on 2026-09-07).</description></item>
+    /// </list>
+    /// Empty when there is nothing to say. An init-only property, not a positional parameter:
+    /// replacing a public record's constructor signature is what
+    /// <see cref="MissingMethodException"/>-aborts a host compiled against the previous platform.
     /// </summary>
     public ImmutableArray<string> Advisories { get; init; } = [];
+
+    /// <summary>
+    /// The packages the instance would Roslyn-compile at boot on the target (#3651) — every
+    /// <see cref="PackageAvailabilityKind.ContentBakeMissing"/> that is an advisory — by name, so
+    /// a surface can list them without parsing the sentence. Empty when every content-bearing
+    /// package has a sealed bake for the target, or the hold is on something else.
+    /// </summary>
+    public ImmutableArray<string> BootCompiles { get; init; } = [];
 
     /// <summary>
     /// True when the hold is an "I could not look" rather than "I looked and it is incompatible".

@@ -804,22 +804,24 @@ public class SelfUpdateHostedService : IHostedService
                             _logger?.LogInformation(
                                 "[SelfUpdate] release-availability gate not enforced for {Tag}: {Reason}",
                                 target, notEnforced);
-                        // 🚨 #3648 — the declared module floors are advisories beside the
-                        // verdict, never inside it. These sentences were the hold reasons on
-                        // 2026-09-07; they are logged so an operator can still read them, and the
-                        // roll proceeds on what the link probe measures at boot.
+                        // 🚨 The advisories ride beside the verdict, never inside it (#3651,
+                        // #3648): the packages this roll would recompile at boot, a landed module
+                        // whose loadability on the target could not be measured, a declared floor
+                        // the target does not rank above. The floor sentences were the hold reasons
+                        // on 2026-09-07; they are logged so an operator can still read them, and
+                        // the roll proceeds on what the link probe measured — here against the
+                        // published surface, and again at boot.
                         if (!verdict.Advisories.IsDefaultOrEmpty)
                             _logger?.LogInformation(
-                                "[SelfUpdate] rolling to {Tag} although {Count} installed module(s) "
-                                + "declare a platform floor it does not rank above — advisory, "
-                                + "loadability is measured at boot: {Advisories}",
+                                "[SelfUpdate] rolling to {Tag} with {Count} advisory line(s) — "
+                                + "reported, never a hold: {Advisories}",
                                 target, verdict.Advisories.Length,
                                 string.Join("; ", verdict.Advisories));
-                        // 🚨 The availability gate answered "an artifact exists". The combo gate
-                        // answers the question that artifact cannot: whether the candidate's
-                        // assemblies can still serve the module content this instance has landed.
-                        // Both have to clear before anything is patched.
-                        return ComboThenApply(policy, target);
+                        // 🚨 The availability gate answered "nothing of yours is unloadable there".
+                        // The combo gate answers the question the bytes on the shelf cannot:
+                        // whether the candidate's assemblies can still serve the module content
+                        // this instance has landed. Both have to clear before anything is patched.
+                        return ComboThenApply(policy, target, verdict);
                     }
 
                     return RecordHold(target, verdict).Catch(HoldWriteFailed(target))
@@ -857,7 +859,13 @@ public class SelfUpdateHostedService : IHostedService
     /// UNVERIFIED roll is a state an operator can see, never a silent one.</item>
     /// </list>
     /// </summary>
-    private IObservable<SelfUpdateVerdict> ComboThenApply(UpdatePolicyContent policy, string target)
+    /// <param name="policy">The policy node as read this tick.</param>
+    /// <param name="target">The candidate.</param>
+    /// <param name="availability">The availability verdict that cleared the candidate — recorded
+    /// on the policy node beside the (cleared) hold so its advisories reach the Updates tab
+    /// (#3651); null when no availability gate ran.</param>
+    private IObservable<SelfUpdateVerdict> ComboThenApply(
+        UpdatePolicyContent policy, string target, UpdatabilityVerdict? availability = null)
     {
         var combo = ResolveComboGate();
         return (combo is null
@@ -885,8 +893,10 @@ public class SelfUpdateHostedService : IHostedService
 
                 // Clearing is unconditional, exactly as on the availability path: a previous hold
                 // that no longer applies must disappear from the admin tab the moment it is
-                // resolved.
-                return RecordHold(target, null).Catch(HoldWriteFailed(target))
+                // resolved. The availability verdict rides along so what it SAID about this tag
+                // (the boot-compile cost, an unmeasurable module — #3651) is recorded with the
+                // clear rather than lost with it.
+                return RecordHold(target, availability).Catch(HoldWriteFailed(target))
                     .IgnoreElements()
                     .Select(_ => SelfUpdateVerdict.NoOutcome())
                     .Concat(Apply(target).Select(verdict => Qualify(verdict, clearance)));
@@ -1056,9 +1066,13 @@ public class SelfUpdateHostedService : IHostedService
         };
 
     /// <summary>
-    /// Writes (or clears, on null) the availability hold on the policy node, as System — the same
-    /// shape and the same reasons as <see cref="RecordAvailable"/>. Virtual so a test can fault it
-    /// and prove the hold DECISION survives a failed hold WRITE.
+    /// Writes (or clears, on null or on an updatable verdict) the availability hold on the policy
+    /// node, as System — the same shape and the same reasons as <see cref="RecordAvailable"/>.
+    /// 🚨 An UPDATABLE verdict clears the hold exactly as null does and additionally records what
+    /// the gate SAID about the tag (#3651, <see cref="UpdatabilityVerdict.Advisories"/>) — the
+    /// boot-compile cost and an unmeasurable module must be visible on the Updates tab, not only
+    /// in a pod log. Virtual so a test can fault it and prove the hold DECISION survives a failed
+    /// hold WRITE.
     /// </summary>
     protected virtual IObservable<Unit> RecordHold(string tag, UpdatabilityVerdict? verdict)
     {
@@ -1079,13 +1093,18 @@ public class SelfUpdateHostedService : IHostedService
                 .Update<UpdatePolicyContent>((node, cur) =>
                 {
                     var current = cur ?? new UpdatePolicyContent();
+                    var advisories = verdict is { Advisories.IsDefaultOrEmpty: false }
+                        ? string.Join("; ", verdict.Advisories)
+                        : null;
                     return node with
                     {
-                        Content = verdict is null
+                        Content = verdict is null || verdict.IsUpdatable
                             ? current with
                             {
                                 HeldTag = null, HeldReason = null,
                                 HeldIndeterminate = false, HeldAt = null,
+                                AdvisoriesTag = advisories is null ? null : tag,
+                                Advisories = advisories,
                             }
                             : current with
                             {
@@ -1093,6 +1112,8 @@ public class SelfUpdateHostedService : IHostedService
                                 HeldReason = verdict.HoldReason,
                                 HeldIndeterminate = verdict.IsIndeterminate,
                                 HeldAt = DateTimeOffset.UtcNow,
+                                AdvisoriesTag = advisories is null ? null : tag,
+                                Advisories = advisories,
                             },
                     };
                 })

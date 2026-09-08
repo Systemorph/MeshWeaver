@@ -3,8 +3,10 @@ using System.IO.Compression;
 using System.Reactive.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Text.Json;
 using MeshWeaver.Compiler;
 using MeshWeaver.Hosting;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.Logging;
@@ -18,9 +20,10 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para>The layout is the publisher's contract, mirrored here exactly once:</para>
 /// <code>
-/// &lt;root&gt;/_releases/&lt;platform-version&gt;      → a file holding that release's framework identity
-/// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/&lt;bundle&gt;.zip   → the bundles
-/// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/_complete      → the seal, written strictly LAST
+/// &lt;root&gt;/_releases/&lt;platform-version&gt;          → a file holding that release's framework identity
+/// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/&lt;bundle&gt;.zip       → the bundles
+/// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/platform-surface.json → the target platform's type surface (#3651)
+/// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/_complete          → the seal, written strictly LAST
 /// </code>
 ///
 /// <para>🚨 <b>The release marker is what makes "the target release's identity" knowable at all.</b>
@@ -52,6 +55,16 @@ public static class PublishedBundleCatalogue
     /// <see cref="ShippedPrebuiltBundles.PublishedRootConfigKey"/> so a consumer in the portal
     /// layer can address the same directory without referencing the hosting assembly.</summary>
     public const string PublishedRootConfigKey = ShippedPrebuiltBundles.PublishedRootConfigKey;
+
+    /// <summary>
+    /// 🚨 The TARGET platform's type surface, published beside <c>_complete</c> by
+    /// <c>publish-bake-bundles.sh</c> (#3651) — forwarded from
+    /// <see cref="ModulePlatformSurface.PublishedFileName"/> so the producer (the bake), the
+    /// publisher (the script) and this reader name one file. The bake runs INSIDE the target image,
+    /// which is the only process that can write what that platform carries; the gate reads it back
+    /// to link a landed module against a platform not running anywhere it can reach.
+    /// </summary>
+    public const string PlatformSurfaceFileName = ModulePlatformSurface.PublishedFileName;
 
     /// <summary>
     /// Reads the catalogue for one target release. Synchronous and total — every failure becomes a
@@ -367,6 +380,12 @@ public static class PublishedBundleCatalogue
         var producedBy = new Dictionary<string, SealedCopy>(StringComparer.Ordinal);
         var conflicts = ImmutableArray.CreateBuilder<string>();
         var refusals = new List<string>();
+        // 🚨 #3651 — the identity's PLATFORM SURFACE, from the first sealed source that carries one.
+        // Every source under one identity was baked inside the same image, so their documents
+        // describe the same platform; the first readable one is the surface. The reasons a source
+        // has none are collected so a gate that measured nothing can say why.
+        ModulePlatformSurface? surface = null;
+        var surfaceNotes = new List<string>();
 
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
                      .OrderBy(d => d, StringComparer.Ordinal))
@@ -380,6 +399,13 @@ public static class PublishedBundleCatalogue
             bundles.AddRange(complete);
             foreach (var bundle in complete)
                 records.AddRange(DependencyRecordsOf(Path.Combine(publication, bundle), bundle, logger));
+            if (surface is null)
+            {
+                var (read, note) = PlatformSurfaceOf(publication, source, logger);
+                surface = read;
+                if (note is not null)
+                    surfaceNotes.Add(note);
+            }
 
             var modules = SealedModulesOf(sourceDirectory, logger);
             if (modules.Modules is null)
@@ -430,7 +456,41 @@ public static class PublishedBundleCatalogue
                 conflicts.ToImmutable(),
                 refusals.Count == 0 ? null : string.Join("; ", refusals)),
             DependencyRecords = records.ToImmutable(),
+            PlatformSurface = surface,
+            PlatformSurfaceDetail = surface is not null
+                ? null
+                : surfaceNotes.Count == 0
+                    ? $"no sealed source under framework identity '{Path.GetFileName(identityDirectory)}' "
+                      + $"publishes {PlatformSurfaceFileName} (the publication predates #3651), so "
+                      + "the target's type surface is unknown here"
+                    : string.Join("; ", surfaceNotes),
         };
+    }
+
+    /// <summary>
+    /// One sealed source's <see cref="PlatformSurfaceFileName"/>, parsed — or the reason it yields
+    /// none. Absent is the ordinary state of a publication sealed before #3651 and is NOT logged as
+    /// a problem; a document that is there and does not parse IS, because a producer wrote
+    /// something the reader cannot use.
+    /// </summary>
+    private static (ModulePlatformSurface? Surface, string? Note) PlatformSurfaceOf(
+        string publication, string source, ILogger? logger)
+    {
+        var path = Path.Combine(publication, PlatformSurfaceFileName);
+        if (!File.Exists(path))
+            return (null, $"source '{source}' publishes no {PlatformSurfaceFileName} (sealed before #3651)");
+        try
+        {
+            return (ModulePlatformSurface.FromJson(File.ReadAllText(path)), null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            logger?.LogWarning(ex,
+                "ReleaseAvailability: {Path} is present but unusable — the target's type surface "
+                + "cannot be read from it, so no landed module can be linked against this release",
+                path);
+            return (null, $"source '{source}': {PlatformSurfaceFileName} could not be read ({ex.Message})");
+        }
     }
 
     /// <summary>
