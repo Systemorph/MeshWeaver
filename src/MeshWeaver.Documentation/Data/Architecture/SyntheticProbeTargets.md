@@ -144,12 +144,21 @@ monitor gets quietly weakened.
 - `AgenticPrimer` on the staff portal was guaranteed by **nothing**. No mechanism produces it there;
   it is an install decision somebody may or may not have made, and this repository cannot see which.
   The assertion was the wrong half — hence this page.
-- Compare #3670, filed the same night: the bake preflight refused because
-  `memex-portal-ai:latest` **resolved to no digest**. That tag *is* guaranteed — the promotion is
-  supposed to produce it, and the sibling `mw-plugin-test:latest` did. So there the *environment* is
-  the wrong half, and the gate refusing rather than falling back to the pin is it working correctly
-  (its own comment: *"Refusing to fall back to the pin, which would republish an already-published
-  identity and leave instances held"*).
+- **#3670, filed the same night, reads the same way and is not** — and it is worth the space,
+  because it is how this discriminator gets applied wrongly. The bake preflight refused because
+  `memex-portal-ai:latest` **resolved to no digest**, and the sibling `mw-plugin-test:latest` did
+  resolve, so the obvious reading was *the promotion is supposed to produce it, therefore the
+  environment is the wrong half*. Measured: the promotion never produced it. `promote` phase B writes
+  `main` on the portal and `main` + `latest` on the tester, three lines apart in one step; the
+  portal's `latest` came from a release lane deleted in `28fc2da4b`, and retention then purged the
+  frozen manifest it still pointed at. **No mechanism could be named**, so by the rule above the
+  assertion was the guess — and the repair was neither to repoint the consumer nor to put the tag
+  back, but to decide which tags are the contract (`main` + `<version>`, symmetrically on every
+  repository) and gate them at promotion time. See
+  [The Image Tag Contract](/Doc/Architecture/ImageTagContract). The gate refusing rather than falling
+  back to the pin was still correct (its own comment: *"Refusing to fall back to the pin, which would
+  republish an already-published identity and leave instances held"*) — a refusal is information
+  about the input, whichever half turns out to be wrong.
 
 So before repointing a red assertion, name the mechanism that was supposed to make it true. If you
 can name one, the red is a finding and repointing destroys it. If you cannot, the assertion was a
@@ -170,3 +179,6 @@ because it will look exactly like a target that used to work.
   where it does live.
 - [Reading CI Signals](../ReadingCiSignals) — skipped and absent contexts count as satisfied; the
   broader family this red belongs to.
+- [The Image Tag Contract](../ImageTagContract) — the same discriminator applied to #3670, where the
+  mechanism could not be named: which image tags the promotion actually publishes, and the gate that
+  makes a half-tagged set unrepresentable.

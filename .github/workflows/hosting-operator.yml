@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
           if [ "$tracked" -lt 20 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 20 (17 commands + run.sh + _common.sh + _audit.jq)."
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 21 (18 commands + run.sh + _common.sh + _audit.jq)."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -102,6 +102,7 @@ jobs:
           hosting-federate
           hosting-kv-ensure
           hosting-kv-purge
+          hosting-pull-secret
           hosting-pv-purge
           hosting-redirect
           hosting-restore
@@ -174,6 +175,19 @@ jobs:
           fi
           echo "_audit.jq parses (exit ${jq_rc} on empty inputs is its own refusal, as designed)"
 
+      - name: The test stubs are TRACKED and executable
+        # The same .gitignore trap as bin/ above, one directory over: the pull-secret behaviour
+        # tests run against stubs under test/stubs/pull-secret/, and a stub git refused to track
+        # makes those tests fail on a fresh checkout as "command not found" — or, worse, fall
+        # through to a REAL az/kubectl on a runner that has one.
+        run: |
+          set -euo pipefail
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl; do
+            git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
+            [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
+          done
+          echo "pull-secret stubs tracked and executable"
+
       - name: Behaviour tests
         run: deploy/aks/operator/test/run-tests.sh
 
@@ -229,3 +243,90 @@ jobs:
         run: |
           docker run --rm -v "$PWD/deploy/aks/operator/test:/opt/hosting/test:ro" \
             --entrypoint /bin/bash hosting-operator:ci -c 'cd /opt/hosting && bash test/run-tests.sh'
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════
+  # PUBLISH — on a push to main only. Never on a pull request (nothing from a PR reaches ACR),
+  # never with continue-on-error, never behind "is the secret set" (AGENTS.md → a gate never
+  # tests its own inputs): the preflight below asserts every external input and fails RED naming
+  # what to provision, and this job runs unconditionally after it.
+  #
+  # 🚨 WHY THIS JOB EXISTS. `meshweaver.azurecr.io/hosting-operator` was last built by hand on
+  # 2026-08-22 and NOTHING republished it: the two jobs above build the image on every push and
+  # then throw it away, so every fix to a hosting-* script since then — the audit, kv-rotate, the
+  # chart baked into the image — shipped to the repository and never to the Jobs that run them.
+  # The mesh names the image by tag (Hosting__Operator__Image); a tag nobody moves is a fleet
+  # running the operator as it was the day someone last remembered to `docker push`.
+  #
+  # Two tags per build: `<short sha>` (immutable — what a deployment record pins) and `main`
+  # (moving — what a Provision that has not pinned yet uses). Multi-arch is deliberately NOT
+  # built here: the Jobs run on the cluster's amd64 node pools, and the Dockerfile's TARGETARCH
+  # handles a laptop build.
+  # ═══════════════════════════════════════════════════════════════════════════════════════════
+  publish-preflight:
+    name: Publish preflight (every external input, or a red naming it)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every external input, or a red build naming what to provision
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          missing=()
+          [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login (the same one main-cd.yml uses)")
+          [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID           the Systemorph AAD tenant")
+          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the operator image cannot be published — provision the following under Settings → Secrets → Actions, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "All external inputs are present."
+
+  publish:
+    name: Publish operator image to ACR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [publish-preflight, scripts, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # id-token: write is required for OIDC federated login to Azure (no stored client secret) —
+    # the federated credential on the app registration is scoped to this repo's main branch,
+    # which is the only ref this job runs on.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ACR: meshweaver.azurecr.io
+    steps:
+      - uses: actions/checkout@v7
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        # The bounded transport retry main-cd.yml uses (#2827) — the bare one-liner has died on
+        # `context deadline exceeded` from a single runner while sibling jobs logged in fine.
+        run: bash .github/scripts/acr-login.sh
+      - name: Build and push hosting-operator:<sha> and :main
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker build -f deploy/aks/operator/Dockerfile \
+            -t "$ACR/hosting-operator:$short" -t "$ACR/hosting-operator:main" deploy/
+          docker push "$ACR/hosting-operator:$short"
+          docker push "$ACR/hosting-operator:main"
+      - name: Verify the tags exist in the registry (never the green tick)
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          # Read the pushed manifests BACK; a push that "succeeded" against a stale login has
+          # produced a green step and no image before (#2827's family).
+          az acr manifest show-metadata --registry meshweaver --name "hosting-operator:$short" --query digest -o tsv
+          az acr manifest show-metadata --registry meshweaver --name "hosting-operator:main" --query digest -o tsv
+          echo "published $ACR/hosting-operator:$short (+ :main)"

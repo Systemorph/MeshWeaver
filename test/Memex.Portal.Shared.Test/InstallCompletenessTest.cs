@@ -9,6 +9,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -64,6 +65,16 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
           }
         }
         """;
+
+    /// <summary>
+    /// The parser registry the INSTALL would use — the file→node rule's second half since #3659.
+    /// Built exactly as <c>InstallNodeRepo</c> builds it (hub serializer options + the
+    /// DI-contributed parsers), so these arms cannot agree with themselves while the installer
+    /// answers differently.
+    /// </summary>
+    private FileFormatParserRegistry Parsers() => new(
+        Mesh.JsonSerializerOptions,
+        Mesh.ServiceProvider.GetServices<IFileFormatParser>());
 
     private static PackageManifest Candidate() => new()
     {
@@ -125,7 +136,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         record!.ModuleVersion.Should().Be(ModuleHash,
             "the record's module hash is what the up-to-date gate compares — the whole premise is "
             + "that it stays EQUAL across the deletion, so the gate sees 'nothing to sync'");
-        InstallCompleteness.DeclaredNodePaths(record).Should().Contain(GuidePath,
+        InstallCompleteness.DeclaredNodePaths(record, Parsers()).Should().Contain(GuidePath,
             "the record must DECLARE the node for its absence to be detectable at all — a record "
             + "with no file map is the 'Undeclared' verdict, not a shortfall");
 
@@ -266,6 +277,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact]
     public void NotCheckedIsNeverClean()
     {
+        var parsers = Parsers();
         var declared = new PackageManifest
         {
             Id = Package,
@@ -274,30 +286,31 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
                 .Add($"{Package}/Guide.md", "bbb"),
         };
 
-        InstallCompleteness.Compare(Package, Package, null, ImmutableHashSet<string>.Empty)
+        InstallCompleteness.Compare(Package, Package, null, ImmutableHashSet<string>.Empty, parsers)
             .Kind.Should().Be(InstallCompletenessKind.Undeclared,
                 "no record at all means nothing declares what should be here");
 
         InstallCompleteness
-            .Compare(Package, Package, new PackageManifest { Id = Package }, ImmutableHashSet<string>.Empty)
+            .Compare(Package, Package, new PackageManifest { Id = Package }, ImmutableHashSet<string>.Empty, parsers)
             .IsComplete.Should().BeFalse(
                 "a record with no file map cannot be compared against anything — reporting that as "
                 + "complete is the 'zero found, zero expected, green' family");
 
-        InstallCompleteness.Compare(Package, Package, declared, null)
+        InstallCompleteness.Compare(Package, Package, declared, null, parsers)
             .Kind.Should().Be(InstallCompletenessKind.NotObserved,
                 "a mesh that could not be read was NOT checked; a failed read must never be spelled "
                 + "the same way as a real negative");
 
-        InstallCompleteness.Compare(Package, Package, declared, null)
+        InstallCompleteness.Compare(Package, Package, declared, null, parsers)
             .IsComplete.Should().BeFalse("and it is not a pass");
 
         InstallCompleteness
-            .Compare(Package, Package, declared, ImmutableHashSet.Create(StringComparer.Ordinal, GuidePath))
+            .Compare(Package, Package, declared, ImmutableHashSet.Create(StringComparer.Ordinal, GuidePath), parsers)
             .IsComplete.Should().BeTrue("the one case that IS a pass: every declared node observed");
 
         var short_ = InstallCompleteness.Compare(
-            Package, Package, declared, ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal));
+            Package, Package, declared, ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal),
+            parsers);
         short_.Kind.Should().Be(InstallCompletenessKind.Incomplete);
         short_.Missing.Should().ContainSingle().Which.Should().Be(GuidePath);
     }
@@ -319,7 +332,7 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         };
 
         var verdict = InstallCompleteness.Compare(
-            Package, "SomewhereElse", record, ImmutableHashSet<string>.Empty);
+            Package, "SomewhereElse", record, ImmutableHashSet<string>.Empty, Parsers());
 
         verdict.Kind.Should().Be(InstallCompletenessKind.Undeclared,
             "a file map that maps outside the target partition cannot answer whether that partition "
@@ -343,11 +356,172 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
                 .Add("README.md", "fff"),
         };
 
-        InstallCompleteness.DeclaredNodePaths(record).Should().ContainSingle().Which.Should().Be(
+        InstallCompleteness.DeclaredNodePaths(record, Parsers()).Should().ContainSingle().Which.Should().Be(
             GuidePath,
             "the manifest sidecar, content/** assets and the README are files, not nodes — counting "
             + "them would make every healthy install read as incomplete, and a check that is always "
             + "red is a check nobody reads");
+    }
+
+    // ── #3659: the DENOMINATOR — the declared population must be the installer's own ───────────
+
+    /// <summary>
+    /// 🚨 <b>THE repro of #3659, end to end.</b> A package ships files a parser claims (<c>.json</c>,
+    /// <c>.md</c>) and files no parser claims (<c>.tsx</c>, <c>.png</c>, an extension-less
+    /// <c>LICENSE</c>) — the ordinary shape of a real node repo. The install writes the first kind
+    /// and silently skips the second. The sweep must count the SAME population.
+    ///
+    /// <para>Before the fix the declared side applied only the by-design exclusions (README at the
+    /// repo root, the manifest sidecar, <c>content/**</c>) and counted every other file as a node
+    /// the install owed the mesh, so this package read as <c>Incomplete</c> with three phantom
+    /// paths ABSENT — at Error, on every pod boot, forever, and driving a full reinstall of the
+    /// package that could never make the count reach zero. <c>Chess/gui/rn/chess.tsx</c> is the
+    /// live instance.</para>
+    ///
+    /// <para><b>The assertion that keeps this honest</b> is the second half: after deleting a node
+    /// that IS a declared one, the same sweep must go <c>Incomplete</c> naming exactly it. Without
+    /// that, "Complete" here could be bought by a gate that excludes everything.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task FilesNoParserClaims_AreNotDeclaredNodes_AndARealAbsenceStillIs()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var logger = Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger<InstallCompletenessTest>();
+
+        await CatalogLayoutAreas
+            .InstallOrUpdate(Mesh, new FixedSource(CarryAlongFiles()), "HEAD", CarryAlongCandidate(), logger)
+            .Should().Within(180.Seconds())
+            .Emit("the install has to land before its completeness can be measured");
+
+        (await WaitForNode($"{CarryAlong}/Guide", present: true)).Should().BeTrue(
+            "the package's Guide node is what the second half of this test deletes — if the "
+            + "install never wrote it, both halves would pass for the wrong reason");
+
+        var record = await ReadRecord(CarryAlong);
+        record.Should().NotBeNull("the installer stamps an install record");
+        record!.InstalledFiles.Should().HaveCount(8,
+            "the record declares every file the package ships — that is the population the sweep "
+            + "counts over, and stating it is the point of this test");
+
+        var declared = InstallCompleteness.DeclaredNodePaths(record, Parsers());
+        declared.Should().Equal(
+            [CarryAlong, $"{CarryAlong}/Guide", $"{CarryAlong}/README"],
+            "only the files a registered parser claims become nodes — the installer skips the "
+            + "rest, so counting them is counting a population no install ever writes");
+        declared.Should().NotContain($"{CarryAlong}/gui/rn/widget",
+            "a .tsx view is a carry-along asset; this is Chess/gui/rn/chess, the reported phantom");
+        declared.Should().NotContain($"{CarryAlong}/logo", "nor is a .png");
+        declared.Should().NotContain($"{CarryAlong}/LICENSE", "nor is an extension-less file");
+
+        var verdict = await WaitForVerdict(record, InstallCompletenessKind.Complete, CarryAlong);
+        verdict.DeclaredFiles.Should().Be(8, "the record's file map is the population read");
+        verdict.NonNodeFiles.Should().Be(5,
+            "README.md at the REPO root is not in this map; the five are the manifest sidecar, "
+            + "the content/** asset, the .tsx, the .png and the extension-less LICENSE");
+        verdict.Declared.Should().Be(3, "leaving index.json, Guide.md and README.md");
+        verdict.Population.Should().Contain("8 file(s) declared").And.Contain("3 distinct node path(s)",
+            "a count over the wrong population reads exactly like a correct one unless the line "
+            + "says which population it was taken over");
+        verdict.ToString().Should().Contain("8 file(s) declared",
+            "and every surface that prints a verdict carries it");
+
+        // ── The control: the gate must not have blinded the sweep to a REAL loss.
+        await meshService.DeleteNode($"{CarryAlong}/Guide")
+            .Should().Within(60.Seconds())
+            .Emit("the deletion is the control's precondition");
+        (await WaitForNode($"{CarryAlong}/Guide", present: false)).Should().BeTrue(
+            "the node has to be gone before its absence can be the thing measured");
+
+        var afterLoss = await WaitForVerdict(record, InstallCompletenessKind.Incomplete, CarryAlong);
+        afterLoss.Missing.Should().ContainSingle().Which.Should().Be($"{CarryAlong}/Guide",
+            "a declared node that is genuinely absent is still a shortfall — the fix narrows the "
+            + "population, it does not narrow what a shortfall means");
+    }
+
+    /// <summary>
+    /// 🚨 The one-argument <c>NodePathForFile</c> is public API a DEPENDENT repo already calls —
+    /// <c>MeshWeaver.Plugins</c>' <c>ModuleManifestTest.NodePathMappingSkipsNonNodeFiles</c>, six
+    /// assertions. Removing it when #3659 gave the rule a second half would have reddened that
+    /// repo's build at its next platform-pin move while its adaptation could not compile until that
+    /// same pin moved, so it stays as a convenience over the BUILT-IN parser set. Its contract is
+    /// pinned HERE, in the repo that owns the method, because this is where a change can break it —
+    /// a cross-repo caller cannot defend itself.
+    ///
+    /// <para>The loop is the guard that matters: on this host the convenience overload and the
+    /// hub's own registry must give the SAME answer for every shape, so the overload is a
+    /// convenience and never a second rule.</para>
+    /// </summary>
+    [Fact]
+    public void TheBuiltInOverload_AgreesWithTheHubsRegistry_AndWithTheDependentsAssertions()
+    {
+        string?[] shapes =
+        [
+            "Widget/Thing.json", "Widget/index.json", "Widget/Thing/Source/Thing.cs",
+            "Widget/manifest.lock", "README.md", "Widget/Poster/content/poster.png",
+            "Widget/gui/rn/widget.tsx", "Widget/logo.png", "Widget/LICENSE",
+        ];
+
+        // The dependent's six assertions, verbatim.
+        PackageInstaller.NodePathForFile("Widget/Thing.json").Should().Be("Widget/Thing");
+        PackageInstaller.NodePathForFile("Widget/index.json").Should().Be("Widget");
+        PackageInstaller.NodePathForFile("Widget/Thing/Source/Thing.cs")
+            .Should().Be("Widget/Thing/Source/Thing");
+        PackageInstaller.NodePathForFile("Widget/manifest.lock").Should().BeNull();
+        PackageInstaller.NodePathForFile("README.md").Should().BeNull();
+        PackageInstaller.NodePathForFile("Widget/Poster/content/poster.png").Should().BeNull(
+            "a removed content asset must never prune its owning node");
+
+        // …and #3659's own half: a carry-along asset is not a node candidate either.
+        PackageInstaller.NodePathForFile("Widget/gui/rn/widget.tsx").Should().BeNull(
+            "no registered parser claims .tsx, so no install ever writes it — this is the "
+            + "Chess/gui/rn/chess phantom");
+        PackageInstaller.NodePathForFile("Widget/logo.png").Should().BeNull("nor .png");
+        PackageInstaller.NodePathForFile("Widget/LICENSE").Should().BeNull(
+            "nor a file with no extension at all");
+
+        var parsers = Parsers();
+        foreach (var shape in shapes)
+            PackageInstaller.NodePathForFile(shape!, parsers).Should()
+                .Be(PackageInstaller.NodePathForFile(shape!),
+                    "the convenience overload must not be a SECOND rule — where this host's "
+                    + "registry and the built-in set disagree, the install and the sweep would "
+                    + "again be counting different populations");
+    }
+
+    /// <summary>
+    /// The pure arm of the same rule, so the population statement can be read without a mesh: a
+    /// record whose files are ALL carry-along assets declares no node at all, and says so as
+    /// <see cref="InstallCompletenessKind.Undeclared"/> — never <c>Complete</c>, which would be
+    /// "zero found, zero expected, green" (AGENTS.md), and never <c>Incomplete</c>, which is what
+    /// it answered before #3659.
+    /// </summary>
+    [Fact]
+    public void ARecordOfNothingButCarryAlongFiles_DeclaresNoNode_AndSaysSo()
+    {
+        var record = new PackageManifest
+        {
+            Id = Package,
+            TargetPartition = Package,
+            InstalledFiles = ImmutableSortedDictionary<string, string>.Empty
+                .Add($"{Package}/gui/rn/widget.tsx", "aaa")
+                .Add($"{Package}/logo.png", "bbb")
+                .Add($"{Package}/LICENSE", "ccc"),
+        };
+
+        var verdict = InstallCompleteness.Compare(
+            Package, Package, record,
+            ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal), Parsers());
+
+        verdict.Kind.Should().Be(InstallCompletenessKind.Undeclared,
+            "no file in this record is a node candidate, so nothing declares what the partition "
+            + "should hold — before #3659 all three were counted and reported ABSENT on every boot");
+        verdict.IsComplete.Should().BeFalse("'not declared' is not a clean bill of health either");
+        verdict.DeclaredFiles.Should().Be(3);
+        verdict.NonNodeFiles.Should().Be(3);
+        verdict.Because.Should().Contain("non-node files",
+            "the reason has to name WHY there is nothing to compare, or the operator cannot tell "
+            + "this apart from a record that was never stamped");
     }
 
     /// <summary>
@@ -439,21 +613,78 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
             .Timeout(120.Seconds())
             .Await();
 
-    private async Task<PackageManifest?> ReadRecord()
+    private Task<PackageManifest?> ReadRecord() => ReadRecord(Package);
+
+    private async Task<PackageManifest?> ReadRecord(string packageId)
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var node = await persistence
-            .Read($"{PackageInstaller.InstalledPartition}/{Package}", Mesh.JsonSerializerOptions)
+            .Read($"{PackageInstaller.InstalledPartition}/{packageId}", Mesh.JsonSerializerOptions)
             .Take(1)
             .Timeout(60.Seconds())
             .Await();
         return node?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions);
     }
 
+    // ── #3659 fixture: a package carrying the files a real node repo carries ────────────────────
+
+    private const string CarryAlong = "CarryAlongPkg";
+    private const string CarryAlongHash = "fedcba9876543210";
+
+    private static PackageManifest CarryAlongCandidate() => new()
+    {
+        Id = CarryAlong,
+        Name = CarryAlong,
+        Kind = PackageKind.NodeRepo,
+        TargetPartition = CarryAlong,
+        SourceFolder = CarryAlong,
+        Version = "1.0.0",
+        ModuleVersion = CarryAlongHash,
+    };
+
+    private static IReadOnlyList<PackageFile> CarryAlongFiles() =>
+    [
+        new PackageFile($"{CarryAlong}/{ModuleManifest.FileName}", $$"""
+            {
+              "module": "{{CarryAlong}}",
+              "moduleVersion": "{{CarryAlongHash}}",
+              "version": "1.0.0",
+              "files": {
+                "{{CarryAlong}}/{{ModuleManifest.FileName}}": "000",
+                "{{CarryAlong}}/index.json": "aaa",
+                "{{CarryAlong}}/Guide.md": "bbb",
+                "{{CarryAlong}}/README.md": "ccc",
+                "{{CarryAlong}}/gui/rn/widget.tsx": "ddd",
+                "{{CarryAlong}}/logo.png": "eee",
+                "{{CarryAlong}}/LICENSE": "fff",
+                "{{CarryAlong}}/content/og.png": "ggg"
+              }
+            }
+            """),
+        new PackageFile($"{CarryAlong}/index.json", $$"""
+            {
+              "id": "{{CarryAlong}}",
+              "path": "{{CarryAlong}}",
+              "nodeType": "Space",
+              "name": "Carry-along package",
+              "state": "Active"
+            }
+            """),
+        new PackageFile($"{CarryAlong}/Guide.md", "# Guide\n\nA node, and the control's subject."),
+        new PackageFile($"{CarryAlong}/README.md", "# Carry-along\n\nA node: the root-only README "
+            + "exclusion does not match a package-folder README."),
+        // The three the installer silently skips — a React Native view, an image, a licence file.
+        new PackageFile($"{CarryAlong}/gui/rn/widget.tsx", "export const Widget = () => null;"),
+        new PackageFile($"{CarryAlong}/logo.png", "not really a png, and no parser claims .png"),
+        new PackageFile($"{CarryAlong}/LICENSE", "MIT"),
+        // …and one that is a non-node BY DESIGN, which was already excluded before #3659.
+        new PackageFile($"{CarryAlong}/content/og.png", "a content asset"),
+    ];
+
     private IObservable<InstallCompletenessVerdict> Observe(PackageManifest record) =>
         InstallCompleteness.Observe(
             Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
-            Mesh.JsonSerializerOptions, Package, Package, record);
+            Mesh.JsonSerializerOptions, Package, Package, record, Parsers());
 
     /// <summary>
     /// Waits for the verdict to REACH <paramref name="kind"/> rather than sampling once: the delete
@@ -461,10 +692,16 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
     /// observation and this is a condition, never a clock (AGENTS.md — never Task.Delay to wait for
     /// propagation).
     /// </summary>
-    private async Task<InstallCompletenessVerdict> WaitForVerdict(
+    private Task<InstallCompletenessVerdict> WaitForVerdict(
         PackageManifest record, InstallCompletenessKind kind) =>
+        WaitForVerdict(record, kind, Package);
+
+    private async Task<InstallCompletenessVerdict> WaitForVerdict(
+        PackageManifest record, InstallCompletenessKind kind, string packageId) =>
         await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-            .SelectMany(_ => Observe(record))
+            .SelectMany(_ => InstallCompleteness.Observe(
+                Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
+                Mesh.JsonSerializerOptions, packageId, packageId, record, Parsers()))
             .Where(v => v.Kind == kind)
             .FirstAsync()
             .Timeout(120.Seconds())

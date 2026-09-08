@@ -415,6 +415,34 @@ data:
   # #2494's safety net. Same typed-key rule as the line above: a real default, never "" — this
   # binds to a TimeSpan and an empty string aborts the host in the configuration binder.
   SelfUpdate__SafetyNetCheckInterval: "{{ .Values.config.memex_portal.SelfUpdate__SafetyNetCheckInterval | default "01:00:00" }}"
+  # The registry this installation pulls its platform images from and lists them on
+  # (MeshWeaver#3353). Rendered ONLY when selfUpdate.registry is set: SelfUpdateOptions.Registry
+  # has a real default (the upstream ACR) and every image the updater rolls to is named on it, so
+  # an empty string here would make the poller roll to "/memex-portal-ai:<tag>" — the opposite of
+  # inert. Absent ⇒ the image default; a host ⇒ the OCI mirror, listed with the instance key.
+  {{- if (.Values.selfUpdate).registry }}
+  SelfUpdate__Registry: "{{ .Values.selfUpdate.registry }}"
+  {{- end }}
+  # ---- Container image mirror (MeshWeaver#3353, src/MeshWeaver.ContainerImages) --------------
+  # The /v2 pull surface THIS installation serves. Rendered only when containerImages.upstream is
+  # set — an absent block reaches no container and the mirror stays OFF (every /v2 route 404s).
+  # 🚨 ContainerImages__Password is NOT here: a secret arrives through the Key Vault CSI mapping
+  # (keyVaultSecrets.secrets → key: ContainerImages__Password), never through a ConfigMap.
+  {{- if (.Values.containerImages).upstream }}
+  ContainerImages__Upstream: "{{ .Values.containerImages.upstream }}"
+  ContainerImages__Username: "{{ .Values.containerImages.username | default "" }}"
+  ContainerImages__ImageRoot: "{{ .Values.containerImages.imageRoot | default "" }}"
+  ContainerImages__CacheDirectory: "{{ .Values.containerImages.cacheDirectory | default "" }}"
+  {{- /* Binds to a long: rendered only when set, never "" (invariant 9 in check-chart-invariants). */}}
+  {{- if .Values.containerImages.cacheMaxBytes }}
+  ContainerImages__CacheMaxBytes: "{{ .Values.containerImages.cacheMaxBytes }}"
+  {{- end }}
+  {{- /* The allowlist, index by index, the same shape as PluginCatalog__Registries__<i>. An empty
+         list renders no key, which the mirror reads as "serve nothing" — never as "serve all". */}}
+  {{- range $i, $r := .Values.containerImages.repositories }}
+  ContainerImages__Repositories__{{ $i }}: "{{ $r }}"
+  {{- end }}
+  {{- end }}
   # ---- Deployment inventory (Doc/Architecture/DeploymentInventory) ---------------------------
   # Every instance reports what it runs — platform build, commit, framework identity, update policy
   # and every module's pinned coordinate — to the control instance's Hosting/Modules inbox, once

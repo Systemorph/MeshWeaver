@@ -16,6 +16,28 @@ persistDataVolume: false
 # a `helm uninstall` can never take the data with it. Previously these mounts were bolted on by
 # per-env kubectl JSON patches AFTER helm — any unpatched `helm upgrade` silently reverted /data to
 # emptyDir, wiping the caches on every restart.
+# 🚨 The chart renders NO PersistentVolumeClaim unless an entry says `create: true`. Every claim
+# named above on memex / memex-cloud was applied BY HAND from deploy/aks/manifests/portal-pvcs.yaml
+# and is unmanaged by helm — so `create` MUST stay absent/false on those environments: a chart
+# that started rendering `memex-data` there would fail the next upgrade on "resource already
+# exists". A record-driven Provision of a NEW instance (MeshWeaver#3353, the Hosting operator) is
+# the case `create: true` exists for: without it a new namespace gets emptyDir (no claimName → the
+# Memex#134 data-loss shape) or pods stuck Pending on a claim nothing created.
+#
+# With `create: true` the chart renders one PersistentVolumeClaim per entry (templates/memex-portal/
+# pvc.yaml), named `claimName`, with `size` and `storageClass` REQUIRED (a missing one fails the
+# render naming the entry — never a claim of chart-default size on the wrong class), `accessMode`
+# defaulting to ReadWriteMany (every portal claim is shared across replicas), and annotated
+# `helm.sh/resource-policy: keep`, so an uninstall never takes the data with it. `mountPath` keeps
+# its meaning from above; an entry with no claimName is never rendered.
+#
+#   content:
+#     claimName: "memex-content"
+#     create: true
+#     size: "128Gi"
+#     storageClass: "azurefile-memex"
+#     accessMode: "ReadWriteMany"
+#     mountPath: "/mnt/content"
 persistence:
   data:
     claimName: ""
@@ -29,6 +51,57 @@ persistence:
 # leave empty for local/self-host (the in-cluster patch still works; ACR polling just won't auth).
 selfUpdate:
   azureClientId: ""
+  # 🚨 WHERE THIS INSTALLATION PULLS ITS PLATFORM IMAGES FROM, AND LISTS THEM (MeshWeaver#3353).
+  # Empty (the default) keeps SelfUpdate__Registry at the image's own default — the upstream Azure
+  # Container Registry, listed through ACR's API with the workload identity above. A registry
+  # login-server host here — `memex.meshweaver.cloud`, the read-through mirror another
+  # installation serves at /v2 — makes the self-updater list tags through the OCI Distribution API
+  # instead, authenticated with THIS installation's plugin-registry instance key (the mirror host
+  # must equal a pluginCatalog registry's host; no second secret), and roll to images named on
+  # that host. Every installation EXCEPT the one serving the mirror sets this — the mirror instance
+  # cannot serve the image that boots it (Doc/Architecture/ContainerRegistryInMemex).
+  #
+  # 🚨 PAIRED with portal.imagePullSecret below: the images the updater rolls to are named on this
+  # host, so the kubelet needs a credential for it. AcrPull on the node identity covers ACR only.
+  registry: ""
+# ---- Container image mirror (the /v2 pull surface THIS installation serves) -----------------
+# The read-through OCI mirror (src/MeshWeaver.ContainerImages, MeshWeaver#3353): this installation
+# proxies container images from an upstream registry with ONE credential it holds, while every
+# caller — a satellite's CI, another installation's self-updater — authenticates with the plugin-
+# registry instance key it already carries. ONLY the mirror instance (memex.meshweaver.cloud)
+# sets this block; every other installation is a CONSUMER and sets selfUpdate.registry +
+# portal.imagePullSecret instead.
+#
+# Rendered ONLY when `upstream` is set, and then key by key into the portal ConfigMap as
+# ContainerImages__Upstream / __Username / __ImageRoot / __CacheDirectory / __CacheMaxBytes and
+# ContainerImages__Repositories__<i>. Absent block ⇒ no key rendered ⇒ the mirror is OFF and every
+# /v2 route answers 404 (never a partial service). 🚨 `ContainerImages__Password` is a SECRET and
+# is NOT rendered from values: it arrives through the Key Vault CSI mapping like every other
+# credential —
+#   keyVaultSecrets.secrets:
+#     - vaultSecret: <prefix>ContainerImages-Password
+#       key: ContainerImages__Password
+# The mirror is off unless Upstream, Username AND Password are all present.
+containerImages:
+  # The upstream registry login server, e.g. meshweaver.azurecr.io. Empty ⇒ the block is inert.
+  upstream: ""
+  # The upstream pull credential's username (an ACR token name). Its password comes from Key Vault.
+  username: ""
+  # 🚨 The ALLOWLIST of repositories this mirror serves. EMPTY MEANS NONE — without it one upstream
+  # credential becomes an open read proxy for the whole registry.
+  repositories: []
+  #   - memex-portal-ai
+  #   - memex-migration
+  #   - mw-plugin-test
+  # Where every served manifest is recorded as a ContainerImage node (the node must exist).
+  # Empty ⇒ recording is off; the mirror still proxies.
+  imageRoot: ""
+  # The digest-keyed read-through cache. Empty ⇒ off, the mirror proxies every pull. On a
+  # multi-replica installation this must be a SHARED (ReadWriteMany) mount, e.g. under /data.
+  cacheDirectory: ""
+  # The cache's byte budget (an integer). Empty ⇒ the image default (20 GiB). Rendered only when
+  # set: it binds to a long, and a blank string fails the binder at startup.
+  cacheMaxBytes: ""
 # ---- Plugin catalog ---------------------------------------------------------
 # Plugins are folders of mesh nodes in (usually private) git repos. ONE install acts as the
 # REGISTRY: it alone holds the git credential, reads the repos listed in `sources`, and re-serves
@@ -433,6 +506,13 @@ ollama:
 # swaps whatever else on the machine is already running them at its next restart.
 portal:
   image: "ghcr.io/systemorph/memex-portal-ai:latest"
+  # The NAME of a kubernetes.io/dockerconfigjson Secret in this namespace, rendered as
+  # `imagePullSecrets` on the portal Deployment's pod spec AND the migration Job's — the two pods
+  # that pull the platform images. Empty (the default) renders nothing, and the AKS kubelet's
+  # AcrPull keeps working exactly as today. Set it on an installation whose selfUpdate.registry
+  # is the mirror: the operator's `hosting-pull-secret` creates the Secret from the instance key in
+  # Key Vault (deploy/aks/manifests/hosting-operator/README.md). MeshWeaver#3353.
+  imagePullSecret: ""
   # How long a rolled-out pod may keep serving the sessions it already has. The container's preStop
   # drains the ingress (15s) and then waits on /drain until its last Blazor circuit closes, so this
   # is the ceiling on "how long may someone keep working on the OLD build after a roll" — not a

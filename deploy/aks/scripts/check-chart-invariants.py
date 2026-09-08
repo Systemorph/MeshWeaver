@@ -99,7 +99,7 @@ if floor > 1:
     }
     modes = {
         (d.get("metadata") or {}).get("name"): (d.get("spec") or {}).get("accessModes") or []
-        for d in load_all(pvc_path)
+        for d in load_all(pvc_path) + by_kind("PersistentVolumeClaim")
         if d.get("kind") == "PersistentVolumeClaim"
     }
     for claim in sorted(claims):
@@ -246,6 +246,14 @@ NEVER_BLANK_CONFIG = {
         "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
     "AzureAIS__Order":
         "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
+    "ContainerImages__CacheMaxBytes":
+        "binds to a long (ContainerImageOptions.CacheMaxBytes, the read-through cache's byte "
+        "budget). Absent leaves the image default (20 GiB); an empty string fails the binder at "
+        "startup. Rendered only when containerImages.cacheMaxBytes is set.",
+    "SelfUpdate__Registry":
+        "binds to SelfUpdateOptions.Registry, whose default is the upstream ACR and whose value "
+        "names the host of EVERY image the self-updater rolls to. Blank is not inert here — it is "
+        "a roll to '/memex-portal-ai:<tag>'. Rendered only when selfUpdate.registry is set.",
 }
 
 for key, why in NEVER_BLANK_CONFIG.items():
@@ -305,6 +313,86 @@ elif _probe_paths["readinessProbe"] == _probe_paths["startupProbe"]:
         "the survivors inherit its traffic: the 2026-07-21 death spiral. The startup probe already "
         "holds readiness on the heavy path until the mesh is up; after that readiness must be cheap.",
     )
+
+# ---------------------------------------------------------------------------
+# 11. The platform-image pull secret is on BOTH pods that pull a platform image, or on neither.
+#
+# MeshWeaver#3353: an installation that pulls from the mirror instead of ACR needs a
+# kubernetes.io/dockerconfigjson credential on every pod that pulls memex-portal-ai or
+# memex-migration. The chart renders `portal.imagePullSecret` onto the portal Deployment AND the
+# migration Job; a template edit that dropped it from one would leave a Job in ImagePullBackOff
+# while the portal rolls — and helm upgrade waits on that Job, so the deploy hangs on the one
+# object nobody looks at. The two pod specs are asserted against each other, per render.
+# ---------------------------------------------------------------------------
+checks += 1
+# The Job is named per release revision (memex-migration-<n>), so it is found by its component
+# label, and its ABSENCE is a finding: the chart always renders one, so a render without it is not
+# the shape this check understands, and "no Job to compare" must never read as "they agree".
+migration = next(
+    (d for d in by_kind("Job")
+     if ((d.get("metadata") or {}).get("labels") or {}).get("app.kubernetes.io/component") == "memex-migration"),
+    None)
+if migration is None:
+    finding(
+        "the render contains no Job labelled app.kubernetes.io/component=memex-migration",
+        "the chart always renders the migration Job (memex-migration/job.yaml), and invariant 11 "
+        "compares its pod spec against the portal's — with no Job there is nothing to compare, "
+        "which must not read as agreement.",
+    )
+else:
+    _portal_pull = {s.get("name") for s in (pod.get("imagePullSecrets") or [])}
+    _mig_pod = (((migration.get("spec") or {}).get("template") or {}).get("spec")) or {}
+    _mig_pull = {s.get("name") for s in (_mig_pod.get("imagePullSecrets") or [])}
+    if _portal_pull != _mig_pull:
+        finding(
+            f"imagePullSecrets differ between the portal Deployment ({sorted(_portal_pull) or 'none'}) "
+            f"and the migration Job ({sorted(_mig_pull) or 'none'})",
+            "both pull a platform image from the same registry (portal.imagePullSecret). The one "
+            "without the credential is stuck in ImagePullBackOff while the other rolls — for the "
+            "Job, that is a helm upgrade that never completes.",
+        )
+
+# ---------------------------------------------------------------------------
+# 12. A chart-created PersistentVolumeClaim is sized, classed, kept, and actually mounted.
+#
+# MeshWeaver#3353: templates/memex-portal/pvc.yaml renders a claim for each persistence.<name>
+# with `create: true`. Its `required` calls refuse a missing size or class at render time, so a
+# rendered claim carrying neither can only mean the template lost them; `helm.sh/resource-policy:
+# keep` is what stands between a helm uninstall and the data; and a claim the portal pod does not
+# mount is storage nobody uses — the values entry that created it named a claimName the volumes
+# block did not, i.e. the two halves of one entry disagree.
+# ---------------------------------------------------------------------------
+checks += 1
+_mounted_claims = {
+    v["persistentVolumeClaim"]["claimName"]
+    for v in (pod.get("volumes") or [])
+    if isinstance(v.get("persistentVolumeClaim"), dict)
+    and v["persistentVolumeClaim"].get("claimName")
+}
+for _pvc in by_kind("PersistentVolumeClaim"):
+    _pvc_name = (_pvc.get("metadata") or {}).get("name")
+    _pvc_spec = _pvc.get("spec") or {}
+    _size = ((_pvc_spec.get("resources") or {}).get("requests") or {}).get("storage")
+    _keep = ((_pvc.get("metadata") or {}).get("annotations") or {}).get("helm.sh/resource-policy")
+    if not _size or not _pvc_spec.get("storageClassName"):
+        finding(
+            f"chart-created PVC '{_pvc_name}' has no size or no storageClassName",
+            "pvc.yaml marks both `required`; a rendered claim without them means the template "
+            "changed shape. A claim of default size on the default class is a claim on the wrong tier.",
+        )
+    if _keep != "keep":
+        finding(
+            f"chart-created PVC '{_pvc_name}' is not annotated helm.sh/resource-policy: keep",
+            "without it a helm uninstall — or `create` flipped back to false — deletes the claim and "
+            "its data as a side effect of a release going away. Deleting data is an operator's "
+            "explicit act.",
+        )
+    if _pvc_name not in _mounted_claims:
+        finding(
+            f"chart-created PVC '{_pvc_name}' is not mounted by the portal pod",
+            "the persistence entry that created it names a claimName the volumes block does not use "
+            "— the two halves of one entry disagree, and the storage is provisioned for nobody.",
+        )
 
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:

@@ -40,6 +40,7 @@ public class SelfUpdateHostedService : IHostedService
 {
     private readonly IMessageHub _hub;
     private readonly IAcrTagLister _acr;
+    private readonly OciTagLister? _oci;
     private readonly IDeploymentUpdater _updater;
     private readonly SelfUpdateOptions _options;
     private readonly ILogger<SelfUpdateHostedService>? _logger;
@@ -70,10 +71,12 @@ public class SelfUpdateHostedService : IHostedService
         IDeploymentUpdater updater,
         SelfUpdateOptions options,
         ILogger<SelfUpdateHostedService>? logger = null,
-        IoPoolRegistry? registry = null)
+        IoPoolRegistry? registry = null,
+        OciTagLister? oci = null)
     {
         _hub = hub;
         _acr = acr;
+        _oci = oci;
         _updater = updater;
         _options = options;
         _logger = logger;
@@ -86,11 +89,12 @@ public class SelfUpdateHostedService : IHostedService
     {
         _logger?.LogInformation(
             "[SelfUpdate] starting (event-driven, with a {SafetyNet} safety net); version={Version}, "
-            + "registry={Registry}/{Repo}, canPatch={CanPatch}, retryInterval={Interval}.",
+            + "registry={Registry}/{Repo} listed as {RegistryKind}, canPatch={CanPatch}, retryInterval={Interval}.",
             _options.SafetyNetCheckInterval > TimeSpan.Zero
                 ? _options.SafetyNetCheckInterval.ToString()
                 : "disabled",
             ShippedReleaseSeed.InstalledPlatformVersion, _options.Registry, _options.PortalRepository,
+            UsesOciListing ? "an OCI Distribution registry (the mirror, instance-key auth)" : "an Azure Container Registry",
             _updater.CanPatch, _options.RetryInterval);
 
         // 🚨 EVENT-DRIVEN WITH A SAFETY NET, and the event source is deliberately OUTSIDE the
@@ -572,6 +576,26 @@ public class SelfUpdateHostedService : IHostedService
             return Observable.Timer(delay);
         });
 
+    /// <summary>
+    /// Whether tags are listed through the OCI Distribution API rather than ACR's own: true for
+    /// any <see cref="SelfUpdateOptions.Registry"/> that is not an <c>*.azurecr.io</c> host AND
+    /// an <see cref="OciTagLister"/> was supplied. Without one (a host constructed without the
+    /// platform registration) the ACR seam is used as before, so nothing that worked stops.
+    /// </summary>
+    private bool UsesOciListing => _oci is not null && !_options.RegistryIsAzureContainerRegistry;
+
+    /// <summary>
+    /// The tag listing, from whichever registry kind <see cref="SelfUpdateOptions.Registry"/>
+    /// names (#3353). The ACR path is BYTE-IDENTICAL to what it was: the module-supplied
+    /// <see cref="IAcrTagLister"/> inside the Http pool. A non-ACR host — the read-through mirror
+    /// another installation serves — is listed by <see cref="OciTagLister"/>, which authenticates
+    /// with this install's own plugin-registry instance key and follows every page.
+    /// </summary>
+    private IObservable<IReadOnlyList<string>> ListTags() =>
+        UsesOciListing
+            ? _oci!.ListTags(_options.PortalRepository)
+            : _http.Invoke(ct => _acr.ListTagsAsync(_options.PortalRepository, ct));
+
     /// <summary>One evaluation: list tags → pick target per policy → gate target &gt; current →
     /// record availability → (if armed) patch the workloads.
     ///
@@ -591,7 +615,7 @@ public class SelfUpdateHostedService : IHostedService
         if (policy.Policy == UpdatePolicyKind.None)
             return Observable.Return(SelfUpdateVerdict.UpdatesDisabled());
 
-        return _http.Invoke(ct => _acr.ListTagsAsync(_options.PortalRepository, ct))
+        return ListTags()
             // 🚨 The BEST ROLLABLE release, not merely the newest one. A target is only rollable if a
             // sealed content bake exists for the identity that exact image resolves to, and picking
             // the newest tag and stopping means one unbaked release freezes the instance FOREVER:

@@ -1689,9 +1689,36 @@ public record LayoutAreaHost : IDisposable
     internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
         => LayoutDefinition.AreaDefinitions.Values.Where(l => l.IsVisible());
 
+    /// <summary>The area a node falls back to when nothing declares a default. See <see cref="ResolveDefaultArea"/>.</summary>
+    public const string ConventionalDefaultArea = "Overview";
+
     /// <summary>
-    /// Resolves the default area name from LayoutDefinition.DefaultArea,
-    /// or falls back to the first visible area definition.
+    /// Resolves the default area name from <c>LayoutDefinition.DefaultArea</c>, else the
+    /// conventional <see cref="ConventionalDefaultArea"/>, else the first visible area definition.
+    ///
+    /// <para>🚨 <b>The middle step exists because the last one is decided by HASH ORDER, and that
+    /// is not a decision anybody makes.</b> <c>AreaDefinitions</c> is an
+    /// <c>ImmutableDictionary</c>, whose <c>.Values</c> enumerate in hash-trie order, and
+    /// <c>Order</c> is null on almost every area definition — so <c>OrderBy(l =&gt; l.Order ?? 0)</c>
+    /// ties on 0 for all of them and the survivor is whichever KEY happened to hash first. That
+    /// makes the default a property of the whole area-name SET: installing a plugin that adds one
+    /// more area re-rolls it, on every node type, with nothing logged. Every layout in the tree
+    /// that states a default states
+    /// <c>Overview</c> (<c>MeshNodeLayoutAreas</c>, <c>MarkdownLayoutAreas</c>,
+    /// <c>CodeLayoutAreas</c>, <c>NodeTypeLayoutAreas</c>, <c>ActivityLayoutAreas</c>,
+    /// <c>CommentLayoutAreas</c>, …), so when a hub's composed definition carries no default the
+    /// intended answer is Overview — and picking it explicitly is what stops a newly-installed
+    /// plugin from silently becoming the landing page of every node on the mesh.</para>
+    ///
+    /// <para>Measured on memex 2026-09-08: <c>/PartnerRe/</c> (a <c>Space</c>) resolved its default
+    /// to <c>Workspace</c> — an area no layout on that hub registers — and rendered
+    /// "Area not found", while <c>/PartnerRe/Overview</c> rendered the full page. Nothing anywhere
+    /// calls <c>WithDefaultArea("Workspace")</c>; the composed definition simply had no default and
+    /// the order fallback picked a foreign area. A node whose own Overview renders perfectly must
+    /// not land on another type's area because of registration order.</para>
+    ///
+    /// <para>The order fallback is KEPT as the last resort: a layout that genuinely registers no
+    /// Overview (a single-area app view) still resolves to its only area rather than to nothing.</para>
     /// </summary>
     private string ResolveDefaultArea()
     {
@@ -1699,9 +1726,18 @@ public record LayoutAreaHost : IDisposable
         if (!string.IsNullOrEmpty(LayoutDefinition.DefaultArea))
             return LayoutDefinition.DefaultArea;
 
-        // Fall back to the first visible area definition
-        var firstArea = LayoutDefinition.AreaDefinitions.Values
+        var visible = LayoutDefinition.AreaDefinitions.Values
             .Where(l => l.IsVisible())
+            .ToArray();
+
+        // The convention, before order gets a vote.
+        var conventional = visible.FirstOrDefault(
+            l => string.Equals(l.Area, ConventionalDefaultArea, StringComparison.Ordinal));
+        if (conventional is not null)
+            return conventional.Area;
+
+        // Last resort: the first visible area definition.
+        var firstArea = visible
             .OrderBy(l => l.Order ?? 0)
             .FirstOrDefault();
 
