@@ -142,9 +142,22 @@ portal and left the other with no key at all.
 credential entry, compare it against the source it will fall through to and require the answer
 `EQUAL`:
 
+🚨 **Be precise about where the value travels — this is the part that is easy to state wrongly.**
+`kubectl` is a *client*: both the inline `env:` value (read from the Deployment spec) and the Secret
+data cross the Kubernetes API to **wherever `kubectl` runs**. What the snippet below buys is that
+neither value is ever *printed, logged or persisted* — only a verdict and a length are emitted. That
+is a real and worthwhile property, and it is a different one from "the value stayed in the cluster".
+
+The in-cluster claim is true only of the route this cluster actually allows. It is private, so
+`kubectl` is reachable **only** through `az aks command invoke`, which uploads the script, runs it in
+a pod on the cluster, and returns that pod's *stdout*. Run that way the credential is read
+API-server-side and only the verdict crosses back. Run the same snippet from a laptop and the
+credential lands in that laptop's shell process — same commands, different boundary. Say which one
+you used.
+
 ```sh
-# Runs INSIDE the cluster. Values enter shell variables and never leave the pod:
-# the only thing that crosses the boundary is the verdict and the length.
+# Run through `az aks command invoke -f eq.sh --command "sh eq.sh"`, so the read happens in-cluster
+# and only these verdict lines come back. Nothing here prints a value under any route.
 inline() { kubectl -n "$1" get deploy <deployment> -o go-template='{{range .spec.template.spec.containers}}{{if eq .name "<container>"}}{{range .env}}{{if eq .name "<KEY>"}}{{.value}}{{end}}{{end}}{{end}}{{end}}'; }
 sec()    { kubectl -n "$1" get secret "$2" -o go-template="{{index .data \"$3\"}}" | base64 -d; }
 A=$(inline <ns>); B=$(sec <ns> <synced-secret> <KEY>)
