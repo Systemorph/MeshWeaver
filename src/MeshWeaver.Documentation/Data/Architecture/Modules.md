@@ -5,7 +5,7 @@ Description: The module lane end to end — MeshNodeProviderAttribute, the Modul
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
 ---
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A declared `minMeshVersion` no longer refuses, holds or skips a module anywhere on this page's lane — loadability is measured by the link probe, and an installation keeps its previous generation when a newer one does not load. The mechanism described below is what runs until [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) and [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649) lands; this page is rewritten by that change.
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** A declared `minMeshVersion` no longer refuses, holds or skips a module anywhere on this page's lane — loadability is measured by the link probe, and an installation keeps its previous generation when a newer one does not load. Implemented in [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661) (2026-09-08); the sections below describe the mechanism as it runs now.
 
 A **module** is a compiled MeshWeaver assembly a deployment turns on by LISTING it — no code
 change, no recompile of the platform. This page is the operator- and author-facing reference for
