@@ -121,16 +121,19 @@ folder is deleted, and the change likewise takes effect at restart.
 
 **The skip rules** (persisted entries only — the deployment must always boot):
 
-- **Unsatisfied platform floor** — the running platform no longer satisfies the module's declared
-  `minMeshVersion` (a rollback below its requirement). The entry is SKIPPED with a loud log
-  naming both versions and stays in the sidecar, waiting for the platform to move forward again.
-  The gate is `ModulePlatformFloor.DeclineReason` — the ONE notion of the module platform
-  requirement, shared with landing and serving. Deliberately a **semver floor, never MVID
-  equality**: a module is a plain assembly binding by simple name, so a landed module keeps
-  loading across ordinary platform updates; MVID equality is bake semantics and belongs to the
-  NodeType assembly lane. The identity it was built with, recorded on the entry, is never a
-  LANDING gate — it answers the separate question of whether there is anything new to land
-  ("Already landed" means this content against this FRAMEWORK, below).
+- **Declared platform floor — ADVISORY, never a skip (#3648).** The entry's `minMeshVersion` is
+  compared with the running platform by `ModulePlatformFloor.DeclineReason` — still the ONE notion
+  of the declared requirement, shared with landing, serving and the pack-time lint — but since
+  #3648 a floor the running platform does not satisfy decides nothing at boot: the sentence
+  naming both versions is logged and carried onto the activation report and the module's status
+  row ("declares platform ≥ X; running Y"), and the entry is loaded like any other. Whether it
+  loads is MEASURED — the link probe below and the actual load. The comparison stays a **semver
+  floor, never MVID equality**: a module is a plain assembly binding by simple name, so a landed
+  module keeps loading across ordinary platform updates; MVID equality is bake semantics and
+  belongs to the NodeType lane. Why the floor stopped gating: it ranks a continuous build below a
+  release candidate, and on 2026-09-07 that held every production portal on its morning build
+  for a day while every candidate would have loaded (`Doc/Architecture/ModuleAdoptionPolicy`,
+  rule R2).
 - **Missing DLL** — the entry's `modules/<name>/<name>.dll` does not exist (lost volume, manual
   deletion). Skipped loudly; re-install to heal. The check is that path SPECIFICALLY — a
   same-named DLL in the app closure never satisfies a store-installed entry (the
