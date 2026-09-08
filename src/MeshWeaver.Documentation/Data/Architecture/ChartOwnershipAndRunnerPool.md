@@ -76,6 +76,13 @@ GitHub-hosted runners cannot mount persistent drives, which is what the original
 The approximation already in place is per-digest blob caching; what remains per job is a
 once-per-digest fill and a checkout of a few seconds.
 
+> 🚨 **The first half of this shipped on 2026-09-07, and it did NOT use a dedicated node pool.**
+> The measured headroom on the existing pool made the standing cost avoidable; isolation comes from
+> a negative priority class, a `ResourceQuota` and an explicit reserve instead. What was deployed,
+> the caps and the arithmetic behind them are the state of record in
+> [Self-hosted CI runners on AKS](../SelfHostedRunners). The rest of the shape below — the git
+> mirror, the warm layer store, the opt-in labels — is still outstanding.
+
 The full shape, recorded so it can be picked up rather than re-derived:
 
 - **ARC on the existing cluster**, on a dedicated node pool so CI cannot starve the portal.
@@ -104,4 +111,5 @@ standing cost.
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — what a published image set guarantees
 - [Deployment — AKS](../DeploymentAKS) — read end-to-end before any AKS deploy
 - [Module Build Architecture](../ModuleBuildArchitecture) — the unified build shape every repo runs
+- [Self-hosted CI runners on AKS](../SelfHostedRunners) — what actually runs, its caps, and how to scale or remove it
 - [Reading CI Signals](../ReadingCiSignals) — why a skipped required context reads as satisfied

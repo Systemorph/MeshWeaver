@@ -99,6 +99,18 @@ without coordinating: **the ordinally smallest `Id` wins**, and the conflict is 
 lost — a proposal is derived from the activation record, never from the previous proposal, so the
 next wave's sequence N+2 carries everything both replicas landed.
 
+**…and a conflict is DECIDED once, not re-decided on every boot (#3656).** The winner is a pure
+function of the records, so the loser has no further job the moment anything has read the pair: it
+cannot be adopted (`Read` matches an adoption against the WINNER's id), it is not in the GC's
+reference set, and the landings behind it ride the next wave whether it survives or not. What it
+did do while it survived was make the conflict re-detectable forever — `Prune` only reaches BELOW
+the current set, so a duplicate at the newest sequence outlived every pass, and every pod's sweep
+re-read it and re-reported the same decided conflict on every boot. The modules GC now retires the
+loser (`ModuleSetStore.PruneDuplicateProposals`, gated on the same fail-closed read-fault counter
+as every other removal), reporting it once, where it is decided. A record whose id cannot be READ
+makes the winner unknown, so nothing at that sequence is retired — the one thing this must never do
+is delete the record the mesh resolves to.
+
 **The reader decides from the NAMES and opens only what the decision needs.** Every record's name
 carries its sequence and set id (`<sequence:D9>-<id16>.proposed|adopted.json`), so one directory
 listing determines the newest proposal and the newest adopted set; `ModuleSetStore.Read` then opens
@@ -112,6 +124,52 @@ KEDA could add nothing. A record no decision depends on is neither read nor repo
 superseded record is `Prune`'s to remove, not the reader's to announce on every probe, and the
 conflict notice names only the sequences that were actually decided on (the historical
 "proposed by more than one replica" lines that used to repeat on every boot are gone).
+
+## The generation is the content address (#3656)
+
+A module's generation directory leaf is `<name>@<16 hex of SHA-256 over the bytes the landing
+writes>` — every file's module-relative path, its length and its bytes, ordinal-sorted by path.
+Two landings of the same bundle therefore resolve to the **same directory**, and the second one
+adopts what is there instead of writing a second copy.
+
+**Why this belongs to convergence and not merely to storage.** The leaf used to be
+`<name>@<8 random hex>`, and that is what turned a harmless simultaneity into a permanent
+divergence. Every replica reconciles the same feed at boot and on every `ModulePublished`
+broadcast, so two replicas deciding to land one published bundle at the same moment is the normal
+shape, not a rarity. With a random leaf each wrote the *identical bytes* under a *different* name;
+`GenerationsOf` reads the DIRECTORY off the activation record, so the set each derived named a
+different generation for that module, and both were proposed at sequence N+1 with different ids —
+a conflict about nothing. The cost compounded three ways:
+
+- the loser's generation directory was left behind as garbage;
+- the loser's `.proposed.json` sat at the mesh's newest sequence, re-read and re-reported by every
+  pod's sweep on every boot;
+- the two sets named different directories for identical bytes, so replicas on either side pinned
+  different generations and the NodeType stamp ping-ponged — the #3395 symptom, re-created by the
+  fix's own plumbing.
+
+Measured on `memex-cloud`, 2026-09-08: **100 duplicate sequences, 687 set records, 843 generation
+directories**.
+
+With the content address the two landings are one landing: same leaf, same activation entry, same
+derived set, and the second replica's `Propose` is the no-op it should always have been — no
+conflicting record is ever written. A **genuine** conflict (two replicas landing different content)
+still derives two sets and is still reported; the report is now about something that actually
+differs.
+
+Two consequences worth stating, because both look surprising until the rule is in view:
+
+- **A bundle republished with identical assemblies is not a new generation.** Its version and
+  framework identity move on the activation entry; the directory does not, because the bytes did
+  not. What runs is what runs.
+- **An existing directory is the right answer, never a collision.** The landing probes for it, and
+  catches the rename that loses the race to another replica; it then refreshes the directory's
+  timestamp, which is what puts a generation nothing referenced a moment ago back inside the
+  [#2303 grace window](/Doc/Architecture/Modules) before the activation entry references it.
+  Sixteen hex characters, not the eight the random leaf used: a content address that COLLIDED
+  would make a landing adopt somebody else's bytes, where a random one merely failed the rename.
+  It also means no legacy `<name>@<8 hex>` directory can ever be mistaken for a content-addressed
+  one — the lengths differ.
 
 ## Boot — converge, don't serve your own
 
