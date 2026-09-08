@@ -311,6 +311,31 @@ moves only in MeshWeaver.Plugins. What it removes is the *silence* — the state
 created by a green pull request, in a repository that cannot discharge it, with no record anywhere
 that it was created at all.
 
+### Which core a new key has to reach — three refs, three clocks
+
+🚨 **"Is the key live?" and "will the guard go green?" are DIFFERENT questions with different
+answers**, and conflating them produces both mistakes: declaring a portal broken when it is fine,
+and declaring a pin irrelevant when a required check is waiting on it. Measured 2026-09-08 while
+landing the `/onboarding` keys.
+
+| what reads the catalog | which core it resolves | so a key merged to core `main` … |
+|---|---|---|
+| the **portal a visitor signs up on** — `memex-portal-ai`, built by MeshWeaver.Plugins' `portal-ai-image.yml` | `MW_IMAGE_PLATFORM_REF`, declared in that workflow as **`main`** (the repo VARIABLE `MW_PLATFORM_REF` would override it and is unset there) | reaches the running portal on that lane's next build, with **no pin bump** |
+| the **CI that guards the key** — MeshWeaver.Plugins' suites, in the required `Build + test the portal hosts` context | `ci.yml`'s `MW_PLATFORM_REF`, a sealed-set pin moved on the release cadence | is **absent until the pin moves**, so a test asserting the key exists is RED in the meantime |
+| the **React / RN clients** | neither — the generated mirror's own pin in `clients/react/src/i18n/catalog-source.json` | needs `sync:i18n`, as above |
+
+The middle row is deliberate, not an accident to route around: it is what makes the cross-repo half
+VISIBLE. Without it the adopting page compiles, CI is green, and a mistyped key ships a raw token to
+a new user. So the ordering is: the **core catalog half merges first**, the **adoption half waits
+for the pin** (MeshWeaver.Plugins#1455 merged the day after core#3562 for exactly this reason), and
+the **mirror waits for the sync**. Do not "fix" the middle row by moving the pin for one pull
+request — the pin moves at fourteen sites together with the image digests, and moving it obliges
+every other open pull request in that repo to merge `main`.
+
+The first two rows cannot drift arbitrarily apart: `check-platform-pins.py --check-image-gap` bounds
+the image's core against `ci.yml`'s pin by the same two constants as the staleness arms (24 h, 120
+commits) and fails the image lane RED beyond them.
+
 ## Language resolution
 
 `Locales.Resolve` falls back in three steps: exact match → primary subtag → English. So `de-CH`,
