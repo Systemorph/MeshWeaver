@@ -78,6 +78,17 @@ public class BakeOutputTest(ITestOutputHelper output)
             var recordedMvid = File.ReadAllText(mvidFile).Trim();
             recordedMvid.Should().Be(PrebuiltAssemblySeeder.LiveFrameworkMvid);
 
+            // 🚨 The PLATFORM SURFACE beside it (#3651): what this platform carries, keyed to the
+            // same identity, readable by the release gate's reader — the document that lets a
+            // roll gate link a landed module against a platform not running anywhere it can reach.
+            var surfaceFile = Path.Combine(bakeDir, BakeOutput.PlatformSurfaceFile);
+            File.Exists(surfaceFile).Should().BeTrue("the bake must publish the platform's type surface");
+            var surface = MeshWeaver.Mesh.ModulePlatformSurface.FromJson(
+                await File.ReadAllTextAsync(surfaceFile, TestContext.Current.CancellationToken));
+            surface.Identity.Should().Be(PrebuiltAssemblySeeder.LiveFrameworkMvid);
+            surface.Carries("MeshWeaver.Mesh.Contract").Should().BeTrue();
+            surface.TypesOf("MeshWeaver.Mesh.Contract").Should().Contain(typeof(MeshWeaver.Mesh.MeshNode).FullName!);
+
             // One bundle per package, readable by the ONE consumer codec.
             var bundlePath = Path.Combine(bakeDir, "Widget.zip");
             File.Exists(bundlePath).Should().BeTrue(

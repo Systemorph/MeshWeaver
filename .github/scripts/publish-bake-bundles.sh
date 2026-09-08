@@ -2,7 +2,7 @@
 # publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>] [<release-version>]
 #
 # Publishes a CI NodeType bake (the directory mw-plugin-test's --bake-output wrote: one
-# <package>.zip per package + framework-mvid.txt) to the shared storage the portals read at boot
+# <package>.zip per package + framework-mvid.txt + platform-surface.json) to the shared storage the portals read at boot
 # (#1660 WS3). The portal side is ShippedPrebuiltBundles.SeedPublishedRoot: each pod seeds
 # <PreWarm:PrebuiltBundleRoot>/<its-own-framework-identity>/**/*.zip, so the key layout here is
 #
@@ -209,6 +209,36 @@ ARCH_MARKER="architecture.txt"
 ARCH_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$ARCH_MARKER"
 printf '%s\n' "$BAKE_ARCHITECTURE" > "$ARCH_MARKER_LOCAL"
 
+# 🚨 THE PLATFORM SURFACE (MeshWeaver#3651) — `platform-surface.json`, written by the bake beside
+# framework-mvid.txt (BakeOutput.PlatformSurfaceFile; the name is ModulePlatformSurface.PublishedFileName
+# and PublishedBundleCatalogue.PlatformSurfaceFileName reads it back): the assemblies the platform
+# carries and the full type names each exports. The bake runs INSIDE the platform image, so it is
+# the one process that can say what that platform has; the release gate reads this document to
+# link an instance's LANDED module generation against the target — "would this module load there"
+# — which is the ONLY thing that holds a platform roll since #3651. A missing content bake no
+# longer holds (the instance compiles at boot, as every PR of that content already proved green),
+# and a declared floor never did anything a string could get right.
+#
+# Published beside _complete like the other markers — not part of the seeder's contract (it seeds
+# what the sentinel lists), written BEFORE the sentinel so a sealed directory always carries a
+# consistent one, and verified by the postcondition below like every other file.
+#
+# 🚨 OPTIONAL, and loudly so. A bake taken with an image that predates #3651 writes none, and the
+# gate's answer for such a publication is "Indeterminate for the link check" — REPORTED on the
+# verdict, neither clearance nor a hold (the boot-time probe and the keep-the-previous-generation
+# fallback are the safety net). So its absence is a ::warning:: naming what the gate will not be
+# able to measure, never a refusal to publish: refusing here would hold every satellite on an older
+# tester pin from publishing at all, which is a worse outage than an unmeasured link. It is NOT a
+# skip-trapdoor — nothing is skipped, and the consumer names the absence on every verdict.
+SURFACE_FILE="platform-surface.json"
+SURFACE_LOCAL="$BAKE_DIR/$SURFACE_FILE"
+if [ -s "$SURFACE_LOCAL" ]; then
+  HAS_SURFACE=true
+else
+  HAS_SURFACE=false
+  echo "::warning::$BAKE_DIR carries no $SURFACE_FILE — the bake was taken with a platform image that predates MeshWeaver#3651, so the release gate cannot link a landed module against this identity and reports every such module as 'could not be determined' (reported, not a hold). Move the bake image forward to publish the surface."
+fi
+
 # ══════════════════════ THE TWO-WRITER POSTCONDITION (MeshWeaver#3461) ══════════════════════
 #
 # 🚨 `<identity>/plugins` HAS SEVERAL WRITERS. Core CD's `plugins-bake` job publishes `bake-source:
@@ -337,6 +367,7 @@ for m in ${MODULES[@]+"${MODULES[@]}"}; do
 done
 manifest_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 manifest_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
+if [ "$HAS_SURFACE" = "true" ]; then manifest_add "$SURFACE_FILE" "$SURFACE_LOCAL"; fi
 manifest_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 manifest_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
 # The denominator every verification prints and every refusal quotes. A publication with nothing
@@ -347,7 +378,9 @@ if [ "${MANIFEST_COUNT:-0}" -lt 1 ]; then
   echo "::error::the publication manifest is EMPTY — nothing would be verified before the seal, so the seal would claim completeness for an unchecked directory. Refusing."
   exit 1
 fi
-echo "publication $PUBLICATION: $MANIFEST_COUNT file(s) to publish and verify per target (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), 3 marker/index file(s))"
+MARKER_COUNT=4
+if [ "$HAS_SURFACE" = "true" ]; then MARKER_COUNT=5; fi
+echo "publication $PUBLICATION: $MANIFEST_COUNT file(s) to publish and verify per target (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), $MARKER_COUNT marker/index file(s)$([ "$HAS_SURFACE" = "true" ] && echo ", surface published" || echo ", NO platform surface"))"
 
 # Uploads ONE file of the publication, stamped with the two metadata values the postcondition
 # reads back. The digest is LOOKED UP from the manifest rather than recomputed: a file uploaded
@@ -606,6 +639,14 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
   # basename. An extensionless "$dest/$SENTINEL" --path would be silently re-interpreted as a
   # DIRECTORY and fail ParentNotFound (see the SENTINEL_LOCAL comment above).
   upload_published_file "$account" "$share" "$dest" "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL" "$dest"
+  # The platform surface (#3651) — before repository.txt and architecture.txt, which stay the last
+  # uploads before the postcondition (the overlap harness hooks its second publisher onto them).
+  # A ".json" --path is a FILE to the CLI, so the full path is passed; the directory trick the
+  # extensionless markers need does not apply here.
+  if [ "$HAS_SURFACE" = "true" ]; then
+    upload_published_file "$account" "$share" "$dest" "$SURFACE_FILE" "$SURFACE_LOCAL"
+    echo "published surface: $account/$share/$dest/$SURFACE_FILE"
+  fi
   upload_published_file "$account" "$share" "$dest" "$REPO_MARKER" "$REPO_MARKER_LOCAL" "$dest"
   upload_published_file "$account" "$share" "$dest" "$ARCH_MARKER" "$ARCH_MARKER_LOCAL" "$dest"
   # 🚨 THE POSTCONDITION, between the last content upload and the seal (MeshWeaver#3461). Every
@@ -621,7 +662,7 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
     --path "$dest" --source "$SENTINEL_LOCAL" \
     --metadata "digest=$(sha256_of "$SENTINEL_LOCAL")" "publication=$PUBLICATION" \
     --auth-mode login --backup-intent --only-show-errors > /dev/null
-  echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown})"
+  echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown}, platform surface: $HAS_SURFACE)"
 }
 
 # 🚨 PER-TARGET ISOLATION (Plugins #2682, 2026-08-30). Each target is published in its OWN subshell:
@@ -790,4 +831,4 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
   exit 1
 fi
 
-echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} targets-published=$PUBLISHED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
+echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"

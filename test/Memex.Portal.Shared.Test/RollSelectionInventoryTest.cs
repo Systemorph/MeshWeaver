@@ -67,11 +67,11 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
     /// <summary>
     /// 🚨 THE ALGORITHM, denominator and all: four install records, a newer release that ships three
-    /// of them and an older one that ships all four. The service declines the newer NAMING Feedback
-    /// and selects the older.
+    /// of them and an older one that ships all four. The service selects the NEWER (#3651 — a
+    /// missing bake is a boot compile, not a decline) and the outcome NAMES Feedback as the cost.
     /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task SelectsTheLatestReleaseThatShipsEveryInstalledPackage()
+    public async Task SelectsTheNewestRelease_NamingThePackageItRecompilesAtBoot()
     {
         foreach (var id in Installed)
             await Record(id);
@@ -85,12 +85,40 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
         Output.WriteLine(outcome.Summary);
 
         outcome.Kind.Should().Be(RollSelectionKind.Update);
-        outcome.SelectedVersion.Should().Be(CompleteVersion);
+        outcome.SelectedVersion.Should().Be(IncompleteVersion);
+        outcome.Declined.Should().BeEmpty();
         outcome.RequiredPlugins.Should().Be(
             Installed.Length,
             "the denominator is the environment's install records, and it is stated rather than "
             + "inferred from a pass");
         outcome.Summary.Should().Contain("install records");
+        outcome.BootCompiles.Should().Equal(["Feedback"]);
+        outcome.Summary.Should().Contain("would recompile at boot: Feedback");
+    }
+
+    /// <summary>
+    /// The same fixture on an instance that opts into <c>Modules:RequirePrebuilt</c> — the strict
+    /// mode in which the seeder refuses a boot compile — declines the newer NAMING Feedback and
+    /// selects the older, exactly as every instance did before #3651. Read from the instance's
+    /// own configuration, the same key the seeder reads.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task UnderRequirePrebuilt_SelectsTheLatestReleaseThatShipsEveryInstalledPackage()
+    {
+        foreach (var id in Installed)
+            await Record(id);
+
+        var root = StagedRoot();
+
+        var outcome = await Service(root, requirePrebuilt: true)
+            .SelectRollTarget(RunningVersion, [IncompleteVersion, CompleteVersion])
+            .Should().Within(TestTimeouts.Convergence).Emit();
+
+        Output.WriteLine(outcome.Summary);
+
+        outcome.Kind.Should().Be(RollSelectionKind.Update);
+        outcome.SelectedVersion.Should().Be(CompleteVersion);
+        outcome.BootCompiles.Should().BeEmpty();
 
         var declined = outcome.Declined.Should().ContainSingle().Subject;
         declined.Version.Should().Be(IncompleteVersion);
@@ -141,9 +169,9 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
     /// <summary>
     /// With no candidate list the service derives one from the published root's own release markers
     /// — so an environment can answer "which release should I be on" without listing a container
-    /// registry it may not be able to reach. Ordering is <c>VersionSelect</c>'s, which is why the
-    /// older-but-complete release wins over the newer incomplete one rather than over a
-    /// lexicographic accident.
+    /// registry it may not be able to reach. Ordering is <c>VersionSelect</c>'s, which is why —
+    /// on the strict instance, where the incomplete release is declined — the older-but-complete
+    /// release wins over the newer incomplete one rather than over a lexicographic accident.
     /// </summary>
     [Fact(Timeout = 240_000)]
     public async Task DerivesItsCandidatesFromThePublishedReleaseMarkers()
@@ -153,7 +181,7 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         var root = StagedRoot();
 
-        var outcome = await Service(root)
+        var outcome = await Service(root, requirePrebuilt: true)
             .SelectRollTarget(RunningVersion)
             .Should().Within(TestTimeouts.Convergence).Emit();
 
@@ -189,12 +217,17 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
     // ── fixture ─────────────────────────────────────────────────────────────────────────────────
 
-    private ReleaseAvailabilityService Service(string publishedRoot) =>
+    /// <summary>The service over a root, on an instance that does or does not opt into
+    /// <c>Modules:RequirePrebuilt</c> — the same configuration key the seeder reads, on the same
+    /// configuration the service reads its published root from.</summary>
+    private ReleaseAvailabilityService Service(string publishedRoot, bool requirePrebuilt = false) =>
         new(Mesh,
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 [ShippedPrebuiltBundles.PublishedRootConfigKey] = publishedRoot,
                 [DeploymentReportService.DeploymentKey] = "memex",
+                [MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.RequirePrebuiltConfigKey] =
+                    requirePrebuilt ? "true" : null,
             }).Build());
 
     /// <summary>One install record, exactly as <c>PackageInstaller</c> writes it — the same nodes

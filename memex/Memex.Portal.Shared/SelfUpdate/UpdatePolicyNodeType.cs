@@ -156,6 +156,33 @@ public record UpdatePolicyContent
     public DateTimeOffset? HeldAt { get; init; }
 
     /// <summary>
+    /// The tag the availability gate most recently evaluated and had something to SAY about
+    /// without deciding on it (#3651) — held or not. Written beside <see cref="Advisories"/> on
+    /// every gate evaluation, so the Updates tab renders the advisories only for the tag they
+    /// describe. Not user-editable.
+    /// </summary>
+    [Browsable(false)]
+    public string? AdvisoriesTag { get; init; }
+
+    /// <summary>
+    /// 🚨 What the gate reported about <see cref="AdvisoriesTag"/> WITHOUT holding on it (#3651,
+    /// <c>UpdatabilityVerdict.Advisories</c>), one line per item joined with <c>"; "</c>: the
+    /// packages that would recompile at boot because no bake is sealed for the target, a landed
+    /// module whose loadability on the target could not be measured, a declared platform floor
+    /// the target does not rank above. Cleared (null) when the last evaluation had nothing to say.
+    /// This exists so a roll that compiles content at boot is a VISIBLE state on the tab an
+    /// operator already looks at, not a fact that lives only in a pod log. Not user-editable.
+    /// </summary>
+    [Browsable(false)]
+    public string? Advisories { get; init; }
+
+    /// <summary>Whether <paramref name="tag"/> is the tag <see cref="Advisories"/> describe.</summary>
+    public bool HasAdvisoriesFor(string? tag) =>
+        !string.IsNullOrEmpty(tag)
+        && !string.IsNullOrEmpty(Advisories)
+        && string.Equals(AdvisoriesTag, tag, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// 🚨 The version this install RUNS, when the last check found that it is no longer published in
     /// the registry (#3543); <c>null</c> otherwise. Written by the poller on EVERY check, so it is
     /// cleared the moment the tag resolves again — the same unconditional-clearing rule the

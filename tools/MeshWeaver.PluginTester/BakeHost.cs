@@ -71,6 +71,18 @@ internal sealed class BakeHost
     public string? Note { get; init; }
 
     /// <summary>
+    /// 🚨 The host's TYPE SURFACE (#3651) — what the bake writes as
+    /// <see cref="ModulePlatformSurface.PublishedFileName"/> beside <c>framework-mvid.txt</c>, so
+    /// the release gate can link a landed module against this platform without this platform
+    /// running anywhere it can reach. A factory, because measuring it reads the metadata of every
+    /// assembly in the reference set and a bake that stops before writing bundles never needs it.
+    /// Read from the same set the bake compiles against: the running process for an in-process
+    /// host, the host's <c>/app</c> plus its shared frameworks for a directory host — the same
+    /// precedence the reference set already applied.
+    /// </summary>
+    public required Func<ModulePlatformSurface> Surface { get; init; }
+
+    /// <summary>
     /// 🚨 <b>One producer per assembly name (#3175).</b> A module composed with <c>--module</c> that
     /// the host ALSO ships in its application directory — or lists in its surface manifest — is two
     /// builds of one simple name inside one bake. The id resolver puts modules first, so every
@@ -137,6 +149,9 @@ internal sealed class BakeHost
             Note = PrebuiltAssemblySeeder.LiveFrameworkIdentityWarning is { } warning
                 ? $"framework identity degraded — {warning}"
                 : null,
+            // The process IS the host: its loaded assemblies plus its application directory, which
+            // is exactly the surface the portal's own boot probe measures (MeshBuilder).
+            Surface = () => ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory),
         };
 
     /// <summary>
@@ -257,6 +272,10 @@ internal sealed class BakeHost
                 + $"{modules.Count} composed module(s)"
                 + (skipped == 0 ? string.Empty : $"; {skipped} non-managed file(s) skipped"),
             IsThisProcess = false,
+            // The host's own files, in the reference set's precedence (shared frameworks, then the
+            // TPA — empty here — then /app, later wins in AssembliesByName): what a portal booted
+            // from that /app binds a module to. Never this process's loaded assemblies.
+            Surface = () => ModulePlatformSurface.OfFiles(set.AssemblyPaths),
             // Informational, not a refusal: with the toolchain verified equal, a process whose OTHER
             // canonical surfaces differ from the host's still emits bytes bound to the host's
             // assemblies (they are the references) and records the host's ids. The bake is valid
