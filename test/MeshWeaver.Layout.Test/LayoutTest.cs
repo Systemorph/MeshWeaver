@@ -1497,3 +1497,70 @@ public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(o
             "UpdatePointer with empty pointer should update the value at DataContext");
     }
 }
+
+/// <summary>
+/// 🚨 A hub whose composed layout declares NO default area must not land on whichever module
+/// registered first.
+///
+/// <para><c>LayoutAreaHost.ResolveDefaultArea</c> used to fall straight through to
+/// <c>OrderBy(l =&gt; l.Order ?? 0).FirstOrDefault()</c> over <c>AreaDefinitions</c> — an
+/// <c>ImmutableDictionary</c>. <c>Order</c> is null on almost every area definition, so every entry
+/// ties on 0 and the survivor is whichever KEY HASHED FIRST. The default is therefore a property of
+/// the whole area-name SET: installing a plugin that adds one more area silently re-rolls it.
+/// Measured here — over the ten-area set below the un-fixed resolver answers <c>"Details"</c>.</para>
+///
+/// <para>Measured on memex 2026-09-08: <c>/PartnerRe/</c> (a <c>Space</c>) resolved its default to
+/// <c>Workspace</c>, an area no layout on that hub registers, and rendered "Area not found" — while
+/// <c>/PartnerRe/Overview</c> rendered the complete page. Nothing anywhere calls
+/// <c>WithDefaultArea("Workspace")</c>; the composed definition simply carried no default.</para>
+///
+/// <para>The foreign area is registered FIRST here on purpose: under the old rule it wins, so this
+/// test fails without the fix rather than passing for the wrong reason.</para>
+/// </summary>
+public class DefaultAreaConventionTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private const string ForeignView = "Workspace";
+    private const string OverviewView = "Overview";
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+        => base.ConfigureHost(configuration)
+            .WithRoutes(r => r.RouteAddress(ClientType, (_, d) => d.Package()))
+            // NO WithDefaultArea — this is the case the fallback decides.
+            .AddLayout(layout =>
+                layout
+                    // The real hub's shape: a Space carries a dozen areas from several modules.
+                    // ImmutableDictionary enumerates by HASH, so which one comes first is a
+                    // property of the whole key SET — installing one more plugin re-rolls it.
+                    .WithView(ForeignView, Controls.Html("another type's area"))
+                    .WithView("Details", Controls.Html("details"))
+                    .WithView("Catalog", Controls.Html("catalog"))
+                    .WithView("Chat", Controls.Html("chat"))
+                    .WithView("Data", Controls.Html("data"))
+                    .WithView("Files", Controls.Html("files"))
+                    .WithView("Edit", Controls.Html("edit"))
+                    .WithView("Threads", Controls.Html("threads"))
+                    .WithView("Search", Controls.Html("search"))
+                    .WithView(OverviewView, Controls.Html("the node's own overview"))
+            );
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration).AddLayoutClient(d => d);
+
+    [HubFact]
+    public async Task NoDeclaredDefault_ResolvesToOverview_NotTheFirstRegisteredArea()
+    {
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            new LayoutAreaReference(null));
+
+        var control = await stream.GetControlStream(string.Empty)
+            .Should().Within(10.Seconds()).Match(x => x != null);
+
+        var namedArea = control.Should().BeOfType<NamedAreaControl>().Which;
+        namedArea.Area.Should().Be(OverviewView,
+            "a hub that declares no default must land on its own Overview — hash order over the "
+            + "area-name set is not a decision, and letting it decide is how a Space came to "
+            + "resolve its landing page to another type's area");
+    }
+}
