@@ -547,7 +547,9 @@ carries a **different MVID**. Two copies with the same MVID are the same bytes i
 warn nothing, or the line would be noise.
 
 It reports the array it is HANDED, so the line and the load cannot disagree; the acceptance is
-literally that the path in `/proc/1/maps` equals the path the line named:
+literally that the path in `/proc/1/maps` equals the path the line named (a break-glass read —
+"which modules does THIS replica run" is one of the per-replica facts the Hosting API does not
+report yet, [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)):
 
 ```bash
 kubectl exec -n <ns> <pod> -c memex-portal -- sh -c \

@@ -9,7 +9,9 @@ Icon: Cloud
 
 This is **one of two deploy routes** for MeshWeaver. Use it for the shared portals on the **AKS cluster `<aks-cluster>`** (resource group `<aks-resource-group>`, region swedencentral) — the `memex` namespace, backed by the Postgres Flexible Server, with container images in ACR `meshweaver.azurecr.io`. For the Azure Container Apps route (Aspire `test`/`prod` modes via `tools/deploy.sh`), see [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps). These are **different routes to different targets**, not old-vs-new — pick the one that matches where you're deploying.
 
-> **The cluster is private.** `kubectl` is not reachable directly — every command runs through `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`, which executes inside the cluster's API-server-side runner.
+> 🚨 **This runbook is the bootstrap / break-glass form of a `Roll`.** Since 2026-09-08 the rule is that operations go through the control instance's Hosting API: the instance is a `Deployments/<name>` record, its image pin is the roll, and a `Roll` (or `Restart`, `Suspend`, `Audit`, `Reconcile`) `Hosting/InstanceAction` is what the in-cluster operator executes — running exactly the commands below for you. Read them as what happens, not as what you type. Policy, and what the API does not answer yet: [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).
+>
+> **The cluster is private.** `kubectl` is not reachable directly — where a break-glass command is unavoidable it runs through `az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command "…"`, which executes inside the cluster's API-server-side runner.
 
 A **code update** is three steps: build the images, point the Deployments at the new tag, restart. It is **not** `tools/deploy.sh` and **not** `aspire deploy` — those are the Container Apps route.
 

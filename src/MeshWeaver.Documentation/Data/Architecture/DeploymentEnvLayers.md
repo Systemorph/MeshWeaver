@@ -148,7 +148,10 @@ data cross the Kubernetes API to **wherever `kubectl` runs**. What the snippet b
 neither value is ever *printed, logged or persisted* — only a verdict and a length are emitted. That
 is a real and worthwhile property, and it is a different one from "the value stayed in the cluster".
 
-The in-cluster claim is true only of the route this cluster actually allows. It is private, so
+The in-cluster claim is true only of the route this cluster actually allows — and that route is
+break-glass: the record's `inlineEnv` / `extraPortalConfig` / key-vault classes on the control
+instance plus an `Audit` `Hosting/InstanceAction` are the API-side answer to "what does the pod
+actually run" ([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)). It is private, so
 `kubectl` is reachable **only** through `az aks command invoke`, which uploads the script, runs it in
 a pod on the cluster, and returns that pod's *stdout*. Run that way the credential is read
 API-server-side and only the verdict crosses back. Run the same snippet from a laptop and the

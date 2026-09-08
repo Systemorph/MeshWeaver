@@ -203,7 +203,7 @@ A version reaches an environment three ways, and a gate honoured by only one of 
 |---|---|---|
 | **The self-update poll** | `SelfUpdateHostedService` calls the service in-process after `VersionSelect` picks a target and before `KubernetesDeploymentUpdater` patches anything | the roll does not happen; the hold is written to `Admin/UpdatePolicy` (`HeldTag`/`HeldReason`/`HeldAt`) and shown on the Updates tab |
 | **CD's promote** | `main-cd`'s `publish-bake` job asserts, right after publishing, that the release it armed resolves an identity and carries a sealed platform bake (`.github/scripts/check-release-availability.sh`) | the CD run goes **red**, naming what is missing — never a grey skip, which renders identically to a pass |
-| **A manual roll** | the operator asks the target portal `GET /api/plugins/is-updatable?version=…` before `kubectl set image`; the in-product **Apply update now** button consults the same service | the button reports the hold and patches nothing |
+| **A manual roll** (a `Roll` `Hosting/InstanceAction`, or break-glass `kubectl set image` — [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)) | the operator asks the target portal `GET /api/plugins/is-updatable?version=…` before setting the image; the in-product **Apply update now** button consults the same service | the button reports the hold and patches nothing |
 
 ### A hold is a state, not a silence
 

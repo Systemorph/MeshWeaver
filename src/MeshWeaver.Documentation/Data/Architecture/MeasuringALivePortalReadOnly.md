@@ -31,6 +31,13 @@ fact is a guess.
 
 ## Reaching the cluster at all
 
+> 🚨 **Every read on this page is break-glass** (maintainer, 2026-09-08: no direct cluster access;
+> operations and diagnostics go through the control instance's Hosting API). It stays here because
+> the API does not yet answer three of these questions — per-replica image/restarts, a log at time
+> T, and which NodeType assemblies a replica can load — and because a read taken this way must be
+> written up as break-glass, never as the procedure. What exists, what does not:
+> [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).
+
 The AKS cluster is **private**. `kubectl` reaches it only through `az aks command invoke`, which
 runs your command in a pod inside the cluster — which is also what makes it the right place to
 query in-cluster services directly:
