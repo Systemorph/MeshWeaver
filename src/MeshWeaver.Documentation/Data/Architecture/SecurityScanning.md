@@ -171,11 +171,17 @@ settle is any library the signed-in portal loads and the anonymous shell does no
 
 #### 2026-09-08 — the retired BlazorMonaco tree measured gone, on the artifact and on the wire
 
-MeshWeaver.Plugins#1482 merged 2026-09-07T23:14:40Z. The first portal image built after it is
-`meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8079` (built 2026-09-08T05:55:35Z); the last one
-built before it is `…:3.0.0-ci.8059` (2026-09-07T23:06:50Z — eight minutes short of the merge, so it
-cannot carry the filter). That morning the fleet was mid-roll and running one of each, which is what
-made the *before* column still measurable:
+MeshWeaver.Plugins#1482 merged 2026-09-07T23:14:40Z. That morning the fleet was mid-roll and running
+one portal image on each side of that merge, which is what made the *before* column still
+measurable: `memex-cloud` had taken `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8079` (built
+2026-09-08T05:55:35Z, well after the merge), while `memex` was still on `…:3.0.0-ci.8059`, built
+2026-09-07T23:06:50Z — eight minutes short of the merge, so it cannot carry the filter.
+
+🚨 Neither image is *adjacent* to the merge, and the tag numbers do not say so: `ci.8058` finished
+one second after it from a build that started before, and `ci.8064` (2026-09-08T00:04:16Z) is the
+earliest whose build could have carried it. **Tag order is not build order** — read `createdTime`
+off the registry (`az acr repository show-tags --orderby time_desc --detail`) rather than sorting
+the numbers.
 
 | | `ci.8059` → memex.systemorph.com | `ci.8079` → memex.meshweaver.cloud |
 |---|---|---|
