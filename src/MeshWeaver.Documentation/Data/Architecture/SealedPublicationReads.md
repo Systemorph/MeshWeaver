@@ -223,6 +223,44 @@ bundle it downloads against the digest the publication records, and refuses when
 names more than one `publication` — which is what "the publication was replaced while I was reading
 it" looks like from inside a narrowed bake.
 
+## The seal triggers the sync — the publication and the sources are ONE unit
+
+A sealed publication is bytes compiled from **one commit** of the producing repository
+(`source-commit.txt`). The instance's SOURCES for that repository live in the mesh and advance only
+through the git sync. They must be the same commit, or every bundle is — correctly — declined on its
+source fingerprint (#2813) and the instance compiles every type from whatever it holds.
+
+Measured on memex.systemorph.com, 2026-09-08, two ways they were NOT the same commit:
+
+1. **The hook fires before the seal.** The `workflow_run` green-build hook arrives when the
+   repository's build goes green, which is BEFORE its publish-bake job seals the bundles for this
+   identity. `SealedSyncGate` held the source — "not sealed for this instance; it advances when it
+   is" — correctly. Nothing re-fired when the seal landed minutes later, so *when it is* was never.
+2. **"At the commit" was a claim, not a fact.** The config recorded `lastSyncCommitSha = 76cdb553b`
+   with outcome `Skipped`: the importer's content marker matched, so it never read the partition.
+   Three `Crm/Source/Mail*` files a commit had deleted (Crm#54) were still in the mesh — kept from
+   the prune because the conflict horizon was frozen and, judged by timestamp alone, the previous
+   import's own writes read as "newer on the server". 25 live sources against a bake of 22; no bake
+   of that repository could ever match again.
+
+What closes both, in one seam (`IPublicationSyncReconciler`, implemented by the git-sync layer as
+`SealedPublicationSyncReconciler`, invoked by `ShippedPrebuiltBundles.SeedPublishedRoot` after every
+publication sweep with what it sealed and what it declined):
+
+- a source **behind** the seal is imported at the sealed commit — the seal IS the evidence the gate
+  was waiting for (`SealedSyncReconcile.Action.ImportAtSealedCommit`);
+- a source **at** the sealed commit whose types were nevertheless declined on their source
+  fingerprint is re-imported at that commit with the content-skip bypassed
+  (`ImportConflictPolicy.Reconcile` → `GitHubSyncService.ReconcileAtCommit`) — every conflict
+  protection stays armed;
+- and **only a person's write is a server edit** (`ImportConflictPolicy.IsHumanEdit`): a node the
+  import itself wrote (system identity, or no author) is never preserved from the prune, however
+  new its clock. That is what lets a repository's deletion reach an instance whose horizon is held.
+
+A hold is written onto the config (`GitHubSyncConfig.LastSyncNote`, outcome `Held`) and logged at
+Warning **once per reason**, never per delivery. The pure decisions are pinned in
+`SealedSyncReconcileTest` and `ImportConflictPolicyTest`.
+
 ## What is NOT closed
 
 Stated plainly, because a page that only lists what works is how the next session repeats this.

@@ -704,6 +704,28 @@ completely silent: nothing anywhere named a NodeType that is broken and will not
 > file-backed persistence reads the mesh's OWN nodes back through the same parser registry —
 > the rule is about files that come from a repo, so it sits at the two seams where they enter.
 
+### 🚨 A stale-source decline never leaves a DANGLING record
+
+The decline-before-writing branch of `PrebuiltAssemblySeeder` (#2813) leaves "the live build's
+coordinates in place" so the build that is serving keeps serving. That reasoning assumed the live
+build resolves on the process that declined. On a pod that has **restarted** since that build, the
+coordinates name a `local` collection path (`FileSystemAssemblyStore` — the pod's own `/tmp`) in a
+pod that no longer exists: no process can load them, and nothing dispatched a compile (the branch's
+own comment claimed "the caller compiles" — the sweep reads a decline as compile-instead only for a
+bundle declined WHOLE). Measured on memex.systemorph.com, 2026-09-08: `Crm/Client` pointed at
+`Crm_Client/v31756-….dll` in the `local` collection of a replaced pod; both current replicas
+degraded every read of its content (`MeshNodeContentDegradedException`) for hours.
+
+The rule now (`PrebuiltAssemblySeeder.AfterStaleDecline`, pure, pinned in
+`StaleDeclineNeverDanglesTest`): after a stale-source decline the seeder **probes the store** for the
+build the record claims; when it does not resolve on this process, the coordinates are cleared and a
+compile of the live source is dispatched **through the one door** (`Pending` with its inputs token) —
+once per decline, never per activation (a record already `Pending`/`Compiling` is left to the
+compile it carries). On a `Modules:RequirePrebuilt` mesh nothing is cleared and the seeder logs
+Critical: nothing that process can do will serve the type. The decline's outcome is reported to the
+sweep (`SeedOutcome.DeclinedStaleSources…`), which hands the declined paths to the sync reconciler —
+see [Sealed Publication Reads](../SealedPublicationReads) → "The seal triggers the sync".
+
 ### 🚨 An ADOPTED build must say whether it was ever checked against the source
 
 Adoption — taking a prebuilt assembly from a bundle instead of compiling — is what makes installs
