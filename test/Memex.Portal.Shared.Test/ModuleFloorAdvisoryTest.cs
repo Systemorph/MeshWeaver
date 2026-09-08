@@ -222,19 +222,36 @@ public class ModuleFloorAdvisoryTest : IDisposable
         Assert.Contains(verdict.Advisories, a => a.StartsWith("Speech:", StringComparison.Ordinal));
     }
 
-    /// <summary>A missing bake is still a blocker, and the floor advisory rides beside it — the two
-    /// answer different questions and neither hides the other.</summary>
+    /// <summary>
+    /// A missing bake is a COST beside the floor advisory since #3651 — the two answer different
+    /// questions and neither hides the other, and neither holds. Under
+    /// <c>Modules:RequirePrebuilt</c> the bake is still the hold it was, and the floor still rides
+    /// beside it as an advisory.
+    /// </summary>
     [Fact]
-    public void TheReleaseGate_StillHoldsOnAMissingBake_WithTheAdvisoryBesideIt()
+    public void TheReleaseGate_ReportsAMissingBakeAsACost_WithTheFloorAdvisoryBesideIt()
     {
         var verdict = ReleaseAvailability.IsUpdatable(
             new ReleaseTarget(Running, "s8055"),
             [new RequiredPackage("DefaultViews", "DefaultViews", Floor, HasContent: true)],
             ReleaseArtifacts.Of([]));
 
-        Assert.False(verdict.IsUpdatable);
-        Assert.Equal(PackageAvailabilityKind.ContentBakeMissing, Assert.Single(verdict.Blockers).Kind);
-        Assert.Contains(Floor, Assert.Single(verdict.Advisories));
+        Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+        Assert.Empty(verdict.Blockers);
+        Assert.Equal(["DefaultViews"], verdict.BootCompiles);
+        Assert.Equal(2, verdict.Advisories.Length);
+        Assert.Contains(verdict.Advisories, a => a.Contains("would recompile at boot", StringComparison.Ordinal));
+        Assert.Contains(verdict.Advisories, a => a.Contains(Floor, StringComparison.Ordinal));
+
+        var strict = ReleaseAvailability.IsUpdatable(
+            new ReleaseTarget(Running, "s8055"),
+            [new RequiredPackage("DefaultViews", "DefaultViews", Floor, HasContent: true)],
+            ReleaseArtifacts.Of([]),
+            new ReleaseGatePolicy(RequirePrebuilt: true));
+
+        Assert.False(strict.IsUpdatable);
+        Assert.Equal(PackageAvailabilityKind.ContentBakeMissing, Assert.Single(strict.Blockers).Kind);
+        Assert.Contains(Floor, Assert.Single(strict.Advisories));
     }
 
     // ───────────────────────────────────────────── decision point 4: the required-module probe
