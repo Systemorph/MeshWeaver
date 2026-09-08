@@ -36,7 +36,7 @@ start. The one exception is deliberate and safe: `publisher.passwordBcrypt` is a
 {{- $ingress := ($r.ingress | default dict) -}}
 {{- $resources := ($r.resources | default dict) -}}
 {{- $host := required "registry.host is required when registry.enabled — the public hostname the registry answers on (e.g. cr.meshweaver.cloud)" $r.host -}}
-{{- $image := required "registry.image is required when registry.enabled — the distribution image, pinned by digest (ghcr.io/distribution/distribution:3.0.0@sha256:…)" $r.image -}}
+{{- $image := required "registry.image is required when registry.enabled — the distribution image, pinned by digest (ghcr.io/distribution/distribution:3.1.1@sha256:…)" $r.image -}}
 {{- $authImage := required "registry.authImage is required when registry.enabled — the cesanta/docker_auth image, pinned by digest" $r.authImage -}}
 {{- $accountName := required "registry.storage.accountName is required when registry.enabled — the Azure Storage account holding the registry's blobs" $storage.accountName -}}
 {{- $vaultName := required "registry.keyVault.name is required when registry.enabled — the Key Vault holding the token certificate, key and HTTP secret" $kv.name -}}

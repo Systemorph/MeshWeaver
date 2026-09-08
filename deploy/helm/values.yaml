@@ -709,7 +709,7 @@ registry:
   host: ""                        # (required) e.g. cr.meshweaver.cloud — NOT an Azure name
   # Both images pinned BY DIGEST, so what runs is what was reviewed. Resolved 2026-09-08 with
   # `docker buildx imagetools inspect` (multi-arch index digests):
-  #   ghcr.io/distribution/distribution:3.0.0@sha256:4ba3adf47f5c866e9a29288c758c5328ef03396cb8f5f6454463655fa8bc83e2
+  #   ghcr.io/distribution/distribution:3.1.1@sha256:bca24727f4002e51f959c18c42e816e4d1078198081a9837e16b8b7d7e43ebf8
   #   cesanta/docker_auth:1.14.0@sha256:98e0307e0d2dcbafe10098814a97d248143b78ca478693f78c3c0d67fe776ab4
   # 🚨 docker_auth must be ≥ 1.14.0: distribution 3 looks tokens up by RFC 7638 thumbprint and
   # 1.14.0 is the first release that can emit one (token.disable_legacy_key_id, set in the
