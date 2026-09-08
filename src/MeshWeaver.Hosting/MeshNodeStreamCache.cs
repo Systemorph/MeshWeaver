@@ -217,6 +217,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // JsonElement; this registry lets the two degrade seams below re-type it on the
     // already-degraded path. Resolved once from the process-shared root provider.
     private readonly MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry;
+    // What this cache could not TYPE, kept for /health (2026-09-08) — see ContentDegradationRegistry.
+    private readonly ContentDegradationRegistry? degradations;
 
     // 🚨 Lazy<Entry> wraps the factory because ConcurrentDictionary.GetOrAdd
     // is NOT threadsafe for compound operations: under contention the factory
@@ -511,6 +513,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         this.meshHub = meshHub;
         this.logger = logger;
         contentTypeRegistry = meshHub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshContentTypeRegistry>();
+        degradations = meshHub.ServiceProvider.GetService<ContentDegradationRegistry>();
         var opts = options ?? new MeshNodeStreamCacheOptions();
         readStreamIdleExpiration = opts.ReadStreamIdleExpiration;
         readStreamSweepInterval = opts.ReadStreamSweepInterval;
@@ -2164,7 +2167,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <see cref="IMeshNodeStreamCache.GetStream(string, JsonSerializerOptions)"/>.
     /// </summary>
     public IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options) =>
-        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry));
+        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry, degradations));
 
     /// <summary>
     /// Caller-typed write: deserialises the current MeshNode's <c>Content</c>
@@ -2181,7 +2184,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         Func<MeshNode, MeshNode> wrapped = node =>
         {
-            var typed = ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry);
+            var typed = ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry, degradations);
             var updated = update(typed);
             return ConvertContentTypedToJsonElement(updated, options);
         };
@@ -2256,7 +2259,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // against a shape the product no longer has (#3625).
     internal static MeshNode ConvertContentJsonElementToTyped(
         MeshNode node, JsonSerializerOptions options, ILogger logger,
-        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry,
+        ContentDegradationRegistry? degradations = null)
     {
         // Only convert when the cache emitted a raw JsonElement (the cache hub
         // doesn't know domain types, so Content lands here as JsonElement). If
@@ -2280,7 +2284,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // through to the loud warning below.
                 var recovered = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, degraded, options);
                 if (recovered is not null)
+                {
+                    degradations?.Clear(node.NodeType);
                     return node with { Content = recovered };
+                }
 
                 // 🚨 The EXCEPTION ARGUMENT is load-bearing and is not decoration (#3625). A CI
                 // shard's authoritative sink takes a record if and only if
@@ -2291,6 +2298,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // to fire at all. The job log is not an equivalent sink: it carries only the output
                 // of tests that FAILED, and a degradation is overwhelmingly logged under a test
                 // that passes. Reaching the sink is a property of the CALL, not of the wording.
+                degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetStream");
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
@@ -2672,11 +2680,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // been evicted (its own GetQueryRaw would have returned the replacement).
         return _optionsWrappedQueries.AddOrUpdate(
             (id, signature, options),
-            static (_, state) => (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry)),
+            static (_, state) => (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry, state.degradations)),
             static (_, existing, state) => ReferenceEquals(existing.Raw, state.raw)
                 ? existing
-                : (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry)),
-            (raw, options, logger, registry: contentTypeRegistry)).Wrapper;
+                : (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry, state.degradations)),
+            (raw, options, logger, registry: contentTypeRegistry, degradations)).Wrapper;
     }
 
     /// <summary>
@@ -2687,14 +2695,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         IObservable<IEnumerable<MeshNode>> raw,
         JsonSerializerOptions options,
         ILogger logger,
-        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? registry)
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? registry,
+        ContentDegradationRegistry? degradations = null)
         => System.Reactive.Linq.Observable.Select(raw, items =>
-            (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options, logger, registry)).ToArray());
+            (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options, logger, registry, degradations)).ToArray());
 
     // internal for the same reason as ConvertContentJsonElementToTyped above (#3625).
     internal static MeshNode DeserializeContent(
         MeshNode node, JsonSerializerOptions options, ILogger logger,
-        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry,
+        ContentDegradationRegistry? degradations = null)
     {
         // Untyped JSON content arrives in TWO shapes: a JsonElement (storage read) or a JsonNode
         // (the AS-WRITTEN shape — application code builds content as JsonObject, and a change
@@ -2726,11 +2736,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // this domain-agnostic hub's frozen options can't resolve (reimport-renders-empty).
                 var recovered = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, degraded, options);
                 if (recovered is not null)
+                {
+                    degradations?.Clear(node.NodeType);
                     return node with { Content = recovered };
+                }
 
                 // 🚨 Carries the exception for the same reason the GetStream seam does — see there.
                 // A record with no exception object cannot reach the trace log, which is the only
                 // sink the untyped-content shard gate scans (#3625).
+                degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText)),
@@ -2754,6 +2768,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // never match it either. Keying the gate on the exception TYPE rather than on prose is
             // what closes that third blind spot; `ex` rides along as the inner exception, so the
             // deserialization stack is still in the record.
+            degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
             logger.LogWarning(
                 new MeshNodeContentDegradedException(
                     "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText), ex),

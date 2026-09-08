@@ -817,6 +817,9 @@ public static class PersistenceExtensions
         // upstream subscription per path serves every consumer.
         services.TryAddSingleton<MeshNodeStreamCache>();
         services.TryAddSingleton<IMeshNodeStreamCache>(sp => sp.GetRequiredService<MeshNodeStreamCache>());
+        // What the cache could not TYPE, kept so /health can name it (2026-09-08): a mesh-scoped
+        // instance, registered beside the seam that records into it.
+        services.TryAddSingleton<ContentDegradationRegistry>();
         // Late owner-response watch for cross-hub writes: UpdateRemote arms an entry per
         // posted patch; the cache hub's PatchDataResponse handler dispatches responses whose
         // 2s caller window already closed (see LatePatchResponseRegistry). Mesh-scoped

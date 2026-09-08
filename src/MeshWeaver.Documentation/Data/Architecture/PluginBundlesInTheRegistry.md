@@ -49,13 +49,20 @@ on the tag); a partially pushed publication is invisible, because the tag moves 
 Layers are content-addressed, so two identities that share a bundle's bytes share the blob, and a
 `.zip` that did not change between publications is uploaded once.
 
+🚨 **Content addressing does not merge two bakes of one commit.** A compile is not
+byte-reproducible: two publications of the same source commit at the same identity differ in
+most payload files (measured: 40 of 45), so they are two complete indexes with two digests. The
+tag records which one won; both stay resident by digest; a reader holding a digest finishes with
+the set it started with, and a reader of the tag gets a complete set either way. Nothing may
+assume "same commit ⇒ same digest".
+
 ## Who pulls what, and with which credential
 
 | consumer | pulls | credential | how |
 |---|---|---|---|
 | an installation's pre-warm (`ShippedPrebuiltBundles`) | the index for its own identity and each mounted source, materialised under `PreWarm:PrebuiltBundleRoot` in the layout it already reads | the pod's `imagePullSecrets` credential | an init container runs the fetch before the portal starts; the pre-warm keeps reading a filesystem, and needs no mesh and no network |
 | the Store, `RegistryUpdateReconciler`, `InstanceAutoRegistrationService` (a bundle adopted at runtime) | one bundle manifest by digest, named by the index's `artifact` (`cr.meshweaver.cloud/plugins/<source>/<package>@sha256:…`), then its `.zip` layer by digest | the instance credential `RegistryTokenResolver` already holds, presented at the registry's token realm as `Basic instance:<token>` | `PluginBundleClient` through `OciRegistryClient` (`MeshWeaver.PluginCatalog`, the same client `OciTagLister` lists image tags with) — the same landing path, entering `ModuleLandingService.LandCore`, gated by the `ModulePlatformLink` probe and the load; a bundle whose `artifact` is `null` takes the HTTP route |
-| `memex-local` and every self-hosted install | as above | the instance key in its manifest, projected into a docker config entry for `cr.meshweaver.cloud` | no second credential |
+| `memex-local` and every self-hosted install | as above | the instance key in its manifest, projected as `ContainerRegistry:DockerConfigJson` (`{"auths":{"cr.meshweaver.cloud":{"auth":base64("instance:<key>")}}}`, emitted only when the key decrypts — core #3722) | no second credential |
 | satellite CI on `main` (`node-repo-gate`, `compose-sealed-modules`, `memex build plugin`) | the index and bundles for the pinned identity | the repository's instance key (`REGISTRY_KEY`) | ORAS |
 | satellite CI on a `pull_request` | **unchanged: the HTTP prebuilt surface** (`/api/plugins/bundles/prebuilt/…`) with the GitHub OIDC build principal | OIDC token | see "What stays on the HTTP surface" |
 
@@ -111,6 +118,16 @@ other is refused as unsealed, as it is today.
   the HTTP surface until the edge can validate a build principal.
 * **`POST /api/instances/register`** and **`POST /api/instances/token`** — registration and the
   key exchange; the edge depends on the second.
+
+## Registration records the owner
+
+An instance registers once, with the ownership record the setup collects — company, owner name,
+owner email — and the consent evidence (document hashes, acceptance time). Stated ownership wins
+per field over the details of whoever minted the bootstrap key, so an open registration names the
+person standing the instance up, not the registry admin. The key it receives is the credential
+for every pull that follows (core #3722). The registration endpoint does not yet refuse an open
+registration without consent evidence; that enforcement ships with a consent block on the
+registration request that scripted callers send, the keyed lane staying as it is.
 
 ## Verification that means something
 

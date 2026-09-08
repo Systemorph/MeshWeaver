@@ -116,8 +116,12 @@ curl -sS -k -o /dev/null -w "%{http_code}\n" --resolve <host>:443:$INGRESS_IP ht
 ## Self-update: first-install checklist
 
 A new environment should run on **self-update from day one** — that is the steady state.
-The manual [AKS runbook](/Doc/Architecture/DeploymentAKS) (`kubectl set image` + rollout) is the
-**bootstrap / break-glass** path only (the very first install, or forcing a specific tag). Once per
+A new instance is a `Deployments/<name>` record provisioned by a `Provision` `Hosting/InstanceAction`
+on the control instance (see [/new-deployment](https://github.com/Systemorph/MeshWeaver/blob/main/.claude/skills/new-deployment/SKILL.md)
+and [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)); the `az`/`kubectl` steps on
+this page are the pre-record procedure, kept as the record of how the existing environments were
+built and as break-glass. The manual [AKS runbook](/Doc/Architecture/DeploymentAKS) (`kubectl set
+image` + rollout) is what a `Roll` action runs, and the **break-glass** path only. Once per
 environment, in this order:
 
 1. **Deploy the `portal-identity` bicep.** It provisions the shared portal UAMI
@@ -134,8 +138,11 @@ environment, in this order:
    (the **same** value for every env). This authenticates the tag-list call; the chart wires the
    workload-identity annotation/label + `AZURE_CLIENT_ID` from it.
 4. **Set `Admin/UpdatePolicy` for the env.** Settings → Updates (platform admin) writes the
-   `Admin/UpdatePolicy` node. Recommended: **Continuous for dev/test** (always rolls to the newest
-   build-numbered image), **Stable for prod** (rolls only to the newest clean release). See
+   `Admin/UpdatePolicy` node. The seeded default is **Stable** (rolls only to the newest clean
+   release). For **dev/test** set **Continuous with a pattern** — `3.0.0-ci*` today — so the
+   install follows that line's build-numbered images; `Continuous` without a pattern is Stable. A
+   new install can seed that from the chart: `SelfUpdate__DefaultPolicy=Continuous` +
+   `SelfUpdate__DefaultPattern=3.0.0-ci*`. See
    [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy).
 5. **Add the env's Azure Files share to the CI bake targets** — otherwise no published bundle ever
    reaches the new portal and its pods Roslyn-compile every shipped NodeType at boot. Append its

@@ -7,6 +7,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -160,26 +161,55 @@ public sealed record ImportConflictPolicy(
     public static readonly ImportConflictPolicy GitFirst = new(false, null, false);
 
     /// <summary>
+    /// 🚨 A RECONCILING import (2026-09-08): re-evaluates the partition against the repo tree even
+    /// when the content fingerprint matches a prior Succeeded import — the short-circuit that
+    /// otherwise answers <c>Skipped</c> WITHOUT reading the partition. Unlike <see cref="Force"/> it
+    /// keeps every conflict protection: a human's edit since the last sync is still preserved. It
+    /// exists for exactly one caller — the sealed-publication reconciler, which has MEASURED that
+    /// the live sources disagree with the bytes baked from this very commit (a bundle declined on
+    /// its source fingerprint), so "already imported at this fingerprint" is a claim the partition
+    /// no longer satisfies. An INIT property, not a constructor parameter: the positional
+    /// constructor is public surface and widening it is a binary break.
+    /// </summary>
+    public bool Reconcile { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>Only a HUMAN's write is a server edit.</b> The protection below exists for an edit a
+    /// person made on the portal that is not in the repo yet. An import's OWN writes are not that —
+    /// they land under the system identity, carry the import's clock, and on the next import read
+    /// as "newer than the last sync" whenever the sync horizon could not advance (it is held while
+    /// ANY node is preserved). Judged by timestamp alone, the previous import's writes were then
+    /// preserved from the prune, so a file the repo DELETED could never leave the mesh: measured on
+    /// memex.systemorph.com 2026-09-08 — three <c>Crm/Source/Mail*</c> files retired by Crm#54 on
+    /// 09-06 were still compiled into every Crm type two days later, and no bake of the repository
+    /// could ever match the instance's sources again. Pure.
+    /// </summary>
+    public static bool IsHumanEdit(MeshNode? target) =>
+        target?.LastModifiedBy is { Length: > 0 } author
+        && !string.Equals(author, WellKnownUsers.System, StringComparison.Ordinal);
+
+    /// <summary>
     /// True when <paramref name="target"/> is a live node changed on the SERVER since the last sync
-    /// (<see cref="Since"/>) and must therefore be PRESERVED (not overwritten, not pruned) — unless
-    /// this is a <see cref="Force"/> import. Requires a recorded <see cref="Since"/>: with no sync
-    /// baseline there is nothing to protect, so a first import stays git-first. Pure — unit-testable.
+    /// (<see cref="Since"/>) by a person (<see cref="IsHumanEdit"/>) and must therefore be
+    /// PRESERVED (not overwritten, not pruned) — unless this is a <see cref="Force"/> import.
+    /// Requires a recorded <see cref="Since"/>: with no sync baseline there is nothing to protect,
+    /// so a first import stays git-first. Pure — unit-testable.
     /// </summary>
     public bool PreservesServerCopyOf(MeshNode? target) =>
         PreserveServerNewer && !Force && Since is { } since
-        && target is not null && target.LastModified > since;
+        && target is not null && target.LastModified > since && IsHumanEdit(target);
 
     /// <summary>
     /// True when <paramref name="target"/> must be kept from the PRUNE: it was created/changed on
-    /// the server since the last sync (<see cref="Since"/>) while the repo carries no copy — a
-    /// server-side addition to be committed back, not a stale extra to remove. Applies under full
-    /// two-way (<see cref="PreserveServerNewer"/>) AND under prune-only protection
+    /// the server since the last sync (<see cref="Since"/>) by a person while the repo carries no
+    /// copy — a server-side addition to be committed back, not a stale extra to remove. Applies
+    /// under full two-way (<see cref="PreserveServerNewer"/>) AND under prune-only protection
     /// (<see cref="PreserveServerAdditions"/>); a <see cref="Force"/> import prunes regardless, and
     /// with no recorded baseline there is nothing to protect. Pure — unit-testable.
     /// </summary>
     public bool PreservesFromPruneOf(MeshNode? target) =>
         (PreserveServerNewer || PreserveServerAdditions) && !Force && Since is { } since
-        && target is not null && target.LastModified > since;
+        && target is not null && target.LastModified > since && IsHumanEdit(target);
 }
 
 /// <summary>
@@ -998,6 +1028,23 @@ public static class StaticRepoImporter
                 {
                     logger?.LogInformation(
                         "[StaticRepoImport] {Partition}: forced re-import at unchanged fingerprint {Fingerprint}.",
+                        source.Partition, fingerprint);
+                    return Reimport();
+                }
+
+                // 🚨 A RECONCILING import re-evaluates the partition too (2026-09-08). The marker
+                // says "this partition held content F once"; the caller has MEASURED that it no
+                // longer does — a sealed bundle baked from exactly this commit was declined because
+                // the live sources disagree with it, which on memex.systemorph.com meant three files
+                // a commit had deleted were still compiled into every type two days later. Unlike a
+                // forced import the conflict policy stays armed: a person's edit is still preserved;
+                // only the short-circuit that would have answered "Skipped" without reading the
+                // partition is bypassed.
+                if (policy?.Reconcile == true)
+                {
+                    logger?.LogInformation(
+                        "[StaticRepoImport] {Partition}: reconciling re-import at unchanged fingerprint "
+                        + "{Fingerprint} — the live partition was measured to disagree with it.",
                         source.Partition, fingerprint);
                     return Reimport();
                 }

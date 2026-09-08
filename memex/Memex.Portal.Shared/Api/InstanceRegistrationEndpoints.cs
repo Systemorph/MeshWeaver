@@ -56,9 +56,11 @@ public static class InstanceRegistrationEndpoints
         // with the same 401 as an invalid key everywhere else. The caller never learns which.
         var open = string.IsNullOrWhiteSpace(body.BootstrapKey);
         return (open
-                ? instances.RegisterOpen(body.InstanceId, body.DisplayName, body.Description, body.HomeUrl)
+                ? instances.RegisterOpen(body.InstanceId, body.DisplayName, body.Description, body.HomeUrl,
+                    OwnershipOf(body))
                 : instances.RegisterWithBootstrapKey(
-                    body.BootstrapKey, body.InstanceId, body.DisplayName, body.Description, body.HomeUrl))
+                    body.BootstrapKey, body.InstanceId, body.DisplayName, body.Description, body.HomeUrl,
+                    OwnershipOf(body)))
             .Select(registration => (IResult)Results.Json(
                 new InstanceRegistrationPayloads.Response(
                     registration.Instance.InstanceId, registration.RawKey)
@@ -94,5 +96,23 @@ public static class InstanceRegistrationEndpoints
                     "Instance registration for '{InstanceId}' faulted after the response had already been sent",
                     body.InstanceId),
                 ct)!;
+    }
+
+    /// <summary>
+    /// The ownership the registrant stated, or null when they stated nothing.
+    ///
+    /// <para>Null rather than an empty record on purpose: an all-blank ownership must not override
+    /// the lane's existing owner fallback with emptiness, and <c>InstanceOwnership.IsStated</c> is
+    /// what draws that line once instead of at every call site.</para>
+    /// </summary>
+    private static InstanceOwnership? OwnershipOf(InstanceRegistrationPayloads.Request body)
+    {
+        var ownership = new InstanceOwnership
+        {
+            Company = body.Company,
+            Name = body.OwnerName,
+            Email = body.OwnerEmail,
+        };
+        return ownership.IsStated ? ownership : null;
     }
 }

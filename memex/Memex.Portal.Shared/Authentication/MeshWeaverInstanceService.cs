@@ -77,7 +77,7 @@ public sealed class MeshWeaverInstanceService(
     public IObservable<InstanceRegistrationResult> Register(
         string userId, string userName, string userEmail,
         string instanceId, string displayName, string description = "", string homeUrl = "",
-        string? tier = null)
+        string? tier = null, InstanceOwnership? ownership = null)
     {
         if (!IsValidInstanceId(instanceId))
             return Observable.Throw<InstanceRegistrationResult>(new ArgumentException(
@@ -100,8 +100,14 @@ public sealed class MeshWeaverInstanceService(
                 Description = description,
                 HomeUrl = homeUrl,
                 OwnerUserId = userId,
-                OwnerUserName = userName,
-                OwnerUserEmail = userEmail,
+                // 🚨 A STATED ownership record wins, per field. On the bootstrap and open lanes the
+                // userName/userEmail arriving here belong to whoever MINTED the registration key — a
+                // platform admin at the registry, who for an open registration is a stranger to the
+                // person actually standing the instance up. Where the registrant said who they are,
+                // that is the owner; where they said nothing, the previous fallback is unchanged.
+                OwnerUserName = InstanceOwnership.Prefer(ownership?.Name, userName),
+                OwnerUserEmail = InstanceOwnership.Prefer(ownership?.Email, userEmail),
+                Company = InstanceOwnership.Prefer(ownership?.Company, ""),
                 KeyHash = hash,
                 KeyIssuedAt = DateTimeOffset.UtcNow,
                 CreatedAt = DateTimeOffset.UtcNow,
@@ -156,7 +162,8 @@ public sealed class MeshWeaverInstanceService(
     /// </summary>
     public IObservable<InstanceRegistrationResult> RegisterWithBootstrapKey(
         string rawBootstrapKey, string instanceId,
-        string displayName = "", string description = "", string homeUrl = "")
+        string displayName = "", string description = "", string homeUrl = "",
+        InstanceOwnership? ownership = null)
     {
         var keys = hub.ServiceProvider.GetRequiredService<RegistrationKeyService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -182,7 +189,10 @@ public sealed class MeshWeaverInstanceService(
                                 // The key's PLAN is what the instance enrols into — a key minted
                                 // "for Pro customers" seeds Plugins/*@pro on every install that
                                 // presents it; a key without a plan seeds the DefaultGrants alone.
-                                tier: resolved.Key.Tier)
+                                tier: resolved.Key.Tier,
+                                // The registrant's own statement of who owns this instance — the
+                                // key owner above is who minted the key, not necessarily them.
+                                ownership: ownership)
                             .Finally(() => disposable.Dispose());
                     })
                     .SelectMany(registration => keys.StampUse(resolved.KeyPath)
@@ -207,7 +217,8 @@ public sealed class MeshWeaverInstanceService(
     /// when no open key is configured, or when the configured value is not a registration key.
     /// </summary>
     public IObservable<InstanceRegistrationResult> RegisterOpen(
-        string instanceId, string displayName = "", string description = "", string homeUrl = "")
+        string instanceId, string displayName = "", string description = "", string homeUrl = "",
+        InstanceOwnership? ownership = null)
     {
         var openKey = configuration?[OpenRegistrationKeyConfigKey]?.Trim() ?? "";
         if (openKey.Length == 0)
@@ -229,7 +240,7 @@ public sealed class MeshWeaverInstanceService(
         logger.LogInformation(
             "Open registration for '{InstanceId}' — presenting the registry's open registration key",
             instanceId);
-        return RegisterWithBootstrapKey(openKey, instanceId, displayName, description, homeUrl);
+        return RegisterWithBootstrapKey(openKey, instanceId, displayName, description, homeUrl, ownership);
     }
 
     /// <summary>The default grant entries the operator configured, parsed and de-blanked.

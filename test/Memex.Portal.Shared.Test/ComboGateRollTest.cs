@@ -381,6 +381,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
         RetryInterval = TimeSpan.FromMilliseconds(500),
         EventCoalesceWindow = TimeSpan.FromMilliseconds(50),
         DefaultPolicy = UpdatePolicyKind.Continuous,
+        DefaultPattern = "*-ci*",
     };
 
     /// <summary>Fake registry (the documented IO seam): one build newer than anything installed.</summary>
@@ -575,7 +576,8 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     private Task Seed(bool held = false)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var content = new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous };
+        // 2026-09-08: the candidate is a ci build, eligible only under a pattern that admits it.
+        var content = new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, Pattern = "*-ci*" };
         if (held)
             content = content with
             {

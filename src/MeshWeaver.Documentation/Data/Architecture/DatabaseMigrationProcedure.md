@@ -104,7 +104,9 @@ spec:
 
 `az aks command invoke … --file job.yaml --command "kubectl apply -f job.yaml"`, then wait for
 `Database migration completed. Version: N`. The gate is `db_version < expected`, so migrating
-forward never breaks the pods still serving on the older build.
+forward never breaks the pods still serving on the older build. (Break-glass form: a
+`HelmRelease deploy` `Hosting/InstanceAction` runs the same Job through `helm upgrade` with no
+hand-applied manifest — [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).)
 
 ## 🚨 Why a migration deadlocks under load — and what to do until the fix ships
 

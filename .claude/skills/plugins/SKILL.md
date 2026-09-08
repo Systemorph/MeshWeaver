@@ -142,7 +142,10 @@ Re-installing is an upsert; installing one module never disturbs another in a sh
 
 **"Plugin catalog not configured"** → `EffectiveRegistries` is empty: no `registryUrl` and no
 `registries` entry with a URL reached the pod. Check what actually landed, not what the values file
-says:
+says — first on the record: `Deployments/<name>` on the control instance carries the whole env
+precedence stack (`inlineEnv`, `extraPortalConfig`, the key-vault classes), and an `Audit`
+`Hosting/InstanceAction` compares it with the cluster. The direct read is break-glass
+([OperatingFromThePortal.md](../../../src/MeshWeaver.Documentation/Data/Architecture/OperatingFromThePortal.md)):
 
 ```bash
 kubectl -n <env> get deploy memex-portal-deployment \

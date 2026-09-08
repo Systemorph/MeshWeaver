@@ -48,6 +48,55 @@ public static class SealedPublicationIndex
     public const string RepositoryMarkerFileName = "repository.txt";
 
     /// <summary>
+    /// The directory under the published root holding one marker file per platform release,
+    /// named by version, containing that release's framework identity (written by
+    /// <c>publish-bake-bundles.sh</c> on every run). Leading underscore so it can never collide
+    /// with a framework-identity directory (those are <c>s…</c>/<c>g…</c>). The ONE definition;
+    /// <c>PublishedBundleCatalogue.ReleaseMarkerDirectoryName</c> forwards to it.
+    /// </summary>
+    public const string ReleaseMarkerDirectoryName = "_releases";
+
+    /// <summary>
+    /// The REVERSE of the release markers: framework identity → the newest platform version
+    /// published under it (SemVer order via <see cref="Plugin.Packaging.NuGetVersionComparer"/>,
+    /// so <c>ci.900</c> never sorts above <c>ci.3758</c>). This is how a bundle sealed for another
+    /// identity is placed on a platform LINE: its manifest names the identity, the marker names
+    /// the version, and <see cref="PrebuiltAdoptionPolicy"/> compares lines. An identity no
+    /// marker names is absent — the policy then declines it under <c>Family</c> strictness, as a
+    /// line it cannot establish. Pure over the file system; never throws (an unreadable root reads
+    /// as empty).
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ReleasesOf(string? publishedRoot, ILogger? logger = null)
+    {
+        var byIdentity = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(publishedRoot))
+            return byIdentity;
+        var markers = Path.Combine(publishedRoot, ReleaseMarkerDirectoryName);
+        try
+        {
+            if (!Directory.Exists(markers))
+                return byIdentity;
+            foreach (var file in Directory.EnumerateFiles(markers))
+            {
+                var version = Path.GetFileName(file);
+                var identity = ReadMarker(file);
+                if (string.IsNullOrEmpty(identity) || string.IsNullOrEmpty(version))
+                    continue;
+                if (!byIdentity.TryGetValue(identity, out var known)
+                    || Plugin.Packaging.NuGetVersionComparer.Instance.Compare(version, known) > 0)
+                    byIdentity[identity] = version;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "SealedPublicationIndex: could not read the release markers under {Directory} — "
+                + "no identity can be placed on a platform line", markers);
+        }
+        return byIdentity;
+    }
+
+    /// <summary>
     /// Every source directory under <c>&lt;publishedRoot&gt;/&lt;identity&gt;/</c>, read as
     /// <see cref="SealedSource"/>s. Empty when the root or the identity directory is absent.
     /// </summary>

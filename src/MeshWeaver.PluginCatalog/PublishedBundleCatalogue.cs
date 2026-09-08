@@ -49,7 +49,7 @@ public static class PublishedBundleCatalogue
     /// Mirrored in <c>.github/scripts/publish-bake-bundles.sh</c>; the pairing is pinned by
     /// <c>PlatformBakeLaneGuard</c>.
     /// </summary>
-    public const string ReleaseMarkerDirectoryName = "_releases";
+    public const string ReleaseMarkerDirectoryName = SealedPublicationIndex.ReleaseMarkerDirectoryName;
 
     /// <summary>The configuration key naming the published bundle root — forwarded from
     /// <see cref="ShippedPrebuiltBundles.PublishedRootConfigKey"/> so a consumer in the portal

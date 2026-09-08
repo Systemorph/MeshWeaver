@@ -65,6 +65,24 @@ public record UpdatePolicyContent
     }
 
     /// <summary>
+    /// 🚨 The version PATTERN that admits continuous builds — a glob over the registry tag, e.g.
+    /// <c>3.0.1-ci*</c> (<see cref="UpdateChannelPattern"/>). Read only under
+    /// <see cref="UpdatePolicyKind.Continuous"/>: a pre-release tag is eligible ONLY when this
+    /// admits it, and <c>Continuous</c> with no pattern is <c>Stable</c> (clean releases only) —
+    /// the poller says so once at Warning, naming this field. Under <c>Stable</c> a pattern, when
+    /// set, narrows the clean releases considered (e.g. <c>3.0.*</c> keeps an install on one line).
+    /// Null or blank = no pattern.
+    ///
+    /// <para>The fleet's own setting while no clean release above <c>3.0.0</c> exists is
+    /// <c>3.0.0-ci*</c>; it stops matching the day <c>3.0.1</c> is tagged, which is the intended
+    /// way for "follow the line" to end. See <c>Doc/Architecture/ReleaseProcess</c> §1.</para>
+    /// </summary>
+    [Description("Version pattern for continuous builds, e.g. 3.0.1-ci*")]
+    [Translation("de", "Versionsmuster für Continuous-Builds, z. B. 3.0.1-ci*")]
+    [JsonPropertyName("pattern")]
+    public string? Pattern { get; init; }
+
+    /// <summary>
     /// When <c>true</c> (default) the install only rolls to builds that PASSED CI ("green").
     /// The continuous-delivery pipeline already publishes an image ONLY when "MeshWeaver Build and
     /// Test" succeeds, so the verified channel contains green builds exclusively; this flag is the
@@ -257,10 +275,12 @@ public static class UpdatePolicyNodeType
     /// default policy. Existence is read via <c>GetQuery</c> (empty-on-absent) — NEVER a point
     /// <c>GetMeshNodeStream(path)</c> probe of the maybe-absent node (which NotFound-resubscribe-storms
     /// on a fresh DB). Emits the node path when it exists. An existing node is left untouched (its
-    /// admin-chosen policy is preserved).
+    /// admin-chosen policy is preserved). <paramref name="defaultPattern"/> is seeded beside the
+    /// policy (<see cref="UpdatePolicyContent.Pattern"/>); null seeds none.
     /// </summary>
     public static IObservable<string> EnsureExists(
-        IMessageHub hub, AccessService? accessService, UpdatePolicyKind defaultPolicy, ILogger? logger = null)
+        IMessageHub hub, AccessService? accessService, UpdatePolicyKind defaultPolicy, ILogger? logger = null,
+        string? defaultPattern = null)
     {
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
@@ -272,7 +292,11 @@ public static class UpdatePolicyNodeType
             NodeType = NodeType,
             Name = "Update Policy",
             State = MeshNodeState.Active,
-            Content = new UpdatePolicyContent { Policy = defaultPolicy },
+            Content = new UpdatePolicyContent
+            {
+                Policy = defaultPolicy,
+                Pattern = UpdateChannelPattern.Normalize(defaultPattern),
+            },
         };
 
         // 🚨 RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` (#1444/#1790):
@@ -292,7 +316,8 @@ public static class UpdatePolicyNodeType
                     if (existing is not null)
                         return Observable.Return(NodePath);
                     logger?.LogInformation(
-                        "[SelfUpdate] seeding {Path} = {Policy}.", NodePath, defaultPolicy);
+                        "[SelfUpdate] seeding {Path} = {Policy} (pattern: {Pattern}).",
+                        NodePath, defaultPolicy, UpdateChannelPattern.Normalize(defaultPattern) ?? "none");
                     return meshService.CreateNode(BuildNode())
                         .Select(_ => NodePath)
                         // Idempotent: a concurrent first-writer (other replica) won the create race.

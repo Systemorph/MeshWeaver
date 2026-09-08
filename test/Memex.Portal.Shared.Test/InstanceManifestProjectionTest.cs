@@ -293,6 +293,55 @@ public class InstanceManifestProjectionTest
     }
 
     [Fact]
+    public void TheSameKey_AlsoBecomesADockerConfigForTheFleetRegistry()
+    {
+        // One credential, written once. The fleet's OCI registry authenticates an instance as
+        // Basic `instance:<key>`, so an install that must pull images — and, once bundles move
+        // there, plugin bytes — needs a docker config, and this is the only key it has. Deriving it
+        // beside the registry token is what stops a second copy being kept in step by hand.
+        var entries = InstanceManifestProjection.ToConfiguration(
+            Complete() with
+            {
+                Identity = new InstanceIdentitySelection
+                {
+                    Id = "0f8fad5b-d9cb-469f-a165-70867728950e",
+                    Name = "Roland laptop",
+                    RegistryUrl = "https://memex.meshweaver.cloud",
+                    InstanceKey = Protector.Protect("mwi_realkey"),
+                },
+            },
+            Protector);
+
+        var config = entries["ContainerRegistry:DockerConfigJson"];
+        Assert.NotNull(config);
+
+        using var parsed = System.Text.Json.JsonDocument.Parse(config!);
+        var auth = parsed.RootElement
+            .GetProperty("auths").GetProperty("cr.meshweaver.cloud").GetProperty("auth").GetString();
+        Assert.Equal("instance:mwi_realkey",
+            System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(auth!)));
+    }
+
+    [Fact]
+    public void NoDockerConfig_WithoutADecryptableKey()
+        // Same rule as the registry token: a credential that cannot be read is worse than absent —
+        // it would authenticate nothing while looking configured.
+        => Assert.False(
+            InstanceManifestProjection.ToConfiguration(
+                Complete() with
+                {
+                    Identity = new InstanceIdentitySelection
+                    {
+                        Id = "0f8fad5b-d9cb-469f-a165-70867728950e",
+                        Name = "Roland laptop",
+                        RegistryUrl = "https://memex.meshweaver.cloud",
+                        InstanceKey = new ProviderKeyProtector(
+                            new LiteralMasterKeyProvider("a-different-key")).Protect("mwi_realkey"),
+                    },
+                },
+                Protector).ContainsKey("ContainerRegistry:DockerConfigJson"));
+
+    [Fact]
     public void AnIdentityWhoseKeyCannotBeDecrypted_ProjectsNOTHING()
     {
         // 🚨 Not "projects the id without the token" — that is the shape that would register a

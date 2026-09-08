@@ -25,8 +25,8 @@ namespace Memex.Portal.Shared.Test;
 /// (<c>"Patched: Admin/UpdatePolicy"</c>, no version-transition suffix) while the durable node
 /// stayed on its old <see cref="UpdatePolicyContent.Policy"/> — the operator's auto-update
 /// kill-switch never took effect. Reproduces the exact operator sequence against a REAL mesh:
-/// seed the node at the PLATFORM DEFAULT policy (<see cref="UpdatePolicyKind.Continuous"/> —
-/// also the enum's own default value, so it is OMITTED from JSON under this hub's
+/// seed the node at <see cref="UpdatePolicyKind.Continuous"/> (the platform default until
+/// 2026-09-08, and still the enum's own default value, so it is OMITTED from JSON under this hub's
 /// <c>DefaultIgnoreCondition = WhenWritingDefault</c>), then run the exact MCP <c>patch</c> call
 /// an operator would issue to freeze auto-update, while the self-update poller concurrently
 /// writes its own bookkeeping fields (<c>checkedAt</c> / <c>latestAvailableTag</c>) on the SAME
@@ -183,8 +183,8 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
             NodeType = UpdatePolicyNodeType.NodeType,
             Name = "Update Policy",
             State = MeshNodeState.Active,
-            // The default overload seeds at the PLATFORM default AND the enum's own default
-            // (Continuous = 0) — deliberately, so it is omitted from JSON under
+            // The default overload seeds at the enum's own default (Continuous = 0; the platform
+            // default is Stable since 2026-09-08) — deliberately, so it is omitted from JSON under
             // DefaultIgnoreCondition = WhenWritingDefault, exactly like the real
             // Admin/UpdatePolicy node on a fresh install.
             Content = new UpdatePolicyContent { Policy = policy },

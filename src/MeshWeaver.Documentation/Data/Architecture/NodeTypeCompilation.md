@@ -704,6 +704,41 @@ completely silent: nothing anywhere named a NodeType that is broken and will not
 > file-backed persistence reads the mesh's OWN nodes back through the same parser registry —
 > the rule is about files that come from a repo, so it sits at the two seams where they enter.
 
+### 🚨 A stale-source decline never leaves a DANGLING record
+
+The decline-before-writing branch of `PrebuiltAssemblySeeder` (#2813) leaves "the live build's
+coordinates in place" so the build that is serving keeps serving. That reasoning assumed the live
+build resolves on the process that declined. On a pod that has **restarted** since that build, the
+coordinates name a `local` collection path (`FileSystemAssemblyStore` — the pod's own `/tmp`) in a
+pod that no longer exists: no process can load them, and nothing dispatched a compile (the branch's
+own comment claimed "the caller compiles" — the sweep reads a decline as compile-instead only for a
+bundle declined WHOLE). Measured on memex.systemorph.com, 2026-09-08: `Crm/Client` pointed at
+`Crm_Client/v31756-….dll` in the `local` collection of a replaced pod; both current replicas
+degraded every read of its content (`MeshNodeContentDegradedException`) for hours.
+
+The rule now (`PrebuiltAssemblySeeder.AfterStaleDecline`, pure, pinned in
+`StaleDeclineNeverDanglesTest`): after a stale-source decline the seeder **probes the store** for the
+build the record claims; when it does not resolve on this process, the coordinates are cleared and a
+compile of the live source is dispatched **through the one door** (`Pending` with its inputs token) —
+once per decline, never per activation (a record already `Pending`/`Compiling` is left to the
+compile it carries). On a `Modules:RequirePrebuilt` mesh nothing is cleared and the seeder logs
+Critical: nothing that process can do will serve the type. The decline's outcome is reported to the
+sweep (`SeedOutcome.DeclinedStaleSources…`), which hands the declined paths to the sync reconciler —
+see [Sealed Publication Reads](../SealedPublicationReads) → "The seal triggers the sync".
+
+> 🚨 **The probe is a fact about THIS process, written onto a SHARED record.** Measured 2026-09-08:
+> no host overrides the default `IAssemblyStore`, which is rooted per PROCESS
+> (`/tmp/MeshWeaver-AssemblyStore-pid<pid>`, `PersistenceExtensions.RegisterDefaultAssemblyStore`),
+> so a build compiled on one replica is never loadable by another — the coordinates a compile stamps
+> are per-process facts on a node every replica shares (#3395's shape, for NodeType builds). This
+> rule therefore fires once per replica per sweep whenever the bundle is declined: each replica
+> clears the other's unloadable coordinates and compiles its own — bounded by sweeps (boot, install,
+> push), never per activation, and no worse than the activation-time "bytes missing" self-heal that
+> already recompiled on first access. It does not make replicas converge; whether they must — and
+> in particular option (c) of #3417's open policy, *a replica that is behind declines to write
+> NodeType compile records* — is the maintainer's decision. If (c) is chosen, this dispatch is one
+> of the writes it must suppress; the seam is `AfterStaleDecline`'s `canCompileLocally` argument.
+
 ### 🚨 An ADOPTED build must say whether it was ever checked against the source
 
 Adoption — taking a prebuilt assembly from a bundle instead of compiling — is what makes installs
@@ -1546,8 +1581,11 @@ wave costs an assembly load instead of a Roslyn generation.
 
 **Triage fingerprint** — intermittent hangs while most requests succeed, on a portal that
 recently synced or baked: suspect a degraded-but-Ready replica, not a global wedge. One or two
-pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is this incident;
-`kubectl delete pod` them (grace-drain — the Deployment replaces them) and read #2194.
+pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is this incident
+(a break-glass read — the per-replica sample is not on the Hosting API yet,
+[OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)); replace them with a `Restart`
+`Hosting/InstanceAction` (the rolling restart grace-drains each pod and the Deployment replaces
+it), and read #2194.
 
 ### 🚨 A LEAVING pod never touches shared NodeType state — the adoption sweep observes host shutdown
 
