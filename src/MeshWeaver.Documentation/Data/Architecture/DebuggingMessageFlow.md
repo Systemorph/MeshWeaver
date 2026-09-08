@@ -218,6 +218,13 @@ Every transition consequently carries both depths:
 | `DEFERRED gates=[…]` → `QUEUED queue=deferred pos=P mainBehind=M` | It **left** `mainQueue` for `deferredQueue` at position `P`. 🚨 `M` is the count still waiting behind it — precisely the messages that can now overtake it |
 | `DEFERRED_DRAINED` → `QUEUED queue=main depth=N` | Its deferred turn is running. Compare with the `mainBehind` above: if `N` has dropped, those messages already ran and this delivery is now out of order |
 | `GATE_DRAIN gate=… deferred=D behind=B` *(hub-level, `MessageTrace`)* | The restore point. 🚨 `deferred=0` here, paired with a delivery whose fate says it **was** deferred, proves the deferral landed *after* its drain and must wait for a later one — the one conclusion neither stamp shows alone |
+| `REQUEUED_IN_ARRIVAL_ORDER seq=S behind=N` | The **arrival-order barrier** fired: this turn was running when the last gate opened, so it was about to overtake `N` older turns the drain had just restored. It re-joined the queue at its own arrival position instead. Seeing this is normal and correct; it is also the marker that the hub was in exactly the window Plugins#1394 was about |
+
+🚨 **A turn can be in NEITHER queue** — dequeued, and not yet at its gate check. That is where the
+reorder that survived #3408 lived, and no depth stamp can see it because it is in neither count.
+Read [Turn-Loop Arrival Order](../TurnLoopArrivalOrder) before attributing an order defect to a
+queue: it gives the two windows, why the *permutation* names the message that straddled the gate
+open rather than the defect, and the invariant that now holds.
 
 🚨 **The depth is a SEPARATE `QUEUED` stage, and that is not cosmetic — a stage token is a matched
 CONTRACT.** Stages render as `{stage}@{hub}`, and suites wait on that literal substring:
