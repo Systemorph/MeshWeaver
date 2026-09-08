@@ -191,15 +191,20 @@ internal static class NodeTypeBatchBake
             var exotic = expanded.Where(q => !IsInMemoryMatchable(q)).ToList();
             perType.Add(new PendingType(
                 typePath, matchable, exotic,
-                // The invariant's subject: only a type that DECLARES source queries is required to
-                // resolve a non-empty set. A type that relies on the DEFAULT queries may legitimately
-                // own no Code at all (a Configuration-only type is still compilable).
+                // One half of the invariant's subject: a type that DECLARES source queries is
+                // required to resolve a non-empty set. A type that relies on the DEFAULT queries
+                // may legitimately own no Code at all (a Configuration-only type is still
+                // compilable) — which is why this alone is NOT the subject; see KnownSourceCount.
                 DeclaresSources: def?.Sources is { Count: > 0 },
-                // The one independent witness for "genuinely zero matches": the type's OWN live
+                // The one independent witness for what "zero matches" means: the type's OWN live
                 // sources snapshot, maintained by its per-NodeType sources watcher and persisted on
-                // the record. EXPLICITLY empty (Count 0, not null) is the #1204 deleted-content
-                // shape; the same discriminator DynamicTypePreWarmer.ClassifyCompileFailure uses.
-                SourcesKnownDeleted: def?.CurrentSourceVersions is { Count: 0 }));
+                // the record. Three shapes, all load-bearing and all distinguished here (the same
+                // three DynamicTypePreWarmer.ClassifyCompileFailure discriminates):
+                //   • EXPLICITLY empty (0)  — corroborates "the sources were deleted" (#1204).
+                //   • POPULATED   (n > 0)   — the mesh says this type HAS n source files, so a pass
+                //                             that matched none did not establish anything.
+                //   • ABSENT      (null)    — no witness either way; behaviour unchanged.
+                KnownSourceCount: def?.CurrentSourceVersions?.Count));
         }
 
         var needsGlobalFetch = perType.Any(t => t.Matchable.Count > 0);
@@ -310,16 +315,18 @@ internal static class NodeTypeBatchBake
     /// <param name="Matchable">Expanded queries the in-memory matcher provably mirrors.</param>
     /// <param name="Exotic">Expanded queries that must run against the mesh individually.</param>
     /// <param name="DeclaresSources">The type declares its OWN source queries (not the defaults).</param>
-    /// <param name="SourcesKnownDeleted">
-    /// The type's own persisted source snapshot is EXPLICITLY empty — independent corroboration
-    /// that "no matches" is the mesh's real answer rather than a broken discovery pass.
+    /// <param name="KnownSourceCount">
+    /// How many source files the type's OWN persisted snapshot
+    /// (<see cref="NodeTypeDefinition.CurrentSourceVersions"/>) records — <c>0</c> is independent
+    /// corroboration that "no matches" is the mesh's real answer, a positive value is independent
+    /// evidence that it is NOT, and <c>null</c> (absent snapshot) is no evidence either way.
     /// </param>
     private sealed record PendingType(
         string TypePath,
         IReadOnlyList<string> Matchable,
         IReadOnlyList<string> Exotic,
         bool DeclaresSources,
-        bool SourcesKnownDeleted);
+        int? KnownSourceCount);
 
     /// <summary>
     /// Raised when the batched discovery pass cannot be TRUSTED to have established the source
@@ -400,9 +407,9 @@ internal static class NodeTypeBatchBake
     {
         var builder = ImmutableDictionary.CreateBuilder<string, IReadOnlyList<MeshNode>>(
             StringComparer.OrdinalIgnoreCase);
-        // Types whose DECLARED source queries resolved to NOTHING and whose own persisted snapshot
-        // does not corroborate that. Discovery cannot tell such a type apart from a broken pass, so
-        // it refuses to answer for the whole batch rather than guess per type.
+        // Types whose source queries resolved to NOTHING while the mesh's own record says they have
+        // sources. Discovery cannot tell such a type apart from a broken pass, so it refuses to
+        // answer for the whole batch rather than guess per type. See DiscoveryUnestablished.
         var unestablished = new List<string>();
         foreach (var pending in perType)
         {
@@ -416,7 +423,7 @@ internal static class NodeTypeBatchBake
                     foreach (var (path, node) in nodes)
                         matched[path] = node;
 
-            if (matched.Count == 0 && pending.DeclaresSources && !pending.SourcesKnownDeleted)
+            if (DiscoveryUnestablished(matched.Count, pending.DeclaresSources, pending.KnownSourceCount))
                 unestablished.Add(pending.TypePath);
 
             // Deterministic order: the compiler concatenates the files into one syntax tree, so
@@ -436,19 +443,78 @@ internal static class NodeTypeBatchBake
             // 🚨 LOUD, and naming every type — this is the line that would have made #1216 obvious
             // on the first production run instead of reading as "169 types are content-broken".
             logger?.LogWarning(
-                "BatchBake: source discovery resolved an EMPTY source set for {Count} type(s) that "
-                + "DECLARE source queries, and none of them records an explicitly-empty source "
-                + "snapshot to corroborate it: {Types}. That is a DISCOVERY failure, not a content "
-                + "verdict — abandoning the batch for the activation-driven sweep rather than "
-                + "compiling anything against nothing.",
+                "BatchBake: source discovery resolved an EMPTY source set for {Count} type(s) whose "
+                + "own record says they HAVE sources (or that declare source queries), with no "
+                + "explicitly-empty source snapshot to corroborate the emptiness: {Types}. That is a "
+                + "DISCOVERY failure, not a content verdict — abandoning the batch for the "
+                + "activation-driven sweep rather than compiling anything against nothing.",
                 unestablished.Count, string.Join(", ", unestablished));
             throw new SourceDiscoveryFailedException(
-                $"{unestablished.Count} pending type(s) declare source queries that resolved to an "
-                + $"EMPTY source set with no corroborating empty snapshot: {string.Join(", ", unestablished)}");
+                $"{unestablished.Count} pending type(s) resolved an EMPTY source set with no "
+                + $"corroborating empty snapshot: {string.Join(", ", unestablished)}");
         }
 
         return builder.ToImmutable();
     }
+
+    /// <summary>
+    /// 🚨 <b>THE source-set invariant: did this pass ESTABLISH the type's source set, or merely
+    /// fail to find it?</b> True when the answer is "I don't know" and the batch must be abandoned
+    /// for the activation-driven sweep.
+    ///
+    /// <para>The discriminator is a POSITIVE witness, never the absence of one. A resolved set of
+    /// zero is ambiguous by itself — it is the same reading for "this type owns no Code" and for
+    /// "the discovery pass came back short" — so the type's own persisted snapshot
+    /// (<see cref="NodeTypeDefinition.CurrentSourceVersions"/>, written by its per-NodeType sources
+    /// watcher) is asked what the mesh believes:</para>
+    /// <list type="bullet">
+    ///   <item><paramref name="knownSourceCount"/> <c>== 0</c> — the mesh agrees there are none.
+    ///     Established, and deliberately so: this is the #1204 deleted-content shape, which must
+    ///     classify as <see cref="PreWarmStatus.NoSources"/> and must NOT gate a rollout.</item>
+    ///   <item><paramref name="knownSourceCount"/> <c>&gt; 0</c> — the mesh says this type HAS that
+    ///     many source files. A pass that matched none of them contradicts the record, and a
+    ///     contradiction is not a verdict about the code.</item>
+    ///   <item><c>null</c> — no snapshot at all (a type that has never been watched). No witness
+    ///     either way, so only <paramref name="declaresSources"/> can speak.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b><paramref name="declaresSources"/> ALONE was the hole, and it is issue #3663.</b>
+    /// The invariant used to read <c>matched == 0 &amp;&amp; declaresSources &amp;&amp; !knownDeleted</c>,
+    /// which switched the whole check OFF for every type that uses the DEFAULT source queries
+    /// (<c>namespace:{path}/Source scope:subtree nodeType:Code</c>) — i.e. for very nearly the entire
+    /// population of a real mesh, exactly as
+    /// <see cref="DynamicTypePreWarmer.ClassifyCompileFailure"/> already had to be corrected to say
+    /// (#1391: "an empty <c>Sources</c> does not mean configuration-only — it means uses the DEFAULT
+    /// queries"). The same mistake sat here, in the opposite direction, and it turned a short
+    /// discovery read into a production readiness stall.</para>
+    ///
+    /// <para><b>Measured, 2026-09-08 00:31:22Z, memex.systemorph.com.</b> One boot's batched pass
+    /// resolved <b>1145</b> Code nodes where the six neighbouring boots on the same portal — three
+    /// of them on the SAME image — resolved 1236, 1236, 1237, 1237, 1241, 1241. The four NodeTypes
+    /// of the <c>Doc</c> partition (<c>…/BusinessRules/Cession</c>,
+    /// <c>…/PythonPandasNode/PandasExplorer</c>, <c>…/SocialMedia/Post</c>, <c>…/SocialMedia/Profile</c>)
+    /// matched ZERO sources, all four use the default queries, and all four carry a populated
+    /// <c>CurrentSourceVersions</c>. Roslyn was handed the generated provider file alone and emitted
+    /// a completely genuine-looking <c>CS0246 'CessionData' could not be found</c> about each type's
+    /// OWN declared types; the bake gate read four regressions and refused readiness for the
+    /// startup probe's full 3-hour budget (1080 × 10 s) until the kubelet restarted the container
+    /// and the next pass came back complete. With this witness consulted, that pass answers "I don't
+    /// know" and the sweep re-resolves per type instead of condemning the image.</para>
+    ///
+    /// <para>🚨 It cannot launder a real regression. A type whose sources are present resolves them,
+    /// so <paramref name="matchedCount"/> is non-zero and this returns false — the compile runs and
+    /// a genuine failure gates exactly as before.</para>
+    /// </summary>
+    /// <param name="matchedCount">How many Code nodes this pass selected for the type.</param>
+    /// <param name="declaresSources">The type declares its OWN source queries.</param>
+    /// <param name="knownSourceCount">
+    /// <see cref="NodeTypeDefinition.CurrentSourceVersions"/><c>?.Count</c> — see above.
+    /// </param>
+    internal static bool DiscoveryUnestablished(
+        int matchedCount, bool declaresSources, int? knownSourceCount)
+        => matchedCount == 0
+           && knownSourceCount != 0
+           && (declaresSources || knownSourceCount > 0);
 
     /// <summary>
     /// Compile ONE pending type directly — no hub activation, no compile-watcher settle — then
