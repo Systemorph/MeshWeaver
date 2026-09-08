@@ -316,6 +316,14 @@ Stated plainly, because a page that only lists what works is how the next sessio
 - **The window itself remains.** In this layout it cannot be removed — in-place replacement means
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
+- 🚨 **Two Azure-direct readers still address the PREFIX rather than the publication.**
+  `compose-sealed-modules.sh` and `node-repo-gate.yml`'s inline `download-batch` compose their paths
+  under `prebuilt-bundles/<identity>/<source>/` directly, so they read the flat copy whatever the
+  pointer says. Inert while nothing writes a generation, and correct at phase 4 in the ordinary case
+  — but a run whose flat copy is refused leaves them on the previous publication, and phase 5 breaks
+  them outright. They are named as phase 3's precondition on
+  [Sealed Publication Generations](../SealedPublicationGenerations); the publish lane's own two
+  readers (`bake-scope.sh`, `carry-forward-bundles.sh`) already resolve it.
 - **The Azure-direct read path carries no generation.** `az storage file download-batch` against the
   share has no server to ask, so `--storage-target` consumers still do unpinned N+1 reads. The lanes
   all pass `--registry-url`; the storage path is the OIDC fallback.

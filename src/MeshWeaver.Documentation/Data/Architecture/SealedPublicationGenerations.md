@@ -250,11 +250,22 @@ green. (`repository.txt` was added under this rule and says so in place.)
   silently read as flat: the value decides where a publication is written and which directory every
   reader resolves.
 - `bake-scope.sh` and `carry-forward-bundles.sh` resolve the pointer in the SAME commit, by the same
-  rules, so the writer and the two Azure-direct readers cannot disagree about which publication is
-  live. `carry-forward-bundles.sh` resolves it **itself** rather than being handed the directory —
-  its caller may be pinned to a workflow copy that knows nothing about generations, and the
-  one-publication postcondition it already carries is what pins it to a single generation if the
+  rules, so the writer and the two readers of the publish lane cannot disagree about which
+  publication is live. `carry-forward-bundles.sh` resolves it **itself** rather than being handed the
+  directory — its caller may be pinned to a workflow copy that knows nothing about generations, and
+  the one-publication postcondition it already carries is what pins it to a single generation if the
   pointer moves between the listing and the downloads.
+- 🚨 **TWO Azure-direct readers still read the PREFIX, and they are part of phase 3's precondition,
+  not of this change.** `compose-sealed-modules.sh` (the module-set index and each module, on the
+  OIDC fallback path) and `node-repo-gate.yml`'s inline `download-batch` both compose their paths
+  under `prebuilt-bundles/<identity>/<source>/` directly. This is harmless while nothing writes a
+  generation, and it stays harmless at phase 4 in the ordinary case — the flat compatibility copy is
+  written by the same run, from the same bytes, so reading it gives the same content the pointer
+  names. It stops being harmless in exactly two places, and both are worth knowing before flipping:
+  a run whose flat copy is REFUSED (the compatibility copy still races) leaves those two readers on
+  the previous publication while pointer-following readers have moved on; and at phase 5, when the
+  flat copy is dropped, they break outright. **Route them through the same resolution before any
+  prefix flips.** Neither is a reader the portal image carries, so neither was covered by phase 1.
 - 🚨 **The pointer moves BEFORE the flat compatibility copy, not after it.** "Last" in this page is
   about the *generation*: a reader must never be pointed at a directory still being filled in, and
   moving the pointer straight after the seal satisfies that exactly. The flat copy is a different
@@ -376,8 +387,10 @@ was ever visible instead of silently shipping a mixed set.
   to 1 on that incident. The **residual is a sibling that has not sealed yet when this run's sweep
   ends** (21 seconds, measured), and that is not shrinkable by any amount of checking: it is what
   phases 2–5 exist for.
-- **The next change is phase 3** — each producer's `platform-ref` reaches the writer commit. Only
-  then is flipping a prefix both possible and meaningful. `plugins` flips in ONE change set because
+- **The next change is phase 3** — each producer's `platform-ref` reaches the writer commit, **and
+  the two remaining Azure-direct readers (`compose-sealed-modules.sh`, `node-repo-gate.yml`'s
+  `download-batch`) are routed through the same pointer resolution.** Only then is flipping a prefix
+  both possible and meaningful. `plugins` flips in ONE change set because
   it is the only prefix with two producers; the rest flip one repository at a time.
 - 🚨 **Flipping `plugins` does not by itself stop the publish reds.** The flat compatibility copy is
   still replaced in place and still races, so an overlap still costs that copy and still fails the
