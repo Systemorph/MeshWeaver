@@ -157,6 +157,10 @@ public class SealedPublicationLineageTest : IDisposable
                 [.. markers.Select(m => SealedIdentity(m.Identity!, "plugins", m.WrittenUtc))],
                 [.. markers]),
             stampedIdentities: [],
+            // Nothing is pinned here on purpose: this test isolates the LINEAGE order, so retention
+            // must decide on the seal times alone. A pin would protect an identity for a second,
+            // unrelated reason and make the ordering assertion below unfalsifiable.
+            pinned: [],
             retention: new PrebuiltBundleRetention { KeepNewestPerSource = 1 },
             nowUtc: At(10));
 

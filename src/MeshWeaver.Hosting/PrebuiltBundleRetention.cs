@@ -81,7 +81,46 @@ public static class PlatformVersionLine
         if (plus >= 0) v = v[..plus];
         return v.Contains('-');
     }
+
+    /// <summary>
+    /// The bare platform version a pin or a report names, in the form the <c>_releases</c> marker
+    /// files are named: an image reference (<c>…/memex-portal-ai:3.0.0-ci.8080@sha256:…</c>) is
+    /// reduced to its tag, and <c>+build</c> metadata is dropped. Null for a blank value.
+    /// </summary>
+    public static string? Normalize(string? versionOrImageTag)
+    {
+        if (string.IsNullOrWhiteSpace(versionOrImageTag))
+            return null;
+        var v = versionOrImageTag.Trim();
+        var at = v.IndexOf('@');
+        if (at >= 0) v = v[..at];
+        var colon = v.LastIndexOf(':');
+        if (colon >= 0) v = v[(colon + 1)..];
+        var plus = v.IndexOf('+');
+        if (plus >= 0) v = v[..plus];
+        return v.Length == 0 ? null : v;
+    }
 }
+
+/// <summary>
+/// One thing outside this process that PINS a platform build and pulls its seal from this store:
+/// a <c>Hosting/Deployment</c> record's <c>pinnedImageTag</c>, or a registered instance's
+/// reported platform version / framework identity. On the registry (memex-cloud) remote
+/// instances fetch their OWN identity's seal over the HTTP prebuilt surface, so such an identity
+/// is referenced however old it is — pearl pinned to <c>3.0.0-ci.8080</c> would otherwise fall
+/// outside the newest-ten rule and compile from source at every boot.
+/// </summary>
+/// <param name="Origin">Who pins it — the record or instance, for the ledger.</param>
+/// <param name="Version">The pinned platform version or image tag (normalised by <see cref="PlatformVersionLine.Normalize"/>), or null.</param>
+/// <param name="Identity">The framework identity when the origin reports it directly, or null.</param>
+public sealed record PinnedPlatformReference(string Origin, string? Version, string? Identity);
+
+/// <summary>
+/// A provider of <see cref="PinnedPlatformReference"/>s, registered as an enumerable singleton;
+/// the retention pass unions every registered source on every pass. An erroring source aborts
+/// the pass — a reference set that could not be read licenses no deletion.
+/// </summary>
+public delegate IObservable<ImmutableList<PinnedPlatformReference>> PinnedPlatformReferenceSource();
 
 /// <summary>One source directory under an identity, as the sweep read it.</summary>
 /// <param name="Name">The source segment (<c>plugins</c>, <c>education</c>, …).</param>
@@ -150,6 +189,7 @@ public sealed record PrebuiltStoreScan(
 /// <param name="Protected">Why each surviving identity survived, keyed by identity.</param>
 /// <param name="CollectableMarkers">The pre-release markers whose identity goes with this plan, or is already gone.</param>
 /// <param name="AbortReason">Why NOTHING may be collected, or null when the plan is sound.</param>
+/// <param name="UnresolvedPins">Pinned references whose version maps to no <c>_releases</c> marker and that name no identity — they keep nothing, and the ledger says so.</param>
 public sealed record PrebuiltBundleSweepPlan(
     string LiveIdentity,
     string? LivePlatformVersion,
@@ -157,7 +197,8 @@ public sealed record PrebuiltBundleSweepPlan(
     ImmutableList<PrebuiltIdentityEntry> Collectable,
     ImmutableDictionary<string, string> Protected,
     ImmutableList<ReleaseMarkerEntry> CollectableMarkers,
-    string? AbortReason)
+    string? AbortReason,
+    ImmutableList<string> UnresolvedPins)
 {
     /// <summary>Total bytes across every identity.</summary>
     public long TotalBytes => Identities.Sum(i => i.Bytes);
@@ -170,6 +211,7 @@ public sealed record PrebuiltBundleSweepPlan(
         $"{Identities.Count} identity directory(ies) / {Mb(TotalBytes)} — live={LiveIdentity}"
         + $" ({LivePlatformVersion ?? "version unknown"}), collectable={Collectable.Count} / {Mb(CollectableBytes)}"
         + $", markers to retire={CollectableMarkers.Count}"
+        + (UnresolvedPins.IsEmpty ? "" : $", pins mapping to no marker (keep nothing): {string.Join(", ", UnresolvedPins)}")
         + (AbortReason is null ? "" : $", ABORTED: {AbortReason}");
 
     internal static string Mb(long bytes) =>
@@ -353,6 +395,7 @@ public static class PrebuiltBundleStore
     /// <param name="livePlatformVersion">This process's platform version (build metadata stripped), or null.</param>
     /// <param name="scan">What the store holds.</param>
     /// <param name="stampedIdentities">Every identity a NodeType record's <c>CompiledFrameworkVersion</c> names.</param>
+    /// <param name="pinned">Every platform build a Deployment record pins or a registered instance reports (<see cref="PinnedPlatformReference"/>).</param>
     /// <param name="retention">The knobs.</param>
     /// <param name="nowUtc">The instant the grace is measured against.</param>
     public static PrebuiltBundleSweepPlan Plan(
@@ -360,6 +403,7 @@ public static class PrebuiltBundleStore
         string? livePlatformVersion,
         PrebuiltStoreScan scan,
         ImmutableHashSet<string> stampedIdentities,
+        ImmutableList<PinnedPlatformReference> pinned,
         PrebuiltBundleRetention retention,
         DateTimeOffset nowUtc)
     {
@@ -369,7 +413,8 @@ public static class PrebuiltBundleStore
                 ImmutableList<PrebuiltIdentityEntry>.Empty, ImmutableDictionary<string, string>.Empty,
                 ImmutableList<ReleaseMarkerEntry>.Empty,
                 $"release marker '{unreadable.Version}' could not be read ({unreadable.ReadFault}) — which "
-                + "identity it references is unknown, so no identity can be called unreferenced");
+                + "identity it references is unknown, so no identity can be called unreferenced",
+                ImmutableList<string>.Empty);
 
         // 🚨 The SEALED-PUBLICATION LINEAGE, never the version LABEL (#3542). Retention decides what
         // to DELETE, so a label that sorts above a later run does not merely mis-rank a listing here:
@@ -409,6 +454,30 @@ public static class PrebuiltBundleStore
         var liveMajor = PrebuiltAdoptionPolicy.MajorOf(livePlatformVersion);
         var keep = Math.Max(0, retention.KeepNewestPerSource);
 
+        // version (marker file name, normalised) → every identity a marker of that version names.
+        var identitiesOfVersion = readable
+            .GroupBy(m => PlatformVersionLine.Normalize(m.Version) ?? m.Version, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.Select(m => m.Identity!).ToImmutableHashSet(StringComparer.Ordinal),
+                StringComparer.Ordinal);
+        var pinnedReasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var unresolvedPins = ImmutableList.CreateBuilder<string>();
+        foreach (var pin in pinned)
+        {
+            // 🚨 A pinned build is referenced HOWEVER OLD: on the registry, the instance that pins it
+            // pulls exactly that identity's seal over the HTTP prebuilt surface, and the newest-N
+            // rule cannot see it. A reported identity is the exact reference; a version reaches its
+            // identity only through the _releases marker — a version no marker names keeps NOTHING,
+            // and the ledger says so, because nothing can say which directory it would have been.
+            var version = PlatformVersionLine.Normalize(pin.Version);
+            if (!string.IsNullOrWhiteSpace(pin.Identity))
+                pinnedReasons.TryAdd(pin.Identity, $"pinned by {pin.Origin}{(version is null ? "" : $" ({version})")}");
+            else if (version is not null && identitiesOfVersion.TryGetValue(version, out var ids))
+                foreach (var id in ids)
+                    pinnedReasons.TryAdd(id, $"pinned by {pin.Origin} at {version} (via its _releases marker)");
+            else
+                unresolvedPins.Add($"{pin.Origin}={version ?? "(no version)"}");
+        }
+
         foreach (var identity in scan.Identities)
         {
             if (string.Equals(identity.Identity, liveIdentity, StringComparison.Ordinal))
@@ -418,6 +487,8 @@ public static class PrebuiltBundleStore
                     $"its seal could not be read ({identity.Sources.First(s => s.ReadFault is not null).ReadFault}) — unreadable is never unreferenced");
             else if (cleanMarkersOf.TryGetValue(identity.Identity, out var releases))
                 Keep(identity.Identity, $"named by release marker {releases}");
+            else if (pinnedReasons.TryGetValue(identity.Identity, out var pinnedBy))
+                Keep(identity.Identity, pinnedBy);
             else if (stampedIdentities.Contains(identity.Identity))
                 Keep(identity.Identity, "a NodeType record's adoption stamp (CompiledFrameworkVersion) names it");
         }
@@ -471,16 +542,26 @@ public static class PrebuiltBundleStore
         var collectableIdentities = collectable.Select(i => i.Identity).ToImmutableHashSet(StringComparer.Ordinal);
         var present = scan.Identities.Select(i => i.Identity).ToImmutableHashSet(StringComparer.Ordinal);
 
+        var pinnedVersions = pinned
+            .Select(p => PlatformVersionLine.Normalize(p.Version))
+            .Where(v => v is not null)
+            .Select(v => v!)
+            .ToImmutableHashSet(StringComparer.Ordinal);
         var markers = readable
             .Where(m => m.IsPrerelease)
             .Where(m => !string.Equals(m.Identity, liveIdentity, StringComparison.Ordinal))
             .Where(m => livePlatformVersion is null || !string.Equals(m.Version, livePlatformVersion, StringComparison.Ordinal))
+            // A pinned version's marker is the ONLY way its pin reaches an identity — never retired,
+            // even when the directory is absent right now (a republish would need the marker).
+            .Where(m => !pinnedVersions.Contains(PlatformVersionLine.Normalize(m.Version) ?? m.Version)
+                        && !pinnedReasons.ContainsKey(m.Identity!))
             .Where(m => collectableIdentities.Contains(m.Identity!)
                         || (!present.Contains(m.Identity!) && nowUtc - m.WrittenUtc >= retention.UnsealedGrace))
             .ToImmutableList();
 
         return new PrebuiltBundleSweepPlan(
-            liveIdentity, livePlatformVersion, scan.Identities, collectable, reasons.ToImmutable(), markers, null);
+            liveIdentity, livePlatformVersion, scan.Identities, collectable, reasons.ToImmutable(), markers, null,
+            unresolvedPins.ToImmutable());
     }
 
     /// <summary>
@@ -493,11 +574,12 @@ public static class PrebuiltBundleStore
         string liveIdentity,
         string? livePlatformVersion,
         ImmutableHashSet<string> stampedIdentities,
+        ImmutableList<PinnedPlatformReference> pinned,
         PrebuiltBundleRetention retention,
         IIoPool pool,
         ILogger? logger = null)
         => pool.InvokeBlocking(_ =>
-            SweepCore(root, liveIdentity, livePlatformVersion, stampedIdentities, retention, DateTimeOffset.UtcNow, logger));
+            SweepCore(root, liveIdentity, livePlatformVersion, stampedIdentities, pinned, retention, DateTimeOffset.UtcNow, logger));
 
     /// <summary>The sweep itself, with the clock passed in, so the deleting behaviour is exercised at an exact instant.</summary>
     public static PrebuiltBundleSweepResult SweepCore(
@@ -505,6 +587,7 @@ public static class PrebuiltBundleStore
         string liveIdentity,
         string? livePlatformVersion,
         ImmutableHashSet<string> stampedIdentities,
+        ImmutableList<PinnedPlatformReference> pinned,
         PrebuiltBundleRetention retention,
         DateTimeOffset nowUtc,
         ILogger? logger = null,
@@ -533,7 +616,7 @@ public static class PrebuiltBundleStore
             return failed;
         }
 
-        var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, retention, nowUtc);
+        var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, pinned, retention, nowUtc);
         if (plan.AbortReason is not null)
         {
             logger?.LogWarning("PrebuiltBundleRetention: {Summary}. NOTHING collected", plan.Summary);

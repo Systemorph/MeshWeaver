@@ -25,3 +25,4 @@
 # The line this replaces read "DELETE the line once the change has shipped". Nobody did, once;
 # for ~40 minutes every C#-touching pull request in the fleet was red on somebody else's merge.
 # See Doc/Architecture/TransitionalAllowEntries.
+PrebuiltBundleSweepPlan  #3749 — the record shipped in #3741 hours earlier and is in no released image or module; 2 references org-wide, both core (definition + its test); no in-mesh source names it
