@@ -18,6 +18,15 @@ Compilation](/Doc/Architecture/NodeTypeCompilation), and the mesh's node/version
 
 ## A plugin is mesh nodes
 
+**Compatibility is API-based.** A plugin should continue working across platform and dependency
+versions while the APIs it uses remain compatible. Version/build-identity differences alone are
+not runtime refusals; missing or incompatible referenced APIs are. Follow the
+[Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy) for measured loadability,
+continuity and eager adoption. Preserve a working generation when a newer one cannot load, and
+report the actual missing contract. Dependency declarations describe intent; they do not replace
+measurement. For source NodeTypes, an unusable prebuilt cache entry normally means compilation
+against the current platform, rather than holding the platform to that entry's build.
+
 A node repo is exactly the on-disk shape the sample partitions use — a `*.json` per node plus its
 `Source/` (and `Test/`) C# — e.g. the `Publish` plugin and its Slide type:
 
