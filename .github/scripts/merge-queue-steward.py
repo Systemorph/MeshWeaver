@@ -298,6 +298,19 @@ def count_attempts(comment_bodies, head_sha: str) -> dict:
 
 # ─────────────────────────────── the decision ───────────────────────────────
 
+def is_derived_test_report(job: dict, failed_shards: set[str]) -> bool:
+    """Recognize result summaries only when their underlying shard failed."""
+    # GitHub exposes the publisher's check summaries alongside actual workflow jobs.
+    # They duplicate shard verdicts; they are not an independent build/gate failure.
+    # A real job (steps present), an unmatched shard, or a lone failed report stays red.
+    if job.get("steps") or not failed_shards:
+        return False
+    if job.get("name") == "Test Results":
+        return True
+    match = re.fullmatch(r"Test Results \(shard (\d+)\)", job.get("name", ""))
+    return match is not None and match.group(1) in failed_shards
+
+
 def classify(ctx: Context, evidence: RunEvidence | None, catalogue: tuple[FlakeEntry, ...]) -> Decision:
     reason = ctx.reason.upper()
     if reason in NOOP_REASONS:
@@ -451,6 +464,9 @@ class Gh:
         jobs = (self.api(f"actions/runs/{run['id']}/jobs?per_page=100") or {}).get("jobs", [])
         failed_jobs = []
         shards = []
+        failed_shards = {m.group(1) for job in jobs
+                         if job.get("conclusion") == "failure"
+                         and (m := SHARD_JOB.fullmatch(job["name"]))}
         for job in jobs:
             if job.get("conclusion") != "failure":
                 continue
@@ -462,7 +478,7 @@ class Gh:
                 present = self.download_artifact(run["id"], f"testResults-shard{shard}", target)
                 failures, markers = read_shard_artifact(target, shard) if present else ((), ())
                 shards.append(Shard(shard, steps, present, failures, markers))
-            elif job["name"] != REQUIRED_CHECK:
+            elif job["name"] != REQUIRED_CHECK and not is_derived_test_report(job, failed_shards):
                 failed_jobs.append(job["name"])
         return RunEvidence(run["id"], run["html_url"], tuple(failed_jobs), tuple(shards))
 
@@ -707,6 +723,15 @@ def self_test() -> int:
 
     def shard(*failures, steps=(TEST_STEP,), present=True, markers=()):
         return Shard("2", tuple(steps), present, tuple(failures), tuple(markers))
+
+    print("derived reports:")
+    report = lambda name, steps=(): {"name": name, "steps": list(steps)}
+    check(is_derived_test_report(report("Test Results"), {"4"}), "aggregate report of a failed shard is derived")
+    check(is_derived_test_report(report("Test Results (shard 4)"), {"4"}), "matching shard report is derived")
+    check(not is_derived_test_report(report("Test Results"), set()), "report alone cannot excuse a failed run")
+    check(not is_derived_test_report(report("Test Results (shard 3)"), {"4"}), "unmatched shard report remains a failure")
+    check(not is_derived_test_report(report("Test Results", ({"name": "gate"},)), {"4"}), "real job steps cannot be hidden by a reporter name")
+    check(not is_derived_test_report(report("Test Results extra"), {"4"}), "unknown reporter-like name remains a failure")
 
     print("classify:")
     d = classify(ctx(), ev(failed_jobs=("Build solution (once)",)), cat)
