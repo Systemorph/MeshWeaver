@@ -88,3 +88,57 @@ a disposal cause. The experiment still excludes CI's full reference closure and 
 mesh/test process activity. The next useful discriminator would preserve those inputs
 and process history, rather than repeat these clean controls or change production JIT
 settings. No production change or second diagnostic run was performed.
+
+## Exact failing reference closure: unavailable
+
+The follow-up inspected all 26 artifact inventory entries for Plugins run `34402293577`.
+The failing shard's artifact `10125123788` contains 696 files: 683 logs and 13 TRX files,
+with no DLL, runtimeconfig, deps file, dump or reference manifest. The two plausible
+workspace-build archives were inspected too: `10124339542` contains 113 DLLs in 165 files;
+`10124174588` contains 43 DLLs in 78 files. Neither contains the Monolith test build or
+an ordered reference manifest. Their `.closure.txt` files list module project names only.
+They are outputs of separate module-build jobs, not the
+failing test process's reference capture. Inventory and inspected archive hashes are in
+`tools/RoslynEmitProbe/results/34402293577-closure-audit/`.
+
+The shard log records its own Release MSBuild graph from Plugins merge `e601973` and
+core `174f5ab7711e1a107c0c047dfb0dd9ba3bc8b91c`, followed by `dotnet test --no-build`.
+It does not consume those workspace-build archives. An image digest is present in its
+environment, but the test host runs the graph built on the runner; extracting a portal
+image or rebuilding the commits cannot establish its exact runtime-selected references.
+No image pull, reference reconstruction or second probe was therefore performed.
+
+At that exact core revision, `CompileReferences.cs` lines 46–55 and 69–82 compose ordered
+TPA file references and missing known framework additions; lines 102–115 append installed
+module assembly locations with path deduplication. `MeshNodeCompilationService.cs`
+lines 181–185 cache that list per service, and lines 1909–1916 append resolved NuGet
+assembly paths. These are file-backed references. Generator output adds syntax trees,
+not in-memory reference assemblies; the fresh image-backed CoreLib belongs only to the
+pristine canary. The capture gap is runtime selection, ordering and exact bytes, not an
+established dependence on dynamically emitted input assemblies.
+
+### Smallest next capture, before another replay
+
+Use a CI-only, opt-in, once-per-process capture at the original emit exception boundary
+(`EmitPipeline.cs` lines 187–196), without replacing the original exception or adding retries.
+For the unchanged canary probe, the required payload is the **ordered
+`faulted.References` list and referenced bytes**, not all workload source or the entire
+test output directory. Each entry needs ordinal, reference/metadata kind, path/display,
+aliases, EmbedInteropTypes, assembly identity, MVID, size and SHA256; retained bytes should
+be content-addressed. Record missing/unreadable entries and a completion marker: a partial
+capture must never be replayed as the exact closure.
+
+Record the actual compiler and CoreLib identities, runtime, architecture, processor count,
+JIT flags, process/test identity, original exception/site and existing canary outcomes with
+that capture. Preserve the already pinned canary source/options and native runner for the
+comparison. Full workload replay additionally needs final generated syntax trees and
+parse/compilation/emit options, but that is a separate, larger experiment.
+
+A file reread after the failure may differ from metadata Roslyn already mapped. Compare
+captured-file identity against the reference's held metadata identity and explicitly record
+the capture method; do not claim mapped-byte equivalence merely from a path or matching
+MVID. If immutability of the files cannot be established, retain their bytes when references
+are created and record that instrumentation change. Even an exact byte closure reconstructed
+in a new process does not preserve reference-object caches, JIT history or heap state.
+This is a capture specification only: no compiler instrumentation, new permissions,
+production changes, timeout expansion or additional CI execution was introduced.

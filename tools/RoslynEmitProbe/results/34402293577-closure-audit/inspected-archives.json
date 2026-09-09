@@ -1,0 +1,79 @@
+[
+  {
+    "artifactId": 10124339542,
+    "sha256": "bf7e65a9589385d8873ca31de4aca20cb6ec1e47b6f601a492c16269c496a457",
+    "entries": 165,
+    "extensions": {
+      "dll": 113,
+      "pdb": 7,
+      "xml": 7,
+      "txt": 6,
+      "js": 15,
+      "css": 12,
+      "ttf": 1,
+      "mjs": 2,
+      "json": 1,
+      "log": 1
+    },
+    "roots": [
+      "MeshWeaver.AI",
+      "MeshWeaver.AI.closure.txt",
+      "MeshWeaver.Blazor",
+      "MeshWeaver.ContentCollections.Indexing",
+      "MeshWeaver.ContentCollections.Indexing.Graph",
+      "MeshWeaver.Maps",
+      "MeshWeaver.Maps.closure.txt",
+      "MeshWeaver.Markdown.Collaboration",
+      "MeshWeaver.Markdown.Collaboration.closure.txt",
+      "MeshWeaver.Payments.Stripe",
+      "MeshWeaver.Payments.Stripe.closure.txt",
+      "workspace-build.log"
+    ],
+    "moduleClosureLists": {
+      "MeshWeaver.AI.closure.txt": "MeshWeaver.AI\nMeshWeaver.Markdown.Collaboration\nMeshWeaver.Blazor\nMeshWeaver.ContentCollections.Indexing.Graph\nMeshWeaver.ContentCollections.Indexing\n",
+      "MeshWeaver.Maps.closure.txt": "MeshWeaver.Maps\n",
+      "MeshWeaver.Markdown.Collaboration.closure.txt": "MeshWeaver.Markdown.Collaboration\nMeshWeaver.Blazor\n",
+      "MeshWeaver.Payments.Stripe.closure.txt": "MeshWeaver.Payments.Stripe\n"
+    },
+    "runtimeOrDependencyManifests": []
+  },
+  {
+    "artifactId": 10124174588,
+    "sha256": "fa84e4016db261bd9a6e9d5948d3d9cebb34d1aeec3a754dc3c26424dee3970d",
+    "entries": 78,
+    "extensions": {
+      "pdb": 2,
+      "xml": 2,
+      "dll": 43,
+      "js": 13,
+      "css": 11,
+      "ttf": 1,
+      "json": 1,
+      "mjs": 2,
+      "txt": 2,
+      "log": 1
+    },
+    "roots": [
+      "MeshWeaver.Blazor",
+      "MeshWeaver.SelfUpdate.Aks",
+      "MeshWeaver.SelfUpdate.Aks.closure.txt",
+      "workspace-build.log"
+    ],
+    "moduleClosureLists": {
+      "MeshWeaver.SelfUpdate.Aks.closure.txt": "MeshWeaver.SelfUpdate.Aks\nMeshWeaver.Blazor\n"
+    },
+    "runtimeOrDependencyManifests": []
+  },
+  {
+    "artifactId": 10125123788,
+    "sha256": "11a4fb70d5084fbe977d8aeede507c6bc65fe3d012cfd550d502bcf831a96f3b",
+    "entries": 696,
+    "extensions": {
+      "log": 683,
+      "trx": 13
+    },
+    "roots": [],
+    "moduleClosureLists": {},
+    "runtimeOrDependencyManifests": []
+  }
+]
