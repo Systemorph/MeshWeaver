@@ -146,18 +146,24 @@ directory:
 
 ### Retention
 
-A pointer swap must never delete what a reader is mid-way through: a consumer doing N+1 reads may
-have resolved the previous generation seconds ago.
+Follow [Released Artifact Retention](/Doc/Architecture/ReleasedArtifactRetention)
+(#3842). The 30-day age window and release/consumer references supersede the earlier
+24-hour previous-generation grace proposal.
 
-- Never delete the generation `_current` names.
-- Keep the previous generation for at least as long as the slowest consumer's N+1 read plus its
-  backoff. The `503` ladder is `15 30 60 90`, so **24 hours** is a bound with three orders of
-  magnitude of headroom and no measurable storage cost at ~43 files per publication.
-- The sweep is the **publisher's**, at the end of its own run, after the pointer moves. Nothing else
-  knows when a publication stopped applying.
-- 🚨 A retention sweep is not a garbage collector to be tuned down when the share fills. Deleting a
-  generation a reader still holds re-creates a torn read — which is the state this layout exists to
-  make impossible.
+- Preserve the generation `_current` advertises and every generation still consumed,
+  including a same-major adopted fallback. A pointer swap does not prove that all
+  readers or portals have finished with the old generation.
+- Unreferenced continuous generations become eligible after 30 days. Supported
+  official releases and their complete artifact closure survive throughout support.
+- Publication must establish protection before moving `_current`. Generation cleanup
+  must participate in the same publication/consumer ordering as other artifact cleanup;
+  running an independent purge after a pointer swap is insufficient.
+- Missing consumer or publication inventory prevents deletion. A retry/backoff duration
+  is not an adoption lifetime and cannot authorize collecting a serving fallback.
+
+This is the cleanup contract to implement with the release inventory. The identity-level
+bundle sweep never reaches inside a retained identity and therefore does not itself
+prove that generation-level protection and collection are implemented.
 
 ## Who actually publishes — measured, 2026-09-07
 

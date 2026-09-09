@@ -85,10 +85,10 @@ public sealed class PrebuiltBundleRetentionHostedService(
             return Task.CompletedTask;
         }
         logger.LogInformation(
-            "PrebuiltBundleRetention: sweeping {Root} at boot and every {Interval}; keeps the newest {Keep} "
-            + "pre-release identity(ies) per source and open line, {Grace} grace for an unsealed publication, "
+            "PrebuiltBundleRetention: sweeping {Root} at boot and every {Interval}; keeps unreferenced artifacts for at least {MinimumAge}, "
+            + "{Grace} grace for an unsealed publication, "
             + "collection {Armed}",
-            root, retention.Interval, retention.KeepNewestPerSource, retention.UnsealedGrace,
+            root, retention.Interval, retention.MinimumAge, retention.UnsealedGrace,
             retention.Delete ? "ARMED" : "NOT armed (report only)");
         startedRegistration = lifetime.ApplicationStarted.Register(() => KickSchedule(root));
         return Task.CompletedTask;
@@ -199,8 +199,11 @@ public static class PrebuiltBundleRetentionExtensions
     /// <summary>Config key disarming DELETION (<c>false</c> ⇒ report only). Default <c>true</c>.</summary>
     public const string DeleteConfigKey = "PreWarm:PrebuiltBundleRetention:Delete";
 
-    /// <summary>Config key overriding how many newest pre-release identities are kept per source and open line.</summary>
+    /// <summary>Legacy count key retained for caller compatibility; it no longer changes retention.</summary>
     public const string KeepNewestPerSourceConfigKey = "PreWarm:PrebuiltBundleRetention:KeepNewestPerSource";
+
+    /// <summary>Config key extending the minimum artifact age beyond 30 days.</summary>
+    public const string MinimumAgeConfigKey = "PreWarm:PrebuiltBundleRetention:MinimumAge";
 
     /// <summary>Config key overriding the grace (a <see cref="TimeSpan"/> string) an unsealed publication is presumed in flight.</summary>
     public const string UnsealedGraceConfigKey = "PreWarm:PrebuiltBundleRetention:UnsealedGrace";
@@ -230,8 +233,8 @@ public static class PrebuiltBundleRetentionExtensions
         var retention = PrebuiltBundleRetention.Default;
         if (bool.TryParse(configuration[DeleteConfigKey], out var delete))
             retention = retention with { Delete = delete };
-        if (int.TryParse(configuration[KeepNewestPerSourceConfigKey], out var keep) && keep >= 0)
-            retention = retention with { KeepNewestPerSource = keep };
+        if (TimeSpan.TryParse(configuration[MinimumAgeConfigKey], out var age) && age >= TimeSpan.FromDays(30))
+            retention = retention with { MinimumAge = age };
         if (TimeSpan.TryParse(configuration[UnsealedGraceConfigKey], out var grace) && grace > TimeSpan.Zero)
             retention = retention with { UnsealedGrace = grace };
         if (TimeSpan.TryParse(configuration[IntervalConfigKey], out var interval) && interval > TimeSpan.Zero)

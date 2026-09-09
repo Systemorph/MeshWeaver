@@ -716,9 +716,10 @@ which is the part that must never drift.
 
 ## Retention: the published store is pruned by REFERENCE, never by age alone
 
-> Maintainer directive, 2026-09-08: *"please also set up a recurring process in memex.systemorph.com
-> to clean up these shares from old releases. typically when final release is out, we can remove all
-> -CI"* — *"let's maybe leave last 10 -CI"*.
+The current policy is the 30-day age window and release/consumer protection contract in
+[Released Artifact Retention](/Doc/Architecture/ReleasedArtifactRetention) (#3842).
+It supersedes the earlier request to keep ten CI builds. Module repositories resolve
+the released platform at run time; retention must not restore platform pins.
 
 Every CI build that publishes a bake adds one `<root>/<identity>/` directory to the store, and until
 this pass nothing ever removed one. Measured 2026-09-08 on memex.systemorph.com through the memex
@@ -729,39 +730,38 @@ silently and reports the failure far from the cause — every runtime NodeType r
 
 ### The rule, stated once for two stores
 
-The same predicate governs this store and the container registry's pinned digests
-([Pinned Image Retention](../PinnedImageRetention), #3438):
+The same required outcome applies to this store and the container registry (#3438):
 
 > **An artifact that anything pins, names, runs or may adopt is kept — regardless of age and
 > regardless of how many newer ones exist. Only an artifact NOTHING references is collected, and an
 > artifact whose references cannot be READ counts as referenced.**
 
-For the registry the references are CI pins; for this store they are the following, each a KEEP,
-ORed together (`PrebuiltBundleStore.Plan`, `MeshWeaver.Hosting`):
+Registry protection must cover advertised last-green sets and their consumers; the
+legacy pin scanner is still a migration component, not that complete inventory. In
+this store the following KEEP rules are ORed (`PrebuiltBundleStore.Plan`, `MeshWeaver.Hosting`):
 
 | # | an identity directory is kept when… | why that is a reference |
 |---|---|---|
 | 1 | it is the framework identity **this process runs** | its own boot and every install-time adoption read it |
-| 2 | a **clean release marker** `_releases/X.Y.Z` names it | a release line stays adoptable forever and is the rollback target |
+| 2 | a **clean release marker** `_releases/X.Y.Z` names it | support has not been established as ended, so official releases stay available |
 | 3 | a NodeType record's **adoption stamp** (`CompiledFrameworkVersion`, written by `PrebuiltAssemblySeeder` and by every local compile) names it | a record was built under it; a re-seed may ask for it again |
-| 3b | a **Deployment record pins it** (`Hosting/Deployment` → `pinnedImageTag`) or a **registered instance reports running it** (`Hosting/ModuleInventory` → `platformVersion` / `frameworkIdentity`), the version mapped to its identity through the `_releases/<version>` marker (`DeploymentPinnedReferences`, `MeshWeaver.PluginCatalog`; any `PinnedPlatformReferenceSource` is unioned) | on the registry a remote instance pulls exactly its OWN identity's seal over the HTTP prebuilt surface — pearl on `3.0.0-ci.8080` sits far outside the newest ten and would compile from source at every boot. A pinned version's marker is never retired either. 🚨 **A pinned version no marker names keeps NOTHING** — nothing can say which directory it would have been — and the ledger line states it: `pins mapping to no marker (keep nothing): Deployment Deployments/x=3.0.0-ci.1` |
-| 4 | it holds, for some source, the **newest sealed publication on the running major line** | exactly what `Modules:VersionStrictness=Family` adopts ([Module Versioning](../ModuleVersioning)) |
-| 5 | a pre-release marker of an **open line** names it and it is among the newest **N** (`KeepNewestPerSource`, default **10**) such identities for some source, by version | the maintainer's "leave the last 10 -CI"; once the clean `X.Y.Z` marker exists the line is CLOSED and this rule keeps none of its `X.Y.Z-ci.<n>` identities |
-| 6 | **no marker names it** and it is among the newest N for some source **by seal time** | nothing can place an unnamed identity on a line, so recency is the only signal it has — such identities are pruned by recency, not by line |
-| 7 | a source under it is **unsealed and younger than the grace** (`UnsealedGrace`, default 2 h) | the publisher writes bundles first and `_complete` last: a young unsealed directory is a seal in flight. A bounded grace is a reference-like signal; an age cutoff on a *sealed* directory would not be, and there is none |
+| 3b | a Deployment reference or registered instance report identifies it, directly or through `_releases/<version>` (`PinnedPlatformReferenceSource`) | running consumers need their adopted version regardless of age; an unresolved version aborts cleanup rather than keeping nothing |
+| 4 | it holds the **newest sealed publication per source for each represented major** | a registry can serve consumers on a different major from its own process; unsealed successors cannot displace this protection |
+| 5 | its newest content write or a release marker naming it is younger than **30 days** (or an explicitly longer `MinimumAge`) | rapid publishing must not delete recent history; this covers sealed and unnamed identities alike |
+| 7 | a source under it is unsealed and younger than `UnsealedGrace` | additional in-flight publication protection; the 30-day floor also applies |
 | 8 | its seal **cannot be read** | unreadable is never unreferenced (the modules GC's #2509 rule) |
 
 Everything else is collected **oldest first, one identity at a time**, each removal logged with the
 bytes reclaimed. The sentinel of every source is deleted before the directory, so a reader that
 lists mid-removal sees "unsealed" and backs off rather than a sealed listing whose bundles are
 vanishing. The `-ci` **markers** of a removed identity — and of an identity already gone for longer
-than the grace — are removed with it, so `_releases/` does not grow forever; a clean release marker
+than the minimum age — are removed with it, so `_releases/` does not grow forever; a clean release marker
 is never removed. The release gates read the same directory
 ([Release Availability Gates](../ReleaseGates)), so a retired `-ci` version simply reads as
 "published no bake" there, which is the truth once its bundles are gone.
 
 **Fail closed, the way `ModuleSetStore.Prune` does.** A store that cannot be listed, or a release
-marker that cannot be read, aborts the pass with nothing collected — which identity an unreadable
+marker that cannot be read, or a consumer version that cannot be resolved, aborts the pass with nothing collected — which identity an unreadable
 marker names is unknown, so no identity can be called unreferenced. The NodeType stamps are read
 from the mesh on every pass (system-scoped, mesh-wide — the pre-warmer's own enumeration); an
 enumeration that cannot be taken aborts that pass too. A removal that fails is counted and the
@@ -785,7 +785,8 @@ blocking filesystem work on the file-system `IIoPool`, never a hub. Then **recur
 | key | default | meaning |
 |---|---|---|
 | `PreWarm:PrebuiltBundleRetention:Delete` | `true` | `false` measures and reports only |
-| `PreWarm:PrebuiltBundleRetention:KeepNewestPerSource` | `10` | rules 5 and 6 |
+| `PreWarm:PrebuiltBundleRetention:MinimumAge` | `30.00:00:00` | may extend the window; values below 30 days cannot shorten it |
+| `PreWarm:PrebuiltBundleRetention:KeepNewestPerSource` | ignored | legacy key retained for compatibility; no count-based cleanup rule |
 | `PreWarm:PrebuiltBundleRetention:UnsealedGrace` | `02:00:00` | rule 7 |
 | `PreWarm:PrebuiltBundleRetention:Interval` | `1.00:00:00` | the recurrence |
 
