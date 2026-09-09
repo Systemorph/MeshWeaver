@@ -11,6 +11,7 @@ Tags:
   - "Agents"
   - "Email"
   - "Calendar"
+  - "Teams"
   - "Access Control"
 ---
 
@@ -48,6 +49,7 @@ The EA agent declares the `Mesh` + `ExecutiveAssistant` plugins. The `ExecutiveA
 | Mail | `ListInbox`, `SearchMail`, `ReadMail`, `DraftMail`, `DraftReply`, `GetDraft`, `UpdateDraft`, `DiscardDraft` — and `SendMail`, `ReplyToMail` **only where the deployment opted in**, see below |
 | Mailings | `PrepareMailing` — one subject and body template merged per recipient into personal mails, saved as a page the person reviews; **never sends** — see below |
 | Calendar | `ListEvents`, `GetEvent`, `CreateEvent` (book + invite attendees), `UpdateEvent`, `CancelEvent` |
+| Teams (read-only) | `ListTeams`, `ListChannels`, `ReadChannelMessages`, `ListChats`, `ReadChat` — the user's own organisation's teams and chats; no send tool, see below |
 
 Example asks: *"Book 30 min with Alice next Tuesday afternoon and invite her"*, *"reply to the vendor that
 we accept"*, *"clear my Friday"*, *"email me when an approval needs me"* (the last manages your
@@ -145,6 +147,26 @@ knowing before anyone edits them:
 | `UpdateDraft` | the patch carries **only** `subject`, `body`, `toRecipients`, `ccRecipients` — the four fields Graph documents as *"Updatable only if **isDraft** = true"*. A patch that arrives after the send is rejected by the **server**, atomically. `importance`, `categories`, `flag` and `isRead` *are* updatable on a sent message; adding one would remove that backstop silently, so the field set is pinned by a test. |
 | `DiscardDraft` | nothing beyond the re-read. `DELETE /me/messages/{id}` deletes whatever it is given, draft or sent — which is why this tool's guard is the only thing between "discard that draft" and destroying a delivered message. |
 
+### Teams is read-only, on the same grant — and a guest team is out of reach
+
+The Teams tools run on the same delegated grant as mail and calendar (`EaGraphAuth.Scopes` carries
+`Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read` since
+2026-09-09). Two consequences the agent states rather than hides:
+
+- **A grant minted before those scopes existed answers 403.** The mailbox still works; only the
+  Teams consent is missing. The tool answers with the connect link (`{BaseUrl}/auth/ea/connect`)
+  and the agent hands it on — one reconnect, a few seconds — instead of reporting Teams as
+  unavailable. `ChannelMessage.Read.All` is admin-restricted: a non-admin sees "Need admin approval"
+  until a tenant admin has consented once.
+- **A team the user joined as a guest of another organisation is not visible.** The grant is the
+  user's home tenant's; `/me/joinedTeams` omits guest teams and their channels answer 403/404. No
+  scope changes that. The agent says so rather than reporting the team as missing. Reading such a
+  team needs the other organisation's cooperation — see the repository's `/teams` skill.
+
+There is deliberately **no Teams send tool**: Teams has no draft state, so a send would be immediate
+and irreversible, against this agent's draft-by-default contract. Sending gets its own gate
+(`Teams:AgentSend`, mirroring `Email:AgentSend`) and its own consent when it is built.
+
 ### Editing an event is READ then PATCH, never cancel-and-recreate
 
 `GetEvent` and `UpdateEvent` exist because their absence caused real data loss. With only
@@ -182,9 +204,13 @@ cost. The agent definition is `Agent/ExecutiveAssistant`.
 The EA reuses the portal's **sign-in** app registration (the `Authentication:Microsoft` client). On it:
 
 1. Add the **delegated** Microsoft Graph permissions: `Mail.ReadWrite`, `Mail.Send`,
-   `Calendars.ReadWrite`, `offline_access`.
+   `Calendars.ReadWrite`, `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`,
+   `Chat.Read`, `offline_access`.
 2. Add the redirect URI **`{BaseUrl}/auth/ea/callback`** (e.g. `https://portal.example.com/auth/ea/callback`).
-3. No admin pre-consent is required — each user consents for themselves on first use (that's the point).
+3. No admin pre-consent is required for mail and calendar — each user consents for themselves on
+   first use (that's the point). `ChannelMessage.Read.All` is the one exception: it is
+   admin-restricted, so a tenant admin grants it once (Enterprise applications → the sign-in app →
+   Permissions → Grant admin consent); until then non-admins see "Need admin approval".
 
 No application-wide Graph permission is needed for the EA (the standing `Calendars.ReadWrite` *application*
 grant used by an earlier iteration can be removed; the shared `memex@` ingestion mailbox keeps its
