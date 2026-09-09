@@ -371,6 +371,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Measuring a Live Portal Read-Only](MeasuringALivePortalReadOnly) — the four read-only instruments, and why an absence needs a coverage fact before it counts as evidence
 - [Chart Ownership and the Runner Pool](ChartOwnershipAndRunnerPool) — why the chart's gate is here, what a relocation must carry, and why path-filtering it is unsafe
 - [Sharding the Node-Repo Gate](NodeRepoGateSharding) — a cap cut reports as `cancelled`, so the fan-out that removes it, and the fold that keeps ONE required context and ONE gate log
+- [Applying Is Not Rolling Out](ApplyingIsNotRollingOut) — helm applies, the caller observes; the fixed fifteen-minute `--atomic --wait` that reverted a correct upgrade mid-startup-gate, and why a bigger timeout only moves the cliff
 - [Probe Semantics](ProbeSemantics) — readiness, liveness and startup ask three different questions with three different remedies; why they get three paths and three tags
 - [What a Synthetic Probe May Assert](SyntheticProbeTargets) — a probe naming one deployment's installed content is broken by construction; the platform floor, the negative control that tells "absent" from "down", and reading the target's own declaration
 - [Why a GC-Bound Pod Stays in Rotation](WhyAGcBoundPodStaysInRotation) — the GC's hard limit sits below the container limit, so a portal short of memory is defended rather than restarted
