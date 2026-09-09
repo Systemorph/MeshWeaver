@@ -118,8 +118,8 @@ fell into the wrong bucket.
 `ShutdownRequest` that `Dispose()` posted. The hub was not waiting on a child: at `RunLevel=Started`
 it has not reached `DisposeHostedHubs` and has asked nothing below it to do anything.
 
-**Not established** — the mechanism. Two candidates remain, and the instrumentation of the day could
-not discriminate them:
+**Not established** — the mechanism. Three candidates remain (the third was added later; see below),
+and the instrumentation of the day could not discriminate any of them:
 
 | | **M1 — the wake-up was never delivered** | **M2 — a drain body is blocked before the handler** |
 |---|---|---|
@@ -131,9 +131,63 @@ not discriminate them:
 That table *is* the discriminator, and it is why the counters were added: neither reading existed
 when the 47 reports were filed.
 
-🚨 **Do not "fix" this by adding `PreferFairness`.** It is one of two live hypotheses, and shipping
+### M3 — the latch leaked, and nothing was ever scheduled
+
+🚨 **`drainsInFlight == 0` does not mean a drain is queued.** It means no drain body is *running*,
+and the verdict's own prose used to close that gap by assertion — *"the drain flag is latched (a
+drain **is** scheduled on this hub's TaskScheduler)"* — which nothing measured. Two states read
+identically:
+
+| | **M1** — the scheduler holds it | **M3** — nothing is outstanding |
+|---|---|---|
+| `drainsInFlight` | 0 | 0 |
+| `drainsAwaitingScheduler` (`drainsScheduled - drainsStarted`) | **> 0** | **0** |
+| Owner | the `TaskScheduler` — it accepted work and is not running it | **this file** — `MessageService` |
+
+M3 was **reachable**. `draining = true` is set inside the turn gate in `KickDrain` and the schedule
+happens *outside* it; `Terminal()` re-schedules with the latch still held. A throw from
+`Task.Factory.StartNew` at either site left the flag set with nothing outstanding — and since
+`KickDrain` returns immediately whenever the flag is set, the pump was then frozen **for the life of
+the hub**, silently, with the verdict blaming a scheduler that had never been asked. A real
+scheduler throws here: a completed `ConcurrentExclusiveSchedulerPair`, or an Orleans activation torn
+down underneath the hub.
+
+`ScheduleDrainOne` now releases the latch and logs an Error naming the scheduler when a schedule
+fails, so the invariant *"`draining` ⇒ a drain is running or queued"* holds by construction and
+every verdict that reads it is entitled to.
+
+🚨 **M3 is almost certainly NOT what the 47 reports were**, and saying so is the point of listing
+it. `Task.Factory.StartNew` on `TaskScheduler.Default` does not throw, and a hosted hub gets a
+**fresh** `MessageHubConfiguration` (`IServiceProvider.CreateMessageHub`) — nothing copies a parent's
+`TaskScheduler`, and `WithTaskScheduler`'s own contract says to use the grain's scheduler *only* for
+the root grain hub. So `sync/*` hubs run on the default pool scheduler, where M3 is unreachable and
+a dead activation scheduler cannot reach them either. M3 is a real defect with the identical
+fingerprint, found by reading the code and closed; it narrows the candidate set for the incident
+rather than explaining it. **What remains for the reported population is M1-by-pool-starvation or
+M2**, and the next occurrence prints which.
+
+🚨 **It does not fall back to another scheduler.** The turn scheduler is the hub's serialisation
+guarantee — under Orleans it *is* the grain's activation scheduler — so running a turn elsewhere
+would break the actor model to keep a queue moving. Releasing the latch is the honest recovery: the
+next post tries again and reports again, instead of the pump going dark.
+
+### What Orleans makes of M1
+
+`MessageHubGrain` wires the **root grain hub's** turn scheduler to the grain's
+**`ActivationTaskScheduler`** (`.WithTaskScheduler(grainScheduler)`), and the same file already
+records the consequence one hazard over: *"when a stuck round wedges that scheduler, any rescue that
+is itself a hub message can never be processed"* (#147). For a hub on that scheduler, M1 has a
+specific shape — a wedged or already-deactivated activation parks every turn it will ever take — and
+the verdict now hands the stall to that scheduler by measurement rather than by assertion.
+
+🚨 It does **not** apply to hosted hubs, which is what the 47 reports were: hosted hubs are built
+from a fresh configuration and stay on `TaskScheduler.Default`. Read a
+`drainsAwaitingScheduler > 0` on a `sync/*` hub as **pool starvation or a local-queue LIFO stall**,
+not as a dead activation — the owner is the same (the scheduler), the remedy is not.
+
+🚨 **Do not "fix" this by adding `PreferFairness`.** It is one of the live hypotheses, and shipping
 a change that makes a symptom rarer while the mechanism is unmeasured is the band-aid this
-repository refuses. The next occurrence now names which of M1 or M2 it is; that is what the fix
+repository refuses. The next occurrence now names which of M1, M2 or M3 it is; that is what the fix
 waits on.
 
 ---
@@ -162,12 +216,17 @@ bucket, so it fell through to the catch-all. It now names the pump, prints `drai
 dequeue delta, and says in the line itself which reading means what:
 
 ```text
-THE PUMP IS NOT TURNING: the drain flag is latched (a drain is scheduled on this hub's
-TaskScheduler), drainsInFlight=0, and NO turn was dequeued in that window (0 dequeued in total
-since Dispose()). … drainsInFlight=0 means the scheduled drain never ran: look at the TaskScheduler
-that owes this hub a thread. drainsInFlight>0 means a drain body is running and is blocked before
-the dequeue.
+THE PUMP IS NOT TURNING: the drain flag is latched, drainsInFlight=0,
+drainsAwaitingScheduler=1, and NO turn was dequeued in that window (0 dequeued in total since
+Dispose()). … MECHANISM: the turn scheduler ACCEPTED 1 drain(s) and has not run them
+(drainsInFlight=0). The stall is in THAT SCHEDULER, not in this hub: under Orleans the hub's turn
+scheduler IS the grain's ActivationTaskScheduler (MessageHubGrain.WithTaskScheduler), so a wedged
+or already-deactivated activation parks every turn this hub will ever take.
 ```
+
+The `MECHANISM:` clause is chosen from the two counters, never asserted: `drainsInFlight > 0` names
+M2, `drainsAwaitingScheduler > 0` names M1 and hands the stall to the scheduler, and zero on both
+names M3 — a defect in `MessageService.ScheduleDrainOne`, which that method now makes unreachable.
 
 **7313 is now guarded.** "The stall is in a hosted hub or a join it is waiting on" is printable only
 when there *is* something below — hosted hubs still in the collection, an outstanding hosted-hub

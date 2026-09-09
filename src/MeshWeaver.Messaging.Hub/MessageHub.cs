@@ -1231,7 +1231,8 @@ public sealed class MessageHub : IMessageHub
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
             : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
-               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L,
+               DrainsAwaitingScheduler: -1L);
 
         // The discriminator. A hub that was IDLE while waiting genuinely heard nothing: the silence
         // is upstream. A hub that was busy, gated, or holding queued work cannot make that claim —
@@ -2152,30 +2153,61 @@ public sealed class MessageHub : IMessageHub
         // here is a category error, which is precisely what the unguarded fallback below used to do
         // (#3593: 47 sync/* hubs, all at RunLevel=Started with queue depth 1).
         //
-        // What the two counters in the line discriminate:
-        //   drainsInFlight=0 → the scheduled drain never ran. The turn scheduler owes this hub a
-        //                      thread and has not delivered one (a starved pool, a scheduler whose
-        //                      queue is not being serviced, work parked on one thread's local LIFO
-        //                      queue reachable only by stealing).
-        //   drainsInFlight>0 → a drain body IS running and is blocked BEFORE the dequeue — i.e. in
-        //                      the turn gate itself, or in whatever the body does ahead of taking
-        //                      work off the queue.
+        // 🚨 The line used to say "a drain IS scheduled on this hub's TaskScheduler" and then send
+        // the reader to that scheduler — an ASSERTION, not a measurement. Nothing in the snapshot
+        // could tell "the scheduler accepted a drain and never ran it" from "the latch is set and
+        // nothing is outstanding at all", and those have opposite owners. `drainsAwaiting` is that
+        // measurement (#3593): scheduled minus started, read off the pump.
+        //
+        // The three states, in the order the line reports them:
+        //   drainsInFlight > 0   → a drain body IS running and is blocked BEFORE the dequeue — in
+        //                          the turn gate, or in whatever runs ahead of taking work off the
+        //                          queue.
+        //   drainsAwaiting > 0   → the turn scheduler ACCEPTED a drain and has not run it. The
+        //                          cause is outside this hub: a starved pool, work parked on one
+        //                          thread's local LIFO queue, or — for a ROOT GRAIN hub only — an
+        //                          Orleans ActivationTaskScheduler that stopped executing work.
+        //                          🚨 The last one does NOT apply to a hosted hub: hosted hubs are
+        //                          built from a fresh MessageHubConfiguration and inherit no
+        //                          scheduler, which is what WithTaskScheduler's contract asks for.
+        //   drainsAwaiting == 0  → NOTHING is outstanding while the latch is set. That breaks
+        //                          ScheduleDrainOne's invariant and is a defect in the pump itself,
+        //                          not in any scheduler. It is reachable only if a schedule was
+        //                          lost without releasing the latch, which ScheduleDrainOne now
+        //                          refuses to do — so if this branch is ever printed, it is new.
         if (snapshot is { } pumpView && pump is not null
             && pumpView.Draining && pumpView.Buffer > 0 && nothingDequeuedThisBudget)
         {
+            var drainsAwaiting = pumpView.DrainsAwaitingScheduler;
+            var mechanism = pumpView.DrainsInFlight > 0
+                ? "a drain body IS running (drainsInFlight=" + pumpView.DrainsInFlight
+                  + ") and is blocked BEFORE the dequeue — in the turn gate, or in whatever it does "
+                  + "ahead of taking work off the queue"
+                : drainsAwaiting > 0
+                    ? "the turn scheduler ACCEPTED " + drainsAwaiting + " drain(s) and has not run "
+                      + "them (drainsInFlight=0). The stall is in THAT SCHEDULER, not in this hub. "
+                      + "On TaskScheduler.Default (every hosted hub — a hosted hub is built from a "
+                      + "fresh configuration and inherits no scheduler) that is pool starvation or "
+                      + "work parked on one thread's local LIFO queue; on a ROOT GRAIN hub it is the "
+                      + "grain's ActivationTaskScheduler (MessageHubGrain.WithTaskScheduler), where a "
+                      + "wedged or deactivated activation parks every turn this hub will ever take"
+                    : "NOTHING is outstanding (drainsInFlight=0, drainsScheduled==drainsStarted) "
+                      + "while the drain flag is latched. That breaks the pump's own invariant — a "
+                      + "latched flag must mean a drain is running or queued — so this is a defect "
+                      + "in MessageService.ScheduleDrainOne, NOT in any scheduler";
+
             logger.LogError(DisposalPumpNeverDequeued,
                 "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
                 + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}. "
-                + "THE PUMP IS NOT TURNING: the drain flag is latched (a drain is scheduled on this "
-                + "hub's TaskScheduler), drainsInFlight={DrainsInFlight}, and NO turn was dequeued in "
-                + "that window ({Dequeued} dequeued in total since Dispose()). The queued work — the "
+                + "THE PUMP IS NOT TURNING: the drain flag is latched, drainsInFlight={DrainsInFlight}, "
+                + "drainsAwaitingScheduler={DrainsAwaiting}, and NO turn was dequeued in that window "
+                + "({Dequeued} dequeued in total since Dispose()). The queued work — the "
                 + "ShutdownRequest included — has therefore never been handed to a handler, so this "
                 + "stall is in THIS hub's turn scheduling and NOT in a hosted hub or a join. "
-                + "drainsInFlight=0 means the scheduled drain never ran: look at the TaskScheduler "
-                + "that owes this hub a thread. drainsInFlight>0 means a drain body is running and is "
-                + "blocked before the dequeue. Disposal is NOT forced.\n{Diagnostics}",
+                + "MECHANISM: {Mechanism}. Disposal is NOT forced.\n{Diagnostics}",
                 Address, DisposalWatchdogTimeout, lastProgress, RunLevel, pumpView.Buffer,
-                pumpView.DrainsInFlight, dequeued - disposalDequeuedBaseline, DescribeWedge());
+                pumpView.DrainsInFlight, drainsAwaiting, dequeued - disposalDequeuedBaseline,
+                mechanism, DescribeWedge());
             return;
         }
 
@@ -2206,14 +2238,16 @@ public sealed class MessageHub : IMessageHub
         logger.LogError(DisposalStalledUnclassified,
             "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
             + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}, "
-            + "drainsInFlight={DrainsInFlight}, draining={Draining}, {Dequeued} turn(s) dequeued since "
+            + "drainsInFlight={DrainsInFlight}, drainsAwaitingScheduler={DrainsAwaiting}, "
+            + "draining={Draining}, {Dequeued} turn(s) dequeued since "
             + "Dispose(). No turn is on the block, the pump is not holding queued work, and this hub "
             + "has no hosted hubs and no outstanding child-disposal join — so THIS VERDICT DOES NOT "
             + "NAME A CAUSE. What is still outstanding is in the diagnostics below (pending callbacks "
             + "are the usual one: a reply owed from outside this mesh). Disposal is NOT "
             + "forced.\n{Diagnostics}",
             Address, DisposalWatchdogTimeout, lastProgress, RunLevel, snapshot?.Buffer ?? -1,
-            snapshot?.DrainsInFlight ?? -1, snapshot?.Draining ?? false,
+            snapshot?.DrainsInFlight ?? -1, snapshot?.DrainsAwaitingScheduler ?? -1L,
+            snapshot?.Draining ?? false,
             dequeued - disposalDequeuedBaseline, DescribeWedge());
     }
 
@@ -2360,7 +2394,8 @@ public sealed class MessageHub : IMessageHub
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
             : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
-               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L,
+               DrainsAwaitingScheduler: -1L);
         var pending = SnapshotPendingCallbacks();
         var sb = new System.Text.StringBuilder();
         sb.Append("Hub ").Append(Address)
@@ -2447,7 +2482,8 @@ public sealed class MessageHub : IMessageHub
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
             : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
-               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L,
+               DrainsAwaitingScheduler: -1L);
         sb.Append(indent)
           .Append("Hub ").Append(Address)
           .Append(" RunLevel=").Append(RunLevel)

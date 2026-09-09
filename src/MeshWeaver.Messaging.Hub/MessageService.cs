@@ -1003,6 +1003,15 @@ public class MessageService : IMessageService
     // cannot fail is not a measurement.
     private int drainsInFlight;
 
+    // 🚨 The pair that separates "the scheduler never ran our task" from "we latched and scheduled
+    // nothing" (#3593). drainsInFlight=0 alone cannot tell them apart, and the two have opposite
+    // owners: the first is a TaskScheduler that stopped executing work (under Orleans, a wedged or
+    // deactivated ActivationTaskScheduler — MessageHubGrain wires the hub's turn scheduler to the
+    // grain's), the second would be a defect in THIS file. Monotonic; the difference is the number
+    // of drains queued on the turn scheduler that have not begun.
+    private long drainsScheduled;
+    private long drainsStarted;
+
     /// <summary>
     /// Number of turns the pump has taken off its queue so far. Monotonic. Read by the hub's
     /// disposal stall detector: a latched drain flag with this counter frozen means nothing has
@@ -1016,6 +1025,16 @@ public class MessageService : IMessageService
     /// Zero with the drain flag latched means the scheduled drain has not started running.
     /// </summary>
     internal int DrainsInFlight => Volatile.Read(ref drainsInFlight);
+
+    /// <summary>
+    /// Drains handed to the turn scheduler, minus drains that actually began. Positive means the
+    /// scheduler ACCEPTED work and has not run it — the hub is waiting on a thread it will not get
+    /// until that scheduler services its queue. Zero, with the drain flag latched and nothing in
+    /// flight, means no drain is outstanding at all, which the latch invariant forbids: see
+    /// <see cref="ScheduleDrainOne"/>.
+    /// </summary>
+    internal long DrainsAwaitingScheduler =>
+        Interlocked.Read(ref drainsScheduled) - Interlocked.Read(ref drainsStarted);
 
     /// <summary>
     /// Snapshot of the turn loop — used by <see cref="MessageHub.GetDisposalDiagnostics"/> when a
@@ -1035,7 +1054,7 @@ public class MessageService : IMessageService
     /// <c>Doc/Architecture/DisposalStallVerdicts</c> (#3593).</para>
     /// </summary>
     internal (int Buffer, int Deferred, int DrainsInFlight, int OpenGates, bool Draining,
-              string? CurrentMessage, long CurrentMessageElapsedMs)
+              string? CurrentMessage, long CurrentMessageElapsedMs, long DrainsAwaitingScheduler)
         GetQueueSnapshot()
     {
         var current = currentlyExecutingMessageType;
@@ -1047,7 +1066,7 @@ public class MessageService : IMessageService
                 elapsed = (long)((Stopwatch.GetTimestamp() - startedTicks) * 1000.0 / Stopwatch.Frequency);
         }
         return (mainQueue.Count, deferredQueue.Count, Volatile.Read(ref drainsInFlight), gates.Count,
-            draining, current, elapsed);
+            draining, current, elapsed, DrainsAwaitingScheduler);
     }
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
@@ -1278,15 +1297,64 @@ public class MessageService : IMessageService
     // an IObservable — we SUBSCRIBE, never await. A synchronous turn completes inline
     // and advances the drain on this thread; a genuinely-async turn advances when it
     // completes. No Task anywhere on the turn path.
-    private void ScheduleDrainOne() =>
-        Task.Factory.StartNew(DrainOne, CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach, turnScheduler);
+    /// <remarks>
+    /// 🚨 <b>The latch invariant: <c>draining == true</c> must always mean "a drain is running or
+    /// queued on the turn scheduler".</b> Every disposal verdict reads it that way — the pump
+    /// verdict says outright <i>"a drain is scheduled on this hub's TaskScheduler"</i> — so a
+    /// scheduling attempt that FAILS must release the latch rather than leave it set forever. It
+    /// used to be able to: <c>draining = true</c> is set inside the gate in <see cref="KickDrain"/>
+    /// and the schedule happens outside it, and <c>Terminal()</c> re-schedules with the latch still
+    /// held. A throw from either site froze the pump permanently AND made every later
+    /// <see cref="KickDrain"/> return immediately, producing exactly the fingerprint #3593 reports
+    /// — queue non-empty, <c>draining=true</c>, <c>drainsInFlight=0</c>, nothing ever dequeued —
+    /// while the verdict blamed a scheduler that had never been asked.
+    ///
+    /// <para>🚨 <b>And it does NOT fall back to another scheduler.</b> The turn scheduler is the
+    /// hub's serialisation guarantee (under Orleans it is the grain's activation scheduler), so
+    /// running a turn anywhere else would break the actor model to keep a queue moving. Releasing
+    /// the latch is the honest recovery: the next <c>KickDrain</c> tries again and reports again,
+    /// instead of the pump going silently dark.</para>
+    /// </remarks>
+    private void ScheduleDrainOne()
+    {
+        Interlocked.Increment(ref drainsScheduled);
+        try
+        {
+            Task.Factory.StartNew(DrainOne, CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach, turnScheduler);
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Decrement(ref drainsScheduled);
+            int depth;
+            lock (turnGate)
+            {
+                draining = false;
+                depth = mainQueue.Count;
+            }
+            try
+            {
+                logger.LogError(ex,
+                    "Hub {Address}: the turn scheduler ({Scheduler}) REFUSED a drain, so no turn "
+                    + "can start. The drain flag has been released — a latched flag with nothing "
+                    + "scheduled would freeze this pump permanently and make every disposal verdict "
+                    + "blame a scheduler that was never asked (#3593). {Depth} turn(s) are queued "
+                    + "and will be retried by the next post; if the scheduler stays dead they will "
+                    + "not be processed, and THAT is the failure to chase.",
+                    Address, turnScheduler.GetType().Name, depth);
+            }
+            catch { /* logger itself failed — the latch is released, which is the load-bearing part */ }
+        }
+    }
 
     // Counts THIS body as executing for as long as it runs, so the disposal snapshot can tell a
     // drain that is running from a drain that was merely scheduled (#3593). The inner loop keeps
     // every one of its early returns; the counter is released in the finally regardless.
     private void DrainOne()
     {
+        // The scheduler actually gave us a thread. Paired with drainsScheduled above; the two are
+        // what make "queued and never started" a MEASUREMENT rather than an inference (#3593).
+        Interlocked.Increment(ref drainsStarted);
         Interlocked.Increment(ref drainsInFlight);
         try
         {
