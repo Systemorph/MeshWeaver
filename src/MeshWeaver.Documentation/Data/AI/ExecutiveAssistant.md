@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "The Executive Assistant Agent"
-Abstract: "A personal agent that works your own mailbox and calendar — triage and write mail, read your inbox, do your booking — under per-user, just-in-time delegated consent: no app-wide Graph access, an encrypted per-user refresh token, and short-lived delegated tokens that call Graph as you."
+Abstract: "A personal agent that works your own mailbox, calendar and Teams — triage and write mail, read your inbox, do your booking, read your teams' channels and your chats — under per-user, just-in-time delegated consent: no app-wide Graph access, an encrypted per-user refresh token, and short-lived delegated tokens that call Graph as you."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#6a1b9a'/><rect x='4' y='9' width='16' height='10' rx='2' fill='white'/><path d='M9 9V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/><rect x='10.5' y='12' width='3' height='2' rx='0.5' fill='#6a1b9a'/></svg>"
 Thumbnail: "images/agenticai.svg"
 Authors:
@@ -17,14 +17,16 @@ Tags:
 
 # The Executive Assistant Agent
 
-The **Executive Assistant (EA)** is a personal agent that works your **own** mailbox and calendar on your
-behalf — triage and write mail, read your inbox, and "do your booking" (schedule / reschedule / cancel
-meetings). It also helps you manage your [notification preferences](/Doc/GUI/NotificationPreferences).
+The **Executive Assistant (EA)** is a personal agent that works your **own** mailbox, calendar and Teams
+on your behalf — triage and write mail, read your inbox, "do your booking" (schedule / reschedule /
+cancel meetings), and read your teams' channels and your chats. It also helps you manage your
+[notification preferences](/Doc/GUI/NotificationPreferences).
 
 ## Least-privilege by design: per-user, just-in-time consent
 
-The EA never uses standing, application-wide Graph access. Instead it asks for access to **your** mailbox
-and calendar **only when it first needs them**, and only **you** can grant it:
+The EA never uses standing, application-wide Graph access. Instead it asks for access to **your** mailbox,
+calendar and Teams **only when it first needs them**, and only **you** can grant it (one Teams scope
+needs a tenant admin's consent once — see the Azure setup below):
 
 1. You ask the EA to do something with your mail/calendar (e.g. *"what's on my calendar tomorrow?"*).
 2. If you haven't connected yet, the tool replies with a **connect link** (`/auth/ea/connect`) instead of
