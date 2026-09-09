@@ -37,6 +37,11 @@ that only a laptop could move: an input of the control plane with no lane to car
   the scripts name and refuses one the ClusterRole does not grant — naming the script, the verb,
   the resource and the rule to add. It ran red on the manifest as it was, for both scripts.
 - The volume-purge step's grant is added.
+- Ensuring a namespace is now "read it, create it if absent". It used to be a client-side
+  dry-run piped into `kubectl apply`, which *patches* a namespace that already exists — a verb the
+  role does not grant, on purpose. The Reconcile that first reached that line after the RBAC was
+  applied grew memex's data share from 16Gi to 128Gi through the lane and then stopped there. The
+  coverage check now reads that idiom as needing `patch`, and flagged both places it was used.
 
 What the check cannot see is stated in the script: manifests handed to `kubectl apply`, resources
 named at run time, and what helm does with the chart.

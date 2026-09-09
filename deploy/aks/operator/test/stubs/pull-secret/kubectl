@@ -23,8 +23,11 @@ case "${1:-}" in
   create)
     case "${2:-}" in
       namespace)
-        # `create namespace X --dry-run=client -o yaml` → a manifest on stdout, as kubectl does.
-        printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n' "${3:-}" ;;
+        # `create namespace X` → created, as kubectl does. A `--dry-run=client -o yaml` form would
+        # be the retired apply idiom (it patches an existing namespace, which the ClusterRole does
+        # not grant) — the stub refuses it so the retirement cannot silently come back.
+        for arg in "$@"; do case "$arg" in --dry-run=*) echo "kubectl stub: create namespace --dry-run is the retired apply idiom — ensure = get, then create" >&2; exit 1 ;; esac; done
+        echo "namespace/${3:-} created" ;;
       secret)
         # `create secret generic NAME --type=… --from-file=.dockerconfigjson=PATH --dry-run=client -o yaml`
         name="${3:-}"; file=""; type=""
@@ -48,6 +51,11 @@ case "${1:-}" in
     fi
     echo "applied" ;;
   get)
+    # `get namespace X` → exists only when the test says so (HOSTING_PULL_SECRET_STUB_NS_EXISTS=1).
+    if [ "${2:-}" = "namespace" ]; then
+      if [ "${HOSTING_PULL_SECRET_STUB_NS_EXISTS:-0}" = "1" ]; then echo "NAME   STATUS   AGE"; exit 0; fi
+      echo "Error from server (NotFound): namespaces \"${3:-}\" not found" >&2; exit 1
+    fi
     # `get secret NAME -o jsonpath={.type}` / `jsonpath={.data.\.dockerconfigjson}`
     [ "${2:-}" = "secret" ] || { echo "kubectl stub: unexpected get $2" >&2; exit 1; }
     [ -f "$dir/applied-secret.yaml" ] || { echo "Error from server (NotFound): secrets \"${3:-}\" not found" >&2; exit 1; }
