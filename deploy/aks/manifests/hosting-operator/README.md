@@ -99,3 +99,32 @@ record-driven Reconcile through the fixed operator stopped at step 1/6 with `For
 <resource>` a `bin/` script names must be granted here, or the operator test suite is red.
 `kubectl apply` prints `configured` / `unchanged` per resource in the lane's log — that line is
 the change report.
+
+## The Azure grants a Provision needs — and who applies them
+
+`backups.bicep` gives the operator identity Blob Data Contributor on the backup account and
+Contributor on the PostgreSQL server. A Provision needs two more, both scoped to ONE resource:
+
+| Step | Command | Grant | Where |
+|---|---|---|---|
+| 3 · Federate namespace identity | `hosting-federate` → `az identity federated-credential create` on the PORTAL identity | **Managed Identity Contributor** on `memexaks-portal-mi` | `backups.bicep`, param `portalIdentityId` |
+| 4 · Create DNS record | `hosting-dns upsert` → `az network dns record-set a add-record` | **DNS Zone Contributor** on the zone | `dns-zone-operator-role.bicep` (the zone's resource group), or `backups.bicep` param `dnsZoneId` |
+
+Measured 2026-09-09 (`Deployments/pearl-provision-20260909-b`, the first Provision ever run
+through the lane): step 3 failed with `AuthorizationFailed … federatedIdentityCredentials/write`
+over `…/memexaks-portal-mi/federatedIdentityCredentials/hosting-pearl` — the identity had never
+been granted anything on the portal identity.
+
+🚨 **No lane deploys bicep.** Applying these is the documented break-glass, run by a person with
+Owner on the resource group (the operator identity itself deliberately cannot assign roles):
+
+```bash
+# from deploy/aks/infra/modules — parameters as your environment names them
+az deployment group create -g memex-aks-rg -f backups.bicep \
+  -p oidcIssuerUrl=<AZ_OIDC_ISSUER> postgresServerId=<memexaks-pg resource id> \
+     portalIdentityId=<memexaks-portal-mi resource id> \
+     dnsZoneId=/subscriptions/<sub>/resourceGroups/dns/providers/Microsoft.Network/dnsZones/meshweaver.cloud
+```
+
+After it: re-request the Provision — the plan is idempotent from the top (the database and the
+vault secrets the first run created are found, not re-created).

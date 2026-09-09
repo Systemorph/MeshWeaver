@@ -16,6 +16,10 @@ ns=""
 if [ "${1:-}" = "-n" ]; then ns="${2:-}"; shift 2; fi
 live_file() { printf '%s/live/%s.json' "$fixture" "$(printf '%s' "$1" | tr '/' '_')"; }
 case "${1:-}" in
+  auth)
+    # `auth can-i <verb> <kind>` → yes unless $FIXTURE/denied.txt lists "<verb> <kind>"
+    if [ -f "$fixture/denied.txt" ] && grep -qx "${3:-} ${4:-}" "$fixture/denied.txt"; then echo "no"; exit 1; fi
+    echo "yes" ;;
   get)
     if [ "${2:-}" = "namespace" ]; then echo "NAME STATUS AGE"; exit 0; fi
     if [ "${2:-}" = "deploy" ]; then echo "Error from server (NotFound)" >&2; exit 1; fi
