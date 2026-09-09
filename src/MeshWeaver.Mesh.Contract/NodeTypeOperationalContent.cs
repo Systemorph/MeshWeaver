@@ -83,6 +83,11 @@ public static class NodeTypeOperationalContent
         "adoptedSourceFingerprint",
         "currentSourceFingerprint",
         "buildProvenance",
+        // #3583 — the two module versions the compatibility rule compares. Operational for the
+        // same reason the fingerprints are: an authored adopted version would let a repo file
+        // declare its own build compatible.
+        "adoptedModuleVersion",
+        "currentModuleVersion",
         "compiledFrameworkVersion",
         // #1793 — the inputs the standing FAILURE verdict was formed from. Operational for the
         // same reason compiledFrameworkVersion is, and for one sharper one: an authored token that

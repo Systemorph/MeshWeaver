@@ -59,6 +59,12 @@ public enum BuildExecutionVerdict
 ///   <item><b><see cref="BuildProvenance.Compiled"/> is permitted</b> — Roslyn built the bytes from
 ///     the source this mesh holds. It is also the zero value, so a record written before the field
 ///     existed reads as the honest default and no historical node is refused.</item>
+///   <item>🚨 <b><see cref="BuildProvenance.StaleAdopted"/> is PERMITTED</b> (MeshWeaver#3583).
+///     The source moved past the build but the two share a module MAJOR: the last build this mesh
+///     holds keeps serving, marked. Refusal is keyed on version compatibility since 2026-09-09,
+///     when refusing on a fingerprint that merely differed took every page of a type down for an
+///     afternoon over a one-line CSS change. Stale-but-compatible bytes over newer source is the
+///     accepted trade-off; a dead page is not.</item>
 ///   <item><b><see cref="BuildExecutionVerdict.Inconclusive"/> does not execute either</b>, but it
 ///     is a different answer and the call sites treat it differently: it is reached only when the
 ///     definition could not be read at all, where every arming site in the framework already binds
@@ -91,8 +97,8 @@ public static class NodeTypeExecutionGate
             : definition.BuildProvenance switch
             {
                 BuildProvenance.AdoptionRefused => BuildExecutionVerdict.Refused,
-                // Compiled / AdoptedVerified / AdoptedUnverified. Listed as the default arm ON
-                // PURPOSE: BuildProvenance is append-only, and a member added later must not
+                // Compiled / AdoptedVerified / AdoptedUnverified / StaleAdopted. Listed as the
+                // default arm ON PURPOSE: BuildProvenance is append-only, and a member added later must not
                 // silently become a refusal — a new provenance nobody has taught this gate about
                 // is by definition not PROVEN stale. Refusal is opt-in, one name at a time.
                 _ => BuildExecutionVerdict.Permitted,
