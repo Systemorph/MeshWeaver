@@ -294,7 +294,7 @@ sat on one node; a drain at 01:05:01Z shut both down in the same second and the 
 503 until a replacement passed the startup gate (~90 s). Reading it needed the *cluster-wide*
 log — pods in three namespaces stopping together — because inside the memex namespace it looked
 like a rollout that changed nothing. `check-chart-invariants.py` now refuses a floor above one
-with no budget (invariant 11) or no spreading (invariant 12); before, it only asked whether a
+with no budget (invariant 14) or no spreading (invariant 15); before, it only asked whether a
 budget that exists has replicas under it.
 
 Loki loses whatever its ingester had not flushed when `loki-0` itself is drained (the 01:05Z lines

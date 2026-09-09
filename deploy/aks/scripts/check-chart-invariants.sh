@@ -34,6 +34,9 @@
 #   8. every values key the platform must let a deploy set is actually RENDERED, and never blank
 #   9. a key whose consumer parses it must never render BLANK   absent is fine; blank throws at bind
 #  10. readiness and liveness probe DIFFERENT paths           one path cannot answer two questions
+#  11. the platform pull secret is on BOTH pods or neither the migration and the portal pull one image
+#  12. a chart-created PVC is sized, classed, kept, mounted    or the claim exists and nothing uses it
+#  13. the bundle-fetch shelf is the pre-warm root, pod cred   or the portal reads a shelf nobody filled
 #  14. a replica floor > 1 implies a PDB                     or one node drain evicts every replica at once
 #  15. a replica floor > 1 implies anti-affinity / spread    or every replica shares one node
 #
