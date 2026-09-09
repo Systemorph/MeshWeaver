@@ -69,6 +69,38 @@ if [ -n "${HOSTING_VALUES:-}" ]; then
   fi
 fi
 
+# ── Azure sign-in through Workload Identity ──────────────────────────────────────────────────
+# The Job runs as the hosting-operator ServiceAccount, federated to the operator's managed identity
+# (backups.bicep); the workload-identity webhook projects a token into the pod and sets
+# AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_FEDERATED_TOKEN_FILE. 🚨 az DOES NOT READ THOSE ON ITS
+# OWN — the Azure SDKs do (WorkloadIdentityCredential), the CLI does not. Measured 2026-09-09 01:33Z
+# on the first Provision ever run through the lane (Deployments/pearl-provision-20260909): step 1/14
+# `az postgres flexible-server db create` answered "ERROR: Please run 'az login' to setup account."
+# Every earlier run (memex Reconcile/Restart) was kubectl+helm only, which authenticate in-cluster,
+# so no run had reached an az step before. Sign in ONCE here, as the identity, and say so.
+#
+# The token never reaches a command line or the log: it is read from the file straight into az's
+# argument by this process, and az is not wrapped in hosting::do (which narrates argv).
+if [ -n "${AZURE_FEDERATED_TOKEN_FILE:-}" ]; then
+  [ -r "$AZURE_FEDERATED_TOKEN_FILE" ] \
+    || hosting::die "AZURE_FEDERATED_TOKEN_FILE=${AZURE_FEDERATED_TOKEN_FILE} is not readable — the workload-identity webhook set the variable but the projected token is missing"
+  hosting::need_env AZURE_CLIENT_ID "the operator identity's client id (Hosting:Operator:Environment or the record's operator.environment; the webhook also sets it)"
+  hosting::need_env AZURE_TENANT_ID "set by the workload-identity webhook from the ServiceAccount's azure.workload.identity/tenant-id annotation or the webhook default"
+  if az login --service-principal --username "$AZURE_CLIENT_ID" --tenant "$AZURE_TENANT_ID" \
+       --federated-token "$(cat "$AZURE_FEDERATED_TOKEN_FILE")" --allow-no-subscriptions --output none 2>/tmp/az-login.err; then
+    az_sub="$(az account show --query id -o tsv 2>/dev/null || true)"
+    hosting::log "azure     signed in as ${AZURE_CLIENT_ID} (subscription ${az_sub:-none})"
+    hosting::say az_login true
+  else
+    hosting::die "az login as workload identity ${AZURE_CLIENT_ID} failed: $(tr -d '\n' < /tmp/az-login.err). Check the federated credential on the operator identity (subject system:serviceaccount:memex-ops:hosting-operator, issuer AZ_OIDC_ISSUER) — a subject/issuer mismatch fails here and nowhere else."
+  fi
+else
+  # Not a refusal: a Reconcile/Roll/Restart is kubectl+helm only and needs no Azure session. A step
+  # that DOES need az then fails by name — and this line, above it in the log, says what was missing.
+  hosting::log "azure     no workload-identity token (AZURE_FEDERATED_TOKEN_FILE unset) — steps that call az will fail. The Job needs the pod label azure.workload.identity/use=true and the hosting-operator ServiceAccount annotated azure.workload.identity/client-id (manifests/hosting-operator/operator-serviceaccount.yaml)."
+  hosting::say az_login false
+fi
+
 total=0
 while IFS=$'\t' read -r name command; do
   [ -n "${name:-}" ] || continue
