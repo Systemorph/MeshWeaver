@@ -260,6 +260,11 @@ az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
 
 ## Verify a release is healthy (before declaring done)
 
+🚨 **`/api/version` reports the CD run's RESOLVED target commit**, which can differ from the run's
+`head_sha` when two merges land in one queue group (2026-09-09: set 8131 = run head `e1039813e`,
+`/api/version` = `3853374f7`, one second earlier). To name the set a portal runs, match the commit
+against the run's "Resolve the target commit" job output — never against the run head or `main`.
+
 - Migration log shows `Database migration completed. Version: N` AND the portal serves HTTP 200
   (see [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md)).
 - The self-updater logged its decision (picked newer / already current / held with a reason), not

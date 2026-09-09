@@ -112,6 +112,18 @@ and how to reconcile it in the same session. Do not re-derive that list here —
   scheme is `X.Y.Z-ci.<n>` (temporary) → clean `X.Y.Z` (final); `rc` is retired.
 - **A cancelled delivery run with zero jobs is a superseded queue entry**, not a lost seal —
   [ReadingCiSignals](/Doc/Architecture/ReadingCiSignals).
+- **The operator's ClusterRole follows the chart:** `deploy/aks/manifests/hosting-operator/operator-rbac.yaml`
+  is applied by the config repository's helm-release lane on every `adopt` / `deploy`, from the
+  chart at the pin; the operator test suite refuses a script that names a `kubectl` verb+resource
+  the role does not grant (`check-rbac-coverage.sh`). Measured 2026-09-09: the first Reconcile
+  through the fixed operator stopped at step 1/6 with `storageclasses … is forbidden` — the grant
+  had been on `main` for hours, the cluster's role predated it, and only a laptop could have moved
+  it. A control-plane input with no lane is a defect, whichever file it lives in.
+- **`/api/version` names the delivery run's RESOLVED target commit, not the set's queue tip.**
+  `3.0.0-ci.8131` is CD run 34260408777 with head `e1039813e`; its "Resolve the target commit"
+  job picked `3853374f7` (the merge one second earlier in the same queue group), and that is what
+  the image answers. Compare a portal's commit against the run's resolve job, never against the
+  run's head or `main` — read as "not 8131", it cost an hour on 2026-09-09.
 - **Steady state is self-update and CD**, never a hand roll —
   [ReleaseStrategy](/Doc/Architecture/ReleaseStrategy), [DeploymentAKS](/Doc/Architecture/DeploymentAKS)
   (the bootstrap runbook, now read under rule 1 above).
