@@ -239,3 +239,10 @@ forces full builds until a successful publication restores the baseline. The con
 reusing results across arbitrary runs; the caller must provision its credential before enabling
 it. Successful-publication reuse needs only the existing GitHub Actions read permission. Do not substitute the bake's two-module composition
 index for evidence that the whole compiled catalogue was published.
+
+
+`build-logic-ref` opts the module call into these selectors at an immutable core commit, separately
+from `platform-ref` (the framework source against which compiled suites run). A workflow update
+must not silently advance that source pin. Existing callers without the new input keep their
+previous selector and do not invoke the new helpers. The publication-input receipt includes both
+resolved framework source and build-logic pins, as well as the image digests.
