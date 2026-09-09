@@ -256,6 +256,50 @@ mesh, which the attached recursive snapshot lists.
 
 ---
 
+## Who asked for the teardown
+
+`[QUIESCE-START]` names the requester (#3510):
+
+```
+[QUIESCE-START] Hosting: requested by portal/installer (routed DisposeRequest); 4 pending callbacks …
+[QUIESCE-START] Hosting: requested by itself — a self-posted DisposeRequest (Hosting), i.e. a rebind or self-heal recycle; …
+[QUIESCE-START] Hosting: requested by a direct Dispose() (no routed DisposeRequest); …
+```
+
+**Why it was missing, and why the obvious source could not supply it.** `Dispose()` posts its
+`ShutdownRequest` to ITSELF, so that message's `Sender` is always the dying hub — the field that
+looks like it answers "who asked" is the one field that cannot. The discriminating fact is one frame
+earlier: whether a `DisposeRequest` arrived over the bus at all, and from where. That is recorded in
+`HandleDispose`, where such a request is *honoured* (not merely received — the root-mesh refusal
+returns without disposing).
+
+**The three readings, and what each rules out:**
+
+| line says | means | rules out |
+|---|---|---|
+| a named sender | another hub asked — e.g. `PackageInstaller` posting to a package root | a recycle; a host teardown |
+| `itself — a self-posted DisposeRequest` | an automatic recycle: `NodeTypeRebindWatcher`, `WithOverlaySelfHeal` | an external actor |
+| `a direct Dispose() (no routed DisposeRequest)` | host teardown, an owner disposing its children, a `using` | **the whole message path** |
+
+🚨 The third is not an absence of information — it is the deduction #3510 could not make. That issue
+turned on one unknown: the Hosting root was disposed at 23:37:51Z *while its own 145-file install was
+in flight*, its per-node children went with it, the writes they owed acks for were stranded, four
+creates never got a reply and the install ran out a ten-minute bound. Its own words: *"Who disposed
+the root is not in the log at this level"* — so the leading hypothesis (a NodeType rebind posting
+`DisposeRequest` to the root) stayed a hypothesis, and its Expected section asks for this line.
+
+🚨 The **self-posted** case is called out rather than printed as an address on purpose: the automatic
+recycles post to their own hub, so a bare sender renders `Hosting: requested by Hosting` — true,
+useless, and easy to misread as a routing oddity. That case is #3510's leading hypothesis, so it is
+the one reading that must not be ambiguous.
+
+**This names the disposer; it does not stop the wedge.** #3510's other two Expectations — deferring a
+recycle while an install holds the root, or NACKing every in-flight write under it so the install
+fails in milliseconds with a name — are untouched. `QuiesceStartNamesTheAskerTest` pins all three
+readings, and the line is `Information`: a test asserting it must raise its own filter
+(`AddFilter("MeshWeaver", LogLevel.Information)`), because `TestBase` binds levels from
+`test/appsettings.json` and an Information line is otherwise dropped before any provider sees it.
+
 ## What this page does not claim
 
 The wedge in #3593 is **not fixed**. What changed is that the next occurrence is nameable: the
