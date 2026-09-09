@@ -420,6 +420,22 @@ public static class NodeTypeLayoutAreas
             || !string.IsNullOrWhiteSpace(def.HubConfiguration)
             || (def.Sources is { Count: > 0 });
 
+        // 🚨 #3583 — STALE-BUT-SERVING comes BEFORE the green cache-hit line: the record IS Ok
+        // with a usable build, and that is exactly why the operator must be told it is the LAST
+        // build, not the current source. Both module versions and both fingerprints, and what is
+        // awaited. Localized: a viewer of an ordinary page never sees this (the page renders),
+        // but the NodeType page is read in both languages.
+        if (reportedStatus == CompilationStatus.Ok
+            && def.BuildProvenance == BuildProvenance.StaleAdopted
+            && !string.IsNullOrEmpty(def.LatestAssemblyPath))
+            return ("⏸", host.Localize("ui.buildStaleServing"),
+                host.Localize("ui.buildStaleServingBody",
+                    ModuleVersionCompatibility.Display(def.AdoptedModuleVersion),
+                    Short(def.AdoptedSourceFingerprint),
+                    ModuleVersionCompatibility.Display(def.CurrentModuleVersion),
+                    Short(def.CurrentSourceFingerprint),
+                    Short(NodeTypeCompilationHelpers.FrameworkVersion)));
+
         // Cache-hit (Status=Ok with the usable-assembly fields populated) — the
         // routing grain re-used the existing assembly without re-running Roslyn.
         // Surface that as a discrete state so the operator sees "we didn't burn

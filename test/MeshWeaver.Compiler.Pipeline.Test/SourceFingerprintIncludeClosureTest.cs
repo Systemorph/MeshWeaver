@@ -393,6 +393,13 @@ public class SourceFingerprintIncludeClosureTest
                 RequestedSourceStampAt = DateTimeOffset.UtcNow,
                 AdoptedSourceFingerprint = baked,
                 CurrentSourceFingerprint = live,
+                // #3583 — since 2026-09-09 a fingerprint that differs REFUSES only across a module
+                // MAJOR; with the same MAJOR it holds the build as StaleAdopted. The subject here
+                // is that the fingerprint SEES the included-only edit at all, so the fixture is a
+                // MAJOR bump and the assertion stays on the refusal row. Without these two lines
+                // the verdict would be StaleAdopted — still "not Verified", which is #2948's point.
+                AdoptedModuleVersion = "1.0.0",
+                CurrentModuleVersion = "2.0.0",
                 CurrentSourceVersions = snapshot,
                 CompiledSources = snapshot,
                 LatestAssemblyCollection = "assemblies",
@@ -401,9 +408,11 @@ public class SourceFingerprintIncludeClosureTest
             snapshot,
             canCompileLocally: true);
 
-        verdict.BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused,
+        baked.Should().NotBe(live,
             "the only difference between the two builds is an included-only snippet, and that is "
-            + "the whole of #2948 — before the fix these fingerprints were EQUAL and the verdict "
+            + "the whole of #2948 — before the fix these fingerprints were EQUAL");
+        verdict.BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused,
+            "differing fingerprints across a module MAJOR are refused — before #2948 the verdict "
             + "was AdoptedVerified");
         verdict.CompilationStatus.Should().Be(CompilationStatus.Pending,
             "refusing is not enough: the live source has to actually get compiled");

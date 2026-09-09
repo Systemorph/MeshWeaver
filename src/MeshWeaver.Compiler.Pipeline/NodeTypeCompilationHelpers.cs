@@ -75,7 +75,7 @@ internal static class NodeTypeCompilationHelpers
     /// proceeds anyway. Matches the git-sync push path's budget: the sources it reads are the
     /// same image directory and CI-published root, so the cost profile is the same.
     /// </summary>
-    private static readonly TimeSpan OnDemandAdoptionBudget = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan OnDemandAdoptionBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// How long to wait for an adoption's write-back to actually land on the node before
@@ -263,6 +263,43 @@ internal static class NodeTypeCompilationHelpers
                     // FailedBuildInputs treatment, so `formedUnderLiveInputs` is not decoration —
                     // see ApplyGateSettle's doc for why.
                     void SettleAsError(string? reason, bool formedUnderLiveInputs)
+                        => SettlePending(parkedDef => ApplyGateSettle(
+                            parkedDef, reason, formedUnderLiveInputs, guards.ModulesHash));
+
+                    // 🚨 #3583 — A DELIVERY gate (no bundle for this identity, or a declined one)
+                    // on a type that still names a usable build does NOT park it as an Error: the
+                    // last build keeps serving, marked StaleAdopted, and a person is told once. A
+                    // refused (MAJOR-bump) build settles Unavailable with the incompatible notice.
+                    // Only a type with NOTHING to serve takes the Error park below — that one is
+                    // honest. The registry is not parked for a hold: no Roslyn ran, there is no
+                    // storm to contain, and the next Pending flip is exactly the re-check that
+                    // lifts the hold once a bundle lands.
+                    bool SettleAsHold(NodeTypeDefinition pendingDefinition, string reason)
+                    {
+                        var usable = HasUsableBuild(pendingNode!, pendingDefinition, guards);
+                        if (BuildDeliveryHold.Settle(pendingDefinition, usable, reason) is null)
+                            return false;
+                        logger?.LogWarning(
+                            "Compile watcher: {HubPath} is held by delivery (#3583) — {Outcome}. {Reason}",
+                            hubPath,
+                            pendingDefinition.BuildProvenance is BuildProvenance.AdoptionRefused
+                                ? "its adopted build is INCOMPATIBLE (module MAJOR moved) and is not run; awaiting a bundle"
+                                : "its last build keeps serving over source that moved ahead; awaiting a bundle",
+                            reason);
+                        SettlePending(parkedDef =>
+                        {
+                            var held = BuildDeliveryHold.Settle(
+                                parkedDef, HasUsableBuild(pendingNode!, parkedDef, guards), reason);
+                            if (held is null)
+                                return ApplyGateSettle(parkedDef, reason, true, guards.ModulesHash);
+                            if (BuildDeliveryHold.EventOf(parkedDef, held) is { } evt)
+                                BuildDeliveryHold.Notify(hub, hubPath, held, evt, logger);
+                            return held;
+                        });
+                        return true;
+                    }
+
+                    void SettlePending(Func<NodeTypeDefinition, NodeTypeDefinition> settle)
                     {
                         using (accessService?.ImpersonateAsSystem())
                             workspace.GetMeshNodeStream().Update(curr =>
@@ -274,15 +311,11 @@ internal static class NodeTypeCompilationHelpers
                                 // genuine (un-parked) compile has already moved past it.
                                 if (parkedDef.CompilationStatus != CompilationStatus.Pending)
                                     return curr;
-                                return curr with
-                                {
-                                    Content = ApplyGateSettle(
-                                        parkedDef, reason, formedUnderLiveInputs, guards.ModulesHash)
-                                };
+                                return curr with { Content = settle(parkedDef) };
                             }).Subscribe(
                                 _ => { },
                                 ex => logger?.LogWarning(ex,
-                                    "Compile watcher: failed to re-settle parked {HubPath} from Pending to Error",
+                                    "Compile watcher: failed to re-settle parked {HubPath} from Pending",
                                     hubPath));
                     }
 
@@ -495,6 +528,9 @@ internal static class NodeTypeCompilationHelpers
                                 ?? parkRegistry;
                             var pendingDef = pendingNode!.ContentAs<NodeTypeDefinition>(
                                 hub.JsonSerializerOptions, logger);
+                            // #3583 — a type that still holds a build is HELD, not parked dead.
+                            if (pendingDef is not null && SettleAsHold(pendingDef, reason))
+                                return;
                             registry?.OnCompileFailed(
                                 hub, hubPath, reason, deterministic: true,
                                 recipientUserId: null, sources: pendingDef?.CurrentSourceVersions, logger);
@@ -554,6 +590,11 @@ internal static class NodeTypeCompilationHelpers
                                     }
                                     var reason = PrebuiltAssemblySeeder.UntrackedPartitionParkReason(
                                         hubPath, offeredByBundle);
+                                    // #3583 — a type that still holds a build is HELD, not parked
+                                    // dead: the last build keeps serving (same module MAJOR) or is
+                                    // refused-but-not-errored (a MAJOR bump), and a person is told.
+                                    if (SettleAsHold(pendingDefinition, reason))
+                                        return;
                                     logger?.LogError(
                                         "Compile watcher: {HubPath} is a module's content in a partition this "
                                         + "mesh does not track, and no prebuilt build for it landed — PARKING "
@@ -1165,12 +1206,49 @@ internal static class NodeTypeCompilationHelpers
         if (string.Equals(adopted, live, StringComparison.Ordinal))
             return stamped with { BuildProvenance = BuildProvenance.AdoptedVerified };
 
+        // ── #3583 — the fingerprints DIFFER: the source MOVED past these bytes. Whether the bytes
+        // may keep serving is NOT the fingerprint's call any more; it is MODULE VERSION
+        // COMPATIBILITY's (the portal owner's rule, 2026-09-09). Same MAJOR — or versions nobody
+        // recorded — keeps the build serving as StaleAdopted: honest (CompiledSources cleared, so
+        // IsDirty reads true; the page names both versions and says a bundle is awaited), never
+        // dead. On a mesh that compiles module content the live source is still compiled (Pending
+        // through the one door) — the build serves meanwhile; on one that does not, the record
+        // settles Ok right here. Only a MAJOR bump reaches the refusal below.
+        //
+        // Why: on 2026-09-09 a one-line CSS change to Essentials/Email, synced 35 minutes after
+        // merging while the only bundle for the portal's identity predated it, took the refusal
+        // branch and left every page of the type dead for the afternoon. The refusal was right
+        // about the bytes and wrong about the consequence.
+        if (!ModuleVersionCompatibility.Refuses(def.AdoptedModuleVersion, def.CurrentModuleVersion))
+        {
+            var serving = def with
+            {
+                RequestedSourceStampAt = null,
+                BuildProvenance = BuildProvenance.StaleAdopted,
+                CompiledSources = null,
+            };
+            if (canCompileLocally)
+                return DispatchPending(serving, modulesHash, snapshot);
+            // A compile claim already standing on the record (a stray Pending the park will
+            // answer, or a Compiling from before the flag was set) is not clobbered — this row
+            // only settles a record that is not in flight.
+            return serving.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling
+                ? serving
+                : serving with
+                {
+                    DispatchedBuildInputs = null,
+                    CompilationStatus = CompilationStatus.Ok,
+                    CompilationError = null,
+                };
+        }
+
         // 🚨 REFUSED — the only hard fail, and the one this whole mechanism exists for. The bundle
-        // states which sources it was built from and they are NOT the ones this mesh holds, so the
-        // bytes are last week's code over today's data (#2813: four client documents' bodies lost,
-        // one unrecoverable). Do NOT stamp CompiledSources — that write is what makes IsDirty false
-        // by construction and is precisely the lie — and drive a real local compile of the live
-        // source by flipping Pending. The request is still consumed so it cannot re-fire.
+        // states which sources it was built from and they are NOT the ones this mesh holds, AND
+        // the module MAJOR differs — a declared incompatibility — so the bytes are last week's
+        // code over today's data (#2813: four client documents' bodies lost, one unrecoverable).
+        // Do NOT stamp CompiledSources — that write is what makes IsDirty false by construction
+        // and is precisely the lie — and drive a real local compile of the live source by flipping
+        // Pending. The request is still consumed so it cannot re-fire.
         //
         // The refusal is recorded on the node rather than only logged: a reader must be able to see
         // that the assembly currently serving was rejected, not merely that a compile is pending.
@@ -1208,9 +1286,14 @@ internal static class NodeTypeCompilationHelpers
         //
         //   !canCompileLocally -> KEEP them (Modules:RequirePrebuilt refuses a local compile by
         //     design, so clearing would leave the type with NO assembly at all, INDEFINITELY - an
-        //     outage with no recovery path, self-inflicted by a guard). The caller logs Critical
-        //     naming the node, because on such a mesh nothing this process can do will fix it and a
-        //     human has to rebake.
+        //     outage with no recovery path, self-inflicted by a guard). The execute-time gate
+        //     (#2820) is what stops them RUNNING. The caller logs Critical naming the node, because
+        //     on such a mesh nothing this process can do will fix it and a human has to rebake.
+        //     🚨 #3583 — and the record settles UNAVAILABLE with the "incompatible, awaiting
+        //     bundle" notice, NOT Pending: a Pending on such a mesh only parks, and a park used to
+        //     mean Error — a Roslyn verdict on code nothing is wrong with, which the readiness gate
+        //     read as a regression. Nothing is known to be wrong with the source; a bundle is
+        //     awaited.
         //
         // 🚨 Do NOT collapse this to "RequirePrebuilt is unset everywhere". It is measured absent on
         // memex and memex-cloud, and #2194 item 3 records the same - that is TWO instances, and says
@@ -1225,7 +1308,18 @@ internal static class NodeTypeCompilationHelpers
                 LatestAssemblyPath = null,
                 LatestAssemblyMvid = null,
             }
-            : refused;
+            : refused with
+            {
+                // Same in-flight guard as the StaleAdopted row: a standing compile claim is
+                // left for its own driver to settle.
+                DispatchedBuildInputs = def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling
+                    ? def.DispatchedBuildInputs
+                    : null,
+                CompilationStatus = def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling
+                    ? def.CompilationStatus
+                    : CompilationStatus.Unavailable,
+                CompilationError = BuildDeliveryHold.IncompatibleNotice(refused),
+            };
     }
 
     /// <summary>
@@ -1272,6 +1366,29 @@ internal static class NodeTypeCompilationHelpers
         // REAL module fingerprint rather than the safe-but-blind default (#3390).
         var result = ApplyAdoptedSourceStamp(
             def, snapshot, canCompileLocally, ModulesHashOf(hub));
+
+        // #3583 requirement 3 — a person hears about a hold, and about the adoption that lifts
+        // it ("Essentials 1.2.3 adopted for this identity"), on the TRANSITION, never on every
+        // stamp: the pure EventOf is what decides, so the three writers that can fulfil a stamp
+        // request cannot disagree about when to speak.
+        if (BuildDeliveryHold.EventOf(def, result) is { } evt)
+            BuildDeliveryHold.Notify(hub, hubPath, result, evt, logger);
+
+        if (result.BuildProvenance is BuildProvenance.StaleAdopted)
+        {
+            logger?.LogWarning(
+                "[AdoptedSourceStamp] {HubPath}: the source moved past the adopted build (bundle "
+                + "fingerprint {Adopted}, live {Live}) and the two are COMPATIBLE by module version "
+                + "({AdoptedVersion} over {CurrentVersion}) — the build keeps serving as StaleAdopted "
+                + "(#3583); {Next}",
+                hubPath, def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint,
+                ModuleVersionCompatibility.Display(def.AdoptedModuleVersion),
+                ModuleVersionCompatibility.Display(def.CurrentModuleVersion),
+                canCompileLocally
+                    ? "a compile of the live source is dispatched"
+                    : "a bundle for this identity is awaited");
+            return result;
+        }
 
         if (result.BuildProvenance is not BuildProvenance.AdoptionRefused)
             return result;
@@ -1597,7 +1714,13 @@ internal static class NodeTypeCompilationHelpers
                         + "for this emission — an unreadable include must never read as an absent "
                         + "one", hubPath);
                     return Observable.Return((published.Snapshot, Fingerprint: (string?)null));
-                }))
+                })
+                // #3583 — the partition root's module version, read beside the fingerprint so the
+                // compatibility rule always has the CURRENT side when the fingerprint says the
+                // source moved. One safe read (Present / Absent / Unavailable); an unreadable
+                // root keeps the previous value, exactly as an unreadable include does.
+                .SelectMany(p => ReadModuleVersion(hub, accessService, hubPath, logger)
+                    .Select(mv => (p.Snapshot, p.Fingerprint, ModuleVersion: mv))))
             .Switch(),
                 published =>
                 {
@@ -1704,12 +1827,17 @@ internal static class NodeTypeCompilationHelpers
                         // first activation after an upgrade. An INCONCLUSIVE emission (fingerprint
                         // null) drops out of the comparison entirely: it has nothing to say about
                         // the field, so it must neither force a write nor block the snapshot's.
+                        var moduleVersion = published.ModuleVersion;
                         if (!pendingStamp
                             && def.CurrentSourceVersions is not null
                             && DictEquals(def.CurrentSourceVersions, snapshot)
                             && (fingerprint is null
                                 || string.Equals(
                                     def.CurrentSourceFingerprint, fingerprint,
+                                    StringComparison.Ordinal))
+                            && (!moduleVersion.Established
+                                || string.Equals(
+                                    def.CurrentModuleVersion, moduleVersion.Version,
                                     StringComparison.Ordinal)))
                             return curr;
 
@@ -1717,6 +1845,9 @@ internal static class NodeTypeCompilationHelpers
                         {
                             CurrentSourceVersions = snapshot,
                             CurrentSourceFingerprint = fingerprint ?? def.CurrentSourceFingerprint,
+                            CurrentModuleVersion = moduleVersion.Established
+                                ? moduleVersion.Version
+                                : def.CurrentModuleVersion,
                         };
 
                         if (pendingStamp)
@@ -1731,6 +1862,75 @@ internal static class NodeTypeCompilationHelpers
                 },
             logger,
             "Sources watcher");
+    }
+
+    /// <summary>
+    /// The module version of the source this mesh holds for <paramref name="nodeTypePath"/>'s
+    /// partition — the partition root's <c>content.version</c> (MeshWeaver#3583). ONE emission of
+    /// <c>(Version, Established)</c>: a root that is PRESENT establishes its version (null when it
+    /// carries none), an ABSENT root establishes null (a mesh-authored type in a partition that is
+    /// no module), and an UNREADABLE root establishes nothing — the caller keeps its previous
+    /// value, exactly as it does for an unreadable include. A top-level type (no partition above
+    /// it) establishes null without a read. As System: source-set discovery is framework
+    /// infrastructure, and a per-user read of the root would route a permission check back into
+    /// the reading grain (#1253).
+    /// </summary>
+    internal static IObservable<(string? Version, bool Established)> ReadModuleVersion(
+        IMessageHub hub, AccessService? accessService, string nodeTypePath, ILogger? logger)
+    {
+        var partition = PartitionOf(nodeTypePath);
+        if (string.Equals(partition, nodeTypePath, StringComparison.Ordinal))
+            return Observable.Return(((string?)null, true));
+        return accessService
+            .RunAsSystem(() => hub.GetMeshNodeOutcome(
+                partition, SourceFingerprintIncludeReader.ReadBudget, ReadTimeoutBehavior.EmitNull))
+            .Take(1)
+            .Select(outcome => outcome.Status switch
+            {
+                NodeReadStatus.Present => (ModuleVersionOf(outcome.Node, hub.JsonSerializerOptions), true),
+                NodeReadStatus.Absent => ((string?)null, true),
+                _ => ((string?)null, false),
+            })
+            .Catch<(string? Version, bool Established), Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "SourcesWatcher: the partition root '{Partition}' could not be read for its module "
+                    + "version — CurrentModuleVersion is left at its previous value for {HubPath}",
+                    partition, nodeTypePath);
+                return Observable.Return(((string?)null, false));
+            });
+    }
+
+    /// <summary>The <c>version</c> member of a partition root's content, whatever shape the content
+    /// arrived in (a typed record from a module that registered the type, a raw element, an
+    /// as-written object) — read through JSON so the compiler layer needs no reference to the
+    /// Store's <c>PluginContent</c>. Null when the content carries none.</summary>
+    internal static string? ModuleVersionOf(MeshNode? root, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (root?.Content is null)
+            return null;
+        try
+        {
+            var element = root.Content switch
+            {
+                System.Text.Json.JsonElement e => e,
+                System.Text.Json.Nodes.JsonNode n => System.Text.Json.JsonSerializer.SerializeToElement(n, options),
+                var o => System.Text.Json.JsonSerializer.SerializeToElement(o, o.GetType(), options),
+            };
+            if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return null;
+            foreach (var member in element.EnumerateObject())
+                if (string.Equals(member.Name, "version", StringComparison.OrdinalIgnoreCase)
+                    && member.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+                    return member.Value.GetString() is { Length: > 0 } v ? v : null;
+            return null;
+        }
+        catch (Exception)
+        {
+            // An unserialisable root is a root with no readable version — UNKNOWN, which the
+            // compatibility rule never refuses on.
+            return null;
+        }
     }
 
     /// <summary>
@@ -3792,6 +3992,10 @@ internal static class NodeTypeCompilationHelpers
                     if (ok)
                         hub.ServiceProvider.GetService<LocalNodeTypeBuilds>()
                             ?.RecordUsableBuild(hubPath);
+                    // #3583 requirement 3 — set inside the stamp lambda when a delivery hold is
+                    // lifted by THIS compile, emitted after the write lands.
+                    BuildDeliveryHold.DeliveryEvent? lifted = null;
+                    NodeTypeDefinition? liftedDef = null;
                     IObservable<Unit> StampCompileState() =>
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
@@ -3815,12 +4019,12 @@ internal static class NodeTypeCompilationHelpers
                         {
                             logger?.LogInformation("Compile success for {HubPath} → {Assembly}",
                                 hubPath, outcome.Result!.AssemblyLocation);
-                            return curr with
-                            {
-                                Content = ApplyCompileSuccess(
-                                    def, outcome.Result, curr.Version, resolvedActivityPath, newReleasePath,
-                                    hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
-                            };
+                            var succeeded = ApplyCompileSuccess(
+                                def, outcome.Result, curr.Version, resolvedActivityPath, newReleasePath,
+                                hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash);
+                            lifted = BuildDeliveryHold.EventOf(def, succeeded);
+                            liftedDef = succeeded;
+                            return curr with { Content = succeeded };
                         }
 
                         // Pass the exception OBJECT so the stack reaches the log sink — message-only
@@ -3837,6 +4041,8 @@ internal static class NodeTypeCompilationHelpers
                     })
                     .Do(saved =>
                     {
+                        if (lifted is { } evt && liftedDef is { } after)
+                            BuildDeliveryHold.Notify(hub, hubPath, after, evt, logger);
                         // Publish the post-compile MeshNode update onto the
                         // mesh change feed for cross-silo cache invalidation.
                         try

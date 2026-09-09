@@ -15,18 +15,26 @@ namespace MeshWeaver.Compiler.Pipeline.Test;
 
 /// <summary>
 /// The untracked-module gate (MeshWeaver#3583): a MODULE's NodeType in a partition this mesh does
-/// not sync from a repository never compiles here — it parks at <see cref="CompilationStatus.Error"/>
-/// with a reason naming the partition and the fix — while the same type in a partition that DOES
-/// track a repository, and authored content anywhere, compile exactly as before.
+/// not sync from a repository never compiles here. What it settles to depends on whether it still
+/// holds a build: a type WITH a usable build is HELD — <see cref="CompilationStatus.Ok"/>,
+/// <see cref="BuildProvenance.StaleAdopted"/>, its coordinates untouched, its last build serving —
+/// and a type with NOTHING to serve parks at <see cref="CompilationStatus.Error"/> with a reason
+/// naming the partition and the fix. The same type in a partition that DOES track a repository,
+/// and authored content anywhere, compile exactly as before.
 ///
-/// <para><b>A controlled experiment, in one mesh.</b> Three types differ from each other in exactly
-/// one fact each: <c>untracked/Widget</c> carries adoption provenance and its partition has no
-/// <c>_GitSync</c>; <c>tracked/Widget</c> is the same record under a partition whose <c>_GitSync</c>
-/// names a repository; <c>untracked/Authored</c> shares the untracked partition but was never
-/// adopted. Asserting only the park would pass just as well against a watcher that had stopped
-/// compiling anything at all — the two compiling arms are what make the refusal mean something.
-/// The tracking answer comes from the REAL GitHub provider over a REAL config node, not a
-/// stand-in: the seam the gate depends on is part of what is under test.</para>
+/// <para>🚨 The hold is the 2026-09-09 measurement: this very gate settled <c>Essentials/Email</c>
+/// at Error with a working assembly still on the record, and every page of the type rendered
+/// "the platform refused to run it" for an afternoon. A NodeType never errors because of delivery.</para>
+///
+/// <para><b>A controlled experiment, in one mesh.</b> Four types differ from each other in exactly
+/// one fact each: <c>untracked/Widget</c> carries adoption provenance and a usable build, and its
+/// partition has no <c>_GitSync</c>; <c>untracked/Bare</c> is the same record with its build
+/// coordinates cleared; <c>tracked/Widget</c> is the first record under a partition whose
+/// <c>_GitSync</c> names a repository; <c>untracked/Authored</c> shares the untracked partition
+/// but was never adopted. Asserting only the hold would pass just as well against a watcher that
+/// had stopped compiling anything at all — the compiling arms and the Error arm are what make it
+/// mean something. The tracking answer comes from the REAL GitHub provider over a REAL config
+/// node, not a stand-in: the seam the gate depends on is part of what is under test.</para>
 /// </summary>
 public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -50,7 +58,7 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
     private NodeTypeCompileParkRegistry Parks =>
         Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
 
-    private async Task CreateType(string path, bool adoptedBefore)
+    private async Task CreateType(string path, bool adoptedBefore, bool withBuild = true)
     {
         var node = MeshNode.FromPath(path) with
         {
@@ -61,8 +69,11 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
             {
                 Configuration = "config => config",
                 CompilationStatus = CompilationStatus.Ok,
-                LatestAssemblyCollection = "assemblies",
-                LatestAssemblyPath = $"adopted/{path.Replace('/', '_')}.dll",
+                // A usable build: coordinates plus the LIVE framework stamp (HasUsableBuild is
+                // metadata-only). `withBuild: false` models the record after a refusal cleared
+                // them — nothing to serve, so the gate's Error park is the honest answer.
+                LatestAssemblyCollection = withBuild ? "assemblies" : null,
+                LatestAssemblyPath = withBuild ? $"adopted/{path.Replace('/', '_')}.dll" : null,
                 LatestAssemblyMvid = StaleMvid,
                 CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
                 // Adoption provenance from an EARLIER identity: the bake for this one has not
@@ -115,46 +126,66 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
             })
             .Should().Within(TestTimeouts.Convergence).Emit();
 
-    /// <summary>The record after the request settled: an <c>Error</c>, or an <c>Ok</c> whose MVID
+    /// <summary>The record after the request settled: an <c>Error</c>, an <c>Ok</c> whose MVID
     /// is no longer the seeded one (the seeded Ok is what the stream starts with, so it is not a
-    /// settle).</summary>
+    /// settle), or an <c>Ok</c> HELD as <see cref="BuildProvenance.StaleAdopted"/> (the seeded
+    /// record is never that either).</summary>
     private async Task<NodeTypeDefinition> Settled(string path)
     {
         var node = await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.CrossSilo)
             .Match(n => n?.Content is NodeTypeDefinition d
                         && (d.CompilationStatus == CompilationStatus.Error
                             || (d.CompilationStatus == CompilationStatus.Ok
-                                && !string.Equals(d.LatestAssemblyMvid, StaleMvid, StringComparison.Ordinal))),
-                "every route into a compile settles: a Roslyn pass or a named park");
+                                && (d.BuildProvenance == BuildProvenance.StaleAdopted
+                                    || !string.Equals(d.LatestAssemblyMvid, StaleMvid, StringComparison.Ordinal)))),
+                "every route into a compile settles: a Roslyn pass, a hold or a named park");
         return (NodeTypeDefinition)node.Content!;
     }
 
     [Fact]
-    public async Task AModuleTypeInAnUntrackedPartition_Parks_WhileTrackedAndAuthoredTypesCompile()
+    public async Task AModuleTypeInAnUntrackedPartition_IsHeldOrParks_WhileTrackedAndAuthoredTypesCompile()
     {
         const string untrackedModule = "untracked/Widget";
+        const string untrackedBare = "untracked/Bare";
         const string trackedModule = "tracked/Widget";
         const string authored = "untracked/Authored";
 
         await TrackPartition("tracked");
         await CreateType(untrackedModule, adoptedBefore: true);
+        await CreateType(untrackedBare, adoptedBefore: true, withBuild: false);
         await CreateType(trackedModule, adoptedBefore: true);
         await CreateType(authored, adoptedBefore: false);
 
-        // ── THE ARM UNDER TEST: module content, partition tracks nothing → parked, named. ──
+        // ── THE ARM UNDER TEST: module content, partition tracks nothing, a usable build on the
+        // record → HELD: the last build keeps serving, marked, never Error (#3583, 2026-09-09). ──
         await RequestForcedRelease(untrackedModule);
-        var parked = await Settled(untrackedModule);
+        var held = await Settled(untrackedModule);
+        held.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            $"a type that still holds a build never ERRORS because of delivery (#3583); error: {held.CompilationError}");
+        held.BuildProvenance.Should().Be(BuildProvenance.StaleAdopted,
+            "…and says honestly that the build it serves is behind the source");
+        held.LatestAssemblyMvid.Should().Be(StaleMvid,
+            "no Roslyn pass ran and nothing touched the coordinates — the LAST build is what serves");
+        held.LatestAssemblyPath.Should().Be("adopted/untracked_Widget.dll");
+        Parks.IsParked(untrackedModule).Should().BeFalse(
+            "a hold is not a park: no Roslyn ran, there is no storm to contain, and the next Pending "
+            + "flip is exactly the re-check that lifts the hold once a bundle lands");
+        Parks.GetCompileAttemptCount(untrackedModule).Should().Be(0,
+            "the park registry's attempt counter is the observable proof no compile was dispatched");
+
+        // ── THE ERROR ARM: the same record with NOTHING to serve → parked, named. ──
+        await RequestForcedRelease(untrackedBare);
+        var parked = await Settled(untrackedBare);
         parked.CompilationStatus.Should().Be(CompilationStatus.Error,
-            "a module's content this mesh does not sync is never self-baked here (#3583)");
+            "with no build on the record there is nothing to serve — the named park is the truth");
         parked.CompilationError.Should().Contain("tracks no source")
             .And.Contain("partition 'untracked'", "the reason names the partition to fix")
             .And.Contain("add a sync source", "…and the fix")
             .And.Contain("MeshWeaver#3583");
         parked.LatestAssemblyMvid.Should().Be(StaleMvid,
-            "no Roslyn pass ran — a park leaves the coordinates exactly as they were");
-        Parks.IsParked(untrackedModule).Should().BeTrue("the refusal is a deterministic park");
-        Parks.GetCompileAttemptCount(untrackedModule).Should().Be(0,
-            "the park registry's attempt counter is the observable proof no compile was dispatched");
+            "no Roslyn pass ran — a park leaves the record exactly as it was");
+        Parks.IsParked(untrackedBare).Should().BeTrue("the refusal is a deterministic park");
+        Parks.GetCompileAttemptCount(untrackedBare).Should().Be(0);
 
         // ── CONTROL 1: the SAME record, in a partition whose _GitSync names a repository. ──
         await RequestForcedRelease(trackedModule);
@@ -202,6 +233,7 @@ public class UntrackedModuleContentDecisionTest
     [InlineData(BuildProvenance.AdoptedVerified)]
     [InlineData(BuildProvenance.AdoptedUnverified)]
     [InlineData(BuildProvenance.AdoptionRefused)]
+    [InlineData(BuildProvenance.StaleAdopted)]
     public void AnyAdoptionProvenance_IsAModules(BuildProvenance provenance)
         => NodeTypeCompilationHelpers.IsModuleContent(Authored() with { BuildProvenance = provenance }, false)
             .Should().BeTrue();

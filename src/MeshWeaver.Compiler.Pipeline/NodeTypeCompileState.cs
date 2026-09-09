@@ -122,6 +122,16 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.AdoptedSourceFingerprint"/>.</summary>
     public string? AdoptedSourceFingerprint { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.CurrentModuleVersion"/> — the module version of
+    /// the source this mesh HOLDS. Mirrored for the same reason as the pair beside it.</summary>
+    public string? CurrentModuleVersion { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.AdoptedModuleVersion"/>. Mirrored for the same
+    /// reason as the fingerprint beside it: the sync seams MASK it, so a member missing here is
+    /// dropped on the satellite without anything saying so — which is exactly what
+    /// <c>StateMembers_AreExactlyTheMaskedOperationalMembers</c> refuses.</summary>
+    public string? AdoptedModuleVersion { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>.</summary>
     public string? CurrentSourceFingerprint { get; init; }
 
@@ -161,6 +171,8 @@ public record NodeTypeCompileState
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
                 FailedBuildInputs = definition.FailedBuildInputs,
                 AdoptedSourceFingerprint = definition.AdoptedSourceFingerprint,
+                AdoptedModuleVersion = definition.AdoptedModuleVersion,
+                CurrentModuleVersion = definition.CurrentModuleVersion,
                 CurrentSourceFingerprint = definition.CurrentSourceFingerprint,
                 BuildProvenance = definition.BuildProvenance,
             };
@@ -178,7 +190,9 @@ public record NodeTypeCompileState
         && CompiledSources is null && CurrentSourceVersions is null
         && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
-        && AdoptedSourceFingerprint is null && CurrentSourceFingerprint is null
+        && AdoptedSourceFingerprint is null && AdoptedModuleVersion is null
+        && CurrentModuleVersion is null
+        && CurrentSourceFingerprint is null
         && BuildProvenance is Mesh.Services.BuildProvenance.Compiled;
 }
 

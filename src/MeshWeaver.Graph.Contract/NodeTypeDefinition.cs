@@ -620,6 +620,30 @@ public record NodeTypeDefinition
     public Mesh.Services.BuildProvenance BuildProvenance { get; init; }
 
     /// <summary>
+    /// The module's released SemVer the PRODUCER recorded for the adopted bytes — the bundle
+    /// manifest's <c>Version</c>, i.e. <c>manifest.lock</c>'s <c>version</c> at the bake. Written by
+    /// <c>PrebuiltAssemblySeeder.Seed</c> beside <see cref="AdoptedSourceFingerprint"/>; null for
+    /// a locally-compiled build and for a bundle whose producer recorded none.
+    ///
+    /// <para>Compared against <see cref="CurrentModuleVersion"/> by
+    /// <see cref="Mesh.Services.ModuleVersionCompatibility"/> when the fingerprints disagree
+    /// (MeshWeaver#3583): same MAJOR keeps the build serving as
+    /// <see cref="Mesh.Services.BuildProvenance.StaleAdopted"/>, a MAJOR bump refuses it. Survives
+    /// a local compile like the fingerprint does — it describes the last adopted bytes, and the
+    /// NodeType page names it beside the current one while a bundle is awaited.</para>
+    /// </summary>
+    public string? AdoptedModuleVersion { get; init; }
+
+    /// <summary>
+    /// The module version of the source this mesh HOLDS — the partition root's
+    /// <c>content.version</c> (the <c>Store/Plugin</c> root's SemVer, which the tree sync rewrites
+    /// together with the sources), published by the sources watcher in the SAME update as
+    /// <see cref="CurrentSourceFingerprint"/> so a reader never sees one without the other. Null
+    /// when the partition root carries no version (a mesh-authored type, a test partition).
+    /// </summary>
+    public string? CurrentModuleVersion { get; init; }
+
+    /// <summary>
     /// <see cref="DateTime"/> ticks for <c>1601-01-01</c> — the FILETIME epoch, and the value
     /// .NET returns from <c>FileInfo.LastWriteTimeUtc</c> for a file that DOES NOT EXIST
     /// (it does not throw). A node stamped with it has no real modification time.

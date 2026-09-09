@@ -241,6 +241,12 @@ public class DispatchedBuildInputsStampedAtEveryDoorTest
                 RequestedSourceStampAt = System.DateTimeOffset.UtcNow,
                 AdoptedSourceFingerprint = "aaaaaaaaaaaaaaaa",
                 CurrentSourceFingerprint = "bbbbbbbbbbbbbbbb",
+                // #3583 — a refusal is a MAJOR bump now; a fingerprint that merely differs holds
+                // the build as StaleAdopted and dispatches through the same door (pinned in
+                // BuildDeliveryHoldTest). This test is about the door's stamp, so it stays on the
+                // refusal row.
+                AdoptedModuleVersion = "1.0.0",
+                CurrentModuleVersion = "2.0.0",
                 CurrentSourceVersions = LiveSources,
                 LatestAssemblyCollection = "assemblies",
                 LatestAssemblyPath = "adopted/T.dll",
