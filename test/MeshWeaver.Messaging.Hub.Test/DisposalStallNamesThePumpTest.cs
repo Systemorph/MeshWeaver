@@ -91,6 +91,21 @@ public class DisposalStallNamesThePumpTest : HubTestBase
                 "`exec` used to be a hard-coded literal 0 that no reader could distinguish from a "
                 + "measurement; the field now counts drain bodies actually executing, and reading "
                 + "zero here is what says the scheduled drain never ran");
+            // 🚨 The second half of #3593. drainsInFlight=0 alone does not say WHY nothing is
+            // running: "the scheduler took a drain and never ran it" and "the latch is set and
+            // nothing was ever scheduled" both read zero, and they have opposite owners. This
+            // scheduler ACCEPTED the drain — GetScheduledTasks holds it — so the report must say
+            // so as a measurement rather than assert it.
+            verdict.Should().Contain("drainsAwaitingScheduler=1",
+                "exactly one drain was handed to this scheduler and it is still holding it, which "
+                + "is the fact that distinguishes a dead scheduler from a leaked latch");
+            verdict.Should().Contain("the turn scheduler ACCEPTED",
+                "the MECHANISM clause must name the scheduler as the owner of this stall — the "
+                + "line used to assert 'a drain is scheduled on this hub's TaskScheduler' without "
+                + "anything measuring it");
+            verdict.Should().NotContain("defect in MessageService.ScheduleDrainOne",
+                "the pump did its job here: it scheduled the drain. Blaming the pump for a "
+                + "scheduler that will not run work is the same misattribution as blaming a child");
             verdict.Should().Contain("NO turn was dequeued",
                 "turnsCompleted counts HANDLER completions and is blind to a turn that never "
                 + "reached a handler — the dequeue counter is what separates a pump that never "
@@ -115,6 +130,107 @@ public class DisposalStallNamesThePumpTest : HubTestBase
             "the wedge is in the scheduler, not in the hub — once turns are delivered again the "
             + "teardown completes normally, which is why this PR claims a nameable wedge and not a "
             + "fixed one");
+    }
+
+    /// <summary>
+    /// 🚨 <b>A schedule that FAILS must release the drain latch (#3593).</b>
+    ///
+    /// <para><c>draining == true</c> is read by every disposal verdict as <i>"a drain is running or
+    /// queued"</i>. It is set inside the turn gate and the schedule happens outside it, so a throw
+    /// from <c>Task.Factory.StartNew</c> used to leave the flag set with nothing outstanding — and
+    /// because <c>KickDrain</c> returns immediately whenever the flag is set, the pump was then
+    /// frozen for the life of the hub, silently. The fingerprint is exactly the one #3593 reports
+    /// (queue non-empty, <c>draining=true</c>, <c>drainsInFlight=0</c>, nothing dequeued), with the
+    /// verdict blaming a scheduler that had never been asked.</para>
+    ///
+    /// <para><b>Fails on unfixed code:</b> the pump stays latched after the refusal, so the message
+    /// posted once the scheduler recovers is never dequeued and the response never comes.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ASchedulerThatRefusesADrain_DoesNotLeaveThePumpLatched()
+    {
+        var scheduler = new RefusingTaskScheduler();
+        var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "pump-refused-schedule"), c => c
+            .WithTaskScheduler(scheduler)
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithHandler<Ping>((h, d) =>
+            {
+                h.Post(new Pong(), o => o.ResponseFor(d));
+                return d.Processed();
+            }), HostedHubCreation.Always)!;
+
+        // Bring-up on a working scheduler, for the same reason as the test above.
+        await victim.Observe(new Ping(), o => o.WithTarget(victim.Address))
+            .Should().Within(TestTimeouts.Quick)
+            .Emit("the hub must answer once before its scheduler starts refusing");
+
+        // Every schedule from here throws. The post latches `draining`, the schedule fails, and the
+        // latch must come back off — otherwise nothing this hub is ever sent can be processed again.
+        scheduler.Refuse();
+        victim.Post(new Ping(), o => o.WithTarget(victim.Address));
+
+        scheduler.Refusals.Should().BeGreaterThan(0,
+            "PRECONDITION: the scheduler must actually have refused — otherwise this test measures "
+            + "an ordinary post and would pass with the latch leak still present");
+
+        // The recovery, and the whole point: a pump whose latch was released can be driven again.
+        scheduler.Accept();
+        await victim.Observe(new Ping(), o => o.WithTarget(victim.Address))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("a refused schedule must not latch the pump: once the scheduler accepts work "
+                + "again the hub processes messages normally. A leaked latch makes every later "
+                + "KickDrain return immediately, so this request would never be dequeued");
+
+        victim.Dispose();
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TestTimeouts.Convergence);
+        victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
+    }
+
+    /// <summary>
+    /// A <see cref="TaskScheduler"/> that can be told to THROW on queue rather than to hold —
+    /// the second failure mode of a real scheduler (a completed
+    /// <c>ConcurrentExclusiveSchedulerPair</c>, a torn-down activation) and the one that used to
+    /// leak the drain latch.
+    /// </summary>
+    private sealed class RefusingTaskScheduler : TaskScheduler
+    {
+        private readonly Lock gate = new();
+        private bool refusing;
+        private int refusals;
+
+        /// <summary>How many schedules were refused — the test's precondition.</summary>
+        public int Refusals => Volatile.Read(ref refusals);
+
+        public void Refuse()
+        {
+            lock (gate)
+                refusing = true;
+        }
+
+        public void Accept()
+        {
+            lock (gate)
+                refusing = false;
+        }
+
+        protected override void QueueTask(Task task)
+        {
+            lock (gate)
+            {
+                if (refusing)
+                {
+                    Interlocked.Increment(ref refusals);
+                    throw new InvalidOperationException(
+                        "this scheduler is not accepting work (models a completed scheduler pair "
+                        + "or a torn-down Orleans activation)");
+                }
+            }
+            ThreadPool.UnsafeQueueUserWorkItem(_ => TryExecuteTask(task), null);
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+
+        protected override IEnumerable<Task> GetScheduledTasks() => [];
     }
 
     private async Task<string> FirstVerdict(TimeSpan within) =>
