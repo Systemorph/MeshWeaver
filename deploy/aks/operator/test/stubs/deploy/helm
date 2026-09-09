@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# A stand-in `helm` for hosting-deploy's adoption tests. `template` prints the fixture manifest
+# ($HOSTING_DEPLOY_FIXTURE/rendered.yaml — what the RECORD renders); `upgrade` records that it was
+# reached, in order, in $HOSTING_DEPLOY_STUB_LOG. It asserts nothing about helm itself.
+set -uo pipefail
+log="${HOSTING_DEPLOY_STUB_LOG:?the helm stub needs HOSTING_DEPLOY_STUB_LOG}"
+fixture="${HOSTING_DEPLOY_FIXTURE:?the helm stub needs HOSTING_DEPLOY_FIXTURE}"
+printf 'helm %s\n' "$*" >> "$log"
+case "${1:-}" in
+  template) cat "$fixture/rendered.yaml" ;;
+  upgrade)  echo "Release \"${2:-}\" has been upgraded." ;;
+  *) echo "helm stub: unexpected invocation: $*" >&2; exit 1 ;;
+esac

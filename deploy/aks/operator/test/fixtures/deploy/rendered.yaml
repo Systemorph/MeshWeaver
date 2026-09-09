@@ -1,0 +1,15 @@
+# What the RECORD renders for the adoption tests (content irrelevant: kubectl's parsing is stubbed
+# through names.txt). Four resources: one absent live, one owned by this release, one live with NO
+# ownership (the memex-kv shape), and — only in the takeover case — one owned by another release.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: memex-portal-deployment }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: memex-portal-config }
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata: { name: memex-kv }

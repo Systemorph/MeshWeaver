@@ -123,6 +123,53 @@ else
     || hosting::die "could not create namespace ${namespace}"
 fi
 
+# ── adopt: every resource the RECORD renders that exists live without Helm ownership ────────────
+# 🚨 WHY. An instance created before its record existed carries hand-made objects the chart now
+# renders — on memex the SecretProviderClass `memex-kv` (keyVaultSecretClasses[0] on the record),
+# applied by a laptop in 2026-08 and never in any release. Helm refuses to upgrade over such an
+# object: measured 2026-09-09 01:20Z (Deployments/memex-reconcile-20260909-operator-0b79490),
+#   UPGRADE FAILED: … SecretProviderClass "memex-kv" in namespace "memex" exists and cannot be
+#   imported into the current release: invalid ownership metadata
+# and --atomic rolled back. The config repo's helm-release lane has an `adopt` action for exactly
+# this, but it renders from the COMMITTED OVERLAY, which never carried memex-kv — so what only the
+# record renders can only be adopted here, from the record. Adoption is metadata only (two
+# annotations + one label per resource), changes no spec and restarts nothing; from then on helm
+# owns the object and the next upgrade renders it from the record — which is the design.
+#
+# Three outcomes per rendered resource, each logged: ABSENT (helm creates it below), OWNED by this
+# release (nothing to do), UNOWNED live (adopted). A live object owned by ANOTHER release is a
+# refusal, never a takeover — two releases claiming one object is how a teardown deletes the wrong
+# instance's Secret.
+rendered="$(hosting::read helm template "$release" "$CHART" --namespace "$namespace" "${files[@]}" "${sets[@]}" 2>&1)" \
+  || { if hosting::dry; then hosting::log "DRY-RUN: could not template the chart here (${rendered}); adoption is skipped in the rehearsal only"; rendered=""; else hosting::die "could not render the chart for adoption: ${rendered}"; fi; }
+adopted=0; owned=0; absent=0
+if [ -n "$rendered" ]; then
+  names="$(printf '%s\n' "$rendered" | hosting::read kubectl -n "$namespace" create --dry-run=client -o name -f - 2>&1)" \
+    || hosting::die "could not list the rendered resources for adoption: ${names}"
+  while IFS= read -r res; do
+    [ -n "$res" ] || continue
+    live="$(hosting::read kubectl -n "$namespace" get "$res" -o json 2>/dev/null)" || { absent=$((absent+1)); continue; }
+    rel="$(printf '%s' "$live" | jq -r '.metadata.annotations["meta.helm.sh/release-name"] // ""')"
+    mgr="$(printf '%s' "$live" | jq -r '.metadata.labels["app.kubernetes.io/managed-by"] // ""')"
+    if [ "$rel" = "$release" ] && [ "$mgr" = "Helm" ]; then
+      owned=$((owned+1)); continue
+    fi
+    [ -z "$rel" ] || [ "$rel" = "$release" ] \
+      || hosting::die "${res} in ${namespace} is owned by release '${rel}', not '${release}' — refusing to take it over; two releases claiming one object is how a teardown deletes the wrong instance's Secret"
+    hosting::log "adopting  ${res} (live, no Helm ownership)"
+    hosting::do kubectl -n "$namespace" annotate --overwrite "$res" \
+        "meta.helm.sh/release-name=${release}" "meta.helm.sh/release-namespace=${namespace}" >/dev/null \
+      || hosting::die "could not annotate ${res} for adoption"
+    hosting::do kubectl -n "$namespace" label --overwrite "$res" "app.kubernetes.io/managed-by=Helm" >/dev/null \
+      || hosting::die "could not label ${res} for adoption"
+    adopted=$((adopted+1))
+  done <<EOF_NAMES
+$names
+EOF_NAMES
+fi
+hosting::log "adoption  ${adopted} adopted, ${owned} already owned, ${absent} to be created"
+hosting::say adopted "$adopted"
+
 # --atomic: a failed install ROLLS BACK rather than leaving a half-created release that the next
 # attempt then has to `helm uninstall` before it can proceed. --wait so "deployed" means the pods
 # actually came up; the plan's next step (rollout status) then verifies rather than discovers.
