@@ -30,13 +30,16 @@ namespace MeshWeaver.GitSync;
 /// <param name="listingIsComplete">Whether <paramref name="children"/> is the WHOLE repo listing at
 /// that commit (<see cref="RepoSnapshot.ListingIsComplete"/>). False when GitHub truncated the
 /// recursive tree — see <see cref="IStaticRepoSource.ListingIsComplete"/>.</param>
+/// <param name="ownsReadme">A package manifest makes README a source-owned node when declared;
+/// ordinary repository landing pages are outside this source's node mirror.</param>
 internal sealed class InMemoryStaticRepoSource(
     string partition,
     IReadOnlyList<MeshNode> children,
     MeshNode? root,
     IReadOnlyList<StaticContentSync>? contentSyncs = null,
     SyncIgnore? ignore = null,
-    bool listingIsComplete = true) : IStaticRepoSource
+    bool listingIsComplete = true,
+    bool ownsReadme = false) : IStaticRepoSource
 {
     private readonly SyncIgnore ignoreRules = ignore ?? SyncIgnore.For(null);
 
@@ -77,6 +80,8 @@ internal sealed class InMemoryStaticRepoSource(
         // Space-relative, so matching them against a foreign absolute path would be meaningless.
         if (!nodePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return false;
+        if (!ownsReadme && string.Equals(nodePath[prefix.Length..], "README", StringComparison.OrdinalIgnoreCase))
+            return true;
         return ignoreRules.IsIgnored(nodePath[prefix.Length..]);
     }
 }
