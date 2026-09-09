@@ -346,6 +346,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Onboarding a New Environment](OnboardingNewEnvironment)
 - [Release & Self-Update Strategy](ReleaseStrategy)
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
+- [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer
 - [Self-Update Target Selection](SelfUpdateTargetSelection) — candidates are ranked by the CD run number, not the version string; a mislabelled line outranked every sealed set for ever, and an install on a withdrawn tag could never see anything newer
 - [The Continuous Delivery Contract](ContinuousDeliveryContract) — all-or-nothing publication; verify the image, never the tick
 - [The Self-Update Schema Wall](SelfUpdateSchemaWall) — every schema-bumping release is un-takeable by self-update, the stall is invisible, and a promoted tag is not a deployable tag
