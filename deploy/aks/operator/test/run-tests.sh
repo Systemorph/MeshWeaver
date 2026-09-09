@@ -235,16 +235,25 @@ if grep -v '^  <stdin>' "$_ps_log" | grep -q 'mwi_'; then
 else
   ok "pull-secret never puts the key on a command line"
 fi
-# Ordering: the namespace is ensured (create --dry-run | apply) BEFORE the Secret is applied.
-_ns_line="$(grep -n 'kubectl create namespace acme --dry-run=client' "$_ps_log" | head -1 | cut -d: -f1)"
+# Ordering: the namespace is ensured (read, then created — the stub answers NotFound) BEFORE the
+# Secret is applied.
+_ns_line="$(grep -n '^kubectl create namespace acme$' "$_ps_log" | head -1 | cut -d: -f1)"
 _sec_line="$(grep -n 'kubectl -n acme create secret generic registry-pull' "$_ps_log" | head -1 | cut -d: -f1)"
 if [ -n "$_ns_line" ] && [ -n "$_sec_line" ] && [ "$_ns_line" -lt "$_sec_line" ]; then
-  ok "pull-secret ensures the namespace before it applies the Secret"
+  ok "pull-secret creates an absent namespace before it applies the Secret"
 else
-  bad "pull-secret ensures the namespace before it applies the Secret" "namespace at line '${_ns_line}', secret at '${_sec_line}' in: $(cat "$_ps_log")"
+  bad "pull-secret creates an absent namespace before it applies the Secret" "create at line '${_ns_line}', secret at '${_sec_line}' in: $(cat "$_ps_log")"
 fi
-grep -q 'kubectl apply -f -' "$_ps_log" && ok "the namespace manifest is APPLIED, not only rendered" \
-  || bad "the namespace manifest is APPLIED" "no 'kubectl apply -f -' in: $(cat "$_ps_log")"
+# 🚨 ENSURE IS NEVER `create --dry-run=client -o yaml | kubectl apply -f -`. apply PATCHES an
+# existing namespace and the ClusterRole grants namespaces no patch — measured 2026-09-09 on memex,
+# Deployments/memex-reconcile-20260909-pv-capacity, the first run to reach the line after #3757:
+# `namespaces "memex" is forbidden: … cannot patch resource "namespaces"`. The only apply in the
+# log is the Secret's.
+if grep '^  <stdin>' "$_ps_log" | grep -q 'kind: Namespace'; then
+  bad "pull-secret never APPLIES a namespace manifest" "$(grep '^  <stdin>' "$_ps_log" | grep 'kind: Namespace')"
+else
+  ok "pull-secret never APPLIES a namespace manifest (apply = patch, which the role does not grant)"
+fi
 # Content: the applied Secret is a dockerconfigjson for the registry, with the default username.
 if [ -f "$_ps_dir/applied-secret.yaml" ] \
    && grep -q '^type: kubernetes.io/dockerconfigjson' "$_ps_dir/applied-secret.yaml" \
@@ -257,6 +266,21 @@ case "$_ps_out" in *"::hosting:: pull_secret=registry-pull"*) ok "pull-secret re
   *) bad "pull-secret reports the Secret name" "said: ${_ps_out}" ;; esac
 case "$_ps_out" in *"::hosting:: pull_secret_verify=true"*) ok "pull-secret reports verified=true only after reading the Secret back" ;;
   *) bad "pull-secret reports verified=true" "said: ${_ps_out}" ;; esac
+rm -rf "$_ps_dir"
+
+# An EXISTING namespace (the Reconcile / Roll case — every instance after its first Provision):
+# read, left alone, and the Secret still applied into it.
+_ps_dir="$(mktemp -d)"; _ps_log="$_ps_dir/calls.log"; : > "$_ps_log"
+_ps_out="$(env PATH="$PS_STUBS:$PATH" HOSTING_PULL_SECRET_STUB_LOG="$_ps_log" HOSTING_PULL_SECRET_STUB_DIR="$_ps_dir" HOSTING_PULL_SECRET_STUB_NS_EXISTS=1 \
+  hosting-pull-secret --namespace acme --registry cr.meshweaver.cloud --vault Systemorph --secret acme-PluginCatalog-RegistryToken --name registry-pull 2>&1)"; _ps_rc=$?
+[ "$_ps_rc" -eq 0 ] && ok "pull-secret succeeds when the namespace already exists" || bad "pull-secret succeeds when the namespace already exists" "exited ${_ps_rc}: ${_ps_out}"
+if grep -q '^kubectl get namespace acme' "$_ps_log" && ! grep -q '^kubectl create namespace' "$_ps_log" && ! { grep '^  <stdin>' "$_ps_log" | grep -q 'kind: Namespace'; }; then
+  ok "an existing namespace is read and left alone — no create, no apply"
+else
+  bad "an existing namespace is read and left alone" "$(cat "$_ps_log")"
+fi
+grep -q 'kubectl -n acme create secret generic registry-pull' "$_ps_log" && ok "…and the Secret is still applied into it" \
+  || bad "the Secret is still applied into an existing namespace" "$(cat "$_ps_log")"
 rm -rf "$_ps_dir"
 
 # The refusals a stubbed estate can reach: an absent vault object, and a pre-existing Secret of

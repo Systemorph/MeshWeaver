@@ -109,9 +109,19 @@ hosting::log "chart     ${CHART}"
 hosting::log "release   ${release} → namespace ${namespace}"
 hosting::log "database  ${database}"
 
-hosting::do kubectl create namespace "$namespace" --dry-run=client -o yaml \
-  | { hosting::dry && cat >/dev/null || kubectl apply -f - ; } \
-  || hosting::die "could not ensure namespace ${namespace}"
+# 🚨 ENSURE = read, then create if absent — NEVER `create --dry-run=client -o yaml | kubectl apply`.
+# That idiom PATCHES an existing namespace (kubectl apply stamps last-applied-configuration), and
+# the operator's ClusterRole grants namespaces get/list/create/delete and no patch — deliberately:
+# a lifecycle run has no business editing a namespace it did not just create. Measured 2026-09-09
+# on memex (Deployments/memex-reconcile-20260909-pv-capacity), the first run to reach this line
+# after the narration fix: `namespaces "memex" is forbidden: … cannot patch resource "namespaces"`.
+# The read is a read (a dry run still performs it); only the create is a mutation.
+if hosting::read kubectl get namespace "$namespace" >/dev/null 2>&1; then
+  hosting::log "namespace ${namespace} exists"
+else
+  hosting::do kubectl create namespace "$namespace" \
+    || hosting::die "could not create namespace ${namespace}"
+fi
 
 # --atomic: a failed install ROLLS BACK rather than leaving a half-created release that the next
 # attempt then has to `helm uninstall` before it can proceed. --wait so "deployed" means the pods

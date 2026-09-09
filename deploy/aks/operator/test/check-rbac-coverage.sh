@@ -98,7 +98,7 @@ for f in "$BIN"/hosting-* "$BIN"/run.sh; do
   script="$(basename "$f")"
   # verb + first non-flag token after it; `kind/name` keeps only the kind; `rollout status X`
   # is a get on X; `logs` is get on pods/log.
-  while read -r verb res _; do
+  while read -r verb res dry; do
     [ -n "$verb" ] || continue
     case "$res" in -*|'"$'*|'$'*|*'<'*|"") continue ;; esac
     res="${res%%/*}"
@@ -125,8 +125,21 @@ for f in "$BIN"/hosting-* "$BIN"/run.sh; do
       echo "  MISSING  ${script}: kubectl ${verb} ${res} needs ClusterRole rule apiGroups:[\"${group}\"] resources:[\"${plural}\"] verbs:[\"${verb}\"]"
       missing=$((missing+1))
     fi
-  done < <(grep -o 'kubectl \(-n [^ ]* \)\?\(get\|create\|delete\|patch\|apply\|label\|annotate\|scale\|logs\|rollout\) [^ ;|)]*\( [^ ;|)]*\)\?' "$f" \
-             | sed 's/^kubectl //; s/^-n [^ ]* //; s/^rollout [^ ]* /rollout /')
+    if [ "$verb" = "create" ] && [ "$dry" = "dry" ] && ! granted "$group" "$plural" "patch"; then
+      echo "  MISSING  ${script}: kubectl create ${res} --dry-run=client … | kubectl apply -f - PATCHES an existing ${plural} — needs verbs:[\"patch\"] on apiGroups:[\"${group}\"] resources:[\"${plural}\"], or ensure = get, then create"
+      missing=$((missing+1))
+    fi
+  done < <(grep 'kubectl ' "$f" | grep -v '^[[:space:]]*#' | while IFS= read -r line; do
+             # `kubectl create <res> … --dry-run=client -o yaml` exists to be piped into `kubectl
+             # apply -f -`, and apply PATCHES an existing object — so the line needs patch too.
+             # Measured 2026-09-09: both ensure-namespace sites did this against a role that grants
+             # namespaces no patch; the first-cut check saw only the `create`.
+             dry=""; case "$line" in *--dry-run=client*) dry="dry" ;; esac
+             printf '%s\n' "$line" \
+               | grep -o 'kubectl \(-n [^ ]* \)\?\(get\|create\|delete\|patch\|apply\|label\|annotate\|scale\|logs\|rollout\) [^ ;|)]*\( [^ ;|)]*\)\?' \
+               | sed 's/^kubectl //; s/^-n [^ ]* //; s/^rollout [^ ]* /rollout /' \
+               | while read -r v r _; do printf '%s %s %s\n' "$v" "$r" "$dry"; done
+           done)
 done
 
 n_distinct="$(printf '%s' "$distinct" | tr '|' '\n' | grep -c .)"
