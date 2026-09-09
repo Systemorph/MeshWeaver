@@ -220,11 +220,14 @@ public sealed class GitHubSyncService
     /// <summary>
     /// Adds a top-level <c>README.md</c> rendered from the Space root's body so the GitHub
     /// repo page shows a landing page. The authoritative root remains <c>index.json</c>;
-    /// import skips <c>README.md</c> so it never becomes a stray node.
+    /// import skips an undeclared display <c>README.md</c> so it never becomes a stray node.
+    /// An authored README already exported as a node takes precedence over generated text.
     /// </summary>
     private IReadOnlyList<RepoFile> AppendReadme(IList<RepoFile> files, IReadOnlyList<MeshNode> nodes, string partition)
     {
         var list = files.ToList();
+        if (list.Any(f => string.Equals(f.Path, "README.md", StringComparison.OrdinalIgnoreCase)))
+            return list;
         var root = nodes.FirstOrDefault(n => string.Equals(n.Path, partition, StringComparison.Ordinal));
         var readme = root is null ? null : BuildReadme(root);
         if (!string.IsNullOrEmpty(readme))
@@ -618,11 +621,12 @@ public sealed class GitHubSyncService
             // truncated, or a compare error) falls back to a full import — never a silent
             // under-import. This is what stops a routine push from re-materialising the whole
             // partition and storming the live compiler (the memex-cloud outage loop, 2026-07-23).
+            var readmePolicy = ReadmeFilePolicy.From(snapshot);
             var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true
                 ? Observable.Return<IReadOnlyList<string>?>(null)
                 : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
             return diff.SelectMany(changedFiles =>
-                ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
+                ParseSnapshot(snapshot, spaceId, ignore, readmePolicy, progress).SelectMany(parsed =>
                 {
                     // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
                     // needs them to tell "the repo dropped this node" from "this node never syncs".
@@ -633,7 +637,8 @@ public sealed class GitHubSyncService
                     // withheld, because a stale extra is recoverable and a silent delete is not.
                     var source = new InMemoryStaticRepoSource(
                         spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs, ignore,
-                        listingIsComplete: snapshot.ListingIsComplete);
+                        listingIsComplete: snapshot.ListingIsComplete,
+                        ownsReadme: readmePolicy.IsPackage);
                     var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
                     if (changedNodePaths is not null)
                         logger?.LogInformation(
@@ -673,7 +678,8 @@ public sealed class GitHubSyncService
         string.IsNullOrEmpty(sha) ? "(none)" : sha.Length <= 8 ? sha : sha[..8];
 
     private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children, IReadOnlyList<StaticContentSync> ContentSyncs)> ParseSnapshot(
-        RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, Action<string, LogLevel>? progress = null)
+        RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, ReadmeFilePolicy readmePolicy,
+        Action<string, LogLevel>? progress = null)
     {
         if (snapshot.Files.Count == 0)
             return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(),
@@ -698,7 +704,7 @@ public sealed class GitHubSyncService
 
         return classified
             .Where(c => c.Asset is null)
-            .Select(c => ParseFile(c.File, spaceId))
+            .Select(c => ParseFile(c.File, spaceId, readmePolicy.IsDeclaredNode))
             .Merge(8)
             .ToList()
             .Select(list =>
@@ -733,10 +739,11 @@ public sealed class GitHubSyncService
     /// concurrent on one node as well as quadratic. Same defect class as #1341 / #1172.</para>
     /// </summary>
     private IObservable<(MeshNode? Node, bool IsRoot, string? Problem)> ParseFile(
-        RepoFile file, string spaceId)
+        RepoFile file, string spaceId, bool readmeIsNode = false)
     {
-        // The top-level README.md is a GitHub display file emitted on export — never a node.
-        if (string.Equals(file.Path, "README.md", StringComparison.OrdinalIgnoreCase))
+        // A generated repository README is display-only; a package manifest can instead declare
+        // this same file as a real node. Honor that declaration on the Git sync update lane too.
+        if (!readmeIsNode && string.Equals(file.Path, "README.md", StringComparison.OrdinalIgnoreCase))
             return Observable.Return(((MeshNode?)null, false, (string?)null));
 
         var ext = System.IO.Path.GetExtension(file.Path);
