@@ -55,8 +55,10 @@ Use regular age-based cleanup for continuous build artifacts, with a 30-day rete
 window rather than a quota of newer builds. Exclude active deployment and CI pins,
 supported official releases, and the artifacts those releases reference.
 
-The image-protection script treats clean version tags as official releases even when
-no current deployment pins them. Until their support end is established, they remain
+The image-protection script treats clean version tags in the image repositories
+promoted by MeshWeaver's official release workflow as official releases, even when
+no current deployment pins them. Independently versioned helpers and cached third-party
+images are not classified as MeshWeaver releases merely because their tags are numeric. Until their support end is established, they remain
 protected and are not candidates for the optional unpinning cleanup.
 
 The existing cloud cleanup schedule must be brought into line with this policy;

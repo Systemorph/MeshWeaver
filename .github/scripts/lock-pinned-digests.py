@@ -543,6 +543,12 @@ def build_plan(axis1: list, axis2: list[OverlayScan]) -> Plan:
     return plan
 
 
+# These are the ACR/GHCR image repositories promoted by release.yml. Numeric tags
+# in cached third-party images or independently versioned helpers are not MW releases.
+# --check-retention-record checks this set against the publisher's explicit repo loops.
+OFFICIAL_RELEASE_REPOSITORIES = frozenset({"memex-migration", "mw-plugin-test", "memex-portal-ai"})
+
+
 def resolve_and_classify(plan: Plan, registry: Registry,
                          inventory: dict[str, list[Manifest]],
                          inventory_errors: dict[str, str]) -> None:
@@ -576,6 +582,8 @@ def resolve_and_classify(plan: Plan, registry: Registry,
     # cannot authorize removing it. Preserve every clean release (including legacy v
     # prefixes) and keep it out of the optional unlock arm as well.
     for acr_repo, manifests in sorted(inventory.items()):
+        if acr_repo not in OFFICIAL_RELEASE_REPOSITORIES:
+            continue
         for manifest in manifests:
             release_tags = sorted(tag for tag in manifest.tags
                                   if re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+", tag))
@@ -949,6 +957,19 @@ def check_retention_record(root: str) -> int:
         print(f"::error::{record} does not exist — the retention record is the only copy of the "
               "purge tasks' reasoning; the tasks themselves are cloud-only (`contextPath: null`).")
         return 1
+    release_workflow = Path(root) / ".github" / "workflows" / "release.yml"
+    if not release_workflow.is_file():
+        problems.append("release.yml is missing; official image protection scope could not be checked")
+    else:
+        published_repos = {
+            repo for group in re.findall(r"for repo in ([^;\n]+); do",
+                                         release_workflow.read_text(encoding="utf-8"))
+            for repo in group.split()
+        }
+        if published_repos != OFFICIAL_RELEASE_REPOSITORIES:
+            problems.append(
+                "release.yml image repositories differ from official retention protection: "
+                f"publisher={sorted(published_repos)}, protection={sorted(OFFICIAL_RELEASE_REPOSITORIES)}")
     manifest_path = record / "tasks.json"
     if not manifest_path.is_file():
         print(f"::error::{manifest_path} is missing.")
@@ -1248,6 +1269,13 @@ def self_test() -> int:
                        FakeRegistry(_inventory(extra=[malformed_release]), FAKE_TAGS))
     check(any("official release" in b and "valid" in b for b in plan.blockers),
           "OFFICIAL: a release without a usable digest was reported as protectable")
+
+    third_party = Manifest("grafana/loki", "sha256:" + "4" * 64, True, True, ["3.3.2"])
+    helper = Manifest("memex-log-watcher", "sha256:" + "5" * 64, True, True, ["1.3.0"])
+    plan, _, _ = _drive(axis1, axis2,
+                       FakeRegistry(_inventory(extra=[third_party, helper]), FAKE_TAGS))
+    check(not any(w.digest in {third_party.digest, helper.digest} for w in plan.wanted),
+          "OFFICIAL: third-party or independently versioned helper images were classified as MW releases")
 
     # ── ARM 2: idempotence — an already-protected manifest is not re-locked ─────────────────────
     plan, _, registry = _drive(
