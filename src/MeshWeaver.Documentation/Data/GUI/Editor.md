@@ -257,10 +257,11 @@ A generated field paints its caption **outside** the input — the `PropertySkin
 not drawn twice. That is deliberate, and it costs the input its accessible name unless something
 puts one back.
 
-So `MapToControl` sets **`AriaLabel`** on every generated control, read from the same
-`GetEditorLabel()` source the visible caption comes from — `[Display(Name = …)]`, then
-`[DisplayName(…)]`, then the property name word-split. The two can therefore never disagree, which
-is what WCAG's *label in name* asks for.
+So `MapToControl` sets **`AriaLabel`** on every generated **input** control — every `IFormControl`:
+text, multi-line text, number, date, checkbox, switch, select, combobox, listbox, radio group. It is
+read from the same `GetEditorLabel()` source the visible caption comes from — `[Display(Name = …)]`,
+then `[DisplayName(…)]`, then the property name word-split. The two can therefore never disagree,
+which is what WCAG's *label in name* asks for.
 
 ```csharp
 public record Assessment
@@ -282,6 +283,14 @@ the host element, so it survives the boundary and needs no id plumbing.
 
 Setting `Label` yourself still works and still renders a second, visible caption — use it for a
 control you compose by hand, not for a field the editor generates.
+
+**Two generated surfaces are NOT covered yet**, and both are named here rather than left to be
+rediscovered:
+
+| Surface | Why it is still unnamed |
+|---|---|
+| A `[Markdown]` / `[UiControl<MarkdownEditorControl>]` property | `MarkdownEditorControl` is not an `IFormControl` — it is a composite editor with its own toolbar, so its accessible name is an `aria-labelledby` question about that composite, not an `aria-label` on one input. |
+| The click-to-edit path (`MapToToggleableControl`) | It renders its caption as a sibling `LabelControl`, which emits a `FluentLabel` with no `for` — the same association hole, on a different surface. |
 
 ---
 

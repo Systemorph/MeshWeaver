@@ -695,6 +695,14 @@ public static class EditorExtensions
             return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter!))
                 .WithLabel(label!)
                 .WithAriaLabel(ariaLabel);
+        // 🚨 NOT covered, and deliberately so rather than by oversight. A SpecialControl is not an
+        // IFormControl — MarkdownEditorControl is a composite editor with its own toolbar and its own
+        // Blazor view, so its accessible name is an aria-labelledby/region question about that
+        // composite, not an aria-label on a single input, and guessing at it here would ship an
+        // unmeasured answer. The generated-field guarantee in Doc/GUI/Editor is stated over
+        // IFormControl for the same reason. Tracked with the click-to-edit path
+        // (MapToToggleableControl), which has the same shape: a visible FluentLabel sibling that
+        // names nothing.
         if (SpecialControls.TryGetValue(controlType, out var specialFactory))
             return specialFactory.Invoke(propertyInfo, reference);
 
