@@ -160,6 +160,13 @@ public static class ServiceDefaults
 
         builder.AddOpenTelemetryExporters();
 
+        // 🚨 The OTHER half. Subscribing the meter NAME above only says "collect this if it
+        // exists"; something must construct the instance, and the gauge closes over the root hub.
+        // Both halves live here, in the host that actually collects — deliberately NOT in
+        // MeshHostApplicationBuilder, which would arm a meter inside every mesh in the fleet,
+        // including the several thousand a test run builds, none of which has a collector.
+        builder.Services.AddPlatformMetrics();
+
         return builder;
     }
 

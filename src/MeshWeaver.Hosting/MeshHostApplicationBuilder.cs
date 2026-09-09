@@ -56,11 +56,6 @@ public record MeshHostApplicationBuilder : MeshBuilder
         // IHostedLifecycleService.StoppedAsync, which the host invokes only once EVERY StopAsync
         // has returned. See MeshTeardownHostedService for the full story (#1548 and family).
         Host.Services.AddHostedService<MeshTeardownHostedService>();
-        // The platform's own meter (#3488) — armed once the root hub exists. Before it, answering
-        // "how many hubs, of what kind, in what run level" required a heap dump, which suspends the
-        // replica past its liveness budget and therefore RESTARTS it, destroying the very state
-        // being measured.
-        Host.Services.AddHostedService<PlatformMetricsHostedService>();
     }
 
     /// <summary>The host application builder this mesh is bound to.</summary>

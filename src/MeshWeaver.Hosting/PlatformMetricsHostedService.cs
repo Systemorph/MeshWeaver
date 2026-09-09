@@ -20,6 +20,14 @@ namespace MeshWeaver.Hosting;
 /// is worse than no instrumentation: a portal that will not come up because its meter threw is a
 /// far bigger outage than the question the meter was added to answer. A fault is reported and the
 /// host carries on without the gauge.</para>
+///
+/// <para>🚨 <b>Wired by the HOST that collects, never by every mesh.</b> It was first registered in
+/// <c>MeshHostApplicationBuilder</c>, which would have put a hosted service resolving the root hub
+/// into every mesh in the fleet — including the several thousand a test run builds, none of which
+/// has a collector. Instrumentation that alters the startup path of hosts that will never be
+/// scraped is cost without a reader, and it makes every timing-sensitive test's failure a question
+/// about the meter. So the arming lives beside the OpenTelemetry subscription in the portal's
+/// service defaults: both halves of the wiring in one place, and a test mesh is untouched.</para>
 /// </summary>
 /// <param name="services">The mesh's service provider.</param>
 internal sealed class PlatformMetricsHostedService(IServiceProvider services) : IHostedService
@@ -53,5 +61,20 @@ internal sealed class PlatformMetricsHostedService(IServiceProvider services) : 
         // Dispose-once: the hub's own disposal may already have taken it.
         metrics?.Dispose();
         return Task.CompletedTask;
+    }
+}
+
+/// <summary>Wires <see cref="PlatformMetricsHostedService"/> — called by a host that actually
+/// collects metrics (#3488).</summary>
+public static class PlatformMetricsRegistration
+{
+    /// <summary>Arms the platform meter for this host.</summary>
+    /// <param name="services">The host's service collection.</param>
+    /// <returns>The same collection.</returns>
+    public static IServiceCollection AddPlatformMetrics(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.AddHostedService<PlatformMetricsHostedService>();
+        return services;
     }
 }
