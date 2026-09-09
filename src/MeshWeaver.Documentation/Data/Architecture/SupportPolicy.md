@@ -47,13 +47,49 @@ a count of newer releases. An unknown runtime mapping or support date is not evi
 that a release is unsupported; resolve it before deleting its artifacts.
 
 End of support ends this retention guarantee; it does not itself issue a deletion.
-Any later cleanup must still respect deployment pins and other active references.
+Any later cleanup must still respect running deployments, active builds and other active references.
 
 ## Continuous build artifacts
 
 Use regular age-based cleanup for continuous build artifacts, with a 30-day retention
-window rather than a quota of newer builds. Exclude active deployment and CI pins,
-supported official releases, and the artifacts those releases reference.
+window rather than a quota of newer builds. Age alone never makes an artifact eligible
+while it is still needed by a published release, a running deployment or an active build.
+
+Module repositories resolve the released, sealed platform at build time; they do not
+carry a platform pin or a staleness gate. Retention must therefore derive protection
+from publication and consumption records, not require pins to exist in source control.
+Compatibility follows declared major versions: a same-major adopted module can keep
+serving while its successor is pending. An exact build identity remains useful for
+locating and retaining bytes; it must not become a compatibility refusal.
+
+Protect the complete artifact closure of:
+
+- The last green released set available to consumers for each served major/channel.
+  A red, cancelled or merely unsealed newer build does not replace that set.
+- The versions actually adopted by running portals, including a same-major fallback
+  still serving while a replacement is being prepared.
+- The released set resolved by an active build, and a publication being prepared for
+  exposure to consumers.
+- Supported official releases, regardless of whether a portal currently uses them.
+
+The closure includes container manifests and their referenced images, sealed module
+bundles, release records and the sources needed to install or restore the release.
+Resolve it from the publication records rather than assuming all dependencies have
+matching version strings. Never keep a tag or marker while deleting the bytes it names.
+
+Protect a set before advertising it or letting a build consume it. Reconcile these
+references with cleanup under one ordering contract so a new reference cannot appear
+between the cleanup inventory and deletion. Keep the previous set protected until it
+is no longer advertised or consumed; publishing a successor is not evidence that every
+portal adopted it. Announcing readiness is a notification, not proof that the old
+version is unused.
+
+An unavailable deployment report, incomplete publication inventory or unresolved
+artifact prevents deletion. Explicitly reported zero CI pins is valid after migration;
+it is neither evidence of an empty protected set nor permission to unlock old images.
+Legacy references remain protected during migration until their consumers are accounted
+for. See [Released Artifact Retention](/Doc/Architecture/ReleasedArtifactRetention) for
+the transition and its verification requirements.
 
 The image-protection script treats clean version tags in the image repositories
 promoted by MeshWeaver's official release workflow as official releases, even when

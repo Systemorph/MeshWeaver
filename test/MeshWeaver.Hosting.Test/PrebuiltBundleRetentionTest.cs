@@ -63,7 +63,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, version);
         File.WriteAllText(path, identity + "\n");
-        File.SetLastWriteTimeUtc(path, (writtenAt ?? Now - TimeSpan.FromDays(10)).UtcDateTime);
+        File.SetLastWriteTimeUtc(path, (writtenAt ?? Now - TimeSpan.FromDays(100)).UtcDateTime);
         return path;
     }
 
@@ -83,7 +83,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     {
         Sealed(Live, "plugins", DaysAgo(400));
         Sealed("s-old", "plugins", DaysAgo(400));
-        // Two newer unnamed publications take the whole recency budget, so nothing but rule 1 keeps Live.
+        // Only the running-identity rule keeps the old live publication.
         Sealed("s-u1", "plugins", DaysAgo(2));
         Sealed("s-u2", "plugins", DaysAgo(3));
 
@@ -98,6 +98,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     [Fact]
     public void AnIdentityNamedByACleanReleaseMarker_IsKept_AndItsCiSiblingsOfThatLineGo()
     {
+        Marker("3.1.0-ci.9000", Live);
         Marker("3.0.0", "s-release"); Sealed("s-release", "plugins", DaysAgo(300));
         Marker("3.0.0-ci.10", "s-ci10"); Sealed("s-ci10", "plugins", DaysAgo(320));
         Marker("3.0.0-ci.20", "s-ci20"); Sealed("s-ci20", "plugins", DaysAgo(310));
@@ -115,14 +116,14 @@ public class PrebuiltBundleRetentionTest : IDisposable
     }
 
     [Fact]
-    public void AnOpenLine_KeepsItsNewestNCiIdentities_PerSource_ByVersionNotByText()
+    public void EachMajor_KeepsItsLatestSealedPublicationPerSource_AndRecentArtifactsWithoutACountQuota()
     {
         Sealed(Live, "plugins", DaysAgo(1));
         // ci.900 sorts above ci.3758 as TEXT; by version it is the oldest.
         Marker("3.1.0-ci.900", "s-900"); Sealed("s-900", "plugins", DaysAgo(30));
         Marker("3.1.0-ci.3758", "s-3758"); Sealed("s-3758", "plugins", DaysAgo(20));
         Marker("3.1.0-ci.4000", "s-4000"); Sealed("s-4000", "plugins", DaysAgo(10));
-        // A different source on the same line has its own budget.
+        // Preserve each source's latest sealed publication even beyond 30 days.
         Marker("3.1.0-ci.50", "s-edu50"); Sealed("s-edu50", "education", DaysAgo(40));
 
         var plan = PlanNow(liveVersion: "4.0.0-ci.1");
@@ -137,7 +138,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     [Fact]
     public void TheNewestSealedPublicationOnTheRunningLine_IsKept_BecauseFamilyStrictnessAdoptsIt()
     {
-        // Line 3.0.0 is closed and the budget is spent on line 3.2.0 — only the Family rule keeps s-fam.
+        // The older education publication is still its source's latest on this major.
         Marker("3.0.0", "s-rel"); Sealed("s-rel", "plugins", DaysAgo(200));
         Marker("3.0.0-ci.5", "s-fam"); Sealed("s-fam", "education", DaysAgo(150));
         Marker("3.2.0-ci.1", "s-a"); Sealed("s-a", "plugins", DaysAgo(3));
@@ -156,7 +157,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed(Live, "plugins", DaysAgo(1));
         Sealed("s-stamped", "plugins", DaysAgo(500));
         Sealed("s-forgotten", "plugins", DaysAgo(600));
-        // The unnamed recency budget (2) goes to Live and this one, so only the stamp keeps s-stamped.
+        // Only the adoption stamp keeps the old stamped publication.
         Sealed("s-recent", "plugins", DaysAgo(2));
 
         var plan = PlanNow(stamps: ["s-stamped"]);
@@ -166,7 +167,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     }
 
     [Fact]
-    public void UnnamedIdentities_AreKeptByRecencyOnly_TheNewestNPerSourceBySealTime()
+    public void UnnamedIdentities_KeepThirtyDays_RegardlessOfNewerBuildCount()
     {
         Sealed(Live, "plugins", DaysAgo(1));
         Sealed("s-u1", "plugins", DaysAgo(30));
@@ -175,9 +176,10 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
         var plan = PlanNow();
 
-        // Budget 2 by seal time: Live (1 day) and s-u3 (10 days); s-u2 and s-u1 are older and go.
-        plan.Protected[ "s-u3"].Should().Contain("no release marker names it");
-        Ids(plan).Should().Equal("s-u1", "s-u2");
+        // Only the artifact at the 30-day boundary is eligible; newer count is irrelevant.
+        plan.Protected[ "s-u3"].Should().Contain("30-day retention window");
+        plan.Protected.Keys.Should().Contain("s-u2");
+        Ids(plan).Should().Equal("s-u1");
     }
 
     [Fact]
@@ -185,11 +187,11 @@ public class PrebuiltBundleRetentionTest : IDisposable
     {
         Sealed(Live, "plugins", DaysAgo(1));
         Unsealed("s-inflight", "plugins", Now - TimeSpan.FromMinutes(5));
-        Unsealed("s-dead", "plugins", DaysAgo(3));
+        Unsealed("s-dead", "plugins", DaysAgo(40));
 
         var plan = PlanNow();
 
-        plan.Protected[ "s-inflight"].Should().Contain("in flight");
+        plan.Protected[ "s-inflight"].Should().Contain("30-day retention window");
         Ids(plan).Should().Equal("s-dead");
     }
 
@@ -202,6 +204,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     [Fact]
     public void AnIdentityADeploymentRecordPins_IsKept_ViaItsReleaseMarker_RegardlessOfLineAndRecency()
     {
+        Marker("3.1.0-ci.9000", Live);
         Sealed(Live, "plugins", DaysAgo(1));
         Marker("3.0.0", "s-rel"); Sealed("s-rel", "plugins", DaysAgo(100));
         Marker("3.0.0-ci.8080", "s-8080"); Sealed("s-8080", "plugins", DaysAgo(120));
@@ -235,7 +238,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     }
 
     [Fact]
-    public void APinnedVersionNoMarkerNames_KeepsNothing_AndTheLedgerSaysSo()
+    public void AConsumerVersionNoMarkerNames_AbortsCleanup_AndTheLedgerSaysSo()
     {
         Sealed(Live, "plugins", DaysAgo(1));
         Sealed("s-old", "plugins", DaysAgo(500));
@@ -245,11 +248,12 @@ public class PrebuiltBundleRetentionTest : IDisposable
         var plan = PlanNow(pinned: pinned);
 
         plan.UnresolvedPins.Should().Equal("Deployment Deployments/ghost=3.0.0-ci.1");
-        Ids(plan).Should().Equal("s-old");
+        plan.AbortReason.Should().Contain("inventory is incomplete");
+        Ids(plan).Should().BeEmpty();
 
         var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention with { Delete = false }, Now);
         File.ReadAllText(PrebuiltBundleStore.LedgerPathOf(root))
-            .Should().Contain("pins mapping to no marker (keep nothing): Deployment Deployments/ghost=3.0.0-ci.1");
+            .Should().Contain("unresolved consumer references (cleanup blocked): Deployment Deployments/ghost=3.0.0-ci.1");
         result.Plan!.UnresolvedPins.Should().HaveCount(1);
     }
 
@@ -312,11 +316,12 @@ public class PrebuiltBundleRetentionTest : IDisposable
     [Fact]
     public void SweepCore_RemovesOnlyTheCollectable_OldestFirst_AndRetiresTheirMarkers()
     {
+        Marker("3.1.0-ci.9000", Live);
         Sealed(Live, "plugins", DaysAgo(1));
         Marker("3.0.0", "s-rel"); Sealed("s-rel", "plugins", DaysAgo(200));
         Marker("3.0.0-ci.1", "s-c1"); Sealed("s-c1", "plugins", DaysAgo(230), bytes: 4096);
         Marker("3.0.0-ci.2", "s-c2"); Sealed("s-c2", "plugins", DaysAgo(220), bytes: 2048);
-        Unsealed("s-dead", "plugins", DaysAgo(5));
+        Unsealed("s-dead", "plugins", DaysAgo(40));
         // A -ci marker whose identity is long gone retires as well — _releases must not grow forever.
         Marker("3.0.0-ci.0", "s-gone");
         // …but a young dangling marker may precede its bundles (the publisher writes it per run).
@@ -337,7 +342,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
         var markers = Directory.GetFiles(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName))
             .Select(Path.GetFileName).OrderBy(n => n).ToArray();
-        markers.Should().Equal("3.0.0", "3.0.0-ci.3");
+        markers.Should().Equal("3.0.0", "3.0.0-ci.3", "3.1.0-ci.9000");
         result.DeletedMarkers.Should().Be(3);
 
         var ledger = File.ReadAllLines(PrebuiltBundleStore.LedgerPathOf(root));
@@ -390,6 +395,57 @@ public class PrebuiltBundleRetentionTest : IDisposable
         result.AbortReason.Should().Contain("does not exist");
     }
 
+    [Fact]
+    public void MoreThanTenNewerBuilds_CannotCollectARecentBundle()
+    {
+        Sealed("s-recent", "plugins", DaysAgo(29));
+        for (var i = 0; i < 20; i++)
+            Sealed($"s-new-{i}", "plugins", DaysAgo(1));
+        Sealed("s-expired", "plugins", DaysAgo(31));
+
+        Ids(PlanNow()).Should().Equal("s-expired");
+    }
+
+    [Fact]
+    public void ARecentPublicationMarker_ProtectsOlderBytes()
+    {
+        Sealed("s-republished", "plugins", DaysAgo(100));
+        Marker("3.0.0-ci.1", "s-republished", DaysAgo(1));
+        Sealed("s-newer", "plugins", DaysAgo(100));
+        Marker("3.0.0-ci.2", "s-newer");
+
+        PlanNow().Protected.Keys.Should().Contain("s-republished");
+    }
+
+    [Fact]
+    public void AReportedFallback_SurvivesANewerSameMajorPublication()
+    {
+        Sealed("s-fallback", "plugins", DaysAgo(100));
+        Marker("3.0.0-ci.1", "s-fallback");
+        Sealed("s-newer", "plugins", DaysAgo(90));
+        Marker("3.0.0-ci.2", "s-newer");
+
+        var plan = PlanNow(pinned: [new PinnedPlatformReference("adopted fallback", null, "s-fallback")]);
+
+        plan.Protected.Keys.Should().Contain("s-fallback");
+        plan.Protected.Keys.Should().Contain("s-newer");
+        Ids(plan).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AnUnsealedSuccessor_DoesNotDisplaceTheLastSealedPublication()
+    {
+        Sealed("s-green", "plugins", DaysAgo(100));
+        Marker("3.0.0-ci.1", "s-green");
+        Unsealed("s-failed", "plugins", DaysAgo(50));
+        Marker("3.0.0-ci.2", "s-failed");
+
+        var plan = PlanNow(liveVersion: "4.0.0-ci.1");
+
+        plan.Protected.Keys.Should().Contain("s-green");
+        Ids(plan).Should().Equal("s-failed");
+    }
+
     // ---- version lines ------------------------------------------------------------------------
 
     [Theory]
@@ -402,6 +458,27 @@ public class PrebuiltBundleRetentionTest : IDisposable
     {
         PlatformVersionLine.LineOf(version).Should().Be(line);
         PlatformVersionLine.IsPrerelease(version).Should().Be(prerelease);
+    }
+
+    [Theory]
+    [InlineData("00:00:00", 30)]
+    [InlineData("1.00:00:00", 30)]
+    [InlineData("30.00:00:00", 30)]
+    [InlineData("60.00:00:00", 60)]
+    public void Configuration_CanExtendButCannotShortenTheThirtyDayWindow(string age, int days)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new System.Collections.Generic.Dictionary<string, string?>
+            {
+                [PrebuiltBundleRetentionExtensions.MinimumAgeConfigKey] = age,
+                [PrebuiltBundleRetentionExtensions.KeepNewestPerSourceConfigKey] = "0",
+            }).Build();
+
+        var configured = PrebuiltBundleRetentionExtensions.FromConfiguration(configuration);
+        configured.MinimumAge.Should().Be(TimeSpan.FromDays(days));
+        Sealed("s-recent", "plugins", DaysAgo(29));
+        PrebuiltBundleStore.Plan(Live, null, PrebuiltBundleStore.Scan(root), [], [], configured, Now)
+            .Collectable.Should().BeEmpty();
     }
 
     [Fact]
