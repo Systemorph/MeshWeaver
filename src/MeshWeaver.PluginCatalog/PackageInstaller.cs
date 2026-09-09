@@ -1562,11 +1562,58 @@ public static class PackageInstaller
     /// skipped), and it WAITS for the root to answer before the install proceeds. Called only when
     /// the placeholder dance actually ran, i.e. when there is a placeholder binding to replace.</para>
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>Why this install would NOT recycle its root, or <c>null</c> when it should — pure, so
+    /// the rule is pinned without a mesh (#3510).</b>
+    ///
+    /// <para>The recycle exists for exactly one purpose: after the root's in-package NodeType has
+    /// been REBUILT, tear the root down so the hub that comes back binds the package's own
+    /// configuration instead of the fallback. An install that wrote NOTHING rebuilt nothing — the
+    /// two <c>RequestReleases</c> waves this recycle sits between are both gated on
+    /// <c>result.Written &gt; 0</c> for that very reason — so there is nothing to rebind to, and
+    /// the teardown is pure loss.</para>
+    ///
+    /// <para><b>And it is not a theoretical loss.</b> Measured on CD run 34190841613
+    /// (2026-09-08): package <c>Video</c> logged <c>0 written, 21 unchanged</c> and recycled its
+    /// root anyway, and <c>Chess</c> was recycled TWICE per bake. Each teardown killed the
+    /// correlated work in flight beneath the root — its own <c>PluginGating</c> reconcile — which
+    /// the quiesce could not answer and force-cancelled at its 2 s bound, surfacing as
+    /// <c>HubDisposedBeforeResponseException</c>.</para>
+    ///
+    /// <para>🚨 This does NOT fix the case where an install DID write: a recycle that has a job to
+    /// do still tears down a root whose background pipeline is issuing correlated requests, and
+    /// a hub that keeps accepting work while quiescing is its own defect (#3261's family). What
+    /// this removes is the class where the teardown was provably pointless — and it removes it by
+    /// making the recycle agree with the two waves around it, not by widening a bound.</para>
+    /// </summary>
+    /// <param name="rootPath">The retyped root, or null when the placeholder dance did not run.</param>
+    /// <param name="written">How many nodes this install actually wrote.</param>
+    /// <returns>The sentence to log, or <c>null</c> when the recycle should proceed.</returns>
+    internal static string? RecycleDeclineReason(string? rootPath, int written)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath))
+            return null;   // nothing to recycle; the caller returns before logging anything
+        return written > 0
+            ? null
+            : "this install wrote nothing, so its in-package NodeType was not rebuilt (the release "
+              + "waves either side of the recycle are gated on the same condition) and a fresh hub "
+              + "would bind exactly what the current one already has. The teardown would only "
+              + "cancel the work in flight beneath the root.";
+    }
+
     private static IObservable<Unit> SettleRetypedRoot(
-        IMessageHub hub, string? rootPath, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
+        IMessageHub hub, string? rootPath, IReadOnlyCollection<MeshNode> nodes, int written,
+        ILogger? logger)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
             return Observable.Return(Unit.Default);
+
+        if (RecycleDeclineReason(rootPath, written) is { } declined)
+        {
+            logger?.LogInformation(
+                "[PackageInstaller] not recycling root {Root}: {Reason}", rootPath, declined);
+            return Observable.Return(Unit.Default);
+        }
 
         return MayPublishIntoRoot(hub, rootPath!, nodes, logger)
             .SelectMany(rebindable =>
@@ -1601,10 +1648,19 @@ public static class PackageInstaller
                 // the next occurrence a read instead of a reconstruction. Information, not Debug:
                 // it is one line per package install, it names a deliberate teardown of a live
                 // hub, and the reader needing it is looking at a failed install, not a trace.
+                // 🚨 The second sentence used to read "Work in flight beneath this root is answered
+                // by the teardown, not abandoned." That is FALSE as written, and it was measured
+                // false: on CD 34190841613 the pending CreateOrUpdateNodeRequest was neither
+                // answered nor NACKed — the quiesce force-cancelled it at its 2 s bound and it
+                // reached its issuer as HubDisposedBeforeResponseException. A diagnostic that
+                // asserts a guarantee the code does not keep is worse than one that says nothing:
+                // it sends the next reader looking for a different cause (#3510).
                 logger?.LogInformation(
                     "[PackageInstaller] recycling root {Root} now that its in-package NodeType has a "
                     + "loadable build — the hub re-activates against the package's own configuration. "
-                    + "Work in flight beneath this root is answered by the teardown, not abandoned.",
+                    + "Work in flight beneath this root is given the quiesce window to finish; "
+                    + "anything still pending at that bound is force-cancelled and surfaces to its "
+                    + "issuer as HubDisposedBeforeResponseException.",
                     rootPath);
                 using (accessService?.ImpersonateAsSystem())
                     hub.NodeOperationIssuingHub()
@@ -3056,7 +3112,7 @@ public static class PackageInstaller
                     // its rebuild, so the hub that comes back binds the package's own configuration
                     // instead of the fallback — and the install no longer returns while a teardown
                     // it started is still running.
-                    .SelectMany(pruned => SettleRetypedRoot(hub, retypedRoot, nodes, logger)
+                    .SelectMany(pruned => SettleRetypedRoot(hub, retypedRoot, nodes, result.Written, logger)
                         .Select(_ => pruned))
                     // …and ONLY NOW the rest of the package's types. Their compiles read the root
                     // (ValidateCellSurfaceSingleHome → GetMeshNode('<packageRoot>') for every
