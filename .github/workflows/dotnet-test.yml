@@ -2028,7 +2028,11 @@ jobs:
     # run; running it here as well is what makes a core PR that breaks the narrowing red on the
     # core PR, rather than on the next satellite to bump its pin.
     - name: "The build-scope selector can say no, and every fallback still falls back (self-test)"
-      run: python3 .github/scripts/node-repo-scope.py --self-test
+      run: |
+        python3 .github/scripts/node-repo-scope.py --self-test
+        python3 .github/scripts/node-repo-publication-base.py --self-test
+        python3 .github/scripts/node-repo-publication-reuse.py --self-test
+        python3 .github/scripts/node-repo-project-scope.py --self-test
     - name: "A satellite's no-op set stays comparable to ours — the gate can fail (self-test)"
       run: python3 .github/scripts/check-noop-scope-parity.py --self-test
 

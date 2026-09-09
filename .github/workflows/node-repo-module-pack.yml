@@ -412,6 +412,28 @@ on:
         required: false
         type: string
         default: install
+      build-logic-ref:
+        description: >
+          Optional immutable core SHA for selection scripts. Separate from platform-ref, which
+          selects the framework source the tests build. Set it to opt into publication baseline
+          and dependency reuse; existing callers retain their platform-ref selector.
+        required: false
+        type: string
+        default: ''
+      publication-run:
+        description: Successful publishing run paired with publication-base and identical resolved toolchain inputs; permits reusing unchanged gate dependencies.
+        required: false
+        type: string
+        default: ''
+      publication-base:
+        description: >
+          Optional source SHA of a successful main push of the caller's complete publishing
+          workflow. Only push events use it. The selector verifies ancestry and diffs all changes
+          since that publication; a missing/invalid baseline and release-follow events stay full.
+          Never pass github.event.before or a non-publishing workflow's commit.
+        required: false
+        type: string
+        default: ''
       ledger:
         description: >
           The CI MODULE BUILD LEDGER on the registry portal (Doc/Architecture/ModuleBuildArchitecture →
@@ -489,10 +511,10 @@ jobs:
     outputs:
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
       # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
-      modules: ${{ steps.ledger.outputs.modules }}
+      modules: ${{ steps.reuse.outputs.modules }}
       # The SUBSET the one-workspace build compiles — every entry the ledger did not hand a reusable
       # bundle for. The postcondition in build-workspace is fed the SAME list.
-      build-modules: ${{ steps.ledger.outputs.build }}
+      build-modules: ${{ steps.reuse.outputs.build }}
       # The SUBSET whose own test suite must RUN in this call — the entries the pack job's plan
       # would answer `need_test=true` for. It is the `tests` job's matrix; see that job for why
       # the suites are a lane of their own on a non-publishing run.
@@ -585,7 +607,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
+          ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
           path: meshweaver
       - uses: actions/setup-python@v7
         with:
@@ -594,9 +616,18 @@ jobs:
       # falls back. It runs here, on every run, next to the answer it produces — a selector whose
       # self-test is only run by someone remembering to is a selector nobody checks.
       - name: The selection can say no (self-test)
+        env:
+          BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
         run: |
           set -euo pipefail
+          if [ -n "$BUILD_LOGIC_REF" ]; then
+            [[ "$BUILD_LOGIC_REF" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::build-logic-ref must be an immutable SHA'; exit 1; }
+          fi
           python3 meshweaver/.github/scripts/node-repo-scope.py --self-test
+          if [ -n "$BUILD_LOGIC_REF" ]; then
+            python3 meshweaver/.github/scripts/node-repo-publication-base.py --self-test
+            python3 meshweaver/.github/scripts/node-repo-publication-reuse.py --self-test
+          fi
           python3 meshweaver/.github/scripts/node-repo-pack-verify.py --self-test
           python3 meshweaver/.github/scripts/module-build-key.py --self-test
           python3 meshweaver/.github/scripts/module-build-ledger.py --self-test
@@ -605,6 +636,9 @@ jobs:
         env:
           MODULES: ${{ inputs.modules }}
           ALWAYS: ${{ inputs.always-modules }}
+          PUBLICATION_BASE: ${{ inputs.publication-base }}
+          PUBLICATION_RUN: ${{ inputs.publication-run }}
+          BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           # A merge_group run carries no `base_ref`; its base is on the event payload. Dormant
@@ -621,9 +655,14 @@ jobs:
             git -C repo fetch --no-tags origin \
               "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           fi
+          publication_args=()
+          if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+            publication_args=(--publication-base "$PUBLICATION_BASE")
+          fi
           python3 meshweaver/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
-            --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" > "$RUNNER_TEMP/scope.json"
+            --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \
+            "${publication_args[@]}" > "$RUNNER_TEMP/scope.json"
       # ───────────── THE LEDGER: what of this selection is ALREADY BUILT, and who builds the rest ─────────────
       # 🚨 "we should not start the same build multiple times ⇒ coordinate which packages are in
       # progress; track progress through memex … if Plugin X was built against Platform version Y,
@@ -694,6 +733,24 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Reuse unchanged dependencies from the successful publication
+        id: reuse
+        env:
+          MATRIX: ${{ steps.ledger.outputs.modules }}
+          BUILD: ${{ steps.ledger.outputs.build }}
+          BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
+          PUBLICATION_RUN: ${{ inputs.publication-run }}
+          PUBLICATION_BASE: ${{ inputs.publication-base }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$BUILD_LOGIC_REF" ]; then
+            echo "modules=$MATRIX" >> "$GITHUB_OUTPUT"
+            echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 meshweaver/.github/scripts/node-repo-publication-reuse.py \
+            --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE"
 
       # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
       # The `tests` job's matrix. The predicate is EXACTLY the one the pack job's `Ledger — this
@@ -768,22 +825,24 @@ jobs:
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
       - name: Restore the module-pack tool (per-platform-pin cache)
+        if: needs.select.outputs.build-modules != '[]'
         id: tool-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/pack-tool
           key: pack-tool-${{ inputs.platform-ref }}
       - uses: actions/setup-dotnet@v6
-        if: steps.tool-cache.outputs.cache-hit != 'true'
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true'
         with:
           dotnet-version: "10.0.x"
       - name: Publish the module-pack tool (once for every pack job)
-        if: steps.tool-cache.outputs.cache-hit != 'true'
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
       # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.
       - name: Hand the tool to the matrix
+        if: needs.select.outputs.build-modules != '[]'
         uses: actions/upload-artifact@v7
         with:
           name: module-pack-tool-${{ needs.select.outputs.lane }}
@@ -1427,6 +1486,7 @@ jobs:
         env:
           LEDGER: ${{ inputs.ledger }}
           ENTRY_LEDGER: ${{ toJSON(matrix.entry.ledger) }}
+          ENTRY_REUSE: ${{ toJSON(matrix.entry.reuse) }}
           RUN_TESTS: ${{ matrix.entry.test != false }}
           PUBLISH: ${{ inputs.publish }}
           MODULE: ${{ matrix.entry.module }}
@@ -1436,7 +1496,13 @@ jobs:
         run: |
           set -euo pipefail
           decision=build; key=""; need_test="$RUN_TESTS"; need_publish="$PUBLISH"; art_run=""; art_name=""; sha=""; holder=""
-          if [ "$LEDGER" = "required" ] && [ "$ENTRY_LEDGER" != "null" ] && [ -n "$ENTRY_LEDGER" ]; then
+          if [ "$ENTRY_REUSE" != "null" ] && [ -n "$ENTRY_REUSE" ]; then
+            decision=reuse; need_test=false; need_publish=false
+            art_run=$(jq -er '.runId' <<< "$ENTRY_REUSE")
+            art_name=$(jq -er '.name' <<< "$ENTRY_REUSE")
+            holder=$(jq -er '.source' <<< "$ENTRY_REUSE")
+            echo "plan: REUSE unchanged $MODULE from successful publication $holder — no compile, tests or publish owed"
+          elif [ "$LEDGER" = "required" ] && [ "$ENTRY_LEDGER" != "null" ] && [ -n "$ENTRY_LEDGER" ]; then
             decision=$(jq -r '.decision // "build"' <<< "$ENTRY_LEDGER")
             key=$(jq -r '.key // ""' <<< "$ENTRY_LEDGER")
             if [ "$decision" = "reuse" ]; then
@@ -1821,7 +1887,7 @@ jobs:
             echo "### \`$MODULE\` — **reused** from run $ART_RUN"
             echo
             echo "- record: $HOLDER"
-            echo "- sha256: \`$actual\` (verified against the ledger)"
+            echo "- sha256: \`$actual\`; source: $HOLDER"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Published ONCE by the prepare job — `dotnet build` here cost 48–79s in EVERY job (measured
@@ -2125,7 +2191,7 @@ jobs:
           VERSION: ${{ steps.identity.outputs.version }}
           # A reused leg has no compiler of its own: the marker says so, and names the run that did.
           COMPILER: ${{ steps.plan.outputs.decision == 'reuse' && 'reused' || steps.build.outputs.compiler }}
-          CLOSURE: ${{ steps.plan.outputs.decision == 'reuse' && format('reused from run {0} ({1}, sha256 verified against the ledger)', steps.plan.outputs.art_run, steps.plan.outputs.art_name) || steps.build.outputs.closure }}
+          CLOSURE: ${{ steps.plan.outputs.decision == 'reuse' && format('reused from run {0} ({1}, published artifact provenance verified)', steps.plan.outputs.art_run, steps.plan.outputs.art_name) || steps.build.outputs.closure }}
           BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}
         run: |
           set -euo pipefail

@@ -201,3 +201,55 @@ tested 1 before this change and after it.
 moved portal hosts and runs 48 platform suites on every pull request regardless of the diff. That is
 a separate decision, on a job whose suites cover the platform pin rather than this repository's
 modules.
+
+
+## Separate compiled validation from content publication (2026-09-09)
+
+A node-only lesson change does not require rebuilding portal hosts or running unrelated storage,
+AI and Blazor suites. `node-repo-project-scope.py` selects host builds and tests from the caller's
+project graph, linked content and explicit runtime-input prefixes. The caller retains its project
+inventory as policy. A source-scanning guard declares the paths it reads; a linked content folder
+is an input even when it lives outside `src/`. Unknown paths, absent graphs and missing diffs run
+full validation; malformed or missing inventory entries fail. Selection and execution must be
+reconciled by the caller's stable required check.
+
+The module lane accepts an optional `publication-base` on main pushes. Obtain it only from
+`node-repo-publication-base.py`, naming the caller's complete publishing workflow. It reads a
+successful completed **main push**, verifies that commit is an ancestor, and otherwise supplies
+no baseline. Manual runs cannot advance it. A newer failed, cancelled, active or release-follow
+publication forces a full build: its partial writes may have used a different toolchain override,
+which a source diff cannot see. Successful runs record their actual resolved platform ref and
+image digests in `publication-inputs`; a missing or differing receipt also forces a full build.
+The registry's package version and `github.event.before` are not publication evidence.
+
+Selection takes the **union of paths changed by all intervening commits**, not just the net diff.
+A failed run can publish some bundles before it fails; if a later commit reverts that change,
+those bundles must be republished even when HEAD equals the successful baseline. The history union
+retains that repair. A missing baseline or an empty/unreadable history selects everything. A
+workflow/tooling/platform-pin change also selects everything. Release-follow events remain full.
+Floor bundles required by compilation and the sealed bake remain selected; suites run only for
+entries actually affected. `publication-run` pairs the attested baseline with its successful run.
+Unchanged floor entries reuse that run's still-live module artifacts through the existing reuse
+and receipt path. Missing artifacts retain the normal build leg; affected entries never reuse on
+this proof. The module-pack tool is not rebuilt when all selected bundles are reused. The existing receipt verification and supported publication endpoint
+are unchanged. No registry credential or mutable publication ref is introduced.
+
+This is deliberately a conservative first separation. A chronically failing publishing workflow
+forces full builds until a successful publication restores the baseline. The content-addressed module ledger remains the mechanism for coordinating concurrent builds and
+reusing results across arbitrary runs; the caller must provision its credential before enabling
+it. Successful-publication reuse needs only the existing GitHub Actions read permission. Do not substitute the bake's two-module composition
+index for evidence that the whole compiled catalogue was published.
+
+
+`build-logic-ref` opts the module call into these selectors at an immutable core commit, separately
+from `platform-ref` (the framework source against which compiled suites run). A workflow update
+must not silently advance that source pin. Existing callers without the new input keep their
+previous selector and do not invoke the new helpers. The publication-input receipt includes both
+resolved framework source and build-logic pins, as well as the image digests.
+
+The reusable lane accepts the baseline only as a pair: a numeric `publication-run` and a full
+source SHA with `build-logic-ref` enabled. An absent run or malformed pair keeps broad publishing.
+If the compiled-project selector cannot load its scope helper or project graph, it validates the
+entire declared policy; a missing or syntactically invalid helper is covered by its self-test.
+The ledger lane guard verifies that publication reuse receives both ledger outputs and that its
+final build subset feeds the build and postcondition together.

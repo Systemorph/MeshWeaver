@@ -328,7 +328,7 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
            override: list[str] | None, say, publishing: bool = False,
-           always: frozenset[str] = frozenset()) -> dict:
+           always: frozenset[str] = frozenset(), publication_base: str = "") -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -356,11 +356,24 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             "'Build everything' and 'everything is nothing' cannot both be true, so this is a "
             "broken input (a --root that does not match the checkout?), not a scope.")
 
-    if publishing:
+    # Only an ancestor from a successful publishing run can narrow a main push. Never use
+    # event.before: it loses changes from failed/cancelled runs. Other events retain full scope.
+    publication_diff = False
+    if event == "push" and publication_base:
+        if not re.fullmatch(r"[0-9a-f]{40}", publication_base):
+            return full("publication baseline is not a full commit SHA")
+        ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", publication_base, "HEAD"],
+                                  cwd=root, capture_output=True, timeout=30)
+        if ancestor.returncode != 0:
+            return full("publication baseline is unavailable or not an ancestor of HEAD")
+        publication_diff = True
+        diff_range = f"{publication_base}..HEAD"
+        override = None  # a publishing decision must read the actual tree, never a supplied list
+    if publishing and not publication_diff:
         return full("this run PUBLISHES, and a publishing run is never narrowed — the derived "
                     "version is the change detector on that path, and a diff that misses a unit "
                     "means that unit silently never ships.")
-    if event not in NARROWABLE:
+    if event not in NARROWABLE and not publication_diff:
         return full(FULL_REASONS[lane].get(
             event, f"event '{event}' has no meaningful content diff — running the full set."))
     if not (root / SELECTOR).is_file():
@@ -374,7 +387,15 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
     if override is not None:
         files = [f for f in override if f.strip()]
     else:
-        got = changed_files(root, diff_range or "", say)
+        if publication_diff:
+            # A failed run may have published SOME bundles. Include every intervening change,
+            # even one later reverted, so HEAD repairs those partial publications too.
+            history = subprocess.run(["git", "log", "--format=", "--name-only", "--no-renames",
+                                      "-m", diff_range], cwd=root, capture_output=True,
+                                     text=True, timeout=120)
+            got = sorted(set(history.stdout.splitlines()) - {""}) if history.returncode == 0 else None
+        else:
+            got = changed_files(root, diff_range or "", say)
         if got is None:
             return full(f"git diff --name-only {diff_range} failed (see above) — the changed set "
                         "is unknown, so the full set runs.")
@@ -632,6 +653,36 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _fixture(root)
+
+        # Real history: a failed intermediate publication followed by a revert still owes
+        # a publish. A net diff would incorrectly select nothing here.
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
+                                  check=True).stdout.strip()
+        git("init", "-q")
+        git("config", "user.name", "Scope Test")
+        git("config", "user.email", "scope@example.test")
+        git("add", ".")
+        git("commit", "-qm", "baseline")
+        base = git("rev-parse", "HEAD")
+        node = root / "Alpha" / "index.json"
+        before = node.read_text()
+        node.write_text(before + "\n")
+        git("commit", "-qam", "intermediate partial publication")
+        node.write_text(before)
+        git("commit", "-qam", "restore original content")
+        result = _run(root, "modules", "push", None,
+                      extra=["--publication-base", base, "--publishing"])
+        check("a reverted partial publication is repaired", result["selected"] == ["Acme.Alpha"])
+        for event in ("schedule", "repository_dispatch", "workflow_dispatch"):
+            result = _run(root, "modules", event, None, extra=["--publication-base", base])
+            check(f"{event} ignores publication baseline", result["scope"] == "full")
+        for invalid in ("short", "f" * 40):
+            result = _run(root, "modules", "push", None, extra=["--publication-base", invalid])
+            check("invalid or unavailable baseline builds full", result["scope"] == "full")
+        result = _run(root, "modules", "push", None,
+                      extra=["--publication-base", git("rev-parse", "HEAD")])
+        check("empty publication range builds full", result["scope"] == "full")
 
         print("FULL-run fallbacks — the bias that makes narrowing safe (both lanes):")
         for lane, n in (("modules", 2),):
@@ -931,6 +982,8 @@ def main() -> int:
                    help="the PR base branch — the diff is origin/<base-ref>...HEAD")
     p.add_argument("--changed-list", default=None, dest="changed_list",
                    help="comma-separated changed paths instead of a git diff (tests only)")
+    p.add_argument("--publication-base", default="",
+                   help="successful trunk publication SHA; push only, ancestor-checked")
     p.add_argument("--publishing", action="store_true",
                    help="this run hands its output to a registry or feed — never narrow. The "
                         "publish path's change detector is the derived version, and a diff that "
@@ -964,7 +1017,7 @@ def main() -> int:
     always = frozenset(a.strip() for a in args.always.split(",") if a.strip())
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
-                    publishing=args.publishing, always=always)
+                    publishing=args.publishing, always=always, publication_base=args.publication_base)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"
