@@ -621,11 +621,12 @@ public sealed class GitHubSyncService
             // truncated, or a compare error) falls back to a full import — never a silent
             // under-import. This is what stops a routine push from re-materialising the whole
             // partition and storming the live compiler (the memex-cloud outage loop, 2026-07-23).
+            var readmePolicy = ReadmeFilePolicy.From(snapshot);
             var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true
                 ? Observable.Return<IReadOnlyList<string>?>(null)
                 : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
             return diff.SelectMany(changedFiles =>
-                ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
+                ParseSnapshot(snapshot, spaceId, ignore, readmePolicy, progress).SelectMany(parsed =>
                 {
                     // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
                     // needs them to tell "the repo dropped this node" from "this node never syncs".
@@ -637,7 +638,7 @@ public sealed class GitHubSyncService
                     var source = new InMemoryStaticRepoSource(
                         spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs, ignore,
                         listingIsComplete: snapshot.ListingIsComplete,
-                        ownsReadme: ReadmeFilePolicy.From(snapshot).IsPackage);
+                        ownsReadme: readmePolicy.IsPackage);
                     var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
                     if (changedNodePaths is not null)
                         logger?.LogInformation(
@@ -677,7 +678,8 @@ public sealed class GitHubSyncService
         string.IsNullOrEmpty(sha) ? "(none)" : sha.Length <= 8 ? sha : sha[..8];
 
     private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children, IReadOnlyList<StaticContentSync> ContentSyncs)> ParseSnapshot(
-        RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, Action<string, LogLevel>? progress = null)
+        RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, ReadmeFilePolicy readmePolicy,
+        Action<string, LogLevel>? progress = null)
     {
         if (snapshot.Files.Count == 0)
             return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(),
@@ -690,7 +692,6 @@ public sealed class GitHubSyncService
         // node), so committed course videos/posters land and stop getting wiped. Everything else flows
         // to node parsing as before.
         var kept = snapshot.Files.Where(f => !ignore.IsIgnored(f.Path)).ToArray();
-        var readmePolicy = ReadmeFilePolicy.From(snapshot);
         // Cheap path-only precheck first (no byte materialization for the common node file), then
         // classify only the content paths — f.Bytes is realized ONLY for an actual content asset.
         var classified = kept

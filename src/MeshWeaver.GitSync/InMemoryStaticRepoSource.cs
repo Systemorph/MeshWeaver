@@ -30,8 +30,8 @@ namespace MeshWeaver.GitSync;
 /// <param name="listingIsComplete">Whether <paramref name="children"/> is the WHOLE repo listing at
 /// that commit (<see cref="RepoSnapshot.ListingIsComplete"/>). False when GitHub truncated the
 /// recursive tree — see <see cref="IStaticRepoSource.ListingIsComplete"/>.</param>
-/// <param name="ownsReadme">A package manifest makes README a source-owned node when declared;
-/// ordinary repository landing pages are outside this source's node mirror.</param>
+/// <param name="ownsReadme">A package manifest owns the README slot, including retiring a
+/// previously declared README. Ordinary repository landing pages are outside the node mirror.</param>
 internal sealed class InMemoryStaticRepoSource(
     string partition,
     IReadOnlyList<MeshNode> children,
