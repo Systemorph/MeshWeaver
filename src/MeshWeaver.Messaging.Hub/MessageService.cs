@@ -175,7 +175,7 @@ public class MessageService : IMessageService
     /// timer fires <see cref="ReportFailure"/> for any entry still here when its
     /// deadline elapses.
     /// </summary>
-    private readonly ConcurrentDictionary<string, (IMessageDelivery Delivery, CancellationTokenSource TimeoutCts)>
+    private readonly ConcurrentDictionary<string, (IMessageDelivery Delivery, CancellationTokenSource TimeoutCts, string GatesAtDeferral)>
         deferredDeliveries = new();
     private TaskScheduler turnScheduler = TaskScheduler.Default;
     private readonly HierarchicalRouting hierarchicalRouting;
@@ -311,7 +311,7 @@ public class MessageService : IMessageService
         var stillClosed = string.Join(",", gates.Keys);
         var reason = $"Message hub {Address} failed to initialize in {hub.Configuration.StartupTimeout} — gates still closed: [{stillClosed}]";
         logger.LogError(reason);
-        DrainDeferredDeliveries(delivery => ReportFailure(delivery.WithProperty("Error", reason)));
+        DrainDeferredDeliveries((delivery, _) => ReportFailure(delivery.WithProperty("Error", reason)));
     }
 
     /// <summary>
@@ -337,7 +337,7 @@ public class MessageService : IMessageService
     /// prevent. A deferral arriving after the snapshot keeps its own timeout tracker and is retired
     /// by whichever claimant reaches it next.</para>
     /// </summary>
-    private void DrainDeferredDeliveries(Action<IMessageDelivery> answer)
+    private void DrainDeferredDeliveries(Action<IMessageDelivery, string> answer)
     {
         foreach (var id in deferredDeliveries.Keys)
         {
@@ -345,7 +345,7 @@ public class MessageService : IMessageService
                 continue; // someone else owns this tracker — it will answer and dispose it
             tracker.TimeoutCts.Cancel();
             tracker.TimeoutCts.Dispose();
-            answer(tracker.Delivery);
+            answer(tracker.Delivery, tracker.GatesAtDeferral);
         }
     }
 
@@ -503,7 +503,7 @@ public class MessageService : IMessageService
     /// </summary>
     private void FailDeferredBacklog(string reason)
     {
-        DrainDeferredDeliveries(delivery => AnswerUnreleasableDelivery(delivery, reason));
+        DrainDeferredDeliveries((delivery, _) => AnswerUnreleasableDelivery(delivery, reason));
         // The parked turns are the same deliveries, already answered — running them later
         // (a subsequent OpenGate, the disposal drain) would answer them a second time.
         lock (turnGate)
@@ -1792,7 +1792,10 @@ public class MessageService : IMessageService
     private void ScheduleDeferralTimeout(IMessageDelivery delivery)
     {
         var cts = new CancellationTokenSource();
-        var tracker = (delivery, cts);
+        // Called under gateStateLock at the deferral decision. Teardown opens the gates before
+        // draining these trackers, so reading gates.Keys during Dispose loses the cause (#3712).
+        var gatesAtDeferral = string.Join(",", gates.Keys.OrderBy(x => x, StringComparer.Ordinal));
+        var tracker = (delivery, cts, gatesAtDeferral);
 
         // 🚨 RETIRE THE DISPLACED TRACKER. This write used to be a bare indexer assignment, so a
         // re-deferred id (a repost keeps its Id) silently orphaned the previous tracker: with the
@@ -2531,20 +2534,20 @@ public class MessageService : IMessageService
         // reproduce it: the hub, the message type and id, its sender, the gates it was parked
         // behind and this hub's run level.
         var discarded = 0;
-        DrainDeferredDeliveries(delivery =>
+        DrainDeferredDeliveries((delivery, gatesAtDeferral) =>
         {
             discarded++;
             logger.LogError(DisposalDiscardedDeferredDelivery,
                 "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
-                + "still deferred behind its initialization gates [{Gates}] — the message is NOT processed; "
+                + "still deferred; initialization gates closed at deferral: [{Gates}] — the message is NOT processed; "
                 + "the sender is answered ShuttingDown. RunLevel={RunLevel}. Accepted work must be drained "
-                + "before a hub goes down; find why this hub disposed with its gates still shut.",
+                + "before a hub goes down; find why this hub disposed before its deferred work could run.",
                 Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
-                string.Join(",", gates.Keys), hub.RunLevel);
+                gatesAtDeferral, hub.RunLevel);
             NackThroughParent(delivery,
                 $"Hub {Address} was disposed while {delivery.Message.GetType().Name} "
-                + $"(id={delivery.Id}) was still deferred behind its initialization gates "
-                + $"[{string.Join(",", gates.Keys)}] — the message was never processed. The address "
+                + $"(id={delivery.Id}) was still deferred; initialization gates closed at deferral: "
+                + $"[{gatesAtDeferral}] — the message was never processed. The address "
                 + "may reactivate (recycle / restart); retry to get the authoritative answer.");
         });
 

@@ -1,8 +1,12 @@
 using System;
+using System.Collections.Concurrent;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Messaging.Hub.Test;
@@ -34,8 +38,15 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// "ask again", not "gone"; consumers with their own recovery machinery (SynchronizationStream's
 /// resubscribe latch) rely on exactly that classification.</para>
 /// </summary>
-public class DeferredDeliveryNackedOnDisposeTest(ITestOutputHelper output) : HubTestBase(output)
+public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
 {
+    private readonly DeferredLog log = new();
+
+    public DeferredDeliveryNackedOnDisposeTest(ITestOutputHelper output) : base(output)
+    {
+        Services.AddLogging(l => l.Services.AddSingleton<ILoggerProvider>(log));
+    }
+
     private record GatedRequest : IRequest<GatedResponse>;
 
     private record GatedResponse;
@@ -87,6 +98,11 @@ public class DeferredDeliveryNackedOnDisposeTest(ITestOutputHelper output) : Hub
         // TRANSIENT, so a recycled address reads as "retry", never as "gone".
         failure.Failure.Should().NotBeNull();
         failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown);
+        failure.Failure.Message.Should().Contain("test-never-opens",
+            "the shutdown answer must name the gates recorded before teardown opened them");
+        log.Messages.Should().Contain(message => message.Contains("test-never-opens"),
+            "event 7301 must preserve the gate that actually held the delivery (#3712)");
+
         failure.Failure.Message.Should().Contain("deferred",
             "the NACK must name WHY the message was abandoned — a bare failure sends the next "
             + "investigator hunting the wrong layer");
@@ -99,17 +115,32 @@ public class DeferredDeliveryNackedOnDisposeTest(ITestOutputHelper output) : Hub
     /// </summary>
     private static async Task WaitForDeferredBacklog(IMessageHub host)
     {
-        for (var i = 0; i < 100; i++)
-        {
-            foreach (Match m in Regex.Matches(host.GetDisposalDiagnostics(), @"deferred=(\d+)"))
-                if (int.Parse(m.Groups[1].Value) > 0)
-                    return;
-            await Task.Delay(50);
-        }
-
-        Assert.Fail(
-            "The request never reached the gated hub's deferred queue, so this test never "
-            + "exercised the disposal path it exists to pin. Check that GatedRequest still "
-            + "defers behind a closed initialization gate.");
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .Select(_ => host.GetDisposalDiagnostics())
+            .Where(snapshot => Regex.Matches(snapshot, @"deferred=(\d+)")
+                .Any(m => int.Parse(m.Groups[1].Value) > 0))
+            .Take(1)
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
     }
+    private sealed class DeferredLog : ILoggerProvider
+    {
+        public ConcurrentQueue<string> Messages { get; } = new();
+        public ILogger CreateLogger(string categoryName) => new Capture(Messages);
+        public void Dispose() { }
+
+        private sealed class Capture(ConcurrentQueue<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel level) => level >= LogLevel.Error;
+            public void Log<TState>(LogLevel level, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                if (eventId.Id == 7301)
+                    messages.Enqueue(formatter(state, exception));
+            }
+        }
+    }
+
 }
