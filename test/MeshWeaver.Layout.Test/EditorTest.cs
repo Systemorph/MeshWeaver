@@ -275,6 +275,103 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
 
+    #region Accessible names (#3863)
+
+    /// <summary>
+    /// The shape MeshWeaver#3863 was reported on: an assessment form whose questions are declared
+    /// with <see cref="DisplayNameAttribute"/> and rendered through an explicit
+    /// <c>[UiControl&lt;TextAreaControl&gt;]</c>.
+    /// </summary>
+    private record AssessmentForm
+    {
+        [DisplayName("1. What topics do you want to cover?")]
+        [Description("The learner's own words")]
+        [UiControl<TextAreaControl>]
+        public string Topics { get; init; } = null!;
+
+        [DisplayName("2. How much time can you invest each week?")]
+        [Description("Hours per week")]
+        public string Commitment { get; init; } = null!;
+    }
+
+    private UiControl? AssessmentEditor(LayoutAreaHost host, RenderingContext ctx) =>
+        host.Hub.Edit(new AssessmentForm(), "assessment");
+
+    /// <summary>
+    /// 🚨 The generated input must carry the question as its ACCESSIBLE name, and must still NOT
+    /// carry it as a visible <c>Label</c>.
+    ///
+    /// <para>
+    /// Both halves matter and they pull against each other, which is exactly how #3863 was created:
+    /// <c>MapToControl</c> passes <c>label = null</c> to the control on purpose, because the caption
+    /// is already painted by the surrounding <see cref="PropertySkin"/> (the <c>&lt;dt&gt;</c>) and
+    /// setting it twice would render it twice. The consequence nobody accounted for is that the
+    /// input was then left with NO accessible name at all — Playwright's
+    /// <c>getByRole('textbox', { name: question })</c> matched nothing on a live portal, and an HTML
+    /// <c>&lt;label for&gt;</c> cannot fix it because the Fluent host keeps its real input inside a
+    /// SHADOW ROOT, across which <c>for</c>/<c>id</c> do not associate.
+    /// </para>
+    ///
+    /// <para>
+    /// So the assertion is: <c>AriaLabel</c> == the skin's visible <c>Label</c> (WCAG label-in-name —
+    /// they are read from the one <c>GetEditorLabel()</c> source so they cannot drift), and
+    /// <c>Label</c> stays null. Reverting the <c>WithAriaLabel</c> calls in <c>EditorExtensions</c>
+    /// fails this test on the first assertion.
+    /// </para>
+    ///
+    /// <para>
+    /// This is the half of #3863 that a unit test CAN see. The rendered-DOM half — the Fluent host
+    /// actually emitting <c>aria-label</c> — lives in MeshWeaver.Plugins' Blazor views, so the
+    /// browser regression the issue asks for can only go green once that half ships.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task GeneratedFieldsCarryTheirQuestionAsAccessibleName()
+    {
+        var host = GetHost();
+        var workspace = host.GetWorkspace();
+        var area = workspace.GetStream(new LayoutAreaReference(nameof(AssessmentEditor)));
+
+        var control = await area
+            .GetControlStream(nameof(AssessmentEditor))
+            .Should().Within(10.Seconds()).Match(x => x is not null);
+
+        var editor = control.Should().BeOfType<EditorControl>().Subject;
+        editor.Areas.Should().HaveCount(2);
+
+        foreach (var namedArea in editor.Areas)
+        {
+            var skin = namedArea.Skins.OfType<PropertySkin>().Should().ContainSingle().Subject;
+            skin.Label.Should().BeOfType<string>();
+            var question = (string)skin.Label!;
+
+            var field = await area
+                .GetControlStream(namedArea.Area.ToString()!)
+                .Should().Within(10.Seconds()).Match(x => x is not null);
+
+            field.Should().BeAssignableTo<IFormControl>();
+            var formControl = (IFormControl)field!;
+
+            // The accessible name — absent before #3863, which is what left the textbox unnamed.
+            formControl.AriaLabel.Should().Be(question,
+                "the generated input must expose the question as its accessible name (#3863)");
+
+            // …and NOT a second visible label: the caption is the PropertySkin's <dt>.
+            formControl.Label.Should().BeNull(
+                "the visible caption is rendered by the PropertySkin, so duplicating it on the control would paint it twice");
+        }
+
+        // The declared control type is honoured — this is the exact shape reported on the portal.
+        var topics = await area
+            .GetControlStream(editor.Areas.First().Area.ToString()!)
+            .Should().Within(10.Seconds()).Match(x => x is not null);
+        topics.Should().BeOfType<TextAreaControl>()
+            .Which.AriaLabel.Should().Be("1. What topics do you want to cover?");
+    }
+
+    #endregion
+
+
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration).AddLayout(layout => layout
@@ -282,6 +379,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             .WithView(nameof(EditorWithResult), EditorWithResult)
             .WithView(nameof(EditorWithDelayedResult), EditorWithDelayedResult)
             .WithView(nameof(EditorWithListFormProperties), EditorWithListFormProperties)
+            .WithView(nameof(AssessmentEditor), AssessmentEditor)
         ).AddData(data => data
             .AddSource(source =>
                 source.WithType<MyDimension>(type => type.WithInitialData(Dimensions))));

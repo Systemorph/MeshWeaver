@@ -515,14 +515,15 @@ public static class EditorExtensions
         if (dimensionAttribute != null)
         {
             if (dimensionAttribute.Options is not null)
-                return editor.WithView((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options));
+                return editor.WithView((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options).WithAriaLabel(label));
             return editor.WithView((host, ctx) =>
             {
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
                     GetStream(host, dimensionAttribute)
                         .Subscribe(x => host.UpdateData(id, x)));
-                return Controls.Select(jsonPointerReference, new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)));
+                return Controls.Select(jsonPointerReference, new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
+                    .WithAriaLabel(label);
             });
         }
 
@@ -590,13 +591,13 @@ public static class EditorExtensions
         if (dimensionAttribute != null)
         {
             if (dimensionAttribute.Options is not null)
-                return editor.WithView((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options), skinConfiguration);
+                return editor.WithView((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options).WithAriaLabel(propertySkinLabel), skinConfiguration);
             return editor.WithView((host, ctx) =>
             {
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
                     GetStream(host, dimensionAttribute).Subscribe(x => host.UpdateData(id, x)));
-                return RenderListControl(host, Controls.Select, jsonPointerReference, id);
+                return RenderListControl(host, Controls.Select, jsonPointerReference, id).WithAriaLabel(propertySkinLabel);
             }, skinConfiguration);
         }
 
@@ -675,10 +676,33 @@ public static class EditorExtensions
         JsonPointerReference reference,
         object? parameter = null)
     {
+        // 🚨 The ACCESSIBLE name, and it is not the same thing as `label` (MeshWeaver#3863).
+        // `label` is deliberately null on the skinned path so the caption is not painted twice —
+        // the PropertySkin renders it as the surrounding <dt>. That left the input with no
+        // accessible name at all: `getByRole('textbox', { name: question })` matched nothing, and
+        // an HTML <label for> cannot reach it because the Fluent host keeps its real input in a
+        // SHADOW ROOT. aria-label sits on the host element and survives that boundary.
+        //
+        // Read from GetEditorLabel() — the SAME single source the PropertySkin's own label comes
+        // from — so the accessible name and the visible term can never disagree (WCAG label-in-name).
+        var ariaLabel = propertyInfo.GetEditorLabel();
+
         if (BasicControls.TryGetValue(controlType, out var factory))
-            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter!)).WithLabel(label!);
+            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter!))
+                .WithLabel(label!)
+                .WithAriaLabel(ariaLabel);
         if (ListControls.TryGetValue(controlType, out var factory2))
-            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter!)).WithLabel(label!);
+            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter!))
+                .WithLabel(label!)
+                .WithAriaLabel(ariaLabel);
+        // 🚨 NOT covered, and deliberately so rather than by oversight. A SpecialControl is not an
+        // IFormControl — MarkdownEditorControl is a composite editor with its own toolbar and its own
+        // Blazor view, so its accessible name is an aria-labelledby/region question about that
+        // composite, not an aria-label on a single input, and guessing at it here would ship an
+        // unmeasured answer. The generated-field guarantee in Doc/GUI/Editor is stated over
+        // IFormControl for the same reason. Tracked with the click-to-edit path
+        // (MapToToggleableControl), which has the same shape: a visible FluentLabel sibling that
+        // names nothing.
         if (SpecialControls.TryGetValue(controlType, out var specialFactory))
             return specialFactory.Invoke(propertyInfo, reference);
 

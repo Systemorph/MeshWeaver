@@ -250,6 +250,50 @@ Each property becomes a named area inside the `EditorControl`. The reactive over
 
 ---
 
+# Accessible names
+
+A generated field paints its caption **outside** the input — the `PropertySkin` renders it as the
+`<dt>` of a definition list and the control itself is created with **no `Label`**, so the caption is
+not drawn twice. That is deliberate, and it costs the input its accessible name unless something
+puts one back.
+
+So `MapToControl` sets **`AriaLabel`** on every generated **input** control — every `IFormControl`:
+text, multi-line text, number, date, checkbox, switch, select, combobox, listbox, radio group. It is
+read from the same `GetEditorLabel()` source the visible caption comes from — `[Display(Name = …)]`,
+then `[DisplayName(…)]`, then the property name word-split. The two can therefore never disagree,
+which is what WCAG's *label in name* asks for.
+
+```csharp
+public record Assessment
+{
+    [DisplayName("1. What topics do you want to cover?")]
+    [UiControl<TextAreaControl>]
+    public string Topics { get; init; } = null!;
+}
+// renders: <dt>1. What topics …</dt>
+//          <dd><fluent-text-area aria-label="1. What topics …"> …
+```
+
+🚨 **`aria-label`, not `<label for>` — and this is not a style preference.** A Fluent input is a web
+component that keeps its real `<input>` inside a **shadow root**, and `for`/`id` do not associate
+across that boundary. The generated form used to emit `<label for="topics">` pointing at an element
+that could not exist: the caption was visible, the textbox was unnamed, and
+`getByRole('textbox', { name: question })` matched nothing (MeshWeaver#3863). `aria-label` sits on
+the host element, so it survives the boundary and needs no id plumbing.
+
+Setting `Label` yourself still works and still renders a second, visible caption — use it for a
+control you compose by hand, not for a field the editor generates.
+
+**Two generated surfaces are NOT covered yet**, and both are named here rather than left to be
+rediscovered:
+
+| Surface | Why it is still unnamed |
+|---|---|
+| A `[Markdown]` / `[UiControl<MarkdownEditorControl>]` property | `MarkdownEditorControl` is not an `IFormControl` — it is a composite editor with its own toolbar, so its accessible name is an `aria-labelledby` question about that composite, not an `aria-label` on one input. |
+| The click-to-edit path (`MapToToggleableControl`) | It renders its caption as a sibling `LabelControl`, which emits a `FluentLabel` with no `for` — the same association hole, on a different surface. |
+
+---
+
 # See Also
 
 - [Property Attributes](../Attributes) — every supported attribute in detail
