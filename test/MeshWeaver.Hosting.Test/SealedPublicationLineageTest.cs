@@ -162,7 +162,7 @@ public class SealedPublicationLineageTest : IDisposable
             // unrelated reason and make the ordering assertion below unfalsifiable.
             pinned: [],
             retention: new PrebuiltBundleRetention { KeepNewestPerSource = 1 },
-            nowUtc: At(10));
+            nowUtc: At(10).AddDays(31));
 
     private static DateTimeOffset At(int hours) =>
         new DateTimeOffset(2026, 9, 8, 0, 0, 0, TimeSpan.Zero).AddHours(hours);

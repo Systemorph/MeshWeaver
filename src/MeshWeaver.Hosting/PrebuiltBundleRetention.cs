@@ -20,24 +20,19 @@ namespace MeshWeaver.Hosting;
 /// </summary>
 public sealed record PrebuiltBundleRetention
 {
-    /// <summary>The shipped default: deletion armed, ten pre-release identities per source and open line.</summary>
+    /// <summary>The shipped default: retain unused continuous artifacts for 30 days.</summary>
     public static readonly PrebuiltBundleRetention Default = new();
 
     /// <summary>
-    /// How many of the newest pre-release (<c>X.Y.Z-ci.&lt;n&gt;</c>) identities to keep per source
-    /// on a line that has no clean release yet — the maintainer's "leave the last 10 -ci"
-    /// (2026-09-08). The same count bounds the unnamed identities (no release marker at all),
-    /// which nothing can place on a line and which are therefore kept by seal time alone.
+    /// Compatibility member for callers compiled against the former count-based policy.
+    /// This value no longer affects retention; cleanup uses <see cref="MinimumAge"/>.
     /// </summary>
     public int KeepNewestPerSource { get; init; } = 10;
 
-    /// <summary>
-    /// How long an UNSEALED source directory (no <see cref="ShippedPrebuiltBundles.CompletionSentinelFileName"/>)
-    /// is presumed to be a seal in flight. The publisher writes the bundles first and the sentinel
-    /// strictly last, so a young unsealed directory is a publication being written; an old one is
-    /// a publish that died. A bounded grace is a reference-like signal — an age cutoff on a SEALED
-    /// directory would not be, and none exists here.
-    /// </summary>
+    /// <summary>The minimum age of unreferenced artifacts before cleanup. Values below 30 days are clamped.</summary>
+    public TimeSpan MinimumAge { get; init; } = TimeSpan.FromDays(30);
+
+    /// <summary>Additional protection for an unsealed publication in flight, beyond the minimum age.</summary>
     public TimeSpan UnsealedGrace { get; init; } = TimeSpan.FromHours(2);
 
     /// <summary>How often the recurring pass runs after the boot pass.</summary>
@@ -108,7 +103,7 @@ public static class PlatformVersionLine
 /// reported platform version / framework identity. On the registry (memex-cloud) remote
 /// instances fetch their OWN identity's seal over the HTTP prebuilt surface, so such an identity
 /// is referenced however old it is — pearl pinned to <c>3.0.0-ci.8080</c> would otherwise fall
-/// outside the newest-ten rule and compile from source at every boot.
+/// outside the age window and lose its bundle at the next boot.
 /// </summary>
 /// <param name="Origin">Who pins it — the record or instance, for the ledger.</param>
 /// <param name="Version">The pinned platform version or image tag (normalised by <see cref="PlatformVersionLine.Normalize"/>), or null.</param>
@@ -189,7 +184,7 @@ public sealed record PrebuiltStoreScan(
 /// <param name="Protected">Why each surviving identity survived, keyed by identity.</param>
 /// <param name="CollectableMarkers">The pre-release markers whose identity goes with this plan, or is already gone.</param>
 /// <param name="AbortReason">Why NOTHING may be collected, or null when the plan is sound.</param>
-/// <param name="UnresolvedPins">Pinned references whose version maps to no <c>_releases</c> marker and that name no identity — they keep nothing, and the ledger says so.</param>
+/// <param name="UnresolvedPins">Pinned references whose version maps to no <c>_releases</c> marker and that name no identity — they abort cleanup because the consumer inventory is incomplete.</param>
 public sealed record PrebuiltBundleSweepPlan(
     string LiveIdentity,
     string? LivePlatformVersion,
@@ -211,7 +206,7 @@ public sealed record PrebuiltBundleSweepPlan(
         $"{Identities.Count} identity directory(ies) / {Mb(TotalBytes)} — live={LiveIdentity}"
         + $" ({LivePlatformVersion ?? "version unknown"}), collectable={Collectable.Count} / {Mb(CollectableBytes)}"
         + $", markers to retire={CollectableMarkers.Count}"
-        + (UnresolvedPins.IsEmpty ? "" : $", pins mapping to no marker (keep nothing): {string.Join(", ", UnresolvedPins)}")
+        + (UnresolvedPins.IsEmpty ? "" : $", unresolved consumer references (cleanup blocked): {string.Join(", ", UnresolvedPins)}")
         + (AbortReason is null ? "" : $", ABORTED: {AbortReason}");
 
     internal static string Mb(long bytes) =>
@@ -265,19 +260,13 @@ public sealed record PrebuiltBundleSweepResult(
 /// <list type="number">
 /// <item>it is the framework identity <b>this process runs</b>;</item>
 /// <item>a <b>clean release marker</b> (<c>_releases/X.Y.Z</c>, no pre-release label) names it —
-/// a release line stays adoptable forever, and it is the rollback target;</item>
+/// support has not been established as ended, so the release stays available;</item>
 /// <item>a <b>NodeType record's adoption stamp</b> (<c>CompiledFrameworkVersion</c>, written by
 /// <c>PrebuiltAssemblySeeder</c> and by every local compile) names it;</item>
-/// <item>it holds, for some source, the <b>newest sealed publication on the running major line</b> —
+/// <item>it holds, for some source, the <b>newest sealed publication on each represented major line</b> —
 /// exactly what <c>Modules:VersionStrictness=Family</c> adopts at boot;</item>
-/// <item>a pre-release marker of an <b>OPEN line</b> names it (a line with no clean release yet) and
-/// it is among the newest <see cref="PrebuiltBundleRetention.KeepNewestPerSource"/> such identities
-/// for some source, by version — once the clean <c>X.Y.Z</c> marker exists, every
-/// <c>X.Y.Z-ci.&lt;n&gt;</c> identity of that line is unreferenced by this rule (maintainer,
-/// 2026-09-08: <i>"when final release is out, we can remove all -CI … leave last 10"</i>);</item>
-/// <item>no marker names it at all and it is among the newest <see cref="PrebuiltBundleRetention.KeepNewestPerSource"/>
-/// such identities for some source <b>by seal time</b> — nothing can place an unnamed identity on
-/// a line, so recency is the only signal it has;</item>
+/// <item>its newest content write or release marker is younger than
+/// <see cref="PrebuiltBundleRetention.MinimumAge"/> (at least 30 days), regardless of build count;</item>
 /// <item>a source under it is <b>unsealed and younger than <see cref="PrebuiltBundleRetention.UnsealedGrace"/></b>
 /// — a seal in flight;</item>
 /// <item>its seal <b>could not be read</b> — unreadable is never unreferenced.</item>
@@ -285,7 +274,7 @@ public sealed record PrebuiltBundleSweepResult(
 ///
 /// <para>Everything else is collected, oldest first, one identity at a time, each removal logged
 /// with the bytes reclaimed. The pre-release markers of a removed identity (and of an identity
-/// already gone for longer than the grace) are removed with it, so <c>_releases/</c> does not grow
+/// already gone for longer than the age window) are removed with it, so <c>_releases/</c> does not grow
 /// forever; a clean release marker is never removed. A release marker that cannot be read, or a
 /// store that cannot be listed, ABORTS the sweep with nothing collected: a partial picture licenses
 /// no deletion. This sweep is IDENTITY-level; the per-source generation retention that follows a
@@ -433,15 +422,6 @@ public static class PrebuiltBundleStore
             .Where(m => !m.IsPrerelease)
             .GroupBy(m => m.Identity!, StringComparer.Ordinal)
             .ToImmutableDictionary(g => g.Key, g => string.Join(", ", g.Select(m => m.Version)), StringComparer.Ordinal);
-        var closedLines = readable.Where(m => !m.IsPrerelease).Select(m => m.Line).Where(l => l is not null)
-            .Select(l => l!).ToImmutableHashSet(StringComparer.Ordinal);
-        var openLines = readable.Where(m => m.IsPrerelease).Select(m => m.Line).Where(l => l is not null && !closedLines.Contains(l))
-            .Select(l => l!).ToImmutableHashSet(StringComparer.Ordinal);
-        var linesOf = readable.Where(m => m.IsPrerelease && m.Line is not null)
-            .GroupBy(m => m.Identity!, StringComparer.Ordinal)
-            .ToImmutableDictionary(g => g.Key, g => g.Select(m => m.Line!).ToImmutableHashSet(StringComparer.Ordinal),
-                StringComparer.Ordinal);
-
         var reasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
         void Keep(string identity, string reason)
         {
@@ -451,8 +431,8 @@ public static class PrebuiltBundleStore
 
         var sources = scan.Identities.SelectMany(i => i.Sources.Where(s => s.IsSealed).Select(s => s.Name))
             .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
-        var liveMajor = PrebuiltAdoptionPolicy.MajorOf(livePlatformVersion);
-        var keep = Math.Max(0, retention.KeepNewestPerSource);
+        var minimumAge = retention.MinimumAge < TimeSpan.FromDays(30)
+            ? TimeSpan.FromDays(30) : retention.MinimumAge;
 
         // version (marker file name, normalised) → every identity a marker of that version names.
         var identitiesOfVersion = readable
@@ -478,6 +458,12 @@ public static class PrebuiltBundleStore
                 unresolvedPins.Add($"{pin.Origin}={version ?? "(no version)"}");
         }
 
+        if (unresolvedPins.Count > 0)
+            return new PrebuiltBundleSweepPlan(liveIdentity, livePlatformVersion, scan.Identities,
+                [], ImmutableDictionary<string, string>.Empty, [],
+                "consumer references could not be resolved; the protected inventory is incomplete",
+                unresolvedPins.ToImmutable());
+
         foreach (var identity in scan.Identities)
         {
             if (string.Equals(identity.Identity, liveIdentity, StringComparison.Ordinal))
@@ -499,35 +485,25 @@ public static class PrebuiltBundleStore
                 .Where(i => i.Sources.Any(s => s.IsSealed && string.Equals(s.Name, source, StringComparison.OrdinalIgnoreCase)))
                 .ToList();
 
-            // 4. what Family strictness adopts: the newest sealed publication on the running line.
-            if (liveMajor is { } major)
+            // Preserve the newest sealed publication for every represented major, including
+            // consumers running a different major than this registry process (#3842).
+            foreach (var family in sealedHere
+                         .Where(i => newestVersionOf.ContainsKey(i.Identity))
+                         .GroupBy(i => PrebuiltAdoptionPolicy.MajorOf(newestVersionOf[i.Identity]))
+                         .Where(g => g.Key is not null))
             {
-                var family = sealedHere
-                    .Where(i => newestVersionOf.TryGetValue(i.Identity, out var v) && PrebuiltAdoptionPolicy.MajorOf(v) == major)
-                    .OrderByDescending(i => newestVersionOf[i.Identity], comparer)
-                    .FirstOrDefault();
-                if (family is not null)
-                    Keep(family.Identity,
-                        $"the newest sealed '{source}' publication on platform line {major} ({newestVersionOf[family.Identity]}) — what Family strictness adopts");
+                var latest = family.OrderByDescending(i => newestVersionOf[i.Identity], comparer).First();
+                Keep(latest.Identity,
+                    $"the newest sealed '{source}' publication on platform major {family.Key} ({newestVersionOf[latest.Identity]}) — what Family strictness adopts");
             }
-
-            // 5. the newest N pre-release identities of every OPEN line.
-            foreach (var line in openLines.OrderBy(l => l, StringComparer.Ordinal))
-                foreach (var kept in sealedHere
-                             .Where(i => linesOf.TryGetValue(i.Identity, out var lines) && lines.Contains(line))
-                             .OrderByDescending(i => newestVersionOf[i.Identity], comparer)
-                             .Take(keep))
-                    Keep(kept.Identity,
-                        $"among the newest {keep} sealed '{source}' publications of open line {line} ({newestVersionOf[kept.Identity]})");
-
-            // 6. unnamed identities: recency by seal time is the only signal they have.
-            foreach (var kept in sealedHere
-                         .Where(i => !newestVersionOf.ContainsKey(i.Identity))
-                         .OrderByDescending(i => i.Sources.First(s => s.IsSealed && string.Equals(s.Name, source, StringComparison.OrdinalIgnoreCase)).SealUtc)
-                         .Take(keep))
-                Keep(kept.Identity,
-                    $"no release marker names it; among the newest {keep} sealed '{source}' publications by seal time");
         }
+
+        // An age window applies to sealed, unnamed and abandoned publications alike.
+        // A recent marker is also a publication reference: old bytes can just have been released.
+        foreach (var identity in scan.Identities)
+            if (nowUtc - identity.NewestWriteUtc < minimumAge
+                || readable.Any(m => m.Identity == identity.Identity && nowUtc - m.WrittenUtc < minimumAge))
+                Keep(identity.Identity, $"within the {minimumAge.TotalDays:N0}-day retention window");
 
         // 7. a seal in flight.
         foreach (var identity in scan.Identities)
@@ -556,7 +532,7 @@ public static class PrebuiltBundleStore
             .Where(m => !pinnedVersions.Contains(PlatformVersionLine.Normalize(m.Version) ?? m.Version)
                         && !pinnedReasons.ContainsKey(m.Identity!))
             .Where(m => collectableIdentities.Contains(m.Identity!)
-                        || (!present.Contains(m.Identity!) && nowUtc - m.WrittenUtc >= retention.UnsealedGrace))
+                        || (!present.Contains(m.Identity!) && nowUtc - m.WrittenUtc >= minimumAge))
             .ToImmutableList();
 
         return new PrebuiltBundleSweepPlan(
