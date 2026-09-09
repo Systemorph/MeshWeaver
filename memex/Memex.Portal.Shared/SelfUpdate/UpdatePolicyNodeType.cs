@@ -216,10 +216,42 @@ public record UpdatePolicyContent
     [Browsable(false)]
     public string? UnresolvedInstalledTag { get; init; }
 
-    /// <summary>Whether <paramref name="tag"/> is the tag currently held by the availability gate.</summary>
+    /// <summary>
+    /// Whether a hold RECORD exists for <paramref name="tag"/>. 🚨 This is a question about the
+    /// record, NOT about why the install is standing still — see <see cref="IsHoldOperative"/>
+    /// before rendering it as a reason (#3812).
+    /// </summary>
     public bool IsHeld(string? tag) =>
         !string.IsNullOrEmpty(tag)
         && string.Equals(HeldTag, tag, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 🚨 <b>Whether the hold on <paramref name="tag"/> is a LIVE verdict — one the checker that
+    /// wrote it would still clear (#3812).</b>
+    ///
+    /// <para><see cref="IsHeld"/> answers "is there a hold record"; both readers of it were asking
+    /// "is this why the install is not moving right now", and those stopped being the same question
+    /// the moment a check could decline to evaluate. <see cref="HeldAt"/> and
+    /// <see cref="HeldReason"/> are written ONLY by the poller's hold write, which runs only when a
+    /// candidate is actually evaluated; <see cref="LastCheckedAt"/> is written on EVERY check. Under
+    /// <see cref="UpdatePolicyKind.None"/> the check records "updates are disabled" and evaluates
+    /// nothing — so the hold is never revisited, never cleared, and the fresh
+    /// <see cref="LastCheckedAt"/> beside it makes a two-day-old record read as a current
+    /// verdict.</para>
+    ///
+    /// <para>Measured on memex 2026-09-09: <c>heldAt</c> 2026-09-07T22:27Z, <c>lastCheckedAt</c>
+    /// 2026-09-09T10:41Z, and the reason quoted three module floors that #3648 had stopped holding
+    /// on two hours after that <c>heldAt</c>. #3706 was filed on that frozen record and read it as
+    /// live. #3795 sharpened it: under <c>None</c> the build-completion triggers are now filtered
+    /// out before they check, so nothing revisits the hold at all.</para>
+    ///
+    /// <para>🚨 The record is deliberately NOT cleared when updates are disabled — the last real
+    /// evaluation is the only diagnostic an operator has when they turn updates back on. What
+    /// changes is that a surface must present it as history, and say the current reason (updates
+    /// are disabled) as the current reason.</para>
+    /// </summary>
+    public bool IsHoldOperative(string? tag) =>
+        IsHeld(tag) && Policy != UpdatePolicyKind.None;
 
     /// <summary>The recorded verdict for <paramref name="tag"/>, when one exists.</summary>
     public ComboVerification? VerificationFor(string? tag) =>
