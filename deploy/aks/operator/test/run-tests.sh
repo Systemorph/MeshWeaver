@@ -354,6 +354,55 @@ out="$(env HOSTING_DRY_RUN=true HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d \
 case "$out" in *"DRY-RUN would run"*) ok "a dry run narrates what it would do" ;;
   *) bad "a dry run narrates" "said: ${out}" ;; esac
 
+# ── run.sh signs in to Azure through Workload Identity, once, before the first step ─────────────
+# Measured 2026-09-09 01:33Z: the first Provision through the lane died at step 1/14 with az's own
+# "Please run 'az login'" — the webhook projects a token and sets the AZURE_* variables, but the CLI
+# never reads them by itself. The stub records argv, which is how the test proves the token is
+# handed to az as an argument and appears nowhere in run.sh's OUTPUT (a `+ az login …` narration
+# would print it — az is deliberately not wrapped in hosting::do).
+RUN_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/run" && pwd)"
+_rl_dir="$(mktemp -d)"; _rl_log="$_rl_dir/calls.log"; : > "$_rl_log"
+printf 'eyJ0b2tlbi1zZW50aW5lbC1ORVZFUi1QUklOVEVEIjp0cnVlfQ' > "$_rl_dir/token"
+_rl_out="$(env PATH="$RUN_STUBS:$PATH" HOSTING_RUN_STUB_LOG="$_rl_log" \
+  AZURE_FEDERATED_TOKEN_FILE="$_rl_dir/token" AZURE_CLIENT_ID=11111111-2222-3333-4444-555555555555 AZURE_TENANT_ID=tenant-t \
+  HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan "First	echo one >> ${_rl_dir}/steps")" "$BIN/run.sh" 2>&1)"; _rl_rc=$?
+[ "$_rl_rc" -eq 0 ] && ok "run.sh succeeds with a workload-identity token" || bad "run.sh succeeds with a workload-identity token" "exited ${_rl_rc}: ${_rl_out}"
+if grep -q '^az login --service-principal --username 11111111-2222-3333-4444-555555555555 --tenant tenant-t --federated-token eyJ0b2tlbi1zZW50aW5lbC1ORVZFUi1QUklOVEVEIjp0cnVlfQ --allow-no-subscriptions' "$_rl_log"; then
+  ok "run.sh signs in as the identity with the projected token"
+else
+  bad "run.sh signs in as the identity with the projected token" "$(cat "$_rl_log")"
+fi
+case "$_rl_out" in *eyJ0b2tlbi1zZW50aW5lbC1ORVZFUi1QUklOVEVEIjp0cnVlfQ*) bad "the federated token never appears in the run's output" "it did: ${_rl_out}" ;;
+  *) ok "the federated token never appears in the run's output" ;; esac
+case "$_rl_out" in *"::hosting:: az_login=true"*) ok "the sign-in is reported to the mesh (az_login=true)" ;;
+  *) bad "the sign-in is reported (az_login=true)" "said: ${_rl_out}" ;; esac
+# Order: the sign-in precedes the first step's marker in the output.
+_rl_login_pos="$(printf '%s' "$_rl_out" | grep -n 'azure     signed in' | head -1 | cut -d: -f1)"
+_rl_step_pos="$(printf '%s' "$_rl_out" | grep -n '::hosting:: step=First' | head -1 | cut -d: -f1)"
+if [ -n "$_rl_login_pos" ] && [ -n "$_rl_step_pos" ] && [ "$_rl_login_pos" -lt "$_rl_step_pos" ]; then
+  ok "the sign-in happens before the first step"
+else
+  bad "the sign-in happens before the first step" "login at '${_rl_login_pos}', step at '${_rl_step_pos}'"
+fi
+# A federation mismatch is a refusal that names the subject/issuer to check, before any step runs.
+: > "$_rl_log"; rm -f "$_rl_dir/steps"
+refuses_hard "a failed sign-in stops the run before any step" "federated credential on the operator identity" \
+  env PATH="$RUN_STUBS:$PATH" HOSTING_RUN_STUB_LOG="$_rl_log" HOSTING_RUN_STUB_LOGIN_FAIL=1 \
+  AZURE_FEDERATED_TOKEN_FILE="$_rl_dir/token" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t \
+  HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan "First	echo one >> ${_rl_dir}/steps")" "$BIN/run.sh"
+[ ! -e "$_rl_dir/steps" ] && ok "…and the first step never ran" || bad "the first step never ran after a failed sign-in" "it did"
+# A token file that is set but unreadable, and a missing tenant, are named.
+refuses "a token variable without the file is named" "is not readable" \
+  env PATH="$RUN_STUBS:$PATH" HOSTING_RUN_STUB_LOG="$_rl_log" AZURE_FEDERATED_TOKEN_FILE="$_rl_dir/nope" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t \
+  HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan 'First	echo one')" "$BIN/run.sh"
+refuses "a missing tenant id is named" "AZURE_TENANT_ID" \
+  env -u AZURE_TENANT_ID PATH="$RUN_STUBS:$PATH" HOSTING_RUN_STUB_LOG="$_rl_log" AZURE_FEDERATED_TOKEN_FILE="$_rl_dir/token" AZURE_CLIENT_ID=c \
+  HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan 'First	echo one')" "$BIN/run.sh"
+# No token at all (a kubectl+helm-only run): not a refusal, but said, and reported as az_login=false.
+emits "without a token the run says so and reports az_login=false" "::hosting:: az_login=false" \
+  env -u AZURE_FEDERATED_TOKEN_FILE HOSTING_ACTION=reconcile HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan 'First	echo one')" "$BIN/run.sh"
+rm -rf "$_rl_dir"
+
 echo
 echo "── hosting-pv-resize: capacity is a record property ──────────────"
 # The stub answers the command's reads from a per-scenario fixture and RECORDS the writes, so
