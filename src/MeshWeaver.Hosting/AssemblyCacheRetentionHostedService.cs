@@ -162,7 +162,7 @@ public static class AssemblyCacheRetentionExtensions
         if (int.TryParse(configuration[KeepGenerationsConfigKey], out var keep) && keep >= 1)
             retention = retention with { KeepGenerations = keep };
         if (TimeSpan.TryParse(configuration[MinimumAgeConfigKey], out var minimumAge)
-            && minimumAge > TimeSpan.Zero)
+            && minimumAge >= TimeSpan.FromDays(30))
             retention = retention with { MinimumAge = minimumAge };
         if (TimeSpan.TryParse(configuration[ClaimTtlConfigKey], out var ttl) && ttl > TimeSpan.Zero)
             retention = retention with { ClaimTtl = ttl };

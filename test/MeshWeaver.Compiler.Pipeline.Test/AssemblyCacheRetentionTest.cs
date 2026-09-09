@@ -228,6 +228,28 @@ public class AssemblyCacheRetentionTest : IDisposable
         File.Exists(young).Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    [InlineData(30)]
+    public void ThirtyDayHistory_SurvivesManyNewerGenerations_EvenWithAShortConfiguredAge(int configuredDays)
+    {
+        var recent = WriteAssembly("bbbbbbbb", Now - TimeSpan.FromDays(29));
+        var expired = WriteAssembly("cccccccc", Now - TimeSpan.FromDays(31));
+        for (var i = 0; i < 20; i++)
+            WriteAssembly(i.ToString("x8", CultureInfo.InvariantCulture), Now - TimeSpan.FromDays(1));
+
+        AssemblyCacheGenerations.SweepCore(CacheRoot, LiveTag,
+            AssemblyCacheRetention.ReportOnly with
+            {
+                Delete = true,
+                MinimumAge = TimeSpan.FromDays(configuredDays)
+            }, Now);
+
+        File.Exists(recent).Should().BeTrue();
+        File.Exists(expired).Should().BeFalse();
+    }
+
     /// <summary>A claim older than its TTL stops protecting, and the generation goes.</summary>
     [Fact]
     public void StaleClaim_DoesNotProtectForever()
