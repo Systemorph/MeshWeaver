@@ -633,6 +633,8 @@
   "ui.updateHeld": "⏸️ **Update to `{0}` is held** — a package this deployment runs has no usable artifact for that release. It applies automatically once the missing artifact is published; nothing has to be un-stuck by hand.",
   "ui.updateHeldUnknown": "⏸️ **Update to `{0}` is held** — availability could NOT be determined, which is not clearance to proceed. This is an availability problem to fix, not an incompatible release.",
   "ui.updateHeldAt": "_(held {0})_",
+  "ui.updateHoldHistorical": "🗄️ **This is a record, not a current verdict.** Automatic updates are switched off on this install, so nothing has re-checked `{0}` since {1} — what follows is the last evaluation that ran, and it may name problems that have since been fixed. Switch updates on to have it re-checked.",
+  "ui.updateHoldHistoricalUndated": "🗄️ **This is a record, not a current verdict.** Automatic updates are switched off on this install, so nothing has re-checked `{0}` — what follows is the last evaluation that ran, and it may name problems that have since been fixed. Switch updates on to have it re-checked.",
   "ui.updateHeldManual": "⏸️ Not applied: the release-availability check holds `{0}`.",
   "ui.updateAdvisories": "ℹ️ **What the release check reported about `{0}` without holding it:** these are costs and unknowns the update accepts, not reasons it is refused — a package with no prebuilt bake for that build compiles when the new build starts; a module whose loadability could not be measured is decided by the platform itself at start-up, which keeps the previous version if the new one cannot load.",
   "ui.updateRefreshHint": "Refresh to continue on the new build.",
