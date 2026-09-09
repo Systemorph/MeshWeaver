@@ -209,7 +209,7 @@ The gate is now two tiers, and the new one is deliberately NARROWER than the old
 |---|---|---|
 | `ShutdownRequest` / `DisposeRequest` | passes | passes |
 | a reply carrying `PostOptions.RequestId` | **passes** — this is what the drain is waiting for | refused |
-| third-party transit to another hub | **passes** — the children are alive until the next phase | refused |
+| third-party transit to another hub | **passes** — transit is not new work owned by the draining hub | refused |
 | fire-and-forget nobody awaits | **passes** — no promise to break, and answering it is the storm shape `AnswerPolicy` prevents | refused (silently) |
 | a NEW request addressed to or originating from this hub | **refused**, `ErrorType.ShuttingDown` | refused, `ErrorType.ShuttingDown` |
 

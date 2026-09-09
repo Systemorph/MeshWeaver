@@ -2,7 +2,6 @@ using System;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
-using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -208,7 +207,7 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
         {
             // Feed the router a third party's envelope: it owes no response callback for it.
             var delivery = new MessageDelivery<NewWorkRequest>(fixture.Host.Address,
-                targetAddress, new NewWorkRequest(), new JsonSerializerOptions())
+                targetAddress, new NewWorkRequest(), fixture.Host.JsonSerializerOptions)
             {
                 AccessContext = new AccessContext { ObjectId = "forwarding-test" }
             };
