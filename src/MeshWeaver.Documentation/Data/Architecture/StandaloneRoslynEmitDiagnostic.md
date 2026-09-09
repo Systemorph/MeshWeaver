@@ -65,3 +65,26 @@ nested diagnostics and four successful flat emits. That portable DLL was built w
 build and JSON-reporting crashes are preserved separately and are not classified as the CI NRE.
 The native comparison addresses that environment limitation; it does not turn the earlier clean
 results into evidence that disposal causes the failure.
+
+## Native observation: run 34414443069
+
+The single native run on September 9, 2026 UTC completed successfully on commit
+`210ed8ea5312a504bb6edbf8fa7cdb06137a225c`. Artifact `10128517549` records Ubuntu
+24.04.4 X64, four processors, .NET 10.0.12 and Roslyn
+`5.9.0-1.26357.3+35d9211b841e7613c1d2f8f5af6d628ace696c4c`.
+Roslyn MVID `9d28c907-337b-44f2-8746-85bb8e79479b` and CoreLib MVID
+`473d0ad3-441b-4fee-a00f-67c03eb1e2b3` match the earlier emulated controls.
+
+Default settings emitted 4,000/4,000 successfully in 18.360 seconds; PGO off emitted
+4,000/4,000 in 17.856 seconds. Both exited zero. The negative control recorded four
+nested CS1001/CS1513 failures and four successful flat emits, exiting one as expected.
+These are driver wall times for one process per arm, not a performance benchmark.
+Raw output and the reconciled verdict are preserved in
+`tools/RoslynEmitProbe/results/34414443069/`.
+
+The native environment did not reproduce the defect. This removes emulation as a
+limitation of this particular control observation; it establishes neither a fix nor
+a disposal cause. The experiment still excludes CI's full reference closure and prior
+mesh/test process activity. The next useful discriminator would preserve those inputs
+and process history, rather than repeat these clean controls or change production JIT
+settings. No production change or second diagnostic run was performed.

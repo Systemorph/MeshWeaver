@@ -1,0 +1,13 @@
+{"kind":"environment","runtime":".NET 10.0.12","runtimeVersion":"10.0.12","os":"Ubuntu 24.04.4 LTS","architecture":"X64","processors":4,"roslyn":"5.9.0-1.26357.3\u002B35d9211b841e7613c1d2f8f5af6d628ace696c4c","roslynMvid":"9d28c907-337b-44f2-8746-85bb8e79479b","corelibMvid":"473d0ad3-441b-4fee-a00f-67c03eb1e2b3","tieredPgo":"unset","tieredCompilation":"unset","serverGc":false,"iterations":2,"workers":1,"negative":true,"note":"Standalone emit only: no MeshWeaver, DI scope, assembly loading, or collectible ALC."}
+RESULT worker=0 iteration=0 leg=shared-nested verdict=diagnostics:CS1001,CS1513
+RESULT worker=0 iteration=0 leg=shared-flat verdict=emits
+RESULT worker=0 iteration=0 leg=pristine-nested verdict=diagnostics:CS1001,CS1513
+RESULT worker=0 iteration=0 leg=pristine-flat verdict=emits
+RESULT worker=0 iteration=1 leg=shared-nested verdict=diagnostics:CS1001,CS1513
+RESULT worker=0 iteration=1 leg=pristine-nested verdict=diagnostics:CS1001,CS1513
+SUMMARY expectedAttempts=8 observedAttempts=8 successfulEmits=4 failures=4 elapsedSeconds=0.838
+COUNT pristine-flat:emits=2
+COUNT pristine-nested:diagnostics:CS1001,CS1513=2
+COUNT shared-flat:emits=2
+COUNT shared-nested:diagnostics:CS1001,CS1513=2
+CONCLUSION A failure was observed; inspect its leg and exception before attributing it to CI's failure.

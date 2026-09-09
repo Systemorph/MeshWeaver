@@ -1,0 +1,163 @@
+{
+  "arms": [
+    {
+      "exitCode": 0,
+      "timedOut": false,
+      "environment": {
+        "kind": "environment",
+        "runtime": ".NET 10.0.12",
+        "runtimeVersion": "10.0.12",
+        "os": "Ubuntu 24.04.4 LTS",
+        "architecture": "X64",
+        "processors": 4,
+        "roslyn": "5.9.0-1.26357.3+35d9211b841e7613c1d2f8f5af6d628ace696c4c",
+        "roslynMvid": "9d28c907-337b-44f2-8746-85bb8e79479b",
+        "corelibMvid": "473d0ad3-441b-4fee-a00f-67c03eb1e2b3",
+        "tieredPgo": "unset",
+        "tieredCompilation": "unset",
+        "serverGc": false,
+        "iterations": 1000,
+        "workers": 1,
+        "negative": false,
+        "note": "Standalone emit only: no MeshWeaver, DI scope, assembly loading, or collectible ALC."
+      },
+      "counts": {
+        "pristine-flat:emits": 1000,
+        "pristine-nested:emits": 1000,
+        "shared-flat:emits": 1000,
+        "shared-nested:emits": 1000
+      },
+      "summary": [
+        4000,
+        4000,
+        4000,
+        0
+      ],
+      "classification": "no-failure-reproduced",
+      "passed": true,
+      "reason": "bounded standalone observation; not attribution to CI #890 or proof of a fix",
+      "elapsedSeconds": 18.35977429500001,
+      "command": [
+        "/usr/share/dotnet/dotnet",
+        "/home/runner/work/MeshWeaver/MeshWeaver/tools/RoslynEmitProbe/bin/Release/net10.0/EmitProbe.dll",
+        "--iterations",
+        "1000",
+        "--workers",
+        "1"
+      ],
+      "name": "default",
+      "log": "/home/runner/work/MeshWeaver/MeshWeaver/artifacts/roslyn-emit-probe/default.log"
+    },
+    {
+      "exitCode": 0,
+      "timedOut": false,
+      "environment": {
+        "kind": "environment",
+        "runtime": ".NET 10.0.12",
+        "runtimeVersion": "10.0.12",
+        "os": "Ubuntu 24.04.4 LTS",
+        "architecture": "X64",
+        "processors": 4,
+        "roslyn": "5.9.0-1.26357.3+35d9211b841e7613c1d2f8f5af6d628ace696c4c",
+        "roslynMvid": "9d28c907-337b-44f2-8746-85bb8e79479b",
+        "corelibMvid": "473d0ad3-441b-4fee-a00f-67c03eb1e2b3",
+        "tieredPgo": "0",
+        "tieredCompilation": "unset",
+        "serverGc": false,
+        "iterations": 1000,
+        "workers": 1,
+        "negative": false,
+        "note": "Standalone emit only: no MeshWeaver, DI scope, assembly loading, or collectible ALC."
+      },
+      "counts": {
+        "pristine-flat:emits": 1000,
+        "pristine-nested:emits": 1000,
+        "shared-flat:emits": 1000,
+        "shared-nested:emits": 1000
+      },
+      "summary": [
+        4000,
+        4000,
+        4000,
+        0
+      ],
+      "classification": "no-failure-reproduced",
+      "passed": true,
+      "reason": "bounded standalone observation; not attribution to CI #890 or proof of a fix",
+      "elapsedSeconds": 17.856338832999995,
+      "command": [
+        "/usr/share/dotnet/dotnet",
+        "/home/runner/work/MeshWeaver/MeshWeaver/tools/RoslynEmitProbe/bin/Release/net10.0/EmitProbe.dll",
+        "--iterations",
+        "1000",
+        "--workers",
+        "1"
+      ],
+      "name": "no-pgo",
+      "log": "/home/runner/work/MeshWeaver/MeshWeaver/artifacts/roslyn-emit-probe/no-pgo.log"
+    },
+    {
+      "exitCode": 1,
+      "timedOut": false,
+      "environment": {
+        "kind": "environment",
+        "runtime": ".NET 10.0.12",
+        "runtimeVersion": "10.0.12",
+        "os": "Ubuntu 24.04.4 LTS",
+        "architecture": "X64",
+        "processors": 4,
+        "roslyn": "5.9.0-1.26357.3+35d9211b841e7613c1d2f8f5af6d628ace696c4c",
+        "roslynMvid": "9d28c907-337b-44f2-8746-85bb8e79479b",
+        "corelibMvid": "473d0ad3-441b-4fee-a00f-67c03eb1e2b3",
+        "tieredPgo": "unset",
+        "tieredCompilation": "unset",
+        "serverGc": false,
+        "iterations": 2,
+        "workers": 1,
+        "negative": true,
+        "note": "Standalone emit only: no MeshWeaver, DI scope, assembly loading, or collectible ALC."
+      },
+      "counts": {
+        "pristine-flat:emits": 2,
+        "pristine-nested:diagnostics:CS1001,CS1513": 2,
+        "shared-flat:emits": 2,
+        "shared-nested:diagnostics:CS1001,CS1513": 2
+      },
+      "summary": [
+        8,
+        8,
+        4,
+        4
+      ],
+      "classification": "expected-diagnostics",
+      "passed": true,
+      "reason": "invalid nested source must produce diagnostics while both flat controls emit",
+      "elapsedSeconds": 0.9161809640000058,
+      "command": [
+        "/usr/share/dotnet/dotnet",
+        "/home/runner/work/MeshWeaver/MeshWeaver/tools/RoslynEmitProbe/bin/Release/net10.0/EmitProbe.dll",
+        "--iterations",
+        "2",
+        "--workers",
+        "1",
+        "--invalid-source"
+      ],
+      "name": "invalid-source",
+      "log": "/home/runner/work/MeshWeaver/MeshWeaver/artifacts/roslyn-emit-probe/invalid-source.log"
+    }
+  ],
+  "hashes": {
+    "tools/RoslynEmitProbe/Program.cs": "6bcd1ea1e605b5d30ec00831be239e268f934af8f93d058b89a597f9542a4687",
+    "tools/RoslynEmitProbe/EmitProbe.csproj": "a231e383d83e4c7990ecc1d02196a84f9ec6d73b49bf03a001bb5e7caf2c2aa5",
+    "tools/RoslynEmitProbe/bin/Release/net10.0/EmitProbe.dll": "fbbccc6760ce60c3b9a89c032180c9f704cffbb2d44e5ae41b85af807fedadf5"
+  },
+  "passed": true,
+  "nativeEvidence": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "runnerOS": "Linux",
+    "runnerArch": "X64",
+    "assertion": "ubuntu-24.04-hosted"
+  },
+  "limitation": "OS/architecture cannot universally detect emulation. CI's hosted ubuntu-24.04 job without a container supplies the native-runner premise."
+}
