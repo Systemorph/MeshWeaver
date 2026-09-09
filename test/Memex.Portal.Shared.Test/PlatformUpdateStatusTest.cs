@@ -105,9 +105,15 @@ public class PlatformUpdateStatusTest
         // 🚨 An install that has REFUSED a build must not look like one that is about to take it.
         // Rendering a hold as "update available" is how a deployment stays frozen for weeks while
         // every surface says it is fine — the outage the gate must never become.
+        //
+        // 🚨 Policy is now STATED rather than defaulted (#3812). It always mattered and was never
+        // written down: a hold reads as a hold only while a poller is running to clear it, and
+        // Policy's default is None. Leaving it implicit made this case indistinguishable from the
+        // frozen-record case that FrozenHoldIsHistoryTest pins.
         var status = PlatformUpdateStatus.Derive(
             new UpdatePolicyContent
             {
+                Policy = UpdatePolicyKind.Continuous,
                 LatestAvailableTag = "3.0.0-ci.2400",
                 HeldTag = "3.0.0-ci.2400",
                 HeldReason = "Store: no sealed content bake for framework identity sabc",

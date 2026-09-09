@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
@@ -97,6 +98,20 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             // makes the in-memory adapter behave exactly like every serializing backend.
             if (node.HubConfiguration is not null)
                 node = node with { HubConfiguration = null };
+
+            // 🚨 …and the SECOND consequence of storing the instance: content that never
+            // MATERIALISES (#3816). The strip above compensates for ONE effect of holding the
+            // object rather than its bytes, and states the goal as "behave exactly like every
+            // serializing backend" — but a node whose Content is still the as-written JsonObject
+            // DOM is handed straight back by Read, for ever, on this backend alone. FileSystem and
+            // Postgres re-type it at their serialization boundary, so `node.Content is TRecord` —
+            // what every ordinary reader does — answers differently depending on the store.
+            //
+            // Measured 2026-09-09: AnInstanceReportsWhatItRunsTest failed 2 of 2 full-project runs
+            // on a clean main and passed in isolation, because whether the LAST write left a typed
+            // record or the DOM is a matter of ordering. The test was right; the backend was the
+            // odd one out.
+            node = MaterializeContent(node, options);
             if (string.IsNullOrEmpty(node.Path))
                 return Observable.Return<MeshNode?>(node);
 
@@ -145,10 +160,14 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         MeshNode node, long expectedVersion, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
-            // Same delegate strip as Write — a store of record must never hold an in-process
-            // HubConfiguration (see the note there).
+            // Same delegate strip AND the same content materialisation as Write — a store of
+            // record must never hold an in-process HubConfiguration, and must not hand back an
+            // as-written DOM that every serializing backend would have re-typed (see the notes
+            // there). Both write paths or neither: a node reaching the store through the
+            // version-gated path is read back by exactly the same readers.
             if (node.HubConfiguration is not null)
                 node = node with { HubConfiguration = null };
+            node = MaterializeContent(node, options);
             var path = Norm(node.Path);
             if (string.IsNullOrEmpty(path))
                 return Observable.Return<bool?>(null);
@@ -181,6 +200,36 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             _changes.OnNext(DataChangeNotification.Updated(path, node));
             return Observable.Return<bool?>(true);
         });
+
+    /// <summary>
+    /// Re-types an as-written JSON DOM through <paramref name="options"/>, exactly as a serializing
+    /// backend does at its storage boundary (#3816). Only a <see cref="JsonNode"/> is touched: an
+    /// already-typed record costs nothing, so the common path pays no JSON round-trip.
+    ///
+    /// <para>🚨 An unresolvable discriminator degrades to a <see cref="JsonElement"/> — which is
+    /// what FileSystem and Postgres yield for that same content. This REPRODUCES their behaviour
+    /// rather than improving on it; making the in-memory store the only one that materialises what
+    /// the others cannot would be a different lie in the other direction.</para>
+    /// </summary>
+    /// <param name="node">The node about to be stored.</param>
+    /// <param name="options">The serializer options the write was given.</param>
+    /// <returns>The node, with its content re-typed when it was a DOM.</returns>
+    private static MeshNode MaterializeContent(MeshNode node, JsonSerializerOptions options)
+    {
+        if (node.Content is not JsonNode dom)
+            return node;
+        try
+        {
+            return node with { Content = JsonSerializer.Deserialize<object>(dom, options) };
+        }
+        catch (JsonException)
+        {
+            // 🚨 Keep the DOM, never null. A store that silently dropped content it could not
+            // re-type would turn a serialization problem into DATA LOSS, and this adapter is the
+            // store of record for every test that uses it.
+            return node;
+        }
+    }
 
     /// <inheritdoc />
     public override IObservable<string> Delete(string path)

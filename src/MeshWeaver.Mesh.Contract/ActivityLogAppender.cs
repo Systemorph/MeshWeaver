@@ -79,6 +79,7 @@ public static class ActivityLogAppender
         var workspace = hub.GetWorkspace();
         var options = hub.JsonSerializerOptions;
         var stream = workspace.GetMeshNodeStream(activityPath);
+        var releaseMirror = PrepareMirrorRelease(hub, activityPath, logger);
 
         // 🚨 stream.Update(...) is invoked EAGERLY, here, and it must stay that way — do NOT wrap
         // this in Observable.Defer. UpdateRemote captures the caller's AccessContext AT THE .Update()
@@ -116,7 +117,7 @@ public static class ActivityLogAppender
                 () =>
                 {
                     if (settled is not null)
-                        ReleaseMirrorWhenFinal(hub, activityPath, settled, options, logger);
+                        ReleaseMirrorWhenFinal(releaseMirror, settled, options, logger);
                 });
     }
 
@@ -144,15 +145,14 @@ public static class ActivityLogAppender
     /// so nothing here may fail the write that reported the status.</para>
     /// </summary>
     private static void ReleaseMirrorWhenFinal(
-        IMessageHub hub,
-        string activityPath,
+        Action<ActivityStatus> releaseMirror,
         MeshNode final,
         System.Text.Json.JsonSerializerOptions options,
         ILogger? logger)
     {
         if (final.ContentAs<ActivityLog>(options, logger) is not { } log)
             return;
-        ReleaseMirrorWhenFinal(hub, activityPath, log.Status, logger);
+        releaseMirror(log.Status);
     }
 
     /// <summary>
@@ -182,6 +182,8 @@ public static class ActivityLogAppender
     /// — cutting the stream out from under it strands the write's own terminal and leaves the
     /// per-path queue to advance on its 5 s backstop. See the <c>Do</c> arm in <see cref="Append"/>.</para>
     /// </summary>
+    /// <remarks>This immediate form requires a live service scope. Writers preparing an asynchronous
+    /// completion must use <see cref="PrepareMirrorRelease"/> before starting the write.</remarks>
     /// <param name="hub">The hub that performed the terminal write.</param>
     /// <param name="activityPath">Path of the activity node.</param>
     /// <param name="status">The status just written. A non-terminal status is a no-op.</param>
@@ -194,12 +196,28 @@ public static class ActivityLogAppender
     {
         if (!status.IsTerminal())
             return;
+        PrepareMirrorRelease(hub, activityPath, logger)(status);
+    }
+
+    /// <summary>
+    /// Captures the mirror cache while the writer is alive. Invoke the returned action on write
+    /// completion: the writer's service scope may have retired by then. The cache owns its own
+    /// disposal check, so late cleanup never needs to resolve services from the retired writer.
+    /// </summary>
+    /// <param name="hub">The still-live writer preparing the write.</param>
+    /// <param name="activityPath">The activity whose mirror will be released.</param>
+    /// <param name="logger">Optional diagnostics for a successful release.</param>
+    /// <returns>A completion action; non-terminal statuses and a disposed cache are no-ops.</returns>
+    public static Action<ActivityStatus> PrepareMirrorRelease(
+        IMessageHub hub, string activityPath, ILogger? logger = null)
+    {
         var cache = hub.ServiceProvider.GetService<IMeshNodeStreamCache>();
-        if (cache is null)
-            return;
-        if (cache.ReleaseIfUnwatched(activityPath))
-            logger?.LogDebug(
-                "Activity {Path}: reached {Status} — released its shared mirror", activityPath, status);
+        return status =>
+        {
+            if (status.IsTerminal() && cache?.ReleaseIfUnwatched(activityPath) == true)
+                logger?.LogDebug(
+                    "Activity {Path}: reached {Status} — released its shared mirror", activityPath, status);
+        };
     }
 
     /// <summary>

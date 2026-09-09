@@ -37,7 +37,20 @@ helm repo update >/dev/null 2>&1
 # allowed to fail when the repo already exists), so without this a failed install would be followed
 # by the verification echoes below and the script would still exit 0 — an install failure that reads
 # like success. Exactly the shape the repo bans in CI gates, and it belongs here too.
-if ! helm upgrade --install loki grafana/loki-stack -n monitoring --create-namespace \
+# 🚨 THE CHART VERSION IS PINNED, and the pin is what makes any verification of these values mean
+# anything. Until #3773 this read `grafana/loki-stack` with no --version, so every run installed
+# whatever upstream had published most recently. That matters more than it looks: this DEPRECATED
+# chart is already known to drop a config key silently (`promtail.config.wal` renders to nothing —
+# see the values file), so an unannounced upstream restructure of `loki.config` could stop
+# templating the ingester WAL and the only symptom would be the next drain losing the logs again.
+# An unpinned third-party chart turns a deliberate upgrade into an invisible one.
+#
+# Moving the pin is a normal, welcome change — make it deliberately, and in the same commit as
+# CHART_VERSION in check-observability-values.sh, which renders THIS version and asserts the keys
+# still arrive and that the Loki binary of the chart's appVersion accepts the result.
+CHART_VERSION="${LOKI_STACK_VERSION:-2.10.3}"
+
+if ! helm upgrade --install loki grafana/loki-stack --version "$CHART_VERSION" -n monitoring --create-namespace \
   -f "$VALUES" \
   --set grafana.enabled=true --set prometheus.enabled=true \
   --set grafana.adminPassword="$GRAFANA_PW" --set grafana.service.type=ClusterIP \
@@ -49,10 +62,28 @@ then
   exit 1
 fi
 
+# Verify the RUNNING pod, not just the desired StatefulSet: an orphan left over from
+# the immutable-volume transition can still be serving from emptyDir (#3773).
+if ! storage_volume=$(kubectl -n monitoring get pod loki-0 -o jsonpath='{.spec.containers[?(@.name=="loki")].volumeMounts[?(@.mountPath=="/data")].name}') \
+  || [ -z "$storage_volume" ]; then
+  echo "FATAL: cannot identify Loki's running /data volume." >&2
+  exit 1
+fi
+if ! storage_claim=$(kubectl -n monitoring get pod loki-0 -o "jsonpath={.spec.volumes[?(@.name==\"$storage_volume\")].persistentVolumeClaim.claimName}") \
+  || [ -z "$storage_claim" ]; then
+  echo "FATAL: Loki's running /data volume is not backed by a PVC; log durability is NOT established." >&2
+  exit 1
+fi
+if ! storage_phase=$(kubectl -n monitoring get pvc "$storage_claim" -o jsonpath='{.status.phase}') \
+  || [ "$storage_phase" != Bound ]; then
+  echo "FATAL: Loki's storage PVC is not Bound; log durability is NOT established." >&2
+  exit 1
+fi
+
 echo
-echo "Verify the three things chart defaults get wrong (all must be non-empty / true):"
+echo "Verified: Loki's running /data volume uses Bound PVC $storage_claim."
+echo "Verify the remaining scheduling properties:"
 echo "  kubectl -n monitoring get pod loki-0 -o jsonpath='{.status.qosClass} {.spec.nodeName}'   # NOT BestEffort, NOT a silos node"
-echo "  kubectl -n monitoring get pvc | grep storage-loki-0                                      # the store is durable"
 echo "  kubectl -n monitoring get sts loki -o jsonpath='{.spec.template.spec.nodeSelector}'      # agentpool: system"
 kubectl -n monitoring get pods
 echo

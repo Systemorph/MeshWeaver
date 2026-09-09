@@ -4774,16 +4774,14 @@ public static class MeshExtensions
                             logger.LogWarning(
                                 "[CreateOrUpdate] the inner CreateNode for {Path} produced no response "
                                 + "within {Bound} — answering the caller with a refusal rather than "
-                                + "leaving it to wait out its budget. The usual cause is the owner being "
-                                + "recycled under its own install (PackageInstaller.SettleRetypedRoot "
-                                + "retypes then recycles the package root on every plugin install), in "
-                                + "which case the create was NOT applied and is safe to retry against "
-                                + "the fresh activation (#3510).",
+                                + "leaving it to wait out its budget. The outcome is unknown: the node "
+                                + "may already be persisted while post-creation work or its response "
+                                + "is still pending. A missing response does not prove rollback.",
                                 node.Path, InnerCreateVerdictBound);
                             PostFail(
                                 $"The create for '{node.Path}' produced no response within "
-                                + $"{InnerCreateVerdictBound.TotalSeconds:0}s. It was NOT applied; retry "
-                                + "against the fresh activation.",
+                                + $"{InnerCreateVerdictBound.TotalSeconds:0}s. The outcome is unknown; "
+                                + "the node may already have been persisted. Check its state before retrying.",
                                 NodeUpsertRejectionReason.Unknown);
                             return;
                         }

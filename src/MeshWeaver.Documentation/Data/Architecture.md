@@ -103,6 +103,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [CQRS — Queries vs. Content Access](CqrsAndContentAccess)
 - [MeshNode Stream Cache](MeshNodeStreamCache)
+- [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
 - [Data Access Patterns](DataAccessPatterns)
 - [Workspace References](WorkspaceReferences)
@@ -182,6 +183,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - **Start here:** [Thread Operations](ThreadOperations)
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
+- [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
 - [Activity Operations](ActivityOperations)
 - [Notifications](Notifications)
 - [Notification Retention](NotificationRetention) — the platform's first data-retention pass, and why it is a logon action
@@ -319,6 +321,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Disposable-mesh e2e](DisposableMeshE2E)
 - [Debugging Message Flow](DebuggingMessageFlow)
 - [Debugging Disposal & Leaks](DebuggingDisposalAndLeaks)
+- [Departed Platform Assemblies](DepartedPlatformAssemblies) — an assembly that leaves the platform for a module breaks every OTHER module that binds it, at LOAD time and invisibly to every compile gate; why "those are the platform" is one answer per host
 - [Detached Response Continuations](DetachedResponseContinuations) — why a `hub.Observe(...)` continuation runs on the RESPONDING hub's action block, what that cost on the mesh's one node-CRUD hub, and the six invariants that make the hop an opt-in rather than the default
 - [Reading a Disposal Stall Verdict](DisposalStallVerdicts) — what each field of the disposal snapshot actually measures, the three that were read as evidence while measuring nothing, and the verdict hole that sent 47 reports to children that were not the problem
 - [Ambient Test-Host Hangs](AmbientTestHostHangs) — what decides whether a killed test host can be diagnosed at all, and the readings of it already falsified
@@ -342,6 +345,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Local Dev Workflow](LocalDevWorkflow)
 - [Onboarding a New Environment](OnboardingNewEnvironment)
 - [Release & Self-Update Strategy](ReleaseStrategy)
+- [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Self-Update Target Selection](SelfUpdateTargetSelection) — candidates are ranked by the CD run number, not the version string; a mislabelled line outranked every sealed set for ever, and an install on a withdrawn tag could never see anything newer
 - [The Continuous Delivery Contract](ContinuousDeliveryContract) — all-or-nothing publication; verify the image, never the tick
 - [The Self-Update Schema Wall](SelfUpdateSchemaWall) — every schema-bumping release is un-takeable by self-update, the stall is invisible, and a promoted tag is not a deployable tag
@@ -364,9 +368,11 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Merge Queue](MergeQueue) — one entry built at a time so nothing churns, and a steward that re-queues an ejected PR on evidence and never re-runs
 - [Carving Projects Out Of Core](CarvingProjectsOutOfCore) — what a SOURCE move costs and what it does not
 - [Red-Log Watching & Ticketing](LogWatchTriage) — every `fail:`/`crit:` becomes exactly one triaged issue
+- [Verifying Chart Values](VerifyingChartValues) — a key can be set, reach the render, and still not be read; why the obvious gate was vacuous for the one component it existed to guard, and the binary check that closes it (the drain that erased every namespace's log history)
 - [Measuring a Live Portal Read-Only](MeasuringALivePortalReadOnly) — the four read-only instruments, and why an absence needs a coverage fact before it counts as evidence
 - [Chart Ownership and the Runner Pool](ChartOwnershipAndRunnerPool) — why the chart's gate is here, what a relocation must carry, and why path-filtering it is unsafe
 - [Sharding the Node-Repo Gate](NodeRepoGateSharding) — a cap cut reports as `cancelled`, so the fan-out that removes it, and the fold that keeps ONE required context and ONE gate log
+- [Applying Is Not Rolling Out](ApplyingIsNotRollingOut) — helm applies, the caller observes; the fixed fifteen-minute `--atomic --wait` that reverted a correct upgrade mid-startup-gate, and why a bigger timeout only moves the cliff
 - [Probe Semantics](ProbeSemantics) — readiness, liveness and startup ask three different questions with three different remedies; why they get three paths and three tags
 - [What a Synthetic Probe May Assert](SyntheticProbeTargets) — a probe naming one deployment's installed content is broken by construction; the platform floor, the negative control that tells "absent" from "down", and reading the target's own declaration
 - [Why a GC-Bound Pod Stays in Rotation](WhyAGcBoundPodStaysInRotation) — the GC's hard limit sits below the container limit, so a portal short of memory is defended rather than restarted

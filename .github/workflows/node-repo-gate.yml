@@ -75,6 +75,26 @@ on:
           summary in the file, so a concatenation would ratchet 1/N of the NodeTypes and report a
           clean sweep.)
         value: ${{ jobs.verify.outputs.gate-log-artifact }}
+      nothing-to-gate:
+        description: >-
+          `true` when this run had NOTHING to gate — a pull request whose diff reaches no module
+          content, under `affected-narrowing` (which is ON by default). The plan then emits an empty
+          matrix, every shard is SKIPPED, and no gate log is produced.
+
+          🚨 This is the OTHER HALF of `gate-log-artifact`, and without it that output is
+          undecidable. Its own description tells a caller "empty ⇒ there was no gate run to
+          ratchet" — but an empty artifact has two causes, and only one of them is benign: nothing
+          to gate, or a gate that was meant to run and did not. A caller's ratchet keying on
+          emptiness alone must therefore either accept both (a skipped gate renders as a pass — the
+          skip-trapdoor AGENTS.md forbids) or reject both (every content-free pull request reds).
+          MeshWeaver.SocialMedia#161 is the second, measured: its ratchet reds every pull request
+          whose diff touches no module content.
+
+          Pair them: accept an empty artifact ONLY when this is `true`, and stay red otherwise.
+          The distinction was always computed here (`plan.outputs.nothing-to-gate`, which this
+          workflow already guards its own aggregate on) and simply never reachable from a caller —
+          a job output is not a `workflow_call` output.
+        value: ${{ jobs.plan.outputs.nothing-to-gate }}
     inputs:
       test-image:
         description: The mw-plugin-test image reference (the caller's vars.MW_TEST_IMAGE).

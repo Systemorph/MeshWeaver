@@ -204,14 +204,62 @@ case "$release_state" in
   *) hosting::log "release   ${release} is '${release_state}'" ;;
 esac
 
-# --atomic: a failed install ROLLS BACK rather than leaving a half-created release that the next
-# attempt then has to `helm uninstall` before it can proceed. --wait so "deployed" means the pods
-# actually came up; the plan's next step (rollout status) then verifies rather than discovers.
+# ── apply, and ONLY apply ───────────────────────────────────────────────────────────────────────
+# 🚨 NO --atomic AND NO --wait, and that is the whole point of this block. helm APPLIES here; the
+# rollout is OBSERVED by the caller, with a budget taken from the record.
+#
+# Measured 2026-09-09 02:35-02:51Z on memex (#3782). This ran with `--atomic --wait --timeout 15m`
+# from a Reconcile. The upgrade LANDED: at 02:50:11Z a read-only audit showed revision 44 with the
+# record's full render — 20 chart-managed objects, portal-next kept, memex-kv owned, the PDB
+# created. Nothing was wrong with it. It was simply still inside its own startup gate, which is
+# what a gated two-replica roll looks like when a generation recompiles, and the record BUDGETS
+# 10800 seconds for exactly that (`startupProbe.budgetSeconds`). Nine seconds later helm's fixed
+# fifteen minutes expired and --atomic rolled the whole thing back to revision 43's manifest. A
+# correct upgrade was destroyed by a timer that had never read the record it was applying.
+#
+# The three reasons this shape cannot be repaired by raising the number:
+#
+#   1. A wait inside helm cannot outlast the process running it. The operator Job's
+#      activeDeadlineSeconds (3600) caps every in-Job wait, so no --timeout can express a budget
+#      the record is allowed to set above it. Raising 15m to 60m moves the cliff; it does not
+#      remove it — and the failure mode at the cliff is a ROLLBACK of work that succeeded.
+#   2. --atomic converts "slow" into "reverted". Slow and broken are indistinguishable to a timer,
+#      and the two deserve opposite treatments. Only something watching the rollout can tell them
+#      apart, because only it can see whether progress is being made.
+#   3. It is not needed for the state it was there to prevent. The comment it replaces argued that
+#      --atomic avoids "a half-created release the next attempt must `helm uninstall`". A `failed`
+#      release is upgradable — helm rolls forward over it. The states that genuinely block the next
+#      upgrade are `pending-*`, and those are refused BY NAME a few lines above, before helm runs.
+#      So the guard rail is already there, and it is a better one: it names the problem and hands
+#      the revision choice to a person instead of silently reverting.
+#
+# This is the same decision the config repository's helm-release lane made deliberately (Memex#188):
+# helm applies, a separate step observes with its own budget. Two implementations of one operation
+# had opposite answers; this is the disagreement resolved, in favour of the one that did not lose a
+# good upgrade.
+#
+# 🚨 WHAT THE CALLER MUST NOW DO. Success here means APPLIED, not ROLLED OUT — the pods may still
+# be coming up, and that is the normal case rather than an edge one. The caller observes the
+# rollout against the record's own budget and reports Done only when it completes. It is told which
+# revision to watch by `::hosting:: helm_revision=<n>` below; never report a rollout no one saw
+# finish.
 hosting::do helm upgrade "$release" "$CHART" \
   --install --namespace "$namespace" --create-namespace \
-  --atomic --wait --timeout 15m \
   "${files[@]}" "${sets[@]}" \
-  || hosting::die "helm upgrade of ${release} in ${namespace} failed (rolled back by --atomic)"
+  || hosting::die "helm upgrade of ${release} in ${namespace} failed. The release was NOT rolled back (no --atomic, by design — see #3782): read \`helm status ${release} -n ${namespace}\` and \`helm history ${release} -n ${namespace}\`. A 'failed' release is upgradable, so the next attempt can roll forward over it."
+
+# The revision this apply produced — the handle the caller needs to observe the right rollout, and
+# the one piece of state that is otherwise only in helm's head. Read back rather than counted:
+# `--install` may have created revision 1 or upgraded to revision 45, and a caller that guessed
+# would watch the wrong generation. In a dry run helm was never called, so there is nothing to read
+# and nothing is claimed.
+if ! hosting::dry; then
+  helm_revision="$(hosting::read helm status "$release" --namespace "$namespace" -o json 2>/dev/null | jq -r '.version // ""' 2>/dev/null || true)"
+  [ -n "$helm_revision" ] \
+    || hosting::die "helm upgrade of ${release} in ${namespace} reported success but \`helm status\` returned no revision — the caller would have nothing to observe, and reporting an unobservable rollout as done is the failure this whole block exists to prevent."
+  hosting::log "applied   revision ${helm_revision} (NOT yet rolled out — the caller observes it)"
+  hosting::say helm_revision "$helm_revision"
+fi
 
 hosting::say release "$release"
 hosting::say namespace "$namespace"

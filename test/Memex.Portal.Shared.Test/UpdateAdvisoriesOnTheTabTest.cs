@@ -1,6 +1,7 @@
 using System;
 using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
+using MeshWeaver.Hosting.SelfUpdate;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -67,6 +68,11 @@ public class UpdateAdvisoriesOnTheTabTest
     {
         var content = new UpdatePolicyContent
         {
+            // 🚨 Policy is STATED, not defaulted (#3812). This case is "a live hold and advisories
+            // render together", and a hold only reads as live while a poller is running to clear
+            // it — Policy's default is None, which is the frozen-record case
+            // FrozenHoldIsHistoryTest pins. Leaving it implicit made the two indistinguishable.
+            Policy = UpdatePolicyKind.Continuous,
             LatestAvailableTag = Tag,
             CheckedAt = DateTimeOffset.UtcNow,
             HeldTag = Tag,

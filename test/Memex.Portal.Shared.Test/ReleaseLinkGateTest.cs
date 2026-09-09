@@ -157,7 +157,16 @@ public class ReleaseLinkGateTest : IDisposable
     }
 
     /// <summary>A module the environment has NOT landed cannot keep running across the roll, so
-    /// there is nothing to measure and nothing to hold on.</summary>
+    /// there is nothing to measure and nothing to hold on.
+    ///
+    /// <para>🚨 This case DOES speak now, and the distinction is the point (#3706). The LINK lane is
+    /// still silent — there are no bytes to link, which is what "is not measured" means and what
+    /// this test is named for. What speaks is the ORPHAN advisory: the target's sealed set does not
+    /// carry the module and nothing is landed, so no publisher produces it. That is a statement
+    /// about the INSTALL RECORD, not about the link, and it neither measures nor holds. The
+    /// assertion moved from "says nothing at all" to "says nothing about the link", because the
+    /// blanket form was written when a link advisory was the only one this lane could emit, and
+    /// blanket emptiness would now re-assert the silence #3706 was filed about.</para></summary>
     [Fact]
     public void AModuleWithNoLandedGeneration_IsNotMeasured()
     {
@@ -167,7 +176,12 @@ public class ReleaseLinkGateTest : IDisposable
             [new RequiredPackage("Views", "Views", HasContent: false) { ModuleName = ViewPack }]);
 
         Assert.True(verdict.IsUpdatable, verdict.HoldReason);
-        Assert.Empty(verdict.Advisories);
+        Assert.DoesNotContain(verdict.Advisories,
+            a => a.Contains("could not be determined", StringComparison.Ordinal)
+                 || a.Contains("cannot load", StringComparison.Ordinal));
+        Assert.Contains(
+            verdict.Advisories,
+            a => a.Contains("no publisher produces it", StringComparison.Ordinal));
     }
 
     // ── Indeterminate is REPORTED — neither clearance nor a hold ───────────────────────────────

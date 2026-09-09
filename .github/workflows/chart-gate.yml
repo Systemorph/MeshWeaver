@@ -103,6 +103,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: deploy/aks/scripts/test-chart-drift-compare.sh
 
+      - name: Assert observability installation refuses ephemeral or unverified storage
+        if: ${{ !cancelled() }}
+        run: python3 deploy/aks/scripts/test-observability-storage.py
+
+      # The observability-values CHECKER's own logic, with helm and docker stubbed — so it runs
+      # here, offline, rather than in the job that reaches the network. Same reason as the
+      # chart-drift comparator above: a gate that has quietly lost the ability to fail reports a
+      # tick nobody re-examines, and this one has already done it once. The first version of that
+      # checker passed a deliberately mis-nested `ingestor:` key, because loki-stack merges
+      # `loki.config` through verbatim and the unknown key reached the render intact — it could not
+      # fail for the very component #3773 was about. These cases are that regression, pinned.
+      - name: Assert the observability values checker still classifies each defect
+        if: ${{ !cancelled() }}
+        run: python3 deploy/aks/scripts/test-observability-values.py
+
   # The three pieces of shell behind Doc/Architecture/PluginBundlesInTheRegistry — the publisher
   # (.github/scripts/push-bundle-publication.sh), the `bundle-fetch` init container's script and
   # docker_auth's ext_auth hook (deploy/helm/files/) — EXECUTED against the real distribution and
@@ -115,6 +130,48 @@ jobs:
   #
   # 🛡️ NO SKIP-TRAPDOOR: every input is in this repository or pinned by digest/checksum; no
   # secret, no cluster; no `continue-on-error:`, no input-shaped `if:`, no path filter.
+  # The observability stack's values, checked the only two ways that can actually fail.
+  #
+  # 🚨 WHY IT IS A SEPARATE JOB. `Chart invariants` above states, as a property worth keeping true,
+  # that every input it reads is in this repository — no secret, no cluster, NO NETWORK. This check
+  # fetches a third-party chart (grafana/loki-stack) and a container image, so folding it in there
+  # would quietly falsify that header. It gets its own job and states its own dependencies instead.
+  #
+  # 🚨 WHAT IT GUARDS. On 2026-09-09 a drain of loki-0 took every namespace's log history with it
+  # (#3773): `persistence.enabled` preserves flushed chunks, and nothing was enabling the ingester
+  # WAL that covers the rest. The WAL keys are set now — but this same values file already
+  # documents, in prose, a key that is set-able and INERT (`promtail.config.wal` renders to
+  # nothing, because the deprecated loki-stack chart does not template it). A prose warning about
+  # silently-dropped keys is exactly the thing that should be executable, so that the next one
+  # fails RED in the pull request that adds it instead of reading as coverage for weeks.
+  #
+  # Two checks, because the components fail in OPPOSITE directions and neither is sufficient alone:
+  #   • promtail — its chart builds config from named fields and drops the rest, so the RENDER
+  #     check catches it.
+  #   • loki — its chart merges `config` through VERBATIM, so the render check is vacuous there: a
+  #     typo'd `ingestor:` arrives in the render intact and passes. Only `loki -verify-config`
+  #     knows it is not a field. Measured 2026-09-09, both directions, on this exact typo.
+  #
+  # 🛡️ NO SKIP-TRAPDOOR: helm missing, PyYAML missing, docker missing or not running, the chart
+  # unfetchable, the render empty, or too few leaves examined are each RED and name themselves.
+  # No `continue-on-error:`, no input-shaped `if:`, no path filter.
+  observability-values:
+    name: Observability values (rendered + binary-validated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.3
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Assert every observability config key survives the render, and Loki accepts it
+        run: deploy/aks/scripts/check-observability-values.sh
+
   bundle-registry:
     name: Bundle registry scripts (executed)
     runs-on: ubuntu-latest
