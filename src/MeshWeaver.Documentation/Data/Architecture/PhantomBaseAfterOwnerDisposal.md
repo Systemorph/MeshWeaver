@@ -159,6 +159,59 @@ no cluster, no scheduler and no wall clock are involved:
 it go red. It is deliberately **not** verified by re-running `LateNackReenqueueTest` hoping to catch
 the 1/330 — the race stays unreproduced, and a test that can only pass by luck proves nothing.
 
+## Correlation-test timeout is a separate observation
+
+Static review of core `e29d540a038f55d6f41f3cc298d236db8bb60654` on 2026-09-09
+identifies a test-contract defect in `LateNackReenqueueCorrelationTest`. This does not establish
+the cause of every failure recorded under #3477, including the original durable-storage timeout
+and the later 90-second method timeout. No new test runs were used for this finding.
+
+The test parks an owner merge until either its release flag is set or `owner.IsShuttingDown`
+becomes true. Disposing the owner therefore releases accepted work, which may finish with an ACK.
+`LateNackReenqueueTest` explicitly documents that ACK as the normal graceful-shutdown outcome;
+a retryable NACK is only a safety net. The correlation test nevertheless waits unconditionally
+for `LATE_NACK_REENQUEUE`. A successful durable write can therefore leave this log wait unsatisfied.
+
+Its timing fence also does not establish a late response. `LatePatchResponseRegistry.ArmedCount`
+is the dictionary entry count. `UpdateRemote` registers that entry before posting through
+`Hub.Observe` and starting `UpdateResponseWaitBound`. Seeing an entry proves neither expiration
+of that bound nor owner acceptance of the patch. An early retryable NACK takes the separate
+`OWNER_NACK_REENQUEUE` branch, whose warning also cannot satisfy the test's regex.
+
+The logger lifetime does not supply a demonstrated alternative explanation. `UpdateRemote`
+captures the cache workspace logger on entry and emits the late-NACK warning immediately before
+the recursive retry. Owner shutdown closes the owner's child scope, not the cache/root scope.
+The test's capturing provider has a no-op `Dispose`, and its sink accepts the emitted category.
+Persistence alone cannot prove that the late-NACK branch ran or that a warning was lost.
+
+### Deterministic correlation regression
+
+The corrected test constructs a late verdict rather than racing for a shutdown NACK:
+
+1. Capture the specific patch request ID and correlation ID, and fence on the unique path's
+   response-timeout transition rather than the global registry count. That path has only the
+   original attempt until the controlled NACK is supplied.
+2. Dispatch an explicit late `OwnerDisposing` verdict through the existing registry seam.
+   `ArmedRequestIds` documents this purpose: construct a late verdict for an actual in-flight patch.
+3. Assert that the resulting child attempt retains the correlation ID, has a distinct request ID,
+   and is actually armed in the registry. The previous test only checked that the warning's
+   correlation value was nonblank and had no spaces.
+4. Release the parked merge in cleanup and verify caller termination and durable persistence with
+   an idempotent update. Keep graceful-disposal coverage accepting either valid terminal verdict.
+
+Before parking the merge, a test-local Debug sentinel through the actual cache logger factory
+proves that this capture sees the diagnostics. The regression requires no production log-level
+changes or increased timing bounds. Synthetic dispatch does not cancel the original accepted patch;
+both pending assignments are idempotent, and the gate is released before awaiting completion.
+This exercises correlation propagation through the late callback, not natural shutdown verdict
+generation. The corrected correlation test and its unchanged disposal sibling both pass locally
+under the two-processor CI shape, with Release warnings-as-errors builds.
+As a negative control, temporarily replacing the late retry's inherited correlation with a newly
+minted one makes the corrected test fail at the parent/child equality assertion in two seconds;
+the control is reverted and is not part of the change.
+The queue-owned delayed conflict retry fixed by #3818 is a different path from `UpdateRemote`'s
+direct recursive late-NACK retry; its passing regressions do not close #3477.
+
 ## Related
 
 - [Write Verdict Totality](../WriteVerdictTotality) — the sibling fail-open on the base read
