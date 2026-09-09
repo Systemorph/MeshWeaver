@@ -303,8 +303,14 @@ and *is* one under `Continuous`.
   the same action — the ordering's job is to make the slip HARMLESS while its tags are still there.
   🚨 The `_releases/` markers are the same set of labels and are **not** covered by that deletion;
   retention removes a pre-release marker only when the identity it names is collected.
-- **The policy record losing its own policy** under its bookkeeping writes (issue #3542, proposal 3 —
-  settled by #3619 for the clobber, still open for the `[MergeGuard]` refusals).
+- **The policy record losing its own policy** under its bookkeeping writes (issue #3542, proposal 3).
+  Settled by #3619: the framework's own typed write (`Update<UpdatePolicyContent>`) refuses a record
+  it cannot read instead of persisting defaults over it, and all four bookkeeping writes are pinned
+  with positive controls in `UnreadablePolicyRecordIsNotClobberedTest`. 🚨 The `[MergeGuard] refused
+  stale/reordered cross-hub write` lines that accompanied it were a **rate**, not a write shape, and
+  §5 removes the rate. Two replicas may still write the install-scoped stamp — that is deliberate,
+  it describes "this install checked" rather than "this pod checked" — and a refusal of the older of
+  two is the merge guard being RIGHT, not a defect to remove.
 - **"Installed" is what the pod RUNS.** This reads `ShippedReleaseSeed.InstalledPlatformVersion` —
   the injected `MESHWEAVER_PLATFORM_VERSION`, never the record's `LatestAvailableTag`, which after a
   manual roll-back kept naming a version no pod ran.
