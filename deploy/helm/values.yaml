@@ -78,7 +78,31 @@ selfUpdate:
 # /v2 route answers 404 (never a partial service). 🚨 `ContainerImages__Password` is a SECRET and
 # is NOT rendered from values: it arrives through the Key Vault CSI mapping like every other
 # credential —
-#   keyVaultSecrets.secrets:
+#   keyVaultSecrets.# ---- Required secrets (Systemorph/Memex#204) ---------------------------------
+# Per-key statement of whether an EMPTY value is legal. EMPTY BY DEFAULT — this enforces exactly
+# what a deployment declares and nothing otherwise.
+#
+# 🚨 The defect it closes: a Secret key rendered EMPTY is invisible to a `keys[]` audit — it reads
+# as configured. `MEMEX_PASSWORD` sat at base64 length 0 on memex-cloud in both the portal and the
+# migration Secret for exactly that reason, and an unconfigured credential then fails at CONNECT
+# time in a running portal rather than at render time.
+#
+# 🚨 NOT a blanket `required`: which optional providers a deployment must have is policy that varies
+# by shape and role, and `Ai__KeyProtection__MasterKey` is stateful (fine until the first `enc:` key
+# is stored, fatal after). Declare per deployment, in that deployment's values file.
+#
+#   requiredSecrets:
+#     - key: Anthropic__ApiKey
+#       because: this deployment routes the `heavy` tier to Anthropic.
+#     - key: memex_postgres_password
+#       component: memex_migration     # memex_portal (default) | memex_migration
+#     - key: GitHub__App__PrivateKey
+#       when: false                    # a BOOLEAN a values file sets; Helm has no `eval` here
+#
+# See templates/_required-secrets.tpl for the full contract.
+requiredSecrets: []
+
+secrets:
 #     - vaultSecret: <prefix>ContainerImages-Password
 #       key: ContainerImages__Password
 # The mirror is off unless Upstream, Username AND Password are all present.
