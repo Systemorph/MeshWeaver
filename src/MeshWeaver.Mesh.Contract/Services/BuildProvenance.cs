@@ -25,6 +25,12 @@ namespace MeshWeaver.Mesh.Services;
 /// date and the node-repo CI gates that depend on prebuilt fetches. It is adopted and MARKED;
 /// only a fingerprint that is present and DISAGREES is refused.</para>
 ///
+/// <para>🚨 The one refusal is keyed on MODULE VERSION COMPATIBILITY, not on fingerprint
+/// equality (MeshWeaver#3583): a fingerprint that differs says the source MOVED; whether the
+/// build that is serving may keep serving is answered by <see cref="ModuleVersionCompatibility"/>
+/// — same MAJOR (or unknown) keeps it, as <see cref="StaleAdopted"/>; a MAJOR bump refuses it, as
+/// <see cref="AdoptionRefused"/>. Either way the type never ERRORS because of delivery.</para>
+///
 /// <para>Appended-only: the persisted ordinal of every existing member must stay unchanged, and
 /// <see cref="Compiled"/> is deliberately the zero value so a record written before this field
 /// existed reads as the honest default — nothing was adopted, so nothing is unverified.</para>
@@ -55,9 +61,42 @@ public enum BuildProvenance
     AdoptedUnverified,
 
     /// <summary>
-    /// An adoption was REFUSED because the bundle's recorded source fingerprint DISAGREED with the
-    /// live source set. The bytes were not accepted; a local compile of the live source was
-    /// driven instead. This is the data-loss case, caught.
+    /// An adoption was REFUSED: the bundle's recorded source fingerprint DISAGREES with the live
+    /// source set AND the two sides are INCOMPATIBLE by module version — the current source's
+    /// MAJOR differs from the adopted build's (<see cref="ModuleVersionCompatibility"/>). The bytes
+    /// are not run (the execute-time gate refuses them); on a mesh that compiles module content a
+    /// local compile of the live source is driven, on one that does not the type reports
+    /// "incompatible, awaiting bundle" until a bundle for this identity lands. This is the
+    /// data-loss case, caught.
+    ///
+    /// <para>🚨 Since MeshWeaver#3583 a fingerprint that merely DIFFERS no longer lands here — it
+    /// lands on <see cref="StaleAdopted"/>. On 2026-09-09 a one-line CSS change to a module's
+    /// source, synced ahead of its bundle, refused the adopted build on every instance of
+    /// <c>Essentials/Email</c> on a live portal and rendered every page of the type dead for the
+    /// afternoon. The refusal was right about the bytes (they were older) and wrong about the
+    /// consequence: a page that renders last week's styling is a page; a refusal overlay is not.
+    /// The portal owner's rule: only a declared incompatibility — a MAJOR bump — may refuse the
+    /// last build the mesh holds.</para>
     /// </summary>
-    AdoptionRefused
+    AdoptionRefused,
+
+    /// <summary>
+    /// The LAST build this mesh holds keeps serving while the current source has moved PAST it —
+    /// the adopted (or locally compiled) bytes are behind the source by a compatible amount (same
+    /// module MAJOR, or the versions are not known), and no bundle for the running framework
+    /// identity has caught up yet (MeshWeaver#3583, measured 2026-09-09).
+    ///
+    /// <para>Honest by construction: <c>CompiledSources</c> is cleared so <c>IsDirty</c> reads
+    /// true (the build IS behind the source), <c>CompilationStatus</c> stays <c>Ok</c> (there IS a
+    /// usable build, and it is not a compile that failed), and the NodeType page names both sides
+    /// — adopted module version and source fingerprint against current ones — with "waiting for a
+    /// bundle for this identity". The fingerprint remains the signal that the source moved; it
+    /// drives this status and the readiness notification, never a refusal.</para>
+    ///
+    /// <para>Permitted by <c>NodeTypeExecutionGate</c>: stale-but-compatible bytes over newer
+    /// source is the accepted trade-off; a dead page is not. Lifted by the next adoption whose
+    /// fingerprint matches (→ <see cref="AdoptedVerified"/>, announced) or by a local compile of
+    /// the live source (→ <see cref="Compiled"/>).</para>
+    /// </summary>
+    StaleAdopted
 }

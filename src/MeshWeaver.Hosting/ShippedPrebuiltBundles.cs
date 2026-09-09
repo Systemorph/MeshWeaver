@@ -1031,7 +1031,8 @@ public static class ShippedPrebuiltBundles
                             .SelectMany(payload => SeedPayloads(
                                 mesh, bundlePath, manifest.FrameworkMvid,
                                 payload.Assemblies, alreadyCurrent, logger, onCovered,
-                                decision, context, ClosureOf(manifest), FileNamesOf(manifest)));
+                                decision, context, ClosureOf(manifest), FileNamesOf(manifest),
+                                manifest.Version));
                     });
             })
             .Catch<SeedTally, Exception>(ex =>
@@ -1142,7 +1143,8 @@ public static class ShippedPrebuiltBundles
         AdoptionDecision? decision = null,
         AdoptionContext? context = null,
         ImmutableHashSet<string>? closure = null,
-        ImmutableDictionary<string, string>? fileNames = null)
+        ImmutableDictionary<string, string>? fileNames = null,
+        string? moduleVersion = null)
         => assemblies
             .Select(a => Observable.Defer(() =>
                 {
@@ -1186,7 +1188,9 @@ public static class ShippedPrebuiltBundles
                             tolerant
                                 ? PrebuiltAdoptionPolicy.LiveStampOf(a.Dependencies, context!.LiveDependencyIdOf, context.LiveToolchainId)
                                 : a.Dependencies,
-                            a.SourceFingerprint)
+                            a.SourceFingerprint,
+                            // #3583 — the manifest's released SemVer, for the owner's compatibility rule.
+                            moduleVersion)
                         .Take(1)
                         .Timeout(SeedBudget)
                         .Do(outcome =>
@@ -1196,7 +1200,8 @@ public static class ShippedPrebuiltBundles
                                 or PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesUnservable)
                                 context?.OnDeclined?.Invoke(a.NodePath);
                         })
-                        .Select(outcome => outcome == PrebuiltAssemblySeeder.SeedOutcome.Adopted);
+                        .Select(outcome => outcome is PrebuiltAssemblySeeder.SeedOutcome.Adopted
+                            or PrebuiltAssemblySeeder.SeedOutcome.AdoptedStale);
                 })
                 .Do(adopted =>
                 {

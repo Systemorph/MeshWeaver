@@ -190,6 +190,34 @@ public class DispatchedBuildInputsInvariantGuard
         Mentions(ternary.Value, "Pending").Should().BeFalse(
             "a ternary between two terminal states is not a dispatch");
 
+        // 🚨 A PRESERVE, not a door (#3583's delivery fix). The expression names Pending and
+        // Compiling only in the PATTERN; the values it can actually commit are the status the node
+        // already had, and Unavailable. Matching bare text called this a second Pending door and
+        // reddened a PR whose line dispatches nothing — so the classifier must read value
+        // positions. Unavailable is still seen, which keeps the terminal rule applying to it.
+        var preserve = Single(
+            "return refused with\n{\n"
+            + "    CompilationStatus = def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling\n"
+            + "        ? def.CompilationStatus\n        : CompilationStatus.Unavailable,\n"
+            + "    DispatchedBuildInputs = null,\n};");
+        Mentions(preserve.Value, "Pending").Should().BeFalse(
+            "a pattern test is not a value the expression can commit — this preserves a status a door already produced");
+        Mentions(preserve.Value, "Compiling").Should().BeFalse(
+            "same reason, and Compiling is not a dispatch either");
+        Mentions(preserve.Value, "Unavailable").Should().BeTrue(
+            "the terminal it CAN commit is still seen, so the clears-the-stamp rule still applies to it");
+        IsReadable(preserve.Value).Should().BeTrue(
+            "it names members literally, so it must not trip the fail-closed assertion");
+
+        // …and the narrowing must not blind the door itself: a literal write in a VALUE position,
+        // with the same members present in a pattern beforehand, is still caught.
+        var doorAfterPattern = Single(
+            "return def with\n{\n"
+            + "    CompilationStatus = def.CompilationStatus is CompilationStatus.Ok\n"
+            + "        ? CompilationStatus.Pending\n        : CompilationStatus.Pending,\n};");
+        Mentions(doorAfterPattern.Value, "Pending").Should().BeTrue(
+            "🚨 the positive control for the value-position rule: stripping pattern operands must not hide a real dispatch");
+
         // Compiling is in neither list — the transition continues the SAME compile, so preserving
         // the stamp (by not mentioning it) is correct and must not be reported.
         var compiling = Single(
@@ -353,8 +381,37 @@ public class DispatchedBuildInputsInvariantGuard
 
     /// <summary>Whether the assigned expression names a given <see cref="CompilationStatus"/>
     /// member — both branches of a ternary count, since either may be committed.</summary>
+    /// <summary>
+    /// Whether the expression can COMMIT <paramref name="member"/> — i.e. names it in a VALUE
+    /// position, not merely in a pattern test.
+    ///
+    /// <para>🚨 Pattern positions are stripped first, and that distinction is the whole point.
+    /// A pass-through such as
+    /// <c>def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling
+    /// ? def.CompilationStatus : CompilationStatus.Unavailable</c>
+    /// PRESERVES a status a door already produced and otherwise commits <c>Unavailable</c>. It can
+    /// never write <c>Pending</c> — that member appears only after <c>is</c>/<c>or</c>. Matching on
+    /// the bare text called it a second Pending door and reddened #3583's delivery fix over an
+    /// expression that dispatches nothing.</para>
+    ///
+    /// <para>🚨 This NARROWS the match, so it could in principle blind the guard. Two things stop
+    /// that, both already here: <see cref="KnownStatusWrites"/> / <see cref="KnownTerminalWrites"/>
+    /// fail the run if the scan stops seeing the writes it is supposed to see, and
+    /// <see cref="TheClassifier_SeesEveryShapeItClaimsTo"/> pins a literal write in a value
+    /// position as still caught. Stripping is confined to text directly after a pattern keyword;
+    /// an assignment, a ternary arm and a plain initializer are untouched.</para>
+    /// </summary>
     private static bool Mentions(string value, string member) =>
-        value.Contains("CompilationStatus." + member, System.StringComparison.Ordinal);
+        ValuePositionsOnly(value).Contains("CompilationStatus." + member, System.StringComparison.Ordinal);
+
+    /// <summary>The expression with every <c>is</c>/<c>or</c>/<c>and</c>/<c>not</c> pattern operand
+    /// blanked, so only what the expression can actually COMMIT remains.</summary>
+    private static string ValuePositionsOnly(string value) =>
+        PatternOperand.Replace(value, " ");
+
+    private static readonly System.Text.RegularExpressions.Regex PatternOperand =
+        new(@"\b(?:is|or|and|not)\s+CompilationStatus\.[A-Za-z_]+",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static readonly string[] Members =
         ["Pending", "Compiling", "Ok", "Error", "Unavailable"];

@@ -64,6 +64,22 @@ public class NodeTypeExecutionGateTest
             .Should().BeFalse();
     }
 
+    /// <summary>
+    /// 🚨 THE 2026-09-09 ROW (MeshWeaver#3583). The source moved PAST the adopted build — the
+    /// fingerprints disagree — but the two share a module MAJOR, so the last build this mesh holds
+    /// keeps serving. A page that renders last week's styling is a page; the refusal overlay that
+    /// took every <c>Essentials/Email</c> page down for an afternoon is not. Refusal is keyed on
+    /// version compatibility now, and this is the row that says "differs" is not "refused".
+    /// </summary>
+    [Fact]
+    public void StaleAdopted_IsPermitted_TheServeOverDeadProperty()
+    {
+        NodeTypeExecutionGate.Evaluate(With(BuildProvenance.StaleAdopted))
+            .Should().Be(BuildExecutionVerdict.Permitted,
+                "stale-but-compatible bytes over newer source is the accepted trade-off; a dead page is not");
+        NodeTypeExecutionGate.RefusesExecution(With(BuildProvenance.StaleAdopted)).Should().BeFalse();
+    }
+
     /// <summary>The bundle's fingerprint MATCHED the live source set — the bytes and the source
     /// have been compared and they agree.</summary>
     [Fact]
