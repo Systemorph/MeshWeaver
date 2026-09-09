@@ -109,6 +109,11 @@
   "overview.unresolvedTypeHint": "The properties of this node cannot be shown until the platform knows the type its content was written with. If that type comes from a NodeType compiled inside the mesh, this resolves itself as soon as the compile finishes and this view refreshes on its own — nothing to do. If the NodeType already reports a successful compile and this notice stays, then no declaration claims that type and the content needs repair.",
   "nav.contents": "Contents",
   "nav.youAreHere": "You are here",
+  "node.meta.type": "Type:",
+  "node.meta.created": "Created:",
+  "node.meta.updated": "Updated:",
+  "node.meta.lastActivity": "Last activity:",
+  "node.meta.by": "by {0}",
   "menu.edit": "Edit",
   "menu.pin": "Pin",
   "menu.move": "Move",
@@ -1433,9 +1438,5 @@
   "setup.problem.noCompany": "Give the organisation this instance belongs to.",
   "setup.problem.noOwnerName": "Give the name of the person who owns this instance.",
   "setup.problem.noOwnerEmail": "Give a valid email address — it is how the registry reaches the owner about this instance.",
-  "setup.problem.noConsent": "Accept the privacy statement and the platform terms to register. Nothing is sent until you do.",
-  "node.meta.type": "Type:",
-  "node.meta.created": "Created:",
-  "node.meta.updated": "Updated:",
-  "node.meta.by": "by {0}"
+  "setup.problem.noConsent": "Accept the privacy statement and the platform terms to register. Nothing is sent until you do."
 }
