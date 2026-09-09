@@ -111,6 +111,33 @@ public sealed class MessageHub : IMessageHub
     public long Version { get; private set; }
 
     /// <summary>
+    /// 🚨 <b>Who asked for this teardown (#3510).</b> <c>null</c> until a routed
+    /// <see cref="DisposeRequest"/> is honoured, and then the sender that posted it.
+    ///
+    /// <para>The bake wedge of #3510 turned on one unknown the log could not answer: the Hosting
+    /// root was disposed at 23:37:51Z while its own 145-file install was in flight, its per-node
+    /// children went with it, and the writes they owed acks for were stranded — but <i>"who
+    /// disposed the root is not in the log at this level"</i>, so the leading hypothesis (a
+    /// NodeType rebind posting <c>DisposeRequest</c> to the root) stayed a hypothesis. The issue
+    /// asks for exactly this: <i>"[QUIESCE-START] on a root should name who asked"</i>.</para>
+    ///
+    /// <para><b>Why the ShutdownRequest's own sender cannot answer it.</b> <c>Dispose()</c> posts
+    /// that request to ITSELF, so its <c>Sender</c> is always this hub — the question it looks like
+    /// it answers is the one it cannot. The discriminating fact is one frame earlier: whether a
+    /// <c>DisposeRequest</c> arrived over the bus at all, and from where. A direct <c>Dispose()</c>
+    /// (host teardown, an owner tearing down its children, a <c>using</c>) leaves this null, and
+    /// that absence is itself the answer — it rules the message path out.</para>
+    /// </summary>
+    private volatile string? disposeRequestedBy;
+
+    /// <summary>
+    /// What <c>[QUIESCE-START]</c> prints when no routed <see cref="DisposeRequest"/> brought this
+    /// hub down — host teardown, an owner disposing its children, or a <c>using</c>. Spelled once so
+    /// a log reader and a log QUERY agree on the token.
+    /// </summary>
+    internal const string DirectDisposeSource = "a direct Dispose() (no routed DisposeRequest)";
+
+    /// <summary>
     /// Disposal-health diagnostic: how many <see cref="ShutdownRequest"/> turns this hub
     /// has handled. A healthy disposal handles exactly the three phase requests
     /// (Quiescing → DisposeHostedHubs → ShutDown). A value in the thousands is the
@@ -2685,8 +2712,10 @@ public sealed class MessageHub : IMessageHub
 
                 var initialPendingSnapshot = SnapshotPendingCallbacks();
                 TryLog(LogLevel.Information,
-                    "[QUIESCE-START] {Address}: {Count} pending callbacks at dispose entry: {Pending}",
-                    Address, initialPendingSnapshot.Length, FormatPendingCallbacks(initialPendingSnapshot));
+                    "[QUIESCE-START] {Address}: requested by {RequestedBy}; {Count} pending callbacks "
+                    + "at dispose entry: {Pending}",
+                    Address, disposeRequestedBy ?? DirectDisposeSource,
+                    initialPendingSnapshot.Length, FormatPendingCallbacks(initialPendingSnapshot));
 
                 // CRITICAL: do the wait OFF the action block. The action block processes
                 // messages serially (MaxDegreeOfParallelism = 1) — a blocking wait on the
@@ -3336,6 +3365,24 @@ public sealed class MessageHub : IMessageHub
         // (our parent) is going down with us.
         if (!IsShuttingDown)
             AnnounceRecycle();
+
+        // Recorded BEFORE Dispose(), because Dispose() is what logs [QUIESCE-START] (#3510). Set
+        // here rather than at the top of the handler so it means what it says: this request was
+        // honoured, not merely received — the root-mesh refusal above returns without disposing.
+        //
+        // 🚨 SELF-POSTED is called out, not printed as an address. The automatic recycles post to
+        // their OWN hub (NodeTypeRebindWatcher, WithOverlaySelfHeal), so the bare sender would read
+        // "[QUIESCE-START] Hosting: requested by Hosting" — true, useless, and easy to misread as a
+        // routing oddity. The reader's question is which of three things happened, so the line says
+        // which: a recycle this hub asked for, a teardown someone else asked for, or no message at
+        // all. #3510's leading hypothesis is precisely the first, and the installer
+        // (PackageInstaller posting to a package root) is the second.
+        disposeRequestedBy = request.Sender is null
+            ? "an unnamed sender (routed DisposeRequest)"
+            : Equals(request.Sender, Address)
+                ? $"itself — a self-posted DisposeRequest ({request.Sender}), i.e. a rebind or "
+                  + "self-heal recycle"
+                : $"{request.Sender} (routed DisposeRequest)";
 
         Dispose();
         return request.Processed();
