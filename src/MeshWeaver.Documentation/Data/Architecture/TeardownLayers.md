@@ -209,9 +209,14 @@ The gate is now two tiers, and the new one is deliberately NARROWER than the old
 |---|---|---|
 | `ShutdownRequest` / `DisposeRequest` | passes | passes |
 | a reply carrying `PostOptions.RequestId` | **passes** — this is what the drain is waiting for | refused |
-| transit to a hosted child | **passes** — the children are alive until the next phase | refused |
+| third-party transit to another hub | **passes** — transit is not new work owned by the draining hub | refused |
 | fire-and-forget nobody awaits | **passes** — no promise to break, and answering it is the storm shape `AnswerPolicy` prevents | refused (silently) |
-| a NEW request addressed to this hub | **refused**, `ErrorType.ShuttingDown` | refused, `ErrorType.ShuttingDown` |
+| a NEW request addressed to or originating from this hub | **refused**, `ErrorType.ShuttingDown` | refused, `ErrorType.ShuttingDown` |
+
+A new outgoing request owned by the draining hub is also refused: an external target does
+not turn it into third-party transit. Otherwise a background pipeline can register new callbacks
+after the drain begins. The refusal identifies the originating hub, not the destination; requests
+forwarded on behalf of other hubs still pass. The same test fixture pins both cases.
 
 The refusal is the same transient, owner-minted NACK tier 2 already posted — `ShutdownNack.RejectingNow`,
 activation identity and all — so a caller reads "ask again at the fresh activation", never "gone",
