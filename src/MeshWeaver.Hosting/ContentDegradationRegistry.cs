@@ -10,12 +10,23 @@ namespace MeshWeaver.Hosting;
 /// <param name="Count">How many reads degraded.</param>
 /// <param name="LastPath">The most recent node path.</param>
 /// <param name="LastAt">When.</param>
-/// <param name="Discriminator">The stored <c>$type</c>, when the degraded content carried one — the
-/// second key <see cref="ContentDegradationRegistry.Unresolved"/> re-asks the content-type registry
-/// under, for content whose NodeType is absent or unregistered.</param>
 public sealed record ContentDegradation(
-    string NodeType, string Seam, int Count, string? LastPath, DateTimeOffset LastAt,
-    string? Discriminator = null);
+    string NodeType, string Seam, int Count, string? LastPath, DateTimeOffset LastAt)
+{
+    /// <summary>
+    /// The stored <c>$type</c>, when the degraded content carried one — the second key
+    /// <see cref="ContentDegradationRegistry.Unresolved"/> re-asks the content-type registry under,
+    /// for content whose NodeType is absent or unregistered.
+    ///
+    /// <para>🚨 An <c>init</c> PROPERTY, deliberately not a primary-constructor parameter. Adding a
+    /// parameter — even with a default — REPLACES the record's constructor signature, so every
+    /// assembly already compiled against the 5-parameter one calls a constructor this build no
+    /// longer has. That is a binary break for module bundles built on a previous platform, and the
+    /// repo's <c>Public surface (binary compatibility)</c> gate refuses it (it caught this exact
+    /// change). A property leaves the arity untouched.</para>
+    /// </summary>
+    public string? Discriminator { get; init; }
+}
 
 /// <summary>
 /// 🚨 <b>What this replica could not read — kept, so it can be SEEN.</b> A node whose
@@ -47,7 +58,7 @@ public sealed class ContentDegradationRegistry
         var now = DateTimeOffset.UtcNow;
         byNodeType.AddOrUpdate(
             key,
-            _ => new ContentDegradation(key, seam, 1, nodePath, now, discriminator),
+            _ => new ContentDegradation(key, seam, 1, nodePath, now) { Discriminator = discriminator },
             (_, existing) => existing with
             {
                 Count = existing.Count + 1,
