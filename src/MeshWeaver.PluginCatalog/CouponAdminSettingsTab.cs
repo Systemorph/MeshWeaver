@@ -87,14 +87,32 @@ public static class CouponAdminSettingsTab
         /// <summary>The coupon code (the node id).</summary>
         public string Code { get; init; } = string.Empty;
         /// <summary>
-        /// What the coupon unlocks: the package list comma-joined; the <c>grantsAll</c> label when
-        /// the coupon covers everything; the empty-list label otherwise.
+        /// What redeeming this coupon GRANTS: the plan and its term (<c>personal · 90 days</c>,
+        /// <c>dedicated · permanent</c>), or the "no plan" label for a coupon that grants nothing
+        /// and is therefore refused at redemption.
+        ///
+        /// <para>🚨 This column exists because <see cref="Unlocks"/> stopped being the answer.
+        /// A coupon grants a PLAN (Systemorph/MeshWeaver.Plugins#1553); the package fields say
+        /// where it may be redeemed. Without this cell the admin list shows "the package it is
+        /// used on" for a staff coupon that actually confers all-access — which is not an omission
+        /// but a wrong answer, and the one an operator would act on.</para>
+        ///
+        /// <para>The tier id is rendered VERBATIM, not translated: it is a wire identifier
+        /// (`personal`, `dedicated`), and those are kept English on purpose. The term around it is
+        /// localized.</para>
+        /// </summary>
+        public string Grants { get; init; } = string.Empty;
+        /// <summary>
+        /// Where the coupon may be REDEEMED: the package list comma-joined; the <c>grantsAll</c>
+        /// label when the coupon reaches everything; the empty-list label otherwise.
         ///
         /// <para>🚨 It used to read <b>"any plugin"</b> for an empty list, which described
         /// behaviour the Store never had. An empty list means the coupon may be REDEEMED anywhere
         /// and grants only the package it was redeemed ON — the opposite of "unlocks any plugin"
         /// (Systemorph/MeshWeaver.Plugins#321). "Unlocks everything" is the coupon's own
         /// <c>grantsAll</c> flag, and now has its own label.</para>
+        ///
+        /// <para>🚨 None of it is a GRANT any more — see <see cref="Grants"/>.</para>
         /// </summary>
         public string Unlocks { get; init; } = string.Empty;
         /// <summary>The effective price: "free" when the coupon carries none (or 0), else the
@@ -136,10 +154,26 @@ public static class CouponAdminSettingsTab
         var validUntil = ReadString(content, "validUntil");
         var redeemed = ReadDecimal(content, "redeemed") ?? 0m;
         var cap = ReadDecimal(content, "maxRedemptions");
+        var tier = ReadString(content, "tier")?.Trim();
+        var tierDays = ReadDecimal(content, "tierDays");
 
         return new CouponRow
         {
             Code = node.Id,
+            // 🚨 The GRANT, first, because it is what a coupon does. A blank tier is no tier —
+            // exactly as CouponContent.ActivatesTier reads it — and such a coupon is refused at
+            // redemption, so the cell says so rather than leaving the column empty and letting an
+            // operator read "no plan configured" as "no plan needed".
+            Grants = string.IsNullOrWhiteSpace(tier)
+                ? Label(localize, "ui.couponGrantsNothing", "nothing — no plan set")
+                // tierDays 0 (or negative) is a deliberately typed permanent grant; a blank field
+                // is the 90-day default, which the coupon type owns — rendered here, not invented:
+                // a number shown against a field the author left empty must be the one that will
+                // actually apply.
+                : $"{tier} · " + (tierDays is { } d && d <= 0m
+                    ? Label(localize, "ui.couponGrantsPermanent", "permanent")
+                    : $"{(tierDays is { } t && t > 0m ? t : DefaultTierDays):0} "
+                      + Label(localize, "ui.couponGrantsDaysUnit", "days")),
             // grantsAll wins the cell: it is the one thing that unlocks more than the list names.
             // An empty list is NOT "any plugin" — see CouponRow.Unlocks.
             Unlocks = grantsAll
@@ -163,6 +197,17 @@ public static class CouponAdminSettingsTab
     // The localized label, or the English fallback when this projection was called without a host
     // (its unit tests). Never CultureInfo.CurrentUICulture — a layout-area render hops the hub
     // scheduler and an ambient culture does not survive it.
+    /// <summary>
+    /// The term a coupon-granted plan runs for when its <c>tierDays</c> is unset — the same 90 that
+    /// <c>CouponContent.DefaultTierDays</c> applies.
+    ///
+    /// <para>🚨 It is DUPLICATED here on purpose and cannot be shared: <c>CouponContent</c> is
+    /// dynamically compiled inside the mesh, so this assembly never sees the type. The risk is that
+    /// the two drift and this grid then shows a term the redemption will not honour, which is why
+    /// the constant is named rather than inlined, and why its test asserts the number.</para>
+    /// </summary>
+    public const int DefaultTierDays = 90;
+
     private static string Label(Func<string, string>? localize, string key, string english) =>
         localize?.Invoke(key) is { Length: > 0 } localized && localized != key ? localized : english;
 
@@ -267,7 +312,9 @@ public static class CouponAdminSettingsTab
             .WithColumn(new PropertyColumnControl<string>
                 { Property = nameof(CouponRow.Code).ToCamelCase() }.WithTitle("Code"))
             .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Unlocks).ToCamelCase() }.WithTitle("Unlocks"))
+                { Property = nameof(CouponRow.Grants).ToCamelCase() }.WithTitle("Grants"))
+            .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(CouponRow.Unlocks).ToCamelCase() }.WithTitle("Redeemable on"))
             .WithColumn(new PropertyColumnControl<string>
                 { Property = nameof(CouponRow.Price).ToCamelCase() }.WithTitle("Price"))
             .WithColumn(new PropertyColumnControl<string>
