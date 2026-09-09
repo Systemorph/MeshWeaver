@@ -310,19 +310,19 @@ public static class CouponAdminSettingsTab
         // data entries for the host's lifetime (each snapshot re-renders this grid).
         var grid = Controls.DataGrid(rows)
             .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Code).ToCamelCase() }.WithTitle("Code"))
+                { Property = nameof(CouponRow.Code).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnCode")))
             .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Grants).ToCamelCase() }.WithTitle("Grants"))
+                { Property = nameof(CouponRow.Grants).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnGrants")))
             .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Unlocks).ToCamelCase() }.WithTitle("Redeemable on"))
+                { Property = nameof(CouponRow.Unlocks).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemableOn")))
             .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Price).ToCamelCase() }.WithTitle("Price"))
+                { Property = nameof(CouponRow.Price).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnPrice")))
             .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Valid).ToCamelCase() }.WithTitle("Valid"))
+                { Property = nameof(CouponRow.Valid).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnValid")))
             .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Redeemed).ToCamelCase() }.WithTitle("Redeemed"))
+                { Property = nameof(CouponRow.Redeemed).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemed")))
             .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Notes).ToCamelCase() }.WithTitle("Notes"))
+                { Property = nameof(CouponRow.Notes).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnNotes")))
             .Resizable();
 
         // DataGrid has no row-click — one Open button per coupon navigates to its node page,
