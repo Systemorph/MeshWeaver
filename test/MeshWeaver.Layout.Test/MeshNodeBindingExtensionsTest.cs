@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -87,6 +88,111 @@ public class MeshNodeBindingExtensionsTest
         MeshNodeBindingExtensions.ResolveField(
                 node, bindContent: true, subPath: "composer", new JsonPointerReference("harness"), Options)
             !.Value.GetString().Should().Be("agentic");
+    }
+
+    // ---- #3862: a node-bound write through an ARRAY must not flatten it -------------------------
+    //
+    // Reproduced on a live portal (3.0.0-ci.8195) while editing an Edu assessment: a TextAreaControl
+    // bound to `courses/0/notes` turned
+    //     "courses": [ { "course": "DataModeling", "notes": "" } ]
+    // into
+    //     "courses": { "0": { "notes": "…" } }
+    // The array — and every sibling element — was gone, and the node then failed to deserialize back
+    // into ImmutableList<LearningCourse>, so the saved curriculum disappeared entirely.
+
+    private static JsonObject Curriculum() => (JsonObject)JsonNode.Parse(
+        """
+        {
+          "title": "Journey",
+          "courses": [
+            { "course": "DataModeling", "notes": "" },
+            { "course": "Scopes",       "notes": "keep" }
+          ]
+        }
+        """)!;
+
+    [Fact]
+    public void SetField_ThroughAnArrayIndex_WritesTheElement_AndKeepsEverySibling()
+    {
+        var root = Curriculum();
+
+        MeshNodeBindingExtensions.SetField(root, "courses/0/notes", JsonValue.Create("edited"));
+
+        var courses = root["courses"].Should().BeOfType<JsonArray>().Subject;
+        courses.Count.Should().Be(2, "the array must survive the write, not be replaced by an object");
+
+        courses[0]!["notes"]!.GetValue<string>().Should().Be("edited");
+        courses[0]!["course"]!.GetValue<string>().Should().Be("DataModeling",
+            "a sibling FIELD of the edited element is preserved");
+        courses[1]!["course"]!.GetValue<string>().Should().Be("Scopes",
+            "a sibling ELEMENT is preserved — this is the data the old code destroyed");
+        courses[1]!["notes"]!.GetValue<string>().Should().Be("keep");
+        root["title"]!.GetValue<string>().Should().Be("Journey");
+    }
+
+    [Fact]
+    public void EvaluateField_ReadsThroughAnArrayIndex()
+    {
+        var node = MeshNode.FromPath("Space1") with
+        {
+            Content = JsonSerializer.Deserialize<JsonElement>(Curriculum().ToJsonString()),
+        };
+
+        MeshNodeBindingExtensions.ResolveField(
+                node, bindContent: true, subPath: null,
+                new JsonPointerReference("courses/1/course"), Options)
+            !.Value.GetString().Should().Be("Scopes",
+                "a pointer through an array index must READ, not report the field absent");
+    }
+
+    [Fact]
+    public void SetField_RoundTripsThroughTheArrayItWrote()
+    {
+        var root = Curriculum();
+        MeshNodeBindingExtensions.SetField(root, "courses/1/notes", JsonValue.Create("second"));
+
+        // The write and the read agree — the shape a reload would deserialize is still a list.
+        MeshNodeBindingExtensions.EvaluateField(root, "courses/1/notes")
+            !.Value.GetString().Should().Be("second");
+        root["courses"]!.GetValueKind().Should().Be(JsonValueKind.Array);
+    }
+
+    [Theory]
+    [InlineData("courses/2/notes")]   // out of range
+    [InlineData("courses/-1/notes")]  // negative
+    [InlineData("courses/x/notes")]   // not an index
+    public void SetField_InvalidArrayIndex_Throws_RatherThanReplacingTheArray(string pointer)
+    {
+        var root = Curriculum();
+
+        var write = () => MeshNodeBindingExtensions.SetField(root, pointer, JsonValue.Create("v"));
+
+        write.Should().Throw<InvalidOperationException>(
+            "refusing is the point — the old code replaced the array and lost every element");
+        root["courses"].Should().BeOfType<JsonArray>().Which.Count.Should().Be(2,
+            "a refused write must leave the document untouched");
+    }
+
+    [Fact]
+    public void SetField_ThroughAScalar_Throws_RatherThanReplacingTheValue()
+    {
+        var root = Curriculum();
+
+        var write = () => MeshNodeBindingExtensions.SetField(root, "title/nested", JsonValue.Create("v"));
+
+        write.Should().Throw<InvalidOperationException>();
+        root["title"]!.GetValue<string>().Should().Be("Journey");
+    }
+
+    [Fact]
+    public void SetField_StillCreatesMissingIntermediateObjects()
+    {
+        // The pre-existing create path must be unchanged: an ABSENT intermediate is still made.
+        var root = new JsonObject();
+
+        MeshNodeBindingExtensions.SetField(root, "composer/harness", JsonValue.Create("agentic"));
+
+        root["composer"]!["harness"]!.GetValue<string>().Should().Be("agentic");
     }
 
     [Fact]
