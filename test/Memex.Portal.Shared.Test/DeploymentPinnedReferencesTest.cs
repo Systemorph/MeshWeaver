@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Hosting;
@@ -83,4 +85,52 @@ public class DeploymentPinnedReferencesTest
         };
         DeploymentPinnedReferences.ReportedBuildOf(node, Options).Should().BeNull();
     }
+    [Fact]
+    public void ARemoteAdoptedFallback_IsProtectedAlongsideTheRunningFramework()
+    {
+        var node = new MeshNode("remote", "Ops/Modules")
+        {
+            Content = JsonNode.Parse("""{"frameworkIdentity":"s-current","platformVersion":"4.0.0-ci.1","adoptedFrameworkInventoryComplete":true,"adoptedFrameworkIdentities":["s-old"]}""")
+        };
+        var references = DeploymentPinnedReferences.ReportedBuildsOf(node, Options);
+        references.Select(r => r.Identity).Should().Equal("s-current", "s-old");
+        var now = DateTimeOffset.UtcNow;
+        var old = now.AddDays(-100);
+        PrebuiltIdentityEntry Identity(string id) => new(id, "/store/" + id,
+            [new PrebuiltSourceEntry("plugins", true, old, old, null)], 1024, old);
+        var scan = new PrebuiltStoreScan([Identity("s-current"), Identity("s-old"), Identity("s-newer")],
+            [new ReleaseMarkerEntry("3.0.0-ci.1", "s-old", "/markers/old", old, null),
+             new ReleaseMarkerEntry("3.0.0-ci.2", "s-newer", "/markers/newer", old, null)]);
+        var policy = new PrebuiltBundleRetention { KeepNewestPerSource = 0 };
+
+        var before = PrebuiltBundleStore.Plan("s-current", "4.0.0-ci.1", scan, [], [], policy, now);
+        before.Collectable.Select(i => i.Identity).Should().Contain("s-old");
+        var protectedPlan = PrebuiltBundleStore.Plan("s-current", "4.0.0-ci.1", scan, [], references, policy, now);
+        protectedPlan.Collectable.Select(i => i.Identity).Should().NotContain("s-old");
+        protectedPlan.Protected["s-old"].Should().Contain("adopted build reported by");
+    }
+
+    [Theory]
+    [InlineData("""{"frameworkIdentity":"s-current"}""")]
+    [InlineData("""{"frameworkIdentity":"s-current","adoptedFrameworkInventoryComplete":false,"adoptedFrameworkIdentities":[]}""")]
+    [InlineData("""{"frameworkIdentity":"s-current","adoptedFrameworkInventoryComplete":true}""")]
+    [InlineData("""{"frameworkIdentity":"s-current","adoptedFrameworkInventoryComplete":true,"adoptedFrameworkIdentities":[null]}""")]
+    [InlineData("""{"frameworkIdentity":"s-current","adoptedFrameworkInventoryComplete":true,"adoptedFrameworkIdentities":[""]}""")]
+    [InlineData("""{"adoptedFrameworkInventoryComplete":true,"adoptedFrameworkIdentities":[]}""")]
+    public void AnIncompleteOrMalformedConsumerInventory_CannotAuthorizeCleanup(string json)
+    {
+        var node = new MeshNode("remote", "Ops/Modules") { Content = JsonNode.Parse(json) };
+        Assert.Throws<InvalidOperationException>(() => DeploymentPinnedReferences.ReportedBuildsOf(node, Options));
+    }
+
+    [Fact]
+    public void AnExplicitCompleteEmptyAdoptionInventory_IsValid_AndStillProtectsTheRunningBuild()
+    {
+        var node = new MeshNode("remote", "Ops/Modules")
+        {
+            Content = JsonSerializer.Deserialize<JsonElement>("""{"FrameworkIdentity":"s-current","AdoptedFrameworkInventoryComplete":true,"AdoptedFrameworkIdentities":[]}""")
+        };
+        DeploymentPinnedReferences.ReportedBuildsOf(node, Options).Select(r => r.Identity).Should().Equal("s-current");
+    }
+
 }

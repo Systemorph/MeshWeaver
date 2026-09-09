@@ -224,8 +224,40 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
         return comboReader.Read()
             .Take(1)
             .Zip(ReadUpdatePolicy(), (combo, policy) => Compose(settings, combo, policy))
+            .Zip(ReadAdoptedFrameworks(), (report, adopted) => report with
+            {
+                AdoptedFrameworkIdentities = adopted.Identities,
+                AdoptedFrameworkInventoryComplete = adopted.Complete,
+                Warnings = adopted.Complete ? report.Warnings
+                    : report.Warnings.Add("adopted artifact inventory is incomplete; retention must not delete"),
+            })
             .SelectMany(report => Deliver(settings, report));
     }
+
+    private IObservable<(ImmutableList<string> Identities, bool Complete)> ReadAdoptedFrameworks() =>
+        hub.ServiceProvider.GetRequiredService<AccessService>().RunAsSystem(() =>
+            hub.ServiceProvider.GetRequiredService<IMeshService>()
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
+                .Where(change => change.ChangeType == QueryChangeType.Initial)
+                .Take(1)
+                .Timeout(ReadBudget)
+                .Select(change =>
+                {
+                    var identities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+                    foreach (var node in change.Items)
+                    {
+                        var definition = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger)
+                            ?? throw new InvalidOperationException("a NodeType adoption record could not be read");
+                        if (!string.IsNullOrWhiteSpace(definition.CompiledFrameworkVersion))
+                            identities.Add(definition.CompiledFrameworkVersion);
+                    }
+                    return (Identities: identities.OrderBy(id => id, StringComparer.Ordinal).ToImmutableList(), Complete: true);
+                }))
+            .Catch<(ImmutableList<string> Identities, bool Complete), Exception>(ex =>
+            {
+                logger.LogWarning(ex, "[DeploymentReport] adopted artifact inventory could not be completed; retention must not delete");
+                return Observable.Return((Identities: ImmutableList<string>.Empty, Complete: false));
+            });
 
     private DeploymentReport Compose(Settings settings, InstanceCombo combo, string? updatePolicy)
     {
@@ -450,6 +482,10 @@ public sealed record DeploymentReport
     public string? PlatformVersion { get; init; }
     public string? CommitSha { get; init; }
     public string? FrameworkIdentity { get; init; }
+    /// <summary>Framework identities of the builds actually adopted by this instance's NodeTypes.</summary>
+    public ImmutableList<string>? AdoptedFrameworkIdentities { get; init; }
+    /// <summary>True only after a complete adoption-stamp read. Null identifies a legacy report.</summary>
+    public bool? AdoptedFrameworkInventoryComplete { get; init; }
     public string? UpdatePolicy { get; init; }
     public string Reporter { get; init; } = "hosted";
     public string SampledAt { get; init; } = "";
