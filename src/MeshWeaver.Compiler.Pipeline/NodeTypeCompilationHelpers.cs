@@ -3285,6 +3285,9 @@ internal static class NodeTypeCompilationHelpers
             { } other => $"{other.GetType().Name}: {other.Message}"
                 + (other.Data[EmitPipeline.EmitCanaryDataKey] is string canary
                     ? $" [{canary}]"
+                    : string.Empty)
+                + (other.Data[EmitPipeline.EmitReferenceCaptureDataKey] is string capture
+                    ? $" [emit-reference-capture: {capture}]"
                     : string.Empty),
         };
 
