@@ -218,6 +218,8 @@
   "chat.assistant": "Assistant",
   "chat.streaming": "Streaming...",
   "chat.streamDuration": "Stream duration",
+  "chat.modelTimeLabel": "Model time {0} across {1} calls",
+  "chat.toolTimeLabel": "Tool time {0} across {1} calls",
   "chat.generatingResponse": "Generating response...",
   "chat.elapsedSinceRound": "Elapsed since round started",
   "chat.runningSubThreads": "Running sub-threads",
