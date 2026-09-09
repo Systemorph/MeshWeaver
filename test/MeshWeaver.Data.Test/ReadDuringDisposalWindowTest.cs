@@ -99,7 +99,10 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
                         parked.OnNext(Unit.Default);
                         parked.OnCompleted();
                         SpinWait.SpinUntil(
-                            () => Volatile.Read(ref release) == 1, TimeSpan.FromSeconds(30));
+                            // TestTimeouts.Convergence, never a literal: it scales with
+                            // MW_TEST_TIMEOUT_FACTOR on CI, and TestTimeoutLiteralRatchetGuard
+                            // holds the hand-written count to a number that only goes down.
+                            () => Volatile.Read(ref release) == 1, TestTimeouts.Convergence);
                     }
                     finally
                     {
@@ -161,7 +164,7 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
         // ShutdownRequest. The read is therefore dequeued with creation already frozen (CloseCreation
         // is synchronous inside Dispose, before it posts anything) and the run level still Started.
         host.Post(new ParkRequest(), o => o.WithTarget(OwnerAddress));
-        await parked.Should().Within(30.Seconds()).Emit(
+        await parked.Should().Within(TestTimeouts.Convergence).Emit(
             "PRECONDITION: the park must OWN the action block before anything else is posted — "
             + "without that the queue order is exactly the race this test is fixing");
 
