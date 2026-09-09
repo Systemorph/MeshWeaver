@@ -75,7 +75,7 @@ public sealed class EmitReferenceCaptureBoundaryTest
         var pool = new IoPool(1);
         try
         {
-            var scheduler = new EmitReferenceCaptureScheduler(pool, directory, item => item.Dispose());
+            var scheduler = new EmitReferenceCaptureScheduler(pool, directory, item => item.Dispose(), new EmitReferenceCaptureReservation());
             var error = new InvalidOperationException("original");
             scheduler.Schedule(CSharpCompilation.Create("Unused"), error);
             error.Data[EmitPipeline.EmitReferenceCaptureDataKey].Should().Be("incomplete:owner-disposed");
@@ -102,7 +102,7 @@ public sealed class EmitReferenceCaptureBoundaryTest
         {
             registered = (SerialDisposable)disposable;
             owner.Add(disposable);
-        });
+        }, new EmitReferenceCaptureReservation());
         var compilation = CSharpCompilation.Create("NoSourceIsCaptured",
             references: [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
         var failure = new InvalidOperationException("not recorded");
@@ -129,6 +129,44 @@ public sealed class EmitReferenceCaptureBoundaryTest
             await Observable.Interval(TimeSpan.FromMilliseconds(10))
                 .Where(_ => registered!.IsDisposed).Take(1).Timeout(TimeSpan.FromSeconds(10));
             registered!.IsDisposed.Should().BeTrue("a completed diagnostic must release its owner");
+        }
+        finally
+        {
+            owner.Dispose();
+            pool.Dispose();
+            (await pool.Disposed.FirstAsync().Timeout(TimeSpan.FromSeconds(10))).Should().Be(0);
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentCompilerHubsShareOneReservationBeforeRegisteringWork()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "emit-cascade-" + Guid.NewGuid().ToString("N"));
+        var pool = new IoPool(1);
+        using var owner = new CompositeDisposable();
+        var reservation = new EmitReferenceCaptureReservation();
+        var registered = 0;
+        var compilation = CSharpCompilation.Create("Cascade",
+            references: [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)]);
+        var errors = Enumerable.Range(0, 64).Select(_ => new InvalidOperationException("original")).ToArray();
+        try
+        {
+            Parallel.ForEach(errors, error =>
+                new EmitReferenceCaptureScheduler(pool, directory, disposable =>
+                {
+                    Interlocked.Increment(ref registered);
+                    owner.Add(disposable);
+                }, reservation).Schedule(compilation, error));
+
+            registered.Should().Be(1, "a cascade must not register or enqueue redundant captures");
+            errors.Count(error => Equals(error.Data[EmitPipeline.EmitReferenceCaptureDataKey],
+                "incomplete:already-requested")).Should().Be(63);
+            var json = await pool.InvokeBlocking(_ => File.ReadAllText(Path.Combine(directory, "manifest.json")))
+                .Timeout(TimeSpan.FromSeconds(10));
+            using var manifest = JsonDocument.Parse(json);
+            manifest.RootElement.GetProperty("complete").GetBoolean().Should().BeTrue();
+            reservation.TryReserve().Should().BeFalse("completion does not re-arm capture");
         }
         finally
         {

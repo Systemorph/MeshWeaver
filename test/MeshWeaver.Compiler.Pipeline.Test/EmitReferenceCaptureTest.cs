@@ -151,6 +151,61 @@ public sealed class EmitReferenceCaptureTest : IDisposable
         Assert.Equal(3, total);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EarlyEofNeverCountsAsCompleteEvenWhenCurrentLengthShrinks(bool truncate)
+    {
+        using var input = new EarlyEofStream(truncate);
+        long total = 0;
+        var image = EmitReferenceCapture.ReadImage(input,
+            new EmitReferenceCapture.CaptureLimits(MaxFileBytes: 8, MaxTotalBytes: 8),
+            ref total, CancellationToken.None, out var refusal);
+        Assert.Null(image);
+        Assert.Equal("incomplete-read", refusal);
+        Assert.Equal(3, total);
+    }
+
+    [Fact]
+    public void TruncationAtExactBudgetBoundaryStillRefusesCapture()
+    {
+        using var input = new LengthChangesAfterReadStream(3);
+        long total = 0;
+        var image = EmitReferenceCapture.ReadImage(input,
+            new EmitReferenceCapture.CaptureLimits(MaxFileBytes: 8, MaxTotalBytes: 8),
+            ref total, CancellationToken.None, out var refusal);
+        Assert.Null(image);
+        Assert.Equal("incomplete-read", refusal);
+        Assert.Equal(8, total);
+    }
+
+    [Fact]
+    public void FileGrowthCannotBeMistakenForTheInitialImage()
+    {
+        using var input = new LengthChangesAfterReadStream(9);
+        long total = 0;
+        var image = EmitReferenceCapture.ReadImage(input,
+            new EmitReferenceCapture.CaptureLimits(MaxFileBytes: 16, MaxTotalBytes: 16),
+            ref total, CancellationToken.None, out var refusal);
+        Assert.Null(image);
+        Assert.Equal("incomplete-read", refusal);
+        Assert.Equal(9, total);
+    }
+
+    [Fact]
+    public void UnchangedStreamAccountsForItsInitialPosition()
+    {
+        using var input = new MemoryStream(new byte[] { 1, 2, 3, 4, 5 });
+        input.Position = 2;
+        long total = 0;
+        var image = EmitReferenceCapture.ReadImage(input,
+            new EmitReferenceCapture.CaptureLimits(MaxFileBytes: 3, MaxTotalBytes: 3),
+            ref total, CancellationToken.None, out var refusal);
+        Assert.Equal(new byte[] { 3, 4, 5 }, image);
+        Assert.Null(refusal);
+        Assert.Equal(3, total);
+    }
+
     [Fact]
     public void InvalidPeReadConsumesBudgetEvenThoughItCannotBeCaptured()
     {
@@ -243,5 +298,41 @@ public sealed class EmitReferenceCaptureTest : IDisposable
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class EarlyEofStream(bool truncate) : MemoryStream(new byte[8])
+    {
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (Position != 0)
+                return 0;
+            var read = base.Read(buffer, offset, Math.Min(count, 3));
+            if (truncate)
+                SetLength(3);
+            return read;
+        }
+    }
+
+    private sealed class LengthChangesAfterReadStream : MemoryStream
+    {
+        private readonly long changedLength;
+        private bool changed;
+
+        public LengthChangesAfterReadStream(long changedLength)
+        {
+            this.changedLength = changedLength;
+            SetLength(8);
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = base.Read(buffer, offset, count);
+            if (!changed)
+            {
+                changed = true;
+                SetLength(changedLength);
+            }
+            return read;
+        }
     }
 }

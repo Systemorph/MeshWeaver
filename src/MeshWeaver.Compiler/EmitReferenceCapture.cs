@@ -180,8 +180,13 @@ internal static class EmitReferenceCapture
     {
         refusal = null;
         ct.ThrowIfCancellationRequested();
-        if (input.Length > limits.MaxFileBytes) { refusal = "file-too-large"; return null; }
-        if (input.Length > limits.MaxTotalBytes - total) { refusal = "total-limit"; return null; }
+        var initialLength = input.Length;
+        var initialPosition = input.Position;
+        if (initialPosition < 0 || initialPosition > initialLength)
+        { refusal = "incomplete-read"; return null; }
+        var expectedBytes = initialLength - initialPosition;
+        if (expectedBytes > limits.MaxFileBytes) { refusal = "file-too-large"; return null; }
+        if (expectedBytes > limits.MaxTotalBytes - total) { refusal = "total-limit"; return null; }
         using var bytes = new MemoryStream();
         var buffer = new byte[64 * 1024];
         while (true)
@@ -203,6 +208,11 @@ internal static class EmitReferenceCapture
             bytes.Write(buffer, 0, count);
         }
         ct.ThrowIfCancellationRequested();
+        // EOF alone is not proof of a complete image: a shared file may shrink while
+        // being read, including at the exact budget boundary above. Preserve the read
+        // charge, but never let a shortened image become successful capture evidence.
+        if (bytes.Length != expectedBytes || input.Position != initialLength || input.Length != initialLength)
+        { refusal = "incomplete-read"; return null; }
         return bytes.ToArray();
     }
 

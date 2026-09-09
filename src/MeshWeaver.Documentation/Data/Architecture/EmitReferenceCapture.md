@@ -28,6 +28,11 @@ job already uploads the `straggler-logs` directory recursively. A different runn
 preserve that directory through its existing artifact mechanism. No additional permissions
 or credentials are required. The first successful atomic creation of `started.json`
 claims that process directory; later emit failures never overwrite the first capture.
+Before snapshotting references or enqueueing I/O, each mesh root admits only one request
+through an injected atomic reservation shared by its compiler hubs. Cancellation or a
+scheduling failure never resets that reservation. Multiple independent mesh roots in a
+test process can each enqueue once, but the file sentinel still permits only one artifact
+capture for the process. No mutable static registry or actor-side file I/O is introduced.
 The request ID in the existing error summary must match the manifest's `captureId`;
 a different failure's manifest is not evidence for the current request.
 

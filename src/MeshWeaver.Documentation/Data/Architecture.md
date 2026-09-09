@@ -229,6 +229,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Dangling NodeTypes](DanglingNodeTypes) — a node whose type resolves to nothing, and the two write paths that allowed it
 - [Node Type Compilation](NodeTypeCompilation)
 - [Execute-Time Interlock](ExecuteTimeInterlock) — a build proven stale is never armed
+- [Emit Reference Capture](EmitReferenceCapture) — bounded, opt-in CI evidence for runtime compiler failures
 - [Graph / Compiler Layering](GraphCompilerLayering) — the four assemblies, the cycle, and the full-MVID size rule
 - [Toolchain Re-evaluation Lane](ToolchainReevaluationLane) — why a toolchain change stopped rebaking the world
 - [Rebake Waves](RebakeWaves) — why a roll rebakes the world anyway, and what one rebake writes

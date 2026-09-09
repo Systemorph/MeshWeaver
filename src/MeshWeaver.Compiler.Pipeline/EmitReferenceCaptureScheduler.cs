@@ -14,7 +14,8 @@ namespace MeshWeaver.Graph.Configuration;
 /// the compile's deadline and never retain source trees or an entire compilation.
 /// </summary>
 internal sealed class EmitReferenceCaptureScheduler(
-    IIoPool pool, string directory, Action<IDisposable> registerForDisposal)
+    IIoPool pool, string directory, Action<IDisposable> registerForDisposal,
+    EmitReferenceCaptureReservation reservation)
 {
     internal static Action<CSharpCompilation, Exception>? ForCi(IMessageHub hub)
     {
@@ -31,8 +32,13 @@ internal sealed class EmitReferenceCaptureScheduler(
                 return (_, error) => error.Data[EmitPipeline.EmitReferenceCaptureDataKey] =
                     "incomplete:no-file-pool";
 
+            var reservation = hub.ServiceProvider.GetService<EmitReferenceCaptureReservation>();
+            if (reservation is null)
+                return (_, error) => error.Data[EmitPipeline.EmitReferenceCaptureDataKey] =
+                    "incomplete:no-reservation";
+
             var scheduler = new EmitReferenceCaptureScheduler(registry.Get(IoPoolNames.FileSystem),
-                directory, item => hub.RegisterForDisposal(item));
+                directory, item => hub.RegisterForDisposal(item), reservation);
             return scheduler.Schedule;
         }
         catch (Exception)
@@ -46,6 +52,15 @@ internal sealed class EmitReferenceCaptureScheduler(
 
     internal void Schedule(CSharpCompilation compilation, Exception error)
     {
+        // Claim before enumerating references or registering/enqueueing work. All
+        // compiler hubs in this mesh share the root-owned reservation. Never retry
+        // a failed/cancelled capture during a cascade; the manifest remains incomplete.
+        if (!reservation.TryReserve())
+        {
+            error.Data[EmitPipeline.EmitReferenceCaptureDataKey] = "incomplete:already-requested";
+            return;
+        }
+
         // Preserve only the reference sequence. No source, configuration, service
         // resolution or mesh mutation occurs in the I/O leaf.
         var references = compilation.References.ToArray();
@@ -68,7 +83,7 @@ internal sealed class EmitReferenceCaptureScheduler(
                 // Errors can arrive asynchronously (including a draining pool).
                 // The original emit error has already been reported unchanged.
                 .Catch<string, Exception>(_ => Observable.Return("incomplete:io-pool"))
-                .Subscribe(_ => owner.Dispose());
+                .Subscribe(_ => owner.Dispose(), _ => owner.Dispose());
         }
         catch
         {
@@ -76,4 +91,12 @@ internal sealed class EmitReferenceCaptureScheduler(
             throw; // The emit boundary records scheduling failure and rethrows its original.
         }
     }
+}
+
+/// <summary>Root-service-owned once gate; no static state or actor-side file I/O.</summary>
+internal sealed class EmitReferenceCaptureReservation
+{
+    private int requested;
+
+    internal bool TryReserve() => Interlocked.CompareExchange(ref requested, 1, 0) == 0;
 }
