@@ -20,6 +20,7 @@ it, not before.
 | [/async](.claude/skills/async/SKILL.md) | any hub-reachable or Blazor-view call; IO; AccessContext |
 | [/gui](.claude/skills/gui/SKILL.md) | any layout area, control, editor, form, table |
 | [/i18n](.claude/skills/i18n/SKILL.md) | any string a human reads on screen |
+| [/teams](.claude/skills/teams/SKILL.md) | anything about an agent SEEING, reading or posting to Teams: the shipped bot reads nothing; what the EA consent link needs; the guest-tenant wall |
 | [/debug](.claude/skills/debug/SKILL.md) · [/storm](.claude/skills/storm/SKILL.md) · [/sigsegv](.claude/skills/sigsegv/SKILL.md) | a hang/timeout; a restart/502/log flood; a crashed host |
 
 ## Git Workflow
