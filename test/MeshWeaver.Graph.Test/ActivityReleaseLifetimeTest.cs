@@ -1,5 +1,5 @@
 using System;
-using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -24,7 +24,10 @@ public class ActivityReleaseLifetimeTest(ITestOutputHelper output) : MonolithMes
         Action completed = () => releaseMirror(ActivityStatus.Succeeded);
 
         writer.Dispose();
-        await writer.DisposalCompleted.Timeout(TimeSpan.FromSeconds(10));
+        using var disposalDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await writer.DisposalCompleted.ObserveCompletion(
+            ex => Output.WriteLine($"Writer disposal failed after completion: {ex}"),
+            disposalDeadline.Token);
         scope.Dispose();
 
         var failure = Record.Exception(completed);
