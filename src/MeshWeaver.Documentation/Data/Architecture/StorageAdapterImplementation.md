@@ -230,6 +230,31 @@ The only boot-time work is `PostgreSqlPartitionSubscriptionHostedService`, which
 > **Reaching for `Observable.FromAsync`.**
 > Forbidden outside `IoPool`. Bridge every async / blocking leaf through `IIoPool`.
 
+> 🚨 **Storing the INSTANCE and forgetting what the serialization boundary does for free (#3816).**
+> An in-memory adapter that keeps the `MeshNode` object hands the same object back on `Read` — so
+> everything a serializing backend does *on the way through* silently does not happen. Each such
+> effect has to be reproduced by hand, and each one that is missed is a difference in behaviour
+> between backends that only shows up as a test failing on one of them.
+>
+> Two are known, and they arrived a year apart:
+>
+> - `MeshNode.HubConfiguration` — an in-process delegate a durable store cannot hold; stripped
+>   explicitly, because FileSystem and Postgres drop it at the boundary.
+> - **Content materialisation** — a node whose `Content` is the as-written `JsonObject` DOM is
+>   returned as a `JsonObject`, so `node.Content is TRecord` (what every ordinary reader does)
+>   answers `false` on that backend and `true` on the others.
+>
+> The second cost two full-project runs to find: `AnInstanceReportsWhatItRunsTest` failed **2 of 2**
+> under load on an unmodified `main` and passed under `--filter`, because whether the *last* write
+> left a typed record or the DOM is a matter of ordering. Deterministic in both directions is the
+> tell that it is not a flake.
+>
+> 🚨 Reproduce the serializing backends, never improve on them. An unresolvable discriminator must
+> still degrade to a `JsonElement` here, because that is what FileSystem and Postgres yield for the
+> same content — an in-memory store that materialised what the others cannot would be a different
+> lie in the other direction, and it would hide exactly the defect the degradation exists to
+> surface.
+
 ---
 
 ## Migration Notes from the Old `Matches` Design
