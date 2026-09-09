@@ -90,6 +90,11 @@ jobs:
         with:
           path: repo
 
+      - name: Check out an independent caller for the main arm
+        uses: actions/checkout@v7
+        with:
+          path: repo-main
+
       - name: Read the pin, and resolve core main ONCE
         id: refs
         env:
@@ -130,67 +135,161 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      # Both arms run the SAME suites with the SAME command; only MeshWeaverRoot differs. A
-      # failure list is written per arm; the diff below is what gets reported.
-      # 🚨 Failures are collected, never fatal. A suite that cannot even BUILD at one arm is a
-      # result (recorded as `<suite>: BUILD FAILED`), not a reason to abandon the comparison — and
-      # a build that fails at BOTH arms cancels out in the delta, which is the control working.
-      - name: Write the per-arm runner (one command, two MeshWeaverRoots)
+      # Results are evidence, not console-output patterns. Both arms must execute tests;
+      # an incomplete arm cannot clear an existing report or establish a baseline pass.
+      - name: Write the evidence runner
         run: |
-          cat > "$GITHUB_WORKSPACE/canary-run.sh" <<'SH'
-          set -uo pipefail
-          : > "$RUNNER_TEMP/$OUT"
-          while IFS= read -r suite; do
-            suite="$(echo "$suite" | xargs)"
-            [ -n "$suite" ] || continue
-            cd "$GITHUB_WORKSPACE/repo"
-            if ! dotnet test "$suite" -c Release -p:MeshWeaverRoot="$GITHUB_WORKSPACE/$CORE/" \
-                 --logger "trx;LogFileName=$RUNNER_TEMP/$CORE-$(basename "$suite").trx" > "$RUNNER_TEMP/out.log" 2>&1; then
-              if grep -qE 'error [A-Z]+[0-9]+' "$RUNNER_TEMP/out.log"; then
-                echo "$suite: BUILD FAILED" >> "$RUNNER_TEMP/$OUT"
-              fi
-            fi
-            # Fully-qualified names of failed tests, from the runner's own output.
-            grep -oE '[A-Za-z0-9_.]+\.[A-Za-z0-9_]+(\([^)]*\))? \[FAIL\]' "$RUNNER_TEMP/out.log" \
-              | sed 's/ \[FAIL\]//' >> "$RUNNER_TEMP/$OUT" || true
-          done <<< "$SUITES"
-          sort -u -o "$RUNNER_TEMP/$OUT" "$RUNNER_TEMP/$OUT"
-          echo "$CORE: $(wc -l < "$RUNNER_TEMP/$OUT" | tr -d ' ') failing test(s)"
-          SH
+          cat > "$GITHUB_WORKSPACE/canary-evidence.py" <<'PYTHON'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+
+          def read_results(path, exit_code):
+              if exit_code not in (0, 1):
+                  raise ValueError(f"test process exited {exit_code}")
+              root = ET.parse(path).getroot()
+              ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+              summary = root.find("t:ResultSummary", ns)
+              if summary is None or summary.get("outcome") not in ("Completed", "Passed", "Failed"):
+                  raise ValueError("missing or incomplete TRX summary")
+              rows = root.findall("t:Results/t:UnitTestResult", ns)
+              if not rows or any(r.get("outcome") not in ("Passed", "Failed", "NotExecuted") for r in rows):
+                  raise ValueError("no test results, or a nonterminal result")
+              results = {}
+              for row in rows:
+                  name, outcome = row.get("testName"), row.get("outcome")
+                  if not name or name in results:
+                      raise ValueError("missing or ambiguous test name")
+                  results[name] = outcome
+              counters = summary.find("t:Counters", ns)
+              if counters is None or int(counters.get("total", "-1")) != len(results):
+                  raise ValueError("TRX counters do not cover the reported tests")
+              if not any(v in ("Passed", "Failed") for v in results.values()):
+                  raise ValueError("no tests executed")
+              failed = sum(v == "Failed" for v in results.values())
+              if int(counters.get("failed", "-1")) != failed or (exit_code == 0) != (failed == 0):
+                  raise ValueError("test exit status and TRX failures disagree")
+              return results
+
+
+          def compare(pin, main):
+              if not pin or set(pin) != set(main):
+                  raise ValueError("the arms did not report the same nonempty suite set")
+              delta, incomplete = [], []
+              for suite in pin:
+                  left, right = pin[suite], main[suite]
+                  if left.get("build") == "passed" and right.get("build") == "failed":
+                      delta.append(f"{suite}: BUILD FAILED at main (build passed at pin)")
+                      continue
+                  if "error" in left or "error" in right:
+                      incomplete.append(f"{suite}: pin={left.get('error', 'measured')}; main={right.get('error', 'measured')}")
+                      continue
+                  for name, outcome in right["results"].items():
+                      baseline = left["results"].get(name)
+                      if outcome == "Failed" and baseline == "Passed":
+                          delta.append(f"{suite}: {name}")
+                      elif outcome == "Failed" and baseline != "Failed":
+                          incomplete.append(f"{suite}: {name} failed without an executed baseline")
+                  # A removed or skipped test is not evidence that a previously observed failure healed.
+                  for name, outcome in left["results"].items():
+                      if outcome in ("Passed", "Failed") and right["results"].get(name) not in ("Passed", "Failed"):
+                          incomplete.append(f"{suite}: {name} was not executed at main")
+              return sorted(delta), incomplete
+
+
+          def run_arm():
+              suites = [x.strip() for x in os.environ["SUITES"].splitlines() if x.strip()]
+              if not suites or len(suites) != len(set(suites)):
+                  raise ValueError("suites must name a nonempty, unique set")
+              workspace = Path(os.environ["GITHUB_WORKSPACE"])
+              scratch = Path(os.environ["RUNNER_TEMP"])
+              core = os.environ["CORE"]
+              evidence = {}
+              for index, suite in enumerate(suites):
+                  directory = scratch / f"canary-{core}-{index}"
+                  directory.mkdir()  # Never reuse results from an earlier invocation.
+                  log = directory / "test.log"
+                  common = [suite, "-c", "Release", "-p:CIRun=true", "-warnaserror",
+                            f"-p:MeshWeaverRoot={workspace / core}/"]
+                  command = ["dotnet", "test", suite, "--no-build", "-c", "Release", "-p:CIRun=true", "-warnaserror",
+                             f"-p:MeshWeaverRoot={workspace / core}/", "--logger", "trx;LogFileName=results.trx",
+                             "--results-directory", str(directory)]
+                  build_passed = False
+                  try:
+                      with (directory / "build.log").open("w") as output:
+                          build = subprocess.run(["dotnet", "build", *common],
+                              cwd=workspace / ("repo" if core == "core-pin" else "repo-main"),
+                              stdout=output, stderr=subprocess.STDOUT, timeout=480)
+                      if build.returncode != 0:
+                          compiler_error = re.search(r"error (?:CS|FS|BC)[0-9]+", (directory / "build.log").read_text())
+                          evidence[suite] = {"build": "failed" if build.returncode == 1 and compiler_error else "unknown",
+                                             "error": f"build exited {build.returncode}; see build.log"}
+                          continue
+                      build_passed = True
+                      with log.open("w") as output:
+                          result = subprocess.run(command, cwd=workspace / ("repo" if core == "core-pin" else "repo-main"), stdout=output,
+                                                  stderr=subprocess.STDOUT, timeout=480)
+                      evidence[suite] = {"build": "passed", "results": read_results(directory / "results.trx", result.returncode)}
+                  except (OSError, ValueError, ET.ParseError, subprocess.TimeoutExpired) as error:
+                      evidence[suite] = {"build": "passed" if build_passed else "unknown", "error": str(error)}
+                      print(f"::warning::{suite}: comparison incomplete: {error}; log: {log}")
+              (scratch / os.environ["OUT"]).write_text(json.dumps(evidence))
+
+
+          def report():
+              scratch = Path(os.environ["RUNNER_TEMP"])
+              delta, incomplete = compare(json.loads((scratch / "pin.json").read_text()),
+                                          json.loads((scratch / "main.json").read_text()))
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write("### Canary evidence\n\n")
+                  summary.write("\n".join(f"- {line}" for line in delta + incomplete) + "\n")
+              if incomplete:
+                  raise ValueError("comparison incomplete; preserving the existing tracking issue")
+              (scratch / "delta.txt").write_text("\n".join(delta) + ("\n" if delta else ""))
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write(f"count={len(delta)}\n")
+
+
+          if __name__ == "__main__":
+              if sys.argv[1] == "run":
+                  run_arm()
+              else:
+                  report()
+          PYTHON
 
       - name: Run the suites at the PIN (the control arm)
-        continue-on-error: true
         env:
           SUITES: ${{ inputs.suites }}
           CORE: core-pin
-          OUT: pin.txt
-        run: bash "$GITHUB_WORKSPACE/canary-run.sh"
+          OUT: pin.json
+        run: python3 "$GITHUB_WORKSPACE/canary-evidence.py" run
 
       - name: Run the suites at core MAIN
-        continue-on-error: true
         env:
           SUITES: ${{ inputs.suites }}
           CORE: core-main
-          OUT: main.txt
-        run: bash "$GITHUB_WORKSPACE/canary-run.sh"
+          OUT: main.json
+        run: python3 "$GITHUB_WORKSPACE/canary-evidence.py" run
 
-      - name: The delta — passes at the pin, fails at core main
+      - name: Preserve the comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-canary-evidence
+          path: |
+            ${{ runner.temp }}/canary-*/
+            ${{ runner.temp }}/pin.json
+            ${{ runner.temp }}/main.json
+          if-no-files-found: error
+
+      - name: The delta — recorded passes at the pin, failures at main
         id: delta
-        run: |
-          set -euo pipefail
-          touch "$RUNNER_TEMP/pin.txt" "$RUNNER_TEMP/main.txt"
-          # Only tests that FAIL at main and do NOT fail at the pin. A test already red at the pin
-          # is this repo's own business and says nothing about core.
-          comm -13 <(sort -u "$RUNNER_TEMP/pin.txt") <(sort -u "$RUNNER_TEMP/main.txt") > "$RUNNER_TEMP/delta.txt" || true
-          count=$(wc -l < "$RUNNER_TEMP/delta.txt" | tr -d ' ')
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Canary delta: ${count} test(s) pass at the pin and fail at core main"
-            echo ""
-            if [ "$count" != "0" ]; then sed 's/^/- `/;s/$/`/' "$RUNNER_TEMP/delta.txt"; else echo "_None._"; fi
-            echo ""
-            echo "Also red at the pin (NOT reported — this repo's own): $(wc -l < "$RUNNER_TEMP/pin.txt" | tr -d ' ')"
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: python3 "$GITHUB_WORKSPACE/canary-evidence.py" report
 
       - name: File or close the tracking issue
         env:
@@ -204,7 +303,9 @@ jobs:
         run: |
           set -euo pipefail
           marker="<!-- platform-canary -->"
-          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$marker in:body" --json number --jq '.[0].number // empty' || true)
+          existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&per_page=100" \
+            --jq '.[] | select(.pull_request == null and ((.body // "") | contains("<!-- platform-canary -->"))) | .number')
+          [ "$(printf '%s\n' "$existing" | sed '/^$/d' | wc -l | tr -d ' ')" -le 1 ] || { echo "::error::multiple canary issues; refusing to choose one"; exit 1; }
           if [ "$COUNT" = "0" ]; then
             if [ -n "$existing" ]; then
               gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
@@ -214,10 +315,10 @@ jobs:
             exit 0
           fi
           {
-            printf 'Core `%s` breaks **%s** test(s) that pass at this repo'"'"'s pin (`%s`, **%s** commits behind).\n\n' "$MAIN" "$COUNT" "$PIN" "$BEHIND"
+            printf 'Core `%s` breaks **%s** regression(s) against this repo'"'"'s pin (`%s`, **%s** commits behind).\n\n' "$MAIN" "$COUNT" "$PIN" "$BEHIND"
             sed 's/^/- `/;s/$/`/' "$RUNNER_TEMP/delta.txt"
             printf '\nThese are **not** red on this repo today, and this is **not** a gate — nothing here blocks a pull request. It is what the next pin bump will hit, reported on the day core merged it rather than days later under a red trunk.\n\n'
-            printf '🚨 **The list is a DELTA, not a failure list.** Each test was run twice — once with core at the pin, once at core main — and only those that pass at the pin and fail at main are here. A test already red at the pin is this repo'"'"'s own business and is excluded.\n\n'
+            printf '🚨 **The list is a DELTA, not a failure list.** Test regressions require an executed pass at the pin and a failure at main. Build regressions require a successful build at the pin and a failed build at main. A test already red at the pin is this repo'"'"'s own business and is excluded.\n\n'
             printf '[Canary run](%s)\n\n%s\n' "$RUN_URL" "$marker"
           } > "$RUNNER_TEMP/body.md"
           if [ -n "$existing" ]; then
@@ -225,7 +326,7 @@ jobs:
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still ${COUNT} at core \`${MAIN}\` ([run](${RUN_URL}))."
           else
             gh issue create --repo "$GITHUB_REPOSITORY" --label "$LABEL" \
-              --title "Platform canary: core main breaks ${COUNT} test(s) this pin does not" --body-file "$RUNNER_TEMP/body.md" || \
+              --title "Platform canary: core main breaks ${COUNT} regression(s) against this pin" --body-file "$RUNNER_TEMP/body.md" || \
             gh issue create --repo "$GITHUB_REPOSITORY" \
-              --title "Platform canary: core main breaks ${COUNT} test(s) this pin does not" --body-file "$RUNNER_TEMP/body.md"
+              --title "Platform canary: core main breaks ${COUNT} regression(s) against this pin" --body-file "$RUNNER_TEMP/body.md"
           fi
