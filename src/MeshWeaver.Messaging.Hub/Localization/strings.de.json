@@ -1431,5 +1431,9 @@
   "setup.problem.noCompany": "Geben Sie die Organisation an, zu der diese Instanz gehört.",
   "setup.problem.noOwnerName": "Geben Sie den Namen der Person an, der diese Instanz gehört.",
   "setup.problem.noOwnerEmail": "Geben Sie eine gültige E-Mail-Adresse an — darüber erreicht die Registry die Eigentümerin oder den Eigentümer dieser Instanz.",
-  "setup.problem.noConsent": "Akzeptieren Sie die Datenschutzerklärung und die Plattform-Nutzungsbedingungen, um zu registrieren. Bis dahin wird nichts gesendet."
+  "setup.problem.noConsent": "Akzeptieren Sie die Datenschutzerklärung und die Plattform-Nutzungsbedingungen, um zu registrieren. Bis dahin wird nichts gesendet.",
+  "node.meta.type": "Typ:",
+  "node.meta.created": "Erstellt:",
+  "node.meta.updated": "Aktualisiert:",
+  "node.meta.by": "von {0}"
 }

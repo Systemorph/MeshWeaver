@@ -645,7 +645,7 @@ public static class MeshNodeLayoutAreas
             var typeLabel = node.NodeType.Contains('/') ? node.NodeType.Split('/').Last() : node.NodeType;
             row = row.WithView(Controls.Html(
                 "<span style=\"display: inline-flex; align-items: center; gap: 6px;\">" +
-                "<span>Type:</span>" +
+                $"<span>{System.Web.HttpUtility.HtmlEncode(host.Localize("node.meta.type"))}</span>" +
                 $"<a href=\"{typeHref}\" style=\"color: var(--accent-fill-rest); font-weight: 500;\">{System.Web.HttpUtility.HtmlEncode(typeLabel)}</a>" +
                 "</span>"));
         }
@@ -653,15 +653,15 @@ public static class MeshNodeLayoutAreas
         if (node != null && node.CreatedDate != default)
         {
             var created = access.ToDisplayTime(node.CreatedDate).ToString("yyyy-MM-dd HH:mm");
-            var createdBy = string.IsNullOrEmpty(node.CreatedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.CreatedBy)}";
-            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Created:</span> {created}{createdBy}</span>"));
+            var createdBy = string.IsNullOrEmpty(node.CreatedBy) ? "" : $" {System.Web.HttpUtility.HtmlEncode(host.Localize("node.meta.by", node.CreatedBy))}";
+            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">{System.Web.HttpUtility.HtmlEncode(host.Localize("node.meta.created"))}</span> {created}{createdBy}</span>"));
         }
 
         if (node != null && node.LastModified != default)
         {
             var modified = access.ToDisplayTime(node.LastModified).ToString("yyyy-MM-dd HH:mm");
-            var modifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.LastModifiedBy)}";
-            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Updated:</span> {modified}{modifiedBy}</span>"));
+            var modifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? "" : $" {System.Web.HttpUtility.HtmlEncode(host.Localize("node.meta.by", node.LastModifiedBy))}";
+            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">{System.Web.HttpUtility.HtmlEncode(host.Localize("node.meta.updated"))}</span> {modified}{modifiedBy}</span>"));
         }
 
         return row;
