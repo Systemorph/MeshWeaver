@@ -2542,6 +2542,39 @@ public sealed class MessageHub : IMessageHub
     }
 
     /// <summary>
+    /// 🚨 <b>Every hub alive under this one, this one included — the population #3432 needed and
+    /// nobody could see without a heap dump (#3488).</b>
+    ///
+    /// <para>Yielded lazily and bounded by <see cref="MaxHostedHubRecursionDepth"/>, exactly like
+    /// the disposal walks beside it: a hosted-hub cycle must cost a truncated answer, never a hung
+    /// scrape. The enumeration is over <c>HostedHubsCollection.Hubs</c>, which is a
+    /// <c>ConcurrentDictionary</c>'s values — safe to walk while hubs are added and removed, and
+    /// the snapshot is deliberately not locked: a metric of a moving population is a sample, and
+    /// pausing the mesh to make it exact would cost more than the number is worth.</para>
+    ///
+    /// <para>Internal: this is instrumentation's read, not a public traversal API. A caller that
+    /// wants to ACT on the tree should use the disposal seams, which are ordered.</para>
+    /// </summary>
+    /// <param name="depth">Recursion depth; callers pass nothing.</param>
+    /// <returns>This hub, then every live descendant.</returns>
+    internal IEnumerable<IMessageHub> LiveHubTree(int depth = 0)
+    {
+        yield return this;
+        if (depth >= MaxHostedHubRecursionDepth)
+            yield break;
+        foreach (var child in hostedHubs.Hubs)
+        {
+            if (child is not MessageHub childHub)
+            {
+                yield return child;
+                continue;
+            }
+            foreach (var descendant in childHub.LiveHubTree(depth + 1))
+                yield return descendant;
+        }
+    }
+
+    /// <summary>
     /// Builds a concise, indented summary of the hubs (and their pending callbacks) that hit the
     /// Quiescing timeout, for a dispose-failure message. Empty when none timed out.
     /// </summary>
