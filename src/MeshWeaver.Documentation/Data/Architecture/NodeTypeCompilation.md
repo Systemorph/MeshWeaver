@@ -8,6 +8,14 @@ icon: /static/NodeTypeIcons/code.svg
 
 # NodeType Compilation & Releases
 
+**Compatibility follows the APIs used, not a fixed platform version**
+([Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy), maintainer clarification
+2026-09-09). Reuse a compiled artifact only when its cache contract permits it; otherwise compile
+the source against the current platform and installed dependencies. A different build identity
+alone is a cache miss, not proof of an incompatible feature and not a reason to pin the running
+platform. Diagnose concrete missing types, changed member contracts and compiler/load failures.
+The explicit `Modules:RequirePrebuilt` policy remains a separate operational choice.
+
 A **dynamic NodeType** carries its behaviour as C# source (`Source/*.cs`) plus a
 `configuration` lambda — and that source is compiled **at runtime, on demand**.
 You never redeploy the portal to add or change a NodeType. This page is the

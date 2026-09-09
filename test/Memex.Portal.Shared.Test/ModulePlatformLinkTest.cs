@@ -4,6 +4,8 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
@@ -437,6 +439,139 @@ public class ModulePlatformLinkTest : IDisposable
     }
 
     // ───────────────────────────────────────────────────────────── harness
+
+    /// <summary>Different assembly versions and additive APIs do not remove a referenced type.
+    /// Exercise the real metadata probe with separately compiled contracts in both directions.</summary>
+    [Theory]
+    [InlineData("1.0.0.0", "9.0.0.0")]
+    [InlineData("9.0.0.0", "1.0.0.0")]
+    public void CompatibleApiAcrossPlatformVersions_IsLinkable(string builtVersion, string runningVersion)
+    {
+        const string contractName = "MeshWeaver.Test.VersionedContract";
+        const string moduleName = "MeshWeaver.Test.VersionTolerantPack";
+        var builtContract = Emit(contractName, $$"""
+            [assembly: System.Reflection.AssemblyVersion("{{builtVersion}}")]
+            namespace MeshWeaver.Test;
+            public class StableApi { public int Answer() => 1; }
+            """);
+        var module = Emit(moduleName, """
+            public class View {
+                public int Render(MeshWeaver.Test.StableApi api) => api.Answer();
+            }
+            """, extra: MetadataReference.CreateFromImage(builtContract));
+        var runningContract = Emit(contractName, $$"""
+            [assembly: System.Reflection.AssemblyVersion("{{runningVersion}}")]
+            namespace MeshWeaver.Test;
+            public class StableApi { public int Answer() => 42; public string Extra() => "new"; }
+            public class UnusedAddition { }
+            """);
+
+        var surface = ModulePlatformSurface.OfFiles([Write(contractName, runningContract)]);
+        var verdict = ModulePlatformLink.Check(module, moduleName, new HashSet<string> { moduleName }, surface);
+
+        Assert.Equal(ModuleLinkState.Linkable, verdict.State);
+        Assert.True(verdict.MayLoad, verdict.Report());
+        Assert.True(verdict.CheckedTypeReferences > 0);
+        Assert.Contains(contractName, verdict.CheckedAssemblies);
+        Assert.Empty(verdict.MissingTypes);
+    }
+
+    /// <summary>The same version can contain incompatible bytes. Version equality must never
+    /// replace the type measurement, even when an unrelated type remains in the assembly.</summary>
+    [Fact]
+    public void IdenticalPlatformVersionWithRemovedApi_IsUnlinkable()
+    {
+        const string contractName = "MeshWeaver.Test.SameVersionContract";
+        const string moduleName = "MeshWeaver.Test.RemovedApiPack";
+        var builtContract = Emit(contractName, """
+            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+            namespace MeshWeaver.Test;
+            public class RequiredApi { }
+            """);
+        var module = Emit(moduleName, """
+            public class View { public MeshWeaver.Test.RequiredApi Render() => new(); }
+            """, extra: MetadataReference.CreateFromImage(builtContract));
+        var runningContract = Emit(contractName, """
+            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+            namespace MeshWeaver.Test;
+            public class UnrelatedApi { }
+            """);
+
+        var verdict = ModulePlatformLink.Check(module, moduleName, new HashSet<string> { moduleName },
+            ModulePlatformSurface.OfFiles([Write(contractName, runningContract)]));
+
+        Assert.Equal(ModuleLinkState.Unlinkable, verdict.State);
+        Assert.False(verdict.MayLoad);
+        Assert.Contains(verdict.MissingTypes, missing => missing.Contains("MeshWeaver.Test.RequiredApi", StringComparison.Ordinal));
+        Assert.Contains(contractName, verdict.Report(), StringComparison.Ordinal);
+    }
+
+    /// <summary>Exercise real method binding as well as type metadata. A changed method body or
+    /// added overload keeps the used signature working; removing/changing it fails when invoked.
+    /// The type probe alone deliberately makes no member-compatibility claim.</summary>
+    [Theory]
+    [InlineData("public int Answer() => 42; public int Answer(int extra) => extra;", true)]
+    [InlineData("public long Answer() => 42;", false)]
+    [InlineData("public int Answer(int extra) => extra;", false)]
+    public void MemberCompatibility_IsMeasuredByBindingTheUsedSignature(string runtimeMember, bool compatible)
+    {
+        const string contractName = "MeshWeaver.Test.MemberContract";
+        const string moduleName = "MeshWeaver.Test.MemberConsumer";
+        var builtContract = Emit(contractName,
+            "namespace MeshWeaver.Test; public class Api { public int Answer() => 1; }");
+        var consumer = Emit(moduleName,
+            "public static class View { public static int Render() => new MeshWeaver.Test.Api().Answer(); }",
+            extra: MetadataReference.CreateFromImage(builtContract));
+        var runtimeContract = Emit(contractName,
+            "namespace MeshWeaver.Test; public class Api { " + runtimeMember + " }");
+
+        var typeVerdict = ModulePlatformLink.Check(consumer, moduleName, new HashSet<string> { moduleName },
+            ModulePlatformSurface.OfFiles([Write(contractName, runtimeContract)]));
+        Assert.Equal(ModuleLinkState.Linkable, typeVerdict.State);
+
+        var context = new AssemblyLoadContext("member-contract-" + Guid.NewGuid().ToString("N"), isCollectible: true);
+        try
+        {
+            using var runtime = new MemoryStream(runtimeContract);
+            context.LoadFromStream(runtime);
+            using var module = new MemoryStream(consumer);
+            var render = context.LoadFromStream(module).GetType("View")!.GetMethod("Render")!;
+            if (compatible)
+                Assert.Equal(42, render.Invoke(null, null));
+            else
+            {
+                var error = Assert.Throws<TargetInvocationException>(() => render.Invoke(null, null));
+                var missing = Assert.IsType<MissingMethodException>(error.InnerException);
+                Assert.Contains("Answer", missing.Message, StringComparison.Ordinal);
+            }
+        }
+        finally { context.Unload(); }
+    }
+
+    /// <summary>An incompatible incoming generation must not replace the working activation.
+    /// Run both real landings and verify the previous bytes and activation pointer survive.</summary>
+    [Fact]
+    public async Task MissingApiInUpgrade_PreservesWorkingModuleAndItsBytes()
+    {
+        const string name = "MeshWeaver.Test.ContinuityPack";
+        var good = ModuleBuiltAgainstThisPlatform(name);
+        await landing.LandModule(name, [(name + ".dll", good)], version: "1.0.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        var before = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        var goodPath = Path.Combine(ModuleLandingService.ModuleDirectoryFor(root, name, before), name + ".dll");
+
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await landing.LandModule(name, [(name + ".dll", ModuleBuiltAgainstAFuturePlatform(name))],
+                    version: "2.0.0", minMeshVersion: "0.0.1")
+                .Timeout(TestTimeouts.Convergence).Await());
+
+        Assert.Contains(FutureType, refusal.Message, StringComparison.Ordinal);
+        var after = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal(before.Directory, after.Directory);
+        Assert.Equal(before.Version, after.Version);
+        Assert.True(after.Enabled);
+        Assert.Equal(good, File.ReadAllBytes(goodPath));
+    }
 
     /// <summary>
     /// A module compiled against a STAND-IN <c>MeshWeaver.Mesh.Contract</c> that carries

@@ -17,6 +17,27 @@ still describes the older mechanism, it says so in a banner that names the imple
 
 ## The three rules
 
+**Maintainer clarification, 2026-09-09: compatibility follows the used API, not a platform pin.**
+Keep a module usable across platform and dependency releases when the contracts it uses remain
+compatible. A different version, build commit or MVID is not evidence of incompatibility. A
+removed type/member, changed required signature or another actual linking/loading failure is.
+Conversely, identical version strings do not make incompatible bytes safe.
+
+This is a runtime contract. Reproducible compiler inputs and content-addressed cache keys record
+what produced an artifact; they must not become an exact-version requirement for running a
+compiled module. A NodeType bake with another build identity is not reused blindly: compile its
+source against the current platform. That cache miss is not a declaration that the feature is
+incompatible. Explicit strict-prebuilt policy remains an operator choice.
+
+The compatibility regression suite must include positive and negative controls: unchanged used
+APIs across different assembly versions, additive APIs/body changes, removal of a referenced API
+even with an unchanged version, incompatible member signatures, and preservation of a working
+generation when an upgrade fails. Exercise real metadata/loader paths; tests that compare version
+strings alone cannot prove these claims. `ModulePlatformLinkTest` covers the type measurement and
+rejected-upgrade continuity. Member compatibility also needs actual loading/execution: the current
+type-level probe cannot establish it. Do not describe a successful type probe as proof that every
+method call is compatible.
+
 | # | Rule | What it replaces |
 |---|---|---|
 | **R1 — continuity** | An installation always runs *some* version of every module it has installed: the newest one that **loads**. If nothing newer ships for the platform it runs, the version it has keeps running. Nothing removes a working module because a newer one exists but cannot load. | A landed generation that does not load leaves the module **absent** (only image-shipped modules had a baseline to fall back to); a shelved landing overwrote the only reference to the loadable generation. |
