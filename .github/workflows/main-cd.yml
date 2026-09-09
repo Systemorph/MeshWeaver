@@ -744,7 +744,7 @@ jobs:
           }
 
           # ── ONE COMMIT, ONE IMAGE SET (MeshWeaver#3376) ────────────────────────────────────
-          # On 2026-09-05 core 34c3eecec got two publishing runs: the push-triggered run (#7845)
+          # On 2026-09-05 core 34c3eecec4eaa6590c64852a0b7b873541983269 got two publishing runs: the push-triggered run (#7845)
           # and the hourly reconcile (#7846) both passed this step, because "is the set complete?"
           # was asked while the first build was still in flight — not complete YET, so the second
           # built too. Two `dotnet publish`es of one commit are two different digests: each got

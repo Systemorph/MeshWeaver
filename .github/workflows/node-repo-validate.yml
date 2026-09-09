@@ -91,11 +91,33 @@ jobs:
           gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-workflow-timeouts.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-workflow-timeouts.py" \
             || { echo "::error::could not fetch .github/scripts/check-workflow-timeouts.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-workflow-timeouts.py" | grep -q "check-workflow-timeouts" || { echo "::error::the fetched check-workflow-timeouts.py at ${PLATFORM_REF} does not look like the guard"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-abbreviated-shas.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-abbreviated-shas.py" \
+            || { echo "::error::could not fetch .github/scripts/check-abbreviated-shas.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-abbreviated-shas.py" | grep -q "check-abbreviated-shas" || { echo "::error::the fetched check-abbreviated-shas.py at ${PLATFORM_REF} does not look like the guard"; exit 1; }
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
       - name: "Every job is capped at 45 minutes — the gate can fail (self-test)"
         run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --self-test
       - name: "Every job in this repo's workflows is capped at 45 minutes"
         run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --root .
+
+      # 🚨 A 40-HEX SUBSTITUTION CANNOT SEE AN ABBREVIATED SHA, and the pin-move procedure in every
+      # node repo's ci.yml is exactly such a substitution ("move each value by grepping its OLD
+      # value"). The narrative comment names the pin SHORT — `core <9-hex>` — so the sed moves the
+      # `uses:`/`platform-ref:` literals and the SET NAME beside it, and leaves the commit. What
+      # remains reads "<new set> / core <old short sha>": new set, old commit, stated confidently.
+      #
+      # (Written with placeholders on purpose: a real short sha here would be flagged by this very
+      # guard, correctly — it would name a commit this file does not pin. It caught exactly that
+      # when this comment first quoted one.)
+      #
+      # Measured 2026-09-09: this fired in THREE repos in one session (MeshWeaver.Reinsurance,
+      # MeshWeaver.Crm, MeshWeaver.Manufacturing), each caught by hand. Reinsurance's own ci.yml
+      # records having had the same class before — "the previous pin's comment said ci.6353 while
+      # the pin was ci.6469" — which is what makes it a guard rather than a fourth catch.
+      - name: "An abbreviated sha resolves in its own file — the gate can fail (self-test)"
+        run: python3 "$RUNNER_TEMP/check-abbreviated-shas.py" --self-test
+      - name: "No pin comment names a commit this repo no longer pins"
+        run: python3 "$RUNNER_TEMP/check-abbreviated-shas.py" --root .
 
       # 🚨 A DUPLICATE MAPPING KEY IS ACCEPTED SILENTLY AND THE LAST ONE WINS (Systemorph/MeshWeaver#3579).
       # `yaml.safe_load` — the loader the guard above and every other guard in this fleet uses — takes
