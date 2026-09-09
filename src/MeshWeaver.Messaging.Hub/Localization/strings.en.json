@@ -1433,5 +1433,9 @@
   "setup.problem.noCompany": "Give the organisation this instance belongs to.",
   "setup.problem.noOwnerName": "Give the name of the person who owns this instance.",
   "setup.problem.noOwnerEmail": "Give a valid email address — it is how the registry reaches the owner about this instance.",
-  "setup.problem.noConsent": "Accept the privacy statement and the platform terms to register. Nothing is sent until you do."
+  "setup.problem.noConsent": "Accept the privacy statement and the platform terms to register. Nothing is sent until you do.",
+  "node.meta.type": "Type:",
+  "node.meta.created": "Created:",
+  "node.meta.updated": "Updated:",
+  "node.meta.by": "by {0}"
 }
