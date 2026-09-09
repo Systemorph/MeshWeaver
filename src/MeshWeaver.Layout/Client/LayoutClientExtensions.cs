@@ -299,8 +299,21 @@ public static class LayoutClientExtensions
         // Labels must render the same value before and after transport serialization.
         // Collections and other non-convertible values use the existing JSON text conversion.
         if (typeof(T) == typeof(string) && value is not null && value is not IConvertible)
-            return hub.ConvertJson(JsonSerializer.SerializeToElement(value, hub.JsonSerializerOptions),
-                null, defaultValue);
+        {
+            try
+            {
+                return hub.ConvertJson(JsonSerializer.SerializeToElement(value, hub.JsonSerializerOptions),
+                    null, defaultValue);
+            }
+            catch (Exception ex) when (ex is JsonException or NotSupportedException)
+            {
+                // Match the unreadable-string policy: report the rejected value's type and keep
+                // the subscription alive so a later valid emission can render normally.
+                hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Layout.ConvertString")
+                    .LogDebug(ex, "Could not serialize label value of type {Type} — using default", value.GetType().Name);
+                return defaultValue;
+            }
+        }
         return value switch
         {
             null => defaultValue,
