@@ -260,6 +260,24 @@ Stated so nobody reads a green sweep as more than it is.
   naming the count. It never reads the first N silently: the roots it skipped would then be spelled
   exactly like roots that are fine, which is the failure this whole page is about.
 
+## Package README pages and Git updates
+
+A package installer sees repo-relative `Store/README.md` and writes `Store/README`.
+Git sync sees that same file as `README.md` after selecting the `Store` subdirectory.
+These paths must agree when the package's root `manifest.lock` declares the README in its
+repo-relative `files` map. Git sync then imports it as a node, including when the node is missing.
+A later package manifest that retires the file retains ordinary mirror deletion behavior.
+
+Without a package manifest, the root README is a generated repository landing page, not a node.
+Skipping that display file must not make an existing README node a deletion candidate. Export
+also preserves an authored README instead of appending another generated file with the same path.
+An unreadable package manifest fails the import before it can make this ownership decision.
+
+The distinction matters when diagnosing a repair: a Git update activity is not evidence that
+`PackageInstaller` performed a full reinstall. In #3686 the cited update activity explicitly fetched
+Git deltas; the package reinstall path restored the README in a local real-mesh reproduction, while
+the Git sync full-import reproduction deleted it before this correction.
+
 ## Related
 
 - [CQRS — Queries vs. Content Access](../CqrsAndContentAccess) — why the observed side is a batched
