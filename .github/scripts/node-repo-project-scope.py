@@ -48,11 +48,11 @@ def select(root, policy, files):
 
     if not files:
         return answer(policy, "no reliable diff — full validation")
-    scope = load(Path(__file__).with_name("node-repo-scope.py"), "node_scope")
     try:
+        scope = load(Path(__file__).with_name("node-repo-scope.py"), "node_scope")
         projects = load(root / scope.PROJECTS, "caller_projects")
         graph = projects.graph_of(root)
-    except (OSError, AttributeError, ValueError):
+    except (OSError, AttributeError, ValueError, ImportError, SyntaxError):
         return answer(policy, "project graph unavailable — full validation")
     packages = scope.node_packages(root)
     noop_dirs, _ = scope.resolve_noop_dirs(root)
@@ -126,7 +126,17 @@ def forward(seed, graph): return {seed} | graph.get(seed, set())
                 pass
             else:
                 raise AssertionError("invalid policy accepted")
-    print("compiled project scope: 14 assertions passed")
+        # Load the actual selector from a separate directory: missing or broken helper files
+        # must broaden validation, never turn an unresolved graph into an empty selection.
+        isolated = root / "isolated"
+        isolated.mkdir()
+        selector = isolated / Path(__file__).name
+        selector.write_text(Path(__file__).read_text())
+        fallback = load(selector, "isolated_selector")
+        assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
+        (isolated / "node-repo-scope.py").write_text("this is invalid Python !")
+        assert fallback.select(root, policy, ["Alpha/Lesson.md"])["count"] == 2
+    print("compiled project scope: 16 assertions passed")
 
 
 def main():

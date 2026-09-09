@@ -246,3 +246,10 @@ from `platform-ref` (the framework source against which compiled suites run). A 
 must not silently advance that source pin. Existing callers without the new input keep their
 previous selector and do not invoke the new helpers. The publication-input receipt includes both
 resolved framework source and build-logic pins, as well as the image digests.
+
+The reusable lane accepts the baseline only as a pair: a numeric `publication-run` and a full
+source SHA with `build-logic-ref` enabled. An absent run or malformed pair keeps broad publishing.
+If the compiled-project selector cannot load its scope helper or project graph, it validates the
+entire declared policy; a missing or syntactically invalid helper is covered by its self-test.
+The ledger lane guard verifies that publication reuse receives both ledger outputs and that its
+final build subset feeds the build and postcondition together.

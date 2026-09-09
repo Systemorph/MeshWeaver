@@ -637,6 +637,7 @@ jobs:
           MODULES: ${{ inputs.modules }}
           ALWAYS: ${{ inputs.always-modules }}
           PUBLICATION_BASE: ${{ inputs.publication-base }}
+          PUBLICATION_RUN: ${{ inputs.publication-run }}
           BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
@@ -655,7 +656,9 @@ jobs:
               "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           fi
           publication_args=()
-          if [ -n "$BUILD_LOGIC_REF" ]; then publication_args=(--publication-base "$PUBLICATION_BASE"); fi
+          if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+            publication_args=(--publication-base "$PUBLICATION_BASE")
+          fi
           python3 meshweaver/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \

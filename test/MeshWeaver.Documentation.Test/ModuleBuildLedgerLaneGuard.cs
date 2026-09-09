@@ -53,9 +53,15 @@ public class ModuleBuildLedgerLaneGuard
         Assert.Contains("inputs.ledger is '$LEDGER'. The only values are 'off' (the default) and 'required'", select, StringComparison.Ordinal);
         // The token is asserted, never tested-and-skipped.
         Assert.Contains("[ -n \"${MW_LEDGER_TOKEN:-}\" ] ||", select, StringComparison.Ordinal);
-        // Both outputs the downstream jobs key on.
-        Assert.Contains("build-modules: ${{ steps.ledger.outputs.build }}", select, StringComparison.Ordinal);
-        Assert.Contains("modules: ${{ steps.ledger.outputs.modules }}", select, StringComparison.Ordinal);
+        // Publication reuse is downstream of the ledger: it must preserve the ledger selection
+        // and its build subset when disabled, then expose the final selection to both consumers.
+        Assert.Contains("MATRIX: ${{ steps.ledger.outputs.modules }}", select, StringComparison.Ordinal);
+        Assert.Contains("BUILD: ${{ steps.ledger.outputs.build }}", select, StringComparison.Ordinal);
+        Assert.Contains("echo \"modules=$MATRIX\" >> \"$GITHUB_OUTPUT\"", select, StringComparison.Ordinal);
+        Assert.Contains("echo \"build=$BUILD\" >> \"$GITHUB_OUTPUT\"", select, StringComparison.Ordinal);
+        Assert.Contains("node-repo-publication-reuse.py", select, StringComparison.Ordinal);
+        Assert.Contains("build-modules: ${{ steps.reuse.outputs.build }}", select, StringComparison.Ordinal);
+        Assert.Contains("modules: ${{ steps.reuse.outputs.modules }}", select, StringComparison.Ordinal);
     }
 
     [Fact]
