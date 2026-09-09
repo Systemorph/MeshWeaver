@@ -23,6 +23,36 @@ public interface IFormControl : IUiControl
     IFormControl WithLabel(object label);
 
     /// <summary>
+    /// Accessible name for the control, rendered as <c>aria-label</c> on the underlying input.
+    ///
+    /// <para>
+    /// 🚨 This is NOT a second visible label — it exists because the visible one frequently lives
+    /// OUTSIDE the control. A generated editor field renders its caption in the surrounding
+    /// <see cref="PropertySkin"/> (a <c>&lt;dt&gt;</c>) and deliberately leaves <see cref="Label"/>
+    /// null so the caption is not painted twice; the input is then left with no accessible name at
+    /// all. An HTML <c>&lt;label for&gt;</c> cannot rescue it either: the Fluent web components put
+    /// their real input inside a SHADOW ROOT, and <c>for</c>/<c>id</c> do not associate across that
+    /// boundary — which is why <c>getByRole('textbox', { name })</c> found nothing (MeshWeaver#3863).
+    /// <c>aria-label</c> is set on the host element and survives the shadow boundary.
+    /// </para>
+    /// </summary>
+    object? AriaLabel => null;
+
+    /// <summary>
+    /// Returns a copy of the control carrying <paramref name="ariaLabel"/> as its accessible name.
+    /// </summary>
+    /// <param name="ariaLabel">The accessible name, or a binding expression resolving to one.</param>
+    /// <returns>A new instance of the form control with the specified accessible name.</returns>
+    /// <remarks>
+    /// The default implementation returns the control unchanged — a form control that carries no
+    /// accessible name of its own. <c>FormControlBase</c>, which every control in this repository
+    /// derives from, overrides both this and <see cref="AriaLabel"/> with the real record copy.
+    /// The default exists so that adding this member cannot oblige an out-of-repo implementer to
+    /// write code before it can compile (see <c>scripts/check-interface-addition.py</c>).
+    /// </remarks>
+    IFormControl WithAriaLabel(object ariaLabel) => this;
+
+    /// <summary>
     /// Whether the form control is disabled.
     /// </summary>
     object? Disabled { get; init; }
