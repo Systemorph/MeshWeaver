@@ -264,6 +264,7 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
             var returnValue = _terminalReturnValue;
 
             var stream = _stream ??= hub.GetWorkspace().GetMeshNodeStream(activityLogPath);
+            var releaseMirror = ActivityLogAppender.PrepareMirrorRelease(hub, activityLogPath, _diagnostics);
             var options = hub.JsonSerializerOptions;
 
             // 🚨 THE canonical mutation API — see the class remarks for why a hand-posted
@@ -357,8 +358,7 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
                         // On COMPLETION, never on the emission: releasing tears the path's upstream
                         // sync streams down, and the write is still in flight when its value is
                         // emitted. Same rule, same reason, as Append's own Do arm.
-                        () => ActivityLogAppender.ReleaseMirrorWhenFinal(
-                            hub, activityLogPath, status, _diagnostics));
+                        () => releaseMirror(status));
         }
         catch { /* never let logging break the script */ }
     }
