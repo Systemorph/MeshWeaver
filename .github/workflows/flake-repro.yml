@@ -17,6 +17,11 @@ name: Flake repro (manual)
 on:
   workflow_dispatch:
     inputs:
+      diagnostic:
+        description: "Suite reproduction or the fixed native standalone Roslyn emit comparison"
+        type: choice
+        options: ["test-suite", "standalone-emit"]
+        default: "test-suite"
       project:
         description: "Test project to loop"
         type: string
@@ -55,6 +60,7 @@ env:
 
 jobs:
   repro:
+    if: inputs.diagnostic != 'standalone-emit'
     name: "Loop suspect test until fail"
     # ubuntu-latest == the 2-vCPU GitHub-hosted runner the real flake needs.
     runs-on: ubuntu-latest
@@ -214,3 +220,52 @@ jobs:
           path: repro-diagnostics/
           retention-days: 15
           compression-level: 9
+
+
+  standalone-emit:
+    name: Native standalone Roslyn emit comparison
+    if: inputs.diagnostic == 'standalone-emit'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Native hosted job: no container, services, production access or additional token scopes.
+    env:
+      MW_EMIT_NATIVE_RUNNER: ubuntu-24.04-hosted
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Initialize diagnostic evidence
+        if: always()
+        run: |
+          mkdir -p artifacts/roslyn-emit-probe
+          echo 'No completed probe verdict yet; a missing verdict is not a successful reproduction.' > artifacts/roslyn-emit-probe/initial-state.txt
+      - name: Setup pinned SDK and runtime
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.401
+      - name: Validate diagnostic result handling
+        run: python3 .github/scripts/test-run-emit-probe.py
+      - name: Build the standalone probe
+        id: build
+        working-directory: tools/RoslynEmitProbe
+        run: |
+          test "$(dotnet --version)" = '10.0.401'
+          dotnet build EmitProbe.csproj -c Release -warnaserror
+      - name: Run bounded native comparison
+        if: always()
+        env:
+          MW_EMIT_BUILD_OUTCOME: ${{ steps.build.outcome }}
+        run: |
+          if [ ! -f .github/scripts/run-emit-probe.py ]; then
+            echo '::error::EMIT PROBE DID NOT RUN — diagnostic checkout is unavailable.'
+            exit 1
+          fi
+          python3 .github/scripts/run-emit-probe.py
+      - name: Upload exact probe evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-emit-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/roslyn-emit-probe/
+          if-no-files-found: error
+          retention-days: 15
