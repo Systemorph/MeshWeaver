@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Hosting;
 
@@ -10,7 +11,22 @@ namespace MeshWeaver.Hosting;
 /// <param name="LastPath">The most recent node path.</param>
 /// <param name="LastAt">When.</param>
 public sealed record ContentDegradation(
-    string NodeType, string Seam, int Count, string? LastPath, DateTimeOffset LastAt);
+    string NodeType, string Seam, int Count, string? LastPath, DateTimeOffset LastAt)
+{
+    /// <summary>
+    /// The stored <c>$type</c>, when the degraded content carried one — the second key
+    /// <see cref="ContentDegradationRegistry.Unresolved"/> re-asks the content-type registry under,
+    /// for content whose NodeType is absent or unregistered.
+    ///
+    /// <para>🚨 An <c>init</c> PROPERTY, deliberately not a primary-constructor parameter. Adding a
+    /// parameter — even with a default — REPLACES the record's constructor signature, so every
+    /// assembly already compiled against the 5-parameter one calls a constructor this build no
+    /// longer has. That is a binary break for module bundles built on a previous platform, and the
+    /// repo's <c>Public surface (binary compatibility)</c> gate refuses it (it caught this exact
+    /// change). A property leaves the arity untouched.</para>
+    /// </summary>
+    public string? Discriminator { get; init; }
+}
 
 /// <summary>
 /// 🚨 <b>What this replica could not read — kept, so it can be SEEN.</b> A node whose
@@ -30,14 +46,28 @@ public sealed class ContentDegradationRegistry
         new(StringComparer.Ordinal);
 
     /// <summary>Records one degraded read.</summary>
-    public void Record(string? nodeType, string? nodePath, string seam)
+    /// <param name="nodeType">The node's NodeType.</param>
+    /// <param name="nodePath">The node path.</param>
+    /// <param name="seam">The read seam that observed it.</param>
+    /// <param name="discriminator">The content's stored <c>$type</c>, when it carried one. Kept so
+    /// <see cref="Unresolved"/> can re-ask the registry by NAME as well as by NodeType — the same
+    /// two routes <c>TryRecoverForNodeType</c> takes.</param>
+    public void Record(string? nodeType, string? nodePath, string seam, string? discriminator = null)
     {
         var key = string.IsNullOrEmpty(nodeType) ? "(no node type)" : nodeType;
         var now = DateTimeOffset.UtcNow;
         byNodeType.AddOrUpdate(
             key,
-            _ => new ContentDegradation(key, seam, 1, nodePath, now),
-            (_, existing) => existing with { Count = existing.Count + 1, LastPath = nodePath, LastAt = now });
+            _ => new ContentDegradation(key, seam, 1, nodePath, now) { Discriminator = discriminator },
+            (_, existing) => existing with
+            {
+                Count = existing.Count + 1,
+                LastPath = nodePath,
+                LastAt = now,
+                // First-seen wins: a later read of the same NodeType whose element happens to carry
+                // no $type must not erase the name the FIRST one gave us to re-ask under.
+                Discriminator = existing.Discriminator ?? discriminator,
+            });
     }
 
     /// <summary>Forgets a node type — called when a later read of it typed cleanly, so a
@@ -46,6 +76,45 @@ public sealed class ContentDegradationRegistry
     {
         if (!string.IsNullOrEmpty(nodeType))
             byNodeType.TryRemove(nodeType, out _);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The verdict, as opposed to the event (#3645).</b> The entries whose content type is
+    /// STILL unresolvable — re-asked against <paramref name="contentTypes"/> at the moment of the
+    /// call, rather than believed from when the read happened.
+    ///
+    /// <para>A degradation is recorded at the INSTANT of a read, and at that instant nothing can
+    /// know whether the type will register a moment later. That is the ordinary state during a
+    /// portal boot — a NodeType's runtime compile lands after the first readers are served — and
+    /// #2952 exists precisely to re-type those readers when the registration arrives. So a
+    /// snapshot of what degraded answers <i>"content was unreadable at a read"</i>, while the
+    /// question every consumer of this registry actually asks (<c>/health</c>, and the CI gate) is
+    /// <i>"content is unreadable"</i>.</para>
+    ///
+    /// <para>Both routes <c>TryRecoverForNodeType</c> takes are re-asked, and nothing else: the
+    /// EXACT route on the node's own NodeType, and the NAME route on the stored <c>$type</c>. Both
+    /// are pure map lookups, so this needs no content and can be called on any thread, as often as
+    /// a health probe likes.</para>
+    ///
+    /// <para>🚨 <b>A null registry means UNRESOLVED, never resolved.</b> There is no registry to
+    /// clear an entry with, so the honest answer is the one that keeps reporting — a missing
+    /// instrument may not read as a clean result.</para>
+    /// </summary>
+    /// <param name="contentTypes">The mesh-wide content-type registry, or <c>null</c>.</param>
+    /// <returns>The still-unresolvable degradations, most recent first.</returns>
+    public ImmutableList<ContentDegradation> Unresolved(IMeshContentTypeRegistry? contentTypes) =>
+        Snapshot().Where(d => !IsResolvable(d, contentTypes)).ToImmutableList();
+
+    /// <summary>Whether one recorded degradation's type resolves NOW. Pure given the registry.</summary>
+    private static bool IsResolvable(ContentDegradation degradation, IMeshContentTypeRegistry? contentTypes)
+    {
+        if (contentTypes is null)
+            return false;
+        if (!string.IsNullOrEmpty(degradation.NodeType)
+            && contentTypes.TryResolveByNodeType(degradation.NodeType, out _))
+            return true;
+        return !string.IsNullOrEmpty(degradation.Discriminator)
+               && contentTypes.TryResolveByDiscriminator(degradation.Discriminator!, out _);
     }
 
     /// <summary>Every node type currently degraded, most recent first.</summary>

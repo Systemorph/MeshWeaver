@@ -777,6 +777,56 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     }
 
     /// <summary>
+    /// 🚨 <b>The one place that can say "this one never recovered" (#3645).</b> Emits one
+    /// <see cref="MeshNodeContentUnresolvedException"/>-bearing record per node type this replica
+    /// degraded and STILL cannot type, at the end of the cache's life.
+    ///
+    /// <para><b>Why here and not at the read.</b> The per-read warning
+    /// (<see cref="MeshNodeContentDegradedException"/>) is emitted at an instant that cannot know
+    /// whether the type registers a moment later — which is the ordinary boot race #2952 re-types
+    /// live readers for. So it describes an EVENT and cannot answer the question the CI gate and
+    /// <c>/health</c> both ask, which is about a STATE. The registry keeps the events;
+    /// <c>Unresolved</c> re-asks the mesh-wide content-type registry about each one, by both routes
+    /// <c>TryRecoverForNodeType</c> takes, and only what is still unresolvable reaches this log.
+    /// A boot that read before its compile landed therefore produces nothing here.</para>
+    ///
+    /// <para>🚨 It runs FIRST in <see cref="Dispose"/>, before any teardown: the registry is a
+    /// plain mesh-scoped record store, but the logger and the service provider are not guaranteed
+    /// alive further down, and a verdict nobody can emit is the failure mode this whole gate exists
+    /// to prevent (#3625). Everything is wrapped: a teardown must never fault on its own
+    /// diagnostics.</para>
+    ///
+    /// <para>Level is <c>Warning</c>, which with a non-null exception is exactly the sink's
+    /// predicate (<c>exception is not null &amp;&amp; logLevel &gt;= Warning</c>) — reaching the
+    /// trace log is a property of the CALL, not of the wording.</para>
+    /// </summary>
+    private void ReportUnresolvedContentTypes()
+    {
+        try
+        {
+            if (degradations is null || degradations.IsEmpty)
+                return;
+            foreach (var degradation in degradations.Unresolved(contentTypeRegistry))
+                logger.LogWarning(
+                    new MeshNodeContentUnresolvedException(
+                        degradation.NodeType, degradation.Discriminator, degradation.Count,
+                        degradation.LastPath, degradation.Seam),
+                    // 🚨 The gate's phrase stays CONTIGUOUS in one literal — see the same note on
+                    // MeshNodeContentUnresolvedException's message. The guard greps this file line
+                    // by line, so a split phrase retires the coupling silently.
+                    "MeshNodeStreamCache: content for nodeType {NodeType} "
+                    + "was NEVER resolvable on this replica — {Count} read(s) degraded and the type "
+                    + "had still not registered when the mesh ended (last {Path}). This is not the "
+                    + "transient boot race: the registry was re-asked just now and answered no.",
+                    degradation.NodeType, degradation.Count, degradation.LastPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error reporting unresolved content types");
+        }
+    }
+
+    /// <summary>
     /// Releases every subscription and rooted subject the cache holds. Fires
     /// when the silo/mesh goes down (cacheHub disposal) and on DI container
     /// teardown (IDisposable). Idempotent via the <see cref="_disposed"/> guard.
@@ -785,6 +835,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0)
             return; // already torn down by the other disposal path
+
+        // 0a. THE VERDICT, before anything is torn down (#3645). Everything recorded that is
+        //     still unresolvable NOW never recovered, and this is the last moment anyone can say
+        //     so — see ReportUnresolvedContentTypes.
+        ReportUnresolvedContentTypes();
 
         // 0. Idle sweep FIRST — no new sweep pass may start once teardown begins
         //    (an in-flight pass is harmless: entry teardown is idempotent and the
@@ -2313,7 +2368,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // to fire at all. The job log is not an equivalent sink: it carries only the output
                 // of tests that FAILED, and a degradation is overwhelmingly logged under a test
                 // that passes. Reaching the sink is a property of the CALL, not of the wording.
-                degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetStream");
+                degradations?.Record(
+                    node.NodeType, node.Path, "MeshNodeStreamCache.GetStream", Discriminator(degraded));
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
@@ -2327,6 +2383,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         }
         return node;
     }
+
+    /// <summary>The stored <c>$type</c> of a degraded element, or <c>null</c> when it carries
+    /// none. Read ONCE at the degradation, so <c>ContentDegradationRegistry.Unresolved</c> can
+    /// re-ask the content-type registry by NAME later without keeping the document (#3645).
+    /// Content without a <c>$type</c> stays legal by design (ContentDiscriminatorValidator), so a
+    /// null here is an ordinary state, not a fault.</summary>
+    private static string? Discriminator(JsonElement content) =>
+        content.ValueKind == JsonValueKind.Object
+        && content.TryGetProperty("$type", out var type)
+        && type.ValueKind == JsonValueKind.String
+            ? type.GetString()
+            : null;
 
     // Truncated raw JSON for diagnostics — bad-data warnings include the offending
     // content so the corrupt row is identifiable in Loki without flooding the log.
@@ -2816,7 +2884,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // 🚨 Carries the exception for the same reason the GetStream seam does — see there.
                 // A record with no exception object cannot reach the trace log, which is the only
                 // sink the untyped-content shard gate scans (#3625).
-                degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
+                degradations?.Record(
+                    node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", Discriminator(degraded));
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText)),
@@ -2840,6 +2909,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // never match it either. Keying the gate on the exception TYPE rather than on prose is
             // what closes that third blind spot; `ex` rides along as the inner exception, so the
             // deserialization stack is still in the record.
+            // No parsed element here — the parse is what failed — so the NodeType is the only key
+            // Unresolved() can re-ask under, which is the exact route it prefers anyway.
             degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
             logger.LogWarning(
                 new MeshNodeContentDegradedException(

@@ -316,6 +316,155 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
         contentType.GetProperty("Label")!.GetValue(typed.Content).Should().Be("by name only");
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    //  #3645 — the VERDICT: which of these degradations was actually a defect
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 <b>The acceptance criterion, transient half.</b> A read that degrades and then RECOVERS —
+    /// exactly what the first test in this class reproduces, and what a portal boot does on every
+    /// NodeType whose compile lands after its first reader — must produce <b>no</b> gate hit.
+    ///
+    /// <para>Before #3645 it produced one: <c>check-untyped-content.sh</c> keyed on the per-read
+    /// <c>MeshNodeContentDegradedException</c>, so two of this class's three cases reddened a shard
+    /// for doing the thing they assert. The verdict is now the RE-ASKED set: the registry keeps
+    /// what degraded, and <c>Unresolved</c> asks the mesh-wide content-type registry again — both
+    /// routes <c>TryRecoverForNodeType</c> takes, two pure lookups — at the moment of the report.</para>
+    ///
+    /// <para><b>Fails on unfixed code:</b> a report built from <c>Snapshot()</c> lists the recovered
+    /// type here.</para>
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ARecoveredDegradation_IsNotTheVerdict()
+    {
+        var registry = Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>();
+        var degradationRegistry = Mesh.ServiceProvider.GetRequiredService<ContentDegradationRegistry>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var contentType = EmitCollectibleType("RecoveredGadget", "Label");
+        var partition = "vrc" + Guid.NewGuid().ToString("N")[..9];
+        var typePath = $"{partition}/Gadget";
+        var instancePath = $"{partition}/Live";
+
+        await Seed(meshService, partition, typePath, contentType, "recovered frame");
+
+        var degraded = await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
+            .Where(n => n is not null).FirstAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit("the node must be readable while its type is unknown");
+        degraded!.Content.Should().BeOfType<JsonElement>(
+            "PRECONDITION: the degradation this test then cures must actually have happened");
+        degradations.AssertReportedFor(instancePath,
+            "the transient degradation is this test's premise — it is what the verdict must then "
+            + "decline to report");
+
+        degradationRegistry.Snapshot().Should().NotBeEmpty(
+            "PRECONDITION: the registry must hold the entry whose fate is under test — otherwise "
+            + "the assertion below would pass over an empty set and mean nothing");
+
+        // The compile finishing.
+        registry.Register(contentType, typePath);
+
+        degradationRegistry.Unresolved(registry).Should().BeEmpty(
+            "the type registered, so the degradation was TRANSIENT — the boot race #2952 re-types "
+            + "live readers for. A gate hit here means 'content was unreadable at a read', which is "
+            + "not a defect and is what #3645 stopped reporting");
+        degradationRegistry.Snapshot().Should().NotBeEmpty(
+            "and the EVENT is still on record — the verdict narrows what is reported, it does not "
+            + "erase the history a reader needs to find which read degraded");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The acceptance criterion, final half — and the control that stops the fix from being
+    /// "report nothing".</b> A discriminator no declaration will ever claim is still a defect: the
+    /// view renders empty forever, and the teardown report names it.
+    ///
+    /// <para>The report is driven through the PRODUCTION path — <c>MeshNodeStreamCache.Dispose</c>
+    /// — rather than by calling the reporter directly, because the thing that failed for five days
+    /// in #3625 was never the wording: it was whether a record could reach the sink at all. So this
+    /// asserts the record the sink's own predicate would take.</para>
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AnUnrecoverableDegradation_IsTheVerdict_AndReachesTheSink()
+    {
+        var registry = Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>();
+        var degradationRegistry = Mesh.ServiceProvider.GetRequiredService<ContentDegradationRegistry>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var contentType = EmitCollectibleType("OrphanGadget", "Label");
+        var partition = "vun" + Guid.NewGuid().ToString("N")[..9];
+        var typePath = $"{partition}/Gadget";
+        var instancePath = $"{partition}/Live";
+
+        await Seed(meshService, partition, typePath, contentType, "orphan frame");
+
+        var degraded = await Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
+            .Where(n => n is not null).FirstAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit("the node must be readable while its type is unknown");
+        degraded!.Content.Should().BeOfType<JsonElement>();
+        degradations.AssertReportedFor(instancePath, "nothing will ever claim this discriminator");
+
+        // 🚨 NOTHING registers it. That is the entire difference from the test above.
+        degradationRegistry.Unresolved(registry).Select(d => d.NodeType).Should().Contain(typePath,
+            "no declaration claims this discriminator, so re-asking the registry answers no — this "
+            + "is the population the gate exists for, and a fix that reported nothing would fail here");
+
+        // The production emission, through the real teardown. Disposal is idempotent (the cache
+        // guards on _disposed), so the fixture's own disposal after this test is unaffected — and
+        // this is the LAST thing the test does with the mesh.
+        (Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>() as IDisposable)
+            .Should().NotBeNull("the cache is what reports the verdict at teardown").And.Subject
+            .As<IDisposable>().Dispose();
+
+        var verdicts = degradations.Verdicts();
+        verdicts.Should().NotBeEmpty(
+            "the teardown must REPORT what never resolved — a verdict nobody emits is the "
+            + "permanently-green gate #3625 was");
+        var verdict = verdicts.Single(v => v.Exception.NodeType == typePath);
+
+        // Restates the sink's own condition over the shape the sink sees, exactly as
+        // AssertReportedFor does for the per-read record.
+        Exception? asTheSinkSeesIt = verdict.Exception;
+        (asTheSinkSeesIt is not null && verdict.Level >= LogLevel.Warning).Should().BeTrue(
+            "the verdict must be a record the trace sink WOULD have written (exception is not null "
+            + "&& level >= Warning) — otherwise check-untyped-content.sh has nothing to scan and "
+            + "passes having matched nothing. Captured: level={0}", verdict.Level);
+        verdict.Message.Should().Contain("was NEVER resolvable on this replica",
+            "the prose net the gate keeps as its second key must be in the formatted message");
+        verdict.Exception.Discriminator.Should().Be(contentType.Name,
+            "the verdict must name the discriminator — that is the second key Unresolved re-asks "
+            + "under, and the one an operator searches the logs for");
+        verdict.Exception.Count.Should().BeGreaterThan(0);
+    }
+
+    /// <summary>Seeds a NodeType declaration plus one instance whose stored content carries a
+    /// discriminator the mesh cannot resolve — the shared premise of both verdict tests.</summary>
+    private async Task Seed(
+        IMeshService meshService, string partition, string typePath, Type contentType, string label)
+    {
+        await meshService.CreateNode(new MeshNode("Gadget", partition)
+        {
+            Name = "Gadget",
+            NodeType = MeshNode.NodeTypePath,
+            State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition { Description = "A NodeType with no compile lifecycle" }
+        }).Should().Within(TestTimeouts.Convergence).Emit("the NodeType declaration must land first");
+
+        var instance = Activator.CreateInstance(contentType)!;
+        contentType.GetProperty("Label")!.SetValue(instance, label);
+        var storedJson = JsonSerializer.Serialize(instance, contentType, Mesh.JsonSerializerOptions);
+        var stored = JsonSerializer.Deserialize<JsonElement>(storedJson);
+        stored.TryGetProperty("$type", out _).Should().BeTrue(
+            "PRECONDITION: the stored row must carry the discriminator the reader has to resolve");
+
+        await meshService.CreateNode(new MeshNode("Live", partition)
+        {
+            Name = "Live frame",
+            NodeType = typePath,
+            State = MeshNodeState.Active,
+            Content = stored
+        }).Should().Within(TestTimeouts.Convergence).Emit("the instance carrying the unresolvable $type must land");
+    }
+
     /// <summary>
     /// 🚨 The private sink for this test class's degradation records — see
     /// <see cref="degradations"/> for why the records must not reach the shared trace file, and why
@@ -338,6 +487,13 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
 
         /// <summary>One captured degradation, with the two facts the trace sink's predicate reads.</summary>
         internal sealed record Captured(LogLevel Level, string Message, MeshNodeContentDegradedException Exception);
+
+        /// <summary>One captured VERDICT — the teardown report (#3645), kept separately because it
+        /// answers a different question from the per-read records above.</summary>
+        internal sealed record CapturedVerdict(
+            LogLevel Level, string Message, MeshNodeContentUnresolvedException Exception);
+
+        private ImmutableList<CapturedVerdict> verdicts = ImmutableList<CapturedVerdict>.Empty;
 
         /// <summary>Wires the real logger everything else is forwarded to, and returns this recorder
         /// so it can be registered inline as the closed <c>ILogger&lt;MeshNodeStreamCache&gt;</c>.</summary>
@@ -362,6 +518,18 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
             {
                 lock (gate)
                     captured = captured.Add(new Captured(logLevel, formatter(state, exception), degraded));
+                return;
+            }
+
+            // 🚨 The VERDICT is diverted for the same reason the events are: this class's whole
+            // subject is content nothing can resolve, so its teardown report is a legitimate hit
+            // that must not red the shard through check-untyped-content.sh. Diverting it obliges
+            // the class to ASSERT it, which AVerdict_* below does.
+            if (exception is MeshNodeContentUnresolvedException unresolved)
+            {
+                lock (gate)
+                    verdicts = verdicts.Add(
+                        new CapturedVerdict(logLevel, formatter(state, exception), unresolved));
                 return;
             }
 
@@ -415,6 +583,13 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
         {
             lock (gate)
                 return captured;
+        }
+
+        /// <summary>Every teardown verdict captured so far.</summary>
+        internal ImmutableList<CapturedVerdict> Verdicts()
+        {
+            lock (gate)
+                return verdicts;
         }
     }
 
