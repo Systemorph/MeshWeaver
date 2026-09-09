@@ -103,6 +103,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [CQRS — Queries vs. Content Access](CqrsAndContentAccess)
 - [MeshNode Stream Cache](MeshNodeStreamCache)
+- [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
 - [Data Access Patterns](DataAccessPatterns)
 - [Workspace References](WorkspaceReferences)

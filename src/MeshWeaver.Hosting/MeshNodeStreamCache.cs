@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -439,41 +440,126 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // with multi-write contention are thread/inbox nodes whose single-digit-
     // per-second write rate is far below the round-trip ceiling.
     //
-    // Storage: `MemoryCache` with 10-minute sliding expiration. The queue
-    // is reusable per path but unbounded retention would leak Subjects for
-    // every node ever written. Sliding expiry tears down the Subject (and
-    // its Concat subscription) for paths quiet for 10 minutes — a fresh
-    // write recreates a fresh queue, no behaviour change for the caller.
-    // Eviction callback completes the Subject so the Concat chain unwinds.
-    private readonly MemoryCache _updateQueues = new(new MemoryCacheOptions
-    {
-        // No size limit — we trim by time, not count.
-    });
-
+    // Publish one Lazy per path atomically, exactly like _streams. MemoryCache.GetOrCreate
+    // returns EACH racing factory's candidate, so Lazy alone did not prevent two live queues.
+    // The existing idle sweep retires only queues with no accepted work, after ten quiet minutes.
+    private readonly ConcurrentDictionary<string, Lazy<UpdateQueueEntry>> _updateQueues = new();
     private static readonly TimeSpan UpdateQueueSlidingExpiration = TimeSpan.FromMinutes(10);
 
-    // 🚨 The state the LAST write on a path left the node in AS ACKNOWLEDGED BY THE OWNER, held only
-    // until the next write on that path consumes it (issues #2305 / #2291). It exists because the
-    // queue above advances on a write's local terminal, NOT on the owner's echo — so the successor's
-    // mirror can still be showing the node as it was BEFORE its predecessor's patch. Diffing against
-    // that ships a base this mirror itself superseded, and the owner three-way-merges it as a conflict
-    // that never happened: the leaf is refused and the writer's newer value is silently dropped while
-    // its non-conflicting siblings land. (An agent round's response cell kept "Generating response..."
-    // in Text while Status went Completed and Summary carried the answer — one write, two verdicts.)
-    //
-    // 🚨 ACKNOWLEDGED, not merely computed — see MeshNodeStreamHandle's onLocalState. A base taken
-    // from a write that never landed is self-perpetuating: it mints no version, so nothing corrects
-    // it, and the next write diffs its own unlanded value into an empty patch and skips silently.
-    //
-    // ONE-SHOT by construction: the dispatch below TryRemoves it, so a stale entry can influence at
-    // most the single next write, and MeshNodeStreamHandle.PatchBaseSource ignores it the moment the
-    // mirror carries a newer Version — which the owner mints on EVERY applied change, from any
-    // writer. Bounded like the queues: the per-path eviction callback drops it, and so does Dispose.
-    private readonly ConcurrentDictionary<string, MeshNode> _pendingSelfWrites = new();
+    internal sealed class UpdateQueueEntry(ILogger logger)
+    {
+        // State-only lock, like the read Entry's subscriber pin: never held while dispatching,
+        // subscribing, disposing or notifying a result. Concat still serializes the actual writes.
+        private readonly object gate = new();
+        private readonly HashSet<ReplaySubject<MeshNode>> pendingResults = [];
+        private int slots;
+        private long lastActiveAt = Environment.TickCount64;
+        private bool retired;
+        private MeshNode? pendingSelfWrite;
 
-    private sealed record UpdateQueueEntry(Subject<UpdateRequest> Subject, IDisposable ConcatSubscription);
+        internal Subject<UpdateRequest> Subject { get; } = new();
+        internal SingleAssignmentDisposable Subscription { get; } = new();
+        internal CompositeDisposable Inflight { get; } = new();
+        internal bool HasObservers => Subject.HasObservers;
+        internal bool IsLive { get { lock (gate) return !retired; } }
 
-    private readonly record struct UpdateRequest(
+        internal bool TryEnqueue(UpdateRequest request)
+        {
+            bool observeResult;
+            lock (gate)
+            {
+                if (retired) return false;
+                slots++;
+                lastActiveAt = Environment.TickCount64;
+                observeResult = pendingResults.Add(request.Result);
+            }
+            // The result and the queue slot settle independently (an optimistic result may precede
+            // the owner ACK). Pin BOTH; the same result also pins the existing delayed conflict retry.
+            if (observeResult)
+                request.Result.Subscribe(_ => { }, _ => ReleaseResult(request.Result),
+                    () => ReleaseResult(request.Result));
+            Subject.OnNext(request);
+            return true;
+        }
+
+        private void ReleaseResult(ReplaySubject<MeshNode> result)
+        {
+            lock (gate)
+            {
+                pendingResults.Remove(result);
+                lastActiveAt = Environment.TickCount64;
+            }
+        }
+
+        internal void ReleaseSlot()
+        {
+            lock (gate)
+            {
+                slots--;
+                lastActiveAt = Environment.TickCount64;
+            }
+        }
+
+        internal bool TryMarkIdleRetired(TimeSpan idleWindow)
+        {
+            lock (gate)
+            {
+                if (retired || slots != 0 || pendingResults.Count != 0
+                    || Environment.TickCount64 - lastActiveAt < idleWindow.TotalMilliseconds)
+                    return false;
+                retired = true;
+                return true;
+            }
+        }
+
+        // A base belongs only to this queue's successor. A late ACK from a retired queue must
+        // neither seed a new queue nor erase that new queue's own handoff on eviction.
+        internal MeshNode? TakePendingSelfWrite()
+        {
+            lock (gate)
+            {
+                var value = pendingSelfWrite;
+                pendingSelfWrite = null;
+                return value;
+            }
+        }
+
+        internal void SetPendingSelfWrite(MeshNode node)
+        {
+            lock (gate)
+                if (!retired) pendingSelfWrite = node;
+        }
+
+        internal void Stop(Exception error)
+        {
+            ReplaySubject<MeshNode>[] results;
+            lock (gate)
+            {
+                retired = true;
+                pendingSelfWrite = null;
+                results = pendingResults.ToArray();
+                pendingResults.Clear();
+            }
+            // Disposal is idempotent. First stop dispatch and in-flight writes, then terminate
+            // every accepted caller, including requests still buffered inside Concat.
+            DisposeOwned(Subscription);
+            DisposeOwned(Inflight);
+            Subject.OnCompleted();
+            foreach (var result in results)
+            {
+                try { result.OnError(error); }
+                catch (Exception ex) { logger.LogError(ex, "Update queue result observer threw during teardown"); }
+            }
+        }
+
+        private void DisposeOwned(IDisposable disposable)
+        {
+            try { disposable.Dispose(); }
+            catch (Exception ex) { logger.LogError(ex, "Update queue subscription threw during teardown"); }
+        }
+    }
+
+    internal readonly record struct UpdateRequest(
         Func<MeshNode, MeshNode> Update,
         ReplaySubject<MeshNode> Result,
         string Path,
@@ -901,21 +987,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         _queries = System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry>.Empty;
         _optionsWrappedQueries.Clear();
 
-        // 2. Per-path update queues: Clear() fires every entry's
-        //    post-eviction callback (ConcatSubscription.Dispose +
-        //    Subject.OnCompleted) so the serial-update Concat pipelines stop
-        //    keeping owner response-subjects rooted; Dispose() then stops the
-        //    MemoryCache's expiration-scan timer (which otherwise pins this
-        //    singleton — and through it meshHub/cacheHub — past mesh disposal).
-        try { _updateQueues.Clear(); }
-        catch (Exception ex)
+        // 2. Update queues — explicitly retire every materialized owner. An initializer that
+        // overlaps this snapshot checks _disposed before handing its queue to a caller.
+        foreach (var (path, lazy) in _updateQueues)
         {
-            logger.LogDebug(ex, "MeshNodeStreamCache: error clearing update queues");
-        }
-        try { _updateQueues.Dispose(); }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "MeshNodeStreamCache: error disposing update-queue cache");
+            if (lazy.IsValueCreated)
+                lazy.Value.Stop(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
+            _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, lazy));
         }
 
         // 3. Permission probe cache — drop the cached (path,user,context)⇒Permission
@@ -937,9 +1015,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         _negative.Clear();
         _transientStreaks.Clear();
 
-        // 6. Pending per-path write bases. The queue eviction callbacks above already drop the ones
-        //    whose queue still existed; this covers a path whose queue had expired first.
-        _pendingSelfWrites.Clear();
+
     }
 
     /// <summary>
@@ -1191,6 +1267,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         {
             foreach (var (path, lazy) in _streams)
                 TryReleaseUnwatched(path, lazy, readStreamIdleExpiration, "idle");
+            foreach (var path in _updateQueues.Keys)
+                TryReleaseUpdateQueue(path, UpdateQueueSlidingExpiration);
         }
         catch (Exception ex)
         {
@@ -1839,17 +1917,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // patches that the RFC 7396 owner-side merge cannot resolve (lists
         // collapse to the last writer). Serializing per path makes each
         // lambda observe its predecessor's effect.
-        // DISPOSED-CACHE GUARD (write side): a late write after this cache's Dispose() — the
-        // canonical case is an agent round whose ThreadExecution.PushToResponseMessage is still
-        // streaming when its mesh's cacheHub tore down (State captured by TeardownStragglerCapturer:
-        // UpdateRaw → _updateQueues.TryGetValue → MemoryCache.CheckDisposed) — must NOT touch the
-        // disposed _updateQueues MemoryCache, whose TryGetValue throws a synchronous
-        // ObjectDisposedException on the caller's ThreadPool continuation. Unobserved, that reaches
-        // AppDomain.UnhandledException and xUnit escalates it to a "Catastrophic failure" that reds
-        // an otherwise-green shard. Dispose() sets _disposed=1 BEFORE it disposes _updateQueues, so
-        // this flag check (same Volatile idiom as ReleaseIdleReadStreams) fully covers the straggler.
-        // Return the same graceful Observable.Throw terminal the negative-cache breaker below uses —
-        // observed by the caller's Subscribe (a benign teardown write), never an unobserved throw.
+        // Late writes surface an observable terminal, including a Dispose racing admission.
         if (System.Threading.Volatile.Read(ref _disposed) != 0)
             return Observable.Throw<MeshNode>(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
 
@@ -1863,13 +1931,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             && IsMissingNodeFailure(negWrite.Error))
             return Observable.Throw<MeshNode>(negWrite.Error);
 
-        var queue = GetOrCreateUpdateQueue(path);
         var result = new ReplaySubject<MeshNode>();
         var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
         logger.LogDebug(
             "[UpdateQueue] ENQUEUE path={Path} seq={Seq} enteredAt={EnteredAt}",
             path, seq, DateTimeOffset.UtcNow);
-        queue.OnNext(new UpdateRequest(
+        EnqueueUpdate(new UpdateRequest(
             update, result, path, seq, DateTimeOffset.UtcNow, FullNode: null, Caller: CaptureCaller()));
         return result;
     }
@@ -1904,85 +1971,75 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private long _updateSeq;
 
     /// <summary>
-    /// Returns the per-path Subject that the serial-Update Concat consumes.
-    /// Backed by <see cref="MemoryCache"/> with sliding expiration so paths
-    /// that go quiet release their Subject + Concat subscription. A fresh
-    /// write after eviction transparently recreates the queue — eviction is
-    /// invisible to callers.
-    ///
-    /// 🚨 The cached VALUE is a <see cref="Lazy{T}"/>, not the Subject
-    /// directly, because <c>MemoryCacheExtensions.GetOrCreate</c>
-    /// is NOT atomic — the factory can run more than once under contention,
-    /// and only ONE result wins per key. Losers would orphan a Subject +
-    /// Concat subscription that never gets evicted (their eviction
-    /// callback is never registered with the cache). Wrapping in
-    /// <c>Lazy&lt;T&gt;(ThreadSafety.ExecutionAndPublication)</c> ensures
-    /// the heavy work (new Subject, build observable, Subscribe) runs at
-    /// most once per key even when multiple GetOrCreate calls race. Same
-    /// pattern as <see cref="_streams"/>'s <c>Lazy&lt;Entry&gt;</c>.
+    /// Atomically publishes one queue owner per path. Only the stored Lazy is initialized;
+    /// losing candidates have no subscription to orphan or dispose. The optional internal seam
+    /// lets the regression force two cold factories to overlap before either candidate is stored.
     /// </summary>
-    private Subject<UpdateRequest> GetOrCreateUpdateQueue(string path) =>
-        _updateQueues.GetOrCreate(path, entry =>
+    internal UpdateQueueEntry GetOrCreateUpdateQueue(string path, Action? beforePublication = null)
+    {
+        while (true)
         {
-            entry.SlidingExpiration = UpdateQueueSlidingExpiration;
-            var lazy = new Lazy<UpdateQueueEntry>(() =>
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            var lazy = _updateQueues.GetOrAdd(path, key =>
             {
-                var subject = new Subject<UpdateRequest>();
-                // 🚨 onError is mandatory. Per-request failures route to req.Result
-                // (Materialize() below shields the Concat), so a fault HERE means the
-                // queue plumbing itself died — the Subject then has no consumer and
-                // every later write for this path would enqueue into the void with the
-                // caller hanging on its result. Surface loudly and evict the dead
-                // entry so the next write builds a fresh queue (the same lifecycle as
-                // sliding-expiry eviction — no timer, no resubscribe of the faulted
-                // pipeline; the fault itself stays visible in the log).
-                var sub = BuildUpdateQueueObservable(path, subject).Subscribe(
-                    _ => { },
-                    ex =>
-                    {
-                        logger.LogError(ex,
-                            "[UpdateQueue] queue pipeline FAULTED path={Path} — evicting dead queue",
-                            path);
-                        // DISPOSED-CACHE GUARD (fault side): this callback fires asynchronously,
-                        // so a straggling pipeline can fault AFTER Dispose() — MemoryCache.Dispose
-                        // never runs eviction callbacks, so the Concat subscription outlives the
-                        // cache and its late fault lands here. Touching the disposed MemoryCache
-                        // throws a synchronous ObjectDisposedException INSIDE OnError, which is
-                        // unobserved → AppDomain.UnhandledException → xUnit "catastrophic failure"
-                        // on an otherwise-green shard (CI: MeshWeaver.AI.Test MASKED exit=2 on
-                        // e0faf867b). Same Volatile idiom as the UpdateRaw write-side guard above;
-                        // the narrow catch covers the read-flag-then-Dispose race — inside OnError
-                        // nothing may throw, and evicting an already-disposed cache is a no-op by
-                        // definition (the fault stays visible via the LogError above).
-                        if (System.Threading.Volatile.Read(ref _disposed) == 0)
-                        {
-                            try { _updateQueues.Remove(path); }
-                            catch (ObjectDisposedException) { /* teardown won the race */ }
-                        }
-                    });
-                return new UpdateQueueEntry(subject, sub);
-            }, LazyThreadSafetyMode.ExecutionAndPublication);
-            // Eviction (sliding-expiry timeout, manual Remove, or process
-            // shutdown) tears down the long-lived Concat subscription and
-            // completes the Subject — otherwise the Concat keeps response-
-            // subjects rooted forever. Only fires if the Lazy was actually
-            // materialised; an unrealised Lazy has no subscription to leak.
-            entry.RegisterPostEvictionCallback((key, value, reason, state) =>
-            {
-                logger.LogDebug(
-                    "[UpdateQueue] EVICTED path={Path} reason={Reason}",
-                    key, reason);
-                // The pending base outlives nothing: a path with no queue has no successor to hand it to.
-                if (key is string evictedPath)
-                    _pendingSelfWrites.TryRemove(evictedPath, out _);
-                if (value is Lazy<UpdateQueueEntry> { IsValueCreated: true } lz)
-                {
-                    try { lz.Value.ConcatSubscription.Dispose(); } catch { /* best-effort */ }
-                    try { lz.Value.Subject.OnCompleted(); } catch { /* best-effort */ }
-                }
+                Lazy<UpdateQueueEntry>? candidate = null;
+                candidate = new Lazy<UpdateQueueEntry>(() => CreateUpdateQueue(key, candidate!),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                beforePublication?.Invoke();
+                return candidate;
             });
-            return lazy;
-        })!.Value.Subject;
+            var queue = lazy.Value;
+            // Dispose can see an unpublished/uninitialized candidate. The initializer owns that
+            // race: stop its materialized queue rather than leave it beyond the teardown snapshot.
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                queue.Stop(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
+                _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, lazy));
+                throw new ObjectDisposedException(nameof(MeshNodeStreamCache));
+            }
+            if (queue.IsLive) return queue;
+            _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, lazy));
+        }
+    }
+
+    private UpdateQueueEntry CreateUpdateQueue(string path, Lazy<UpdateQueueEntry> owner)
+    {
+        var queue = new UpdateQueueEntry(logger);
+        queue.Subscription.Disposable = BuildUpdateQueueObservable(path, queue).Subscribe(
+            _ => { },
+            ex =>
+            {
+                logger.LogError(ex, "[UpdateQueue] queue pipeline FAULTED path={Path} — evicting dead queue", path);
+                queue.Stop(ex);
+                _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, owner));
+            });
+        return queue;
+    }
+
+    private void EnqueueUpdate(UpdateRequest request)
+    {
+        try
+        {
+            // A stale reference can lose admission to retirement; only UNACCEPTED work re-resolves
+            // the owner, like GetEntry's pin-or-recreate loop. Accepted work is never replayed here.
+            while (!GetOrCreateUpdateQueue(request.Path).TryEnqueue(request)) { }
+        }
+        catch (ObjectDisposedException ex)
+        {
+            request.Result.OnError(ex);
+        }
+    }
+
+    internal bool TryReleaseUpdateQueue(string path, TimeSpan idleWindow)
+    {
+        if (!_updateQueues.TryGetValue(path, out var lazy) || !lazy.IsValueCreated
+            || !lazy.Value.TryMarkIdleRetired(idleWindow))
+            return false;
+        lazy.Value.Stop(new ObjectDisposedException("Idle update queue"));
+        _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, lazy));
+        logger.LogDebug("[UpdateQueue] EVICTED path={Path} reason=Idle", path);
+        return true;
+    }
 
     /// <summary>
     /// Builds the per-path Concat pipeline that processes <see cref="UpdateRequest"/>s
@@ -2003,7 +2060,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// state older than write N's, shipped that as its base, and the owner refused the conflicting
     /// leaves of a write that nothing was concurrent with (#2305 / #2291). The invariant is now
     /// DELIVERED rather than asserted: the predecessor's locally-computed node is handed to the
-    /// successor via <see cref="_pendingSelfWrites"/>, and <c>MeshNodeStreamHandle.PatchBaseSource</c>
+    /// successor via <see cref="UpdateQueueEntry.TakePendingSelfWrite"/>, and <c>MeshNodeStreamHandle.PatchBaseSource</c>
     /// prefers it only while the mirror carries nothing newer.</para>
     ///
     /// <para>🚨 …and the SLOT is released by that hand-off, not by LOCAL_EMIT (#2346). For a busy
@@ -2012,8 +2069,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// loaded runs where it matters. The caller still gets its terminal at LOCAL_EMIT; only the next
     /// QUEUED write waits.</para>
     /// </summary>
-    private IObservable<MeshNode> BuildUpdateQueueObservable(string path, Subject<UpdateRequest> subject) =>
-        subject
+    private IObservable<MeshNode> BuildUpdateQueueObservable(string path, UpdateQueueEntry queue) =>
+        queue.Subject
             .Select(req => Observable.Defer<MeshNode>(() =>
             {
                 var waitedToStart = (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds;
@@ -2037,10 +2094,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     ? accessService.SwitchAccessContext(req.Caller)
                     : null;
 
-                // 🚨 Consume the predecessor's locally-computed state — see _pendingSelfWrites. Taken
+                // 🚨 Consume the predecessor's locally-computed state from this queue owner. Taken
                 // (and REMOVED) here rather than read in place so it can only ever inform the single
                 // next write: if this one produces no local emit, the write after it reads the mirror.
-                _pendingSelfWrites.TryRemove(path, out var pendingSelfWrite);
+                var pendingSelfWrite = queue.TakePendingSelfWrite();
 
                 // 🚨 THE QUEUE'S ADVANCE SIGNAL — issue #2346, and the residual half of #2305 / #2291.
                 //
@@ -2092,7 +2149,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             // re-enqueued attempt, a late terminal NACK). Release the slot; the
                             // successor re-reads the mirror, which is correct for those cases.
                             if (local is not null)
-                                _pendingSelfWrites[path] = local;
+                                queue.SetPendingSelfWrite(local);
                             SettleHandoff();
                         });
 
@@ -2109,13 +2166,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // it never accumulates.
                 var inflight = new System.Reactive.Disposables.SingleAssignmentDisposable();
                 _inflightWrites[inflight] = 0;
+                queue.Inflight.Add(inflight);
                 var sawLocalEmit = false;
                 void Settle()
                 {
                     _inflightWrites.TryRemove(inflight, out _);
+                    queue.Inflight.Remove(inflight);
                     try { inflight.Dispose(); } catch { /* best-effort */ }
                 }
-                inflight.Disposable = update.Subscribe(
+                inflight.Disposable = update.Finally(Settle).Subscribe(
                     node =>
                     {
                         logger.LogDebug(
@@ -2161,14 +2220,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                                 path, req.Seq, retry.Attempt, MaxConflictRetries);
                             SettleHandoff();
                             Settle();
-                            Observable.Timer(ConflictRetryDelay).Subscribe(_ =>
+                            var retryTimer = new SingleAssignmentDisposable();
+                            queue.Inflight.Add(retryTimer);
+                            retryTimer.Disposable = Observable.Timer(ConflictRetryDelay)
+                                .Finally(() => queue.Inflight.Remove(retryTimer))
+                                .Subscribe(_ =>
                             {
                                 try
                                 {
-                                    if (System.Threading.Volatile.Read(ref _disposed) != 0)
+                                    // The unresolved result pins this owner throughout the delay.
+                                    // A retired owner's already-failed write must never reappear on
+                                    // a replacement queue after its caller has received a terminal.
+                                    if (System.Threading.Volatile.Read(ref _disposed) != 0
+                                        || !queue.TryEnqueue(retry))
                                         req.Result.OnError(ex);
-                                    else
-                                        GetOrCreateUpdateQueue(path).OnNext(retry);
                                 }
                                 catch (Exception requeueEx)
                                 {
@@ -2226,7 +2291,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     }))
                     .Take(1)
                     .SelectMany(_ => Observable.Empty<MeshNode>());
-            }))
+            }).Finally(queue.ReleaseSlot))
             .Concat();
 
     /// <summary>
@@ -2296,18 +2361,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private IObservable<MeshNode> OverwriteRaw(string path, MeshNode node)
     {
         // Disposed-cache guard — see UpdateRaw. A late overwrite after Dispose() must not hit the
-        // disposed _updateQueues MemoryCache; return a graceful observed terminal, never a throw.
+        // retired queue owner; return a graceful observed terminal, never a throw.
         if (System.Threading.Volatile.Read(ref _disposed) != 0)
             return Observable.Throw<MeshNode>(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
 
-        var queue = GetOrCreateUpdateQueue(path);
         var result = new ReplaySubject<MeshNode>();
         var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
         logger.LogDebug(
             "[UpdateQueue] ENQUEUE-OVERWRITE path={Path} seq={Seq} enteredAt={EnteredAt}",
             path, seq, DateTimeOffset.UtcNow);
         // Update func is a placeholder (never invoked — the FullNode branch is taken).
-        queue.OnNext(new UpdateRequest(
+        EnqueueUpdate(new UpdateRequest(
             static n => n, result, path, seq, DateTimeOffset.UtcNow, node, CaptureCaller()));
         return result;
     }
