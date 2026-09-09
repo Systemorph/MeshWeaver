@@ -1021,7 +1021,8 @@ public sealed class MessageHub : IMessageHub
         // registration would read as "nothing was ever posted" — the opposite of the truth (#981).
         requestFates.Find(delivery.Id)?.Add(
             "REGISTERED_AFTER_POST (Observe(delivery) overload — earlier stages not recorded)", Address);
-        return RestoreUserContextOnEmission(observable, delivery.AccessContext);
+        return ContinueOffBlockIfDeclared(
+            RestoreUserContextOnEmission(observable, delivery.AccessContext), delivery.Message);
     }
 
     /// <summary>
@@ -1065,11 +1066,13 @@ public sealed class MessageHub : IMessageHub
             requestFates.Find(messageId)?.Add($"POST_THREW {postEx.GetType().Name}: {postEx.Message}", Address);
             throw;
         }
-        return RestoreUserContextOnEmission(
-            WrapWithCancelOnDispose(
-                ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
-                messageId, subject),
-            capturedCtx);
+        return ContinueOffBlockIfDeclared(
+            RestoreUserContextOnEmission(
+                WrapWithCancelOnDispose(
+                    ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                    messageId, subject),
+                capturedCtx),
+            r);
     }
 
     /// <summary>
@@ -1110,11 +1113,13 @@ public sealed class MessageHub : IMessageHub
             }
             return null;
         }
-        return RestoreUserContextOnEmission(
-            WrapWithCancelOnDispose(
-                ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
-                messageId, subject),
-            capturedCtx);
+        return ContinueOffBlockIfDeclared(
+            RestoreUserContextOnEmission(
+                WrapWithCancelOnDispose(
+                    ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                    messageId, subject),
+                capturedCtx),
+            r);
     }
 
     private IObservable<IMessageDelivery> ObserveById(string messageId,
@@ -1169,6 +1174,103 @@ public sealed class MessageHub : IMessageHub
     /// hub-impersonation), and any post made from the Subscribe callback inherits the wrong
     /// identity — surfaces as <c>Access denied: user '&lt;cell-hub-path&gt;' lacks ...</c>.
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>The one hop that stops a shared execution hub from serialising the whole mesh
+    /// (#2543)</b> — applied ONLY to requests that declare
+    /// <see cref="IDetachedResponseContinuation"/>.
+    ///
+    /// <para>A response subject is signalled from INSIDE the turn that handled the response, so Rx
+    /// resumes the caller's chain on the responding hub's action block, inside that turn — and the
+    /// turn cannot end until the chain does. On <c>portal/nodeops</c>, the mesh's ONE node-CRUD
+    /// execution hub, that made every node write in the mesh queue behind one create's
+    /// continuation: <c>Queue(buffer=1,…) Executing(CreateNodeResponse, …)</c> for a whole
+    /// budget.</para>
+    ///
+    /// <para>🚨 <b>Why not for every request.</b> Doing it unconditionally was tried and is not
+    /// safe. The action block is not only a serialiser — it is an ERROR BOUNDARY and a DISPOSAL
+    /// FENCE, and an impersonation <c>AsyncLocal</c> is still in scope on it. Hopping every
+    /// continuation off it crashed the test host repeatedly and broke several invariants nobody had
+    /// written down. Narrowing the hop to the requests that demonstrably must not hold a shared hub
+    /// keeps every other request's semantics exactly as they were.</para>
+    ///
+    /// <para>🚨 <b>Order matters:</b> this wraps the OUTSIDE of the identity restore, so
+    /// <c>RestoreUserContextOnEmission</c>'s <c>.Do(SetContext)</c> is what runs first on the
+    /// continuation's thread. Reversed, the chain would resume unauthenticated.</para>
+    ///
+    /// <para>And a continuation that has left the block can no longer be caught by the pump, so it
+    /// is fenced: <see cref="GuardContinuationFaults"/> reports a throw and TERMINATES the sequence
+    /// rather than letting it go unhandled on a scheduler thread and kill the process.</para>
+    /// </summary>
+    /// <param name="source">The response observable, identity already restored.</param>
+    /// <param name="request">The request message, or null when it is not known.</param>
+    private IObservable<IMessageDelivery> ContinueOffBlockIfDeclared(
+        IObservable<IMessageDelivery> source, object? request)
+        => request is IDetachedResponseContinuation
+            ? GuardContinuationFaults(source.ObserveOn(PooledContinuationScheduler.Instance))
+            : source;
+
+    /// <summary>
+    /// The block is an ERROR BOUNDARY, and a continuation that has left it is outside that
+    /// boundary — an exception from a <c>Subscribe</c> callback would otherwise surface unhandled
+    /// on a scheduler thread and take the process down.
+    ///
+    /// <para>🚨 It REPORTS <b>and TERMINATES</b>. A first version only reported, which turned a
+    /// crash into a HANG: the caller's sequence stayed open forever waiting for an emission that
+    /// could never come. Rx's own contract is that a throwing observer ends the subscription, and
+    /// that is what the pump did too — it logged the fault and failed the delivery, so the caller
+    /// got an answer.</para>
+    /// </summary>
+    /// <param name="source">The continuation, already hopped off the block.</param>
+    private IObservable<IMessageDelivery> GuardContinuationFaults(IObservable<IMessageDelivery> source)
+        => Observable.Create<IMessageDelivery>(observer => source.Subscribe(
+            value =>
+            {
+                try
+                {
+                    observer.OnNext(value);
+                }
+                catch (Exception ex)
+                {
+                    ReportContinuationFault(ex);
+                    Guarded(() => observer.OnError(ex));
+                }
+            },
+            error => Guarded(() => observer.OnError(error)),
+            () => Guarded(observer.OnCompleted)));
+
+    /// <summary>Runs one observer callback, routing anything it throws. See
+    /// <see cref="GuardContinuationFaults"/> for why this is the block's boundary and not a
+    /// swallow.</summary>
+    /// <param name="deliver">The observer callback to run.</param>
+    private void Guarded(Action deliver)
+    {
+        try
+        {
+            deliver();
+        }
+        catch (Exception ex)
+        {
+            ReportContinuationFault(ex);
+        }
+    }
+
+    /// <summary>Says what a continuation fault was, at the level its cause deserves.</summary>
+    /// <param name="ex">The fault an observer callback threw.</param>
+    private void ReportContinuationFault(Exception ex)
+    {
+        if (RunLevel >= MessageHubRunLevel.ShutDown)
+            logger.LogDebug(ex,
+                "{Address}: a response continuation raced this hub's teardown — transient. The "
+                + "continuation runs off the action block, so it can outlive the scope it "
+                + "resolves from; the caller's subscription is already going away.", Address);
+        else
+            logger.LogError(ex,
+                "{Address}: a response continuation threw. It runs off the action block, so this "
+                + "did not fault a turn — it would otherwise have gone unhandled on a scheduler "
+                + "thread and killed the process. The throw is in the code that subscribed to "
+                + "hub.Observe(...), not in the hub.", Address);
+    }
+
     private IObservable<IMessageDelivery> RestoreUserContextOnEmission(
         IObservable<IMessageDelivery> source, AccessContext? capturedCtx)
     {
