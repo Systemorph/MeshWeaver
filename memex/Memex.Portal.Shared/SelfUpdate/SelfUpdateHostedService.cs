@@ -170,6 +170,10 @@ public class SelfUpdateHostedService : IHostedService
             // ordering: it silently dropped the startup pass. policy is Replay(1), so Take(1) yields
             // the latest value immediately and deterministically.
             .SelectMany(trigger => policy.Take(1).Select(content => (trigger, content)))
+            // 🚨 #3790 — an externally paced trigger whose verdict is already a foregone
+            // conclusion is not a check. See IsDecisionPoint: this is a rate decision, NOT the
+            // silence #2553 removed, and the two are one line apart.
+            .Where(check => IsDecisionPoint(check.trigger, check.content))
             .SelectMany(check => RunOnce(check.content)
                 // wedges-to-zero: a check error (ACR outage, k8s 403) is a VERDICT, not a silence,
                 // and the watch stays live. No outer .Retry — that would be a resubscribe storm.
@@ -221,6 +225,44 @@ public class SelfUpdateHostedService : IHostedService
     /// state it produced — never race a timer against it.
     /// </summary>
     protected internal IObservable<Unit> ChecksReported => _checksReported;
+
+    /// <summary>
+    /// 🚨 <b>Is this trigger a decision point under this policy? (#3790)</b>
+    ///
+    /// <para>Under <see cref="UpdatePolicyKind.None"/> a check can change nothing, and the code
+    /// says so in two places already: <see cref="RunOnce"/> returns
+    /// <see cref="SelfUpdateVerdict.UpdatesDisabled"/> before it lists a single tag, and
+    /// <see cref="SelfUpdateVerdict.MayRestartAfter"/> answers <c>false</c> for that outcome, so
+    /// the module-restart half (#3650) is not taken either. The whole effect of such a check is a
+    /// log line and a bookkeeping stamp repeating a verdict the record already carries.</para>
+    ///
+    /// <para>That would be harmless if the checks were paced by this install. They are not. The
+    /// <c>BuildCompletion</c> and <c>ModuleSetProposed</c> triggers are paced by the FLEET — every
+    /// platform and module publication anywhere wakes every replica — and on memex that measured
+    /// <b>158 checks in 5 h</b>, each writing <c>LastCheckedAt</c> cross-hub into one shared leaf
+    /// from both replicas at once: 14 <c>[MergeGuard] refused stale/reordered</c>, 10
+    /// <c>OWNER_NACK_REENQUEUE</c>, two 10-second <c>[UpdateQueue] FAILED</c> stalls in the hub
+    /// that also carries user writes, and <c>Admin/UpdatePolicy</c> at <b>version 62,671</b> for a
+    /// content decision that had not changed in two days.</para>
+    ///
+    /// <para>🚨 <b>This is NOT the <c>Where</c> that #2553 removed</b>, and the distinction is the
+    /// whole design. That one dropped EVERY check under <c>None</c>, so an install an admin had
+    /// deliberately pinned and an install whose updater was broken both left the record empty —
+    /// indistinguishable. Here <see cref="SelfUpdateTrigger.Startup"/> still runs (the record
+    /// always carries the disabled verdict and the time this pod established it),
+    /// <see cref="SelfUpdateTrigger.PolicyChange"/> still runs (enabling updates must not wait for
+    /// a publication) and <see cref="SelfUpdateTrigger.SafetyNet"/> still runs (so
+    /// <c>LastCheckedAt</c> keeps moving on THIS service's own period and a dead checker is still
+    /// visible as a stale stamp). What stops is only the repetition, at a rate nobody here
+    /// chooses, of a sentence already on the node.</para>
+    ///
+    /// <para>Pure and static so the rule is pinned without a mesh, exactly as
+    /// <see cref="SelfUpdateVerdict.RestartDeferredBy"/> pins the floor arithmetic. Internal
+    /// rather than private for the same reason — the truth table is the test.</para>
+    /// </summary>
+    internal static bool IsDecisionPoint(SelfUpdateTrigger trigger, UpdatePolicyContent policy)
+        => policy.Policy != UpdatePolicyKind.None
+           || trigger is not (SelfUpdateTrigger.BuildCompletion or SelfUpdateTrigger.ModuleSetProposed);
 
     /// <summary>
     /// The safety net (#2494): a bounded liveness floor on the CHECK, never on the roll.

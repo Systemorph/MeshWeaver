@@ -240,7 +240,59 @@ the lowest assembly `MeshWeaver.Hosting`, `MeshWeaver.PluginCatalog` and `Memex.
 reference directly. `PlatformReleaseOrderTest.ThePreReleaseLabelIsTextToSemVer_WhichIsWhyTheFloorNeedsItsOwnPredicate`
 pins the boundary so the floor decision is taken knowingly rather than by reusing the update one.
 
-## 5. What this does NOT fix
+## 5. A trigger whose verdict is a foregone conclusion is not a check
+
+**The rate of a check is a property the install must own.** Everything above is about *what* a check
+selects; this is about *when* one happens, and the two failed in the same direction on
+[#3790](https://github.com/Systemorph/MeshWeaver/issues/3790).
+
+The self-updater is event-driven, which is right: `BuildCompletion` ticks once per publication
+**anywhere in the fleet**, and nothing beats an event for latency. But the rate that carries is the
+fleet's build cadence, not anything about this install — and under `UpdatePolicyKind.None` a check
+can act on none of it. Two places in the code already say so:
+
+- `RunOnce` returns `SelfUpdateVerdict.UpdatesDisabled()` **before it lists a single tag**; and
+- `SelfUpdateVerdict.MayRestartAfter` answers `false` for that outcome, so the module-restart half
+  ([#3650](https://github.com/Systemorph/MeshWeaver/issues/3650)) is not taken either.
+
+So the whole effect of such a check is a log line plus a bookkeeping stamp repeating a sentence the
+node already carries. Measured on memex, 2026-09-09 01:30–06:36Z, policy `None`, two replicas:
+
+| | |
+|---|---|
+| `[SelfUpdate] check (BuildCompletion): updates are disabled …` | **158** in 5 h |
+| `[MergeGuard] refused stale/reordered cross-hub write to 'lastCheckedAt'` | 14 |
+| `[UpdateRemote] OWNER_NACK_REENQUEUE … code=Conflict` | 10 |
+| `[UpdateQueue] FAILED path=Admin/UpdatePolicy … elapsedMs=10015` | 2 |
+| `Admin/UpdatePolicy` version | **62,671** |
+
+Two replicas writing one leaf on the same event is a conflict by construction; at event rate it is a
+sustained one, in the update queue that also carries user writes.
+
+`SelfUpdateHostedService.IsDecisionPoint(trigger, policy)` is the rule, and it is a filter on the
+**trigger**, never on the check:
+
+| trigger | paced by | a decision point under `None`? |
+|---|---|---|
+| `BuildCompletion` | the fleet | **no** |
+| `ModuleSetProposed` | the fleet | **no** |
+| `Startup` | this pod | yes — the record must carry the disabled verdict and when this pod established it |
+| `PolicyChange` | an admin | yes — enabling updates must not wait for a publication |
+| `SafetyNet` | this service | yes — `LastCheckedAt` keeps moving on its own period, so a dead checker still reads as stale |
+
+Under any policy that can act, every trigger is a decision point.
+
+🚨 **This is the opposite of the `Where` that #2553 removed, and they are one line apart.** That one
+dropped *every* check under `None`, so an install an administrator had deliberately pinned and an
+install whose updater was broken both left the record empty — indistinguishable, and memex sat three
+builds behind for seven hours in that state. What #3790 stops is only the **repetition**, at a rate
+nobody here chooses, of an answer already on the node. Because the regression that would undo #2553
+is one enum member away, the rule is pinned as a truth table over every trigger × every policy
+(`SelfUpdateChecksOnlyAtDecisionPointsTest.TheDecisionPointRule`), and the integration half is a
+controlled experiment: the same event, pushed through the same seam, is *not* a check under `None`
+and *is* one under `Continuous`.
+
+## 6. What this does NOT fix
 
 - **The withdrawn tags themselves.** Ordering makes them lose; it does not remove them. Measured
   2026-09-08 (`az acr repository show-tags -n meshweaver --repository memex-portal-ai`): **1403 tags,
@@ -264,7 +316,8 @@ pins the boundary so the floor decision is taken knowingly rather than by reusin
   (`Newest`), in the lowest assembly all of them reach.
 - `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` — the tag-shape filters, the policy,
   `CheckInstalledTag` and `SelectCandidates`. Pure; no hub, no registry, no Rx.
-- `memex/Memex.Portal.Shared/SelfUpdate/SelfUpdateHostedService.cs` — `RunOnce` / `NothingToRoll`.
+- `memex/Memex.Portal.Shared/SelfUpdate/SelfUpdateHostedService.cs` — `RunOnce` / `NothingToRoll`,
+  and `IsDecisionPoint` (§5).
 - `src/MeshWeaver.Hosting/SealedPublicationIndex.cs` — identity → its newest published version.
 - `src/MeshWeaver.Hosting/ShippedPrebuiltBundles.cs` — which sealed publication a tolerant adoption
   takes (`Modules:VersionStrictness`, [Module Versioning](/Doc/Architecture/ModuleVersioning)).
@@ -275,6 +328,8 @@ pins the boundary so the floor decision is taken knowingly rather than by reusin
   sweep, each in both directions.
 - `test/Memex.Portal.Shared.Test/VersionSelectTest.cs` — the ordering and the three-valued check.
 - `test/Memex.Portal.Shared.Test/SelfUpdateStrandRecoveryTest.cs` — the poller, against a real mesh.
+- `test/Memex.Portal.Shared.Test/SelfUpdateChecksOnlyAtDecisionPointsTest.cs` — §5's truth table,
+  and the same event under two policies.
 
 ## Related
 
