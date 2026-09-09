@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using System.Collections.Immutable;
+using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -41,6 +42,37 @@ public record PageLayoutOptions
     /// </summary>
     public string? MaxWidth { get; init; }
 }
+
+/// <summary>
+/// The newest thing that happened UNDER a node, for pages whose subject is a container rather than
+/// a document.
+///
+/// <para>🚨 <b>Why a container cannot use its own <c>LastModified</c>.</b> A partition root — a CRM
+/// client, a space — is written when it is opened and then barely again; the work lives in its
+/// children. So its own row reports whatever last touched the ROOT, which on a retyped client is
+/// the migration, stamped <c>system-security</c>, while the deals and documents underneath moved
+/// days later. Rendering that as "Updated" is not an incomplete answer, it is a wrong one: it tells
+/// a reader the account has been quiet since a date on which nothing about the account happened.
+/// Supplying this record replaces that segment with the question the page is actually asked.</para>
+/// </summary>
+/// <param name="At">When it happened (UTC; rendered in the viewer's zone like every other stamp).</param>
+/// <param name="By">Who did it, or null when the source does not record one.</param>
+/// <param name="What">A few words naming it, or null. Appended after an em dash.</param>
+public record NodeActivity(DateTimeOffset At, string? By = null, string? What = null);
+
+/// <summary>
+/// One segment of a node's provenance line — the label's translation KEY, the rendered value, and
+/// an optional link target.
+///
+/// <para>It carries the key rather than the text because <see cref="MeshNodeLayoutAreas.BuildMetaEntries"/>
+/// is deliberately pure: no host, no service provider, no <c>AccessService</c>. That is what makes
+/// the line assertable without standing up a mesh, and it is why the localization happens in the
+/// renderer that has a host to localize with.</para>
+/// </summary>
+/// <param name="LabelKey">Translation key for the label (e.g. <c>node.meta.created</c>).</param>
+/// <param name="Text">The value, already formatted in the viewer's zone.</param>
+/// <param name="Href">Where the value links, or null for plain text.</param>
+public record NodeMetaEntry(string LabelKey, string Text, string? Href = null);
 
 /// <summary>
 /// Layout areas for mesh node content.
@@ -453,6 +485,26 @@ public static class MeshNodeLayoutAreas
     /// <param name="partitionRoot">The node's partition root, or null to skip inheritance.</param>
     public static UiControl BuildHeader(
         LayoutAreaHost host, MeshNode? node, bool canEdit, MeshNode? partitionRoot)
+        => BuildHeader(host, node, canEdit, partitionRoot, null);
+
+    /// <summary>
+    /// <see cref="BuildHeader(LayoutAreaHost, MeshNode?, bool, MeshNode?)"/> for a page whose
+    /// subject is a CONTAINER: <paramref name="lastActivity"/> replaces the provenance line's
+    /// <c>Updated</c> segment with the newest thing that happened underneath the node.
+    ///
+    /// <para>🚨 A fifth OVERLOAD rather than a fifth optional parameter, for the reason the
+    /// four-argument form spells out above: this method is a module-facing contract compiled
+    /// against by out-of-tree modules, and adding a parameter — default or not — replaces the
+    /// signature every already-compiled module was built against. An overload is additive.</para>
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="node">The node whose header is being built.</param>
+    /// <param name="canEdit">Whether the viewer may edit (icon picker, inline title).</param>
+    /// <param name="partitionRoot">The node's partition root, or null to skip inheritance.</param>
+    /// <param name="lastActivity">The newest activity beneath the node, or null to report the node's own row.</param>
+    public static UiControl BuildHeader(
+        LayoutAreaHost host, MeshNode? node, bool canEdit, MeshNode? partitionRoot,
+        NodeActivity? lastActivity)
     {
         // Chrome-less pages: a node excluded from the "header" context ships without the
         // icon/title/meta block — the content (a marketing hero, a landing page) starts
@@ -501,7 +553,7 @@ public static class MeshNodeLayoutAreas
         identityRow = identityRow.WithView(BuildHeaderActionRow(host, node, nodePath, canEdit));
 
         // Row 2 — node-type link + timestamps
-        var metaRow = BuildHeaderMetaRow(host, node);
+        var metaRow = BuildMetaRow(host, node, lastActivity);
 
         return Controls.Stack
             .WithWidth("100%")
@@ -627,41 +679,112 @@ public static class MeshNodeLayoutAreas
         return row;
     }
 
+    /// <summary>Translation key for the provenance line's node-type label.</summary>
+    public const string MetaTypeKey = "node.meta.type";
+
+    /// <summary>Translation key for the provenance line's created label.</summary>
+    public const string MetaCreatedKey = "node.meta.created";
+
+    /// <summary>Translation key for the provenance line's updated label.</summary>
+    public const string MetaUpdatedKey = "node.meta.updated";
+
+    /// <summary>Translation key for the provenance line's last-activity label.</summary>
+    public const string MetaLastActivityKey = "node.meta.lastActivity";
+
+    /// <summary>The one timestamp format the provenance line uses.</summary>
+    private const string MetaStampFormat = "yyyy-MM-dd HH:mm";
+
     /// <summary>
-    /// Meta row under the identity row: shows node-type as a link to the type's Configuration
-    /// area and the Created / LastModified / LastModifiedBy timestamps when present.
+    /// The provenance line's segments — <c>Type</c>, <c>Created</c>, and either <c>Updated</c> or,
+    /// when <paramref name="lastActivity"/> is supplied, <c>Last activity</c>.
+    ///
+    /// <para>🚨 <b>Pure on purpose.</b> No host, no service provider, no <c>AccessService</c>: the
+    /// viewer's zone arrives as an IANA id and every stamp goes through the deterministic
+    /// <see cref="DisplayTimeExtensions.ToDisplayTime(DateTimeOffset, string?)"/>. That is what lets
+    /// the line be asserted without standing up a mesh — the renderer below is then only markup and
+    /// localization, which is where this used to hide three hard-coded English words.</para>
+    ///
+    /// <para>A stamp that was never set emits NO segment rather than an em dash or the epoch: a node
+    /// with no recorded date should say nothing, not something false. Equally, a null
+    /// <paramref name="lastActivity"/> falls through to the node's own <c>LastModified</c>, so a
+    /// container with nothing under it yet still reports when it was itself last written.</para>
     /// </summary>
-    private static UiControl BuildHeaderMetaRow(LayoutAreaHost host, MeshNode? node)
+    /// <param name="node">The node whose provenance is described, or null for no segments.</param>
+    /// <param name="timeZoneId">The viewer's named IANA zone; null/unknown renders UTC.</param>
+    /// <param name="lastActivity">The newest activity beneath a CONTAINER node — see <see cref="NodeActivity"/>.</param>
+    public static ImmutableArray<NodeMetaEntry> BuildMetaEntries(
+        MeshNode? node, string? timeZoneId, NodeActivity? lastActivity = null)
     {
+        if (node is null)
+            return ImmutableArray<NodeMetaEntry>.Empty;
+
+        var entries = ImmutableArray.CreateBuilder<NodeMetaEntry>(3);
+
+        // A NodeType node linking to its own Configuration area would link to the page you are on.
+        if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != MeshNode.NodeTypePath)
+            entries.Add(new NodeMetaEntry(
+                MetaTypeKey,
+                node.NodeType.Contains('/') ? node.NodeType.Split('/').Last() : node.NodeType,
+                BuildUrl(node.NodeType, NodeTypeLayoutAreas.ConfigurationArea)));
+
+        if (node.CreatedDate != default)
+            entries.Add(new NodeMetaEntry(MetaCreatedKey, Stamp(node.CreatedDate, node.CreatedBy, null, timeZoneId)));
+
+        // The override REPLACES the node's own row rather than joining it: two "last changed"
+        // answers on one line, one of them a migration's, is worse than the weaker of the two.
+        if (lastActivity is { } activity)
+            entries.Add(new NodeMetaEntry(
+                MetaLastActivityKey, Stamp(activity.At, activity.By, activity.What, timeZoneId)));
+        else if (node.LastModified != default)
+            entries.Add(new NodeMetaEntry(
+                MetaUpdatedKey, Stamp(node.LastModified, node.LastModifiedBy, null, timeZoneId)));
+
+        return entries.ToImmutable();
+    }
+
+    /// <summary>One stamp: the instant in the viewer's zone, then " by {who}", then " — {what}".</summary>
+    private static string Stamp(DateTimeOffset at, string? by, string? what, string? timeZoneId)
+    {
+        var text = DisplayTimeExtensions.ToDisplayTime(at, timeZoneId).ToString(MetaStampFormat);
+        if (!string.IsNullOrWhiteSpace(by))
+            text += $" by {by}";
+        if (!string.IsNullOrWhiteSpace(what))
+            text += $" — {what}";
+        return text;
+    }
+
+    /// <summary>
+    /// The provenance line as a control — node type linking to its Configuration area, then the
+    /// timestamps, every label localized.
+    ///
+    /// <para>Public module-facing contract, and the narrow one: a module page that builds its own
+    /// body but wants the standard provenance line calls THIS rather than
+    /// <see cref="BuildHeader(LayoutAreaHost, MeshNode?, bool)"/>, which would also impose the
+    /// icon/title/action block the page has already drawn itself. Pass
+    /// <paramref name="lastActivity"/> on a container page — see <see cref="NodeActivity"/>.</para>
+    /// </summary>
+    public static UiControl BuildMetaRow(
+        LayoutAreaHost host, MeshNode? node, NodeActivity? lastActivity = null)
+    {
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        var zoneId = access?.Context?.TimeZoneId ?? access?.CircuitContext?.TimeZoneId;
+
         var row = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("align-items: center; gap: 24px; flex-wrap: wrap; font-size: 0.85rem; color: var(--neutral-foreground-hint);");
 
-        var access = host.Hub.ServiceProvider.GetService<AccessService>();
-
-        if (node != null && !string.IsNullOrEmpty(node.NodeType) && node.NodeType != MeshNode.NodeTypePath)
+        foreach (var entry in BuildMetaEntries(node, zoneId, lastActivity))
         {
-            var typeHref = BuildUrl(node.NodeType, NodeTypeLayoutAreas.ConfigurationArea);
-            var typeLabel = node.NodeType.Contains('/') ? node.NodeType.Split('/').Last() : node.NodeType;
-            row = row.WithView(Controls.Html(
-                "<span style=\"display: inline-flex; align-items: center; gap: 6px;\">" +
-                "<span>Type:</span>" +
-                $"<a href=\"{typeHref}\" style=\"color: var(--accent-fill-rest); font-weight: 500;\">{System.Web.HttpUtility.HtmlEncode(typeLabel)}</a>" +
-                "</span>"));
-        }
-
-        if (node != null && node.CreatedDate != default)
-        {
-            var created = access.ToDisplayTime(node.CreatedDate).ToString("yyyy-MM-dd HH:mm");
-            var createdBy = string.IsNullOrEmpty(node.CreatedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.CreatedBy)}";
-            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Created:</span> {created}{createdBy}</span>"));
-        }
-
-        if (node != null && node.LastModified != default)
-        {
-            var modified = access.ToDisplayTime(node.LastModified).ToString("yyyy-MM-dd HH:mm");
-            var modifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? "" : $" by {System.Web.HttpUtility.HtmlEncode(node.LastModifiedBy)}";
-            row = row.WithView(Controls.Html($"<span><span style=\"color: var(--neutral-foreground-rest);\">Updated:</span> {modified}{modifiedBy}</span>"));
+            var label = System.Web.HttpUtility.HtmlEncode(host.Localize(entry.LabelKey));
+            var text = System.Web.HttpUtility.HtmlEncode(entry.Text);
+            row = row.WithView(entry.Href is { } href
+                ? Controls.Html(
+                    "<span style=\"display: inline-flex; align-items: center; gap: 6px;\">" +
+                    $"<span>{label}</span>" +
+                    $"<a href=\"{href}\" style=\"color: var(--accent-fill-rest); font-weight: 500;\">{text}</a>" +
+                    "</span>")
+                : Controls.Html(
+                    $"<span><span style=\"color: var(--neutral-foreground-rest);\">{label}</span> {text}</span>"));
         }
 
         return row;
