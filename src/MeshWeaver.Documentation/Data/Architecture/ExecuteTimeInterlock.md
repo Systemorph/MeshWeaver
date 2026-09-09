@@ -31,7 +31,8 @@ boolean:
 
 | provenance | verdict | why |
 |---|---|---|
-| `AdoptionRefused` | **Refused** | The bundle NAMED the sources it was built from and they are not this mesh's. Proven stale — the one hard refusal. |
+| `AdoptionRefused` | **Refused** | The bundle NAMED the sources it was built from, they are not this mesh's, **and the module MAJOR moved** — a declared incompatibility. The one hard refusal. |
+| `StaleAdopted` | **Permitted** | 🚨 The source moved past the build but the two share a module MAJOR: the last build this mesh holds keeps serving, marked ([#3583](https://github.com/Systemorph/MeshWeaver/issues/3583), below). |
 | `AdoptedUnverified` | **Permitted** | 🚨 A legacy bundle carries no fingerprint, so nothing was compared. **Unknown is not proven-stale.** |
 | `AdoptedVerified` | Permitted | Fingerprints compared and equal. |
 | `Compiled` | Permitted | Roslyn built these bytes here, from this mesh's source. Also the zero value, so a record written before the field existed reads honestly. |
@@ -178,3 +179,67 @@ then request a release.** The log line says so, in those words.
   produces `BuildProvenance`, and the conditional decision about whether refused bytes keep serving.
 - [Plugin Packaging](/Doc/Architecture/PluginPackaging) — where the producer's source fingerprint is
   written into a bundle.
+
+
+## Refusal is keyed on version compatibility, not on the fingerprint (2026-09-09)
+
+Measured on memex.systemorph.com, platform `3.0.0-ci.8057`
+([#3583](https://github.com/Systemorph/MeshWeaver/issues/3583)):
+
+```
+11:56:53Z  Plugins#1555 merges — a one-line CSS change in Essentials/Email/Source/EmailLayoutAreas.cs
+12:30:56Z  the tree sync rewrites that source on the portal; the only bundle for the portal's identity predates it
+12:32:45Z  Essentials/Email: compilationStatus = Error, buildProvenance = AdoptionRefused
+           adoptedSourceFingerprint 572183a89fca620b, currentSourceFingerprint 4ed23561cfd142d1
+           latestAssemblyPath Essentials_Email/v331-… — a WORKING assembly, still on the record
+```
+
+Every page of the type rendered *"the platform refused to run it"* for the afternoon. The #2813
+gate was right about the bytes (they were older) and the untracked-module gate was right about the
+source (nothing syncs that partition's files); together they turned a cosmetic upstream change into
+an outage of every instance of the type. The portal owner's rule replaces "keep the last adopted
+build" with something more precise:
+
+> The adoption decision is a **module-version compatibility** check, not an exact fingerprint
+> match. Same MAJOR ⇒ compatible ⇒ the adopted build MUST keep serving (stale-but-serving, naming
+> both versions and that a bundle for the running identity is pending). Only a MAJOR bump — a
+> declared incompatibility — may refuse the adopted build, and even then the type must not error:
+> it reports *"incompatible, awaiting bundle"*. The fingerprint stays as the signal that the source
+> moved; it no longer drives refusal.
+
+The rule is one pure function, `ModuleVersionCompatibility.Classify(adopted, current)`, with three
+answers — `Compatible`, `Incompatible`, `Unknown` — and only `Incompatible` refuses. The two
+versions are:
+
+- **adopted**: the bundle manifest's released SemVer (`manifest.lock`'s `version` at the bake),
+  stamped as `NodeTypeDefinition.AdoptedModuleVersion` when the bytes are adopted;
+- **current**: the partition root's `content.version` — the `Store/Plugin` root the tree sync
+  rewrites together with the sources — published by the sources watcher as
+  `CurrentModuleVersion` in the same write as `CurrentSourceFingerprint`. The root, not a bundle's
+  manifest, because the incident's whole shape is "the source moved and no bundle for this identity
+  has caught up": the only current version on the mesh is the one the sync wrote.
+
+Where it lands, and what each seam now settles to (`BuildDeliveryHold` is the one place):
+
+| seam | fingerprint differs, same MAJOR / unknown | fingerprint differs, MAJOR moved | nothing to serve |
+|---|---|---|---|
+| owner's judgement (`ApplyAdoptedSourceStamp`) | `StaleAdopted`; `Ok` on a mesh that will not compile, `Pending` (compile the live source, build serves meanwhile) on one that will | `AdoptionRefused`; `Unavailable` + "incompatible, awaiting bundle" on a mesh that will not compile, `Pending` with the coordinates cleared (#2813, unchanged) on one that will | — |
+| compile-watcher delivery gates (RequirePrebuilt, untracked module) | `Ok` + `StaleAdopted`, coordinates untouched, no park | `Unavailable` + notice, gate refuses execution | `Error` park, named — the truth |
+| bundle seeder, bytes declined on fingerprint | live build resolves ⇒ declined, record untouched; nothing resolves and the mesh will not compile ⇒ **adopted** as `StaleAdopted` | declined; Critical when nothing can serve | — |
+
+`Unavailable`, not `Error`, for a refused-but-held build: an `Error` is a Roslyn verdict on the
+code, the instance overlay tells the author to fix it, and the readiness gate reads it as a
+regression that freezes self-update — none of which is true of a bundle that has not arrived yet.
+
+**Announcing readiness.** A hold is a transition a person should hear about, and so is its lifting.
+`BuildDeliveryHold.EventOf(before, after)` decides — `HeldStale`, `HeldIncompatible`, `Adopted`,
+`Compiled` — and every writer that can make the transition (the three stamp-request fulfillers, the
+two gates, the compile write-back) notifies on it exactly once, to `RequestedReleaseBy` when there
+is one and to the platform operators' bell otherwise: *"Essentials 1.2.3 adopted: 'Email'"* is the
+signal a person can act on, in place of discovering a dead page by reloading it.
+
+What the change does **not** do: a fingerprint that differs on a mesh that CAN compile still
+compiles the live source (the build serves meanwhile); a MAJOR bump on such a mesh still takes the
+#2813 path unchanged; and the sync still lets source run ahead of bytes — holding a module's tree
+sync until a bundle for the registering portal's identity exists is `SealedSyncGate`'s job
+(#3600/#3612), which is inert until a seal written by a post-#3612 lane exists for a live identity.
