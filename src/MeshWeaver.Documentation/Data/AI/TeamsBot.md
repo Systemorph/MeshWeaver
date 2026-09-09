@@ -114,6 +114,17 @@ secret ([ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanc
 > Until step 5, the bot is completely inert — the code ships with `Teams:Enabled=false`, the endpoint
 > returns `NotFound`, and no reply sender runs.
 
+## What the bot does NOT do
+
+The bot **reads nothing on a user's behalf**: it cannot list a user's teams, enumerate channels,
+read channel history or chats, or post as a user. Its outbound credential is an app-only Bot
+Framework connector token, valid only for conversations the bot is part of. Reading or sending a
+user's Teams content is a different integration — delegated Graph scopes on the Executive
+Assistant's consent link plus tools on its plugin — and a team the user reaches as a **guest**
+(another company's tenant) is not reachable on a home-tenant token at all. An agent that answers
+"I have no Teams access" is describing this accurately; the engineering notes live with the
+repository's `/teams` skill.
+
 ## Notifications over Teams
 
 The [notification system](/Doc/Architecture/EmailIngestionAndNotifications#3-the-notification-system)
