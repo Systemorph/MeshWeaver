@@ -286,6 +286,21 @@ answer. It fires on a key **added** and on a **value changed** on a shared key, 
 the mirror stale and both are invisible to the mirror's own guard until the pin moves; a key
 **removed** does not fire, since a mirror holding a key core no longer uses renders nothing wrong.
 
+🚨 **Adding the line to the body does NOT unblock the run that already failed.** The gate reads the
+body from the **event payload**, not from the API:
+
+```yaml
+PR_BODY: ${{ github.event.pull_request.body }}
+```
+
+That value is frozen when the run is created, and `gh run rerun --failed` replays the same payload —
+so the job re-reads the *old* body and fails identically, while the pull request on screen plainly
+carries the line. Measured 2026-09-09 on #3815: the re-run's log echoed the pre-edit text. **Edit the
+body, then push a commit** (or reopen the pull request) so a fresh `pull_request` event carries it.
+The same holds for every body-declared gate — `Pairs-with:`, `Implementers:`, `Satellite-pins:` —
+because they read the body the same way, and for the same reason: a body fetched at run time is
+attacker-controlled text that can change after review.
+
 **Why a declaration and not a check of the mirror.** The gate a reader expects — *is the pin an
 ancestor of core's newest catalog-touching commit?* — cannot live on core's pull-request path, for
 two independent reasons. It would have to read MeshWeaver.Plugins, and a gate on core's own pull

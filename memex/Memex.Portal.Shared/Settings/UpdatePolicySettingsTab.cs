@@ -208,16 +208,33 @@ public static class UpdatePolicySettingsTab
         // reason this install is not moving RIGHT NOW. A hold that only showed up in the logs would
         // leave an operator reading "update available" for weeks with nothing explaining why the
         // version never changes — the silent freeze this gate must never become.
+        // 🚨 A hold RECORD is not a live verdict (#3812). HeldAt/HeldReason are written only when a
+        // candidate is actually EVALUATED; LastCheckedAt is written on every check. With updates
+        // switched off the check records "updates are disabled" and evaluates nothing, so the hold
+        // is never revisited — and the fresh LastCheckedAt beside it makes a days-old record read
+        // as the reason this install is standing still. That is not hypothetical: #3706 was filed
+        // on memex's frozen record and quoted three module floors that #3648 had stopped holding on
+        // two hours after the hold was written. The record is still worth showing — it is the only
+        // diagnostic an operator has before turning updates back on — but it is shown as HISTORY,
+        // and "(held {date})" is dropped with it, because that phrasing reads as an ongoing state.
         if (content.IsHeld(tag))
+        {
+            var operative = content.IsHoldOperative(tag);
             available += "\n\n"
-                + localize(
-                    content.HeldIndeterminate ? "ui.updateHeldUnknown" : "ui.updateHeld", [tag])
+                + (operative
+                    ? localize(
+                        content.HeldIndeterminate ? "ui.updateHeldUnknown" : "ui.updateHeld", [tag])
+                    : content.HeldAt is { } recordedAt
+                        ? localize("ui.updateHoldHistorical",
+                            [tag, DisplayTimeExtensions.ToDisplayTime(recordedAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
+                        : localize("ui.updateHoldHistoricalUndated", [tag]))
                 + (string.IsNullOrEmpty(content.HeldReason)
                     ? ""
                     : "\n\n> " + Sanitize(content.HeldReason!))
-                + (content.HeldAt is { } heldAt
+                + (operative && content.HeldAt is { } heldAt
                     ? "\n\n" + localize("ui.updateHeldAt", [DisplayTimeExtensions.ToDisplayTime(heldAt, zoneId).ToString("yyyy-MM-dd HH:mm")])
                     : "");
+        }
 
         // 🚨 What the gate SAID about this tag without holding on it (#3651): the packages the
         // roll compiles at boot, a landed module whose loadability there could not be measured, a

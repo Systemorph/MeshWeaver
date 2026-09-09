@@ -315,6 +315,57 @@ and *is* one under `Continuous`.
   the injected `MESHWEAVER_PLATFORM_VERSION`, never the record's `LatestAvailableTag`, which after a
   manual roll-back kept naming a version no pod ran.
 
+## 7. A hold nothing can recompute is HISTORY, not the current verdict
+
+§5's consequence, and the one that bit a reader within a day of it landing.
+
+`HeldTag` / `HeldReason` / `HeldAt` are written **only** by `RecordHold`, which runs only when a
+candidate is actually evaluated. `LastCheckedAt` is written by `RecordCheck` on **every** check. Once
+a check can decline to evaluate — which is exactly what §5 made it do — those two clocks separate,
+and nothing in the record says so.
+
+Measured on `memex`, `get @Admin/UpdatePolicy`, 2026-09-09 10:42Z:
+
+```
+heldAt          : 2026-09-07T22:27:17Z
+heldTag         : 3.0.0-ci.8057
+lastCheckedAt   : 2026-09-09T10:41:24Z          <- 36 h later
+lastCheckVerdict: "updates are disabled on this install (Admin/UpdatePolicy = None);
+                   the registry was not listed."
+```
+
+**A frozen verdict beside a fresh timestamp reads as a current one.** Issue #3706 was filed on that
+record: it quoted three module floors as *"holding every self-update on memex forever"*. Those lines
+were computed at 22:27Z on 09-07; [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) made
+floors advisory at 00:22Z and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) reduced
+the hold to measured unloadability at 01:10Z the next morning. **The evidence predated its own fix by
+two hours, and the record could not say so.** Of the eleven lines in that `heldReason`, ten are
+advisories under today's rules; the one real blocker is the two-build inconsistency of #3732.
+
+### The distinction, and where it is drawn
+
+`IsHeld(tag)` answers *"is there a hold record for this tag"*. Both readers used it to answer *"is
+this why the install is not moving right now"*. Those are now different questions, so they are
+different methods:
+
+| | asks | true when |
+|---|---|---|
+| `IsHeld(tag)` | is there a record | `HeldTag == tag` |
+| `IsHoldOperative(tag)` | is it a live verdict | …and a poller is running that would clear it |
+
+- **The Updates tab** renders an operative hold as before, and a frozen one as history — *"this is a
+  record, not a current verdict … nothing has re-checked `{tag}` since «date»"*. The `(held «date»)`
+  suffix is dropped with the live framing, because that phrasing reads as an ongoing state.
+- **`PlatformUpdateStatus.Derive`** stops answering `UpdateHeld` off a note nothing can refresh. A
+  **Red combo verification keeps holding** regardless: that is a recorded fact about the build, not a
+  note about the poller — the distinction the surrounding comment already drew, extended to the case
+  it did not anticipate.
+
+🚨 **The record is deliberately NOT cleared when updates are switched off.** The last real evaluation
+is the only diagnostic an operator has *before* turning updates back on; destroying it to avoid
+showing something stale trades a misleading answer for no answer. Only the framing changes — the
+reason is still quoted in full.
+
 ## Where it lives
 
 - `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs` — the lineage key (`BuildOrdinal`), the
@@ -336,6 +387,8 @@ and *is* one under `Continuous`.
 - `test/Memex.Portal.Shared.Test/SelfUpdateStrandRecoveryTest.cs` — the poller, against a real mesh.
 - `test/Memex.Portal.Shared.Test/SelfUpdateChecksOnlyAtDecisionPointsTest.cs` — §5's truth table,
   and the same event under two policies.
+- `test/Memex.Portal.Shared.Test/FrozenHoldIsHistoryTest.cs` — §7: both framings on the tab, both
+  answers on the About surface, and the Red-verdict positive control that must keep holding.
 
 ## Related
 
