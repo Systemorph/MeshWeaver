@@ -170,6 +170,40 @@ fi
 hosting::log "adoption  ${adopted} adopted, ${owned} already owned, ${absent} to be created"
 hosting::say adopted "$adopted"
 
+# ── preflight: can this identity write every kind the record renders? ────────────────────────
+# helm applies the release under the operator's ClusterRole. A kind the role cannot create is an
+# UPGRADE FAILED inside helm followed by an --atomic rollback — measured 2026-09-09 01:59Z on memex
+# (poddisruptionbudgets after core #3774 rendered a PDB; the rollback then erred as well). A
+# SelfSubjectAccessReview is always permitted, so ask BEFORE helm, once per rendered kind, and
+# refuse with the whole list — one line names every grant to add, instead of one failed upgrade
+# per missing kind. deploy/aks/operator/test/check-chart-kinds-granted.sh is the static half.
+if [ -n "$rendered" ]; then
+  denied=""
+  while IFS= read -r kind; do
+    [ -n "$kind" ] || continue
+    for verb in create patch delete; do
+      answer="$(hosting::read kubectl -n "$namespace" auth can-i "$verb" "$kind" 2>/dev/null || true)"
+      [ "$answer" = "yes" ] || denied="${denied} ${verb}:${kind}"
+    done
+  done <<EOF_KINDS
+$(printf '%s\n' "$names" | sed 's#/.*##' | sort -u)
+EOF_KINDS
+  [ -z "$denied" ] \
+    || hosting::die "the operator's ClusterRole cannot write every kind the record renders — denied:${denied}. Grant them in deploy/aks/manifests/hosting-operator/operator-rbac.yaml (the config repo's helm-release lane applies it on the next adopt/deploy); helm would otherwise fail inside the upgrade and roll back. ClusterRole/ClusterRoleBinding are excluded by design — a record that renders them (instancesAdmin.clusterRead) is a decision for a person."
+  hosting::log "preflight every rendered kind is writable by this identity"
+fi
+
+# A release helm cannot upgrade is refused by name, not by helm's "another operation is in
+# progress" after a 15-minute wait: pending-install / pending-upgrade / pending-rollback are the
+# states a cut-off run leaves behind, and the fix (helm rollback to the last deployed revision)
+# is a person's call.
+release_state="$(hosting::read helm status "$release" --namespace "$namespace" -o json 2>/dev/null | jq -r '.info.status // ""' 2>/dev/null || true)"
+case "$release_state" in
+  pending-*) hosting::die "release ${release} in ${namespace} is '${release_state}' — a previous operation was cut off and helm refuses every upgrade until it is resolved (helm history ${release} -n ${namespace}; helm rollback ${release} <last deployed revision>). Not done here: choosing the revision is a person's call." ;;
+  "") hosting::log "release   ${release} is not installed yet (first install)" ;;
+  *) hosting::log "release   ${release} is '${release_state}'" ;;
+esac
+
 # --atomic: a failed install ROLLS BACK rather than leaving a half-created release that the next
 # attempt then has to `helm uninstall` before it can proceed. --wait so "deployed" means the pods
 # actually came up; the plan's next step (rollout status) then verifies rather than discovers.

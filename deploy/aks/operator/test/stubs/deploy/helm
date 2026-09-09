@@ -8,6 +8,8 @@ fixture="${HOSTING_DEPLOY_FIXTURE:?the helm stub needs HOSTING_DEPLOY_FIXTURE}"
 printf 'helm %s\n' "$*" >> "$log"
 case "${1:-}" in
   template) cat "$fixture/rendered.yaml" ;;
+  status)   # `helm status <rel> --namespace <ns> -o json` → $FIXTURE/status.json, else "not found"
+    [ -f "$fixture/status.json" ] && cat "$fixture/status.json" || { echo "Error: release: not found" >&2; exit 1; } ;;
   upgrade)  echo "Release \"${2:-}\" has been upgraded." ;;
   *) echo "helm stub: unexpected invocation: $*" >&2; exit 1 ;;
 esac

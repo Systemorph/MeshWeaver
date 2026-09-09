@@ -47,9 +47,11 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # jobs: the chart's migration Job is a release object helm PATCHES on every upgrade (labels,
+  # annotations) — check-chart-kinds-granted.sh found the missing patch on 2026-09-09.
   - apiGroups: ["batch"]
     resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "create", "delete"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
   - apiGroups: ["secrets-store.csi.x-k8s.io"]
     resources: ["secretproviderclasses"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
@@ -60,21 +62,39 @@ rules:
   - apiGroups: ["apps"]
     resources: ["daemonsets"]
     verbs: ["get", "list"]
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["get", "list"]
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
-    verbs: ["get", "list"]
-  - apiGroups: ["keda.sh"]
-    resources: ["scaledobjects"]
     verbs: ["get", "list"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list"]
+  # 🚨 EVERY KIND THE CHART RENDERS MUST BE WRITABLE HERE — helm applies the release under this
+  # identity. Measured 2026-09-09 01:59Z (Deployments/memex-reconcile-20260909-adopt): the chart at
+  # core #3774 rendered a PodDisruptionBudget for every two-replica instance, the role granted
+  # poddisruptionbudgets get+list (the audit's read-only block), and helm answered
+  #   UPGRADE FAILED: failed to create resource: poddisruptionbudgets.policy is forbidden
+  # and its --atomic rollback then erred as well. A chart change that renders a NEW kind must land
+  # with its grant; deploy/aks/operator/test/check-chart-kinds-granted.sh holds that ratchet, and
+  # hosting-deploy refuses BEFORE helm (kubectl auth can-i per rendered kind) so a missing grant is
+  # named in one line instead of discovered by a failed upgrade. Excluded on purpose, and refused by
+  # name if a record renders them: ClusterRole/ClusterRoleBinding (instancesAdmin.clusterRead) — a
+  # Job must never widen cluster-scoped RBAC.
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # The chart's rbac.yaml (ungated) renders the portal's own Role + RoleBinding (self-update: get/
+  # patch its Deployment). Kubernetes refuses a Role that grants more than its creator holds, so
+  # this cannot escalate past the rules in this file.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # ollama/service.yaml renders an Endpoints object for an external model host (ollama.external).
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
   # READ-ONLY, for hosting-pv-resize. The storage class decides whether a claim can grow
   # (allowVolumeExpansion); the command reads it BEFORE patching, and refuses a class that cannot
   # expand rather than leaving a request in Pending forever. The patch itself is the
