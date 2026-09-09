@@ -121,7 +121,8 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             .Where(snapshot => Regex.Matches(snapshot, @"deferred=(\d+)")
                 .Any(m => int.Parse(m.Groups[1].Value) > 0))
             .Take(1)
-            .Timeout(TestTimeouts.Convergence);
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
     }
     private sealed class DeferredLog : ILoggerProvider
     {
