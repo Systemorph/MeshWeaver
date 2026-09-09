@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Every abbreviated commit sha in a workflow file must have its FULL form in the same file.
+"""check-abbreviated-shas.py — every abbreviated commit sha in a workflow file must have its FULL form in the same file.
+(The name on this first line is load-bearing: node-repo-validate.yml fetches this file at its scripts
+ref and refuses a body whose first 400 bytes do not name it — the same shape as
+check-workflow-timeouts.py. Without it, every caller fetching the lane's guards at `main` failed with
+"the fetched check-abbreviated-shas.py at main does not look like the guard" — Plugins#1566, 2026-09-09.)
 
 🚨 WHY THIS EXISTS. A platform pin is moved by grepping the OLD 40-hex value and substituting the
 new one — that is the documented procedure in every node repo's ci.yml, and it is right, because

@@ -227,13 +227,31 @@ on:
         default: ''
       platform-ref:
         description: >-
-          The Systemorph/MeshWeaver ref whose .github/scripts this gate runs (compose-sealed-modules.sh).
+          The Systemorph/MeshWeaver ref that names the PLATFORM this gate runs against; also the ref
+          this lane's own .github/scripts are fetched at when `scripts-ref` (below) is empty.
           Default main; pin it to the same sha as the `uses:` line for a reproducible run.
           (`github.job_workflow_sha` is EMPTY inside a reusable called from another repo — measured
           2026-08-30 — so the script's ref is an input, never inferred.)
         required: false
         type: string
         default: main
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
+          compose scripts and mergers under .github/scripts that the lane itself runs). Distinct from
+          `platform-ref`, which names the PLATFORM the caller builds against (compile references,
+          images, core source). Empty (the default) means "the same as platform-ref" — right for a
+          caller that pins the lane and the platform to one commit. A caller that pins NOTHING
+          (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
+          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
+          (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
+          (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
+          reusable called from another repository (measured 2026-08-30), so the lane's own ref is an
+          input, never inferred.
+        required: false
+        type: string
+        default: ''
       shards:
         description: >-
           How many runners to fan the gate out across. 1 (the default) is exactly the pre-fan-out
@@ -637,22 +655,24 @@ jobs:
           [ -n "$identity" ] || { echo "::error::framework-identity printed no identity for the portal's /app"; exit 1; }
           echo "identity=$identity" >> "$GITHUB_OUTPUT"
           echo "this gate runs as framework identity $identity (the portal's; the tester resolves the same); upstream bundles must be sealed under it"
-      # The compose script, from the platform at platform-ref — same fetch shape as
-      # compose-sealed-modules.sh below, for the same reason (job_workflow_sha is empty here).
+      # The compose script, from the platform at the lane's SCRIPTS ref (`scripts-ref`, falling back
+      # to platform-ref) — same fetch shape as compose-sealed-modules.sh below, for the same reason
+      # (job_workflow_sha is empty here). Not platform-ref itself: this is the LANE's tooling, and an
+      # unpinned caller's platform (the newest sealed set) is hours behind the lane (MeshWeaver#3842).
       - name: Compose the gate host (the portal's /app + the tester CLI)
         id: host
         env:
           PORTAL_APP: ${{ steps.hosts.outputs.portal_app }}
           TESTER_APP: ${{ steps.hosts.outputs.tester_app }}
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           SCRIPT="${RUNNER_TEMP:-/tmp}/compose-gate-host.sh"
-          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — compose-gate-host.sh has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-gate-host.sh?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$SCRIPT" \
-            || { echo "::error::could not fetch compose-gate-host.sh at ${PLATFORM_REF} from Systemorph/MeshWeaver"; exit 1; }
-          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-gate-host.sh at ${PLATFORM_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — compose-gate-host.sh has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-gate-host.sh?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+            || { echo "::error::could not fetch compose-gate-host.sh at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-gate-host.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           chmod +x "$SCRIPT"
           HOST="$RUNNER_TEMP/gate-host"
           "$SCRIPT" "$PORTAL_APP" "$TESTER_APP" "$HOST"
@@ -930,7 +950,7 @@ jobs:
           SEAL_UPSTREAMS: ${{ inputs.upstream-seed }}
           IDENTITY: ${{ steps.identity.outputs.identity }}
           TARGETS: ${{ inputs.bake-publish-targets }}
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -941,14 +961,15 @@ jobs:
               # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
               # from the SEALED upstream publication for this identity, never the registry's
               # package endpoint. No fallback — a missing seal or module set is RED in the script.
-              # The compose script at inputs.platform-ref (default main; pin it beside the `uses:` sha for a
-              # reproducible run). NOT github.job_workflow_sha: it is empty inside a reusable called from
-              # another repository, so a fetch keyed on it silently read main while claiming a pin.
+              # The compose script at the lane's SCRIPTS ref (`scripts-ref`, falling back to platform-ref
+              # for a caller that pins both to one commit; an unpinned caller passes `main`, MeshWeaver#3842).
+              # NOT github.job_workflow_sha: it is empty inside a reusable called from another repository,
+              # so a fetch keyed on it silently read main while claiming a pin.
               SCRIPT="${RUNNER_TEMP:-/tmp}/compose-sealed-modules.sh"
-              [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the compose script has no ref to be fetched at"; exit 1; }
-              gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$SCRIPT" \
-                || { echo "::error::could not fetch compose-sealed-modules.sh at ${PLATFORM_REF} from Systemorph/MeshWeaver"; exit 1; }
-              head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${PLATFORM_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+              [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the compose script has no ref to be fetched at"; exit 1; }
+              gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+                || { echo "::error::could not fetch compose-sealed-modules.sh at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+              head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
               chmod +x "$SCRIPT"
               if [ -n "${REGISTRY_URL:-}" ]; then
                 "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
@@ -1267,11 +1288,13 @@ jobs:
     outputs:
       gate-log-artifact: ${{ steps.fold.outputs.artifact }}
     steps:
-      - name: Check out Systemorph/MeshWeaver at the pinned ref
+      # The lane's own merger (gate-shard-merge.py) — the lane's SCRIPTS ref, not the platform's
+      # (MeshWeaver#3842: an unpinned caller's platform is hours behind the lane).
+      - name: Check out Systemorph/MeshWeaver at the lane's scripts ref
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
+          ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
           path: meshweaver
       - uses: actions/setup-python@v7
         with:
