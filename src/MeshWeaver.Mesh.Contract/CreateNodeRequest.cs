@@ -14,7 +14,8 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 /// <param name="Node">The MeshNode to create</param>
 [CreateNodePermission]
-public record CreateNodeRequest(MeshNode Node) : IRequest<CreateNodeResponse>, IDiagnosticKeyed
+public record CreateNodeRequest(MeshNode Node)
+    : IRequest<CreateNodeResponse>, IDiagnosticKeyed, IDetachedResponseContinuation
 {
     /// <summary>
     /// The path of the node being created — so a bulk fan-out (N creates for N DISTINCT paths from
@@ -150,7 +151,8 @@ public enum NodeCreationRejectionReason
 /// </summary>
 /// <param name="Nodes">The MeshNodes to create, in the order they must land.</param>
 [CreateNodesPermission]
-public record CreateNodesRequest(ImmutableList<MeshNode> Nodes) : IRequest<CreateNodesResponse>
+public record CreateNodesRequest(ImmutableList<MeshNode> Nodes)
+    : IRequest<CreateNodesResponse>, IDetachedResponseContinuation
 {
     /// <summary>
     /// The user or system requesting the creation — resolution identical to
@@ -275,7 +277,8 @@ public class CreateNodesPermissionAttribute() : RequiresPermissionAttribute(Perm
 /// </summary>
 /// <param name="Path">The path of the node to delete</param>
 [RequiresPermission(Permission.Delete)]
-public record DeleteNodeRequest(string Path) : IRequest<DeleteNodeResponse>, IDiagnosticKeyed
+public record DeleteNodeRequest(string Path)
+    : IRequest<DeleteNodeResponse>, IDiagnosticKeyed, IDetachedResponseContinuation
 {
     /// <summary>
     /// The path being deleted — tells a wide prune (N distinct paths) apart from one delete
@@ -432,7 +435,8 @@ public enum NodeDeletionRejectionReason
 /// Both checks run through the standard permission pipeline.</para>
 /// </summary>
 [CreateOrUpdateNodePermission]
-public record CreateOrUpdateNodeRequest(MeshNode Node) : IRequest<CreateOrUpdateNodeResponse>, IDiagnosticKeyed
+public record CreateOrUpdateNodeRequest(MeshNode Node)
+    : IRequest<CreateOrUpdateNodeResponse>, IDiagnosticKeyed, IDetachedResponseContinuation
 {
     /// <summary>
     /// The path being upserted. This is THE bulk verb — <c>StaticRepoImporter</c> issues one per
@@ -570,7 +574,8 @@ public class CreateOrUpdateNodePermissionAttribute() : RequiresPermissionAttribu
 /// </summary>
 /// <param name="SourcePath">The path to copy from.</param>
 /// <param name="TargetPath">The path to copy to.</param>
-public record CopyNodeRequest(string SourcePath, string TargetPath) : IRequest<CopyNodeResponse>, IDiagnosticKeyed
+public record CopyNodeRequest(string SourcePath, string TargetPath)
+    : IRequest<CopyNodeResponse>, IDiagnosticKeyed, IDetachedResponseContinuation
 {
     /// <summary>
     /// The target path — the thing being produced. Tells a wide copy fan-out apart from one copy
@@ -701,7 +706,8 @@ public enum NodeCopyRejectionReason
 /// <param name="SourcePath">The current path of the node</param>
 /// <param name="TargetPath">The new path for the node</param>
 [MoveNodePermission]
-public record MoveNodeRequest(string SourcePath, string TargetPath) : IRequest<MoveNodeResponse>, IDiagnosticKeyed
+public record MoveNodeRequest(string SourcePath, string TargetPath)
+    : IRequest<MoveNodeResponse>, IDiagnosticKeyed, IDetachedResponseContinuation
 {
     /// <summary>
     /// The source path — the node being moved. Tells a wide move fan-out apart from one move

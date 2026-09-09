@@ -319,6 +319,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Disposable-mesh e2e](DisposableMeshE2E)
 - [Debugging Message Flow](DebuggingMessageFlow)
 - [Debugging Disposal & Leaks](DebuggingDisposalAndLeaks)
+- [Detached Response Continuations](DetachedResponseContinuations) — why a `hub.Observe(...)` continuation runs on the RESPONDING hub's action block, what that cost on the mesh's one node-CRUD hub, and the six invariants that make the hop an opt-in rather than the default
 - [Reading a Disposal Stall Verdict](DisposalStallVerdicts) — what each field of the disposal snapshot actually measures, the three that were read as evidence while measuring nothing, and the verdict hole that sent 47 reports to children that were not the problem
 - [Ambient Test-Host Hangs](AmbientTestHostHangs) — what decides whether a killed test host can be diagnosed at all, and the readings of it already falsified
 - [In-Mesh Tests and the Seal](InMeshTestsAndTheSeal) — a Tests area no required context executes is a latent trunk red the seal detonates fleet-wide; how to measure a gate before requiring it
