@@ -182,6 +182,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - **Start here:** [Thread Operations](ThreadOperations)
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
+- [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
 - [Activity Operations](ActivityOperations)
 - [Notifications](Notifications)
 - [Notification Retention](NotificationRetention) — the platform's first data-retention pass, and why it is a logon action
