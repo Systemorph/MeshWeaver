@@ -40,6 +40,8 @@ internal class MeshNodeCompilationService(
 {
     private readonly IAssemblyStore _assemblyStore = assemblyStore ?? NullAssemblyStore.Instance;
     private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
+    private readonly Action<CSharpCompilation, Exception>? _captureEmitFailure =
+        EmitReferenceCaptureScheduler.ForCi(hub);
 
     // Compile pool for the bare-async leaf (CompilationInputs assembly): a plain
     // Observable.FromAsync deadlocks under a blocking subscriber because SubscribeOn
@@ -1954,7 +1956,7 @@ internal class MeshNodeCompilationService(
             actualPath = EmitPipeline.EmitToDiskWithRetry(
                 cacheService.CacheDirectory, nodeName, EmitPipeline.DiskEmitAttempts, logger,
                 releaseDir => emitted = EmitPipeline.EmitCompilationToDirectory(
-                    compilation, nodeName, node.Path, releaseDir, ct));
+                    compilation, nodeName, node.Path, releaseDir, [], ct, _captureEmitFailure));
             warnings = emitted.Warnings;
         }
         else
