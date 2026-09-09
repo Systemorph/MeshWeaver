@@ -49,6 +49,22 @@ that a release is unsupported; resolve it before deleting its artifacts.
 End of support ends this retention guarantee; it does not itself issue a deletion.
 Any later cleanup must still respect deployment pins and other active references.
 
+## Continuous build artifacts
+
+Use regular age-based cleanup for continuous build artifacts, with a 30-day retention
+window rather than a quota of newer builds. Exclude active deployment and CI pins,
+supported official releases, and the artifacts those releases reference.
+
+The image-protection script treats clean version tags in the image repositories
+promoted by MeshWeaver's official release workflow as official releases, even when
+no current deployment pins them. Independently versioned helpers and cached third-party
+images are not classified as MeshWeaver releases merely because their tags are numeric. Until their support end is established, they remain
+protected and are not candidates for the optional unpinning cleanup.
+
+The existing cloud cleanup schedule must be brought into line with this policy;
+this policy alone does not change its settings. Protection must succeed before cleanup
+runs, and the cleanup tool must enforce the age window for untagged artifacts too.
+
 ## Operational logs
 
 Operational logs are retained for 30 days and cleaned up automatically by age. This

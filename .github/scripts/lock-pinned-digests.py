@@ -543,6 +543,12 @@ def build_plan(axis1: list, axis2: list[OverlayScan]) -> Plan:
     return plan
 
 
+# These are the ACR/GHCR image repositories promoted by release.yml. Numeric tags
+# in cached third-party images or independently versioned helpers are not MW releases.
+# --check-retention-record checks this set against the publisher's explicit repo loops.
+OFFICIAL_RELEASE_REPOSITORIES = frozenset({"memex-migration", "mw-plugin-test", "memex-portal-ai"})
+
+
 def resolve_and_classify(plan: Plan, registry: Registry,
                          inventory: dict[str, list[Manifest]],
                          inventory_errors: dict[str, str]) -> None:
@@ -569,6 +575,33 @@ def resolve_and_classify(plan: Plan, registry: Registry,
             merged = Wanted(acr_repo=acr_repo, digest=digest, tag=tag)
             plan.wanted.append(merged)
         merged.sources.extend(f"{where} (tag {tag})" for where in wheres)
+
+    # release.yml publishes clean major.minor.patch image tags. Support follows the
+    # underlying .NET lifecycle, not whether a deployment currently pins the release.
+    # Until an authoritative end-of-support mapping is available, absence of a pin
+    # cannot authorize removing it. Preserve every clean release (including legacy v
+    # prefixes) and keep it out of the optional unlock arm as well.
+    for acr_repo, manifests in sorted(inventory.items()):
+        if acr_repo not in OFFICIAL_RELEASE_REPOSITORIES:
+            continue
+        for manifest in manifests:
+            release_tags = sorted(tag for tag in manifest.tags
+                                  if re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+", tag))
+            if not release_tags:
+                continue
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", manifest.digest):
+                plan.blockers.append(
+                    f"official release {acr_repo}:{', '.join(release_tags)} has no valid "
+                    "manifest digest, so its protection could not be established")
+                continue
+            entry = next((w for w in plan.wanted
+                          if w.acr_repo == acr_repo and w.digest == manifest.digest), None)
+            if entry is None:
+                entry = Wanted(acr_repo=acr_repo, digest=manifest.digest)
+                plan.wanted.append(entry)
+            entry.sources.append(
+                "official release tag(s) " + ", ".join(release_tags)
+                + " — support has not been established as ended")
 
     # Which of them are already protected?
     known: dict[tuple[str, str], Manifest] = {}
@@ -675,7 +708,7 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
     emit(f"      tag pin SITES found                      {getattr(plan, 'axis2_sites', 0)}")
     emit(f"      …FLOATING tags (no fixed manifest)       {len(floating)}")
     emit("")
-    emit("    UNION — manifests the fleet pins")
+    emit("    UNION — fleet pins and official release manifests")
     emit(f"      distinct manifests wanted                {len(plan.wanted)}")
     emit(f"      …already protected (deleteEnabled false) {len(plan.already_protected)}")
     emit(f"      …TO LOCK                                 {len(plan.to_lock)}")
@@ -924,6 +957,19 @@ def check_retention_record(root: str) -> int:
         print(f"::error::{record} does not exist — the retention record is the only copy of the "
               "purge tasks' reasoning; the tasks themselves are cloud-only (`contextPath: null`).")
         return 1
+    release_workflow = Path(root) / ".github" / "workflows" / "release.yml"
+    if not release_workflow.is_file():
+        problems.append("release.yml is missing; official image protection scope could not be checked")
+    else:
+        published_repos = {
+            repo for group in re.findall(r"for repo in ([^;\n]+); do",
+                                         release_workflow.read_text(encoding="utf-8"))
+            for repo in group.split()
+        }
+        if published_repos != OFFICIAL_RELEASE_REPOSITORIES:
+            problems.append(
+                "release.yml image repositories differ from official retention protection: "
+                f"publisher={sorted(published_repos)}, protection={sorted(OFFICIAL_RELEASE_REPOSITORIES)}")
     manifest_path = record / "tasks.json"
     if not manifest_path.is_file():
         print(f"::error::{manifest_path} is missing.")
@@ -1188,6 +1234,49 @@ def self_test() -> int:
     check(all(digest != "{{" for _, digest, _ in registry.writes),
           "ARM 1: a `{{ … }}` template was read as a tag")
 
+    # Official releases remain protected even when no current deployment pins them.
+    official_digest = "sha256:" + "1" * 64
+    official = Manifest("memex-portal-ai", official_digest, True, True, ["3.0.0"])
+    plan, fails, registry = _drive(axis1, axis2,
+                                  FakeRegistry(_inventory(extra=[official]), FAKE_TAGS))
+    check(not fails, "OFFICIAL: protection failed")
+    check(("memex-portal-ai", official_digest, False) in registry.writes,
+          "OFFICIAL: an unpinned official release was left purgeable")
+    plan, _, registry = _drive(axis1, axis2,
+                              FakeRegistry(_inventory(extra=[Manifest("memex-portal-ai", official_digest,
+                                  False, True, ["3.0.0"])]), FAKE_TAGS),
+                              release_enabled=True)
+    check(not any(m.digest == official_digest for m in plan.release_candidates),
+          "OFFICIAL: a protected release became an unpinned unlock candidate")
+    check(("memex-portal-ai", official_digest, True) not in registry.writes,
+          "OFFICIAL: an enabled release arm unlocked an official release")
+
+    unknown = Manifest("memex-portal-ai", "sha256:" + "2" * 64, True, True,
+                       ["v999.0.0", "999.0.0"])
+    ci_only = Manifest("memex-portal-ai", "sha256:" + "3" * 64, True, True,
+                       ["3.0.0-ci.9000"])
+    plan, _, registry = _drive(axis1, axis2,
+                              FakeRegistry(_inventory(extra=[unknown, ci_only]), FAKE_TAGS))
+    check((unknown.acr_repo, unknown.digest, False) in registry.writes,
+          "OFFICIAL: an unknown support mapping was treated as end of support")
+    check(sum(w.digest == unknown.digest for w in plan.wanted) == 1,
+          "OFFICIAL: two release tags produced duplicate locks for one digest")
+    check(not any(w.digest == ci_only.digest for w in plan.wanted),
+          "OFFICIAL: an unpinned CI build was retained as an official release")
+
+    malformed_release = Manifest("memex-portal-ai", "", True, True, ["3.0.0"])
+    plan, _, _ = _drive(axis1, axis2,
+                       FakeRegistry(_inventory(extra=[malformed_release]), FAKE_TAGS))
+    check(any("official release" in b and "valid" in b for b in plan.blockers),
+          "OFFICIAL: a release without a usable digest was reported as protectable")
+
+    third_party = Manifest("grafana/loki", "sha256:" + "4" * 64, True, True, ["3.3.2"])
+    helper = Manifest("memex-log-watcher", "sha256:" + "5" * 64, True, True, ["1.3.0"])
+    plan, _, _ = _drive(axis1, axis2,
+                       FakeRegistry(_inventory(extra=[third_party, helper]), FAKE_TAGS))
+    check(not any(w.digest in {third_party.digest, helper.digest} for w in plan.wanted),
+          "OFFICIAL: third-party or independently versioned helper images were classified as MW releases")
+
     # ── ARM 2: idempotence — an already-protected manifest is not re-locked ─────────────────────
     plan, _, registry = _drive(
         axis1, axis2,
@@ -1386,7 +1475,7 @@ def self_test() -> int:
         print(f"::error::self-test: {line}")
     if failures:
         return 1
-    print("self-test: 15 arms — lock requested on both axes and both overlay shapes, idempotent, "
+    print("self-test: official-release protection and 15 existing arms — lock requested on both axes and both overlay shapes, idempotent, "
           "unreadable repo / truncated tree / zero pins / unclassified / malformed / gone / "
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
