@@ -18,6 +18,9 @@
     <!-- PresentationScreenExtensions.LastKnownOnFault is observable-in / observable-out precisely so
          the faulting-profile leg (which a live mesh cannot arrange on demand) is directly testable. -->
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <!-- #3862: the array-traversal regressions exercise the SetField/EvaluateField write primitives
+         directly, as the issue asks, rather than through a live hub + node stream. -->
+    <InternalsVisibleTo Include="MeshWeaver.Layout.Test" />
   </ItemGroup>
 
   <ItemGroup>

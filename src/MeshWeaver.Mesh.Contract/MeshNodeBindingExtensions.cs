@@ -370,45 +370,137 @@ public static class MeshNodeBindingExtensions
     /// <paramref name="root"/>, case-insensitively, returning the value as a <see cref="JsonElement"/>
     /// (or <c>null</c> when any segment is missing). Leading <c>/</c> is tolerated.
     /// </summary>
-    private static JsonElement? EvaluateField(JsonObject? root, string pointer)
+    internal static JsonElement? EvaluateField(JsonObject? root, string pointer)
     {
         if (root is null) return null;
         JsonNode? node = root;
         foreach (var segment in SplitPointer(pointer))
         {
-            if (node is not JsonObject obj) return null;
-            node = GetCaseInsensitive(obj, segment);
+            node = Descend(node, segment);
             if (node is null) return null;
         }
         if (ReferenceEquals(node, root)) return null; // empty pointer → no field value
         return JsonSerializer.Deserialize<JsonElement>(node.ToJsonString());
     }
 
+    /// <summary>
+    /// One read step: a key on an object (case-insensitively) or an ELEMENT on an array when the
+    /// segment is a valid index. Null for a missing key, an out-of-range or non-numeric index, and
+    /// for a scalar (which has nothing to descend into).
+    ///
+    /// <para>🚨 The array arm is why this exists (issue #3862). Without it every pointer THROUGH an
+    /// array read as absent — `courses/0/notes` returned null even though the value was there — and
+    /// the write side then "repaired" the shape by replacing the array outright.</para>
+    /// </summary>
+    private static JsonNode? Descend(JsonNode? node, string segment) => node switch
+    {
+        JsonObject obj => GetCaseInsensitive(obj, segment),
+        JsonArray arr when TryIndex(segment, arr.Count, out var i) => arr[i],
+        _ => null,
+    };
+
+    /// <summary>A pointer segment that addresses an EXISTING array element: digits only (so no
+    /// sign, no whitespace, no hex) and inside the array's current bounds.</summary>
+    private static bool TryIndex(string segment, int count, out int index)
+        => int.TryParse(segment, System.Globalization.NumberStyles.None,
+               System.Globalization.CultureInfo.InvariantCulture, out index)
+           && index >= 0 && index < count;
+
     /// <summary>Sets the field at <paramref name="pointer"/> on <paramref name="root"/> (creating
     /// intermediate objects), matching an existing key case-insensitively so we patch the SAME key
     /// the node already uses rather than adding a casing-variant duplicate.</summary>
-    private static void SetField(JsonObject root, string pointer, JsonNode? value)
+    internal static void SetField(JsonObject root, string pointer, JsonNode? value)
     {
         var segments = SplitPointer(pointer).ToArray();
         if (segments.Length == 0) return;
-        var obj = root;
+        JsonNode current = root;
         for (var i = 0; i < segments.Length - 1; i++)
-        {
-            var key = ExistingKey(obj, segments[i]) ?? segments[i];
-            if (obj[key] is JsonObject child)
-            {
-                obj = child;
-            }
-            else
-            {
-                var created = new JsonObject();
-                obj[key] = created;
-                obj = created;
-            }
-        }
-        var last = ExistingKey(obj, segments[^1]) ?? segments[^1];
-        obj[last] = value;
+            current = DescendForWrite(current, segments[i], pointer);
+        AssignLeaf(current, segments[^1], value, pointer);
     }
+
+    /// <summary>
+    /// One WRITE step: returns the container to descend into, creating a missing one as an object.
+    ///
+    /// <para>🚨 THE DATA-LOSS FIX (issue #3862). This used to be typed <c>JsonObject</c> and read
+    /// <c>if (obj[key] is JsonObject child) … else obj[key] = new JsonObject()</c> — so an existing
+    /// <see cref="JsonArray"/> did not match the pattern and was REPLACED by an empty object. A
+    /// write to <c>courses/0/notes</c> turned <c>[{"course":"DataModeling","notes":""}]</c> into
+    /// <c>{"0":{"notes":"…"}}</c>: every sibling element gone, and the node then failed to
+    /// deserialize back into <c>ImmutableList&lt;T&gt;</c> at all, so the whole list disappeared.</para>
+    ///
+    /// <para>🚨 An incompatible intermediate now THROWS rather than being replaced. Silently
+    /// replacing is what destroyed data; the caller (<see cref="Write"/>) already surfaces the fault
+    /// through its <c>onError</c> arm, so the edit fails visibly instead of committing a corrupted
+    /// shape.</para>
+    /// </summary>
+    private static JsonNode DescendForWrite(JsonNode current, string segment, string pointer)
+    {
+        switch (current)
+        {
+            case JsonObject obj:
+            {
+                var key = ExistingKey(obj, segment) ?? segment;
+                switch (obj[key])
+                {
+                    case JsonObject child: return child;
+                    case JsonArray arr: return arr;
+                    case null:
+                        var created = new JsonObject();
+                        obj[key] = created;
+                        return created;
+                    default:
+                        throw Incompatible(pointer, segment, obj[key]);
+                }
+            }
+            case JsonArray arr2:
+            {
+                if (!TryIndex(segment, arr2.Count, out var index))
+                    throw new InvalidOperationException(
+                        $"Cannot write '{pointer}': segment '{segment}' does not address an element of "
+                        + $"the array it traverses (length {arr2.Count}). Writing would have replaced the "
+                        + "array and lost every element.");
+                switch (arr2[index])
+                {
+                    case JsonObject child: return child;
+                    case JsonArray nested: return nested;
+                    case null:
+                        var created = new JsonObject();
+                        arr2[index] = created;
+                        return created;
+                    default:
+                        throw Incompatible(pointer, segment, arr2[index]);
+                }
+            }
+            default:
+                throw Incompatible(pointer, segment, current);
+        }
+    }
+
+    /// <summary>Writes the final segment, on an object key or an array element.</summary>
+    private static void AssignLeaf(JsonNode current, string segment, JsonNode? value, string pointer)
+    {
+        switch (current)
+        {
+            case JsonObject obj:
+                obj[ExistingKey(obj, segment) ?? segment] = value;
+                return;
+            case JsonArray arr when TryIndex(segment, arr.Count, out var index):
+                arr[index] = value;
+                return;
+            case JsonArray arr2:
+                throw new InvalidOperationException(
+                    $"Cannot write '{pointer}': segment '{segment}' does not address an element of the "
+                    + $"array it targets (length {arr2.Count}).");
+            default:
+                throw Incompatible(pointer, segment, current);
+        }
+    }
+
+    private static InvalidOperationException Incompatible(string pointer, string segment, JsonNode? found)
+        => new($"Cannot write '{pointer}': segment '{segment}' traverses a "
+               + $"{found?.GetValueKind().ToString() ?? "null"} value, which is not a container. "
+               + "Refusing to replace it — that would discard the value already stored there.");
 
     private static IEnumerable<string> SplitPointer(string pointer)
         => (pointer ?? string.Empty)
