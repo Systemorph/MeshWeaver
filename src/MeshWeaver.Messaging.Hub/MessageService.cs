@@ -657,8 +657,11 @@ public class MessageService : IMessageService
         // Compare without Host — Host tracks the routing path, the inner address is the identity
         // (same test HierarchicalRouting.RouteMessageAsync makes to decide "are we the target").
         // A null Target is handled locally, so it counts as addressed here.
+        // Only third-party traffic gets the routing exemption. Our own outgoing request
+        // would register new work during the drain, even though its target is elsewhere.
         if (delivery.Target is not null
-            && !(delivery.Target with { Host = null }).Equals(Address))
+            && !(delivery.Target with { Host = null }).Equals(Address)
+            && !(delivery.Sender is { } sender && (sender with { Host = null }).Equals(Address)))
             return false;
 
         return IsAwaitedBySender(delivery);
