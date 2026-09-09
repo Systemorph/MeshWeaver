@@ -131,6 +131,14 @@ public static class ServiceDefaults
                 metrics.AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
                     .AddMeter("Microsoft.Orleans")
+                    // 🚨 The platform's OWN meter (#3488). Until it existed, every counter any
+                    // investigation used was a runtime built-in standing in for what was actually
+                    // wanted, and answering "how many hubs, of what kind, in what run level" cost
+                    // a heap dump — which suspends the replica past its liveness budget and
+                    // therefore RESTARTS it, destroying the state being measured. A meter nobody
+                    // collects is the same silence one step later, so the name is subscribed here
+                    // rather than left for a deployment to remember.
+                    .AddMeter(MeshWeaver.Messaging.PlatformMetrics.MeterName)
                     .AddRuntimeInstrumentation();
             })
             .WithTracing(tracing =>
