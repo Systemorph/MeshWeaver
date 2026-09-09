@@ -163,6 +163,16 @@ public static class EmitPipeline
     internal static EmittedArtifact EmitCompilationToDirectory(
         CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir,
         IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct)
+        => EmitCompilationToDirectory(compilation, nodeName, nodePath, releaseDir,
+            manifestResources, ct, null);
+
+    // The existing entry points keep their signatures and default behavior. Only the
+    // NodeType pipeline supplies the optional CI diagnostic scheduler; it must not do
+    // blocking I/O here or replace the exception that caused the capture.
+    internal static EmittedArtifact EmitCompilationToDirectory(
+        CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir,
+        IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct,
+        Action<CSharpCompilation, Exception>? captureFailure)
     {
         var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
         var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
@@ -193,6 +203,16 @@ public static class EmitPipeline
             // reporting funnel via SummarizeCompileError — no second log from here, the
             // log-once contract above still holds.
             ex.Data[EmitCanaryDataKey] = ProbeSharedEmitState(compilation);
+            try
+            {
+                captureFailure?.Invoke(compilation, ex);
+            }
+            catch (Exception captureError)
+            {
+                // Scheduling/ownership can fail during teardown. Diagnostic failure
+                // must never wrap, replace or suppress the original Roslyn exception.
+                ex.Data[EmitReferenceCaptureDataKey] = "incomplete:scheduling-" + captureError.GetType().Name;
+            }
             throw;
         }
 
@@ -224,6 +244,8 @@ public static class EmitPipeline
     /// <c>NodeTypeCompilationHelpers.SummarizeCompileError</c> reads it back.
     /// </summary>
     internal const string EmitCanaryDataKey = "MeshWeaver.EmitCanary";
+
+    internal const string EmitReferenceCaptureDataKey = "MeshWeaver.EmitReferenceCapture";
 
     /// <summary>
     /// Did the canary PROVE that this PROCESS can no longer emit — as opposed to this
