@@ -296,6 +296,11 @@ public static class LayoutClientExtensions
         // `fail` line on EVERY NavLink render (prod error storm) while the icon rendered as nothing.
         if (typeof(T) == typeof(Icon) && TryGetStringValue(value, out var iconString))
             return (T?)(object?)Icon.Parse(iconString);
+        // Labels must render the same value before and after transport serialization.
+        // Collections and other non-convertible values use the existing JSON text conversion.
+        if (typeof(T) == typeof(string) && value is not null && value is not IConvertible)
+            return hub.ConvertJson(JsonSerializer.SerializeToElement(value, hub.JsonSerializerOptions),
+                null, defaultValue);
         return value switch
         {
             null => defaultValue,

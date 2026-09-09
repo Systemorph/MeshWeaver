@@ -16,6 +16,39 @@ public class LayoutClientExtensionsTest(ITestOutputHelper output) : HubTestBase(
         return base.ConfigureHost(config);
     }
 
+    [Fact]
+    public void ConvertSingle_CollectionLabel_MatchesItsSerializedValue()
+    {
+        var hub = GetHost();
+        object[] values =
+        [
+            new[] { "Initialize", "MeshNodeInit" },
+            new System.Collections.Generic.List<int> { 1, 2, 3 },
+            new System.Collections.Generic.Dictionary<string, int> { ["pending"] = 2 },
+            System.Text.Json.Nodes.JsonNode.Parse("[\"Initialize\",\"MeshNodeInit\"]")!,
+            System.Text.Json.Nodes.JsonNode.Parse("{\"pending\":2}")!
+        ];
+        foreach (var value in values)
+        {
+            var serialized = JsonSerializer.SerializeToElement(value, hub.JsonSerializerOptions);
+            var expected = hub.ConvertSingle<string>(serialized, null);
+            expected.Should().NotBeNullOrEmpty();
+            hub.ConvertSingle<string>(value, null).Should().Be(expected,
+                "a label must render the same value before and after transport serialization");
+        }
+    }
+
+    [Fact]
+    public void ConvertSingle_GateNames_RenderAsReadableText()
+    {
+        var hub = GetHost();
+        hub.ConvertSingle<string>(new[] { "Initialize", "MeshNodeInit" }, null)
+            .Should().Be("Initialize, MeshNodeInit");
+        hub.ConvertSingle<string>(Array.Empty<string>(), null).Should().BeEmpty();
+        hub.ConvertSingle<string>(Guid.Parse("01234567-89ab-cdef-0123-456789abcdef"), null)
+            .Should().Be("01234567-89ab-cdef-0123-456789abcdef");
+    }
+
     /// <summary>
     /// 🚨 A value that is not <see cref="IConvertible"/> must not END THE BINDING (#3764).
     ///
