@@ -46,8 +46,10 @@ namespace Memex.Portal.Shared.Authentication;
 /// <c>ContentAs&lt;T&gt;</c>, and there is no shape switch left to have an arm.</para>
 ///
 /// <para><b>Azure setup (one-time):</b> on the sign-in app registration add the <i>delegated</i> scopes
-/// <c>Mail.ReadWrite Mail.Send Calendars.ReadWrite offline_access</c> and the redirect URI
-/// <c>{BaseUrl}/auth/ea/callback</c>. The user's first use triggers the consent screen.</para>
+/// <c>Mail.ReadWrite Mail.Send Calendars.ReadWrite Team.ReadBasic.All Channel.ReadBasic.All
+/// ChannelMessage.Read.All Chat.Read offline_access</c> and the redirect URI
+/// <c>{BaseUrl}/auth/ea/callback</c>. The user's first use triggers the consent screen;
+/// <c>ChannelMessage.Read.All</c> needs a tenant admin's consent once.</para>
 /// </summary>
 public sealed class EaGraphAuth(
     IServiceProvider rootServices,
@@ -56,10 +58,35 @@ public sealed class EaGraphAuth(
     HttpClient http,
     ILogger<EaGraphAuth>? logger = null) : IEaGraphAuth
 {
-    /// <summary>Delegated scopes the EA needs (space-separated, Graph v2 form).</summary>
+    /// <summary>
+    /// Delegated scopes the EA needs (space-separated, Graph v2 form).
+    ///
+    /// <para><b>Teams, read-only (2026-09-09).</b> <c>Team.ReadBasic.All</c> lists the user's teams,
+    /// <c>Channel.ReadBasic.All</c> a team's channels, <c>ChannelMessage.Read.All</c> a channel's
+    /// messages, <c>Chat.Read</c> the user's chats — the surface the Executive Assistant's
+    /// <c>ListTeams</c> / <c>ListChannels</c> / <c>ReadChannelMessages</c> / <c>ListChats</c> /
+    /// <c>ReadChat</c> tools (MeshWeaver.Plugins) call. Deliberately NO send scope: Teams has no
+    /// draft state, so a send would be immediate and irreversible, and the EA's mail contract is
+    /// draft-by-default; sending gets its own gate and its own consent when it is built.</para>
+    ///
+    /// <para><b>Consent.</b> The v2 authorize endpoint consents to whatever <c>scope</c> asks for
+    /// (dynamic consent), so these need not be pre-listed on the app registration — but
+    /// <c>ChannelMessage.Read.All</c> is admin-restricted: a non-admin user sees "Need admin
+    /// approval" until a tenant admin has consented once (Entra → Enterprise applications → the
+    /// sign-in app → Permissions → Grant admin consent). Every user who connected BEFORE this
+    /// change holds a grant without these scopes and must reconnect once via
+    /// <c>{BaseUrl}/auth/ea/connect</c>; the plugin says so on the 403 it gets until then.</para>
+    ///
+    /// <para><b>Tenant boundary.</b> A grant is minted by the user's HOME tenant. A team the user
+    /// reaches as a guest of another company's tenant is not visible on it — <c>/me/joinedTeams</c>
+    /// omits guest teams — and no scope here changes that; see the <c>/teams</c> skill.</para>
+    /// </summary>
     public const string Scopes =
         "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send " +
-        "https://graph.microsoft.com/Calendars.ReadWrite offline_access";
+        "https://graph.microsoft.com/Calendars.ReadWrite " +
+        "https://graph.microsoft.com/Team.ReadBasic.All https://graph.microsoft.com/Channel.ReadBasic.All " +
+        "https://graph.microsoft.com/ChannelMessage.Read.All https://graph.microsoft.com/Chat.Read " +
+        "offline_access";
 
     /// <summary>
     /// How long a single credential-node read may take before the answer becomes
