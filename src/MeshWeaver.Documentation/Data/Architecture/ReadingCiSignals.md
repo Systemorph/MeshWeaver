@@ -643,7 +643,7 @@ classified before anything was changed. Two node paths, two opposite verdicts:
 | occurrence | verdict |
 |---|---|
 | `Ops/Modules/{deployment}` (`Hosting/ModuleInventory`) | **TRUE POSITIVE — a live defect in `src/`.** `DeploymentReportService` stamped `$type = "ModuleInventoryContent"`, a literal naming **no CLR type in the fleet**, while the real record `DeploymentReport` was registered nowhere. Its own comment said the stamp existed because *"content without the discriminator … materialises as NOTHING"* — and it materialised as nothing anyway. Every instance's self-reported module inventory read back untyped. Fixed: the record is registered and the constant is `nameof(DeploymentReport)`. |
-| `{partition}/Live` (`LateContentTypeRegistrationTest`) | **A true degradation, but NOT the gate's subject.** That test asserts content *stays* untyped when an unrelated type registers; its `$type` is literally `AContentTypeTheMeshNeverCompiled`. The keying is not at fault — the event really happened — but the gate cannot distinguish a degradation that is a test's SUBJECT from one nobody intended. |
+| `{partition}/Live` (`LateContentTypeRegistrationTest`) | **A true degradation, but NOT the gate's subject.** That test asserts content *stays* untyped when an unrelated type registers; its `$type` is literally `AContentTypeTheMeshNeverCompiled`. The keying was not at fault — the event really happened — but the gate could not distinguish a degradation that is a test's SUBJECT from one nobody intended, nor a transient one from a final one. The second half is answered by #3645 (see *TRANSIENT from FINAL* below); the first is still answered by capture-and-assert. |
 
 🚨 **The guard on the true positive was asserting the defect.** `AnInstanceReportsWhatItRunsTest`
 checked `content.GetProperty("$type") == InventoryContentType` — and a `$type` **property** is only
@@ -701,20 +701,48 @@ degradation this test reproduces"*. So the regression is now caught by a **test*
 gate that must first see a whole shard's logs. With the fix in place: 3/3 pass, marker count in the
 shared trace **3 → 0**, `check-untyped-content.sh` **exit 1 → exit 0**.
 
-🚨 **What the gate still cannot tell you: TRANSIENT from FINAL.** `MeshNodeStreamCache` warns at the
-instant of a read, and at that instant it cannot know the type will register moments later — which
-is the normal state during portal boot, before the NodeType compiles land, and is exactly the race
-#2952 fixed by re-typing every live reader when the registration arrives. The sibling seam one layer
-down already says so in its own message: `MeshNodeTypeSource` prints **both** causes — *"(a) the
-NodeType's runtime compile has not registered it YET, which is TRANSIENT … (b) no declaration will
-ever claim this discriminator"* — and it passes **no exception**, so it never reaches the trace file
-and reds nothing. One event, two descriptions, opposite CI consequences: the cache's is a shard
-failure, the type source's is invisible. Two of `LateContentTypeRegistrationTest`'s three cases are
-the transient one, and they degrade *and recover* inside a single test. Telling them apart means
-recording a degradation and reporting only the ones never recovered, which needs a window nothing in
-a process naturally closes — a rework rather than a repair, and deliberately left to its own issue.
-Until then read a gate hit as *"content was unreadable at a read"*, and check the node's
-`compilationStatus` before calling it (b).
+🚨 **TRANSIENT from FINAL — the gate's denominator, answered by #3645.** `MeshNodeStreamCache` warns
+at the instant of a read, and at that instant it cannot know the type will register moments later —
+which is the normal state during portal boot, before the NodeType compiles land, and is exactly the
+race #2952 fixed by re-typing every live reader when the registration arrives. The sibling seam one
+layer down already said so in its own message: `MeshNodeTypeSource` prints **both** causes — *"(a)
+the NodeType's runtime compile has not registered it YET, which is TRANSIENT … (b) no declaration
+will ever claim this discriminator"* — and it passes **no exception**, so it never reaches the trace
+file and reds nothing. One event, two descriptions, opposite CI consequences: the cache's was a
+shard failure, the type source's invisible. Two of `LateContentTypeRegistrationTest`'s three cases
+are the transient one, and they degrade *and recover* inside a single test — so a gate hit meant
+*"content was unreadable at a read"*, never *"content is unreadable"*.
+
+**What closed it was not a window; it was asking again.** The platform already kept the state
+(`ContentDegradationRegistry`, one entry per node type, added for `/health`), and the content-type
+registry already answers *"is this resolvable"* as a pure map lookup by either of the two routes
+`TryRecoverForNodeType` takes. So the verdict is computed by **re-asking at report time**:
+`ContentDegradationRegistry.Unresolved(registry)` drops every entry whose type has since
+registered, and `MeshNodeStreamCache.Dispose` logs one `MeshNodeContentUnresolvedException` per
+entry that survives. `check-untyped-content.sh` keys on **that** type now, not on the per-read
+`MeshNodeContentDegradedException`.
+
+| record | when | meaning | reds a shard? |
+|---|---|---|---|
+| `MeshNodeContentDegradedException` | at each degraded read | *this read was untyped* — an EVENT, possibly the boot race | **no** (since #3645) |
+| `MeshNodeContentUnresolvedException` | once per node type, at cache teardown | *the registry was re-asked and still says no* — a VERDICT | **yes** |
+
+So a boot that reads a runtime-compiled NodeType before its compile lands now produces **no** gate
+hit, while a discriminator nothing will ever claim produces exactly one, naming the node type and
+the discriminator. The per-read records stay in the logs and stay useful: once the verdict names a
+type, they are how you find which reads degraded on it.
+
+🚨 `/health` was wrong the same way and is fixed in the same change: `ContentTypeHealthCheck` fed
+`Snapshot()`, so a replica stayed `Degraded` after a boot race until some later read of that type
+happened to clear the entry — a probe answering about the past. It reads `Unresolved(...)` now.
+
+**Falsified in both directions, as the issue asked.** With `Unresolved` reduced to `Snapshot()`, the
+recovered case is reported and `ARecoveredDegradation_IsNotTheVerdict` fails; with the teardown
+report removed, `AnUnrecoverableDegradation_IsTheVerdict_AndReachesTheSink` fails on *"the teardown
+must REPORT what never resolved"*. `UntypedContentDegradationGate` pins the script's key to
+`nameof(MeshNodeContentUnresolvedException)`, that the emitter constructs it, that the report is
+computed from `Unresolved(`, and that both read seams still emit the per-read record the verdict is
+derived from.
 
 **The instrument that does answer it** is `MessageTrace`
 (`MeshWeaver.Messaging.Hub/MessageService.cs`): `MESHWEAVER_MSG_TRACE=1` makes every delivery write

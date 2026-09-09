@@ -58,15 +58,45 @@
 # asserted by UntypedContentDegradationReachesTheTraceSinkTest, which drives the PRODUCTION emitter
 # and evaluates the sink's own condition against the captured record. Modelled on
 # EmitDeadAttributionReachesTheTraceSinkTest, which exists for the same trap one diagnostic over.
+#
+# 🚨 WHY THE KEY MOVED FROM THE EVENT TO THE VERDICT (MeshWeaver#3645).
+#
+# For its next stretch this gate could fire, and fired on the WRONG POPULATION. It keyed on
+# MeshNodeContentDegradedException, which is emitted at the INSTANT of a read — and at that instant
+# nothing can know whether the type registers a moment later. That is the ordinary state during a
+# portal boot: a NodeType's runtime compile lands after the first readers have been served, and
+# MeshWeaver#2952 exists precisely to re-type those readers when the registration arrives. The
+# sibling seam one layer down (MeshNodeTypeSource) already said so in its own message — "content
+# stays an untyped JsonElement FOR NOW … (a) … has not registered it YET, which is TRANSIENT … or
+# (b) no declaration will ever claim this discriminator" — and, passing no exception, reddened
+# nothing. One event, two descriptions, opposite CI consequences.
+#
+# Measured on #3628: two of LateContentTypeRegistrationTest's three cases degrade and RECOVER inside
+# a single test — the recovery IS the assertion — and both produced a gate-reddening record. So a
+# hit meant "content was unreadable at a read", never "content is unreadable".
+#
+# The denominator is now the FINAL state, and the platform already had the machinery for it.
+# ContentDegradationRegistry keeps what a replica could not type; MeshNodeStreamCache.Dispose calls
+# Unresolved(), which RE-ASKS the mesh-wide content-type registry per entry — both routes
+# TryRecoverForNodeType takes, two pure map lookups, no content needed — and logs one
+# MeshNodeContentUnresolvedException per node type that is STILL unresolvable. A boot that read
+# before its compile landed leaves nothing behind; a discriminator no declaration will ever claim
+# leaves exactly one record, naming the node type.
+#
+# So the marker below is the VERDICT, not the event. The per-read
+# MeshNodeContentDegradedException records stay in the logs and stay useful — they are how you find
+# WHICH read degraded once the verdict tells you a type never recovered — but they no longer red a
+# shard on their own.
 set -euo pipefail
 
-# The event's IDENTITY. Primary key: compiler-bound, and pinned to this string by
+# The verdict's IDENTITY. Primary key: compiler-bound, and pinned to this string by
 # UntypedContentDegradationGate via nameof(...).
-MARKER='MeshNodeContentDegradedException'
-# The event's DESCRIPTION. Secondary net, kept deliberately: a per-test file log
+MARKER='MeshNodeContentUnresolvedException'
+# The verdict's DESCRIPTION. Secondary net, kept deliberately: a per-test file log
 # (MESHWEAVER_TEST_FILE_LOGS, on in node-repo-module-pack.yml) carries the formatted message with
-# no exception attached at all.
-PHRASE='stayed an untyped JsonElement'
+# no exception attached at all. 🚨 It must match the FINAL report only — the per-read warnings say
+# "stayed an untyped JsonElement", which is the transient population this gate no longer reds on.
+PHRASE='was NEVER resolvable on this replica'
 DIR="${1:?usage: check-untyped-content.sh <collected-logs-dir>}"
 scan_err="$(mktemp)"
 trap 'rm -f "$scan_err"' EXIT
@@ -117,22 +147,27 @@ if [ "$scan_rc" -gt 1 ]; then
 fi
 
 if [ -z "$matches" ]; then
-  echo "No content-type degradation in $DIR (scan exit $scan_rc)."
+  echo "No unresolved content type in $DIR (scan exit $scan_rc) — a transient degradation that later recovered is not a hit."
   exit 0
 fi
 
-echo "::error::A node's content degraded to an untyped JsonElement — a content type was not registered on the hub that read it."
+echo "::error::A node's content was NEVER resolvable — a content type was not registered on the hub that read it, and still was not when the mesh ended."
 echo ""
 echo "This does NOT throw. The value reads as absent: an 'is MyType' check misses, a view renders"
 echo "empty, a reactive wait never completes. It is caught here or not at all."
 echo ""
+echo "This is the VERDICT, not the event: the content-type registry was re-asked at teardown and"
+echo "answered no, so the transient boot race (a NodeType read before its own compile landed) is"
+echo "already excluded. Search the same logs for MeshNodeContentDegradedException to see WHICH"
+echo "reads degraded on it."
+echo ""
 echo "Occurrences:"
-# Trim to the node path — the whole line carries a serialised payload and drowns the signal.
-# Both record shapes name the node: the log message says "Content for <path> stayed …", the
-# exception says "content for '<path>' (nodeType …)". Reduce either to the path.
+# Reduce to the NODE TYPE — the verdict is per node type, not per node. Both record shapes name
+# it: the log message says "content for nodeType <X> was NEVER…", the exception says
+# "content for nodeType '<X>' (discriminator …)".
 grep -rh "${EXCLUDES[@]}" -e "$MARKER" -e "$PHRASE" "$DIR" 2>/dev/null \
-  | sed -E -e "s/.*Content for ([^ ]+) stayed.*/  \1/" \
-           -e "s/.*content for '([^']*)'.*/  \1/" \
+  | sed -E -e "s/.*content for nodeType '([^']*)'.*/  \1/" \
+           -e "s/.*content for nodeType ([^ ]+) was NEVER.*/  \1/" \
   | sort | uniq -c | sort -rn | head -20
 echo ""
 echo "Files: $(printf '%s' "$matches" | tr '\n' ' ')"
