@@ -266,7 +266,33 @@ public static class ReleaseAvailability
         if (artifacts.Modules?.MvidByModule.ContainsKey(package.ModuleName) == true)
             return (null, null);
         if (string.IsNullOrWhiteSpace(package.LandedModulePath))
-            return (null, null);
+            // 🚨 NOTHING LANDED AND THE TARGET DOES NOT CARRY IT — an install record naming a
+            // package NO PUBLISHER PRODUCES (#3706). This used to return silence, and silence is
+            // the wrong answer twice over: the gate correctly does not hold (no roll of this
+            // deployment can conjure a build nobody publishes — holding would be the eternal wait
+            // #3706 was filed about), but nothing told the operator that the record is stale
+            // either, so the only way to learn it was to read a frozen `heldReason` and reach the
+            // wrong conclusion. That is exactly what happened: memex's Agent / Skill / PlatformUI
+            // records outlived the packages (the AI engine serves those now — MeshWeaver.Plugins
+            // 7afbd745, deliberately), and the hold quoted against them had been computed once,
+            // 36 hours earlier, by a code path that no longer decides anything.
+            //
+            // Named, never a hold — which is #3706's option 3 stated as behaviour.
+            //
+            // 🚨 Only when the set was actually READ. A null or refused SealedModuleSet means the
+            // module was not looked for, and "we did not look" must never be worded as "it does
+            // not exist" — the same conflation #1754 forbids one severity up. Unmeasured stays
+            // silent here and is reported by the paths that own it.
+            return artifacts.Modules is { Refusal: null } observed
+                    && !observed.MvidByModule.ContainsKey(package.ModuleName)
+                ? (null,
+                    $"{package.Name}: the install record names module {package.ModuleName}, which "
+                    + $"the module set sealed for framework identity {target.FrameworkIdentity} "
+                    + "does not carry, and no generation of it is landed on this instance — so no "
+                    + "publisher produces it and no roll can obtain it. Reported, never a hold: "
+                    + "holding would wait for ever. If the package is genuinely retired, remove "
+                    + "its install record; if it moved, the record must name its new home")
+                : (null, null);
 
         if (!artifacts.ModuleLinks.TryGetValue(package.Name, out var link))
             return (null,
