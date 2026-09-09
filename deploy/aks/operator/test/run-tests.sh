@@ -632,6 +632,45 @@ else
 fi
 rm -rf "$_dp_dir"
 
+# ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
+# Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`
+# and its --atomic rollback erred too. The preflight asks `kubectl auth can-i` per rendered kind
+# and names every denial in ONE refusal, with helm never reached.
+echo
+echo "── hosting-deploy: writable-kinds preflight and release state ───"
+_pf_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_pf_dir/"; _pf_log="$_pf_dir/calls.log"; : > "$_pf_log"
+_pf_vals="$_pf_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_pf_vals"
+printf 'create secretproviderclass.secrets-store.csi.x-k8s.io\npatch deployment.apps\n' > "$_pf_dir/denied.txt"
+_pf_out="$(env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_pf_dir" HOSTING_DEPLOY_STUB_LOG="$_pf_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_pf_vals" --image cr.example.test/memex-portal-ai:1 2>&1)"; _pf_rc=$?
+if [ "$_pf_rc" -ne 0 ] && printf '%s' "$_pf_out" | grep -q 'denied:.*create:secretproviderclass.secrets-store.csi.x-k8s.io' \
+   && printf '%s' "$_pf_out" | grep -q 'denied:.*patch:deployment.apps' && ! grep -q '^helm upgrade' "$_pf_log"; then
+  ok "every denied verb:kind is named in ONE refusal, and helm never runs"
+else
+  bad "denied kinds are named before helm" "rc=${_pf_rc} out: ${_pf_out} log: $(cat "$_pf_log")"
+fi
+# A release helm cannot upgrade (pending-*) is refused by name before helm.
+rm -f "$_pf_dir/denied.txt"; printf '{"name":"memex","info":{"status":"pending-upgrade"},"version":41}\n' > "$_pf_dir/status.json"; : > "$_pf_log"
+_pf_out="$(env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_pf_dir" HOSTING_DEPLOY_STUB_LOG="$_pf_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_pf_vals" --image cr.example.test/memex-portal-ai:1 2>&1)"; _pf_rc=$?
+if [ "$_pf_rc" -ne 0 ] && printf '%s' "$_pf_out" | grep -q "is 'pending-upgrade'" && ! grep -q '^helm upgrade' "$_pf_log"; then
+  ok "a pending-* release is refused by name, and helm never runs"
+else
+  bad "a pending-* release is refused by name" "rc=${_pf_rc} out: ${_pf_out}"
+fi
+rm -rf "$_pf_dir"
+
+# ── every kind the CHART renders is writable by the operator's ClusterRole ─────────────────────
+# core #3774 rendered a PodDisruptionBudget; the role could only read them; the next Reconcile of
+# memex failed inside helm. A chart change that renders a new kind lands with its grant, or this
+# case is red naming the kind and the rule.
+ck_out="$(bash "$(dirname -- "${BASH_SOURCE[0]}")/check-chart-kinds-granted.sh" 2>&1)"; ck_rc=$?
+if [ "$ck_rc" -eq 0 ]; then
+  ok "every kind the chart renders is writable by operator-rbac.yaml ($(printf '%s' "$ck_out" | tail -1 | sed 's/^check-chart-kinds-granted: //'))"
+else
+  bad "every kind the chart renders is writable by operator-rbac.yaml" "$ck_out"
+fi
+
 # ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
 # The manifest lives three directories away from the scripts and is reviewed separately; twice a
 # script reached main without its grant (storageclasses for pv-resize — failed the first Reconcile
