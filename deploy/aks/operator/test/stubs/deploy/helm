@@ -10,6 +10,12 @@ case "${1:-}" in
   template) cat "$fixture/rendered.yaml" ;;
   status)   # `helm status <rel> --namespace <ns> -o json` → $FIXTURE/status.json, else "not found"
     [ -f "$fixture/status.json" ] && cat "$fixture/status.json" || { echo "Error: release: not found" >&2; exit 1; } ;;
-  upgrade)  echo "Release \"${2:-}\" has been upgraded." ;;
+  upgrade)
+    # A failing upgrade, on demand: the refusal text must name the roll-forward path and must NOT
+    # claim a rollback, because there is no longer an --atomic to perform one (#3782).
+    if [ "${HOSTING_DEPLOY_STUB_UPGRADE_FAILS:-false}" = "true" ]; then
+      echo "Error: UPGRADE FAILED: stubbed failure" >&2; exit 1
+    fi
+    echo "Release \"${2:-}\" has been upgraded." ;;
   *) echo "helm stub: unexpected invocation: $*" >&2; exit 1 ;;
 esac

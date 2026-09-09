@@ -632,6 +632,72 @@ else
 fi
 rm -rf "$_dp_dir"
 
+# ── hosting-deploy APPLIES; it never waits, and never rolls back a good upgrade ─────────────────
+# 🚨 Measured 2026-09-09 02:35-02:51Z on memex (#3782). `--atomic --wait --timeout 15m` DESTROYED a
+# correct upgrade: revision 44 had landed with the record's full render and was inside its own
+# startup gate (the record budgets 10800s for it) when helm's fixed fifteen minutes expired, and
+# --atomic reverted it to revision 43. Slow and broken are indistinguishable to a timer; only
+# something watching the rollout can tell them apart. helm now applies and the CALLER observes,
+# which is why the applied revision has to come back out.
+#
+# These cases are that decision, pinned. The first is written against the ARGUMENT LIST rather than
+# an outcome on purpose: `--atomic` reappearing is a silent regression that no stubbed run can
+# fail on, because a stub always "succeeds" — the flag itself is the defect.
+echo
+echo "── hosting-deploy: applies without waiting, reports the revision ─"
+_ap_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_ap_dir/"; _ap_log="$_ap_dir/calls.log"; : > "$_ap_log"
+_ap_vals="$_ap_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_ap_vals"
+_ap_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_ap_dir" HOSTING_DEPLOY_STUB_LOG="$_ap_log" "$@" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_ap_vals" --image cr.example.test/memex-portal-ai:1 2>&1; }
+_ap_out="$(_ap_run env)"; _ap_rc=$?
+_ap_upgrade="$(grep '^helm upgrade' "$_ap_log" | head -1)"
+if [ "$_ap_rc" -eq 0 ] && [ -n "$_ap_upgrade" ] \
+   && ! printf '%s' "$_ap_upgrade" | grep -q -- '--atomic' \
+   && ! printf '%s' "$_ap_upgrade" | grep -q -- '--wait' \
+   && ! printf '%s' "$_ap_upgrade" | grep -q -- '--timeout'; then
+  ok "helm upgrade carries no --atomic, no --wait and no --timeout"
+else
+  bad "helm upgrade carries no --atomic/--wait/--timeout" "rc=${_ap_rc} upgrade line: '${_ap_upgrade}' out: ${_ap_out}"
+fi
+case "$_ap_out" in *"::hosting:: helm_revision=42"*) ok "the applied revision is reported for the caller to observe" ;;
+  *) bad "the applied revision is reported" "said: ${_ap_out}" ;; esac
+# The revision is READ BACK from helm, not guessed — and read AFTER the apply, or it names the
+# revision the upgrade replaced.
+_ap_up_line="$(grep -n '^helm upgrade' "$_ap_log" | head -1 | cut -d: -f1)"
+_ap_st_line="$(grep -n '^helm status' "$_ap_log" | tail -1 | cut -d: -f1)"
+if [ -n "$_ap_up_line" ] && [ -n "$_ap_st_line" ] && [ "$_ap_st_line" -gt "$_ap_up_line" ]; then
+  ok "the revision is read back AFTER the apply, never guessed"
+else
+  bad "the revision is read back after the apply" "upgrade at '${_ap_up_line}', status at '${_ap_st_line}' in: $(cat "$_ap_log")"
+fi
+# Success here means APPLIED, not rolled out — and it must say so, or a caller reads a tick as a
+# finished rollout, which is precisely what #3782 asks never to report.
+case "$_ap_out" in *"NOT yet rolled out"*) ok "the log states the rollout has NOT happened yet" ;;
+  *) bad "the log states the rollout has not happened yet" "said: ${_ap_out}" ;; esac
+
+# A FAILED upgrade must not claim a rollback that no longer happens, and must name the way forward.
+: > "$_ap_log"
+_ap_out="$(_ap_run env HOSTING_DEPLOY_STUB_UPGRADE_FAILS=true)"; _ap_rc=$?
+if [ "$_ap_rc" -ne 0 ] && printf '%s' "$_ap_out" | grep -q 'was NOT rolled back' \
+   && printf '%s' "$_ap_out" | grep -q 'helm history' \
+   && ! printf '%s' "$_ap_out" | grep -q 'rolled back by --atomic'; then
+  ok "a failed upgrade says it was NOT rolled back and names helm history"
+else
+  bad "a failed upgrade reports honestly" "rc=${_ap_rc} out: ${_ap_out}"
+fi
+
+# 🚨 An apply whose revision cannot be read is a REFUSAL, not a quiet success. Without this the
+# script would report a release the caller has no handle on, and "observed" would degrade back to
+# "assumed" — the exact regression this change exists to prevent.
+printf '{"name":"memex","info":{"status":"deployed"}}\n' > "$_ap_dir/status.json"; : > "$_ap_log"
+_ap_out="$(_ap_run env)"; _ap_rc=$?
+if [ "$_ap_rc" -ne 0 ] && printf '%s' "$_ap_out" | grep -q 'returned no revision'; then
+  ok "an apply with no readable revision is refused, not reported as done"
+else
+  bad "an apply with no readable revision is refused" "rc=${_ap_rc} out: ${_ap_out}"
+fi
+rm -rf "$_ap_dir"
+
 # ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
 # Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`
 # and its --atomic rollback erred too. The preflight asks `kubectl auth can-i` per rendered kind
