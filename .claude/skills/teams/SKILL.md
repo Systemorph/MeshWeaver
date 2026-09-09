@@ -88,7 +88,7 @@ A delegated token is minted by the user's **home** tenant. A team the user reach
 (B2B) lives in the **resource** tenant, and Graph does not cross that line on a home-tenant token:
 `/me/joinedTeams` does not list guest teams, and the channel endpoints answer 403/404 for them —
 measured and documented by others
-([Q&A](https://learn.microsoft.com/en-us/answers/questions/48733/read-teams-channels-using-graph-api-as-a-b2b-(gues),
+([Q&A](https://learn.microsoft.com/en-us/answers/questions/48733/read-teams-channels-using-graph-api-as-a-b2b-%28gues),
 [Tech Community](https://techcommunity.microsoft.com/t5/teams-developer/read-teams-channels-using-graph-api-as-a-b2b-or-guest-user/m-p/1502502)).
 So the scopes above make the EA see **Systemorph's** teams. PartnerRe ESL needs one of:
 
