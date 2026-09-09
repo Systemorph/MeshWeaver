@@ -17,7 +17,9 @@ a nuisance rather than a cloud compromise.
 ```bash
 kubectl apply -f namespace.yaml
 kubectl apply -f operator-serviceaccount.yaml      # edit AZURE_CLIENT_ID annotation first
-kubectl apply -f operator-rbac.yaml
+kubectl apply -f operator-rbac.yaml                # FIRST TIME ONLY — from then on the config repo's
+                                                   # helm-release lane (adopt/deploy) re-applies it from
+                                                   # this repo at the chart pin; see the note below
 kubectl apply -f jobrunner.yaml                    # 🚨 edit the SA/Secret namespace to your CONTROL
                                                    # PORTAL's namespace first — a pod can only mount
                                                    # Secrets from its own namespace, so they live
@@ -84,3 +86,16 @@ The chart's half: `portal.imagePullSecret` renders `imagePullSecrets` on the por
 **and** the migration Job; `selfUpdate.registry` renders `SelfUpdate__Registry`, which makes the
 self-updater list tags over the OCI Distribution API with the same key. Neither is set on the
 mirror instance itself — it cannot serve the image that boots it.
+
+## The ClusterRole follows the chart
+
+`operator-rbac.yaml` is re-applied by `Systemorph/Memex` `helm-release.yml` on every `adopt` and
+`deploy`, read from THIS repository at the same pin the lane renders the chart from. So a script
+that needs a new grant lands with the grant, and the next deploy carries both to the cluster —
+no laptop in the loop. Measured before this existed (2026-09-09): the `storageclasses` rule had
+been on main since the volume-capacity step, the cluster's ClusterRole predated it, and the first
+record-driven Reconcile through the fixed operator stopped at step 1/6 with `Forbidden`.
+`deploy/aks/operator/test/check-rbac-coverage.sh` is the other half: every `kubectl <verb>
+<resource>` a `bin/` script names must be granted here, or the operator test suite is red.
+`kubectl apply` prints `configured` / `unchanged` per resource in the lane's log — that line is
+the change report.

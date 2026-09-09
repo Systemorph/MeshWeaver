@@ -248,7 +248,12 @@ jobs:
       # scripts will actually execute under in a lifecycle Job.
       - name: Behaviour tests, inside the image
         run: |
+          # The manifests are NOT in the image (only bin/ and the chart are), but the suite's RBAC
+          # coverage case needs the ClusterRole: mount them read-only and name the file, so the
+          # case runs here exactly as on the runner — a missing input is exit 2 and red, not a skip.
           docker run --rm -v "$PWD/deploy/aks/operator/test:/opt/hosting/test:ro" \
+            -v "$PWD/deploy/aks/manifests:/opt/hosting/manifests:ro" \
+            -e HOSTING_RBAC_MANIFEST=/opt/hosting/manifests/hosting-operator/operator-rbac.yaml \
             --entrypoint /bin/bash hosting-operator:ci -c 'cd /opt/hosting && bash test/run-tests.sh'
 
   # ═══════════════════════════════════════════════════════════════════════════════════════════
