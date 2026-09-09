@@ -1547,7 +1547,7 @@ Every rule is a KEEP rule and they are ORed — a generation survives if **any**
 | it is the sweeping process's own framework | a failed claim write must never let a pod delete what it is loading |
 | a claim younger than `ClaimTtl` (24 h) names it | another pod is still running that image |
 | it is among the `KeepGenerations` (3) most recently written | rollback headroom — and the rollout that first introduces claims, where the outgoing image is not asserting one yet |
-| its newest file is younger than `MinimumAge` (7 d) | a backstop bounding what a wrong answer from either of the above can do |
+| its newest file is younger than `MinimumAge` (at least 30 d) | preserve 30 days of history regardless of newer generation count; configuration may extend but cannot shorten this floor |
 
 Anything the sweep cannot attribute to a generation — the claim files, an untagged pre-2026-06 DLL,
 any foreign file — is counted and **never deleted**, and any error reading the tree or the claims
