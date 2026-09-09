@@ -247,7 +247,7 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
                     foreach (var node in change.Items)
                     {
                         var definition = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger)
-                            ?? throw new InvalidOperationException("a NodeType adoption record could not be read");
+                            ?? throw new InvalidOperationException($"NodeType adoption record {node.Path} could not be read");
                         if (!string.IsNullOrWhiteSpace(definition.CompiledFrameworkVersion))
                             identities.Add(definition.CompiledFrameworkVersion);
                     }
