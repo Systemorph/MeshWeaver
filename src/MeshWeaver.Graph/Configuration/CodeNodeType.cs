@@ -565,6 +565,7 @@ public static class CodeNodeType
             logger?.LogWarning(exception,
                 "CodeNodeType: failing run {Activity} dispatched from {Hub}: {Error}",
                 activityPath, hub.Address, error);
+        var releaseMirror = ActivityLogAppender.PrepareMirrorRelease(hub, activityPath, logger);
         hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(curr =>
                 // 🚨 ContentAs, never `is ActivityLog`. This lambda runs against a LOCAL mirror whose
                 // Content can be a degraded JsonElement, and a plain type test is then null — the
@@ -579,7 +580,6 @@ public static class CodeNodeType
                     "CodeNodeType: failed to reconcile ActivityLog {Activity} to Failed", activityPath),
                 // #3117 — retire the activity's per-node hub on the terminal write rather than
                 // leaving it to the 10-minute idle sweep. Completion, never emission.
-                () => ActivityLogAppender.ReleaseMirrorWhenFinal(
-                    hub, activityPath, ActivityStatus.Failed, logger));
+                () => releaseMirror(ActivityStatus.Failed));
     }
 }
