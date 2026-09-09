@@ -63,7 +63,7 @@ MeshWeaver is a distributed platform for building data-driven applications with 
 
 ## Topic map
 
-The catalog below lists every page; these are the load-bearing reads per theme.
+Each theme starts with its introductory page, followed by related architecture topics.
 
 <!-- 🚨 ONE ENTRY PER LINE, and it must stay that way (#3699).
      This map used to be a table whose cells each held the whole entry list on ONE line
@@ -90,6 +90,14 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Hub Disposal Model](HubDisposalModel)
 - [Transient Node Probes](TransientNodeProbes) — a probe hub's own address is not a node
 - [Executive Assistant Credential Reads](ExecutiveAssistantCredentialReads) — a turn that waits for a mesh read holds the queue that read's reply must travel through, and the timeout was rendered as "you never connected"
+- [Bounds Must Be Ordered](BoundsMustBeOrdered)
+- [Message-Based Communication](MessageBasedCommunication)
+- [No Static State](NoStaticState)
+- [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
+- [Per-Hub TaskScheduler — Actor Isolation Across the Mesh](OrleansTaskScheduler)
+- [Removing Hand-Woven Concurrency Gates](RemovingHandWovenGates)
+- [Removing Observable-to-Task Bridges](RemovingObservableToTaskBridges)
+- [JSON Serialization](Serialization)
 
 ### Reading & writing nodes
 
@@ -110,6 +118,18 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [The sync/ Hub Population](SyncHubPopulation) — a `sync/` hub is one field of a stream and a subscription makes two of them; the only reaper of a Started one is an idle sweep the traffic keeps re-arming
 - [The Evicted-Stream Retention](EvictedStreamRetention) — a change-feed eviction parks a remote stream and `ReclaimIfUnheld` refuses to dispose one that carries no lease entry, so every unleased call site retains one stream, and two `sync/` hubs, per change event
 - [The Recursive-Delete Drain](RecursiveDeleteDrain) — the plan is a snapshot the removals may exceed, the completion check must include the ROOT, and the stage bound measures progress, not duration
+- [Business Rules & Calculations](BusinessRules)
+- [Data Versioning Strategies](DataVersioning)
+- [Mesh Graph Architecture](MeshGraph)
+- [MeshNode Versioning](MeshNodeVersioning)
+- [Query Provider Parity](QueryProviderParity)
+- [Query Result Scoring](QueryResultScoring)
+- [Reading a Write Verdict](ReadingAWriteVerdict)
+- [Satellite Entity Patterns](SatelliteEntityPatterns)
+- [Satellite Node Patterns](SatelliteNodePatterns)
+- [Repairing a Stale MainNode — When the Broken Field Guards Itself](StaleMainNodeRepair)
+- [Synced Mesh Node Queries](SyncedMeshNodeQueries)
+- [Update Validators See Typed Content](UpdateValidatorsSeeTypedContent)
 
 ### Storage & partitions
 
@@ -129,6 +149,17 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Instance-Key Resolution](InstanceKeyResolution) — the registry reads an instance key through live mirrors, never a per-request point read
 - [Cross-Schema Fan-Out Elimination](CrossSchemaFanOutElimination) — an unanchored query is a lock bomb; the census and the per-caller plan
 - [Addressed Notifications](AddressedNotifications) — plan 1 worked out: deliver a notification to its addressee so the bell reads two schemas, not 199
+- [Content Indexing Activation](ContentIndexingActivation)
+- [Cross-Instance Mirror](CrossInstanceMirror)
+- [Data Synchronization and CRDT](DataSyncAndCrdt)
+- [Setting Up Data Sync](DataSyncSetup)
+- [DatabaseBackups](DatabaseBackups)
+- [Declarative export and import](DeclarativeImportExport)
+- [Syncing a Space with GitHub](GitHubSync)
+- [The Import Marker Records Convergence](ImportMarkerRecordsConvergence)
+- [Instance Sync — bi-directional space replication between MeshWeaver instances](InstanceSync)
+- [Managing Partition Sync (Admin Guide)](PartitionSyncGuide)
+- [Static Node Providers](StaticNodeProviders)
 
 ### Security
 
@@ -142,6 +173,9 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Logon Actions](LogonActions) — per-user work at logon, run as the user
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
+- [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
+- [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
+- [OWASP ZAP Scan — Every Release](SecurityScanning)
 
 ### Threads, activities & AI
 
@@ -153,6 +187,17 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Notification Retention](NotificationRetention) — the platform's first data-retention pass, and why it is a logon action
 - [Agentic AI](AgenticAI)
 - [Script Execution](ScriptExecution)
+- [Agent Framework Stores — mesh nodes behind Microsoft's abstractions](AgentFrameworkStores)
+- [Centralized speech — Whisper Swiss German as a container](CentralizedSpeech)
+- [Email Ingestion, Channels and Notifications](EmailIngestionAndNotifications)
+- [Event Subscriptions — the durable 'when THIS fires, run THAT' engine](EventSubscriptions)
+- [Foreign-Language Bridge (Python, Bun/Node) over gRPC](ForeignLanguageBridge)
+- [Foreign-Language & Cross-Platform Integration](ForeignLanguageIntegration)
+- [Model Providers and BYO Credentials](ModelProviders)
+- [On-device voice — Whisper + Swiss German](OnDeviceVoice)
+- [Python Code Nodes](PythonCodeNodes)
+- [Script Execution — Try It](ScriptExecutionDemo)
+- [Sending Email](SendingEmail)
 
 ### UI
 
@@ -167,6 +212,13 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Localization](Localization) — the viewer's language, resolved explicitly, never from ambient culture
 - [Chrome and Content Language](ChromeAndContentLanguage) — ownership decides the language, and in-flow chrome minimises words
 - [The Supplied Navigation Rail](SuppliedNavigationRail) — a module supplies its own left-hand index, and core renders it in the order the module gave
+- [The Apps Home](AppsHome)
+- [Content Favicon Rasterization](ContentFaviconRasterization)
+- [Controls That Cannot Fail](ControlsThatCannotFail)
+- [Link Previews](LinkPreviews)
+- [Local-First Client & Bootstrap](LocalFirstClient)
+- [PDF Export — one browser, two fidelities](PixelFaithfulExport)
+- [UI Extensibility](UiExtensibility)
 
 ### Node types
 
@@ -183,14 +235,20 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Import Write Ordering](ImportWriteOrdering) — type before instance, and what a foreign type does
 - [Language Services](LanguageServices)
 - [Extensible Defaults](ExtensibleDefaults)
+- [Build coordination — the Build node protocol](BuildCoordination)
+- [Build Identity Admission](BuildIdentityAdmission)
+- [The Build Process — compile and test as a dependency cascade](BuildProcess)
+- [What a Pull Request Rebuilds](BuildScopeNarrowing)
+- [The Build Server](BuildServer)
+- [The Compile Program — State of Record](CompileProgramStateOfRecord)
+- [Content-Type Registration](ContentTypeRegistration)
+- [NodeType Catalogs (shipping instances of a NodeType)](NodeTypeCatalogs)
+- [NodeType Release Redesign](Postmortems/NodeTypeReleaseRedesign)
 
 ### Plugins & content delivery
 
 - **Start here:** [Plugins](Plugins) — node repos from git, no NuGet
-- [Plugin Manual](PluginAuthoring) — author
-- publish
-- install
-- own registry
+- [Plugin Manual](PluginAuthoring) — author · publish · install · own registry
 - [Plugin Registry](PluginRegistry) — memex re-serves plugins over REST
 - [Webhook Inbox](WebhookInbox) — external services deliver into {target}/_Inbox
 - [Plugin Packaging](PluginPackaging) — bundles, the framework identity, and the `Release` node that links a release to its assemblies per architecture
@@ -203,6 +261,25 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Sealed Publication Reads](SealedPublicationReads) — a publication is unreadable for ~90s per target per publish and the `plugins` prefix has two writers; the three answers (404/503/412), the generation that pins one instance, and the mix no reader can detect
 - [Sealed Publication Generations](SealedPublicationGenerations) — the layout that makes that mix UNREPRESENTABLE (a directory per publication plus a pointer swapped last), the reader contract, the retention rule, and the ordered migration that avoids a new-writer/old-writer half-state
 - [Install Completeness](InstallCompleteness) — what an install RECORD declares landed, compared against what is actually in the mesh; the comparison nothing made until #3485, and why only one of its five verdicts is a pass
+- [CI Content Bake](CiContentBake)
+- [Deploying a plugin change — merging is not shipping](DeployingPluginChanges)
+- [Module Adoption Policy](ModuleAdoptionPolicy)
+- [Module Build Architecture](ModuleBuildArchitecture)
+- [Module Closure Accounting](ModuleClosureAccounting)
+- [The Module Identity Anchor](ModuleIdentityAnchor)
+- [Module-Owned Siblings Ride](ModuleOwnedSiblingsRide)
+- [The Module Platform Link Gate](ModulePlatformLinkGate)
+- [Module Set Convergence](ModuleSetConvergence)
+- [Module Versioning](ModuleVersioning)
+- [Modules](Modules)
+- [Package Mark Inheritance](PackageMarkInheritance)
+- [Pin-Boundary Contracts](PinBoundaryContracts)
+- [Platform and content — two layers, two cadences](PlatformAndContent)
+- [Platform Build Identity](PlatformBuildIdentity)
+- [The Platform-Shipped Witness](PlatformShippedWitness)
+- [The Plugin Build Contract](PluginBuildContract)
+- [Plugin Bundles in the Registry](PluginBundlesInTheRegistry)
+- [Plugin Update on Green Build](PluginUpdateOnGreenBuild)
 
 ### Reliability & wedges
 
@@ -224,6 +301,14 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [The /api/content 503](ContentRoute503) — two causes with opposite fixes, and the one field in the line already printed that tells them apart
 - [Refused Replies During Teardown](RefusedRepliesDuringTeardown) — every failure route answers the SENDER, which for a reply is the responder; the answer the caller is parked on is dropped with nobody told
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
+- [Guards and Unknown States](GuardsAndUnknownStates)
+- [Mesh Admission](MeshAdmission)
+- [Mesh Lifecycle — Build Up & Tear Down](MeshLifecycle)
+- [Pod-Hub Delivery — the Transport Swap and its Roll Plan](PodHubDeliveryRollPlan)
+- [The Portal Heap Is Hubs](PortalHeapIsHubs)
+- [SignalR Mesh Participant — joining the mesh over a WebSocket](SignalRMeshParticipant)
+- [Teardown Layers — work finishes, nothing is forced](TeardownLayers)
+- [Teardown Verdicts Are Causal, Not Timed](TeardownVerdictsAreCausal)
 
 ### Testing & debugging
 
@@ -238,6 +323,14 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Ambient Test-Host Hangs](AmbientTestHostHangs) — what decides whether a killed test host can be diagnosed at all, and the readings of it already falsified
 - [In-Mesh Tests and the Seal](InMeshTestsAndTheSeal) — a Tests area no required context executes is a latent trunk red the seal detonates fleet-wide; how to measure a gate before requiring it
 - [Cancel and Join Are Two Questions](CancelAndJoinSequencing) — a deadline that asks work to stop and a deadline that waits for it to have stopped must not share one clock
+- [Collection-Scoped Test Fixtures](CollectionScopedTestFixtures)
+- [Debugging Native Crashes (core dumps)](DebuggingNativeCrashes)
+- [Debugging Postgres in Prod / Test](DebuggingPostgres)
+- [Decentralised Tests](DecentralisedTests)
+- [Gate Content Assets](GateContentAssets)
+- [In-Mesh Build and Test](InMeshBuildAndTest)
+- [Orleans Test Routing Pattern](OrleansTestRoutingPattern)
+- [Reading CI Signals](ReadingCiSignals)
 
 ### Deployment & ops
 
@@ -277,6 +370,34 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [What a Synthetic Probe May Assert](SyntheticProbeTargets) — a probe naming one deployment's installed content is broken by construction; the platform floor, the negative control that tells "absent" from "down", and reading the target's own declaration
 - [Why a GC-Bound Pod Stays in Rotation](WhyAGcBoundPodStaysInRotation) — the GC's hard limit sits below the container limit, so a portal short of memory is defended rather than restarted
 - [Self-hosted CI runners on AKS](SelfHostedRunners) — ARC beside the portals on one pool; three brakes, a negative priority class, and the reserve arithmetic that decides the cap
+- [Candidate Release Protocol](CandidateReleaseProtocol)
+- [Chart Drift — what a deploy actually does](ChartDriftSemantics)
+- [Configuring an instance from Aspire](ConfiguringAnInstanceFromAspire)
+- [The Dependabot Secret Store](DependabotSecretStore)
+- [Deployment env layers — what a record must be able to hold](DeploymentEnvLayers)
+- [DeploymentInventory](DeploymentInventory)
+- [Deployment Options (AKS)](DeploymentOptions)
+- [Environment Composition](EnvironmentComposition)
+- [Feature Flags](FeatureFlags)
+- [First-Run Setup](FirstRunSetup)
+- [Image Cleanup](ImageCleanup)
+- [Instance Identity and Setup](InstanceIdentityAndSetup)
+- [Instance Lifecycle — State of Record](InstanceLifecycleStateOfRecord)
+- [Instances](Instances)
+- [Local memex on Colima k3s (Mac)](LocalColimaMac)
+- [Mac local stack — on-device AI + local observability (M-series)](MacLocalStack)
+- [Memex Cloud Deployment](MemexCloudDeployment)
+- [Merge Queue Mechanics](MergeQueueMechanics)
+- [Operating from the portal, not the cluster](OperatingFromThePortal)
+- [The Payment Provider Contract](PaymentProviderContract)
+- [Pre-Boot Service Substitution](PreBootServiceSubstitution)
+- [Project Templates](ProjectTemplates)
+- [The Release Event Bus](ReleaseEventBus)
+- [The Release Gate's Denominator](ReleaseGateDenominator)
+- [Release to Production — the whole path](ReleaseToProductionPipeline)
+- [Renaming a Required Status Check](RenamingARequiredCheck)
+- [Repository Topology](RepositoryTopology)
+- [The Release Wave — one emitter, and who resolves the digest](TheReleaseWave)
 
 ### Contributing docs
 
@@ -284,6 +405,8 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 - [Docs Follow The Functionality](DocsFollowTheFunctionality) — which repo a page belongs in, and what pins the rest here
 - [Specifying Software](SpecifyingSoftware)
 - [Glossary](/Doc/Glossary)
+- [Developing from within MeshWeaver](DevelopingFromMeshWeaver)
+- [Shared Rule Blocks](SharedRuleBlocks)
 
 ### Licensing
 

@@ -28,49 +28,39 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class ArchitectureTopicMapTest
 {
-    /// <summary>
-    /// How many architecture pages the topic map does NOT list, as measured when this guard was
-    /// written (2026-09-09: 291 pages under Data/Architecture/, 168 distinct pages listed).
-    ///
-    /// <para>🚨 <b>A ratchet, not a budget, and RAISING IT IS NOT A FIX.</b> Zero is the right
-    /// number and 125 is what the tree actually had the day the hole was first measured — nobody had
-    /// counted before, because nothing asked. Listing all 125 is a classification exercise (which
-    /// theme does each page belong under?) that a guard cannot do and should not fake by seeding an
-    /// allow list: an unexplained allow entry IS the silent unlisting this exists to prevent, just
-    /// moved somewhere greener. So the count is pinned here and may only go DOWN, which gives the
-    /// property that matters immediately — a NEW page cannot be added without being listed.</para>
-    /// </summary>
-    private const int UnlistedBaseline = 125;
-
     [Fact]
     public void EveryArchitecturePage_IsListedInTheTopicMap()
     {
-        var unlisted = Unlisted();
+        var (map, dir) = ReadMap();
+        var pages = dir.GetFiles("*.md", SearchOption.AllDirectories)
+            .Select(f => Path.ChangeExtension(Path.GetRelativePath(dir.FullName, f.FullName), null)
+                .Replace(Path.DirectorySeparatorChar, '/'))
+            .ToArray();
+        Assert.NotEmpty(pages);
+        var unlisted = Unlisted(map, pages);
 
-        Assert.True(unlisted.Count <= UnlistedBaseline,
-            $"{unlisted.Count} architecture page(s) are listed nowhere in the topic map, up from the "
-            + $"baseline of {UnlistedBaseline}. A page reachable by URL but listed nowhere has lost "
-            + "its only discoverable entry point, and no other gate notices — "
-            + "DocumentationLinkIntegrityTest checks that links RESOLVE, not that pages are LISTED. "
-            + "Add an entry to Data/Architecture.md under the theme it belongs to. Do NOT raise this "
-            + "baseline: it may only go down.\n  "
-            + string.Join("\n  ", unlisted.Except(new string[0]).Take(20)));
+        Assert.True(unlisted.Count == 0,
+            "Architecture pages missing from Data/Architecture.md. Add each page under its theme; "
+            + "a working URL alone does not make it discoverable.\n  "
+            + string.Join("\n  ", unlisted));
     }
 
-    /// <summary>
-    /// Caps the slack, so the baseline cannot quietly become permanent headroom: if the tree has
-    /// fallen well below it, the baseline is stale and should be lowered in the same change that
-    /// earned it. Same shape as <c>TestTimeoutLiteralRatchetGuard</c>'s companion.
-    /// </summary>
     [Fact]
-    public void TheBaselineStaysCloseToTheTree()
+    public void Coverage_RequiresTheCorrectPathForNestedPages()
     {
-        var actual = Unlisted().Count;
-        Assert.True(UnlistedBaseline - actual <= 10,
-            $"the topic map now omits only {actual} page(s) but UnlistedBaseline is still "
-            + $"{UnlistedBaseline} — lower it to {actual}. A baseline left far above the tree is "
-            + "headroom a future change can spend without any gate objecting, which is exactly what "
-            + "a ratchet is meant to stop.");
+        var missing = Unlisted(
+            "- [Elsewhere](/Doc/Other/Page)\n- [Top level](Page)",
+            ["Page", "Nested/Page"]);
+        Assert.Equal(new[] { "Nested/Page" }, missing);
+        Assert.Empty(Unlisted("- [Nested](Nested/Page)", ["Nested/Page"]));
+    }
+
+    [Fact]
+    public void Coverage_ResolvesArchitectureLinksWithFragments()
+    {
+        Assert.Empty(Unlisted(
+            "- [One](/Doc/Architecture/One#details)\n- [Two](./Nested/Two.md#example)",
+            ["One", "Nested/Two"]));
     }
 
     [Fact]
@@ -80,33 +70,44 @@ public class ArchitectureTopicMapTest
         var crowded = map.Split('\n')
             .Select((text, i) => (Line: i + 1, text))
             .Where(l => l.text.TrimStart().StartsWith("- ", StringComparison.Ordinal))
-            .Where(l => Regex.Matches(l.text, @"\]\([^)]+\)").Count > 1)
+            .Where(l => Regex.Matches(l.text, @"\]\([^)]+\)").Count != 1)
             .Select(l => $"line {l.Line}: {l.text.Trim()[..Math.Min(120, l.text.Trim().Length)]}…")
             .ToList();
 
         crowded.Should().BeEmpty(
-            "the topic map carries ONE entry per line so that two doc PRs appending pages touch "
+            "each topic-map bullet must carry exactly ONE linked entry so that two doc PRs appending pages touch "
             + "DIFFERENT lines and git merges them unaided. Packing several entries onto one line "
             + "restores the conflict-by-construction this format exists to remove — and its silent "
             + "failure, where a hand-merge keeps one side and drops the other side's page from the "
             + "index with every gate still green (#3699)");
     }
 
-    /// <summary>Architecture pages with no entry in the topic map, by file name.</summary>
-    private static List<string> Unlisted()
+    /// <summary>Architecture pages with no entry, retaining their path below Architecture/.</summary>
+    private static List<string> Unlisted(string map, IEnumerable<string> pages)
     {
-        var (map, dir) = ReadMap();
         var listed = Regex.Matches(map, @"\]\(([^)]+)\)")
-            .Select(m => m.Groups[1].Value)
-            .Select(href => href.Split('#')[0].TrimEnd('/'))
-            .Select(href => href.Contains('/') ? href[(href.LastIndexOf('/') + 1)..] : href)
+            .Select(m => NormalizeArchitectureLink(m.Groups[1].Value))
+            .Where(path => path is not null)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        return dir.GetFiles("*.md", SearchOption.TopDirectoryOnly)
-            .Select(f => Path.GetFileNameWithoutExtension(f.Name))
-            .Where(name => !listed.Contains(name))
-            .OrderBy(n => n, StringComparer.Ordinal)
+        return pages.Where(path => !listed.Contains(path))
+            .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
+    }
+
+    private static string? NormalizeArchitectureLink(string href)
+    {
+        var path = href.Split('#')[0].TrimEnd('/');
+        const string prefix = "/Doc/Architecture/";
+        if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            path = path[prefix.Length..];
+        else if (path.StartsWith('/') || path.Contains(':'))
+            return null;
+        if (path.StartsWith("./", StringComparison.Ordinal))
+            path = path[2..];
+        if (path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            path = path[..^3];
+        return path;
     }
 
     private static (string Map, DirectoryInfo Dir) ReadMap()
