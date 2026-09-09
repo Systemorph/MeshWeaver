@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh;
@@ -108,6 +109,8 @@ public class AnInstanceReportsWhatItRunsTest(ITestOutputHelper output) : Monolit
         report.Host.Should().Be("https://unit.example");
         report.PlatformVersion.Should().NotBeNullOrWhiteSpace("the standard platform version, never a bespoke key");
         report.FrameworkIdentity.Should().NotBeNullOrWhiteSpace("bundles are keyed on it, so the fleet must see it");
+        report.AdoptedFrameworkInventoryComplete.Should().Be(true);
+        report.AdoptedFrameworkIdentities.Should().NotBeNull();
         report.UpdatePolicy.Should().Be(nameof(UpdatePolicyKind.Stable));
         report.SampledAt.Should().EndWith("Z");
 
@@ -190,6 +193,30 @@ public class AnInstanceReportsWhatItRunsTest(ITestOutputHelper output) : Monolit
         var node = await Read($"{DeploymentReportService.DefaultOperationalSpace}/Modules/{Deployment}");
         Element(node!.Content!).GetProperty("modules").GetArrayLength().Should().Be(2,
             "the record is the LATER request's write — an earlier read landing last would say what the instance carried a moment ago");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task TheReport_PreservesAnOlderAdoptedBuild_AlongsideItsRunningPlatform()
+    {
+        const string adopted = "older-adopted-framework";
+        await Seed(new MeshNode("OldModuleType", "Sample")
+        {
+            NodeType = MeshNode.NodeTypePath,
+            Name = "Old module type",
+            Content = new NodeTypeDefinition { CompiledFrameworkVersion = adopted },
+        });
+
+        var outcome = await Reporter.Report().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+
+        outcome.Delivery.Should().Be(DeploymentReportDelivery.Written);
+        outcome.Report!.FrameworkIdentity.Should().NotBe(adopted);
+        outcome.Report.AdoptedFrameworkInventoryComplete.Should().Be(true);
+        outcome.Report.AdoptedFrameworkIdentities!.Should().Contain(adopted,
+            "the running platform must not replace the identity of an older build a module still uses");
+        var node = await Read($"{DeploymentReportService.DefaultOperationalSpace}/Modules/{Deployment}");
+        var landed = Assert.IsType<DeploymentReport>(node!.Content);
+        landed.AdoptedFrameworkIdentities!.Should().Contain(adopted);
+        landed.AdoptedFrameworkInventoryComplete.Should().Be(true);
     }
 
     [Fact]

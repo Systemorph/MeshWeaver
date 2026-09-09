@@ -13,17 +13,17 @@ namespace MeshWeaver.PluginCatalog;
 /// <summary>
 /// The <see cref="PinnedPlatformReferenceSource"/> of a control instance: every platform build a
 /// <c>Hosting/Deployment</c> record PINS (<c>pinnedImageTag</c>) and every platform build a
-/// registered instance REPORTS running (<c>Hosting/ModuleInventory</c> —
+/// registered instance REPORTS running or adopted (<c>Hosting/ModuleInventory</c> —
 /// <see cref="DeploymentReport.PlatformVersion"/> and <see cref="DeploymentReport.FrameworkIdentity"/>).
 ///
 /// <para>On the registry (memex-cloud) a remote instance pulls its OWN identity's seal over the
 /// HTTP prebuilt surface, so an identity such an instance pins or runs is referenced however old
-/// it is — and the prebuilt-bundle retention's newest-N rule cannot see it. This is how it does.
+/// it is. Age alone cannot reveal whether a remote instance still uses that build.
 /// A Deployment record's <c>pinnedImageTag</c> is a mesh NodeType defined outside this assembly,
 /// so it is read as JSON (case-insensitively) rather than through a CLR type.</para>
 ///
 /// <para>Read as System, mesh-wide, on every pass. Errors propagate: a pin set that could not be
-/// read aborts the pass, which is what fail-closed means here.</para>
+/// read aborts the pass, as does a report with an incomplete adoption inventory.</para>
 /// </summary>
 public static class DeploymentPinnedReferences
 {
@@ -57,7 +57,7 @@ public static class DeploymentPinnedReferences
             Records(meshService, DeploymentNodeType)
                 .Zip(Records(meshService, DeploymentReportService.InventoryNodeType), (deployments, inventories) =>
                     deployments.Select(n => DeploymentPinOf(n, hub.JsonSerializerOptions))
-                        .Concat(inventories.Select(n => ReportedBuildOf(n, hub.JsonSerializerOptions)))
+                        .Concat(inventories.SelectMany(n => ReportedBuildsOf(n, hub.JsonSerializerOptions)))
                         .Where(r => r is not null)
                         .Select(r => r!)
                         .ToImmutableList())
@@ -80,6 +80,33 @@ public static class DeploymentPinnedReferences
         return string.IsNullOrWhiteSpace(tag)
             ? null
             : new PinnedPlatformReference($"Deployment {node.Path}", tag, null);
+    }
+
+    /// <summary>
+    /// The running platform and every adopted build in a complete consumer inventory.
+    /// Legacy, incomplete or malformed inventories abort retention instead of implying no consumers.
+    /// </summary>
+    public static ImmutableList<PinnedPlatformReference> ReportedBuildsOf(MeshNode node, JsonSerializerOptions options)
+    {
+        var content = node.Content is JsonElement element ? element : JsonSerializer.SerializeToElement(node.Content, options);
+        JsonElement Find(string name) => content.ValueKind == JsonValueKind.Object
+            ? content.EnumerateObject().FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)).Value
+            : default;
+        var complete = Find(nameof(DeploymentReport.AdoptedFrameworkInventoryComplete));
+        var identities = Find(nameof(DeploymentReport.AdoptedFrameworkIdentities));
+        if (complete.ValueKind != JsonValueKind.True || identities.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException($"instance report {node.Path}: adopted artifact inventory is incomplete or legacy; retention must not delete");
+        var references = ImmutableList.CreateBuilder<PinnedPlatformReference>();
+        var running = ReportedBuildOf(node, options)
+            ?? throw new InvalidOperationException($"instance report {node.Path}: running build is missing; retention must not delete");
+        references.Add(running);
+        foreach (var identity in identities.EnumerateArray())
+        {
+            if (identity.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(identity.GetString()))
+                throw new InvalidOperationException($"instance report {node.Path}: an adopted artifact identity is malformed; retention must not delete");
+            references.Add(new PinnedPlatformReference($"adopted build reported by {node.Path}", null, identity.GetString()));
+        }
+        return references.ToImmutable();
     }
 
     /// <summary>An inventory record's reported build, or null when it reports neither a version nor an identity.</summary>
