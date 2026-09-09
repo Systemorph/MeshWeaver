@@ -15,6 +15,9 @@ Tags:
 
 # Release Process & Versioning
 
+Support lifetime and official artifact retention follow the
+[Release Support Policy](/Doc/Architecture/SupportPolicy).
+
 One number, two channels, one set of bytes. The whole scheme lives in
 `Directory.Build.props` and applies to every project in the solution.
 
