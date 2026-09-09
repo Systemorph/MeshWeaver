@@ -103,6 +103,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: deploy/aks/scripts/test-chart-drift-compare.sh
 
+      - name: Assert observability installation refuses ephemeral or unverified storage
+        if: ${{ !cancelled() }}
+        run: python3 deploy/aks/scripts/test-observability-storage.py
+
   # The three pieces of shell behind Doc/Architecture/PluginBundlesInTheRegistry — the publisher
   # (.github/scripts/push-bundle-publication.sh), the `bundle-fetch` init container's script and
   # docker_auth's ext_auth hook (deploy/helm/files/) — EXECUTED against the real distribution and

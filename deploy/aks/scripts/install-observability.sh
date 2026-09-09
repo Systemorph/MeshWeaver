@@ -49,10 +49,28 @@ then
   exit 1
 fi
 
+# Verify the RUNNING pod, not just the desired StatefulSet: an orphan left over from
+# the immutable-volume transition can still be serving from emptyDir (#3773).
+if ! storage_volume=$(kubectl -n monitoring get pod loki-0 -o jsonpath='{.spec.containers[?(@.name=="loki")].volumeMounts[?(@.mountPath=="/data")].name}') \
+  || [ -z "$storage_volume" ]; then
+  echo "FATAL: cannot identify Loki's running /data volume." >&2
+  exit 1
+fi
+if ! storage_claim=$(kubectl -n monitoring get pod loki-0 -o "jsonpath={.spec.volumes[?(@.name==\"$storage_volume\")].persistentVolumeClaim.claimName}") \
+  || [ -z "$storage_claim" ]; then
+  echo "FATAL: Loki's running /data volume is not backed by a PVC; log durability is NOT established." >&2
+  exit 1
+fi
+if ! storage_phase=$(kubectl -n monitoring get pvc "$storage_claim" -o jsonpath='{.status.phase}') \
+  || [ "$storage_phase" != Bound ]; then
+  echo "FATAL: Loki's storage PVC is not Bound; log durability is NOT established." >&2
+  exit 1
+fi
+
 echo
-echo "Verify the three things chart defaults get wrong (all must be non-empty / true):"
+echo "Verified: Loki's running /data volume uses Bound PVC $storage_claim."
+echo "Verify the remaining scheduling properties:"
 echo "  kubectl -n monitoring get pod loki-0 -o jsonpath='{.status.qosClass} {.spec.nodeName}'   # NOT BestEffort, NOT a silos node"
-echo "  kubectl -n monitoring get pvc | grep storage-loki-0                                      # the store is durable"
 echo "  kubectl -n monitoring get sts loki -o jsonpath='{.spec.template.spec.nodeSelector}'      # agentpool: system"
 kubectl -n monitoring get pods
 echo

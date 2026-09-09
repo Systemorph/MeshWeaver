@@ -42,6 +42,20 @@ loki:
     size: 30Gi
     storageClassName: default
 
+  # Retention is age-based: the compactor deletes logs older than 30 days. The
+  # 24-hour index period from this chart is required by boltdb-shipper retention.
+  # Its working directory and WAL are both below the persistent /data mount.
+  config:
+    compactor:
+      retention_enabled: true
+    limits_config:
+      retention_period: 720h
+    ingester:
+      wal:
+        enabled: true
+        dir: /data/loki/wal
+        flush_on_shutdown: true
+
 promtail:
   # Deliberately NO nodeSelector: Promtail is a DaemonSet and must run on EVERY node, including the
   # silos pool, or those nodes' logs are never shipped. Only the QoS class changes.
