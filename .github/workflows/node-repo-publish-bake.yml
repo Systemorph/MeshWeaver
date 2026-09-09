@@ -292,6 +292,23 @@ on:
         required: false
         type: string
         default: 'main'
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
+          compose scripts and mergers under .github/scripts that the lane itself runs). Distinct from
+          `platform-ref`, which names the PLATFORM the caller builds against (compile references,
+          images, core source). Empty (the default) means "the same as platform-ref" — right for a
+          caller that pins the lane and the platform to one commit. A caller that pins NOTHING
+          (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
+          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
+          (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
+          (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
+          reusable called from another repository (measured 2026-08-30), so the lane's own ref is an
+          input, never inferred.
+        required: false
+        type: string
+        default: ''
       module-artifacts:
         description: >-
           Artifact-name pattern (actions/download-artifact `pattern`) of module bundles UPLOADED
@@ -755,11 +772,14 @@ jobs:
       # path: it carries no root index.json, so the tester never treats it as a module (identical
       # reasoning to `cross-repo-stage/`).
       # Unconditional since MeshWeaver#3022: compose-gate-host.sh runs on every bake.
+      # At the lane's SCRIPTS ref (`scripts-ref`, falling back to platform-ref): these are the LANE's
+      # tooling, and an unpinned caller's platform-ref — the newest sealed set — is hours behind the
+      # lane's own tip (MeshWeaver#3842, Plugins#1566).
       - name: Fetch the canonical gate + bake-scope scripts (platform repo)
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
+          ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
           path: mw-platform-gate
           sparse-checkout: .github/scripts
       # ───────────── TWO IMAGES, ONE BUILD: pull, extract, compose (MeshWeaver#3022) ─────────────
@@ -1226,7 +1246,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
+          # The lane's SCRIPTS ref, as for the gate scripts above (MeshWeaver#3842).
+          ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
           path: mw-platform
           sparse-checkout: .github/scripts
       # ───────────── KEEP THE PUBLICATION COMPLETE (the reason the bake used to be full) ─────────────

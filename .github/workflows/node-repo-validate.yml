@@ -34,6 +34,23 @@ on:
         required: false
         type: string
         default: main
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
+          compose scripts and mergers under .github/scripts that the lane itself runs). Distinct from
+          `platform-ref`, which names the PLATFORM the caller builds against (compile references,
+          images, core source). Empty (the default) means "the same as platform-ref" — right for a
+          caller that pins the lane and the platform to one commit. A caller that pins NOTHING
+          (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
+          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
+          (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
+          (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
+          reusable called from another repository (measured 2026-08-30), so the lane's own ref is an
+          input, never inferred.
+        required: false
+        type: string
+        default: ''
       check-versions-always:
         description: >-
           Run the derived-version check on EVERY event instead of main-only. Correct for a repo
@@ -78,22 +95,31 @@ jobs:
       # 🚨 THE 45-MINUTE CAP, fleet-wide (maintainer, 2026-09-02: "hard cut CI runs after 45min — we pay all
       # this"). GitHub's default job timeout is 360 minutes; an uncapped job that hangs bills a runner for six
       # hours and, when a required check `needs:` it, blocks every merge behind it (the Plugins Mcp bundle,
-      # 19 runs in_progress at once). The guard is the PLATFORM's script fetched at platform-ref — the same
-      # centralization as compile-check.py — and it runs against the CALLER's tree. No fallback: a ref the
-      # script cannot be fetched at fails RED naming it, never "skipped".
-      - name: Fetch the platform's workflow-timeout guard at the pinned ref
+      # 19 runs in_progress at once). The guard is the PLATFORM's script fetched at the lane's SCRIPTS ref
+      # (`scripts-ref`, falling back to platform-ref for a caller that pins both to one commit) — the
+      # same centralization as compile-check.py — and it runs against the CALLER's tree. No fallback: a
+      # ref the script cannot be fetched at fails RED naming it, never "skipped".
+      #
+      # 🚨 WHY THE SCRIPTS REF IS NOT `platform-ref` (MeshWeaver#3842). A caller that pins nothing calls
+      # this lane at `@main` and resolves its platform to the newest SEALED set — a commit hours behind
+      # the lane. Every guard fetched here is the LANE's tooling and must be the lane's vintage: fetched
+      # at the platform commit, a guard core added since the seal does not exist there and the lane
+      # fails on the 404 while the caller changed nothing (check-abbreviated-shas.py, 2026-09-09,
+      # Plugins#1566). `github.job_workflow_sha` is empty inside a cross-repo reusable, so the lane's
+      # own ref is the `scripts-ref` input.
+      - name: Fetch the platform's workflow-timeout guard at the lane's scripts ref
         env:
           GH_TOKEN: ${{ github.token }}
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
         run: |
           set -euo pipefail
-          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the timeout guard has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-workflow-timeouts.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-workflow-timeouts.py" \
-            || { echo "::error::could not fetch .github/scripts/check-workflow-timeouts.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
-          head -c 400 "$RUNNER_TEMP/check-workflow-timeouts.py" | grep -q "check-workflow-timeouts" || { echo "::error::the fetched check-workflow-timeouts.py at ${PLATFORM_REF} does not look like the guard"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-abbreviated-shas.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-abbreviated-shas.py" \
-            || { echo "::error::could not fetch .github/scripts/check-abbreviated-shas.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
-          head -c 400 "$RUNNER_TEMP/check-abbreviated-shas.py" | grep -q "check-abbreviated-shas" || { echo "::error::the fetched check-abbreviated-shas.py at ${PLATFORM_REF} does not look like the guard"; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the timeout guard has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-workflow-timeouts.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-workflow-timeouts.py" \
+            || { echo "::error::could not fetch .github/scripts/check-workflow-timeouts.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-workflow-timeouts.py" | grep -q "check-workflow-timeouts" || { echo "::error::the fetched check-workflow-timeouts.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-abbreviated-shas.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-abbreviated-shas.py" \
+            || { echo "::error::could not fetch .github/scripts/check-abbreviated-shas.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-abbreviated-shas.py" | grep -q "check-abbreviated-shas" || { echo "::error::the fetched check-abbreviated-shas.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
       - name: "Every job is capped at 45 minutes — the gate can fail (self-test)"
         run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --self-test
@@ -138,16 +164,16 @@ jobs:
       # `timeout-minutes:` is invisible to it and to everything else. This gate is the general form:
       # any duplicate key, any mapping, at the first job. It needs NO credential, so it runs on forks
       # and on Dependabot pull requests too.
-      - name: Fetch the platform's duplicate-key guard at the pinned ref
+      - name: Fetch the platform's duplicate-key guard at the lane's scripts ref
         env:
           GH_TOKEN: ${{ github.token }}
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
         run: |
           set -euo pipefail
-          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the duplicate-key guard has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-workflow-yaml-keys.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-workflow-yaml-keys.py" \
-            || { echo "::error::could not fetch .github/scripts/check-workflow-yaml-keys.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
-          head -c 400 "$RUNNER_TEMP/check-workflow-yaml-keys.py" | grep -q "check-workflow-yaml-keys" || { echo "::error::the fetched check-workflow-yaml-keys.py at ${PLATFORM_REF} does not look like the guard"; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the duplicate-key guard has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-workflow-yaml-keys.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-workflow-yaml-keys.py" \
+            || { echo "::error::could not fetch .github/scripts/check-workflow-yaml-keys.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-workflow-yaml-keys.py" | grep -q "check-workflow-yaml-keys" || { echo "::error::the fetched check-workflow-yaml-keys.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           # Do not lean on the timeout guard above having installed it — a reorder there would
           # break this step with an ImportError instead of a verdict.
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
@@ -172,16 +198,16 @@ jobs:
       # A name legitimately passed but never consumed on a PR — or asserted inside a shared lane
       # this repo only CALLS, which the guard cannot see through — is declared once, with a reason,
       # in the caller's `.github/pr-secret-preflight-allow.txt`. A stale entry there fails too.
-      - name: Fetch the platform's PR-secret preflight guard at the pinned ref
+      - name: Fetch the platform's PR-secret preflight guard at the lane's scripts ref
         env:
           GH_TOKEN: ${{ github.token }}
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
         run: |
           set -euo pipefail
-          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the PR-secret guard has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-pr-secret-preflight.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-pr-secret-preflight.py" \
-            || { echo "::error::could not fetch .github/scripts/check-pr-secret-preflight.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
-          head -c 400 "$RUNNER_TEMP/check-pr-secret-preflight.py" | grep -q "check-pr-secret-preflight" || { echo "::error::the fetched check-pr-secret-preflight.py at ${PLATFORM_REF} does not look like the guard"; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the PR-secret guard has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-pr-secret-preflight.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-pr-secret-preflight.py" \
+            || { echo "::error::could not fetch .github/scripts/check-pr-secret-preflight.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-pr-secret-preflight.py" | grep -q "check-pr-secret-preflight" || { echo "::error::the fetched check-pr-secret-preflight.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           # Do not lean on the timeout guard above having installed it — a reorder there would
           # break this step with an ImportError instead of a verdict.
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
@@ -202,17 +228,17 @@ jobs:
       # runner time being spent. `app` missing from three satellites' copies is dormant in all
       # three: none of them has an `app/`.)
       # Static, two files and a directory listing — no credential, so it runs on forks too.
-      - name: Fetch the platform's no-op parity guard at the pinned ref
+      - name: Fetch the platform's no-op parity guard at the lane's scripts ref
         env:
           GH_TOKEN: ${{ github.token }}
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
         run: |
           set -euo pipefail
-          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the no-op parity guard has no ref to be fetched at"; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the no-op parity guard has no ref to be fetched at"; exit 1; }
           for script in check-noop-scope-parity.py node-repo-scope.py; do
-            gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/${script}?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/${script}" \
-              || { echo "::error::could not fetch .github/scripts/${script} at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
-            head -c 400 "$RUNNER_TEMP/${script}" | grep -q "${script%.py}" || { echo "::error::the fetched ${script} at ${PLATFORM_REF} does not look like the guard"; exit 1; }
+            gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/${script}?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/${script}" \
+              || { echo "::error::could not fetch .github/scripts/${script} at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            head -c 400 "$RUNNER_TEMP/${script}" | grep -q "${script%.py}" || { echo "::error::the fetched ${script} at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           done
       - name: "This repo's no-op set is comparable and agrees — the gate can fail (self-test)"
         run: python3 "$RUNNER_TEMP/check-noop-scope-parity.py" --self-test
@@ -222,16 +248,16 @@ jobs:
       # guards above and like compile-check.py: asserted RED when unavailable, never fallen back to
       # a drifted per-repo copy. The fetch and the self-test run on EVERY call, whichever copy is
       # believed below, so "the platform's checker is intact" is never a thing a run can skip.
-      - name: Fetch the platform's manifest checker at the pinned ref
+      - name: Fetch the platform's manifest checker at the lane's scripts ref
         env:
           GH_TOKEN: ${{ github.token }}
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
         run: |
           set -euo pipefail
-          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the canonical gen-manifests.py has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/gen-manifests.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/gen-manifests.py" \
-            || { echo "::error::could not fetch .github/scripts/gen-manifests.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
-          head -c 400 "$RUNNER_TEMP/gen-manifests.py" | grep -q "manifest.lock" || { echo "::error::the fetched gen-manifests.py at ${PLATFORM_REF} does not look like the manifest generator"; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the canonical gen-manifests.py has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/gen-manifests.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/gen-manifests.py" \
+            || { echo "::error::could not fetch .github/scripts/gen-manifests.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/gen-manifests.py" | grep -q "manifest.lock" || { echo "::error::the fetched gen-manifests.py at ${SCRIPTS_REF} does not look like the manifest generator"; exit 1; }
       - name: "The manifest checker can fail — --resolve, the trunk baseline and the config contract (self-test)"
         run: python3 "$RUNNER_TEMP/gen-manifests.py" --self-test
 
