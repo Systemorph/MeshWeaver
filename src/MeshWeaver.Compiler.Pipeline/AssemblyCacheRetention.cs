@@ -36,9 +36,9 @@ public sealed record AssemblyCacheRetention
     /// <summary>
     /// A generation is never collected until its newest file is at least this old. A pure backstop
     /// under <see cref="KeepGenerations"/> and the claims: it bounds the damage a wrong answer from
-    /// either can do to "something nobody has written to in a week".
+    /// either can do to "something nobody has written to in 30 days".
     /// </summary>
-    public TimeSpan MinimumAge { get; init; } = TimeSpan.FromDays(7);
+    public TimeSpan MinimumAge { get; init; } = TimeSpan.FromDays(30);
 
     /// <summary>
     /// How long a generation claim counts as evidence that some pod is still running that framework.
@@ -328,6 +328,8 @@ public static class AssemblyCacheGenerations
             .Select(g => g.Tag)
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
+        var minimumAge = retention.MinimumAge < TimeSpan.FromDays(30)
+            ? TimeSpan.FromDays(30) : retention.MinimumAge;
         var reasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         var collectable = ImmutableList.CreateBuilder<AssemblyCacheGeneration>();
 
@@ -342,8 +344,8 @@ public static class AssemblyCacheGenerations
                     ? $"claimed by {holders}"
                 : recent.Contains(generation.Tag)
                     ? $"among the {retention.KeepGenerations} most recently written"
-                : nowUtc - generation.NewestWriteUtc < retention.MinimumAge
-                    ? $"newer than the {retention.MinimumAge} minimum age"
+                : nowUtc - generation.NewestWriteUtc < minimumAge
+                    ? $"newer than the {minimumAge} minimum age"
                 : null;
 
             if (reason is null)
