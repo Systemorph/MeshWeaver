@@ -15,8 +15,11 @@
 # manifest), `kubectl get "$res"` (dynamic), and everything helm does with the chart. Those stay
 # covered by the chart-owner grants in the ClusterRole's own scope notes.
 #
-# Pure bash 3.2 + awk: it runs on the macOS laptop, the ubuntu runner and inside the operator
-# image (Azure Linux, no python on PATH) alike.
+# Pure bash 3.2 + grep/sed/tr (the tools bin/ itself uses): it runs on the macOS laptop, the
+# ubuntu runner and inside the operator image alike. 🚨 NOT awk and NOT python — the image
+# (Azure Linux 3) has neither; the first cut used awk, passed on the laptop and the runner, and
+# the in-image run answered "awk: command not found" (run 34295483037). The image run is the one
+# that proves the check can run where the scripts run.
 set -u
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BIN="${HOSTING_BIN:-$HERE/../bin}"
@@ -52,23 +55,35 @@ resource_of() {
 }
 
 # The ClusterRole's rules as "group resource verb" lines (one per combination). Comments are
-# dropped; a rule is the three bracketed lists that follow an `- apiGroups:` line.
-grants="$(awk '
-  /^[[:space:]]*#/ { next }
-  /^kind:[[:space:]]*ClusterRoleBinding/ { exit }
-  function list(s,   t) { sub(/^[^[]*\[/, "", s); sub(/\].*$/, "", s); gsub(/["'"'"' ]/, "", s); return s }
-  /^[[:space:]]*-[[:space:]]*apiGroups:/ { if (g != "" || r != "") flush(); g = list($0); r = ""; v = ""; next }
-  /^[[:space:]]*resources:/ { r = list($0); next }
-  /^[[:space:]]*verbs:/     { v = list($0); flush(); g = ""; r = ""; v = ""; next }
-  function flush(   ng, nr, nv, gs, rs, vs, i, j, k) {
-    if (g == "" && r == "") return
-    ng = split(g, gs, ","); nr = split(r, rs, ","); nv = split(v, vs, ",")
-    if (ng == 0) { ng = 1; gs[1] = "" }   # apiGroups: [""] is the core group, not "no rule"
-    for (i = 1; i <= ng; i++) for (j = 1; j <= nr; j++) for (k = 1; k <= nv; k++)
-      printf "%s %s %s\n", (gs[i] == "" ? "-" : gs[i]), rs[j], vs[k]
-  }
-  END { flush() }
-' "$RBAC")"
+# dropped; a rule is the three bracketed lists that follow an `- apiGroups:` line; the core API
+# group (`[""]`) is recorded as "-" so a grep can anchor on it.
+list_of() { # the comma-joined items of a `key: ["a", "b"]` line
+  local s="$1"; s="${s#*[}"; s="${s%%]*}"; s="${s//\"/}"; s="${s//\'/}"; s="${s// /}"; printf '%s' "$s"
+}
+grants=""
+flush_rule() {
+  [ -n "${rule_g}${rule_r}" ] || return 0
+  local gs rs vs g r v
+  IFS=, read -ra gs <<<"$rule_g"; IFS=, read -ra rs <<<"$rule_r"; IFS=, read -ra vs <<<"$rule_v"
+  [ "${#gs[@]}" -gt 0 ] || gs=("")      # apiGroups: [""] is the core group, not "no rule"
+  for g in "${gs[@]}"; do for r in "${rs[@]}"; do for v in "${vs[@]}"; do
+    grants="${grants}${g:--} ${r} ${v}
+"
+  done; done; done
+}
+rule_g=""; rule_r=""; rule_v=""
+while IFS= read -r line; do
+  [[ "$line" =~ ^[[:space:]]*# ]] && continue
+  [[ "$line" =~ ^kind:[[:space:]]*ClusterRoleBinding ]] && break
+  if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*apiGroups: ]]; then
+    flush_rule; rule_g="$(list_of "$line")"; rule_r=""; rule_v=""
+  elif [[ "$line" =~ ^[[:space:]]*resources: ]]; then
+    rule_r="$(list_of "$line")"
+  elif [[ "$line" =~ ^[[:space:]]*verbs: ]]; then
+    rule_v="$(list_of "$line")"; flush_rule; rule_g=""; rule_r=""; rule_v=""
+  fi
+done < "$RBAC"
+flush_rule
 
 granted() { # group resource verb
   local g="${1:--}"
@@ -83,7 +98,7 @@ for f in "$BIN"/hosting-* "$BIN"/run.sh; do
   script="$(basename "$f")"
   # verb + first non-flag token after it; `kind/name` keeps only the kind; `rollout status X`
   # is a get on X; `logs` is get on pods/log.
-  while read -r verb res; do
+  while read -r verb res _; do
     [ -n "$verb" ] || continue
     case "$res" in -*|'"$'*|'$'*|*'<'*|"") continue ;; esac
     res="${res%%/*}"
@@ -110,7 +125,8 @@ for f in "$BIN"/hosting-* "$BIN"/run.sh; do
       echo "  MISSING  ${script}: kubectl ${verb} ${res} needs ClusterRole rule apiGroups:[\"${group}\"] resources:[\"${plural}\"] verbs:[\"${verb}\"]"
       missing=$((missing+1))
     fi
-  done < <(grep -o 'kubectl \(-n [^ ]* \)\?\(get\|create\|delete\|patch\|apply\|label\|annotate\|scale\|logs\|rollout\) [^ ;|)]*' "$f" | sed 's/^kubectl //; s/^-n [^ ]* //' | awk '$1=="rollout"{print "rollout", $3; next} {print $1, $2}')
+  done < <(grep -o 'kubectl \(-n [^ ]* \)\?\(get\|create\|delete\|patch\|apply\|label\|annotate\|scale\|logs\|rollout\) [^ ;|)]*\( [^ ;|)]*\)\?' "$f" \
+             | sed 's/^kubectl //; s/^-n [^ ]* //; s/^rollout [^ ]* /rollout /')
 done
 
 n_distinct="$(printf '%s' "$distinct" | tr '|' '\n' | grep -c .)"
