@@ -1,7 +1,18 @@
-{{- if .Values.keda.enabled }}
-# A PodDisruptionBudget for the portal. Rendered only under KEDA autoscaling (min 2) — i.e. the HA
-# deployments (AKS). A single-replica self-host leaves KEDA off, where a PDB would only block node
-# maintenance, so it is templated out there.
+{{- $floor := ternary (int .Values.keda.minReplicas) (int ((.Values.replicas).portal | default 1)) .Values.keda.enabled }}
+{{- if ge $floor 2 }}
+# A PodDisruptionBudget for the portal. Rendered whenever the REPLICA FLOOR is two or more — under
+# KEDA autoscaling (minReplicas) or a plain `replicas.portal: 2` — i.e. every HA deployment. A
+# single-replica self-host renders none: over one pod a budget would only block node maintenance.
+#
+# 🚨 The gate used to be `keda.enabled` alone, and that is how memex.systemorph.com ran TWO
+# replicas with NO budget (MeshWeaver#3772). memex's helm-release lane renders the vault values
+# plus `values.memex.public.yaml` — never `deploy/aks/values.aks.yaml`, where KEDA is on — so the
+# overlay's `replicas.portal: 2` rendered two pods the eviction API could take together. On
+# 2026-09-09 an AKS node drain did exactly that at 01:05:01Z: both pods logged "Application is
+# shutting down" in the same second and the portal answered 503 until a replacement passed the
+# startup gate (~90 s). The pod template's anti-affinity (deployment.yaml) is the other half:
+# the budget throttles eviction to one pod at a time, the anti-affinity makes "the other pod"
+# live on another node so there is one left to serve while the drained one is replaced.
 #
 # 🚨 maxUnavailable, NOT minAvailable — and that is the whole point of this file.
 #
