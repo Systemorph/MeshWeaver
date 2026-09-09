@@ -296,6 +296,13 @@ public static class LayoutClientExtensions
         // `fail` line on EVERY NavLink render (prod error storm) while the icon rendered as nothing.
         if (typeof(T) == typeof(Icon) && TryGetStringValue(value, out var iconString))
             return (T?)(object?)Icon.Parse(iconString);
+        // A label can receive the CLR collection directly from a local binding, or its JSON
+        // representation after transport. Both must use the same display conversion. Collections,
+        // JsonNodes and values such as Guid do not implement IConvertible, so ChangeType cannot
+        // render them. Keep scalar coercion and caller-supplied converters unchanged.
+        if (typeof(T) == typeof(string) && value is not null && value is not IConvertible)
+            return hub.ConvertJson(JsonSerializer.SerializeToElement(value, hub.JsonSerializerOptions),
+                null, defaultValue);
         return value switch
         {
             null => defaultValue,
