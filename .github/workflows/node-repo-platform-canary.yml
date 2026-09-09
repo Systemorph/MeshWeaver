@@ -1,0 +1,231 @@
+name: Node repo platform canary (reusable)
+
+# ♻️ REUSABLE (workflow_call) — tells a node repo, ON THE DAY IT HAPPENS, that a core change it
+# has not adopted yet would break it.
+#
+# 🚨 WHY IT EXISTS, measured on MeshWeaver.Plugins 2026-09-08. Twice in one day a core behaviour
+# change behind an UNCHANGED SIGNATURE reddened that repo, and both times it was discovered by the
+# pin bump rather than before it:
+#
+#   Plugins#1506  core #3681 restricted the legacy access heal to pre-installed partitions.
+#                 Found by reading core's open PRs — luck, not a gate.
+#   Plugins#1518  core #3648 made the platform floor ADVISORY; 14 tests asserted the hold/refuse/
+#                 skip it replaced. Found by the bump itself, WITH THE TRUNK ALREADY RED.
+#
+# The structural reason, from Plugins#1518: no surface detector sees this class by construction —
+# the cross-repo pair gate looks for REMOVED types and members, and nothing was removed. And for a
+# dependent that PINS core, the release event resolves the same pin as a pull request does. So
+# THE PIN BUMP IS THE INTEGRATION TEST — and because the bump is a hand PR wherever the App lacks
+# `workflows` (Plugins#1464/#1547), in practice it runs when the staleness ratchet forces it. That
+# is the worst possible moment: the break surfaces with the trunk red and every open PR blocked on
+# a gate none of their diffs can reach.
+#
+# This lane runs that same integration test on a schedule, without moving anything.
+#
+# 🚨 IT NEVER GATES, and that is not timidity. Core `main` moves under this lane, so a red canary
+# must never block a pull request that is fine at the pin — a caller that made this required would
+# be blocked by someone else's core merge. It reports; a human decides when to adopt.
+#
+# 🚨 THE CONTROL ARM IS THE LOAD-BEARING HALF. The suites are run TWICE — once at the caller's
+# CURRENT pin, once at core `main` — and only tests that pass at the pin AND fail at main are
+# reported. Without that, every pre-existing red reads as pin drift, the report is noise, and the
+# lane is ignored inside a week. That is precisely the failure AGENTS.md names for a gate that is
+# red when nothing is wrong, and the one Plugins#1510 had just finished fixing in compile-check.py.
+#
+# CALLER (a scheduled workflow of its own, never a `pull_request` job):
+#
+#     on:
+#       schedule: [{cron: "37 5 * * *"}]
+#       workflow_dispatch:
+#     jobs:
+#       canary:
+#         permissions: {contents: read, issues: write}
+#         uses: Systemorph/MeshWeaver/.github/workflows/node-repo-platform-canary.yml@<sha>
+#         with:
+#           pin-key: MW_PLATFORM_REF
+#           workflow-file: .github/workflows/ci.yml
+#           suites: |
+#             src/MeshWeaver.PluginCatalog.Test
+#             src/MeshWeaver.Hosting.Monolith.Test
+
+on:
+  workflow_call:
+    inputs:
+      workflow-file:
+        description: The caller's workflow file carrying the pin.
+        type: string
+        default: .github/workflows/ci.yml
+      pin-key:
+        description: The env key holding the platform commit.
+        type: string
+        default: MW_PLATFORM_REF
+      upstream-repo:
+        description: The repo whose default branch the pin tracks.
+        type: string
+        default: Systemorph/MeshWeaver
+      suites:
+        description: >-
+          Newline-separated test project paths, relative to the caller. Choose the suites a pin
+          bump has actually reddened — for MeshWeaver.Plugins those are
+          src/MeshWeaver.PluginCatalog.Test and src/MeshWeaver.Hosting.Monolith.Test, where both
+          of 2026-09-08's breaks landed. Running everything would cost more and report the same.
+        type: string
+        required: true
+      issue-label:
+        description: Label put on the tracking issue, so a repo can route it.
+        type: string
+        default: platform-canary
+
+jobs:
+  canary:
+    name: Would core main break this repo
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out the caller
+        uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Read the pin, and resolve core main ONCE
+        id: refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ inputs.upstream-repo }}
+          WORKFLOW_FILE: ${{ inputs.workflow-file }}
+          PIN_KEY: ${{ inputs.pin-key }}
+        run: |
+          set -euo pipefail
+          pin=$(grep -m1 -E "^[[:space:]]*${PIN_KEY}:" "repo/${WORKFLOW_FILE}" | sed -E 's/.*:[[:space:]]*//' | tr -d '"'"'"' \r')
+          [ -n "$pin" ] || { echo "::error::could not read ${PIN_KEY} from ${WORKFLOW_FILE} — the canary has no baseline to compare against and will not guess one"; exit 1; }
+          head=$(gh api "repos/${UPSTREAM}" --jq .default_branch)
+          main=$(gh api "repos/${UPSTREAM}/commits/${head}" --jq .sha)
+          # 🚨 Resolved ONCE, here, and both checkouts below read this output — the same discipline
+          # ci.yml's `platform-ref` job exists for. Two checkouts of a branch name in one run
+          # legitimately take two different commits; core merges several times an hour.
+          echo "pin=$pin"   >> "$GITHUB_OUTPUT"
+          echo "main=$main" >> "$GITHUB_OUTPUT"
+          echo "behind=$(gh api "repos/${UPSTREAM}/compare/${pin}...${main}" --jq .ahead_by)" >> "$GITHUB_OUTPUT"
+          echo "### Canary" >> "$GITHUB_STEP_SUMMARY"
+          echo "pin \`${pin}\` → core main \`${main}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out core at the PIN (the control arm)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.upstream-repo }}
+          ref: ${{ steps.refs.outputs.pin }}
+          path: core-pin
+
+      - name: Check out core at MAIN
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.upstream-repo }}
+          ref: ${{ steps.refs.outputs.main }}
+          path: core-main
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      # Both arms run the SAME suites with the SAME command; only MeshWeaverRoot differs. A
+      # failure list is written per arm; the diff below is what gets reported.
+      # 🚨 Failures are collected, never fatal. A suite that cannot even BUILD at one arm is a
+      # result (recorded as `<suite>: BUILD FAILED`), not a reason to abandon the comparison — and
+      # a build that fails at BOTH arms cancels out in the delta, which is the control working.
+      - name: Write the per-arm runner (one command, two MeshWeaverRoots)
+        run: |
+          cat > "$GITHUB_WORKSPACE/canary-run.sh" <<'SH'
+          set -uo pipefail
+          : > "$RUNNER_TEMP/$OUT"
+          while IFS= read -r suite; do
+            suite="$(echo "$suite" | xargs)"
+            [ -n "$suite" ] || continue
+            cd "$GITHUB_WORKSPACE/repo"
+            if ! dotnet test "$suite" -c Release -p:MeshWeaverRoot="$GITHUB_WORKSPACE/$CORE/" \
+                 --logger "trx;LogFileName=$RUNNER_TEMP/$CORE-$(basename "$suite").trx" > "$RUNNER_TEMP/out.log" 2>&1; then
+              if grep -qE 'error [A-Z]+[0-9]+' "$RUNNER_TEMP/out.log"; then
+                echo "$suite: BUILD FAILED" >> "$RUNNER_TEMP/$OUT"
+              fi
+            fi
+            # Fully-qualified names of failed tests, from the runner's own output.
+            grep -oE '[A-Za-z0-9_.]+\.[A-Za-z0-9_]+(\([^)]*\))? \[FAIL\]' "$RUNNER_TEMP/out.log" \
+              | sed 's/ \[FAIL\]//' >> "$RUNNER_TEMP/$OUT" || true
+          done <<< "$SUITES"
+          sort -u -o "$RUNNER_TEMP/$OUT" "$RUNNER_TEMP/$OUT"
+          echo "$CORE: $(wc -l < "$RUNNER_TEMP/$OUT" | tr -d ' ') failing test(s)"
+          SH
+
+      - name: Run the suites at the PIN (the control arm)
+        continue-on-error: true
+        env:
+          SUITES: ${{ inputs.suites }}
+          CORE: core-pin
+          OUT: pin.txt
+        run: bash "$GITHUB_WORKSPACE/canary-run.sh"
+
+      - name: Run the suites at core MAIN
+        continue-on-error: true
+        env:
+          SUITES: ${{ inputs.suites }}
+          CORE: core-main
+          OUT: main.txt
+        run: bash "$GITHUB_WORKSPACE/canary-run.sh"
+
+      - name: The delta — passes at the pin, fails at core main
+        id: delta
+        run: |
+          set -euo pipefail
+          touch "$RUNNER_TEMP/pin.txt" "$RUNNER_TEMP/main.txt"
+          # Only tests that FAIL at main and do NOT fail at the pin. A test already red at the pin
+          # is this repo's own business and says nothing about core.
+          comm -13 <(sort -u "$RUNNER_TEMP/pin.txt") <(sort -u "$RUNNER_TEMP/main.txt") > "$RUNNER_TEMP/delta.txt" || true
+          count=$(wc -l < "$RUNNER_TEMP/delta.txt" | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Canary delta: ${count} test(s) pass at the pin and fail at core main"
+            echo ""
+            if [ "$count" != "0" ]; then sed 's/^/- `/;s/$/`/' "$RUNNER_TEMP/delta.txt"; else echo "_None._"; fi
+            echo ""
+            echo "Also red at the pin (NOT reported — this repo's own): $(wc -l < "$RUNNER_TEMP/pin.txt" | tr -d ' ')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: File or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COUNT: ${{ steps.delta.outputs.count }}
+          PIN: ${{ steps.refs.outputs.pin }}
+          MAIN: ${{ steps.refs.outputs.main }}
+          BEHIND: ${{ steps.refs.outputs.behind }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LABEL: ${{ inputs.issue-label }}
+        run: |
+          set -euo pipefail
+          marker="<!-- platform-canary -->"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$marker in:body" --json number --jq '.[0].number // empty' || true)
+          if [ "$COUNT" = "0" ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+                --comment "Core \`${MAIN}\` no longer breaks anything this repo tests that the pin does not. Closed by the canary ([run](${RUN_URL}))."
+            fi
+            echo "canary clean — nothing to report"
+            exit 0
+          fi
+          {
+            printf 'Core `%s` breaks **%s** test(s) that pass at this repo'"'"'s pin (`%s`, **%s** commits behind).\n\n' "$MAIN" "$COUNT" "$PIN" "$BEHIND"
+            sed 's/^/- `/;s/$/`/' "$RUNNER_TEMP/delta.txt"
+            printf '\nThese are **not** red on this repo today, and this is **not** a gate — nothing here blocks a pull request. It is what the next pin bump will hit, reported on the day core merged it rather than days later under a red trunk.\n\n'
+            printf '🚨 **The list is a DELTA, not a failure list.** Each test was run twice — once with core at the pin, once at core main — and only those that pass at the pin and fail at main are here. A test already red at the pin is this repo'"'"'s own business and is excluded.\n\n'
+            printf '[Canary run](%s)\n\n%s\n' "$RUN_URL" "$marker"
+          } > "$RUNNER_TEMP/body.md"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still ${COUNT} at core \`${MAIN}\` ([run](${RUN_URL}))."
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label "$LABEL" \
+              --title "Platform canary: core main breaks ${COUNT} test(s) this pin does not" --body-file "$RUNNER_TEMP/body.md" || \
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Platform canary: core main breaks ${COUNT} test(s) this pin does not" --body-file "$RUNNER_TEMP/body.md"
+          fi
