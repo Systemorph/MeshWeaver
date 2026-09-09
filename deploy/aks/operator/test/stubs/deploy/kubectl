@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-deploy's adoption tests. Records every invocation in
+# $HOSTING_DEPLOY_STUB_LOG. The live estate is $HOSTING_DEPLOY_FIXTURE/live/<name>.json, one file
+# per rendered resource name (kind.group/name with '/' → '__'); absent file → NotFound.
+#
+#   get namespace X                          → exists
+#   create --dry-run=client -o name -f -     → $FIXTURE/names.txt (kubectl's own parsing is not under test)
+#   get <res> -o json                        → the live object, or NotFound
+#   annotate / label                         → recorded; the live object is REWRITTEN with the ownership
+#                                              so a second pass reads it as owned (adoption is idempotent)
+set -uo pipefail
+log="${HOSTING_DEPLOY_STUB_LOG:?the kubectl stub needs HOSTING_DEPLOY_STUB_LOG}"
+fixture="${HOSTING_DEPLOY_FIXTURE:?the kubectl stub needs HOSTING_DEPLOY_FIXTURE}"
+printf 'kubectl %s\n' "$*" >> "$log"
+ns=""
+if [ "${1:-}" = "-n" ]; then ns="${2:-}"; shift 2; fi
+live_file() { printf '%s/live/%s.json' "$fixture" "$(printf '%s' "$1" | tr '/' '_')"; }
+case "${1:-}" in
+  get)
+    if [ "${2:-}" = "namespace" ]; then echo "NAME STATUS AGE"; exit 0; fi
+    if [ "${2:-}" = "deploy" ]; then echo "Error from server (NotFound)" >&2; exit 1; fi
+    f="$(live_file "${2:-}")"
+    [ -f "$f" ] || { echo "Error from server (NotFound): ${2:-} not found" >&2; exit 1; }
+    cat "$f" ;;
+  create)
+    cat >/dev/null
+    cat "$fixture/names.txt" ;;
+  annotate|label)
+    res="${3:-}"; f="$(live_file "$res")"
+    [ -f "$f" ] || { echo "Error from server (NotFound): ${res} not found" >&2; exit 1; }
+    if [ "$1" = "annotate" ]; then
+      rel=""; rns=""
+      for arg in "$@"; do case "$arg" in meta.helm.sh/release-name=*) rel="${arg#*=}" ;; meta.helm.sh/release-namespace=*) rns="${arg#*=}" ;; esac; done
+      jq --arg r "$rel" --arg n "$rns" '.metadata.annotations["meta.helm.sh/release-name"]=$r | .metadata.annotations["meta.helm.sh/release-namespace"]=$n' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    else
+      jq '.metadata.labels["app.kubernetes.io/managed-by"]="Helm"' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+    echo "${res} ${1}d" ;;
+  *) echo "kubectl stub: unexpected invocation: $*" >&2; exit 1 ;;
+esac

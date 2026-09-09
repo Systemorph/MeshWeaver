@@ -530,6 +530,59 @@ emits "a dry run still audits (read-only)" "::hosting:: audit_verdict=clean" \
   env HOSTING_DRY_RUN=true PATH="$STUBS:$PATH" HOSTING_AUDIT_FIXTURE="$FIXTURES/clean" \
   hosting-audit --namespace memex --release memex
 
+# ── hosting-deploy adopts what the RECORD renders and the cluster already holds ─────────────────
+# Measured 2026-09-09 01:20Z on memex: the first Reconcile to reach helm failed with
+#   UPGRADE FAILED: … SecretProviderClass "memex-kv" … exists and cannot be imported into the
+#   current release: invalid ownership metadata
+# because that object was hand-applied before any release and only the record renders it. The
+# stubs play a three-resource estate — one absent, one owned, one live without ownership — and
+# record every call in order, so the assertions are about WHAT was stamped and WHEN.
+echo
+echo "── hosting-deploy: adoption before helm ─────────────────────────"
+DP_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/deploy" && pwd)"
+DP_FIXTURES="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/deploy" && pwd)"
+_dp_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_dp_dir/"; _dp_log="$_dp_dir/calls.log"; : > "$_dp_log"
+_dp_vals="$_dp_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_dp_vals"
+_dp_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_dp_dir" HOSTING_DEPLOY_STUB_LOG="$_dp_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_dp_vals" --image cr.example.test/memex-portal-ai:1 2>&1; }
+_dp_out="$(_dp_run)"; _dp_rc=$?
+[ "$_dp_rc" -eq 0 ] && ok "deploy succeeds against the stubbed estate" || bad "deploy succeeds against the stubbed estate" "exited ${_dp_rc}: ${_dp_out}"
+case "$_dp_out" in *"::hosting:: adopted=1"*) ok "exactly the unowned live resource is adopted (adopted=1)" ;;
+  *) bad "exactly the unowned live resource is adopted" "said: ${_dp_out}" ;; esac
+case "$_dp_out" in *"adoption  1 adopted, 1 already owned, 1 to be created"*) ok "the three outcomes are counted and logged" ;;
+  *) bad "the three outcomes are counted and logged" "said: ${_dp_out}" ;; esac
+_spc='secretproviderclass.secrets-store.csi.x-k8s.io/memex-kv'
+if grep -q "^kubectl -n memex annotate --overwrite ${_spc} meta.helm.sh/release-name=memex meta.helm.sh/release-namespace=memex" "$_dp_log" \
+   && grep -q "^kubectl -n memex label --overwrite ${_spc} app.kubernetes.io/managed-by=Helm" "$_dp_log"; then
+  ok "the unowned SecretProviderClass gets this release's ownership annotations and label"
+else
+  bad "the unowned SecretProviderClass gets ownership" "$(cat "$_dp_log")"
+fi
+grep -q 'annotate --overwrite configmap/\|annotate --overwrite deployment.apps/' "$_dp_log" \
+  && bad "an owned or absent resource is never touched" "$(grep 'annotate' "$_dp_log")" \
+  || ok "an owned or absent resource is never touched"
+_adopt_line="$(grep -n "annotate --overwrite ${_spc}" "$_dp_log" | head -1 | cut -d: -f1)"
+_helm_line="$(grep -n '^helm upgrade memex' "$_dp_log" | head -1 | cut -d: -f1)"
+if [ -n "$_adopt_line" ] && [ -n "$_helm_line" ] && [ "$_adopt_line" -lt "$_helm_line" ]; then
+  ok "adoption happens BEFORE helm upgrade"
+else
+  bad "adoption happens BEFORE helm upgrade" "adopt at '${_adopt_line}', helm at '${_helm_line}' in: $(cat "$_dp_log")"
+fi
+# Idempotent: the stub rewrote the live object with its ownership; a second run adopts nothing.
+: > "$_dp_log"; _dp_out="$(_dp_run)"
+case "$_dp_out" in *"::hosting:: adopted=0"*) ok "a second run adopts nothing (the estate is now owned)" ;;
+  *) bad "a second run adopts nothing" "said: ${_dp_out}" ;; esac
+# 🚨 Never a takeover: an object owned by ANOTHER release is a refusal, and helm is never reached.
+jq '.metadata.labels["app.kubernetes.io/managed-by"]="Helm" | .metadata.annotations["meta.helm.sh/release-name"]="other" | .metadata.annotations["meta.helm.sh/release-namespace"]="memex"' \
+  "$DP_FIXTURES/live/secretproviderclass.secrets-store.csi.x-k8s.io_memex-kv.json" > "$_dp_dir/live/secretproviderclass.secrets-store.csi.x-k8s.io_memex-kv.json"
+: > "$_dp_log"; _dp_out="$(_dp_run)"; _dp_rc=$?
+if [ "$_dp_rc" -ne 0 ] && printf '%s' "$_dp_out" | grep -q "owned by release 'other'" && ! grep -q '^helm upgrade' "$_dp_log"; then
+  ok "an object owned by another release is refused, and helm never runs"
+else
+  bad "an object owned by another release is refused" "rc=${_dp_rc} out: ${_dp_out} log: $(cat "$_dp_log")"
+fi
+rm -rf "$_dp_dir"
+
 # ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
 # The manifest lives three directories away from the scripts and is reviewed separately; twice a
 # script reached main without its grant (storageclasses for pv-resize — failed the first Reconcile
