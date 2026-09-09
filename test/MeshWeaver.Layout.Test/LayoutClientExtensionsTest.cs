@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Globalization;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
@@ -14,6 +16,59 @@ public class LayoutClientExtensionsTest(ITestOutputHelper output) : HubTestBase(
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration config)
     {
         return base.ConfigureHost(config);
+    }
+
+    [Fact]
+    public void ConvertSingle_CollectionLabel_MatchesItsSerializedValue()
+    {
+        var hub = GetHost();
+        object[] values =
+        [
+            new[] { "Initialize", "MeshNodeInit" },
+            new System.Collections.Generic.List<int> { 1, 2, 3 },
+            new System.Collections.Generic.Dictionary<string, int> { ["pending"] = 2 },
+            System.Text.Json.Nodes.JsonNode.Parse("[\"Initialize\",\"MeshNodeInit\"]")!,
+            System.Text.Json.Nodes.JsonNode.Parse("{\"pending\":2}")!
+        ];
+        foreach (var value in values)
+        {
+            var serialized = JsonSerializer.SerializeToElement(value, hub.JsonSerializerOptions);
+            var expected = hub.ConvertSingle<string>(serialized, null);
+            expected.Should().NotBeNullOrEmpty();
+            hub.ConvertSingle<string>(value, null).Should().Be(expected,
+                "a label must render the same value before and after transport serialization");
+        }
+    }
+
+    [Fact]
+    public void ConvertSingle_GateNames_RenderAsReadableText()
+    {
+        var hub = GetHost();
+        hub.ConvertSingle<string>(new[] { "Initialize", "MeshNodeInit" }, null)
+            .Should().Be("Initialize, MeshNodeInit");
+        hub.ConvertSingle<string>(Array.Empty<string>(), null).Should().BeEmpty();
+        hub.ConvertSingle<string>(Guid.Parse("01234567-89ab-cdef-0123-456789abcdef"), null)
+            .Should().Be("01234567-89ab-cdef-0123-456789abcdef");
+    }
+
+    [Fact]
+    public void ConvertSingle_UnserializableLabel_DoesNotEndBinding()
+    {
+        var hub = GetHost();
+        var cycle = new System.Collections.Generic.List<object>();
+        cycle.Add(cycle);
+        var rendered = new System.Collections.Generic.List<string?>();
+        Exception? failure = null;
+        using var source = new Subject<object>();
+        using var subscription = source.Select(value => hub.ConvertSingle<string>(value, null, "unreadable"))
+            .Subscribe(rendered.Add, error => failure = error);
+
+        source.OnNext(typeof(string));
+        source.OnNext(cycle);
+        source.OnNext(new[] { "Initialize", "MeshNodeInit" });
+
+        failure.Should().BeNull();
+        rendered.Should().Equal("unreadable", "unreadable", "Initialize, MeshNodeInit");
     }
 
     /// <summary>
