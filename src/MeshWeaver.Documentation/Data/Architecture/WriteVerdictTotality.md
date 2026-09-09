@@ -465,6 +465,15 @@ follows, and the run contains **zero `[CreateOrUpdate]` lines of any kind** — 
 ever ran. Silence, not a fault. The install then ran out its ten-minute bound with no name for what
 happened.
 
+### A create timeout cannot establish that nothing was written
+
+The inner-create bound guarantees an answer to the upsert caller; it does not establish rollback.
+The create handler persists the row before running post-creation handlers and sending its response.
+A pending post-creation handler can therefore outlive that bound with the row already present.
+The timeout reports an **unknown outcome**, never "NOT applied" or an unconditional safe retry.
+`CreateTimeoutOutcomeTest` pins this with a real stored node and a held post-creation handler,
+letting the production bound expire without altering its duration.
+
 ### 🚨 The recycle is by design, it succeeds, and it is NOT the defect
 
 The disposer is `PackageInstaller.SettleRetypedRoot` — the installer's own ordered recycle of the
