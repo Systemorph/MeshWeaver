@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text;
@@ -369,30 +370,161 @@ internal static class NodeTypeBatchBake
                 "BatchBake: source query '{Query}' carries its own limit: — discovery overrides it "
                 + "with {Limit}, because a truncated source set compiles WRONG", query, SourceDiscoveryLimit);
         var bounded = $"{query} limit:{SourceDiscoveryLimit}";
-        return Observable
-            // 🚨 .AsSystem() — batch-bake source discovery is framework infrastructure, not a
-            // user-scoped read, and this Defer's subscription does not carry the caller's ambient
-            // identity. Unstamped it would resolve as Anonymous and hand the compiler a silently
-            // TRUNCATED source set, which "compiles WRONG" exactly as the limit: note above warns.
-            // Declared on the request so no scheduler hop can lose it. See
-            // Doc/Architecture/QueryIdentity.
-            .Defer(() => meshService.Query<MeshNode>(new MeshQueryRequest
-            {
-                Query = bounded,
-                Limit = SourceDiscoveryLimit,
-            }.AsSystem()))
-            .Scan(
-                ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
-                NodeCompileShaping.ApplyQueryChange)
-            .Throttle(QueryQuietWindow)
-            .Take(1)
-            .SelectMany(nodes => nodes.Count < SourceDiscoveryLimit
-                ? Observable.Return(nodes)
-                : Observable.Throw<ImmutableDictionary<string, MeshNode>>(
-                    new SourceDiscoveryFailedException(
-                        $"source discovery query '{bounded}' returned {nodes.Count} node(s) — its own "
-                        + $"ceiling of {SourceDiscoveryLimit}, so the source set may be TRUNCATED and "
-                        + "no compile driven from it would be a verdict about the code")));
+        return Observable.Defer(() =>
+        {
+            // Per-SUBSCRIPTION state, created here rather than captured from outside: two
+            // concurrent discoveries of the same query text must not fold their chunk timings
+            // together, and nothing here is static (#3704).
+            var chunks = new ChunkTiming();
+            return Observable
+                // 🚨 .AsSystem() — batch-bake source discovery is framework infrastructure, not a
+                // user-scoped read, and this Defer's subscription does not carry the caller's ambient
+                // identity. Unstamped it would resolve as Anonymous and hand the compiler a silently
+                // TRUNCATED source set, which "compiles WRONG" exactly as the limit: note above warns.
+                // Declared on the request so no scheduler hop can lose it. See
+                // Doc/Architecture/QueryIdentity.
+                .Defer(() => meshService.Query<MeshNode>(new MeshQueryRequest
+                {
+                    Query = bounded,
+                    Limit = SourceDiscoveryLimit,
+                }.AsSystem()))
+                .Do(chunks.Observe)
+                .Scan(
+                    ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
+                    NodeCompileShaping.ApplyQueryChange)
+                .Throttle(QueryQuietWindow)
+                .Take(1)
+                .Do(nodes => chunks.Report(logger, bounded, nodes.Count, QueryQuietWindow))
+                .SelectMany(nodes => nodes.Count < SourceDiscoveryLimit
+                    ? Observable.Return(nodes)
+                    : Observable.Throw<ImmutableDictionary<string, MeshNode>>(
+                        new SourceDiscoveryFailedException(
+                            $"source discovery query '{bounded}' returned {nodes.Count} node(s) — its own "
+                            + $"ceiling of {SourceDiscoveryLimit}, so the source set may be TRUNCATED and "
+                            + "no compile driven from it would be a verdict about the code")));
+        });
+    }
+
+    /// <summary>
+    /// 🚨 <b>The discriminating measurement #3704 asks for, taken where the fold happens.</b>
+    ///
+    /// <para>On 2026-09-08 00:31:22Z one boot of memex resolved a source-discovery set <b>91 Code
+    /// nodes short</b> (1145 against 1236/1237/1241 on the same portal, three of them on the same
+    /// image), and content grows monotonically across that window — so it was a truncation, not a
+    /// smaller mesh. Two mechanisms could produce it and nothing recorded enough to tell them
+    /// apart:</para>
+    ///
+    /// <list type="number">
+    /// <item><b>The completion rule.</b> <see cref="RunQuery"/> decides a chunked query has
+    /// finished answering from <see cref="QueryQuietWindow"/> of silence, because
+    /// <c>QueryResultChange&lt;T&gt;</c> carries no terminal marker — there is no
+    /// "the initial set is complete" for any reader of that protocol. A chunk gap wider than the
+    /// window silently ends the fold and hands the compiler a short map.</item>
+    /// <item><b>An upstream shortfall</b> — the providers simply returned less, in which case the
+    /// window is innocent and the search moves to what answered.</item>
+    /// </list>
+    ///
+    /// <para><b>What this records, per query and per subscription:</b> how many
+    /// <c>QueryResultChange</c> events were folded, what each contributed, and the LARGEST
+    /// inter-chunk gap. That is the whole discriminator: a largest gap approaching the window
+    /// indicts the completion rule; all-small gaps exonerate it and point upstream. Both readings
+    /// are printed on every pass, so the next short read explains itself instead of being compared
+    /// against neighbouring boots by hand.</para>
+    ///
+    /// <para>🚨 It deliberately does NOT widen the window, add a retry, or change what a short pass
+    /// concludes. #3698 already made a short pass cost the batch rather than a rollout; widening a
+    /// bound to make a symptom rarer while the mechanism is unmeasured is the band-aid this
+    /// repository refuses. The fix waits on this number.</para>
+    ///
+    /// <para>Instance state, created per subscription inside the <c>Defer</c> — never static, and
+    /// the per-chunk counts are an <see cref="System.Collections.Immutable.ImmutableList{T}"/>
+    /// (fully qualified: <c>System.Reactive</c> ships one of the same name, and a bare cref is a
+    /// <c>CS0419</c> under -warnaserror). Timing is
+    /// <see cref="Stopwatch"/> ticks, not <c>DateTime</c>: the quantity is an interval.</para>
+    /// </summary>
+    internal sealed class ChunkTiming
+    {
+        /// <summary>Enough per-chunk counts to see the shape without turning a log line into a
+        /// page. A pass that exceeds it says so and keeps the count and the largest gap, which are
+        /// the two figures the verdict actually rests on.</summary>
+        private const int MaxRecordedCounts = 48;
+
+        private readonly Func<long> clock;
+        private readonly long startedTicks;
+        private long lastTicks;
+        private long largestGapTicks;
+        private int chunks;
+        private int items;
+        private ImmutableList<int> counts = ImmutableList<int>.Empty;
+
+        /// <summary>
+        /// <paramref name="clock"/> is <see cref="Stopwatch.GetTimestamp"/> in production and a
+        /// supplied tick source in a test — the same seam <c>RestartDeferredBy</c> uses for the
+        /// roll floor. It exists so the rule below can be pinned as a TRUTH TABLE rather than by
+        /// sleeping through a real inter-chunk gap: a test that waits out half a second to observe
+        /// a timing verdict measures the runner as much as the rule.
+        /// </summary>
+        /// <param name="clock">Monotonic tick source; defaults to <see cref="Stopwatch"/>.</param>
+        internal ChunkTiming(Func<long>? clock = null)
+        {
+            this.clock = clock ?? Stopwatch.GetTimestamp;
+            startedTicks = this.clock();
+            lastTicks = startedTicks;
+        }
+
+        /// <summary>Folds one change's timing and size. Called from the query's own emission
+        /// sequence, which is serial, so no gate is needed or wanted.</summary>
+        internal void Observe(QueryResultChange<MeshNode> change)
+        {
+            var now = clock();
+            var gap = now - lastTicks;
+            if (chunks > 0 && gap > largestGapTicks)
+                largestGapTicks = gap;
+            lastTicks = now;
+            chunks++;
+            var count = change.Items?.Count ?? 0;
+            items += count;
+            if (counts.Count < MaxRecordedCounts)
+                counts = counts.Add(count);
+        }
+
+        /// <summary>Prints the measurement, and says which way it points.</summary>
+        internal void Report(ILogger? logger, string query, int settled, TimeSpan window)
+        {
+            if (logger is null)
+                return;
+            var largestGapMs = Ms(largestGapTicks);
+            var elapsedMs = Ms(clock() - startedTicks);
+            var windowMs = window.TotalMilliseconds;
+            var share = windowMs > 0 ? largestGapMs / windowMs * 100 : 0;
+            var shape = counts.Count < chunks
+                ? string.Join(",", counts) + $",… ({chunks - counts.Count} more)"
+                : string.Join(",", counts);
+
+            logger.LogInformation(
+                "BatchBake: source discovery query '{Query}' settled at {Settled} node(s) from "
+                + "{Chunks} change(s) ({Items} item(s) delivered) in {ElapsedMs}ms. Largest "
+                + "inter-chunk gap {GapMs}ms = {Share}% of the {WindowMs}ms completion window. "
+                + "Per-chunk: [{Shape}].",
+                query, settled, chunks, items, elapsedMs,
+                largestGapMs.ToString("F0"), share.ToString("F0"), windowMs.ToString("F0"), shape);
+
+            // 🚨 The line that makes the next short read self-explaining. The threshold picks the
+            // LEVEL only — every number above is printed unconditionally, so a reader never depends
+            // on where it sits.
+            if (share >= 50)
+                logger.LogWarning(
+                    "BatchBake: source discovery query '{Query}' had an inter-chunk gap of {GapMs}ms "
+                    + "against a {WindowMs}ms completion window ({Share}%). A gap WIDER than that "
+                    + "window ends the fold early and hands the compiler a short source map — the "
+                    + "mechanism named in #3704, where one boot resolved 91 Code nodes short. This "
+                    + "pass settled at {Settled} node(s); compare it with the neighbouring boots on "
+                    + "THIS portal before concluding.",
+                    query, largestGapMs.ToString("F0"), windowMs.ToString("F0"),
+                    share.ToString("F0"), settled);
+        }
+
+        private static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
     }
 
     /// <summary>
