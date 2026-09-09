@@ -1345,7 +1345,24 @@ public sealed class MessageHub : IMessageHub
     /// <returns>The same sequence, with observer faults routed instead of escaping.</returns>
     private IObservable<IMessageDelivery> GuardContinuationFaults(IObservable<IMessageDelivery> source)
         => Observable.Create<IMessageDelivery>(observer => source.Subscribe(
-            value => Guarded(() => observer.OnNext(value)),
+            value =>
+            {
+                try
+                {
+                    observer.OnNext(value);
+                }
+                catch (Exception ex)
+                {
+                    // 🚨 REPORT **AND TERMINATE**. Reporting alone is the worse bug: the sequence
+                    // would neither emit nor error, so anything awaiting this response waits for its
+                    // full timeout instead of learning immediately that the work failed — a hang
+                    // where the block used to fail fast. `MessageService` did not swallow either; it
+                    // logged AND called ReportFailure, so the caller got an answer. This is the same
+                    // disposition: say what happened, then end the sequence with the fault.
+                    ReportContinuationFault(ex);
+                    Guarded(() => observer.OnError(ex));
+                }
+            },
             error => Guarded(() => observer.OnError(error)),
             () => Guarded(observer.OnCompleted)));
 
@@ -1360,6 +1377,15 @@ public sealed class MessageHub : IMessageHub
             deliver();
         }
         catch (Exception ex)
+        {
+            ReportContinuationFault(ex);
+        }
+    }
+
+    /// <summary>Says what a continuation fault was, at the level its cause deserves.</summary>
+    /// <param name="ex">The fault an observer callback threw.</param>
+    private void ReportContinuationFault(Exception ex)
+    {
         {
             if (RunLevel >= MessageHubRunLevel.ShutDown)
                 logger.LogDebug(ex,
