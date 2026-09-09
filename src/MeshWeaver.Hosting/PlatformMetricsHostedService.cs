@@ -58,8 +58,14 @@ internal sealed class PlatformMetricsHostedService(IServiceProvider services) : 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        // Dispose-once: the hub's own disposal may already have taken it.
-        metrics?.Dispose();
+        // 🚨 Dispose-ONCE, and the field is cleared to make it so. The hub's own disposal may
+        // already have taken it (RegisterForDisposal), and a comment claiming once-only semantics
+        // that the code does not implement is worse than neither — Meter.Dispose happens to be
+        // idempotent today, which is not a property this class should be relying on during
+        // shutdown.
+        var taken = metrics;
+        metrics = null;
+        taken?.Dispose();
         return Task.CompletedTask;
     }
 }

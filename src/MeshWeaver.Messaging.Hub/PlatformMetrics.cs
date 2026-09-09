@@ -67,6 +67,14 @@ public sealed class PlatformMetrics : IDisposable
     /// </summary>
     private static IEnumerable<Measurement<long>> Observe(IMessageHub root)
     {
+        // 🚨 A dead ROOT is a torn-down mesh, and reporting one Dead hub for it is noise the
+        // summary above already promises not to emit — nothing throws on a disposed hub, so
+        // without this the promise was prose. This is the root ONLY: a Dead hub INSIDE a live
+        // tree is exactly what the runlevel tag exists to show ("how many are still running
+        // versus already dead" is the question the meter was added for).
+        if (root.RunLevel == MessageHubRunLevel.Dead)
+            yield break;
+
         Dictionary<(string Kind, string RunLevel), long> counts;
         try
         {
@@ -105,14 +113,18 @@ public sealed class PlatformMetrics : IDisposable
     /// <para>🚨 A per-address tag would be unbounded cardinality: one time series per
     /// <c>sync/{guid}</c>, which is the population that reached 6,925 on one replica. The whole
     /// question is "how many of each sort", and the sort is the type.</para>
+    ///
+    /// <para>🚨 <b><see cref="Address.Type"/>, never <c>ToString()</c>.</b> This first split
+    /// <c>ToString()</c> at its first <c>/</c>, and <c>ToString()</c> is <c>Path + '~' + Host</c>
+    /// for a hosted address — so for a SINGLE-segment path the first <c>/</c> comes out of the HOST
+    /// chain and the kind became <c>admin~portal</c>, silently re-admitting host ids to the tag and
+    /// recreating the exact unbounded cardinality the paragraph above forbids. <c>Type</c> is
+    /// <c>Segments[0]</c>: the type segment by construction, host-free, no parsing.</para>
     /// </summary>
     private static string KindOf(Address? address)
     {
-        var text = address?.ToString();
-        if (string.IsNullOrEmpty(text))
-            return "unknown";
-        var slash = text.IndexOf('/');
-        return slash > 0 ? text[..slash] : text;
+        var type = address?.Type;
+        return string.IsNullOrEmpty(type) ? "unknown" : type;
     }
 
     /// <summary>Releases the meter with the mesh that owns it.</summary>

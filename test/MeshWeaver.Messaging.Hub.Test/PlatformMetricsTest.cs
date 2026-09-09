@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -107,26 +109,72 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
+    /// 🚨 <b>The invariant <c>KindOf</c> rests on, pinned where it is actually decidable.</b>
+    ///
+    /// <para><c>KindOf</c> first derived the kind by splitting <c>Address.ToString()</c> at its
+    /// first <c>/</c>. That is wrong by construction, and this test says why:
+    /// <c>ToString()</c> is <c>Path + '~' + Host</c>, so for a path of ONE segment the first
+    /// <c>/</c> comes out of the HOST chain — the kind becomes <c>solo~portal</c>, host ids are
+    /// back in the tag, and the unbounded cardinality the tag exists to bound is recreated. The
+    /// two-segment case above cannot catch it: there the first <c>/</c> is inside the path, so the
+    /// parse looks right.</para>
+    ///
+    /// <para>The fix is to stop parsing — <c>Address.Type</c> IS <c>Segments[0]</c>, host-free.
+    /// This asserts both halves of that claim on <see cref="Address"/> itself, because a hub whose
+    /// own address carries a host chain is not constructible through the public hub API this rig
+    /// uses, and an assertion that cannot fail is not one.</para>
+    /// </summary>
+    [HubFact]
+    public void ToStringCarriesTheHostChain_TypeDoesNot()
+    {
+        var hosted = new Address("solo") { Host = new Address("portal", "xyz") };
+
+        hosted.ToString().Should().Be("solo~portal/xyz",
+            "PRECONDITION: ToString appends the host, and for a one-segment path the FIRST '/' in "
+            + "it therefore belongs to the host — which is what made the old parse wrong");
+        hosted.ToString().IndexOf('/').Should().Be("solo~portal".Length,
+            "…and precisely there, so splitting on it yielded 'solo~portal' as the kind");
+
+        hosted.Type.Should().Be("solo",
+            "Type is Segments[0]: the type segment by construction, with no host and no parsing");
+    }
+
+    /// <summary>
     /// 🚨 A gauge that throws is swallowed by the metrics infrastructure and the instrument goes
     /// SILENT — indistinguishable from a mesh with no hubs, which is the exact failure this issue
     /// is about. A disposed root is the cheapest way to fault the walk.
     /// </summary>
     [HubFact]
-    public void ADisposedRoot_ReportsNothing_RatherThanThrowing()
+    public async Task ADisposedRoot_ReportsNothing_RatherThanThrowing()
     {
         var host = GetHost();
         var doomed = (MessageHub)host.GetHostedHub(new Address("victim", "metrics-doomed"), c => c)!;
         using var metrics = new PlatformMetrics(doomed);
         doomed.Dispose();
+        // 🚨 Dispose() RETURNS before the hub is Dead — teardown drains in-flight work, so the run
+        // level walks Quiescing → DisposeHostedHubs → … → Dead afterwards. Scraping straight after
+        // the call measures a hub that is winding DOWN, not one that is gone, and asserting
+        // "nothing" there would be asserting the wrong property (a hub still draining SHOULD be
+        // reported — its run level is exactly what the runlevel tag is for). Wait for the terminal
+        // state, which is what the guard under test keys on.
+        await doomed.DisposalCompleted.FirstOrDefaultAsync().Timeout(TimeSpan.FromSeconds(15)).Await();
+        doomed.RunLevel.Should().Be(MessageHubRunLevel.Dead,
+            "PRECONDITION: the guard keys on the terminal state, so the test must reach it");
 
         // Deliberately NOT an assertion helper: the property under test is that nothing escapes,
         // and the plainest way to assert that is to let the call stand. A throw fails the test with
         // the real exception, which is more useful than a wrapped one.
         var taken = Scrape(metrics);
 
-        taken.Should().NotBeNull(
-            "the scrape must never propagate out of the gauge — an exception there stops the "
-            + "instrument reporting for the life of the process, silently, and a silent meter is "
-            + "indistinguishable from a mesh with no hubs");
+        // 🚨 BOTH halves, and the second one is why this assertion changed. `NotBeNull` on a list
+        // that can never be null is vacuous — it would have passed just as well if the gauge kept
+        // emitting after disposal, i.e. it tested the half named in the method name and not the
+        // half named in the sentence. The throw-safety is asserted by the call standing above; the
+        // "reports nothing" is asserted here.
+        taken.Should().BeEmpty(
+            "a disposed root is a torn-down mesh: the scrape must neither propagate out of the "
+            + "gauge — an exception there stops the instrument reporting for the life of the "
+            + "process, silently, and a silent meter is indistinguishable from a mesh with no "
+            + "hubs — nor report a phantom population for a mesh that is gone");
     }
 }
