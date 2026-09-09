@@ -296,13 +296,6 @@ public static class LayoutClientExtensions
         // `fail` line on EVERY NavLink render (prod error storm) while the icon rendered as nothing.
         if (typeof(T) == typeof(Icon) && TryGetStringValue(value, out var iconString))
             return (T?)(object?)Icon.Parse(iconString);
-        // A label can receive the CLR collection directly from a local binding, or its JSON
-        // representation after transport. Both must use the same display conversion. Collections,
-        // JsonNodes and values such as Guid do not implement IConvertible, so ChangeType cannot
-        // render them. Keep scalar coercion and caller-supplied converters unchanged.
-        if (typeof(T) == typeof(string) && value is not null && value is not IConvertible)
-            return hub.ConvertJson(JsonSerializer.SerializeToElement(value, hub.JsonSerializerOptions),
-                null, defaultValue);
         return value switch
         {
             null => defaultValue,
@@ -350,16 +343,63 @@ public static class LayoutClientExtensions
     {
         var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
 
+        // 🚨 A JsonElement is NOT IConvertible, and it reaches here (#3764). `ConvertSingle` has a
+        // JsonElement branch, but a value can arrive at this helper already unwrapped — a nullable's
+        // underlying value, or a structured value the earlier branches did not claim. Handing one to
+        // Convert.ChangeType below throws "Object must implement IConvertible", and because the whole
+        // chain runs inside the binding's Rx `Select`, that exception does not fail ONE emission: it
+        // terminates the subscription, so the control stops updating for the rest of its life. A
+        // Label bound to `gates` died exactly this way and simply never loaded.
+        if (value is JsonElement json)
+            return ConvertJsonElement<T>(json, targetType);
+
         // Handle numeric conversions more safely
         if (IsNumericType(targetType))
         {
             return ConvertNumericSafely<T>(value, targetType);
         }
 
+        // 🚨 DEGRADE, never tear the binding down. Convert.ChangeType throws InvalidCastException for
+        // anything that is not IConvertible, and one such emission would end the subscription (see
+        // above). A control rendering its default is a bounded, visible loss; a dead binding is an
+        // unbounded, invisible one — the value is simply never right again and nothing says so.
+        if (value is not IConvertible)
+            return default;
+
         // Fall back to Convert.ChangeType for non-numeric types
         // Use targetType (underlying type for nullables) since Convert.ChangeType doesn't support nullable types
         var converted = Convert.ChangeType(value, targetType);
         return (T?)converted;
+    }
+
+    /// <summary>
+    /// Converts a <see cref="JsonElement"/> to <typeparamref name="T"/> without going through
+    /// <see cref="Convert.ChangeType(object?, Type)"/>, which cannot take one.
+    ///
+    /// <para>A structured element (object or array) bound into a scalar slot — the `gates` case in
+    /// #3764 — has no scalar reading, so it renders as its raw text rather than as nothing: the
+    /// control shows what it was given instead of silently emptying.</para>
+    /// </summary>
+    private static T? ConvertJsonElement<T>(JsonElement element, Type targetType)
+    {
+        if (targetType == typeof(string))
+            return (T?)(object?)(element.ValueKind == JsonValueKind.String
+                ? element.GetString()
+                : element.GetRawText());
+
+        if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return default;
+
+        try
+        {
+            return element.Deserialize<T>();
+        }
+        catch (JsonException)
+        {
+            // The element does not shape into T — a structured value in a scalar slot. Degrade for
+            // the same reason as above: one unbindable emission must not end the subscription.
+            return default;
+        }
     }
 
     private static bool IsNumericType(Type type)
@@ -400,6 +440,14 @@ public static class LayoutClientExtensions
                 return ConvertDoubleToInteger<T>(f, targetType);
             }
         }
+
+        // 🚨 Same rule as ConvertNumericValue, and this arm is the one a NUMERIC target reaches
+        // (#3764): a non-IConvertible value throws "Object must implement IConvertible" here, and
+        // because the chain runs inside the binding's Rx `Select` that ends the SUBSCRIPTION rather
+        // than one emission. Degrade to the default — a control showing 0 is a bounded, visible
+        // loss; a binding that never updates again is an unbounded, invisible one.
+        if (value is not IConvertible)
+            return default;
 
         // Use Convert.ChangeType for other numeric conversions
         return value is null ? default : (T?)Convert.ChangeType(value, targetType);
