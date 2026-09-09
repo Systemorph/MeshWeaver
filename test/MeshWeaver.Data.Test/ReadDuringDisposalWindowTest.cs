@@ -1,5 +1,8 @@
 using System;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -27,12 +30,23 @@ namespace MeshWeaver.Data.Test;
 /// <para>It is #1362 reproduced by its own fix: #1362 closed the case where the request produced
 /// NO answer; this was the same request producing a WRONG one, from the line above.</para>
 ///
-/// <para><b>How the window is held open</b> — the technique
-/// <c>SubscribeDuringRecycleTest</c> established, no sleeps and no racing: one un-answered response
-/// callback is parked on the owner, so its <c>Quiescing</c> phase cannot drain and the hub sits in
-/// the disposal window (creation frozen, message intake still open) for its whole quiesce budget.
-/// The test then WAITS until <c>RunLevel</c> has demonstrably reached <c>Quiescing</c> before
-/// reading — the state is verified, not timed.</para>
+/// <para><b>How the window is reached</b> — by ORDER, never by waiting. The owner's action block is
+/// occupied first, so the <c>DisposeRequest</c> and the read under test are both ENQUEUED before any
+/// disposal work is handled; FIFO then fixes the sequence for good: <c>DisposeRequest</c> → the read
+/// → the <c>ShutdownRequest</c> that <c>Dispose()</c> posts from inside that handler. The read is
+/// dequeued with hosted-hub creation already frozen (<c>CloseCreation</c> is synchronous inside
+/// <c>Dispose</c>, before it posts anything) and the run level still <c>Started</c>. A second park —
+/// one un-answered response callback — keeps the <c>Quiescing</c> drain from completing underneath
+/// the assertions.</para>
+///
+/// <para>🚨 <b>It did not always order it (#3827).</b> The read used to be posted AFTER
+/// <c>DisposeRequest</c> with nothing occupying the block, on the stated premise that "message
+/// intake stays open until <c>DisposeHostedHubs</c>". That was TRUE when it was written and #3506
+/// removed it — the intake gate used to open one phase too late, and
+/// <c>QuiescingHubRefusesNewWorkTest</c> now describes the same sentence as the defect it fixed. What
+/// was left was an unordered race between the test's own post and the hub's <c>ShutdownRequest</c>:
+/// when the latter won, the read was refused at INTAKE, naming the run level rather than the
+/// stream-creation refusal this test exists for. Measured 1 in 4 on unmodified main.</para>
 /// </summary>
 public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBase(output)
 {
@@ -45,10 +59,25 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
 
     private record HoldResponse;
 
+    /// <summary>
+    /// Occupies the owner's ACTION BLOCK until the test releases it — a different thing from
+    /// <see cref="HoldRequest"/>, which parks a response CALLBACK. This one is what makes the
+    /// ordering below deterministic: while its handler is executing, nothing else on that hub is
+    /// dequeued, so the test can place several messages in the queue and know exactly what order
+    /// they will be handled in.
+    /// </summary>
+    private record ParkRequest;
+
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
             .AddData()
-            .WithTypes(typeof(HoldRequest), typeof(HoldResponse), typeof(Item));
+            .WithTypes(typeof(HoldRequest), typeof(HoldResponse), typeof(ParkRequest), typeof(Item));
+
+    /// <summary>Set to 1 to let the parked action block go. Volatile — read from the hub's thread.</summary>
+    private int release;
+
+    /// <summary>Completed by the park handler the moment it OWNS the action block.</summary>
+    private readonly AsyncSubject<Unit> parked = new();
 
     [HubFact]
     public async Task ReadThatFaultsOnTeardown_IsNackedShuttingDown_NotAnsweredAsAbsent()
@@ -57,8 +86,27 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
 
         var owner = host.GetHostedHub(
             OwnerAddress,
-            c => c.WithTypes(typeof(HoldRequest), typeof(HoldResponse), typeof(Item))
+            c => c.WithTypes(typeof(HoldRequest), typeof(HoldResponse), typeof(ParkRequest), typeof(Item))
                 .WithHandler<HoldRequest>((_, d) => d.Processed())
+                // 🚨 The sanctioned park: a volatile int under a BOUNDED SpinUntil, released in a
+                // finally so a failing assertion upstream can never strand the hub's only thread.
+                // Never a SemaphoreSlim — this runs ON the action block, which is the one place a
+                // hand-rolled async gate deadlocks by construction.
+                .WithHandler<ParkRequest>((_, d) =>
+                {
+                    try
+                    {
+                        parked.OnNext(Unit.Default);
+                        parked.OnCompleted();
+                        SpinWait.SpinUntil(
+                            () => Volatile.Read(ref release) == 1, TimeSpan.FromSeconds(30));
+                    }
+                    finally
+                    {
+                        Volatile.Write(ref release, 1);
+                    }
+                    return d.Processed();
+                })
                 .AddData(data => data.AddSource(source =>
                     source.WithType<Item>(type => type
                         .WithKey(i => i.Id)
@@ -96,11 +144,35 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
         // posted after it, from the same sender to the same target, is dequeued INSIDE the window
         // by construction. No poll, no sleep, no sampled property — and no wait that could fall
         // through and let the test assert against a hub that never started disposing.
+        // 🚨 OCCUPY THE BLOCK FIRST (#3827). The ordering above was stated as holding "by
+        // construction" and did not: the read was posted AFTER DisposeRequest, so its
+        // ScheduleNotify raced the ShutdownRequest that Dispose() posts from inside that handler.
+        // Whichever won decided the outcome — if ShutdownRequest was handled first the RunLevel had
+        // already reached Quiescing and the read was refused at INTAKE, naming the run level instead
+        // of the stream-creation refusal this test is about. Measured 1 in 4 on unmodified main.
+        //
+        // The premise was true when it was written and #3506 removed it: the intake gate used to
+        // open one phase too late, so "message intake stays open until DisposeHostedHubs" was a
+        // real guarantee. QuiescingHubRefusesNewWorkTest now describes that same sentence as the
+        // defect it fixed — two tests on one main, and only one of them could be right.
+        //
+        // With the block occupied, both posts below are ENQUEUED before any disposal work is
+        // handled, and FIFO then fixes the order for good: DisposeRequest → the read →
+        // ShutdownRequest. The read is therefore dequeued with creation already frozen (CloseCreation
+        // is synchronous inside Dispose, before it posts anything) and the run level still Started.
+        host.Post(new ParkRequest(), o => o.WithTarget(OwnerAddress));
+        await parked.Should().Within(30.Seconds()).Emit(
+            "PRECONDITION: the park must OWN the action block before anything else is posted — "
+            + "without that the queue order is exactly the race this test is fixing");
+
         host.Post(new DisposeRequest(), o => o.WithTarget(OwnerAddress));
 
-        // THE READ UNDER TEST. Creation is frozen, so building the reference's stream throws
-        // HubDisposingException — the exact production fault #1470 is about.
-        var answer = await host
+        // THE READ UNDER TEST. Creation is frozen by the time it is handled, so building the
+        // reference's stream throws HubDisposingException — the exact production fault #1470 is
+        // about. Subscribed (which is what POSTS it) before the release, awaited after: awaiting
+        // first would block this thread and the park would never be let go.
+        var answers = new AsyncSubject<object?>();
+        using var reading = host
             .Observe<GetDataResponse>(
                 new GetDataRequest(new CollectionReference(nameof(Item))),
                 o => o.WithTarget(OwnerAddress))
@@ -108,7 +180,12 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
             // A DeliveryFailure arrives as OnError (DeliveryFailureException) — turn it into a
             // value so ONE assertion covers both shapes and a hang is the only other outcome.
             .Catch<object?, Exception>(ex => Observable.Return<object?>(ex))
-            .Should().Within(30.Seconds()).Emit();
+            .Take(1)
+            .Subscribe(answers);
+
+        Volatile.Write(ref release, 1);
+
+        var answer = await answers.Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"[TEST] answer: {answer} (owner IsShuttingDown={owner.IsShuttingDown}, RunLevel={owner.RunLevel})");
 
         // The window was real — read AFTER the fact, so this is a statement about what happened,
