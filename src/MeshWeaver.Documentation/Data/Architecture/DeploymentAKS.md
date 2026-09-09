@@ -270,6 +270,38 @@ above 1, and `strategy.maxUnavailable: 0` under KEDA. Every input is in this rep
 runs unconditionally on every pull request (`.github/workflows/chart-gate.yml`) — no secret to be
 absent means no condition under which it may decline to run.
 
+## Node drains — the disruption budget and where the replicas sit
+
+An AKS node-pool operation (node image upgrade, OS patching, autoscaler consolidation) cordons a
+node and **evicts** its pods through the eviction API, one node after another. Two facts decide
+what the portal's users see while that happens:
+
+- **The eviction API honours a `PodDisruptionBudget`, and nothing else.** The chart renders
+  `memex-portal-pdb` with `maxUnavailable: 1` whenever the replica floor is two or more —
+  `keda.minReplicas` under autoscaling, `replicas.portal` otherwise. Under it a drain evicts one
+  pod, waits until the Deployment has a replacement Ready, then evicts the next.
+  `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` speaks only to the autoscaler's
+  bin-packing; a drain ignores it.
+- **A budget cannot help when "the other pod" is on the same node.** The pod template declares a
+  *preferred* `podAntiAffinity` on `kubernetes.io/hostname`, so two replicas land on two nodes
+  when two are schedulable and still schedule when only one is (a drained node's replacement has
+  to land on the survivor).
+
+🚨 **Measured 2026-09-09 (MeshWeaver#3772):** memex ran `replicas.portal: 2` with **no budget** —
+`pdb.yaml` was gated on `keda.enabled`, and memex's helm-release lane renders the vault values
+plus `values.memex.public.yaml`, never `deploy/aks/values.aks.yaml` where KEDA is on. Both pods
+sat on one node; a drain at 01:05:01Z shut both down in the same second and the portal answered
+503 until a replacement passed the startup gate (~90 s). Reading it needed the *cluster-wide*
+log — pods in three namespaces stopping together — because inside the memex namespace it looked
+like a rollout that changed nothing. `check-chart-invariants.py` now refuses a floor above one
+with no budget (invariant 11) or no spreading (invariant 12); before, it only asked whether a
+budget that exists has replicas under it.
+
+Loki loses whatever its ingester had not flushed when `loki-0` itself is drained (the 01:05Z lines
+were readable at 01:08Z and gone at 01:11Z) — read a cluster-wide incident promptly, and see the
+header of `deploy/aks/scripts/values.observability.yaml` for what the loki-stack chart can and
+cannot persist.
+
 ## Self-update ops — pausing, pinning, and the rules that bite
 
 Operational facts about the in-pod updater (learned the hard way — each cost a debugging session):

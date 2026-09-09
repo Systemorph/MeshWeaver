@@ -34,6 +34,8 @@
 #   8. every values key the platform must let a deploy set is actually RENDERED, and never blank
 #   9. a key whose consumer parses it must never render BLANK   absent is fine; blank throws at bind
 #  10. readiness and liveness probe DIFFERENT paths           one path cannot answer two questions
+#  14. a replica floor > 1 implies a PDB                     or one node drain evicts every replica at once
+#  15. a replica floor > 1 implies anti-affinity / spread    or every replica shares one node
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -101,6 +103,12 @@ COMBOS=(
   # that renders the `bundle-fetch` init container, its shelf, its script and the projected pull
   # secret. Invariant 13 asserts the shelf is the pre-warm's root and the credential is the pod's.
   "mirror consumer + bundles from the fleet registry (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.mirror-consumer.yaml:deploy/aks/scripts/testdata/values.bundle-fetch.yaml"
+  # The memex.systemorph.com shape (MeshWeaver#3772): TWO PLAIN REPLICAS with KEDA OFF. Its lane
+  # renders the vault values plus its own overlay — never values.aks.yaml — so this is the only
+  # combination here with a replica floor above one and no ScaledObject. Until 2026-09-09 it
+  # rendered NO PodDisruptionBudget (pdb.yaml was gated on keda.enabled) and invariants 14/15 did
+  # not exist: an AKS node drain evicted both pods in the same second, 503 for ~90 s.
+  "two plain replicas, KEDA off (the memex shape)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.two-replicas-no-keda.yaml"
 )
 
 WORK="$(mktemp -d)"

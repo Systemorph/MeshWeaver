@@ -78,6 +78,24 @@ spec:
       # complaint this closes. Grains follow the same budget for free — MessageHubGrain is
       # [PreferLocalPlacement], so a circuit's hubs live on the pod serving that circuit, and a pod
       # that stays alive keeps them running against the code they activated with.
+      # 🚨 Two replicas on ONE node are one replica for every purpose that matters
+      # (MeshWeaver#3772): an AKS node drain evicted both memex pods in the same second on
+      # 2026-09-09 and the portal answered 503 until a replacement passed the startup gate.
+      # PREFERRED, not required: with two schedulable nodes the replicas land on two nodes; with
+      # one (a drained node's replacement has to land on the survivor) the pod still schedules
+      # instead of sitting Pending — the PodDisruptionBudget (pdb.yaml) is what then throttles the
+      # NEXT eviction to one pod at a time, so the survivor keeps serving while its twin moves.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: "{{ .Chart.Name }}"
+                    app.kubernetes.io/component: "memex-portal"
+                    app.kubernetes.io/instance: "{{ .Release.Name }}"
       terminationGracePeriodSeconds: {{ .Values.portal.drainSeconds | default 1800 }}
       initContainers:
         # Postgres and the portal start concurrently on a fresh install; the portal's hub

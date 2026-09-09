@@ -153,6 +153,32 @@ if pdb is not None:
             "the floor in the same change that introduces the budget.",
         )
 
+# ---- 14./15. a floor > 1 must be PROTECTED (MeshWeaver#3772) -----------------
+# The converse of 6. memex ran `replicas.portal: 2` with NO budget for weeks — pdb.yaml was gated
+# on keda.enabled, which memex's overlay never set — and an AKS node drain on 2026-09-09 evicted
+# both pods in the same second (503 for ~90 s). Invariant 6 was green throughout: it only asked
+# whether a budget that IS rendered has a floor under it.
+checks += 1
+if floor > 1 and pdb is None:
+    finding(
+        f"the replica floor is {floor} but no PodDisruptionBudget is rendered",
+        "without a budget the eviction API may take every replica at once — one node drain "
+        "shut down both memex pods in the same second on 2026-09-09. Render memex-portal-pdb "
+        "(maxUnavailable: 1) whenever the floor is two or more, KEDA or not.",
+    )
+checks += 1
+if floor > 1:
+    anti = ((pod.get("affinity") or {}).get("podAntiAffinity")) or {}
+    spread = pod.get("topologySpreadConstraints") or []
+    if not anti and not spread:
+        finding(
+            f"the replica floor is {floor} but the pod template declares neither podAntiAffinity "
+            "nor topologySpreadConstraints",
+            "nothing stops the scheduler from co-locating every replica on one node, where one "
+            "drain or one node failure takes them all — a budget cannot help when 'the other "
+            "pod' shares the host. Declare a preferred podAntiAffinity on kubernetes.io/hostname.",
+        )
+
 # ---- 7. surge-first rolls ---------------------------------------------------
 checks += 1
 if scaled is not None:
