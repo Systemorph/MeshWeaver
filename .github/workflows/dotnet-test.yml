@@ -410,9 +410,8 @@ jobs:
     - name: "This diff does not shrink what the surface detector can see"
       env:
         EVENT: ${{ github.event_name }}
-        # A pull-request body is attacker-controlled text: it reaches the script through a FILE
-        # written from the environment, never interpolated into a shell command.
-        PR_BODY: ${{ github.event.pull_request.body }}
+        # Read corrected declarations on reruns; keep the body as file data, never shell text.
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         # Already fetched above; repeated explicitly so the steps can be reordered.
@@ -424,7 +423,8 @@ jobs:
         echo "Comparing against merge base $base"
         args=(--base "$base")
         if [ "$EVENT" = "pull_request" ]; then
-          printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+          python3 scripts/test-read-current-pr-body.py
+          python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
           echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes — a declared decrease can be honoured."
           args+=(--pr-body-file "$RUNNER_TEMP/pr-body.md")
         else
@@ -2531,14 +2531,15 @@ jobs:
     - name: "Prove the pair gate is not vacuous (self-test)"
       run: python3 scripts/check-cross-repo-pair.py --self-test
 
-    # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
-    # never interpolated into a shell command.
+    # The event body is frozen at run creation, even on reruns. Read the current declaration
+    # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
-        PR_BODY: ${{ github.event.pull_request.body }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/test-read-current-pr-body.py
+        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Report the public surface this diff removes"
@@ -2617,14 +2618,15 @@ jobs:
     - name: "Prove the pin gate is not vacuous (self-test)"
       run: python3 scripts/check-package-pin-removal.py --self-test
 
-    # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
-    # never interpolated into a shell command.
+    # The event body is frozen at run creation, even on reruns. Read the current declaration
+    # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
-        PR_BODY: ${{ github.event.pull_request.body }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/test-read-current-pr-body.py
+        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Every removed PackageVersion is declared"
@@ -2701,14 +2703,15 @@ jobs:
     - name: "Prove the interface-addition gate is not vacuous (self-test)"
       run: python3 scripts/check-interface-addition.py --self-test
 
-    # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
-    # never interpolated into a shell command.
+    # The event body is frozen at run creation, even on reruns. Read the current declaration
+    # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
-        PR_BODY: ${{ github.event.pull_request.body }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/test-read-current-pr-body.py
+        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Report the public surface this diff adds"
@@ -2764,8 +2767,8 @@ jobs:
     #   * the self-test runs FIRST and fails this job — an unproven gate is no gate;
     #   * no path filter — a pull request that touches nothing else would otherwise "pass" by not
     #     running, and the catalog is exactly what such a pull request edits;
-    #   * no `continue-on-error:` and no `if:` asking whether a secret is set — this gate needs NO
-    #     credential at all, which is why it also runs on FORK pull requests. The one exemption is
+    #   * no `continue-on-error:` and no `if:` asking whether a secret is set — the metadata read
+    #     uses the built-in token, so it also runs on FORK pull requests. The one exemption is
     #     on the EVENT: `merge_group` carries no pull-request body, and a pull request cannot reach
     #     the queue without this job green, since it is a `needs:` of the required check;
     #   * a CONTROL ARM on the denominator: the catalogs hold 1399 keys each, and a reader that
@@ -2791,14 +2794,15 @@ jobs:
     - name: "Prove the mirror-sync gate is not vacuous (self-test)"
       run: python3 scripts/check-i18n-mirror-sync.py --self-test
 
-    # A pull-request body is attacker-controlled text: it goes to a FILE through the environment,
-    # never interpolated into a shell command.
+    # The event body is frozen at run creation, even on reruns. Read the current declaration
+    # through REST and verify it still belongs to the event head. It stays file data throughout.
     - name: Capture the pull-request body
       env:
-        PR_BODY: ${{ github.event.pull_request.body }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        printf '%s' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.md"
+        python3 scripts/test-read-current-pr-body.py
+        python3 scripts/read-current-pr-body.py --output "$RUNNER_TEMP/pr-body.md"
         echo "Pull-request body: $(wc -c < "$RUNNER_TEMP/pr-body.md") bytes."
 
     - name: "Every catalog change hands the mirror sync over"
