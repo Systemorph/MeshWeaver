@@ -506,6 +506,20 @@ emits "a dry run still audits (read-only)" "::hosting:: audit_verdict=clean" \
   env HOSTING_DRY_RUN=true PATH="$STUBS:$PATH" HOSTING_AUDIT_FIXTURE="$FIXTURES/clean" \
   hosting-audit --namespace memex --release memex
 
+# ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
+# The manifest lives three directories away from the scripts and is reviewed separately; twice a
+# script reached main without its grant (storageclasses for pv-resize — failed the first Reconcile
+# through the fixed operator on memex, 2026-09-09, step 1/6 Forbidden; persistentvolumes for
+# pv-purge — never granted). The check names the script, the verb, the resource and the rule to
+# add. Its manifest input is REQUIRED: absent (as in an image without deploy/aks/manifests) it
+# exits 2 and this case is red, never skipped — mount the manifests dir and set HOSTING_RBAC_MANIFEST.
+rbac_out="$(bash "$(dirname -- "${BASH_SOURCE[0]}")/check-rbac-coverage.sh" 2>&1)"; rbac_rc=$?
+if [ "$rbac_rc" -eq 0 ]; then
+  ok "every kubectl verb+resource in bin/ is granted by operator-rbac.yaml ($(printf '%s' "$rbac_out" | tail -1 | sed 's/^check-rbac-coverage: //'))"
+else
+  bad "every kubectl verb+resource in bin/ is granted by operator-rbac.yaml" "$rbac_out"
+fi
+
 echo
 echo "─────────────────────────────────────────────────────────────────"
 echo "${pass} passed, ${fail} failed"

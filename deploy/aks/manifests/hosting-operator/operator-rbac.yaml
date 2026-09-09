@@ -10,6 +10,20 @@
 #  * NO access to `nodes`, `clusterroles`, or the monitoring namespace — a lifecycle run has no
 #    business there, and the day someone needs it is the day to review this file, not to widen it
 #    pre-emptively.
+#
+# 🚨 HOW THIS FILE REACHES THE CLUSTER. It is applied by the config repo's helm-release lane
+# (Systemorph/Memex `helm-release.yml`, actions adopt and deploy) from THIS repository at the
+# same pin the lane renders the chart from — so a grant and the operator step that needs it move
+# together. It is NOT applied by the operator (a Job must never widen its own ClusterRole) and no
+# longer by a laptop. Measured 2026-09-09 on memex: the `storageclasses` rule below had been on
+# main since the volume-capacity step landed, the cluster's ClusterRole predated it, and the first
+# record-driven Reconcile through the fixed operator stopped at step 1/6 with
+#   storageclasses.storage.k8s.io "azurefile-memex" is forbidden: User
+#   "system:serviceaccount:memex-ops:hosting-operator" cannot get resource "storageclasses"
+# A grant that only a laptop can move is the same defect as an operator image that only a laptop
+# can move (core #3757 / Plugins #1542): the record and the chart are the inputs, and every one of
+# them needs a lane. deploy/aks/operator/test/check-rbac-coverage.py holds the other half — every
+# kubectl verb+resource a bin/ script names must be granted here, or the suite is red.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -64,11 +78,21 @@ rules:
   # READ-ONLY, for hosting-pv-resize. The storage class decides whether a claim can grow
   # (allowVolumeExpansion); the command reads it BEFORE patching, and refuses a class that cannot
   # expand rather than leaving a request in Pending forever. The patch itself is the
-  # persistentvolumeclaims grant above. Re-apply this file when adopting the feature — a Forbidden
-  # here fails the "Ensure volume capacity" step of every Provision / Reconcile by name.
+  # persistentvolumeclaims grant above. A Forbidden here fails the "Ensure volume capacity" step
+  # of every Provision / Reconcile by name (measured 2026-09-09, see the header).
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get"]
+  # For hosting-pv-purge, the Teardown step that releases the Retain-policy PersistentVolumes a
+  # deleted namespace leaves behind. PVs are cluster-scoped, so this is the one cluster-scoped
+  # DELETE in the file; the script lists by the claim's namespace label, reads each PV's phase,
+  # reclaim policy and share handle, and deletes only a Released volume. Without this grant the
+  # purge step fails by name ("could not list PersistentVolumes") — which is the designed
+  # fail-loud shape, but it means a Teardown could never complete. Added 2026-09-09 when the
+  # coverage check below was written; the script had been on main without its grant.
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
