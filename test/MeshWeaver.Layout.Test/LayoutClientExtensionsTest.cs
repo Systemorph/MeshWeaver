@@ -16,37 +16,50 @@ public class LayoutClientExtensionsTest(ITestOutputHelper output) : HubTestBase(
         return base.ConfigureHost(config);
     }
 
-    [Fact]
-    public void ConvertSingle_CollectionLabel_MatchesItsSerializedValue()
+    /// <summary>
+    /// 🚨 A value that is not <see cref="IConvertible"/> must not END THE BINDING (#3764).
+    ///
+    /// <para>The conversion chain used to finish at <c>Convert.ChangeType</c>, which throws
+    /// <c>InvalidCastException</c> ("Object must implement IConvertible") for a
+    /// <see cref="JsonElement"/>. The whole chain runs inside the binding's Rx <c>Select</c>, so that
+    /// exception did not fail one emission — it terminated the subscription, and the control stopped
+    /// updating for the rest of its life. A Label bound to a `gates` value died exactly this way and
+    /// never loaded.</para>
+    ///
+    /// <para>These cases are the ones that used to throw. Each asserts a VALUE, so the test would
+    /// still fail if the fix degraded everything to default instead of converting what it can.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("\"hello\"", "hello")]              // a JSON string reads as its text, not its quoting
+    [InlineData("{\"a\":1}", "{\"a\":1}")]            // a structured value in a scalar slot shows what it was given
+    [InlineData("[1,2]", "1, 2")]        // an array already had a reading; it renders its members
+    public void ConvertSingle_JsonElementToString_ConvertsInsteadOfThrowing(string rawJson, string expected)
     {
         var hub = GetHost();
-        object[] values =
-        [
-            new[] { "Initialize", "MeshNodeInit" },
-            new System.Collections.Generic.List<int> { 1, 2, 3 },
-            new System.Collections.Generic.Dictionary<string, int> { ["pending"] = 2 },
-            System.Text.Json.Nodes.JsonNode.Parse("[\"Initialize\",\"MeshNodeInit\"]")!,
-            System.Text.Json.Nodes.JsonNode.Parse("{\"pending\":2}")!
-        ];
-        foreach (var value in values)
-        {
-            var serialized = JsonSerializer.SerializeToElement(value, hub.JsonSerializerOptions);
-            var expected = hub.ConvertSingle<string>(serialized, null);
-            expected.Should().NotBeNullOrEmpty();
-            hub.ConvertSingle<string>(value, null).Should().Be(expected,
-                "a label must render the same value before and after transport serialization");
-        }
+        var element = JsonDocument.Parse(rawJson).RootElement;
+
+        var result = hub.ConvertSingle<string>(element, null);
+
+        result.Should().Be(expected,
+            "a JsonElement is not IConvertible, and reaching Convert.ChangeType with one threw an "
+            + "exception that tore down the binding subscription rather than failing one emission");
     }
 
+    /// <summary>
+    /// The other half: a value that genuinely has no reading as <typeparamref name="T"/> degrades to
+    /// the default rather than throwing. A control rendering its default is a bounded, visible loss;
+    /// a dead binding is an unbounded, invisible one.
+    /// </summary>
     [Fact]
-    public void ConvertSingle_GateNames_RenderAsReadableText()
+    public void ConvertSingle_NonConvertibleValue_DegradesInsteadOfThrowing()
     {
         var hub = GetHost();
-        hub.ConvertSingle<string>(new[] { "Initialize", "MeshNodeInit" }, null)
-            .Should().Be("Initialize, MeshNodeInit");
-        hub.ConvertSingle<string>(Array.Empty<string>(), null).Should().BeEmpty();
-        hub.ConvertSingle<string>(Guid.Parse("01234567-89ab-cdef-0123-456789abcdef"), null)
-            .Should().Be("01234567-89ab-cdef-0123-456789abcdef");
+
+        var result = hub.ConvertSingle<int>(new object(), null);
+
+        result.Should().Be(0,
+            "an un-convertible emission must not raise out of the binding's Select — that ends the "
+            + "subscription and the control never updates again");
     }
 
     [Fact]
