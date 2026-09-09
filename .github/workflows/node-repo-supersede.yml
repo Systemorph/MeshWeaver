@@ -27,6 +27,23 @@ on:
         required: false
         type: string
         default: main
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
+          compose scripts and mergers under .github/scripts that the lane itself runs). Distinct from
+          `platform-ref`, which names the PLATFORM the caller builds against (compile references,
+          images, core source). Empty (the default) means "the same as platform-ref" — right for a
+          caller that pins the lane and the platform to one commit. A caller that pins NOTHING
+          (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
+          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
+          (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
+          (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
+          reusable called from another repository (measured 2026-08-30), so the lane's own ref is an
+          input, never inferred.
+        required: false
+        type: string
+        default: ''
       protected-jobs:
         description: >-
           Regex over the CALLER-JOB segment of job names (the text before " / "; a plain job
@@ -52,15 +69,16 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Fetch the platform's supersede script at the pinned ref
+      # The lane's SCRIPTS ref (`scripts-ref`, falling back to platform-ref) — MeshWeaver#3842.
+      - name: Fetch the platform's supersede script at the lane's scripts ref
         env:
           GH_TOKEN: ${{ github.token }}
-          PLATFORM_REF: ${{ inputs.platform-ref }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
         run: |
           set -euo pipefail
-          [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the script has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/supersede-main-runs.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/supersede-main-runs.py"
-          [ -s "$RUNNER_TEMP/supersede-main-runs.py" ] || { echo "::error::fetched an EMPTY supersede-main-runs.py at ${PLATFORM_REF}"; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the script has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/supersede-main-runs.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/supersede-main-runs.py"
+          [ -s "$RUNNER_TEMP/supersede-main-runs.py" ] || { echo "::error::fetched an EMPTY supersede-main-runs.py at ${SCRIPTS_REF}"; exit 1; }
       - name: The decision can say no (self-test)
         run: python3 "$RUNNER_TEMP/supersede-main-runs.py" --self-test
       - name: Cancel the runs this push supersedes
