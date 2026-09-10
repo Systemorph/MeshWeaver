@@ -12,11 +12,11 @@ MAUI all reach one endpoint. The mesh side is `MeshWeaver.Speech` (`WhisperConta
 
 ```bash
 cd deploy/whisper
-# 1. Fetch the Swiss-German model (~547 MB) into ./models/ (same file the on-device client downloads):
+# 1. Fetch the Swiss-German model (~547 MB) into ./models/ — a BUILD INPUT, baked into the image.
 mkdir -p models
 # Model on the PRIVATE MeshWeaver.Plugins repo (moved 2026-08-28) — requires gh auth.
 gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins --pattern 'ggml-swiss-german-turbo-q5_0.bin' --output models/model.bin
-# 2. Build + start the container:
+# 2. Build + start the container (step 1 is not optional — the build fails naming the file without it):
 docker compose up --build -d
 # 3. Smoke-test with any WAV (16 kHz mono is ideal):
 curl -F file=@sample.wav -F language=de -F response_format=json http://localhost:8080/inference
@@ -31,8 +31,20 @@ Then point the portal at it (appsettings or the portal's Speech settings):
 
 ## Notes
 
-- **Model is mounted, not baked** — the image stays small and the (large, swappable) model lives in
-  `./models/`. Swap in `ggml-base.bin` / `ggml-large-v3-turbo.bin` to trade Swiss-German accuracy for size.
+- **Model is BAKED, not mounted** — the image carries `/models/model.bin`, and the image registry the
+  cluster already authenticates to is what distributes it. That is deliberate and it is the fix for
+  [#3906](https://github.com/Systemorph/MeshWeaver/issues/3906): the chart used to fetch the model with an
+  anonymous `curl` from a GitHub release on the core repo,
+  [#2593](https://github.com/Systemorph/MeshWeaver/issues/2593) moved that asset to the private
+  MeshWeaver.Plugins repo without moving the pin, and every pod then died in `Init:Error` on a 404. The
+  model is a **CC BY-NC-4.0** derivative, so republishing it for anonymous download is not available as a
+  fix — see [Voice model distribution](../../src/MeshWeaver.Documentation/Data/Architecture/VoiceModelDistribution.md)
+  for that decision and the two rejected alternatives. Expected asset: 574,041,195 bytes,
+  `sha256 2d56e773724a247360067b527417842b81d25ff891fed014341a6844f15ea612` (the build prints what it baked).
+  🚨 Never bind-mount a volume over `/models` — an empty one shadows the baked model.
+- **Swapping the model** — put a different GGML file at `models/model.bin` and rebuild (`ggml-base.bin` /
+  `ggml-large-v3-turbo.bin` trade Swiss-German accuracy for size). The build asserts only that the file is
+  big enough to be a model at all, so a swap needs no code change; the image tag is yours to choose.
 - **Language `de`** transcribes Swiss German *out as Standard German* (the model was trained that way);
   `auto` detects mixed de/fr/it at some dialect-accuracy cost.
 - **GPU**: this Dockerfile is CPU (portable). For throughput, build whisper.cpp with CUDA/Vulkan and add the

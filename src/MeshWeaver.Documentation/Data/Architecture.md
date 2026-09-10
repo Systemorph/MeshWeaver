@@ -198,6 +198,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Foreign-Language & Cross-Platform Integration](ForeignLanguageIntegration)
 - [Model Providers and BYO Credentials](ModelProviders)
 - [On-device voice — Whisper + Swiss German](OnDeviceVoice)
+- [Voice model distribution — where a 547 MB CC BY-NC model may live](VoiceModelDistribution)
 - [Python Code Nodes](PythonCodeNodes)
 - [Script Execution — Try It](ScriptExecutionDemo)
 - [Sending Email](SendingEmail)
