@@ -19,10 +19,12 @@ namespace MeshWeaver.Compiler.Pipeline.Test;
 /// <c>lsp_check_node @BinaryClickerV2/BinaryToggle</c> with <c>proposedCode</c> =
 /// <c>"this is definitely not valid C# ###"</c> answered <c>{"ok":true,"diagnostics":[]}</c>. Not a
 /// wrong verdict about the code — no verdict at all, wearing the costume of a clean one. The
-/// NodeType lives in a partition that identity has no read grant on, so nothing was ever compiled;
-/// <c>CheckSpeculative</c> mapped BOTH of its no-answer branches (owner unresolvable, and no
-/// compilation inputs) to <c>Array.Empty&lt;DiagnosticInfo&gt;()</c>, which is byte-identical to
-/// what a clean compile produces.</para>
+/// NodeType lives in a partition that identity has no read grant on — a read validator HIDES such a
+/// node, and a filtered node is invisible to the reader by contract — so nothing was ever compiled,
+/// and <c>CheckSpeculative</c> mapped that to <c>Array.Empty&lt;DiagnosticInfo&gt;()</c>, which is
+/// byte-identical to what a clean compile produces. (The issue listed a second silent branch, "no
+/// compilation inputs". It is unreachable from this path — see
+/// <see cref="ANodeThatIsNotANodeTypeIsGenuinelyCheckedAsAScript"/>.)</para>
 ///
 /// <para><b>Why it is the worst shape available.</b> The <c>/code</c> skill's edit loop is built on
 /// this call — <i>"edit a Source/*.cs file in your head → lsp_check_node → if diagnostics, fix →
@@ -205,6 +207,71 @@ public class SpeculativeCheckCannotAnswerGreenForAnUncheckedNodeTest(ITestOutput
             "text that cannot parse as C# must produce Roslyn errors; a check that answers empty "
             + "here is the #3888 defect wearing a resolvable path");
         outcome.IsClean.Should().BeFalse();
+    }
+
+    // ───────────────── the arm no live mesh can arrange: a read that did not answer
+
+    /// <summary>
+    /// 🚨 <b>The arm a live-mesh test cannot reach, and therefore the one a regression would put
+    /// back on <c>Compiled</c> unnoticed</b> (Copilot review on #3912). A wedged per-node hub is not
+    /// something a monolith test can arrange on demand — the read's budget is 15 s and the outcome
+    /// depends on an owner that will not answer — so the mapping is driven directly instead, over
+    /// the LIVE enum.
+    ///
+    /// <para>The assertion is deliberately stronger than "Unavailable maps to Unavailable": <b>no</b>
+    /// read that produced no node may read as compiled, <i>including a
+    /// <see cref="NodeReadStatus"/> added later</i>. A per-value test would go silent on a new
+    /// status; enumerating the enum makes the next one arrive as a red instead of as a hole.</para>
+    /// </summary>
+    [Fact]
+    public void NoReadThatProducedNoNodeMayReadAsCompiled()
+    {
+        foreach (var status in Enum.GetValues<NodeReadStatus>())
+        {
+            var mapped = MeshNodeLanguageService.NothingWasChecked(
+                new NodeReadOutcome { Status = status, Failure = new TimeoutException("owner silent") });
+
+            mapped.Status.Should().NotBe(NodeDiagnosticsStatus.Compiled,
+                "a read that produced no node compiled nothing, so status {0} must not render as a "
+                + "verdict about the proposed source", status);
+            mapped.IsClean.Should().BeFalse(
+                "IsClean is what lsp_check_node renders as ok; status {0} must not read as approval",
+                status);
+        }
+    }
+
+    /// <summary>
+    /// The wedged-owner arm specifically, and that the CAUSE survives to the caller — a refusal
+    /// naming neither the path nor the reason is only a differently-shaped dead end.
+    /// </summary>
+    [Fact]
+    public void AnOwnerThatDidNotAnswerIsUnavailable_AndTheReasonSurvives()
+    {
+        var failure = new TimeoutException("the owning hub did not answer within the budget");
+
+        var mapped = MeshNodeLanguageService.NothingWasChecked(NodeReadOutcome.Unavailable(failure));
+
+        mapped.Status.Should().Be(NodeDiagnosticsStatus.Unavailable,
+            "a hub that did not answer is not a hub that answered 'fine' — this is the case that "
+            + "makes the pre-flight a gate rather than a nicety");
+        mapped.IsClean.Should().BeFalse();
+        mapped.Failure.Should().BeSameAs(failure, "the cause is what makes the refusal actionable");
+        mapped.DescribeProblem("type/Wedged")!.Should().Contain("type/Wedged");
+        mapped.DescribeProblem("type/Wedged")!.Should().Contain(failure.Message);
+    }
+
+    /// <summary>
+    /// And the OTHER direction of the same mapping, so it cannot pass by answering `Unavailable` to
+    /// everything: a delete in flight is <see cref="NodeDiagnosticsStatus.Absent"/>, because the
+    /// next authoritative answer for that path is "gone" and never "here again".
+    /// </summary>
+    [Fact]
+    public void ADeleteInFlightReadsAbsent_NotUnavailable()
+    {
+        MeshNodeLanguageService.NothingWasChecked(NodeReadOutcome.DeleteInProgress)
+            .Status.Should().Be(NodeDiagnosticsStatus.Absent,
+                "the node is on its way out — 'the read failed' would send the caller retrying "
+                + "something that is deliberately disappearing");
     }
 
     // ────────────────────────────────────── the split is deliberate, and stays

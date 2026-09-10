@@ -114,7 +114,7 @@ Two tools are exposed via `McpMeshPlugin` for external MCP clients (`lsp_check_n
 
 `[]` is what a clean compile looks like. It is *also* what "I could not resolve that path" looks like, and what "the owning hub never answered" looks like. Nothing in an `IReadOnlyList<DiagnosticInfo>` separates them, so a tool rendering `ok = !diagnostics.Any(Error)` reports a **clean bill of health for a check that never ran**.
 
-| | Fixed in | The symptom |
+| Method | Fixed in | The symptom |
 |---|---|---|
 | `GetDiagnostics` | #1592 / #1618 | `lsp_diagnostics_for_node @Edu/DefinitelyNotARealNodeType` → `{"ok":true,"diagnostics":[]}`; the mandated pre-prod sweep reported all-green over stale paths having verified nothing |
 | `CheckSpeculative` | #3888 | `lsp_check_node` on a NodeType in a partition the caller cannot read → `{"ok":true,"diagnostics":[]}` — **including for `proposedCode` that is not C# at all**; the `/code` edit loop's pre-flight blessed every proposed edit against every path it could not reach |
@@ -140,6 +140,17 @@ The interface member carries a **default implementation that answers `Unavailabl
 > **What #3888 also corrected about its own reading of the code.** The issue named *two* silent branches and could not say which produced the live observation. It can only have been the unresolvable-owner one: the other — `GetCompilationInputsAsync` answering `null` — is unreachable from the speculative path, because that method refuses exactly one shape (a node whose `NodeType` is unset) and such a node is classified as a **script** here, never as a NodeType. The `NotCompilable` mapping stays as the honest reading of a nullable contract, and the test suite says so rather than pinning a branch that could never fail.
 
 The controls live in `test/MeshWeaver.Compiler.Pipeline.Test/SpeculativeCheckCannotAnswerGreenForAnUncheckedNodeTest.cs` and run **in both directions**: an unresolvable path must not read clean, *and* a real NodeType must still compile its proposal and report errors when the proposal is broken. A fix that made everything fail would be no better than one that made everything pass. See [Controls That Cannot Fail](/Doc/Architecture/ControlsThatCannotFail).
+
+> **One arm no live-mesh test can reach — and what to do about it.** The wedged-owner case
+> (`NodeReadStatus.Unavailable`) cannot be arranged on demand: the read's budget is 15 s and the
+> outcome depends on an owner that will not answer. An arm with no control is precisely where a
+> regression would put `Compiled` back unnoticed, so the mapping is **extracted** —
+> `MeshNodeLanguageService.NothingWasChecked(NodeReadOutcome)`, the whole decision rather than a
+> fragment, the same idiom as `CanReuseWorkspace` — and driven directly over
+> `Enum.GetValues<NodeReadStatus>()`. The invariant that gets asserted is deliberately stronger than
+> per-value equality: **no** read that produced no node may render as `Compiled`, *including a status
+> added later*. A per-value test would go silent on a new status; enumerating the enum makes the next
+> one arrive as a red instead of as a hole.
 
 ## The /code Pre-Flight Loop
 
