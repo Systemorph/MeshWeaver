@@ -842,8 +842,12 @@ public static class MeshExtensions
                     //     posted by the one code path that already knows how.
                     .SelectMany(_ => SystemOwnedGrantRejection(hub, node))
                     .SelectMany(grantRejection => grantRejection is not null
+                        // 🚨 English only, and NOT an oversight: CreateNodeResponse.Fail carries no
+                        // ActivityLog, so this path has no keyed surface to render into. Giving the
+                        // create leg a transcript is the follow-up MeshWeaver#3917 names; until then
+                        // the refusal's key travels no further than here.
                         ? Observable.Return<(string? ErrorMessage, NodeCreationRejectionReason Reason)?>(
-                            (grantRejection, NodeCreationRejectionReason.ValidationFailed))
+                            (grantRejection.English, NodeCreationRejectionReason.ValidationFailed))
                         : RunCreationValidatorsObs(hub, node, capturedRequest))
                     .SelectMany(validationError =>
                     {
@@ -3972,32 +3976,29 @@ public static class MeshExtensions
     /// builders, and as <c>JsonElement</c> over the wire — and a shape test that misses would read
     /// "no roles", i.e. silently allow exactly what this guard exists to refuse.</para>
     /// </summary>
-    private static IObservable<string?> SystemOwnedGrantRejection(IMessageHub hub, MeshNode node)
+    private static IObservable<LocalizableText?> SystemOwnedGrantRejection(IMessageHub hub, MeshNode node)
     {
         if (!string.Equals(node.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType,
                 StringComparison.OrdinalIgnoreCase))
-            return Observable.Return<string?>(null);
+            return Observable.Return<LocalizableText?>(null);
 
         var scope = AccessAssignmentGuard.ScopeFromPath(node.Path);
         if (string.IsNullOrEmpty(scope))
-            return Observable.Return<string?>(null);
+            return Observable.Return<LocalizableText?>(null);
 
         var assignment = node.ContentAs<AccessAssignment>(hub.JsonSerializerOptions);
         if (!AccessAssignmentGuard.ConfersWriteAccess(assignment))
-            return Observable.Return<string?>(null);
+            return Observable.Return<LocalizableText?>(null);
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
-            return Observable.Return<string?>(null);
+            return Observable.Return<LocalizableText?>(null);
 
         var partition = AccessAssignmentGuard.PartitionOf(scope);
         return ReadNodeAuthoritative(hub, persistence, $"{partition}/_GitSync")
-            .Select(sync => AccessAssignmentGuard.IsForbiddenOnSystemOwned(
+            .Select(sync => AccessAssignmentGuard.SystemOwnedRefusal(
                 node, assignment,
-                systemOwned: AccessAssignmentGuard.IsSystemOwned(sync, hub.JsonSerializerOptions),
-                out var reason)
-                ? reason
-                : null);
+                systemOwned: AccessAssignmentGuard.IsSystemOwned(sync, hub.JsonSerializerOptions)));
     }
 
     /// <summary>
@@ -4568,7 +4569,10 @@ public static class MeshExtensions
 
         if (string.IsNullOrWhiteSpace(node.Id) || string.IsNullOrWhiteSpace(node.Path))
         {
-            PostFail("Node path and Id must not be empty", NodeUpsertRejectionReason.InvalidPath);
+            PostFail(
+                LocalizableText.Keyed("Node path and Id must not be empty",
+                    "activity.node.upsert.emptyPathOrId"),
+                NodeUpsertRejectionReason.InvalidPath);
             return request.Processed();
         }
 
@@ -4585,16 +4589,19 @@ public static class MeshExtensions
         if (upsertMeshConfig != null)
             node = NormalizeSatelliteMainNode(node, upsertMeshConfig);
 
-        if (AccessAssignmentGuard.IsScopeInvalid(node, out var upsertScopeReason))
+        if (AccessAssignmentGuard.ScopeRefusal(node) is { } upsertScopeRefusal)
         {
-            logger.LogError("[UpsertNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}", node.Path, upsertScopeReason);
-            PostFail(upsertScopeReason, NodeUpsertRejectionReason.InvalidPath);
+            logger.LogError("[UpsertNode] REFUSED mis-scoped AccessAssignment {Path}: {Reason}",
+                node.Path, upsertScopeRefusal.English);
+            PostFail(upsertScopeRefusal, NodeUpsertRejectionReason.InvalidPath);
             return request.Processed();
         }
 
         if (inboundRequest.Patch is not null)
         {
-            PostFail("Patch-mode upserts are not yet supported.",
+            PostFail(
+                LocalizableText.Keyed("Patch-mode upserts are not yet supported.",
+                    "activity.node.upsert.patchNotSupported"),
                 NodeUpsertRejectionReason.PatchFailed);
             return request.Processed();
         }
@@ -4615,7 +4622,7 @@ public static class MeshExtensions
                 if (grantRejection is null)
                     return existingObs;
                 logger.LogError("[UpsertNode] REFUSED privileged grant on system-owned partition {Path}: {Reason}",
-                    node.Path, grantRejection);
+                    node.Path, grantRejection.English);
                 PostFail(grantRejection, NodeUpsertRejectionReason.ValidationFailed);
                 return Observable.Empty<MeshNode?>();
             });
@@ -4664,7 +4671,9 @@ public static class MeshExtensions
                 hub.NoteRequestStage(request.Id, "UPSERT_READ faulted");
                 logger.LogWarning(ex,
                     "[CreateOrUpdate] persistence read failed for {Path}", node.Path);
-                PostFail($"Persistence read failed: {ex.Message}",
+                PostFail(
+                    LocalizableText.Keyed($"Persistence read failed: {ex.Message}",
+                        "activity.node.upsert.readFailed", ("error", ex.Message)),
                     NodeUpsertRejectionReason.Unknown);
             },
             () =>
@@ -4676,9 +4685,11 @@ public static class MeshExtensions
                     + "neither a node nor a fault. Answering the caller with a refusal rather than "
                     + "leaving it to wait out its budget (MeshWeaver#2454).", node.Path);
                 PostFail(
-                    "The existing-node read completed without producing a result or a fault, so the "
-                    + "upsert could not decide between create and update. Retry; if it recurs, the "
-                    + "storage adapter's Read is completing empty rather than emitting null.",
+                    LocalizableText.Keyed(
+                        "The existing-node read completed without producing a result or a fault, so the "
+                        + "upsert could not decide between create and update. Retry; if it recurs, the "
+                        + "storage adapter's Read is completing empty rather than emitting null.",
+                        "activity.node.upsert.readCompletedEmpty"),
                     NodeUpsertRejectionReason.Unknown);
             });
 
@@ -4762,7 +4773,13 @@ public static class MeshExtensions
                         }
                         else
                             PostFail(
-                                (d.Message as CreateNodeResponse)?.Error ?? "Inner CreateNode returned no response",
+                                // The inner Error is the create handler's own words — verbatim
+                                // upstream output, so it carries no key of ours. Only the
+                                // no-response literal is this handler's sentence.
+                                (d.Message as CreateNodeResponse)?.Error is { Length: > 0 } innerError
+                                    ? LocalizableText.Verbatim(innerError)
+                                    : LocalizableText.Keyed("Inner CreateNode returned no response",
+                                        "activity.node.upsert.innerCreateNoResponse"),
                                 MapCreateRejection((d.Message as CreateNodeResponse)?.RejectionReason));
                     },
                     ex =>
@@ -4779,15 +4796,21 @@ public static class MeshExtensions
                                 + "is still pending. A missing response does not prove rollback.",
                                 node.Path, InnerCreateVerdictBound);
                             PostFail(
-                                $"The create for '{node.Path}' produced no response within "
-                                + $"{InnerCreateVerdictBound.TotalSeconds:0}s. The outcome is unknown; "
-                                + "the node may already have been persisted. Check its state before retrying.",
+                                LocalizableText.Keyed(
+                                    $"The create for '{node.Path}' produced no response within "
+                                    + $"{InnerCreateVerdictBound.TotalSeconds:0}s. The outcome is unknown; "
+                                    + "the node may already have been persisted. Check its state before retrying.",
+                                    "activity.node.upsert.createNoVerdict",
+                                    ("path", node.Path),
+                                    ("seconds", InnerCreateVerdictBound.TotalSeconds.ToString("0"))),
                                 NodeUpsertRejectionReason.Unknown);
                             return;
                         }
                         logger.LogWarning(ex,
                             "[CreateOrUpdate] inner CreateNode faulted for {Path}", node.Path);
-                        PostFail($"Inner CreateNode faulted: {ex.Message}",
+                        PostFail(
+                            LocalizableText.Keyed($"Inner CreateNode faulted: {ex.Message}",
+                                "activity.node.upsert.innerCreateFaulted", ("error", ex.Message)),
                             NodeUpsertRejectionReason.Unknown);
                     },
                     () =>
@@ -4803,8 +4826,10 @@ public static class MeshExtensions
                             + "response and without a fault. Answering the caller with a refusal "
                             + "(#3510).", node.Path);
                         PostFail(
-                            $"The create for '{node.Path}' completed without producing a response. It "
-                            + "was NOT applied; retry against the fresh activation.",
+                            LocalizableText.Keyed(
+                                $"The create for '{node.Path}' completed without producing a response. It "
+                                + "was NOT applied; retry against the fresh activation.",
+                                "activity.node.upsert.createCompletedEmpty", ("path", node.Path)),
                             NodeUpsertRejectionReason.Unknown);
                     });
         }
@@ -4943,7 +4968,7 @@ public static class MeshExtensions
                                 + "faulted; refusing the update rather than risking a dangling type.",
                                 node.Path, node.NodeType);
                             PostFail(
-                                NodeTypeResolution.ProbeFailedMessage(node.Path, node.NodeType!, probeError),
+                                NodeTypeResolution.ProbeFailed(node.Path, node.NodeType!, probeError),
                                 NodeUpsertRejectionReason.Unknown);
                             return;
                         }
@@ -4958,7 +4983,7 @@ public static class MeshExtensions
                                 + "risking a dangling type (MeshWeaver#3674).",
                                 node.Path, node.NodeType);
                             PostFail(
-                                NodeTypeResolution.ProbeFailedMessage(node.Path, node.NodeType!,
+                                NodeTypeResolution.ProbeFailed(node.Path, node.NodeType!,
                                     new InvalidOperationException(
                                         "the existence probe completed without producing an answer")),
                                 NodeUpsertRejectionReason.Unknown);
@@ -4970,7 +4995,7 @@ public static class MeshExtensions
                             + "that resolves to nothing.",
                             node.Path, node.NodeType, existingNodeType);
                         PostFail(
-                            NodeTypeResolution.RejectionMessage(node.Path, node.NodeType!),
+                            NodeTypeResolution.Rejection(node.Path, node.NodeType!),
                             NodeUpsertRejectionReason.InvalidNodeType);
                     },
                     // The subscriber's OWN contract, never the probe's: the probe's fault arrives
@@ -5078,7 +5103,9 @@ public static class MeshExtensions
                             {
                                 logger.LogWarning(ex,
                                     "[CreateOrUpdate] inner UpdateNode faulted for {Path}", node.Path);
-                                PostFail($"Inner UpdateNode faulted: {ex.Message}",
+                                PostFail(
+                                    LocalizableText.Keyed($"Inner UpdateNode faulted: {ex.Message}",
+                                        "activity.node.upsert.innerUpdateFaulted", ("error", ex.Message)),
                                     ex is UnauthorizedAccessException
                                         ? NodeUpsertRejectionReason.Unauthorized
                                         : NodeUpsertRejectionReason.Unknown);
@@ -5091,10 +5118,12 @@ public static class MeshExtensions
                                 + "rather than leaving it to wait out its budget (MeshWeaver#3674).",
                                 node.Path);
                             PostFail(
-                                $"The update of '{node.Path}' completed without producing a result "
-                                + "or a fault, so the write is NOT confirmed. The outcome is "
-                                + "unknown: the owner may have committed it without acknowledging. "
-                                + "Check the node's state before retrying.",
+                                LocalizableText.Keyed(
+                                    $"The update of '{node.Path}' completed without producing a result "
+                                    + "or a fault, so the write is NOT confirmed. The outcome is "
+                                    + "unknown: the owner may have committed it without acknowledging. "
+                                    + "Check the node's state before retrying.",
+                                    "activity.node.upsert.updateCompletedEmpty", ("path", node.Path)),
                                 NodeUpsertRejectionReason.Unknown);
                         },
                         ex => logger.LogWarning(ex,
@@ -5122,17 +5151,28 @@ public static class MeshExtensions
                 o => o.ResponseFor(request));
         }
 
-        void PostFail(string error, NodeUpsertRejectionReason reason)
+        // The failure twin of PostOk, and keyed for the same reason (#3917): the transcript is a
+        // RENDERED surface read by whoever is looking at it, so a refusal must resolve in THEIR
+        // language while `refusal.English` stays the fallback.
+        //
+        // 🚨 `CreateOrUpdateNodeResponse.Error` stays ENGLISH deliberately. It is a wire field: every
+        // consumer in src/ is a service (ModuleDiscoveryService, PackageInstaller, GitHubSyncService,
+        // GitHubWebhookProcessor, IssueService, StaticRepoImporter, NodeCopyHelper), none of them a
+        // viewer surface, and StaticRepoImporter folds it into an exception message. Localizing it
+        // would translate a value code reads and logs — the same reason wire identifiers are never
+        // translated — while giving no viewer a German sentence. The LOCALIZED surface is the
+        // ActivityLog on the same response, which is what a viewer actually reads.
+        void PostFail(LocalizableText refusal, NodeUpsertRejectionReason reason)
         {
             hub.NoteRequestStage(request.Id, $"UPSERT_REPLY fail reason={reason}");
             var failLog = baseActivity.Append(
-                new LogMessage(error, Microsoft.Extensions.Logging.LogLevel.Error)) with
+                refusal.ToLogMessage(Microsoft.Extensions.Logging.LogLevel.Error)) with
             {
                 End = DateTime.UtcNow,
                 Status = ActivityStatus.Failed,
             };
             hub.Post(
-                CreateOrUpdateNodeResponse.Fail(error, reason, failLog),
+                CreateOrUpdateNodeResponse.Fail(refusal.English, reason, failLog),
                 o => o.ResponseFor(request));
         }
 
