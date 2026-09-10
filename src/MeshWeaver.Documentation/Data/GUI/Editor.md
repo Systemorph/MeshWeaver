@@ -265,9 +265,21 @@ deliberate, and it costs the input its accessible name unless something puts one
 
 So the generators set **`AriaLabel`** on every generated **input** — every `IFormControl`: text,
 multi-line text, number, date, checkbox, switch, select, combobox, listbox, radio group, mesh-node
-picker. It is read from the same source the visible caption comes from — `[Display(Name = …)]`, then
-`[DisplayName(…)]`, then the property name word-split — so the two can never disagree, which is what
-WCAG's *label in name* asks for.
+picker.
+
+**Each form reads it from the same helper its own caption comes from**, so within a form the
+accessible name and the visible term can never disagree — which is what WCAG's *label in name* asks
+for. The two helpers do not resolve the caption the same way, and that predates this:
+
+| Form | caption helper | resolution order |
+|---|---|---|
+| `Edit<T>()` | `GetEditorLabel` | `[Display(Name = …)]` → `[DisplayName(…)]` → the property name word-split |
+| click-to-edit | `GetToggleableDisplayName` | `[Display(Name = …)]` → the viewer-localized `[Description]` / `[Translation]` → the property name word-split |
+
+🚨 So `[DisplayName("…")]` names an `Edit<T>()` field and does **not** name a click-to-edit one, which
+falls through to the wordified property name. That divergence is stated here rather than smoothed
+over: it is a question about the visible CAPTION, not about the accessible name, and changing it
+would re-word every click-to-edit caption in the portal.
 
 ```csharp
 public record Assessment
@@ -276,8 +288,8 @@ public record Assessment
     [UiControl<TextAreaControl>]
     public string Topics { get; init; } = null!;
 }
-// renders: <dt><label for="property-…">1. What topics …</label></dt>
-//          <dd><fluent-text-area id="property-…" aria-label="1. What topics …"> …
+// Edit<T>() renders: <dt><label for="property-…">1. What topics …</label></dt>
+//                    <dd><fluent-text-area id="property-…" aria-label="1. What topics …"> …
 ```
 
 🚨 **`aria-label` is not decoration on top of `<label for>`.** A Fluent input is a web component that
