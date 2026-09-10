@@ -135,10 +135,10 @@ latency bimodal at ≤ 3.2 s / 33–49 s, and one capture of
 `Queue(buffer=45,…) Executing(CreateNodeRequest, 24888ms)`.
 
 **A content upload burst is a node-CRUD burst.** With the indexing pipeline registered, each
-uploaded file starts its own Activity — and `ContentIndexingObserver.OnUploaded` fires them
-**unbounded and fully parallel**, one per file (Plugins,
-`ContentIndexingObserver.cs:107-116`; contrast `ReindexAll`, which sequences the identical work with
-`.Concat()` at `:270`). Per file, on `portal/nodeops-{meshId}`:
+uploaded file starts its own Activity — and until 2026-09-10 `ContentIndexingObserver.OnUploaded`
+fired them **unbounded and fully parallel**, one per file: it subscribed the per-file activity
+inline, the instant the seam was raised, while its own sibling walk sequenced the identical work
+with `.Concat()`. Per file, on `portal/nodeops-{meshId}`:
 
 | Work | Deliveries on that action block |
 |---|---|
@@ -149,8 +149,55 @@ uploaded file starts its own Activity — and `ContentIndexingObserver.OnUploade
 router's own single-threaded block, and ~3 activity-log `stream.Update`s on `cache/{meshId}`.
 Thirty-two files is on the order of a hundred deliveries. The burst does not drain when the files
 are written — it drains when the slowest indexing leg finishes, and for image posters that leg is a
-**vision-model round trip on the `Http` pool, capped at 16** (`ContentIndexingService.cs:215-224`;
-`IoPoolOptions.cs:160`). That is where *minutes* comes from, and why it heals untouched.
+**vision-model round trip on the `Http` pool, capped at 16** (`ContentIndexingService.cs:215-224` →
+`ChatClientImageDescriber.cs:72`; `IoPoolOptions.cs:171`). That is where *minutes* comes from, and
+why it heals untouched.
+
+### The fan-out that produced the burst — re-measured, and bounded
+
+🚨 **Re-read on 2026-09-10 at the same coordinates: the mechanism above was still live, verbatim.**
+`ContentIndexingObserver.OnUploaded` (Plugins, `ContentIndexingObserver.cs:107-116`) was
+`IndexFileActivity(collectionPath, filePath).Subscribe(...)` — one activity per file, subscribed the
+moment the seam fired, with no bound of any kind, while `ReindexCollection` sequenced the identical
+per-file work with `.Concat()` at `:270`. It is now bounded
+([MeshWeaver.Plugins#1616](https://github.com/Systemorph/MeshWeaver.Plugins/pull/1616)): uploads
+push onto an instance channel the observer drains with
+`.Merge(ContentIndexingObserver.MaxConcurrentUploadIndexing)`, so at most **four** indexing
+activities are ever in flight. `OnUploaded` still returns immediately — the surplus is queued by
+`Merge`, not by a gate of our own.
+
+🚨 **The asymmetry that decides the bound is not where a reader first looks.** The expensive leg is
+the model round trip, and it is *already* bounded — 16, by the shared `Http` pool, as the paragraph
+above says. So fan-out past that cap buys **no throughput at all**: the surplus activities exist
+only to queue at the Http gate, and every one of them has ALREADY paid its node-CRUD cost in full,
+up front, before reaching the model. The burst on `portal/nodeops-{meshId}` was therefore pure cost
+with no compensating benefit — which is exactly why bounding the fan-out is not a slowdown.
+
+**Why not sequence, and why not a pool slot.** Both were candidates; each is refused by a
+measurement rather than a preference.
+
+| Candidate | Why not |
+|---|---|
+| **Sequence it — `.Concat()`, the sibling walk's own shape** | `ReindexAll` is ONE activity for a whole collection, so ordering its log costs it nothing. Here each file is its own activity, so a bound of 1 does not reduce the node-CRUD *count* at all — it only paces it, which a bound of 4 already does — while giving up a 4x on work the `Http` pool is happy to run concurrently. |
+| **Hold an `IIoPool` slot for the whole activity** (the `Ai` pool's stated "runaway-fan-out STOP" shape) | The right instinct, refused on two counts. The activity's own inner legs take `FileSystem`, `Http` and `Query` slots, so the outer bound must be a pool the inner work never re-enters — a nested acquisition of a pool you already hold is the classic gate deadlock the framework names at `IoPoolOptions.cs:55-59`. A *new* pool name is available to a plugin, but its cap falls to `IoPoolOptions.Default` = `Environment.ProcessorCount`, which is a fallback rather than a reasoned bound, and giving it a real one is a change to `IoPoolOptions` here in core that the plugins repo cannot reach behind its pin. |
+| **`.Merge(n)` on an instance channel** (chosen) | The fleet's established bounded fan-out for this exact shape: `.Merge(4)` wherever the per-item work writes mesh nodes (`AiSourcesInstallHook`, `AiContentDiskWriter`, `IssueService.cs:83`, `GitHubWebhookProcessor.cs:154`), `.Merge(8)` where it does not (`GitHubSyncService.cs:214`, `OctokitGitHubRepoClient.cs:223`). `.Concat()` **is** `Merge(1)`, so the sibling walk and the new pump are one operator at two settings - nothing hand-woven, no `SemaphoreSlim`, no pacer, no queue of our own. |
+
+**The control, both directions.** `UploadIndexingFanOutBoundTest` (Plugins,
+`MeshWeaver.ContentCollections.Indexing.Graph.Test`) runs on a monolith mesh with a real
+file-system collection and no sleeps. Its instrument is the summarizer: `ContentIndexingService`
+calls it exactly ONCE per document, from inside that file's activity, so concurrent calls **are**
+concurrent activities — and the test's summarizer PARKS, which holds every admitted file inside the
+pipeline long enough for the number to be read. Twelve files raised through `RaiseContentUploaded`
+in one burst, measured 2026-09-10:
+
+| Observer | Peak concurrent indexing activities | Verdict |
+|---|---|---|
+| `.Merge(4)` (bounded) | **4** — 4 of 12 admitted while parked, all 12 indexed after release | green |
+| `.Merge()` (the pre-fix shape) | **12** — the whole burst at once | red: *"the upload to index fan-out must be bounded at 4: 12 files were uploaded in one burst and 12 indexing activities ran at once"* |
+
+The green run also asserts the *lower* half — the peak must REACH 4, so a future change that
+over-serialises the pump is red too — and the positive control that every one of the 12 files is
+still indexed, because a bound that indexed nothing would satisfy a ceiling assertion on its own.
 
 **Signature.**
 
@@ -410,8 +457,9 @@ read.
    (`MeshExtensions.MeshReadHub` returns null past `DisposeHostedHubs`), reinstating the
    router-as-both-ends hang the long comment above that call exists to prevent.
 
-And one in the plugins repo: the per-file indexing fan-out has **no concurrency bound**, while its
-own sibling walk does.
+A third lived in the plugins repo — the per-file indexing fan-out had **no concurrency bound** while
+its own sibling walk did. Re-measured 2026-09-10, found still live at the same coordinates, and
+**fixed**: see *"The fan-out that produced the burst"* under Cause B above.
 
 ## On answering "not ready" with 409/425
 
