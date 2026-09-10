@@ -7,6 +7,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -78,12 +79,71 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                         .Do(_ => logger?.LogInformation(
                             "[PackageRepair] reconciled declared access + install hooks for {Count} "
                             + "installed partition(s)", records.Count)))
+                .Do(_ => ReportDeclaredModulesWithNoBinary(records, logger))
                 .SelectMany(_ => VerifyCompleteness(records, logger)))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex, "[PackageRepair] repair pass failed"));
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 🚨 <b>Say when an installed package's DECLARED MODULE has no binary here — the half of a
+    /// mixed package that goes missing in total silence (Systemorph/MeshWeaver.Plugins#1597).</b>
+    ///
+    /// <para>The sibling of the <c>[InstallCompleteness]</c> lines below, asking the same question
+    /// about the OTHER half of the package. Those verdicts count the NODES an install owed the
+    /// mesh; a package that also declares <c>content.module</c> owes it a compiled assembly too,
+    /// and nothing counted that. So the record read up to date, the guide page rendered, and every
+    /// layout area the module serves answered <i>Area not found</i> — measured on a
+    /// <c>memex-local</c> self-registry install where <c>Export</c> was installed and
+    /// <c>MeshWeaver.Markdown.Export.dll</c> was in neither <c>/app</c> nor <c>/app/modules</c>,
+    /// because a mounted checkout can never land a module BINARY (Systemorph/MeshWeaver#2417).</para>
+    ///
+    /// <para><b>The probe is the boot loader's own resolution</b>, not a re-derivation:
+    /// <see cref="MeshBuilder.ResolveModulePath(string,string?)"/> (landed root → image
+    /// <c>modules/</c> → app closure) and then the activation sidecar, so a bundle that HAS landed
+    /// as a generation and is merely waiting for a restart is not reported as absent. A report that
+    /// fired on the normal minutes after an install would be one nobody reads by the second week.</para>
+    ///
+    /// <para>🚨 <b>One line, warning, never a failure.</b> It cannot fail the boot: a portal that
+    /// will not start cannot be given the module it is missing — the same deadlock
+    /// <see cref="ModuleLoadReport"/> refuses to create, and the reason <c>Modules:Required</c> is
+    /// the wrong home for this (a required module that cannot land fails readiness and the portal
+    /// never serves at all).</para>
+    /// </summary>
+    private void ReportDeclaredModulesWithNoBinary(
+        IReadOnlyList<InstalledRecord> records, ILogger? logger)
+    {
+        // 🚨 No configuration ⇒ no module root ⇒ nothing is KNOWN, and the report says nothing
+        // rather than clearing every package. Same rule as the null probe on BinaryAbsent.
+        if (hub.ServiceProvider.GetService<IConfiguration>() is not { } configuration)
+            return;
+
+        var moduleRoot = ModuleRoot.Resolve(configuration);
+        var activation = ModuleActivationSidecar.Read(moduleRoot);
+        var landed = activation.Entries
+            .ToDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
+
+        var absent = ModuleDelivery.BinaryAbsent(
+            records.Select(record => record.Manifest),
+            module => File.Exists(MeshBuilder.ResolveModulePath($"{module}.dll", moduleRoot))
+                || (landed.TryGetValue(module, out var entry)
+                    && ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry)));
+
+        if (absent.IsEmpty)
+            return;
+
+        logger?.LogWarning(
+            "[PackageRepair] {Count} installed package(s) declare a compiled module whose assembly "
+            + "is not on this installation: [{Packages}]. Their NODES are installed and their pages "
+            + "render; every layout area and node type the module serves is ABSENT, and the install "
+            + "record says the package is up to date. Nothing here can produce the bytes — a mounted "
+            + "checkout never lands a module binary (MeshWeaver#2417). Install the package from a "
+            + "registry that serves its bundle, or ship the module in the image (a MeshModuleClosure "
+            + "row AND a Modules:Assemblies entry — the two move together or neither works).",
+            absent.Count, string.Join(", ", absent.Select(u => u.Describe())));
     }
 
     /// <summary>
