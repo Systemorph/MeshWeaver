@@ -64,21 +64,26 @@ proposal's CLR type is the type of the content the node is moving **to**; it say
 snapshot the node is moving **from**.
 
 **Typing the snapshot by it is not recovery, it is manufacture — and `System.Text.Json` makes the
-manufacture silent.** The hub options set `UnmappedMemberHandling = Skip`, so the old node's bytes
-deserialise *cleanly* into the new type whenever the new type's members are present or defaultable.
-Two records that merely share a member name are enough:
+manufacture silent.** The hub options set `UnmappedMemberHandling = Skip`, so the old content
+deserialises *cleanly* into the new type whenever the new type's members are present or defaultable.
+
+The sharpest case needs no degraded JSON at all, because a `$type` discriminator is a **package-local
+name**: `As` recovers a foreign runtime type exactly when `value.GetType().Name == type.Name`, and one
+customer repo ships `Currency` in four packages (see `IMeshContentTypeRegistry`). So two packages that
+each declare a `PackageContent` are enough, with both types registered and nothing degraded anywhere:
 
 ```text
-stored   {"title":"Original","sequence":5}     (NodeType A, content record A(Title, Sequence))
-proposed A(Title, Reason) → B(Title, Reason)   (NodeType B, content record B(Title, Reason))
-manufactured existing     B("Original", null)  ← a state the node was never in
+stored    RetypeFrom.PackageContent("Original", 5)     (NodeType A, registered, reads back typed)
+proposed  RetypeTo.PackageContent("Retyped", "…")      (NodeType B, registered)
+                     ↓ short names match, so As round-trips it
+manufactured existing RetypeTo.PackageContent("Original", null)   ← a state the node was never in
 ```
 
 Nothing throws, nothing logs, and the validator's `ExistingNode.Content is B e && Node.Content is B
 p && …` now *succeeds* — against a ghost, with `Sequence` dropped and `Reason` defaulted. Where the
-conversion instead throws, `As` returns null, the snapshot stays untyped and the typed comparison
-skips: the #3056 silent pass all over again, this time with a `JsonException` in the log. That is
-issue #3803; the first report saw the loud half, and the silent half is the worse one.
+conversion instead throws, or where the two names differ, `As` returns null and the snapshot is left
+as it was. That is issue #3803; the first report saw the loud half, and the silent half is the worse
+one.
 
 **So the pipeline gates the recovery on the NodeType being unchanged** (`RetypesTheNode` requires
 BOTH sides to name a type — a proposal that omits `NodeType` is not changing it, and reading
@@ -93,12 +98,21 @@ plus a late re-type wait for a content type that is not registered yet. A snapsh
 the time the update pipeline sees it is untyped because nothing in the process can type it. The
 honest outcome is to say so, not to invent an answer.
 
-`UpdateRetypeExistingContentTest` (MeshWeaver.Graph.Test) pins both halves: a retype must never hand
-a validator an existing content of the *proposed* type, and an update that keeps the NodeType must
-still get the #3056 recovery. Its probe node is created with content already in the degraded shape
-(a bare `JsonElement`, no `$type`) — the monolith rig does not produce that state by itself, because
-a create hands the store a live CLR instance and the same process reads it straight back, so the
-typing step is never reached at all.
+`UpdateRetypeExistingContentTest` (MeshWeaver.Graph.Test) pins all three halves: a retype must never
+hand a validator an existing content of the *proposed* type; an update that keeps the NodeType must
+still get the #3056 recovery; and the exact NodeType-keyed recovery must still run upstream, which
+is **measured** rather than asserted from a code read — the probe stores bytes carrying no `$type`
+under a NodeType that declares its content type, so a typed result can only have come from
+`TryRecoverForNodeType`.
+
+🚨 **Its fixture is the cross-package collision, not unreadable JSON, and that distinction is
+enforced.** An earlier revision seeded discriminator-less bytes under a NodeType that declared no
+content type; that node was never resolvable, so `check-untyped-content.sh` redded the shard at
+teardown — correctly, because *content nothing can read* is a different defect, and that gate has no
+allow-list by design. Seeding a live, REGISTERED value of a foreign same-short-named type reproduces
+this defect through the mechanism a running mesh actually produces, degrades nothing, and leaves the
+gate with nothing to report. If you are modelling "present but unreadable as `T`" anywhere, that is
+the shape to reach for.
 
 ## What this does not change
 
