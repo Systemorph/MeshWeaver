@@ -1037,7 +1037,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             Query = queryString,
             Context = context,
             ContextPath = contextPath,
-            UserId = null,
             // Over-fetch so the scorer can pick the best matches; the request
             // limit is enforced post-scoring below. Empty basePath means "match
             // anywhere across this adapter" — contains/substring search needs the
@@ -1047,10 +1046,46 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 : Math.Max(limit * 5, 100),
         };
 
+        // 🚨 THE VIEWER, resolved HERE — issue #3890. This request used to carry a
+        // hard-coded `UserId = null` into a `useSecurityFilter: false` read, so the
+        // @-reference drill-down enumerated names, paths and node types out of partitions
+        // the caller cannot `get`. It is the SAME storage and the SAME query shape as the
+        // secured read; only these two inputs differed, which is what made autocomplete a
+        // witness to other people's content (measured on memex 2026-09-10: `@/Helvetia/`
+        // named five nodes for an identity whose `get` and `search` on the very same paths
+        // answered nothing).
+        //
+        // Two halves, and both are needed:
+        //
+        //  1. Resolve the viewer NOW, on the caller's thread. MeshQuery.Autocomplete composes
+        //     eagerly, so this line runs at the same instant — and off the same AccessService —
+        //     as MeshService.StampViewer would. Doing it at call time rather than leaving it to
+        //     GetEffectiveUserId at subscribe time keeps the answer correct if this path ever
+        //     grows a Defer or a pool hop, as the Query surface already has.
+        //  2. Stamp ONLY what was actually resolved — the same rule MeshService.StampViewer
+        //     documents. Pinning the Anonymous FALLBACK here would make this line the last word,
+        //     and it is not: a caller whose ambient context is empty at CALL time can still have
+        //     one at SUBSCRIBE time. Left null, the provider's own late resolution runs unchanged.
+        var viewer = QueryIdentityResolver.Resolve(
+            queryRequest,
+            accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId);
+        if (!viewer.IsUnresolved)
+            queryRequest = queryRequest with { UserId = viewer.UserId };
+
         // Pure-IObservable scoring layer over the query stream — no _ioPool.Run /
         // await foreach bridge (the bulk-fan-out deadlock). RunQueryNodes already
         // composes the (pooled) adapter reads reactively; we just score the snapshot.
-        return RunQueryNodes(queryRequest, options, useSecurityFilter: false)
+        //
+        // 🚨 useSecurityFilter: TRUE — the same per-row ValidateRead the secured
+        // IMeshQueryProvider.Query<T> applies, so a suggestion and a `get` of the same path
+        // agree BY CONSTRUCTION rather than by coincidence. The
+        // over-fetch above is filtered, not narrowed: there is no "partitions this user may
+        // read" oracle to narrow with (the native SQL providers express it as an inline
+        // predicate, never as a list), and a partition-level narrowing would be wrong anyway
+        // — grants exist BELOW a partition root, so a caller denied `Helvetia` may still hold
+        // Read on one node inside it. RlsNodeValidator short-circuits synchronously for the
+        // caller's own partition, which is the common drill-down.
+        return RunQueryNodes(queryRequest, options, useSecurityFilter: true)
             .Select(nodes =>
             {
                 var suggestions = new List<QuerySuggestion>();

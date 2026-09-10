@@ -1864,7 +1864,7 @@ different sets of rows:
 | | runs as | rows considered |
 |---|---|---|
 | `DynamicTypePreWarmer` boot sweep (the gate) | system | every NodeType in every partition on this replica |
-| `search`, `get`, `get_diagnostics` (the pre-prod sweep) | the caller | only partitions the caller may read |
+| `search`, `get`, `get_diagnostics`, `autocomplete` (the pre-prod sweep) | the caller | only partitions the caller may read |
 
 `IMeshQueryProvider.Query` filters through `ValidateRead`; `IMeshQueryCore.Query` does not
 (`StorageAdapterMeshQueryProvider`, `useSecurityFilter`). So **a NodeType parked at `Error` inside a
@@ -1882,23 +1882,43 @@ absent are the same string. That is not a hypothetical reading of the code:
 > source nodes re-surfaced, unchanged, as #3883 — while
 > `search 'nodeType:NodeType content.compilationStatus:Error'` on that portal returned **0**.
 
-**Positive control for "denied, not deleted".** Three cheap reads separate them, and no single one
-does:
+**Positive control for "denied, not deleted".**
+
+🚨 **This control used to have a second step that no longer exists, and its removal is the
+point.** `autocomplete '@/<Namespace>/'` ran `RunQueryNodes(…, useSecurityFilter: false)` with the
+caller's identity dropped, so it enumerated names, paths and node types the caller could not `get` —
+which is what made it a witness here, and is also why it was a **disclosure surface**. On
+memex.systemorph.com, 2026-09-10, that drill-down named five `Helvetia/*` nodes, with their titles,
+to an identity whose `get` and `search` on the very same paths answered nothing. #3890 closed it:
+the drill-down now resolves the viewer and runs the same `ValidateRead` chain as `get`, so a
+suggestion and a point read agree by construction. **There is no caller-run read that separates
+denied from deleted any more, and there should not be one** — a control that works by publishing
+someone else's document titles is a disclosure wearing an instrument's colours.
+
+What is left is one read you can run and one answer that comes from the system:
 
 1. `get @Admin/Partition/<Namespace>` — the partition record survives its data. `Active` means the
-   partition was never torn down.
-2. `autocomplete '@/<Namespace>/'` — the partition drill-down runs
-   `RunQueryNodes(…, useSecurityFilter: false)`, so it enumerates names, paths and node types the
-   caller cannot `get`. Same storage, same query shape, one differing input: if autocomplete names
-   the node and `get` says `Not found`, the answer is **denied**.
-3. A partition you CAN read, asked the same three ways, as the negative control — otherwise a
+   partition was never torn down. This narrows the question to the PARTITION; it never answers
+   about the node. Ask a partition you CAN read the same way as the negative control, otherwise a
    broken instrument reads like a deleted node.
+2. **The pod's `nodetype_bake` payload — the only instrument with the full denominator.** The boot
+   sweep (`DynamicTypePreWarmer`) enumerates `nodeType:NodeType` mesh-wide under
+   `ImpersonateAsSystem`, so it sees every NodeType in every partition on the replica, not the ones
+   you may read. It also already carries the distinction: `Regressions` / `Unevaluated` /
+   `ContentBroken` name a type that EXISTS and did not build, while `Retired` / `Removed` is the
+   sweep reporting that the repository withdrew it or that a listing no longer names the node
+   (`PreWarmStatus.Removed`, established by a LISTING that came back — never by a point read).
+   🚨 Read the arming caveat below before trusting its silence.
 
-🚨 **Step 2 leans on a bypass that is itself under review (#3890).** Autocomplete answers without
-the caller's identity, which is what makes it a witness here and is also a disclosure surface. If
-it starts filtering, this control dies with it — so whichever change lands must replace step 2 in
-the same diff. The durable substitute is the system-side read: the pod's `nodetype_bake` payload
-(see the caveat below), or asking the partition's owner.
+🚨 **And re-read what the sweep is actually FOR.** Its question is not *"does this node
+exist"* but *"is anything broken"*, and step 2 answers that one over the whole mesh regardless of
+who may read what. Denied-versus-deleted was only ever load-bearing because the instrument you were
+allowed to run had a hole in its denominator; name the denominator and the distinction stops
+deciding anything. **Where you genuinely must know about one node in a partition you cannot read,
+the answer is its OWNER's** — ask them, or elevate (break-glass, their decision, never a sweep
+step). 🚨 **Until you have one of those, a `Not found` from outside your readable denominator has
+told you nothing and cannot close an issue.** That is precisely how #1391 was closed on a false
+negative and re-filed unchanged, four weeks later, as #3883.
 
 **So a zero from this sweep is not a green mesh; it is a green *readable* mesh.** State the
 denominator with the result — "0 of N NodeTypes over M readable partitions" — and when the deploy
