@@ -112,13 +112,15 @@ The hazard is real and worth an assertion. `MeshWeaver.*` assemblies bind by a s
 `AssemblyVersion` (see [Module Closure Accounting](../ModuleClosureAccounting) → "the same-identity
 trap"), so two copies under one simple name are **one assembly identity**: `Assembly.LoadFrom` returns
 the already-loaded one and ignores the second path. Whichever copy loads first wins the process, and
-the loser's bytes are never in memory.
+the loser's bytes are never in memory. Callers compiled against the loser silently run the winner,
+so load order decides behaviour whenever the builds differ.
 
-What that costs when the copies differ is exactly the `#3175` incident:
-`NodeTypeCompilationHelpers.ModuleMvidsOf` reports the MVID of the assembly that actually loaded, so
-every NodeType whose dependency record named the other build is declined at adoption —
-*"dependency record mismatch — 'MeshWeaver.Markdown.Collaboration' built against mvid:A, live is
-mvid:B"* — and the view renders empty.
+Before dependency records became version floors ([#3934](https://github.com/Systemorph/MeshWeaver/issues/3934)),
+that hazard also surfaced as the `#3175` adoption failure: a NodeType naming the losing build's MVID
+was declined. A floor now keeps same-version NodeTypes adoptable, but it cannot make the loader use
+both builds or prove that their behaviour agrees. The composed-set refusal is therefore more
+load-bearing, not less: this is the one point where every competing copy is visible. A genuinely
+older live version remains below the floor and is still declined.
 
 ### 🚨 The copies do NOT agree, and the reason is structural (#3732)
 
