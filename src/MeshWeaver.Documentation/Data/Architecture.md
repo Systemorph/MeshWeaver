@@ -305,7 +305,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Reading a Silo Eviction](ReadingASiloEviction) — a heartbeat newer than the suspect votes is not proof the silo was healthy; the control arm that tells a correct eviction from a false positive
 - [Dead-Circuit Fan-Out Storm](DeadCircuitFanOutStorm) — a closed tab's owner pushed to the corpse for 46 minutes because the only verdict the eviction acts on could not be said; the release tombstone that says it
 - [Bake Seal — NodeOps Saturation](BakeSealNodeOpsSaturation) — the mesh's ONE node-CRUD hub stops draining under a bulk burst, and every consumer then reports its own bound
-- [The /api/content 503](ContentRoute503) — two causes with opposite fixes, and the one field in the line already printed that tells them apart
+- [The /api/content 503](ContentRoute503) — three causes with different fixes, why the third wears the first's signature, and the black-box discriminator that needs no log line
 - [Refused Replies During Teardown](RefusedRepliesDuringTeardown) — every failure route answers the SENDER, which for a reply is the responder; the answer the caller is parked on is dropped with nobody told
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
 - [Guards and Unknown States](GuardsAndUnknownStates)
