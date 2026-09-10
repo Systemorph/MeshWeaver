@@ -272,14 +272,14 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
                         .WithInitialData(new[] { new Item("1", "one") }))))
                 .WithPostingIdentity(PostingIdentity.System));
         owner.Should().NotBeNull();
-        await owner!.Started.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await owner!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
 
         var reference = new CollectionReference(nameof(Item));
 
         // WARM THE SAME REFERENCE — this is the difference from the test above, and the whole point.
         var warm = await host
             .Observe<GetDataResponse>(new GetDataRequest(reference), o => o.WithTarget(owner.Address))
-            .Should().Within(30.Seconds()).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit();
         warm.Message.Data.Should().NotBeNull("the warm read must land, or nothing is cached to serve from");
 
         // Same ordering discipline as above: occupy the block, enqueue DisposeRequest, then the read.
@@ -299,7 +299,7 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
 
         Volatile.Write(ref release, 1);
 
-        var answer = await answers.Should().Within(30.Seconds()).Emit();
+        var answer = await answers.Should().Within(TestTimeouts.Convergence).Emit();
         Output.WriteLine($"[TEST] answer: {answer} (owner IsShuttingDown={owner.IsShuttingDown}, RunLevel={owner.RunLevel})");
 
         owner.IsShuttingDown.Should().BeTrue(
