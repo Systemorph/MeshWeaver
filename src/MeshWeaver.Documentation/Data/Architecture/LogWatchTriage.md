@@ -440,6 +440,13 @@ hub-creation ones, including the configuration-throw that must stay red.
   ticket".
 - **Not a substitute for reading logs.** It tickets what a portal reports as red. A fault that logs
   at `warn:` or does not log at all is invisible to it.
+- 🚨 **Not the thing that writes `Hosting/LogEntry`.** This subsystem's only mesh output is
+  `Admin/_LogIncident/{fingerprint}`. `Hosting/LogEntry` nodes under `Ops/Logs` come from a `Logs`
+  `Hosting/InstanceAction` — one LogQL query somebody asked — and the `LogWatch__*` keys on a
+  `Deployments/*` record choose which GitHub repository an incident is FILED into, not what is
+  ingested. Reading `Ops/Logs` as "LogWatch's ingest" and its gaps as omissions produced a wrong
+  conclusion on [#3931](https://github.com/Systemorph/MeshWeaver/issues/3931); see
+  [Log Entries Are a Query Result, Not a Feed](../LogEntriesAreAQueryResult).
 
 ## Related
 
