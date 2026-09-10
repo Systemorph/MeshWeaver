@@ -11,12 +11,35 @@ Icon: Cloud
 access of aks etc"* · *"build the api in a way that you don't need any az access"*.
 
 An instance is a **record** (`Deployments/<name>`, a `Hosting/Deployment` node on the control
-instance `memex.meshweaver.cloud`, GitSynced to the private `Systemorph/Memex` repo), and every
+instance **`memex.systemorph.com`**, GitSynced to the private `Systemorph/Memex` repo), and every
 change to it is an **action node** (`Hosting/InstanceAction`) that the control instance's operator
 executes **in-cluster** under its own service account. The operator's credential lives in the
 cluster; the person or agent who asks holds none. That is the whole design: an operator who never
 had `az`, `kubectl` or a Loki endpoint can still roll, restart, suspend, audit and reconcile an
 instance — and can read what it is running.
+
+### 🚨 Which portal am I talking to? The MCP server named `memex` is NOT the instance named `memex`
+
+Measured 2026-09-10, and it cost two sessions an hour on the same morning:
+
+| MCP server | Host | What it is |
+|---|---|---|
+| `systemorph` | `memex.systemorph.com` | the **control instance** — the live, GitSynced `Deployments` space |
+| `memex` | `memex.meshweaver.cloud` | the public portal and the **plugin registry** |
+
+The instance *named* `memex` is `memex.systemorph.com`, so the server named after it is the *other*
+one. Both portals hold nodes at `Deployments/<name>`, and they are **two independently created
+nodes, not a replica and its lag**: on 2026-09-10 the control instance's `Deployments/memex-cloud`
+was version 60, `createdDate` 2026-08-10, `lastModifiedBy` `system-security`, written 64 s after the
+config-repo merge; `memex.meshweaver.cloud`'s was version 9, `createdDate` 2026-08-30,
+`lastModifiedBy` a person, and 40 versions behind. Reading the second one and concluding "the
+GitSync is frozen" is the trap — it is not a sync target at all. Three facts settle which is which
+without guessing: the `Deployments/memex` record's own `host` and `purpose`, and every other
+instance's `Hosting__ReportTo`, which points at `https://memex.systemorph.com`.
+
+**So confirm the portal before drawing any conclusion from a read of it** — `/api/version`, or the
+MCP server's configured URL. This is the same class as the `namespace: memex` confusion in #3883,
+where the word named a Kubernetes namespace rather than an instance.
 
 The rest of this doc tree still carries `az aks command invoke …` / `kubectl …` recipes. **They are
 evidence, not procedure**: each one is either a measurement that was taken through the cluster
