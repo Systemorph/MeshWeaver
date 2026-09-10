@@ -700,14 +700,18 @@ internal static class NodeTypeBatchBake
         // the same finding; re-writing it would move LastCompileStartedAt and make a compile that
         // never ran look like one that did.
         var standing = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions, logger);
+        var standingUnmatched = standing is null
+            ? null
+            : SourceCoverage.UnmatchedSourceQueries(
+                standing.Sources, typePath, sources.Select(s => s.Path).ToList());
         if (standing is not null
-            && NodeTypeCompilationHelpers.IsUnconvergableSourceFailure(standing, typePath)
-            && SourceCoverage.UnmatchedSourceQueries(
-                   standing.Sources, typePath, sources.Select(s => s.Path).ToList())
-               is { Count: > 0 })
+            && standingUnmatched is { Count: > 0 }
+            && NodeTypeCompilationHelpers.IsUnconvergableSourceFailure(standing, typePath))
         {
+            // Reported from THIS pass's finding, not from the stamp: a failure recorded before
+            // #3903 carries no stamp at all, and the live answer is the one that is true now.
             var detail = SourceCoverage.Describe(
-                typePath, standing.FailedSourceQueries,
+                typePath, standingUnmatched,
                 standing.Sources is { Count: > 0 }
                     ? standing.Sources.Count
                     : CodeQueryResolver.DefaultSources.Count);
