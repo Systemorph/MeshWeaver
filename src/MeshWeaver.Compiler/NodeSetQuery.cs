@@ -57,10 +57,39 @@ public static class NodeSetQuery
             if (nodeType is not null
                 && !string.Equals(node.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
                 return false;
+            return MatchesPathCore(node.Path, node.Namespace ?? string.Empty);
+        }
+
+        /// <summary>
+        /// The PATH/SCOPE half of the predicate evaluated against a BARE PATH — for a caller that
+        /// holds the paths a query matched but not the nodes themselves.
+        /// <see cref="SourceCoverage"/> is that caller: its evidence is
+        /// <c>NodeTypeDefinition.CurrentSourceVersions</c>, a path→version map.
+        ///
+        /// <para>🚨 The <c>nodeType:</c> constraint is deliberately IGNORED here, and the DIRECTION
+        /// of that omission is what makes it safe. Dropping a conjunct can only make a predicate
+        /// MORE permissive, so this overload can answer "matched something" where the full
+        /// predicate would have answered "matched nothing" — never the reverse. Every caller asks
+        /// only <i>"did this query match NOTHING?"</i>, and a more permissive predicate answering
+        /// "nothing" is proof that the stricter one did too. So the derived answer can UNDER-report
+        /// a missing source query and can never accuse one that was fine — the only asymmetry a
+        /// diagnosis is allowed to have.</para>
+        ///
+        /// <para>The namespace is derived from the path (everything before the last <c>/</c>),
+        /// which is the relation <c>MeshNode</c> itself maintains between the two.</para>
+        /// </summary>
+        /// <param name="nodePath">The node's full mesh path.</param>
+        public bool MatchesPath(string nodePath)
+        {
+            ArgumentNullException.ThrowIfNull(nodePath);
+            var slash = nodePath.LastIndexOf('/');
+            return MatchesPathCore(nodePath, slash < 0 ? string.Empty : nodePath[..slash]);
+        }
+
+        private bool MatchesPathCore(string nodePath, string nodeNamespace)
+        {
             if (path is null)
                 return true;
-            var nodePath = node.Path;
-            var nodeNamespace = node.Namespace ?? string.Empty;
             if (path.Length == 0)
                 return scope switch
                 {

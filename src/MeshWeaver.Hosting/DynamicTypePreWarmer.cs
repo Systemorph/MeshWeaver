@@ -85,6 +85,32 @@ public enum PreWarmStatus
     /// </summary>
     NoSources,
     /// <summary>
+    /// 🚨 <see cref="NoSources"/> one granularity finer, and the shape <see cref="NoSources"/> can
+    /// never see (issue #3903): the source snapshot is NOT empty, but one of the type's DECLARED
+    /// source queries answered and matched NOTHING — its own <c>Source/</c> subtree is gone while
+    /// the <c>shared=@Lib/Source</c> entries beside it still resolve, so the union stays populated
+    /// and the emptiness that matters is invisible to a count.
+    ///
+    /// <para>The consequence is the phantom-diagnostic failure <c>SourceSnapshot</c> exists to
+    /// prevent, arriving through the one door it does not watch: Roslyn is handed a set that is
+    /// SHORT of what the type declares and emits completely genuine-looking <c>CS0246</c>/
+    /// <c>CS1061</c> about symbols the author never lost. Measured on memex.meshweaver.cloud —
+    /// <c>rbuergi/OperationRequest</c> failed from 2026-09-06 on three symbols that are exactly its
+    /// three absent <c>Source/*</c> nodes, against 41 sources pulled in by five <c>shared=</c>
+    /// entries, and the investigation went looking for them in module surfaces.</para>
+    ///
+    /// <para>A CONTENT verdict, like <see cref="NoSources"/> and for the identical reason: which
+    /// nodes a mesh query matches is a property of the mesh, not of the framework being rolled out,
+    /// so no image caused it and no rollout can fix it. Dependents inherit
+    /// <see cref="UpstreamContentBroken"/>, the gate files it under content-broken, and the batch
+    /// driver stops re-attempting the compile — see
+    /// <c>NodeTypeCompilationHelpers.IsUnconvergableSourceFailure</c> for why that is a
+    /// classification and not a retry cap, and for the second witness
+    /// (<see cref="NodeTypeDefinition.LastCompileSucceededAt"/>) that keeps a type which NEVER
+    /// built — whose failure may be its own configuration — gating exactly as before.</para>
+    /// </summary>
+    DeclaredSourcesMissing,
+    /// <summary>
     /// NOT ATTEMPTED, and content-broken one hop up: a NodeType this one draws sources from is
     /// <see cref="NoSources"/>-broken, so this type cannot build either — for the same
     /// content-not-image reason, which must propagate AS ITSELF rather than as a gating
@@ -787,6 +813,7 @@ public static class DynamicTypePreWarmer
                             if (o.Status is PreWarmStatus.TimedOut)
                                 unevaluated.Add(p);
                             else if (o.Status is PreWarmStatus.NoSources
+                                     or PreWarmStatus.DeclaredSourcesMissing
                                      or PreWarmStatus.Retired
                                      or PreWarmStatus.Removed)
                                 contentBroken.Add(p);
@@ -1059,13 +1086,33 @@ public static class DynamicTypePreWarmer
     /// a non-empty snapshot and keeps gating — pinned by
     /// <c>ClassifyCompileFailure_MatchedSources_StaysCompileError</c>.</para>
     /// </summary>
-    public static PreWarmStatus ClassifyCompileFailure(NodeTypeDefinition d) =>
+    /// <param name="d">The failed type's definition.</param>
+    /// <param name="nodeTypePath">
+    /// The type's path, so the <see cref="PreWarmStatus.DeclaredSourcesMissing"/> question can be
+    /// asked (#3903) — it needs the <c>$self</c> expansion root. 🚨 A <c>null</c> here leaves that
+    /// branch unreachable and the classification falls through to
+    /// <see cref="PreWarmStatus.CompileError"/>, i.e. it keeps GATING. Not being able to ask must
+    /// never buy a type the leniency the answer would have bought it.
+    /// </param>
+    public static PreWarmStatus ClassifyCompileFailure(
+        NodeTypeDefinition d, string? nodeTypePath = null) =>
         // A type its repository has retired (held for its remaining instances) is a content
         // verdict before anything else is asked: its sources were withdrawn on purpose.
         d.PendingRetirement is { Length: > 0 }
             ? PreWarmStatus.Retired
         : d.CurrentSourceVersions is { Count: 0 } && d.LastCompileSucceededAt is not null
             ? PreWarmStatus.NoSources
+        // 🚨 #3903 — the same content fact one granularity finer, and the branch that catches
+        // every COMPOSED type the one above cannot. The snapshot is non-empty (a `shared=` group
+        // still resolves) but a DECLARED source query matched nothing, so Roslyn was handed a set
+        // short of what the type declares and its CS0246/CS1061 are about symbols nobody lost.
+        // Guarded by the identical second witness: the sources must have been LOST, not never
+        // present, or a type broken in its own Configuration would stop gating.
+        : d.LastCompileSucceededAt is not null
+          && MeshWeaver.Compiler.SourceCoverage.UnmatchedSourceQueries(
+                 d.Sources, nodeTypePath, d.CurrentSourceVersions?.Keys.ToList())
+             is { Count: > 0 }
+            ? PreWarmStatus.DeclaredSourcesMissing
             : PreWarmStatus.CompileError;
 
     /// <summary>
@@ -1178,7 +1225,7 @@ public static class DynamicTypePreWarmer
     /// layer can say whether the source set was stable when the verdict was formed.
     /// </summary>
     internal static PreWarmOutcome FromFailedCompile(string typePath, NodeTypeDefinition d) =>
-        new(typePath, ClassifyCompileFailure(d), d.CompilationError)
+        new(typePath, ClassifyCompileFailure(d, typePath), d.CompilationError)
         {
             SourcesMovedDuringCompile = SourcesMovedDuringCompile(d)
         };

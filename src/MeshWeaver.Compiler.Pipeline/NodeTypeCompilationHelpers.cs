@@ -1012,7 +1012,7 @@ internal static class NodeTypeCompilationHelpers
         var redriveGivenUp = false;
         var failedVerdictKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
-                && HasStaleFailureVerdict(def, guards.ModulesHash)
+                && HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
                 && !IsStaticOnlyNodeType(node, def))
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
@@ -1095,20 +1095,42 @@ internal static class NodeTypeCompilationHelpers
                 // snapshot the re-drive is merely WAITING, not declining, and reporting that as
                 // "stuck" would cry wolf on every cold activation of a broken type.
                 && def.CurrentSourceVersions is not null
-                && !HasStaleFailureVerdict(def, guards.ModulesHash))
+                && !HasStaleFailureVerdict(def, guards.ModulesHash, hubPath))
             .Take(1)
             .Subscribe(
                 node =>
                 {
                     var def = (NodeTypeDefinition)node!.Content!;
-                    logger?.LogWarning(
-                        "NodeType {HubPath} is STUCK at {Status} with no compiled assembly: its verdict was "
-                        + "formed under the compile inputs that are live now ({Inputs}), so the automatic "
-                        + "re-drive correctly declines and nothing will retry it until the framework, the "
-                        + "installed modules or its sources change — or someone requests a build. Error: {Error}",
-                        hubPath, def.CompilationStatus,
-                        def.FailedBuildInputs ?? "(never stamped)",
-                        def.CompilationError ?? "(none recorded)");
+                    // 🚨 SAY WHICH KIND OF STUCK (#3903). "the framework, the installed modules or
+                    // its sources" is the right remedy list for a type whose code does not compile;
+                    // it is actively misleading for one whose own source nodes are ABSENT, because
+                    // two of the three can never help and the reader spends the investigation on
+                    // module surfaces. When the coverage says a declared query matched nothing, the
+                    // line names the query and narrows the remedy to the one thing that works.
+                    if (IsUnconvergableSourceFailure(def, hubPath))
+                        logger?.LogWarning(
+                            "NodeType {HubPath} is STUCK at {Status} with no compiled assembly, and it "
+                            + "CANNOT CONVERGE: {Missing} Nothing will retry it until those source nodes "
+                            + "exist (which re-drives it automatically) or someone requests a build — a "
+                            + "redeploy or a module update will not, because neither can supply a symbol "
+                            + "that lives in a node this mesh does not hold. Error: {Error}",
+                            hubPath, def.CompilationStatus,
+                            SourceCoverage.Describe(
+                                hubPath, def.FailedSourceQueries,
+                                def.Sources is { Count: > 0 }
+                                    ? def.Sources.Count
+                                    : CodeQueryResolver.DefaultSources.Count)
+                            ?? "(a declared source query matched no nodes)",
+                            def.CompilationError ?? "(none recorded)");
+                    else
+                        logger?.LogWarning(
+                            "NodeType {HubPath} is STUCK at {Status} with no compiled assembly: its verdict was "
+                            + "formed under the compile inputs that are live now ({Inputs}), so the automatic "
+                            + "re-drive correctly declines and nothing will retry it until the framework, the "
+                            + "installed modules or its sources change — or someone requests a build. Error: {Error}",
+                            hubPath, def.CompilationStatus,
+                            def.FailedBuildInputs ?? "(never stamped)",
+                            def.CompilationError ?? "(none recorded)");
                 },
                 ex => logger?.LogDebug(ex,
                     "Stuck-type diagnostic: own-stream subscription faulted for {HubPath}", hubPath));
@@ -2952,7 +2974,16 @@ internal static class NodeTypeCompilationHelpers
     /// disabling it, and a mesh that cannot answer the source query degrades to no re-drive rather
     /// than to a wrong verdict.</para>
     /// </summary>
-    internal static bool HasStaleFailureVerdict(NodeTypeDefinition def, string? modulesHash) =>
+    /// <param name="def">The definition to judge.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the live compile inputs.</param>
+    /// <param name="nodeTypePath">
+    /// 🚨 The NodeType's own path, so <see cref="IsUnconvergableSourceFailure"/> can be asked
+    /// (#3903). Passing <c>null</c> makes that question unanswerable, and an unanswerable question
+    /// is answered NO — the re-drive then behaves exactly as it did before, which is the safe
+    /// direction: an extra attempt costs one compile, a wrongly-declined one strands a type.
+    /// </param>
+    internal static bool HasStaleFailureVerdict(
+        NodeTypeDefinition def, string? modulesHash, string? nodeTypePath = null) =>
         def.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable
         // NO usable build was ever recorded — the complement of HasStaleFrameworkBuild, which
         // owns every case where coordinates DO exist.
@@ -2960,6 +2991,11 @@ internal static class NodeTypeCompilationHelpers
         && string.IsNullOrEmpty(def.LatestAssemblyPath)
         // The source set must be ESTABLISHED before it can be compared — see above.
         && def.CurrentSourceVersions is not null
+        // 🚨 …and the failure must be one a fresh attempt could possibly answer differently
+        // (#3903). See IsUnconvergableSourceFailure: a compile whose missing symbols live in
+        // source nodes that are not on this mesh fails identically on every framework and every
+        // module set, so re-driving it on one of those is not a retry, it is a repetition.
+        && !IsUnconvergableSourceFailure(def, nodeTypePath)
         && (
             // 🚨 An UNAVAILABLE verdict is stale ON ITS OWN — the inputs are irrelevant, because the
             // inputs were never the reason (#1701). Unavailable records "we never found out": the
@@ -2977,6 +3013,54 @@ internal static class NodeTypeCompilationHelpers
                 def.FailedBuildInputs,
                 BuildInputsToken(modulesHash, def.CurrentSourceVersions),
                 StringComparison.Ordinal));
+
+    /// <summary>
+    /// 🚨 <b>THE compile that cannot converge</b> (issue #3903) — a standing <c>Error</c> on a type
+    /// whose own declared source queries still match NOTHING on this mesh, measured against the
+    /// LIVE source snapshot rather than against the stamp that recorded it.
+    ///
+    /// <para><b>Why this is a classification and not a retry cap.</b> The re-drive's whole premise
+    /// is that a verdict is worth re-forming when the INPUTS it was formed from have moved
+    /// (<see cref="NodeTypeDefinition.FailedBuildInputs"/>: framework, modules, sources). That
+    /// premise fails for exactly one shape: when the symbols Roslyn could not resolve are the ones
+    /// the type's own <c>Source/*</c> nodes define, and those nodes are not on this mesh, then no
+    /// framework identity and no module set can supply them — the ONLY input that can change the
+    /// answer is the source set. Re-driving on the other two is not a retry, it is the same
+    /// measurement taken again, and on memex.meshweaver.cloud it was taken on every pod boot for
+    /// four days while nothing named the cause.</para>
+    ///
+    /// <para><b>It converges by construction, and it cannot latch.</b> The question is re-asked
+    /// from <see cref="NodeTypeDefinition.CurrentSourceVersions"/> on every emission, so the
+    /// instant the missing nodes land the coverage is empty, this is false, the token comparison
+    /// takes over and the type is re-driven — sooner than before, because it no longer has to wait
+    /// for a framework change to be noticed. An explicit Compile / release request never consults
+    /// this at all.</para>
+    ///
+    /// <para>🚨 <b>Three conditions, each load-bearing:</b></para>
+    /// <list type="bullet">
+    ///   <item><c>Error</c>, never <see cref="CompilationStatus.Unavailable"/>. Unavailable means
+    ///     the compile reached NO verdict, so nothing was measured and there is nothing to decline
+    ///     repeating (#1701 — that branch is deliberately input-independent).</item>
+    ///   <item>A DECLARED source query matched nothing (<see cref="SourceCoverage"/>). Not "the
+    ///     snapshot is empty", which is <c>PreWarmStatus.NoSources</c>' condition and unreachable
+    ///     for any type that also draws on a shared library.</item>
+    ///   <item><see cref="NodeTypeDefinition.LastCompileSucceededAt"/> is set — the second witness
+    ///     that the sources were LOST rather than never present. A type that has never built cannot
+    ///     have lost anything: its failure may well be its own <c>Configuration</c>, and that one
+    ///     must keep earning its attempt on a new framework. Same discriminator, for the same
+    ///     reason, as <c>DynamicTypePreWarmer.ClassifyCompileFailure</c>.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="def">The definition to judge.</param>
+    /// <param name="nodeTypePath">The type's path; <c>null</c> makes the question unanswerable and
+    /// the answer is then NO — never a silent yes.</param>
+    internal static bool IsUnconvergableSourceFailure(
+        NodeTypeDefinition def, string? nodeTypePath) =>
+        def.CompilationStatus is CompilationStatus.Error
+        && def.LastCompileSucceededAt is not null
+        && SourceCoverage.UnmatchedSourceQueries(
+            def.Sources, nodeTypePath, def.CurrentSourceVersions?.Keys.ToList())
+            is { Count: > 0 };
 
     /// <summary>
     /// 🅿️ THE failed-verdict re-drive's COMMIT step (#2260) — the whole decision, including the
@@ -3023,7 +3107,7 @@ internal static class NodeTypeCompilationHelpers
             return curr;
         // Re-check against the state being committed — a genuine compile may have settled, or a
         // fresh terminal failure may have re-parked, between the outer Where and this write.
-        if (!HasStaleFailureVerdict(d, modulesHash)) return curr;
+        if (!HasStaleFailureVerdict(d, modulesHash, hubPath)) return curr;
         // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
         // watcher's parked short-circuit lets this Pending emission through. The park itself is
         // never touched.
@@ -3276,6 +3360,11 @@ internal static class NodeTypeCompilationHelpers
             // had already had its automatic attempt under these inputs, and the type would sit
             // broken with nothing due to retry it.
             FailedBuildInputs = null,
+            // 🚨 …and so must the finding that explained it (#3903). A standing "these declared
+            // source queries matched nothing" describes a failure that no longer exists; left
+            // behind it would tell the next reader that a green type is missing its sources, and
+            // would let the re-drive decline for a type that is not even failing.
+            FailedSourceQueries = null,
             // 🚨 This compile just answered the question an adoption's stamp request was asking
             // (#1834), and answered it from the set it actually consumed. A request left standing
             // would let a later CurrentSourceVersions publication re-stamp CompiledSources over
@@ -3440,13 +3529,38 @@ internal static class NodeTypeCompilationHelpers
     /// <c>EnsureCompileDispatched</c> re-dispatches on the next request, and the bake gate files it
     /// as unevaluated rather than as an image regression (issue #1218).</para>
     /// </summary>
+    /// <param name="def">The definition being stamped.</param>
+    /// <param name="result">The compile result, when one was produced.</param>
+    /// <param name="error">The terminal exception, when the compile threw.</param>
+    /// <param name="activityPath">The compile activity, when one was created.</param>
+    /// <param name="modulesHash">The installed-module fingerprint half of the compile inputs.</param>
+    /// <param name="nodeTypePath">
+    /// 🚨 The NodeType's own path — the <c>$self</c> expansion root, and therefore what makes
+    /// <see cref="NodeTypeDefinition.FailedSourceQueries"/> computable (#3903). A <c>null</c> here
+    /// leaves that field NOT DETERMINED rather than empty: a stamp that could not measure the
+    /// coverage must never look like one that measured it and found nothing wrong.
+    /// </param>
     internal static NodeTypeDefinition ApplyCompileFailure(
         NodeTypeDefinition def,
         NodeCompilationResult? result,
         Exception? error,
         string? activityPath,
-        string? modulesHash = null)
-        => def with
+        string? modulesHash = null,
+        string? nodeTypePath = null)
+    {
+        // 🚨 Measured against the set the compile CONSUMED (the result's own snapshot when it
+        // resolved one, else the node's live one) — the same evidence FailedBuildInputs uses, so
+        // the two halves of the record describe the same compile.
+        var consumed = result?.CompiledSources ?? def.CurrentSourceVersions;
+        var unmatched = SourceCoverage.UnmatchedSourceQueries(
+            def.Sources, nodeTypePath, consumed?.Keys.ToList());
+        var declaredCount = def.Sources is { Count: > 0 }
+            ? def.Sources.Count
+            : CodeQueryResolver.DefaultSources.Count;
+        var missingSources = SourceCoverage.Describe(
+            nodeTypePath ?? "(unknown)", unmatched, declaredCount);
+
+        return def with
         {
             // 🚨 Terminal ⇒ no compile in flight (#3390). Missed by the first half of #3390
             // because the status here is a TERNARY, not the literal the guard matched on — the
@@ -3455,12 +3569,23 @@ internal static class NodeTypeCompilationHelpers
             CompilationStatus = IsAvailabilityNonVerdict(error)
                 ? CompilationStatus.Unavailable
                 : CompilationStatus.Error,
-            CompilationError = SummarizeCompileError(result, error),
+            // 🚨 The DIAGNOSIS LEADS (#3903). When a declared source query matched nothing, the
+            // Roslyn diagnostics below it are about a source set SHORT of what the type declares —
+            // and a reader who is not told that spends the investigation hunting the named symbols
+            // through module surfaces that never carried them (measured: rbuergi/OperationRequest,
+            // four days). Prefixed rather than replacing: the diagnostics are still the evidence.
+            CompilationError = missingSources is null
+                ? SummarizeCompileError(result, error)
+                : $"{missingSources}\n{SummarizeCompileError(result, error)}",
             CompilationDiagnostics = result?.Diagnostics is { Count: > 0 } ds
                 ? System.Collections.Immutable.ImmutableList.CreateRange(ds)
                 : null,
             LastCompilationActivityPath = activityPath,
             CompiledSources = null,
+            // 🚨 THE STRUCTURED HALF of the same finding — null when it could not be determined,
+            // EMPTY when every declared source query matched. See the property doc: those two must
+            // never collapse into each other.
+            FailedSourceQueries = unmatched,
             // 🚨 RECORD WHAT THE VERDICT WAS FORMED FROM (#1793). This is the one durable fact a
             // failure can leave behind — it writes no assembly coordinates and no framework stamp,
             // which is exactly why every automatic re-drive used to skip a never-compiled failure
@@ -3478,6 +3603,7 @@ internal static class NodeTypeCompilationHelpers
             // above), so the request goes with it — see ApplyCompileSuccess (#1834).
             RequestedSourceStampAt = null
         };
+    }
 
     /// <summary>
     /// Compile-and-write-back loop for one NodeType. Runs Roslyn via
@@ -4059,7 +4185,8 @@ internal static class NodeTypeCompilationHelpers
                         {
                             Content = ApplyCompileFailure(
                                 def, outcome.Result, outcome.Error, resolvedActivityPath,
-                                hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
+                                hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
+                                hubPath)
                         };
                     })
                     .Do(saved =>

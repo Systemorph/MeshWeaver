@@ -905,6 +905,7 @@ public static class BuildProtocolDriver
         && outcome.Status is not (PreWarmStatus.TimedOut
             or PreWarmStatus.UpstreamUnevaluated
             or PreWarmStatus.NoSources
+            or PreWarmStatus.DeclaredSourcesMissing
             or PreWarmStatus.UpstreamContentBroken);
 
     private sealed record OpenedChunk(

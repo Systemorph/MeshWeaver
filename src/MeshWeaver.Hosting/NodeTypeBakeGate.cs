@@ -322,7 +322,9 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         // the same deploy-freeze rule as WasHealthyBeforeBake, arriving through content deletion
         // instead of an abandoned Error record. UpstreamContentBroken is the same condition one
         // hop downstream (the depth-1 rule, again).
-        if (outcome.Status is PreWarmStatus.NoSources or PreWarmStatus.UpstreamContentBroken)
+        if (outcome.Status is PreWarmStatus.NoSources
+                              or PreWarmStatus.DeclaredSourcesMissing
+                              or PreWarmStatus.UpstreamContentBroken)
         {
             contentBroken[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
             return false;

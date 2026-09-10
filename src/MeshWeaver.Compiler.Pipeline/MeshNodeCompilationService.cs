@@ -972,6 +972,37 @@ internal class MeshNodeCompilationService(
                         string.Join(", ", matchedCodePaths),
                         "activity.compile.discoveryMatched",
                         ("count", matchedCodePaths.Count), ("paths", string.Join(", ", matchedCodePaths)));
+
+                    // 🚨 …AND WHICH DECLARED QUERY MATCHED NOTHING (#3903). The line above is a
+                    // count over the UNION, so a type that draws on a shared library reports a
+                    // healthy-looking N while the query for its own Source subtree matched zero —
+                    // and Roslyn, handed a set short of what the type declares, then emits
+                    // completely genuine-looking CS0246/CS1061 about symbols nobody lost. That is
+                    // the same phantom-diagnostic failure SourceSnapshot exists to prevent (#1218),
+                    // reaching the compile through the one door it does not watch, and it is the
+                    // reader — not the compiler — who pays: on memex.meshweaver.cloud the three
+                    // unresolved names were hunted through module surfaces that never carried them.
+                    // Warning, not Info: this is the diagnosis, and it belongs above the noise.
+                    var unmatched = SourceCoverage.UnmatchedSourceQueries(
+                        ntDef?.Sources, selfPath, matchedCodePaths);
+                    if (unmatched is { Count: > 0 })
+                    {
+                        var declared = ntDef?.Sources is { Count: > 0 } s
+                            ? s.Count
+                            : CodeQueryResolver.DefaultSources.Count;
+                        // The query strings are the mesh query LANGUAGE, not prose — they ride as
+                        // written, exactly like activity.compile.sourceQuery above.
+                        var queries = string.Join(", ", unmatched);
+                        discoveryLog = AppendWarning(discoveryLog,
+                            $"{unmatched.Count} of {declared} DECLARED source quer(ies) for "
+                            + $"'{selfPath}' matched NO nodes: {queries}. The compile below runs "
+                            + "against a source set SHORT of what this NodeType declares — an "
+                            + "unresolved type or extension method is far more likely to be an "
+                            + "absent source NODE than an absent module.",
+                            "activity.compile.declaredQueryMatchedNone",
+                            ("count", unmatched.Count), ("declared", declared),
+                            ("path", selfPath), ("queries", queries));
+                    }
                 }
 
                 // 🚨 Compile on the ThreadPool via Task.Run, never inline and never the IoPool.
