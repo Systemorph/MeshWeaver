@@ -111,11 +111,61 @@ every NodeType whose dependency record named the other build is declined at adop
 *"dependency record mismatch — 'MeshWeaver.Markdown.Collaboration' built against mvid:A, live is
 mvid:B"* — and the view renders empty.
 
-Today the copies agree by **accident**: `bake-scope.sh` classifies any change under `src/` as
-affecting ALL modules, and `module-build-key.py` folds each entry's whole in-repo `ProjectReference`
-closure into its content address, so a sibling's change re-keys every bundle that carries it. Both
-are correct and neither is the assertion — they are two mechanisms that happen to preserve the
-property. The assertion is:
+### 🚨 The copies do NOT agree, and the reason is structural (#3732)
+
+This page used to say the copies agree by **accident** — that `bake-scope.sh` classifies any change
+under `src/` as affecting ALL modules, and that `module-build-key.py` folds each entry's whole
+in-repo `ProjectReference` closure into its content address, so a sibling's change re-keys every
+bundle that carries it. Both statements are true. **The conclusion drawn from them was false**, and
+the gap is one word: re-keying makes the bundles **REBUILD**, and says nothing about their BYTES.
+
+**A publication is composed from several INDEPENDENT COMPILATIONS.** On `MeshWeaver.Plugins` there
+are three per push, and a sibling project is compiled once in each of them:
+
+| compilation | what it is | which bundles it produced |
+|---|---|---|
+| the **floor** lane's `build-workspace` | one Roslyn workspace inside the pinned image, for the first `module-pack` call (`Essentials`, `AI`, `Maps`, `Stripe`) | the DECLARED `MeshWeaver.Markdown.Collaboration`, and its ride inside `MeshWeaver.AI` |
+| the **rest** lane's `build-workspace` | a second workspace, for the other `module-pack` call's `build: container` entries | its ride inside `Mcp`, `Teams`, `Mail.MicrosoftGraph`, `Observability`, `Notifications.Channels`, and the six `AI.*` providers |
+| the legacy **`sdk`** entries | `dotnet build <project> -p:Version=<that module's version>` per module, on the runner — and `-p:Version` is a GLOBAL property, so every transitively referenced sibling is rebuilt under it | its ride inside `MeshWeaver.Blazor.Chat` |
+
+Measured on `memex.meshweaver.cloud`, 2026-09-10: **one pod held
+`MeshWeaver.Markdown.Collaboration` in 15 copies and THREE builds**, and the three groups match the
+three compilations entry for entry — 12 copies riding the `rest` lane's container modules, 2 sharing
+the `floor` lane's build (the declared module and its ride inside `MeshWeaver.AI`), 1 riding the one
+`sdk` module that reaches it. Nothing was stale, nothing had drifted: 14 rides + 1 declaration = 15
+copies, exactly as the closure rule intends, in as many builds as there were compilations.
+
+Two consequences, both measured:
+
+* **The bake host picks one by arrival order, and its pick becomes the contract.** The gate and bake
+  lanes compose every module into `/ext/<Name>/` and hand them all to one process, which loads the
+  first copy it sees and stamps `mvid:` of THAT build into every NodeType's dependency record. On
+  memex the bundles named a build (`798f92a0…`) that was on no pod at all.
+* **Two replicas holding two builds never converge.** Each declines the other's record
+  (`HasStaleFrameworkBuild`), recompiles locally, stamps its own — `v2031 → v2050 → v2053`,
+  alternating between two `compiledModulesHash` values with `currentSourceFingerprint` constant. Every
+  activation lands mid-ping-pong, exhausts `MaxRecompileAttempts` and falls to the default config, so
+  `SocialMedia/Post`'s views (`Preview`, `Write`, `PostCard`) were simply absent and
+  `/Posts/SavThankYou` rendered nothing. A recycle does not clear it; publishing the missing bundle
+  does not clear it either.
+
+### The producer asserts it, where every copy is first in one hand
+
+The `ext-modules` composition step of `node-repo-gate.yml` and `node-repo-publish-bake.yml` digests
+every `MeshWeaver.*` assembly it composed under `/ext/<module>/`, groups them by simple name, and
+**refuses a set carrying one name at more than one build** — naming each copy's digest, the module
+folder it came from, and whether it is the DECLARED module or a RIDING sibling, which is the half
+that says which producer to change. It prints its denominator on every run, green or red (copies,
+distinct names, names carried by more than one module, names carried at more than one build), because
+a check pointed at the wrong directory refuses nothing while ticking exactly like a clean
+measurement. Identical copies PASS — that is the decision this page took, and
+`test-module-set-consistency.py` executes both directions plus two falsification arms against the
+lanes' own extracted shell.
+
+That placement is not incidental: it is the first moment every copy is in one hand, **and** the
+moment the damage is done, since what the bake loads is what every consumer must then match.
+
+### The consumer asserts it again, and turns a violation into a HOLD
 
 **`PublishedBundleCatalogue.ArtifactsForIdentity` reads the MVID of every `MeshWeaver.*` assembly
 each sealed module bundle carries — entry and riding sibling alike — and any name carried at two
@@ -138,6 +188,40 @@ Two boundaries are deliberate:
   fleet for a property that was never claimed.
 
 ## What this does not close
+
+**The assertions REFUSE the divergence; they do not remove the second compilation.** A repo whose
+publication is composed from more than one compilation now goes RED instead of shipping — which is
+the correct verdict for those bytes — but the way to stay green is a decision nobody has taken yet,
+and there are exactly two:
+
+1. **One compilation per publication.** Every bundle of one publication is packed from ONE workspace
+   build. Today `MeshWeaver.Plugins` splits `module-pack` into a `floor` call and a `rest` call
+   (deliberately — the floor's four bundles are what the gates compose, Plugins#1438) and still has
+   five legacy `sdk` entries, each rebuilding its siblings under its own `-p:Version`. Merging the
+   two calls, or making the second reuse the first's workspace output for shared siblings, is a lane
+   change; converting the last `sdk` entries is the standing direction anyway (maintainer,
+   2026-09-01: *"one global one and finish"*).
+   🚨 One part of this is cheap and independent: core's own `Directory.Build.props` pins the
+   COMPILED version attributes to the commit precisely so `-p:Version=` cannot move an assembly's
+   MVID (#3022 — *"two publishes of one commit fork the identity and the bake goes inert"*).
+   MeshWeaver.Plugins' `src/Directory.Build.props` sets `AssemblyVersion`/`FileVersion` from the
+   platform but leaves `InformationalVersion` at the SDK default, i.e. `$(Version)` — so on the
+   `sdk` lane the host module's package version is still compiled into every sibling it rebuilds.
+   Carrying #3022's pin across removes that producer without touching a lane.
+2. **Stop the ride.** Argued and rejected above, and the argument still holds: `AI` `requires`
+   `[Store]` while `Essentials` — which DECLARES `MeshWeaver.Markdown.Collaboration` — `requires`
+   `[AI, …]`, so making `AI` resolve the sibling from `Essentials` is a package cycle. It becomes
+   available only if the assembly MOVES to a package `AI` already requires. That is a packaging
+   decision in MeshWeaver.Plugins, not a line edit here.
+
+🚨 **A host-measured witness cannot decide this.** [The Platform-Shipped Witness](../PlatformShippedWitness)
+drops a riding copy the platform host already ships, and its third reading —
+`<app>/modules/<Name>/<Name>.dll`, the seeded-module lane — happens to cover
+`MeshWeaver.Markdown.Collaboration` and `MeshWeaver.AI` **on the portal image**, because
+Plugins#1515 seeds them there. It does not cover them on `mw-plugin-test`, which is built from
+core and contains neither. One publication, two hosts, two answers, one seal: the duplicate is a
+property of the PUBLICATION and only a publication-level reading settles it. That is why the
+assertion above measures the composed set rather than the image.
 
 The **second producer in time** is untouched: an instance that installed a module from the registry's
 content-versioned package endpoint holds whatever *that* lane published last, while the sealed
