@@ -320,6 +320,48 @@ The file-level diff is available with **no extra fetch**: the installed side is 
 the install record (`InstalledFiles`, written by `WriteInstalledRecord`), and the candidate side
 rides in on the catalog entry (`ManifestFiles`, kept when the source parses `manifest.lock`).
 
+### 🚨 A manifest-less package advertises its SNAPSHOT REF — so the ref must be content-derived (#3880)
+
+The comparison above needs a `moduleVersion`, and a package that ships no `manifest.lock` has none.
+Both the card and the install then fall back to `PackageManifest.Version`, which
+`NodeRepoPackageSource.ListPackages` takes from the snapshot's `CommitSha`:
+
+> no `manifest.lock` ⇒ the source's **snapshot ref** *is* the module's content identity
+
+For a repo fetched over git that ref is a real commit sha, so content identity comes for free. A
+**mounted working tree** has no commit to read — the local checkout a `memex-local` self-registry
+serves, and the tree a `LocalCheckout` source reconciles on every boot — so
+`PackageSources.LocalDirectoryFetch` synthesises the ref, and whatever it hashes *is* that identity.
+
+It hashed each file's relative path and its `FileInfo.Length`. Any edit preserving the byte count —
+`ABC` → `DEF` in a Markdown page, a PNG swapped for another of the same size — left the advertised
+version identical, so the catalog card read "up to date" and the boot reconcile short-circuited.
+The portal quietly stopped mirroring the tree it exists to mirror. Nothing was logged, because from
+every consumer's point of view "nothing changed" was correctly derived from the evidence it was
+given.
+
+The fingerprint now hashes the bytes the snapshot actually returns (`RepoFile.Bytes` — already read
+to build the payload, so there is no second filesystem read), keeping the `local-<sha>` ref format,
+the dot-directory skip and the declared-release-version precedence.
+
+Verified by reverting the fix under `LocalSourceContentVersionTest` (2026-09-10): with the
+length-only hash restored, both the Markdown and the PNG case fail with
+
+```text
+Did not expect value to be "local-26ab574df588" because a mounted source version must
+identify its content, including equal-length edits.
+```
+
+and both pass with the content hash, while the unchanged-tree and `.git`-only controls hold either
+way — so the test discriminates rather than merely passing.
+
+**The general rule: a fingerprint that gates adoption is computed over the bytes it certifies, never
+over metadata that merely correlates with them.** Length and mtime are both preserved by an ordinary
+edit, so neither is evidence of equal content. It is the same reason
+[`PartitionSourceFingerprint`](/Doc/Architecture/StaticRepoImport) hashes serialised node content for
+an unversioned partition instead of a version number, and why `ModuleLandingService.GenerationIdOf`
+appends each file's bytes and not only its length.
+
 ## 🚨 Reminder by default; unattended on opt-in — seeded per deployment
 
 The **platform default is explicit opt-in**: a changed module raises a `Notification` satellite on
