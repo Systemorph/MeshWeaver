@@ -29,6 +29,24 @@ public abstract record FormControlBase <TControl>(object Data)
         => WithLabel(label);
 
     /// <summary>
+    /// The accessible name rendered as <c>aria-label</c> on the underlying input. See
+    /// <see cref="IFormControl.AriaLabel"/> for why a form control needs one in addition to
+    /// <see cref="Label"/>.
+    /// </summary>
+    public object? AriaLabel { get; init; }
+
+    /// <summary>
+    /// Sets the accessible name (<c>aria-label</c>) of the control.
+    /// </summary>
+    /// <param name="ariaLabel">The accessible name, or a binding expression resolving to one.</param>
+    /// <returns>A new instance of the control with the specified accessible name.</returns>
+    public TControl WithAriaLabel(object ariaLabel)
+        => This with { AriaLabel = ariaLabel };
+
+    IFormControl IFormControl.WithAriaLabel(object ariaLabel)
+        => WithAriaLabel(ariaLabel);
+
+    /// <summary>
     /// Whether the number field is disabled.
     /// </summary>
     public object? Disabled { get; init; }
