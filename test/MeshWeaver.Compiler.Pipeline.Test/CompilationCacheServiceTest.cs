@@ -162,9 +162,11 @@ public class CompilationCacheServiceTest : IDisposable
 
     /// <summary>
     /// Lays out the timestamped-subdir cache that <see cref="CompilationCacheService.TryGetLatestCachedDllPath"/>
-    /// expects: <c>{cacheDir}/{nodeName}_{ticks_hex}/{nodeName}.{dll,pdb}</c>
+    /// expects: <c>{cacheDir}/{nodeName}_{ticks_hex}/{nodeName}.{dll,pdb,inputdigest}</c>
     /// plus the flat <c>{cacheDir}/{nodeName}.cs</c> source mirror. Mirrors what
-    /// <see cref="MeshNodeCompilationService.CompileToDiskAsync"/> writes at runtime.
+    /// <see cref="MeshNodeCompilationService.CompileToDiskAsync"/> writes at runtime — including
+    /// the generated-input digest, which the emit publishes inside the same staged directory as
+    /// the assembly (#3892).
     /// </summary>
     private string CreateCacheArtifacts(string nodeName, DateTime? dllWriteTime = null)
     {
@@ -176,6 +178,7 @@ public class CompilationCacheServiceTest : IDisposable
         File.WriteAllText(dllPath, "dummy dll");
         File.WriteAllText(pdbPath, "dummy pdb");
         File.WriteAllText(sourcePath, "dummy source");
+        File.WriteAllText(GeneratedInputDigestFile.PathFor(dllPath), "gdummydigest");
         if (dllWriteTime is { } t)
             File.SetLastWriteTimeUtc(dllPath, t);
         return dllPath;
@@ -196,6 +199,34 @@ public class CompilationCacheServiceTest : IDisposable
 
         // Assert
         isValid.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 An artifact set WITHOUT its generated-input digest is INCOMPLETE, not merely undocumented
+    /// (#3892) — the same judgement the PDB check makes one line above it.
+    ///
+    /// <para>Reusing such an entry would stamp a dependency record with no <c>!input</c> content
+    /// key, while a fresh compile of the identical content stamps one. That record is a PRODUCER
+    /// artifact: it lands on the NodeType and ships inside every bundle baked from it, so the
+    /// guard's strength would depend on whether this machine's cache was warm. One recompile is
+    /// the price, and it is paid once per type, for artifacts a build that predates the sidecar
+    /// published.</para>
+    /// </summary>
+    [Fact]
+    public void IsCacheValid_ReturnsFalse_WhenTheGeneratedInputDigestIsMissing()
+    {
+        var nodeName = "digestless_cache";
+        var dllPath = CreateCacheArtifacts(nodeName);
+        _service.IsCacheValid(nodeName, DateTimeOffset.UtcNow.AddMinutes(-5)).Should().BeTrue(
+            "the positive control: with every artifact present this entry IS valid, so the "
+            + "assertion below cannot pass for some unrelated reason");
+
+        File.Delete(GeneratedInputDigestFile.PathFor(dllPath));
+
+        _service.IsCacheValid(nodeName, DateTimeOffset.UtcNow.AddMinutes(-5)).Should().BeFalse(
+            "bytes whose generated-input digest is not beside them cannot be stamped with a "
+            + "content key, so serving them would produce a WEAKER dependency record than a fresh "
+            + "compile of the same content — recompile instead");
     }
 
     [Fact]
