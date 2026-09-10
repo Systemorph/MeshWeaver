@@ -177,11 +177,15 @@ cases those are in two places of its own:
   a re-parsed `JsonElement` …, or a content record holding collections (compared by reference) all
   read as 'changed' while the persisted JSON is byte-identical"*.
 
-And the mixed pair is what this path always has. `UpdateRemote` runs on the **cache hub**, whose
-mirror content is a `JsonElement` because — in `MeshNode.Equals`'s own words — that hub *"does not
-know domain types"*; the caller's lambda produces a **typed** content. So every such write fails gate
-1 by construction and is decided at gate 2, which is precisely where the phantom guard was not
-looking.
+And a mixed pair is what this comparison gets **whenever the content type resolves**. `UpdateQueued`
+wraps the caller's lambda as `update(EnsureTypedContent(node, …))`, so the lambda's **output** carries
+typed content while `current` — the raw mirror emission it is compared against — still carries the
+`JsonElement`. Gate 1 therefore cannot fire, and gate 2 decides, which is precisely where the phantom
+guard was not looking.
+
+When the type does **not** resolve, `EnsureTypedContent` degrades back to a `JsonElement`, both sides
+stay untyped, and `JsonElement.DeepEquals` settles it at gate 1. So gate 2 is the resolved-type case
+— the ordinary one — not literally every write.
 
 The fix is to ask the write path's own question once:
 

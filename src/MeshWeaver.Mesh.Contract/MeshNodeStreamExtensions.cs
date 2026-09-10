@@ -420,10 +420,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// mode. The authoritative read is paid only in the ambiguous case, which is the case that was
     /// losing the write.</para>
     ///
-    /// <para><paramref name="baseAlreadyCarriesTheWrite"/> runs the caller's lambda against the
-    /// candidate base and discards the result; the lambda is a pure state transform by contract
-    /// (the re-enqueue machinery already re-runs it once per attempt), so evaluating it a second
-    /// time on the SAME base cannot change what is written.</para>
+    /// <para>The phantom test runs the caller's lambda against the candidate base and discards the
+    /// result; the lambda is a pure state transform by contract (the re-enqueue machinery already
+    /// re-runs it once per attempt), so evaluating it a second time on the SAME base cannot change
+    /// what is written.</para>
+    ///
+    /// <para>🚨 <b>The predicate is COMPUTED here, not injected.</b> It used to be a
+    /// <c>Func&lt;MeshNode, bool&gt;</c> parameter, which made the seam un-pinnable: a test could
+    /// supply <see cref="PostsNothing"/> and stay green while the production call site regressed to
+    /// half of it — which is exactly how #3633's guard came to cover only one of the write path's
+    /// two no-write exits. Taking <paramref name="update"/> and
+    /// <paramref name="jsonOptions"/> instead means there is one predicate and no way to pass a
+    /// different one.</para>
     ///
     /// <para>Static, with both bases as seams, so the rule is asserted deterministically — no hub,
     /// no cluster, no wall clock.</para>
@@ -434,8 +442,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// <param name="mirrorBase">The composed mirror read every other write uses.</param>
     /// <param name="authoritativeBase">A read served by the OWNER, subscribed only when the mirror
     /// base turns out to be a phantom.</param>
-    /// <param name="baseAlreadyCarriesTheWrite">Whether the caller's lambda is a no-op against the
-    /// candidate base — i.e. whether the base already contains the write the owner just refused.</param>
+    /// <param name="update">The caller's update lambda — the same one the write path applies.</param>
+    /// <param name="jsonOptions">The hub's serializer options, so <see cref="PostsNothing"/>
+    /// measures the diff that would actually be posted.</param>
     /// <param name="path">The node being written, for the refusal message.</param>
     /// <param name="onPhantomBase">Called when the mirror base is discarded for the authoritative
     /// one, so the swap is nameable in a log rather than invisible.</param>
@@ -443,14 +452,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         bool ownerSaidNeverApplied,
         IObservable<MeshNode> mirrorBase,
         IObservable<MeshNode?> authoritativeBase,
-        Func<MeshNode, bool> baseAlreadyCarriesTheWrite,
+        Func<MeshNode, MeshNode> update,
+        JsonSerializerOptions jsonOptions,
         string path,
         Action? onPhantomBase = null)
         => !ownerSaidNeverApplied
             ? mirrorBase
             : mirrorBase.SelectMany(node =>
             {
-                if (!baseAlreadyCarriesTheWrite(node))
+                // 🚨 The write path's OWN no-write decision — both gates, never half of them.
+                if (!PostsNothing(node, update(node), jsonOptions))
                     return Observable.Return(node);
                 onPhantomBase?.Invoke();
                 // 🚨 TOTALITY, the same rule RequireBaseState applies to the mirror read (#3001),
@@ -489,14 +500,17 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// exists to refuse: nothing posted, storage untouched, the caller told the marker was saved,
     /// not one line above Debug.</para>
     ///
-    /// <para><b>That pair is not contrived — it is this path's ordinary shape.</b>
-    /// <c>MeshNode.ContentEquals</c> compares two <c>JsonElement</c>s structurally, but a MIXED
-    /// pair — one <c>JsonElement</c>, one typed — is <c>false</c> by construction, and says why:
-    /// "no <c>JsonSerializerOptions</c> is available here to bridge representations". The mirror
-    /// <c>UpdateRemote</c> reads lives on the CACHE hub, which (in <c>MeshNode.Equals</c>'s own
-    /// words) "does not know domain types", so its content IS a <c>JsonElement</c>, while the
-    /// caller's lambda produces a TYPED content. Every such write therefore fails gate 1 by
-    /// construction and is decided at gate 2 — the gate the phantom test was not looking at.
+    /// <para><b>That pair is not contrived — it is this path's ordinary shape whenever the content
+    /// type RESOLVES.</b> <c>MeshNode.ContentEquals</c> compares two <c>JsonElement</c>s
+    /// structurally, but a MIXED pair — one <c>JsonElement</c>, one typed — is <c>false</c> by
+    /// construction, and says why: "no <c>JsonSerializerOptions</c> is available here to bridge
+    /// representations". And a mixed pair is what this comparison gets: <c>UpdateQueued</c> wraps
+    /// the caller's lambda as <c>update(EnsureTypedContent(node, …))</c>, so the lambda's OUTPUT
+    /// carries typed content while <c>current</c> — the raw mirror emission it is compared against —
+    /// still carries the <c>JsonElement</c>. Gate 1 therefore cannot fire, and gate 2 decides.
+    /// (When the type does NOT resolve, <c>EnsureTypedContent</c> degrades back to a
+    /// <c>JsonElement</c>, both sides stay untyped, and <c>JsonElement.DeepEquals</c> settles it at
+    /// gate 1 — so gate 2 is the RESOLVED-type case, which is the ordinary one.)
     /// <c>MeshNode.SerializedEquals</c> enumerates the same witnesses.</para>
     ///
     /// <para>So the guard now asks the write path's OWN question, through the write path's own
@@ -1847,13 +1861,14 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // aside for a still-shutting-down activation, so what answers is the fresh one.
                     Observable.Defer(() => MeshNodeStreamExtensions
                         .GetMeshNode(_workspace.Hub, _path!)),
-                    // 🚨 The write path's OWN no-write decision, not a re-spelling of half of it.
-                    // This used to be the record comparison alone, which is only the FIRST of the
-                    // two exits that post nothing; the second — an empty patch after serialisation
-                    // — walked past the guard into the very silent success it exists to refuse.
-                    // See PostsNothing.
-                    baseAlreadyCarriesTheWrite: node =>
-                        PostsNothing(node, update(node), _workspace.Hub.JsonSerializerOptions),
+                    // 🚨 The lambda and the options, NOT a predicate — ReattemptBaseSource computes
+                    // the no-write decision itself (PostsNothing), so this call site cannot supply
+                    // half of it. It used to pass the record comparison alone, which is only the
+                    // FIRST of the two exits that post nothing; the second — an empty patch after
+                    // serialisation — walked past the guard into the very silent success it exists
+                    // to refuse.
+                    update,
+                    _workspace.Hub.JsonSerializerOptions,
                     path: _path!,
                     onPhantomBase: () => diagLogger?.LogWarning(
                         "[UpdateRemote] PHANTOM_BASE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — "
@@ -1930,12 +1945,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
 
                             // 🚨 Gate TWO of two, and the one #3633's phantom guard could not see:
                             // reached precisely when a "rebuilt-but-identical content slips past
-                            // the record-Equals check above" — which on THIS hub is every write,
-                            // because the cache mirror's content is untyped JSON and the caller's
-                            // lambda yields a typed value, a pair MeshNode.ContentEquals refuses
-                            // outright. PostsNothing now covers both gates, so a re-attempt whose
-                            // owner said the write never applied can no longer exit here against a
-                            // phantom base (#3477).
+                            // the record-Equals check above" — which is every write whose content
+                            // type RESOLVES, because UpdateQueued wraps the lambda as
+                            // update(EnsureTypedContent(node, …)) so `updated` is typed while
+                            // `current` is still the raw mirror's JsonElement, a pair
+                            // MeshNode.ContentEquals refuses outright. PostsNothing now covers both
+                            // gates, so a re-attempt whose owner said the write never applied can no
+                            // longer exit here against a phantom base (#3477).
                             if (patch.Count == 0)
                             {
                                 diagLogger?.LogDebug(

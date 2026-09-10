@@ -140,11 +140,21 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             // cannot give is what would hang.
             var marker = $"post-nack-{Guid.NewGuid():N}"[..24];
             var workspace = Mesh.GetWorkspace();
+            // 🚨 VOLATILE both ways. These are written on whatever thread carries the owner's
+            // verdict — the cache hub's action block — and read by the interval poller below on a
+            // scheduler thread. A plain field gives the reader no guarantee of ever observing the
+            // write, so the poll could time out on a caller that HAD been settled and lose exactly
+            // the diagnosis this test exists to surface. (Polling, rather than awaiting the write
+            // observable, is deliberate: awaiting resumes the continuation INLINE on the signalling
+            // thread — see LateNackReenqueueCorrelationTest.CapturingLoggerProvider.FirstMatching
+            // for the 90 s wedge that produced.)
             MeshNode? callerTerminal = null;
             Exception? callerError = null;
             using var writeSub = workspace.GetMeshNodeStream(path)
                 .Update(n => n with { Name = marker })
-                .Subscribe(n => callerTerminal = n, ex => callerError = ex);
+                .Subscribe(
+                    n => Volatile.Write(ref callerTerminal, n),
+                    ex => Volatile.Write(ref callerError, ex));
             Output.WriteLine($"[write] patch posted with marker {marker}; owner merge is parked");
 
             // Fence on the patch actually being in flight before the dispose below — the armed
@@ -182,11 +192,27 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             // window closed inside a region that is silent BY DESIGN and the failure could only ever
             // read "System.TimeoutException : The operation has timed out." — which is verbatim what
             // #3477 recorded, with the write's own diagnosis discarded unread.
-            await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-                .Where(_ => callerTerminal is not null || callerError is not null)
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-            callerError.Should().BeNull("the re-enqueued attempt landed, so the caller must see a success");
-            callerTerminal!.Name.Should().Be(marker,
+            // 🚨 The bound is TURNED INTO A VALUE, never allowed to throw. A bare
+            // `.Timeout(...)` raises an anonymous TimeoutException before any assertion runs — the
+            // very defect this reordering exists to remove — so the elapsed bound becomes `false`
+            // and the assertion below carries the diagnosis instead.
+            var settled = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+                .Where(_ => Volatile.Read(ref callerTerminal) is not null
+                    || Volatile.Read(ref callerError) is not null)
+                .Select(_ => true)
+                .Take(1)
+                .Timeout(TestTimeouts.Convergence, Observable.Return(false))
+                .FirstAsync().Await(ct);
+            settled.Should().BeTrue(
+                "the write must reach a terminal, and TestTimeouts.Convergence dominates the bound "
+                + "UpdateRemote PUBLISHES (LatePatchResponseRegistry.WriteVerdictBound). 🚨 If THIS "
+                + "is what failed, the write is unbounded rather than merely slow: a re-enqueue "
+                + "chain arms a fresh deadline per attempt and pays a base read outside it, so its "
+                + "composite worst case exceeds the published bound — the open defect recorded in "
+                + "Doc/Architecture/PhantomBaseAfterOwnerDisposal, not a number to widen here");
+            Volatile.Read(ref callerError).Should().BeNull(
+                "the re-enqueued attempt landed, so the caller must see a success");
+            Volatile.Read(ref callerTerminal)!.Name.Should().Be(marker,
                 "the caller's terminal is the verdict of the attempt that actually committed");
 
             // Ground truth, and now a STRICTLY STRONGER claim than the old poll made. On the owner
@@ -196,10 +222,20 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             // 'initial' (the parked merge turn died with the sync hub; nobody re-applies) — and a
             // PHANTOM success, the write reported saved while no store anywhere holds it, fails
             // HERE and says so, instead of hiding inside an anonymous storage timeout.
+            // 🚨 Same rule as above: the bound becomes a NULL, not a TimeoutException, so the
+            // phantom — a caller told "committed" while no store holds the value — is reported by
+            // the assertion that names it rather than by an anonymous timeout.
             var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
                 .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
                 .Where(n => n is not null && n.Name == marker)
-                .FirstAsync().Timeout(TestTimeouts.Quick).Await(ct);
+                .Take(1)
+                .Timeout(TestTimeouts.Quick, Observable.Return<MeshNode?>(null))
+                .FirstAsync().Await(ct);
+            persisted.Should().NotBeNull(
+                "the caller has just been handed a SUCCESS, and on the owner the ack follows the "
+                + "durable flush — so a store that does not carry the marker means the write was "
+                + "reported saved while it is in no store at all: #3477's silent loss, caught here "
+                + "instead of hiding inside a timeout");
             persisted!.Name.Should().Be(marker,
                 "a write whose owner NACKed OwnerDisposing must be re-enqueued and applied on "
                 + "the fresh activation — never silently lost, and never reported to the caller as "

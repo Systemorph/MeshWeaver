@@ -56,17 +56,15 @@ public class ReattemptBaseIsAuthoritativeTest
 
     private static MeshNode Update(MeshNode node) => node with { Name = Marker };
 
-    private static readonly JsonSerializerOptions JsonOptions = new();
-
     /// <summary>
-    /// 🚨 PRODUCTION's predicate, not a local re-implementation of it. An earlier version of this
-    /// file spelled the record comparison out here, so the guard could be narrowed in
-    /// <c>UpdateRemote</c> without a single case going red — a test asserting a rule nothing under
-    /// test was using. <see cref="MeshNodeStreamHandle.PostsNothing"/> is the one the write path
-    /// calls, so narrowing it now fails <see cref="NeverAppliedReattempt_WhoseMirrorCarriesAPhantomThatIsNotRecordEqual_StillRebasesOnTheOwner"/>.
+    /// 🚨 These cases hand <see cref="MeshNodeStreamHandle.ReattemptBaseSource"/> the caller's
+    /// LAMBDA, never a predicate — the seam computes the no-write decision itself
+    /// (<see cref="MeshNodeStreamHandle.PostsNothing"/>), so there is no way for this test to
+    /// supply one rule while the production call site uses another. An earlier version of this file
+    /// injected the predicate and spelled the record comparison out locally, which is exactly how a
+    /// guard covering only ONE of the write path's two no-write exits stayed green (#3477).
     /// </summary>
-    private static bool AlreadyCarriesTheWrite(MeshNode node) =>
-        MeshNodeStreamHandle.PostsNothing(node, Update(node), JsonOptions);
+    private static readonly JsonSerializerOptions JsonOptions = new();
 
     /// <summary>A typed content payload — what a caller's lambda produces, against a mirror that
     /// holds the same value as untyped JSON.</summary>
@@ -108,7 +106,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(Phantom),
             authoritativeBase: Observable.Return<MeshNode?>(OwnerState),
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path,
             onPhantomBase: () => phantomNoted++));
 
@@ -157,8 +156,13 @@ public class ReattemptBaseIsAuthoritativeTest
     {
         // The cache hub's mirror carries UNTYPED content; the caller's lambda produces a TYPED
         // value. ContentEquals refuses that mixed pair outright, and the two serialise identically.
+        // 🚨 The mirror's JSON is produced by the SAME serializer the diff uses, so the two sides
+        // are byte-identical under WHATEVER options are supplied — hub options included, with their
+        // naming policy and polymorphic discriminator. A hand-written literal here would pin only
+        // the default options and could disagree with production (which is how the mirror gets its
+        // value in the first place: the owner serialised it with the hub's own options).
         static JsonElement Mirrored() =>
-            JsonDocument.Parse("""{"Text":"unchanged"}""").RootElement.Clone();
+            JsonSerializer.SerializeToElement<object>(new Payload("unchanged"), JsonOptions);
         static MeshNode UpdateRebuildingContent(MeshNode node) =>
             node with { Name = Marker, Content = new Payload("unchanged") };
 
@@ -176,8 +180,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(phantom),
             authoritativeBase: Observable.Return<MeshNode?>(owned),
-            baseAlreadyCarriesTheWrite: node =>
-                MeshNodeStreamHandle.PostsNothing(node, UpdateRebuildingContent(node), JsonOptions),
+            update: UpdateRebuildingContent,
+            jsonOptions: JsonOptions,
             path: Path,
             onPhantomBase: () => phantomNoted++));
 
@@ -208,7 +212,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(Phantom),
             authoritativeBase: Observable.Return<MeshNode?>(new MeshNode(Path) { Name = Marker, Version = 5 }),
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path));
 
         observed.Error.Should().BeNull();
@@ -236,7 +241,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(new MeshNode(Path) { Name = "initial", Version = 4 }),
             authoritativeBase: authoritative,
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path));
 
         observed.Values.Should().ContainSingle().Which.Name.Should().Be("initial");
@@ -265,7 +271,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: false,
             mirrorBase: Observable.Return(Phantom),
             authoritativeBase: authoritative,
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path));
 
         observed.Values.Should().ContainSingle().Which.Name.Should().Be(Marker);
@@ -299,7 +306,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(Phantom),
             authoritativeBase: authoritative,
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path));
 
         observed.Values.Should().BeEmpty("there was no trustworthy state to diff against");
