@@ -540,9 +540,58 @@ public class PrebuiltBundleRetentionTest : IDisposable
         var source = Path.Combine(root, Live, "plugins");
 
         var resolved = ShippedPrebuiltBundles.PublicationDirectoryOf(source);
+        var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(source);
 
         resolved.Should().Be(Path.Combine(source, "gen-new"));
+        // The two must be the same resolution, or the sweep and the readers can disagree.
+        pointer.Directory.Should().Be(resolved);
+        pointer.IsGeneration.Should().BeTrue();
+        pointer.Named.Should().Be("gen-new");
+        pointer.Fault.Should().BeNull();
         PlanNow().CollectableGenerations.Select(g => g.Directory).Should().NotContain(resolved);
+    }
+
+    /// <summary>
+    /// The resolution outcomes a retention rule branches on, each mapped to the answer every
+    /// READER takes for it — the fallback is always the source directory, so a pointer this reader
+    /// will not follow can never make it read somewhere else.
+    /// </summary>
+    [Fact]
+    public void EveryPointerOutcome_ResolvesToTheSourceDirectory_AndNamesWhyItFellBack()
+    {
+        var source = Path.Combine(root, Live, "plugins");
+        Generation(Live, "plugins", "gen-a", DaysAgo(1));
+
+        // no pointer at all — the flat layout, and NOT a fault
+        var flat = ShippedPrebuiltBundles.ResolvePublicationPointer(source);
+        flat.Directory.Should().Be(source);
+        flat.IsGeneration.Should().BeFalse();
+        flat.Fault.Should().BeNull();
+
+        // dangling
+        Pointer(Live, "plugins", "gen-gone");
+        var dangling = ShippedPrebuiltBundles.ResolvePublicationPointer(source);
+        dangling.Directory.Should().Be(source);
+        dangling.IsGeneration.Should().BeFalse();
+        dangling.Fault.Should().Contain("is not on disk");
+
+        // refused: a pointer is a NAME, never a path
+        Pointer(Live, "plugins", "../elsewhere");
+        var refused = ShippedPrebuiltBundles.ResolvePublicationPointer(source);
+        refused.Directory.Should().Be(source);
+        refused.IsGeneration.Should().BeFalse();
+        refused.Fault.Should().Contain("not a single directory name");
+
+        // blank — a pointer mid-replacement
+        File.WriteAllText(Path.Combine(source, ShippedPrebuiltBundles.PublicationPointerFileName), "\n");
+        var blank = ShippedPrebuiltBundles.ResolvePublicationPointer(source);
+        blank.Directory.Should().Be(source);
+        blank.IsGeneration.Should().BeFalse();
+        blank.Fault.Should().Be("the pointer is empty");
+
+        // and resolving cleanly
+        Pointer(Live, "plugins", "gen-a");
+        ShippedPrebuiltBundles.ResolvePublicationPointer(source).IsGeneration.Should().BeTrue();
     }
 
     /// <summary>The live generation is kept HOWEVER old — a pointer is a reference, and age never overrides one.</summary>
