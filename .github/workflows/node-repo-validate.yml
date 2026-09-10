@@ -90,6 +90,25 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      # GitSync accepts a BuildCompletion only from this exact repository-level path (#3978).
+      # If a maintainer renames content CI, the renamed workflow still runs this reusable lane;
+      # this gate then fails RED instead of letting every installation silently freeze on its
+      # previous imported commit. The guard is fetched at the lane's own scripts ref for the same
+      # reason as the other centralized policy below: a caller cannot silently retain an old rule.
+      - name: Fetch the content-CI publish-path guard at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the content-CI path guard has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-content-ci-path.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-content-ci-path.py" \
+            || { echo "::error::could not fetch .github/scripts/check-content-ci-path.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-content-ci-path.py" | grep -q "check-content-ci-path" || { echo "::error::the fetched check-content-ci-path.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+      - name: "The content-CI publish path is enforced — the gate can fail (self-test)"
+        run: python3 "$RUNNER_TEMP/check-content-ci-path.py" --self-test
+      - name: "Content CI remains at GitSync's publish-signal path"
+        run: python3 "$RUNNER_TEMP/check-content-ci-path.py" --root . --expected .github/workflows/ci.yml
       - name: Validate every node JSON (+ NodeType Source)
         run: python3 scripts/validate-repos.py
       # 🚨 THE 45-MINUTE CAP, fleet-wide (maintainer, 2026-09-02: "hard cut CI runs after 45min — we pay all

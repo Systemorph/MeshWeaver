@@ -32,6 +32,21 @@ public static class GitHubSyncConfiguration
     public static IServiceCollection AddGitHubSyncServices(this IServiceCollection services)
     {
         services.AddOptions<GitHubOAuthOptions>();
+        services.AddOptions<GitHubContentWorkflowOptions>()
+            .Configure<IConfiguration>((options, configuration) =>
+            {
+                foreach (var child in configuration
+                             .GetSection(GitHubContentWorkflowOptions.ConfigSection)
+                             .GetSection(nameof(GitHubContentWorkflowOptions.Repositories))
+                             .GetChildren())
+                {
+                    options.Repositories.Add(new GitHubContentWorkflow
+                    {
+                        Repository = child[nameof(GitHubContentWorkflow.Repository)] ?? "",
+                        Path = child[nameof(GitHubContentWorkflow.Path)] ?? "",
+                    });
+                }
+            });
         // GitHub App (machine identity): server-side operations — the plugin registry's sync of
         // the plugins repo, boot imports — authenticate as the App installation instead of a
         // personal credential. The host binds GitHub:App next to GitHub:OAuth; left unconfigured,

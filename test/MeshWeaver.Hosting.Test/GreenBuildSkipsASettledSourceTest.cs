@@ -325,6 +325,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
           "workflow_run": {
             "conclusion": "success", "head_branch": "main", "head_sha": "{{headSha}}",
             "id": 39450000001, "run_number": 3945, "name": "Content CI", "event": "push",
+            "path": ".github/workflows/ci.yml",
             "updated_at": "2026-09-10T17:35:00Z"
           }
         }
