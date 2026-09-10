@@ -29,6 +29,22 @@ Then point the portal at it (appsettings or the portal's Speech settings):
 "Speech": { "Endpoint": "http://localhost:8080", "Enabled": true, "Language": "de" }
 ```
 
+## Model licence
+
+The default model is a derivative of
+[Flurin17/whisper-large-v3-turbo-swiss-german](https://huggingface.co/Flurin17/whisper-large-v3-turbo-swiss-german)
+— **CC BY-NC 4.0, non-commercial use only**. (The base `openai/whisper-large-v3-turbo` is MIT, but a
+derivative cannot be more permissive than what it derives from, so NC is the binding term.) That is why the
+model is **never** republished for anonymous download and why the container gets it from an authenticated
+channel; see [Voice model distribution](../../src/MeshWeaver.Documentation/Data/Architecture/VoiceModelDistribution.md).
+
+For a commercial deployment, point this container at a permissively licensed model instead — put e.g.
+`ggml-large-v3-turbo.bin` at `models/model.bin` and rebuild. You lose the Swiss-German dialect accuracy the
+fine-tune exists for, and nothing else changes: the `/inference` contract is identical.
+
+`clients/voice-gateway/README.md` has said the same thing since the gateway landed, and pointed here for the
+detail — this section is that detail, which was missing.
+
 ## Notes
 
 - **Model is BAKED, not mounted** — the image carries `/models/model.bin`, and the image registry the

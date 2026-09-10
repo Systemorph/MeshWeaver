@@ -38,6 +38,22 @@ from. Measured from the model card and the HuggingFace API on 2026-09-10 — `ca
 `cc-by-nc-4.0`, and the card says *"This model is distributed under the Creative Commons
 Attribution-NonCommercial 4.0 license."*
 
+**This was already known in one corner of the repo, and the pointer was dangling.**
+`clients/voice-gateway/README.md` has carried a "Speech model license" section all along — *"**CC BY-NC 4.0
+— non-commercial use only**. A personal home assistant is non-commercial use; for anything commercial, point
+the whisper container at a permissively licensed model (see `deploy/whisper/README.md`)"* — but
+`deploy/whisper/README.md`, the page it sends you to, said nothing about a licence at all. So the constraint
+existed, in prose, in the one file least likely to be read by someone editing a Helm chart. That is precisely
+why the chart's fix was chosen against it without anybody noticing, and why it is written here instead.
+
+🚨 **The commercial question is open and is NOT answered by this page.** NonCommercial and a commercial
+product are in tension, and that tension predates this issue — it applies equally to the shipped on-device
+MAUI path. Nothing here changes the posture; it only stops the constraint being implicit. The escape hatch
+the voice-gateway README names — *point the container at a permissively licensed model* — is a real one and
+costs nothing structural: the chart takes any GGML file, so swapping to a permissive model
+(`ggml-large-v3-turbo`, MIT) is a rebuild, at the price of the Swiss-German dialect accuracy that is the
+whole reason for the fine-tune.
+
 ## The standing rule
 
 > **The model is distributed only through channels that already authenticate their reader.** It is never
