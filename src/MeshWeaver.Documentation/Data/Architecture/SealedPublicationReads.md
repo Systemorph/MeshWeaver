@@ -80,6 +80,21 @@ also remove it between the module routes' first and second catalogue reads. A st
 `ModuleSetReading.PublicationUnavailable` result preserves the transient response on that second
 read, distinct from a sealed publication with no module index. All four routes are exercised.
 
+🚨 **The BOOT SEEDER reads the same seal, and it is the reader with no status to return.**
+`ShippedPrebuiltBundles.CompletePublishedBundlesOf` walks every source under one identity and skips
+an unsealed one deliberately — the sweep compiles it instead. It kept the racing `File.Exists`
+after the catalogue's readers were fixed, and the consequence there is worse than a wrong status:
+the `FileNotFoundException` left the loop and reached `SeedBundles`' outer `Catch`, which abandons
+**the whole identity's adoption pass**. One source being replaced during a boot therefore made every
+*other* sealed source on that identity recompile as well — a publication window costing far more
+than the publication it was in. The seeder now reads through the same operation and skips only the
+source whose seal went away, and its warning says WHICH absence it saw: a publication directory
+that is present but unsealed (it died before the seal, or is being replaced right now) versus one
+that has been removed. Two implementations of one classification is how the divergence happened, so
+there is now exactly one — `ShippedPrebuiltBundles.ReadSealLines`, beside the sentinel's own name,
+which `PublishedBundleCatalogue` delegates to (`MeshWeaver.PluginCatalog` depends on
+`MeshWeaver.Hosting`, so the shared operation can only live on that side).
+
 🚨 **A `404` for a name the index just listed used to be the *only* signal for all of this, and it
 named the wrong thing.** The route re-evaluates the seal on every request, so a `404` on
 `Export.zip` was equally consistent with *some other* bundle having gone absent a moment earlier —

@@ -726,17 +726,13 @@ public static class PublishedBundleCatalogue
     // The publisher removes the seal before replacing a publication. File.Exists followed by
     // ReadAllLines races that removal (#3876): only the open can decide whether it is readable.
     // Other I/O failures must still surface; they do not establish an absent seal.
+    //
+    // 🚨 ONE implementation, in ShippedPrebuiltBundles beside the sentinel's own name — the boot
+    // seeder reads the same file and cannot reference this assembly (MeshWeaver.PluginCatalog
+    // depends on MeshWeaver.Hosting, not the reverse). A second copy here is how the seeder came
+    // to keep the racing File.Exists after the catalogue readers had been fixed.
     internal static string[]? ReadSealLines(string sentinel, Func<string, string[]>? readLines = null)
-    {
-        try
-        {
-            return (readLines ?? File.ReadAllLines)(sentinel);
-        }
-        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
-    }
+        => ShippedPrebuiltBundles.ReadSealLines(sentinel, readLines);
 
     /// <summary>
     /// The same reading as <see cref="CompleteBundlesOf"/>, plus the directory the bytes are
