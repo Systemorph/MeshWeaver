@@ -329,6 +329,37 @@ readings plus both halves of the `why:` field, and the line is `Information`: a 
 (`AddFilter("MeshWeaver", LogLevel.Information)`), because `TestBase` binds levels from
 `test/appsettings.json` and an Information line is otherwise dropped before any provider sees it.
 
+### Where the `why:` is READ — the gate log already asks for it
+
+`PluginGateRunner` raises three categories to `Information` for exactly this question
+(`RecycleAttributionCategories`: `MeshWeaver.Graph.Configuration`,
+`MeshWeaver.PluginCatalog.PackageInstaller`, `MeshWeaver.Messaging.MessageHub`), because the gate
+otherwise runs at `Warning` and every candidate recycler announced itself into a sink with no
+listener. So the reason surfaces in the bake gate log with no further wiring — which is the one log
+where the six occurrences of #3510 were read.
+
+### The rebind hypothesis: possible by construction, excluded by measurement
+
+#3510's leading candidate was `NodeTypeRebindWatcher`. Read from code, it **can** fire against the
+root of the package currently installing, and that is worth stating plainly because two eliminations
+in the thread read as stronger than they are:
+
+- the watcher is armed on **every** instance hub at initialization (`WithInitialization` →
+  `RegisterForDisposal(Arm(...))`), package roots included;
+- `RequiresRebind` fires on any post-commit `Created`/`Updated` event for that node whose `NodeType`
+  differs from the one its hub bound — and the installer's placeholder dance **retypes the root**,
+  which is precisely such an event;
+- it posts at most ONE self-`DisposeRequest` (`Take(1)`), and skips a hub already `IsDisposing`.
+
+So "it cannot happen" is false. What is true is that it has **never been the observed disposer**:
+every measured occurrence carries `PackageInstaller`'s own recycle line at the disposal timestamp,
+and the two are separated by ORDERING — the rebind fires at the retype, in the WRITE stage; the
+installer's `SettleRetypedRoot` fires after the package's own adoption wave. They are also separated
+by TRANSPORT, which is the cheaper discriminator now that the line exists: the rebind posts to
+**itself**, and `SettleRetypedRoot` posts from the node-operation issuing hub, so one reads
+`requested by itself — a self-posted DisposeRequest` and the other `requested by portal/nodeops-… (routed
+DisposeRequest)`. With the reason attached, no ordering argument is needed at all.
+
 ## Sighting 2026-09-10 — a verdict that was MINTED and still did not reach the waiter
 
 Recorded here because the evidence is a CI log that ages out, and because it is the *other* half of
