@@ -1,7 +1,7 @@
 ---
 Name: What a Green Build Costs a Synced Space
 Category: Architecture
-Description: A green build of a repository fans out to every Space that syncs it, and exactly one field decides whether a delivery is free or a full clone. That field is deliberately frozen whenever an import does not fully converge — so a source that cannot converge pays the full fetch on every delivery, and its retry cadence is set by the source repository's CI schedule rather than by anything about the source.
+Description: A green build of a repository fans out to every Space that syncs it, and for two years exactly one field decided whether a delivery was free or a full clone. That field is deliberately frozen whenever an import does not fully converge, so a source that could not converge paid the full fetch on every delivery at the source repository's CI cadence. The fix is a second, weaker pointer — and the reason it needs a FINAL verdict rather than merely a recorded one.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v6"/><path d="M12 15v6"/><circle cx="12" cy="12" r="3"/><path d="M4.2 6.6l2.8 2.2"/><path d="M17 15.2l2.8 2.2"/><path d="M4.2 17.4l2.8-2.2"/><path d="M17 8.8l2.8-2.2"/></svg>
 ---
 
@@ -13,10 +13,15 @@ feature. This page describes what one delivery **costs**, and the one field that
 
 The short version:
 
-> A delivery is free only when the source's `lastSyncCommitSha` already equals the built commit.
+> A delivery was free only when the source's `lastSyncCommitSha` already equalled the built commit.
 > That field is held back — on purpose — whenever an import does not fully converge. So the
-> cheapness gate and the convergence guard are **the same field**, and a source that can never
-> converge is the source that re-clones its repository most often.
+> cheapness gate and the convergence guard were **the same field**, and a source that could never
+> converge was the source that re-cloned its repository most often.
+>
+> §7 is the fix: a **second, weaker pointer** — *we have already looked at exactly these bytes* —
+> that never touches the conservative baseline. Its whole difficulty is that today's
+> re-clone-per-delivery is *also* the retry loop for transient failures, so the new skip has to
+> distinguish a verdict re-running cannot change from one that might.
 
 ## 1. What actually fires — a green build is not a merge
 
@@ -62,7 +67,12 @@ For a healthy source both are harmless, and the allow-list says so explicitly
 > `SkipReason` ("already at this commit"), so a scheduled or dispatched re-verification of an
 > unchanged default branch triggers no import at all.
 
-That invariant is the design. Section 4 is about the sources for which it is **false**.
+That invariant is the design. Section 4 is about the sources for which it was **false**, and §7
+about what makes it true again. 🚨 **Note what the fix is not: the trigger list is deliberately
+unchanged.** Dropping `schedule` would take out 87 of these 254 deliveries at a stroke — and it
+would be the same mistake the 2026-09-02 measurement corrected in the other direction, because a
+cron run is the only green verdict some repositories ever produce, and for a *converging* source
+those 87 deliveries already cost nothing. The trigger was never the defect.
 
 ## 2. The one gate that makes a delivery free
 
@@ -75,10 +85,12 @@ built repository is nevertheless left alone:
 | `direction is ExportOnly` | the source refuses imports |
 | `branch 'X' != built branch 'Y'` | the build is not on the branch this source tracks |
 | **`already at this commit`** | **`lastSyncCommitSha == headSha`** |
+| **`already attempted at this commit with a final verdict`** | **`lastAttemptedCommitSha == headSha` AND `lastAttemptWasFinal`** (§7) |
 
-Only the last one is a *work* saving, and it is keyed on exactly one field. Deliveries two and three
-of a merge, and every cron tick until the next merge, are free **iff** the first delivery advanced
-`lastSyncCommitSha` to that commit.
+Only the last two are a *work* saving. Until the second one existed the saving was keyed on exactly
+one field, so deliveries two and three of a merge, and every cron tick until the next merge, were
+free **iff** the first delivery advanced `lastSyncCommitSha` to that commit — and §4 is why, for
+some sources, it never did.
 
 ## 3. What a non-skipped delivery costs
 
@@ -147,6 +159,10 @@ necessarily disarms the first:
 > anything about the source. A cron probe that never changes the tip re-clones the repository just
 > as hard as a merge does.
 
+🚨 **None of the three clauses may be relaxed** — each is an incident, and the failure mode of
+relaxing one is silent data loss or silently-missing content, not a slow sync. The field stays
+exactly as conservative as it is; §7 adds a *different* field for the *different* question.
+
 So the allow-list's stated invariant — *"a sync source already sitting on the built sha is skipped …
 so a scheduled re-verification triggers no import at all"* — holds for every source that converges
 and **for no source that does not**. On the converging sources the 15-minute probe costs nothing at
@@ -160,6 +176,15 @@ None of the three freeze conditions resolves by itself:
 - a node **failed** on a content rule fails identically on the same bytes for ever;
 - an import that failed outright fails again until its cause is fixed.
 
+> ⚠️ **`MayAdvanceBaseline` and `StaticRepoImportResult.Converged` are not the same predicate**, and
+> the difference is `PruneRefused`. A run whose source listing came back truncated (#3589 / #3614)
+> is *not* `Converged` — the marker refuses to record it as such — but `MayAdvanceBaseline` does not
+> read that field, so such a run **does** advance `lastSyncCommitSha` and the source is skipped by
+> §2's first arm on every later delivery of that commit. That is pre-existing behaviour, deliberately
+> untouched here: closing it would make a source pay *more* clones, which is the opposite of this
+> page's subject. It is noted because a reader comparing the two predicates will otherwise assume
+> one of them is a typo.
+
 ### Reading it off a live portal, read-only
 
 **The discriminator is `lastSyncedAt` far behind `lastSyncAttemptAt` with an outcome of
@@ -167,7 +192,7 @@ None of the three freeze conditions resolves by itself:
 reconcile — which is `MayAdvanceBaseline` returning false, which holds `lastSyncCommitSha` too.
 
 > ⚠️ **Two things that look like this and are not.** A frozen `lastSyncedAt` beside outcome
-> `Skipped` is the sanctioned no-op (#677) — see *The three clocks* in
+> `Skipped` is the sanctioned no-op (#677) — see *The four facts* in
 > [GitHub Sync](/Doc/Architecture/GitHubSync). And a `lastSyncCommitSha` a few hours behind the
 > branch tip is normal: the webhook imports **at the commit the build proved**, not at the tip, so
 > the recorded sha is the last delivered green commit, not `HEAD`.
@@ -205,6 +230,12 @@ gh api "repos/<owner>/<repo>/compare/<lastSyncCommitSha>...main" \
 
 `behind_by: 0` confirms the recorded sha is still an ancestor (nothing was force-pushed away);
 `ahead_by` is how many commits of deliveries the source has been paying for without converging.
+
+Since §7 there is a third pair of fields to read, and for a settled source they are the ones that
+explain the frozen dates: `lastAttemptedCommitSha` (what the last attempt *looked at*) and
+`lastAttemptWasFinal` (whether looking again could change anything). The settings tab renders the
+second as *"this commit has a final verdict — the next new commit re-attempts"*, so a reader is not
+left to infer a stopped webhook from a stopped clock.
 
 ## 5. What the content-addressed marker does and does not close
 
@@ -245,13 +276,141 @@ live instance: a `MeshWeaver/_GitSync` on `memex.meshweaver.cloud` pointing at
 `https://github.com/Systemorph/MeshWeaver` with no subdirectory, 389 refused nodes per pass.
 
 **The fix for that shape is the configuration, not the engine**: give the source a `subdirectory`
-that really is a content tree, or delete the source. The engine's own share of the problem is the
-one section 4 states — that the cheapness gate has no way to say *"we have already looked at exactly
-these bytes for this source"* independently of *"the mesh is known to hold this commit"*.
+that really is a content tree, or delete the source. The engine's own share of the problem was the
+one section 4 states — that the cheapness gate had no way to say *"we have already looked at exactly
+these bytes for this source"* independently of *"the mesh is known to hold this commit"*. §7 is that
+sentence, given a field. It makes a misconfigured source cost **one** clone per new commit instead
+of one per delivery; it does not make the source correct, and the configuration is still the fix.
+
+## 7. The fix: two questions, two fields
+
+The engine had one field answering two questions that must be allowed to diverge:
+
+| Question | Who asks it | Field |
+|---|---|---|
+| *Is the mesh known to hold this commit's content?* | the two-way conflict guard, the diff base, the "up to date?" display | `lastSyncCommitSha` — **unchanged**, still held by `MayAdvanceBaseline` |
+| *Have we already looked at exactly these bytes?* | the webhook's cheapness gate | `lastAttemptedCommitSha` + `lastAttemptWasFinal` — **new** |
+
+`RecordSyncResult` writes the new pair on **every import conclusion**, in the same `stream.Update`
+patch as the recency stamp. `SkipReason` gains a fifth arm that fires only when *both* halves agree
+with the built commit. Nothing else moved: the baseline stays as conservative as #675 / #677 /
+#2229 item C need it to be, the next NEW commit still brings the source a full unscoped import, and
+the GUI's own **Update to latest** never consults `SkipReason` at all.
+
+### 🚨 Why "already attempted" is not enough on its own
+
+**Today's re-clone-per-delivery is also, accidentally, the retry loop** for exactly the failures the
+importer refuses to call final. `IsContentVerdict` is a short allow-list on purpose — `InvalidPath`,
+`InvalidNodeType`, `ValidationFailed`, `Unauthorized` — and everything else stays retryable, because
+getting *that* backwards freezes a healthy partition out of the mesh (#3101). A store that was
+briefly unreachable comes back as `Unknown` ("Persistence read failed…", "Inner CreateNode
+faulted…"); the next delivery is the only thing that retries it, and on a quiet repository the next
+commit is never.
+
+So a skip keyed on the sha alone would trade one bug for a worse one. The second half is
+`StaticRepoImportResult.VerdictIsFinal` — *would running again change the answer?* — which is a
+different question from `Converged` (*is the partition now equal to the source?*):
+
+| Outcome shape | `Converged` | `VerdictIsFinal` | Next delivery at the same commit |
+|---|---|---|---|
+| clean `Imported` | ✅ | ✅ | skipped by §2's **first** arm (the baseline advanced) |
+| `Preserved > 0`, nothing failed | ❌ | ✅ | **skipped by the new arm** — the same bytes meet the same server-newer nodes |
+| `ImportedWithContentErrors` (every failure a content verdict) | ❌ | ✅ | **skipped by the new arm** — the same bytes break the same rules |
+| `ImportedWithErrors` (one or more retryable failures) | ❌ | ❌ | **attempted** — a store blip may not recur |
+| outcome `Failed` (the whole import faulted) | ❌ | ❌ | **attempted** — no per-file tally to classify, and unknown means retryable |
+| `PruneRefused` (truncated listing) | ❌ | ❌ | attempted — though §4's aside notes the baseline advanced anyway |
+
+`Preserved > 0` is the row that matters most in practice: it is the arm both measured live sources
+sit on, and the one the import marker (§5) does nothing for. The preserve decision is taken against
+`lastSyncedAt`, which no re-import moves — so a preserved node is preserved identically on every
+pass until a person commits it back or discards it.
+
+### What clears the licence
+
+The pair is **written, never merged** — an older value must not survive a conclusion that set none,
+or a skip would be licensed for an attempt that never happened. Three things clear it:
+
+- **an export / commit-back**, because it advances the conflict horizon, which is what decides
+  *which* live nodes an import preserves — so any earlier "final at commit X" is stale;
+- **a hold** (the sealed-publication gate), because no attempt ran, and a seal arriving later is the
+  archetype of a condition that clears without the commit moving;
+- **a new commit**, trivially — the recorded sha stops matching.
+
+🚨 **What does NOT clear it, stated rather than hidden:** a mesh-side change at an unchanged commit —
+someone deleting the very node that was being preserved, say. The next green build still skips, and
+the source waits for the repository's next commit or for a human pressing **Update to latest**. That
+is the same contract `lastSyncCommitSha` has always had for the converging case, and it is the
+deliberate price of not re-cloning a repository ten times an hour to discover that nothing changed.
+
+### The controls
+
+`GreenBuildSkipsASettledSourceTest` measures both directions **on the clone itself** — the transfer
+is the cost, so an assertion on a decision function or on a log line would not be measuring it. The
+GitHub transport and one marked storage path are substituted; the webhook processor, the sync
+service, the importer and the node streams are real.
+
+- *A content verdict at this commit costs no second clone, and a new commit still does import* — a
+  nested `Space` refused with `InvalidPath`, then the same green build again (**no fetch**), then a
+  new sha (**fetch, at the commit that build proved**). It also pins `lastSyncCommitSha` still
+  `null`: the conservative baseline must not have moved.
+- *A failure that might not recur is still attempted at the same commit* — one node whose store
+  faults with the production connect-timeout shape, so the pass is `ImportedWithErrors` with
+  `VerdictIsFinal == false`; the same green build then **must** reach GitHub. This is the control
+  that could falsify the first: a fix that skips everything strands every self-healing source.
+
+## 8. Why the cron probe stays in the allow-list
+
+A third of core's deliveries come from one workflow that compiles nothing —
+`.github/workflows/prod-synthetic-probe.yml`, `cron: "*/15 * * * *"`, whose entire body is `curl`
+against the two live portals (no checkout, no restore, no compile, no artefact). Excluding it, or
+dropping `schedule` from `PublishSignalTriggers` altogether, looks like the cheapest possible win.
+It was measured, and it is not one.
+
+**The window (24 h to 2026-09-10T17:35Z, core `main`, green): 329 runs enumerated against a
+`total_count` of 329 — complete.** 254 are publish signals; 75 are `workflow_run`-triggered and
+already rejected. `schedule` accounts for 112 of the 254 (44 %), the probe alone for 87 (34 %).
+
+- **The probe publishes no commit that a push run did not already publish.** Its 87 runs cover 34
+  distinct `head_sha`s, and every one of them also carried a green `push` run of the content CI.
+  (One sha appeared to be probe-only until its push runs were found nine minutes before the window
+  opened — a window artefact, not a case.) So the probe's deliveries are *duplicates*: for a
+  converging source §2's first arm already answers them for free, and for a settled source §7's new
+  arm now does. **Excluding it saves nothing the engine fix does not already save.**
+- **No repository in the fleet depends on `schedule`.** All six satellites' content CI fires on
+  `push` *and* `repository_dispatch` *and* `schedule`; Memex's has no cron at all. Counting shas
+  whose only green content-CI run was a `schedule` run: 51 in the 30 days to 2026-09-10, **none on
+  or after 2026-09-01** (the satellites moved from `17,47 * * * *` polling to a daily `03:xx` cron
+  plus the `meshweaver-upstream-published` dispatch on 2026-08-29/30). Over the whole of September,
+  removing `schedule` would have widened exactly one repository's worst quiet stretch, by six hours.
+- **But it would not close the class.** A `push`-triggered run of a workflow that is *not* the
+  content CI is admitted exactly as readily as a cron: on core `192a60d84a36`, `Chart Gate` and
+  `Hosting Operator` both went green on `push` in the same second that `push MeshWeaver Build and
+  Test` **failed**. Narrowing the trigger set would suppress the loudest member of the class and
+  leave the rest — and it is the same shape of mistake as the pre-2026-09-02 `event == "push"` test,
+  which discarded `Systemorph/MeshWeaver.Reinsurance`'s three green `repository_dispatch` runs and
+  left `Underwriting/_GitSync` 38 h behind a merged main with every delivery answering 200 OK.
+
+🚨 **And the class has a correctness half, not only a cost half.** `Auto-update green armed PRs`
+(`cron: "*/10 * * * *"` in Reinsurance, SocialMedia and MeshWeaver.Crm) does nothing but call
+`gh api … /update-branch` on armed PRs — it checks out nothing — and in the 48 h to
+2026-09-10T19:36Z it recorded **20 green build completions for
+`MeshWeaver.Reinsurance@7d29a303`** and **40+ for `MeshWeaver.SocialMedia@07cc155e`**, both of them
+commits whose content CI had **failed**. That is a delivery authorising an import of a tree no build
+proved — the proposition `SyncRefContract` exists to guarantee.
+
+**The conclusion: the trigger event is a proxy for the wrong proposition.**
+`PublishSignalTriggers` answers *"how was this run started"*; what the record needs is *"did this
+repository's own CONTENT CI prove this tree"*. The discriminator for that is already in the payload —
+`workflow_run.name` / `.path` — and every repository has exactly one such workflow (`ci.yml` in each
+satellite, `dotnet-test.yml` in core). Keyed on that, the probe, the PR-updater, `Deployment Smoke`,
+`Arm credential`, `Chart Gate` and `Hosting Operator` all fall out under one rule, no repository
+loses its only signal, and the trigger allow-list can stay as wide as it is. That is a separate
+change with its own risk (a repository that declares the wrong workflow stops syncing silently), and
+it is filed as such.
 
 ## See also
 
-- [Syncing a Space with GitHub](/Doc/Architecture/GitHubSync) — the feature, the three clocks, the webhook setup.
+- [Syncing a Space with GitHub](/Doc/Architecture/GitHubSync) — the feature, the webhook setup, and the four facts — the horizon, the baseline, the recency stamp, and §7's attempt pair.
 - [The Import Marker Records Convergence](/Doc/Architecture/ImportMarkerRecordsConvergence) — the content-addressed short-circuit and what may write it.
 - [Static Repo Import](/Doc/Architecture/StaticRepoImport) — fingerprint, activity lock, upsert, prune.
 - [Sync Ref Contract](/Doc/Architecture/SyncRefContract) — what a build completion records and who consumes it.

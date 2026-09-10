@@ -161,6 +161,60 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
         && Failed == 0
         && !PruneRefused
         && !string.Equals(Outcome, "Failed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 🚨 <b>Issue #3945 — is this run's verdict FINAL for the content it read?</b> True when every
+    /// reason this run did not converge is a property of THOSE BYTES, so a re-run against the same
+    /// content re-derives the identical verdict and can accomplish nothing.
+    ///
+    /// <para><b>Not the same question as <see cref="Converged"/>, and the difference is the point.</b>
+    /// <c>Converged</c> asks "is the partition now equal to the source?" — the question the
+    /// content-addressed marker answers, and the one <c>GitHubSyncService.MayAdvanceBaseline</c>
+    /// answers before it moves a sync source's baseline. This asks "would running again change the
+    /// answer?" A converged run is trivially final; a run that kept live nodes back
+    /// (<see cref="Preserved"/>) is NOT converged and IS final — the same bytes meet the same
+    /// server-newer nodes and are kept back again.</para>
+    ///
+    /// <para><b>Final — re-running provably cannot help:</b></para>
+    /// <list type="bullet">
+    ///   <item><see cref="Preserved"/> &gt; 0 with nothing failed — two-way conflict resolution kept
+    ///     server-newer nodes, or a bidirectional prune spared a server-side addition. Neither is a
+    ///     transient condition: the protection is measured against
+    ///     <c>GitHubSyncConfig.LastSyncedAt</c>, which no re-import moves.</item>
+    ///   <item><c>Outcome == "ImportedWithContentErrors"</c> — the fold above emits this literal
+    ///     only when EVERY per-node failure was an <c>IsContentVerdict</c> refusal, i.e. a rule
+    ///     these bytes break (#3146).</item>
+    /// </list>
+    ///
+    /// <para><b>NOT final — something outside the content may have changed by the next attempt:</b></para>
+    /// <list type="bullet">
+    ///   <item><c>Outcome == "ImportedWithErrors"</c> — at least one failure was NOT a content
+    ///     verdict. <c>Unknown</c> ("Persistence read failed…", "Inner CreateNode faulted…") and
+    ///     <c>PatchFailed</c> deliberately land here, and treating them as final is #3101 — a
+    ///     partition frozen out of the mesh over a store blip.</item>
+    ///   <item><c>Outcome == "Failed"</c> — the whole import faulted, carrying no per-file tally to
+    ///     classify. Unknown means retryable.</item>
+    ///   <item><see cref="PruneRefused"/> — the source listing came back truncated (#3589/#3614), so
+    ///     this run never saw the whole content its verdict would be about.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>A caller may use this to skip WORK, never to record CONVERGENCE.</b> It says
+    /// nothing about whether the mesh holds this content; only <see cref="Converged"/> does.</para>
+    /// </summary>
+    public bool VerdictIsFinal =>
+        !PruneRefused
+        && !string.Equals(Outcome, "Failed", StringComparison.OrdinalIgnoreCase)
+        && (Failed == 0
+            || string.Equals(Outcome, ContentErrorsOutcome, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The <see cref="Outcome"/> literal a pass earns when it had failures and <b>every one</b> of
+    /// them was a content verdict (#3146) — the one outcome word that carries "re-reading these same
+    /// bytes re-derives this same refusal". Named here, beside <see cref="VerdictIsFinal"/> which
+    /// reads it and the fold in <c>StaticRepoImporter.Run</c> which writes it, so a re-wording
+    /// cannot silently split the two.
+    /// </summary>
+    public const string ContentErrorsOutcome = "ImportedWithContentErrors";
 }
 
 /// <summary>
@@ -1016,7 +1070,7 @@ public static class StaticRepoImporter
                                     // 🚨 #3146 — Failed, not Warning, and that is load-bearing: it is
                                     // the status the skip arm reads to stop re-running content that
                                     // provably cannot import at this fingerprint.
-                                    "ImportedWithContentErrors" => ActivityStatus.Failed,
+                                    StaticRepoImportResult.ContentErrorsOutcome => ActivityStatus.Failed,
                                     "Failed" => ActivityStatus.Failed,
                                     _ => ActivityStatus.Succeeded,
                                 },
@@ -1055,7 +1109,7 @@ public static class StaticRepoImporter
                 // fingerprint. Force still re-runs — that is its purpose.
                 if (policy?.Force != true
                     && existingLog is { Status: ActivityStatus.Failed }
-                    && MarkerOutcome(existingLog) == "ImportedWithContentErrors")
+                    && MarkerOutcome(existingLog) == StaticRepoImportResult.ContentErrorsOutcome)
                 {
                     logger?.LogWarning(
                         "[StaticRepoImport] {Partition} already FAILED at {Fingerprint} on content "
@@ -1983,7 +2037,7 @@ public static class StaticRepoImporter
                                 // retryable failure among them keeps the ordinary Warning, because
                                 // then a later pass genuinely might do better.
                                 failed > 0 && count.FailedDeterministic == failed
-                                    ? "ImportedWithContentErrors"
+                                    ? StaticRepoImportResult.ContentErrorsOutcome
                                 : failed > 0 ? "ImportedWithErrors"
                                     : blockedCreates.Count > 0 ? "ImportedWithBlockedCreates"
                                     : refusedContent.Count > 0 ? "ImportedWithRefusedContent" : "Imported",

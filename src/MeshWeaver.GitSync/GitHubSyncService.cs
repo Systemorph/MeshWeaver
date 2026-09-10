@@ -142,6 +142,11 @@ public sealed class GitHubSyncService
                         // Record the commit by MERGING only the last-sync fields atop the latest
                         // node content (stream.Update read-modify-write) — never a full-content write,
                         // so a concurrent repo-field edit in the GUI editor is not clobbered.
+                        // 🚨 The attempt pair (#3945) is left to its default — i.e. CLEARED. An
+                        // export advances the conflict horizon, and the horizon is what decides
+                        // which live nodes an import preserves, so any "final at commit X" verdict
+                        // an earlier import recorded is stale the moment this lands: the next green
+                        // build must attempt again rather than skip on it.
                         return repoClient.Push(request).SelectMany(result =>
                             RecordSyncResult(spacePath, CommittedOutcome, result.CommitSha,
                                     advanceHorizon: true, sourceId)
@@ -482,7 +487,16 @@ public sealed class GitHubSyncService
                                 // while the mesh still has instances) is drift the sync cannot close
                                 // by itself — it is stated on the config, where the settings tab and
                                 // the status surface read it, not only in the activity log.
-                                note: HeldNote(x.Result))
+                                note: HeldNote(x.Result),
+                                // 🚨 #3945 — the SECOND, weaker pointer, and the whole reason it is
+                                // a second one. "We have already looked at exactly these bytes" is
+                                // not "the mesh holds this commit", and one field answering both is
+                                // what made a source that cannot converge re-clone its entire
+                                // repository on every green build of the source repository. This one
+                                // is stamped whatever the outcome; whether it may LICENCE a skip is
+                                // the flag beside it, never this sha alone.
+                                attemptedCommitSha: x.CommitSha,
+                                attemptWasFinal: x.Result.VerdictIsFinal)
                             .Select(_ => x.Result);
                     });
             });
@@ -515,6 +529,17 @@ public sealed class GitHubSyncService
     /// <para>A "Skipped" (fingerprint-matched no-op) outcome is NOT judged here — it is allowed
     /// through to <c>RecordSyncResult</c> with <c>advanceHorizon: false</c>, which advances the SEEN commit only and deliberately
     /// leaves the conflict horizon alone.</para>
+    ///
+    /// <para>🚨 <b>This is NOT the question "would attempting again change anything" (#3945), and it
+    /// must never be relaxed into it.</b> Holding the baseline is what keeps un-landed content
+    /// reachable; but because <c>GitHubWebhookProcessor.SkipReason</c> also read this same field to
+    /// decide whether a delivery was FREE, holding it made every later green build of the source
+    /// repository pay a full clone — 10/h on core, for as long as the source did not converge. That
+    /// second question now has its own pair of fields
+    /// (<see cref="GitHubSyncConfig.LastAttemptedCommitSha"/> +
+    /// <see cref="GitHubSyncConfig.LastAttemptWasFinal"/>), fed by
+    /// <see cref="StaticRepoImportResult.VerdictIsFinal"/>, so this one can stay exactly as
+    /// conservative as #675 / #677 / #2229 item C need it to be.</para>
     /// </summary>
     /// <param name="result">The import outcome to judge.</param>
     /// <returns><c>true</c> when the mesh is genuinely in sync with the repo at this commit.</returns>
@@ -984,7 +1009,7 @@ public sealed class GitHubSyncService
     /// concurrent GUI edit of the repository fields is never clobbered, and re-writing an unchanged
     /// value costs nothing: the write travels as an RFC 7396 merge patch of what actually changed.
     ///
-    /// <para>🚨 <b>The three clocks are separate ON PURPOSE and must stay so.</b> Folding the horizon
+    /// <para>🚨 <b>The clocks are separate ON PURPOSE and must stay so.</b> Folding the horizon
     /// into the recency stamp is the one change that must never be made — it would advance the
     /// horizon on exactly the outcomes that suppress it (a fingerprint-matched no-op, an import that
     /// preserved server-newer nodes, one that landed nothing), moving it past pending uncommitted
@@ -1000,9 +1025,18 @@ public sealed class GitHubSyncService
     /// never landed.</param>
     /// <param name="advanceHorizon">Whether this outcome RECONCILED mesh and repo.</param>
     /// <param name="sourceId">The sync source (null = the primary).</param>
+    /// <param name="note">The hold reason / finding to state on the config, or null to clear it.</param>
+    /// <param name="attemptedCommitSha">The commit an IMPORT attempt actually read, or <c>null</c>
+    /// to CLEAR the attempt pair — which every non-import conclusion does, because an export moves
+    /// the conflict horizon (so an earlier verdict at that commit is stale) and a hold means no
+    /// attempt ran at all (#3945).</param>
+    /// <param name="attemptWasFinal">Whether that attempt's verdict is final at that commit
+    /// (<see cref="StaticRepoImportResult.VerdictIsFinal"/>). Meaningless without
+    /// <paramref name="attemptedCommitSha"/>, and written in the same patch as it.</param>
     private IObservable<MeshNode> RecordSyncResult(
         string spacePath, string outcome, string? seenCommitSha, bool advanceHorizon,
-        string? sourceId = null, string? note = null)
+        string? sourceId = null, string? note = null,
+        string? attemptedCommitSha = null, bool attemptWasFinal = false)
     {
         var now = DateTimeOffset.UtcNow;
         return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
@@ -1019,6 +1053,17 @@ public sealed class GitHubSyncService
                     // A hold's reason, or cleared by an attempt that ran: the note describes the
                     // LAST attempt only, never an older one.
                     LastSyncNote = note,
+                    // 🚨 #3945 — ALWAYS written, never merged with what was already there. Unlike
+                    // the baseline above (`?? cur.…`, a HIGH-WATER MARK that only ever advances)
+                    // this pair describes the LAST ATTEMPT, so an older value surviving a conclusion
+                    // that set none would licence a skip for an attempt that never happened. The
+                    // RFC 7396 diff a cross-hub `stream.Update` ships emits a key present in the
+                    // stored node and absent from the new content as `null` — an RFC 7396 REMOVE —
+                    // so passing null here genuinely clears the stored value.
+                    LastAttemptedCommitSha = attemptedCommitSha,
+                    // Never true on its own: the flag is only ever read beside the sha, and a true
+                    // with no sha would be a licence attached to no commit.
+                    LastAttemptWasFinal = attemptedCommitSha is { Length: > 0 } && attemptWasFinal,
                 },
             };
         });
@@ -1032,6 +1077,11 @@ public sealed class GitHubSyncService
     /// Records that this source was HELD from advancing, and why — onto the config, so the reason
     /// is visible where the outcome is (2026-09-08: a source held for hours showed only
     /// <c>Skipped</c>). Moves nothing else: not the commit, not the horizon. Cold.
+    ///
+    /// <para>🚨 It also CLEARS the attempt pair (#3945), by leaving it at its default. A hold means
+    /// no import ran, and a seal that has not arrived yet is the archetype of a condition that
+    /// clears without the commit moving — so a hold must never leave a "final at this commit"
+    /// licence standing for the delivery that follows it.</para>
     /// </summary>
     public IObservable<MeshNode> RecordHold(string spacePath, string? sourceId, string reason)
         => RecordSyncResult(spacePath, HeldOutcome, seenCommitSha: null, advanceHorizon: false,
