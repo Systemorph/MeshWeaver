@@ -130,6 +130,132 @@ public class QuiesceStartNamesTheAskerTest : HubTestBase
         line.Should().NotContain("itself", "nothing asked; there is no requester to name");
     }
 
+    /// <summary>
+    /// 🚨 <b>WHO is only half the question (#3510).</b> The sender identifies the recycler only
+    /// when it is a DIFFERENT hub; the three automatic recyclers post to their OWN hub and render
+    /// as one sentence — "a rebind or self-heal recycle" — which is the
+    /// <see href="/Doc/Architecture/ControlsThatCannotFail">one word covering three states</see>
+    /// shape. The poster has always known why. Now the request carries it.
+    /// </summary>
+    [HubFact]
+    public async Task ADisposeRequestCarryingAReason_PrintsThatReason()
+    {
+        var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "asked-with-reason"), c => c)!;
+        var asker = (MessageHub)Mesh.GetHostedHub(new Address("asker", "with-reason"), c => c)!;
+
+        asker.Post(
+            new DisposeRequest { Reason = "NodeType rebind: node 'X' is now typed 'A'" },
+            o => o.WithTarget(victim.Address));
+
+        var line = await QuiesceLineFor(victim);
+
+        line.Should().Contain("why: ",
+            "the line must have a WHY field at all — the whole residual of #3510 is that it did not");
+        line.Should().Contain("NodeType rebind: node 'X' is now typed 'A'",
+            "the poster's own sentence is the answer; a reader must not have to infer it from the "
+            + "sender the way #3510 had to infer it from ordering");
+        line.Should().NotContain(DisposeRequest.ReasonNotStated,
+            "a stated reason must never be reported as unstated");
+    }
+
+    /// <summary>
+    /// 🚨 The <c>NothingWasChecked</c> shape, one subsystem over: an unanswered question is a NAMED
+    /// answer, never a blank. A caller that said nothing is reported as having said nothing —
+    /// which is what tells the next reader to go and look at the poster, instead of reading an
+    /// empty field as "there was nothing to report".
+    ///
+    /// <para>This is also the NEGATIVE control on the test above: a formatter that invented a
+    /// plausible reason, or that silently dropped the field when there was none, would pass
+    /// <see cref="ADisposeRequestCarryingAReason_PrintsThatReason"/> and fail here.</para>
+    /// </summary>
+    [HubFact]
+    public async Task ADisposeRequestWithNoReason_SaysTheCallerDidNotStateOne()
+    {
+        var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "asked-no-reason"), c => c)!;
+        var asker = (MessageHub)Mesh.GetHostedHub(new Address("asker", "no-reason"), c => c)!;
+
+        asker.Post(new DisposeRequest(), o => o.WithTarget(victim.Address));
+
+        var line = await QuiesceLineFor(victim);
+
+        line.Should().Contain(DisposeRequest.ReasonNotStated,
+            "an absent reason must be REPORTED as absent; a field that simply disappears reads to "
+            + "the next person as 'there was nothing to report'");
+        line.Should().Contain("asker/no-reason",
+            "the half that IS known must still be printed — a missing reason does not cost the "
+            + "sender");
+    }
+
+    /// <summary>
+    /// 🚨 <b>#3510's exact shape, one level down — and the reading nothing could produce.</b>
+    ///
+    /// <para>The issue's trail: <i>"The Hosting root hub was disposed at 23:37:51Z while its own
+    /// 145-file install was in flight. Its per-node children — the owners of
+    /// <c>Hosting/*/_Activity/compile-state</c> … — went with it"</i>, and the writes those
+    /// children owed acks for were stranded. The stranded writes were owed by the CHILDREN, so the
+    /// child's own <c>[QUIESCE-START]</c> is where a reader lands — and a hosted hub is torn down
+    /// by a plain <c>Dispose()</c> from <c>HostedHubsCollection</c>, so that line read
+    /// <c>requested by a direct Dispose() (no routed DisposeRequest)</c>: the same sentence a
+    /// <c>using</c> produces. The root recycle that actually took it was invisible from there.</para>
+    ///
+    /// <para>Now the child names the cascade AND the originating teardown, so one line answers
+    /// both halves without a second log to correlate against.</para>
+    /// </summary>
+    [HubFact]
+    public async Task AChildTornDownWithItsOwner_NamesTheCascadeAndTheOriginatingTeardown()
+    {
+        var root = (MessageHub)Mesh.GetHostedHub(new Address("root", "recycled-mid-install"), c => c)!;
+        var child = (MessageHub)((IMessageHub)root)
+            .GetHostedHub(new Address("child", "compile-state"), c => c)!;
+        var installer = (MessageHub)Mesh.GetHostedHub(new Address("installer", "packages"), c => c)!;
+
+        installer.Post(
+            new DisposeRequest
+            {
+                Reason = "PackageInstaller.SettleRetypedRoot: recycling the root WHILE INSTALLING "
+                         + "that package",
+            },
+            o => o.WithTarget(root.Address));
+
+        var line = await QuiesceLineFor(child);
+
+        line.Should().Contain("a cascade from its owner",
+            "a hub that goes down because its OWNER does must say so — this is the reading #3510 "
+            + "could not get from the child, which is where its stranded writes were owed");
+        line.Should().Contain("root/recycled-mid-install",
+            "and it must NAME the owner, so the reader can go to the right hub's line next");
+        line.Should().Contain("PackageInstaller.SettleRetypedRoot",
+            "the ORIGINATING teardown travels down the cascade — otherwise the child names its "
+            + "parent and the reader still has to correlate two logs to learn that an install "
+            + "recycled the root");
+        line.Should().NotContain("no routed DisposeRequest",
+            "a cascade is not a direct Dispose(), and reading it as one is exactly what cost "
+            + "#3510 six occurrences");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The negative control, in the other direction.</b> A change that stamped EVERY disposal
+    /// as a cascade would satisfy the test above while destroying the one reading #3510 already
+    /// had — the absence of a routed request, which rules the message path out. An ordinary hub
+    /// disposed on its own must still read as one.
+    /// </summary>
+    [HubFact]
+    public async Task AHubDisposedOnItsOwn_IsNotReportedAsACascade()
+    {
+        var lonely = (MessageHub)Mesh.GetHostedHub(new Address("lonely", "no-owner-teardown"), c => c)!;
+
+        lonely.Dispose();
+
+        var line = await QuiesceLineFor(lonely);
+
+        line.Should().NotContain("a cascade from its owner",
+            "nothing tore this hub down but the caller — claiming an owner did would be a "
+            + "confidently wrong attribution, which is worse than the blank it replaces");
+        line.Should().Contain("no routed DisposeRequest",
+            "the ABSENCE of a request must survive the change: it is what rules the message path "
+            + "out, and it is the one deduction #3510 could already make");
+    }
+
     private sealed class QuiesceLogCapture : ILoggerProvider
     {
         public ConcurrentQueue<string> Entries { get; } = new();

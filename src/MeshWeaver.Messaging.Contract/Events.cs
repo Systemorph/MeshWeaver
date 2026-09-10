@@ -283,10 +283,38 @@ public enum ErrorType
 
 /// <summary>
 /// Request asking a hub to dispose itself and tear down its resources.
+///
+/// <para>🚨 <b>Carry a <see cref="Reason"/>.</b> A teardown that names only its sender answers half
+/// the question: Systemorph/MeshWeaver#3510 spent six occurrences and four bake seals establishing
+/// WHICH of several self-posting recyclers took a package root down mid-install, because
+/// <c>[QUIESCE-START]</c> could say <i>"requested by itself — a rebind or self-heal recycle"</i> and
+/// nothing more. That sentence is one word covering three states
+/// (<c>NodeTypeRebindWatcher</c>, the stale-build convergence, <c>WithOverlaySelfHeal</c>), which is
+/// the shape <see href="https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/ControlsThatCannotFail.md">Controls That Cannot Fail</see>
+/// catalogues. The poster always knows why; only the log did not.</para>
 /// </summary>
 [SystemMessage]
 [CanBeIgnored]
-public record DisposeRequest;
+public record DisposeRequest
+{
+    /// <summary>
+    /// One sentence saying WHY this hub is being torn down, written by the code that posts the
+    /// request — <c>"NodeType rebind: 'X' is now typed 'A' but its hub activated on 'B'"</c>,
+    /// <c>"PackageInstaller: recycling the retyped root …"</c>.
+    ///
+    /// <para><c>null</c> means the poster did not say, and that is printed as
+    /// <see cref="ReasonNotStated"/> — a NAMED answer, never a blank. Same rule as
+    /// <c>NodeDiagnosticsOutcome</c>: an absent answer that renders as nothing reads to the next
+    /// person as "there was nothing to report".</para>
+    /// </summary>
+    public string? Reason { get; init; }
+
+    /// <summary>
+    /// What <c>[QUIESCE-START]</c> prints for a <see cref="DisposeRequest"/> whose poster supplied
+    /// no <see cref="Reason"/>. Spelled once so a log reader and a log QUERY agree on the token.
+    /// </summary>
+    public const string ReasonNotStated = "reason not stated by the caller";
+}
 /// <summary>
 /// Liveness probe requesting a <see cref="PingResponse"/> from the target hub.
 /// </summary>

@@ -1864,8 +1864,18 @@ internal static class NodeTypeEnrichmentHelpers
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub.Address.ToString(),
                             instanceHub.JsonSerializerOptions,
+                            // 🚨 Named, not anonymous (#3510): a self-posted DisposeRequest reads
+                            // as "a rebind or self-heal recycle" — three posters, one sentence —
+                            // and telling them apart cost that issue six occurrences.
                             recycle: () => instanceHub.Post(
-                                new DisposeRequest(), o => o.WithTarget(instanceHub.Address)),
+                                new DisposeRequest
+                                {
+                                    Reason = "Overlay self-heal: the instance is bound to an "
+                                             + $"overlay of NodeType '{nodeType}' that its own "
+                                             + "watcher found stale, so the hub is recycled to "
+                                             + "re-bind against the current build",
+                                },
+                                o => o.WithTarget(instanceHub.Address)),
                             reportStuck: () => ReportStuckOverlayToAdmins(instanceHub, nodeType, logger),
                             nodeType, typeVersionAtOverlay, logger,
                             guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
@@ -2119,7 +2129,16 @@ internal static class NodeTypeEnrichmentHelpers
                             "Stale-build convergence: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — auto-recycling instance '{InstancePath}' ({ConfigKey}=true)",
                             nodeType, published, boundAssemblyPath, instanceHub.Address,
                             AutoRecycleConfigKey);
-                        instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                        // 🚨 Named (#3510) — see the rebind watcher: the three self-posting
+                        // recyclers were indistinguishable in the victim's own log.
+                        instanceHub.Post(
+                            new DisposeRequest
+                            {
+                                Reason = $"Stale-build convergence ({AutoRecycleConfigKey}=true): "
+                                         + $"NodeType '{nodeType}' published build '{published}', "
+                                         + $"superseding the bound '{boundAssemblyPath}'",
+                            },
+                            o => o.WithTarget(instanceHub.Address));
                         return;
                     }
 
