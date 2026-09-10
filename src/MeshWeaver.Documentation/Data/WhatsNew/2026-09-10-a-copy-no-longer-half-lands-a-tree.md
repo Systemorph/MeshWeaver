@@ -8,9 +8,9 @@ Order: -20260910
 
 # A copy no longer half-lands a tree
 
-Copying a subtree — from the Copy dialog, from "copy to home", from an import, or through an agent's
-`copy` tool — used to report the number of nodes it managed to write, and that number said nothing
-about whether the copy was whole.
+Copying a subtree — from the Copy dialog, from "copy to home", or through an agent's or the CLI's
+`copy` command — used to report the number of nodes it managed to write, and that number said
+nothing about whether the copy was whole.
 
 Two things could make it short. If part of the source was **not visible to you** — a branch someone
 else has not shared, or the gated part of an installed package — the copy simply did not see those
@@ -31,3 +31,7 @@ folder. And it reports every node that did not land — the ones that were refus
 therefore never attempted — instead of naming one and staying silent about the rest.
 
 Copies that were already complete behave exactly as before, including the count they report.
+
+This covers the copy described above. Moving a node, importing an archive and installing a package
+each run on their own machinery and are unchanged — a move already refuses rather than relocating
+part of a subtree, and the other two are separate pipelines.

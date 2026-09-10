@@ -93,7 +93,7 @@ later.
 
 🚨 **The refusal states COUNTS and never the paths.** The shortfall is exactly the set the caller may
 not read, so naming it would turn a refusal into a disclosure surface — the same reason
-[#3890](https://github.com/Systemorph/MeshWeaver/pull/3890) closed the autocomplete drill-down, which
+[#3890](https://github.com/Systemorph/MeshWeaver/issues/3890) closed the autocomplete drill-down, which
 worked by naming other people's node titles. An `Incomplete` report DOES name its paths: every one of
 them came out of the caller's own enumeration, so it discloses nothing the caller cannot already see.
 
