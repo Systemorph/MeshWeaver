@@ -1,8 +1,12 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using MeshWeaver.GitSync;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
@@ -153,6 +157,8 @@ public class GreenBuildPublishSignalTest
     [InlineData("Systemorph", "MeshWeaver", ".github/workflows/dotnet-test.yml", true)]
     [InlineData("Systemorph", "MeshWeaver", ".github/workflows/chart-gate.yml", false)]
     [InlineData("Systemorph", "MeshWeaver", ".github/workflows/prod-synthetic-probe.yml", false)]
+    [InlineData("someone", "MeshWeaver", ".github/workflows/ci.yml", true)]
+    [InlineData("someone", "MeshWeaver", ".github/workflows/dotnet-test.yml", false)]
     [InlineData("Systemorph", "MeshWeaver.Reinsurance", ".github/workflows/ci.yml", true)]
     [InlineData("Systemorph", "MeshWeaver.Reinsurance", ".github/workflows/auto-update-green-prs.yml", false)]
     [InlineData("someone", "content-repo", ".github/workflows/ci.yml", true)]
@@ -172,6 +178,49 @@ public class GreenBuildPublishSignalTest
         Assert.False(GitHubWebhookProcessor.IsRepositoryContentWorkflow(repository, null));
         Assert.False(GitHubWebhookProcessor.IsRepositoryContentWorkflow(repository, ""));
         Assert.False(GitHubWebhookProcessor.IsRepositoryContentWorkflow(repository, "   "));
+    }
+
+    [Fact]
+    public void AnArbitraryRepositoryCanDeclareItsOneRepositoryLevelWorkflowPath()
+    {
+        var repository = new RepoIdentity("customer", "knowledge");
+        var overrides = new[]
+        {
+            new GitHubContentWorkflow
+            {
+                Repository = "https://github.com/CUSTOMER/Knowledge",
+                Path = ".github/workflows/publish-content.yml",
+            },
+        };
+
+        Assert.True(GitHubWebhookProcessor.IsRepositoryContentWorkflow(
+            repository, ".github/workflows/publish-content.yml", overrides));
+        Assert.False(GitHubWebhookProcessor.IsRepositoryContentWorkflow(
+            repository, ".github/workflows/ci.yml", overrides));
+    }
+
+    [Fact]
+    public void RepositoryLevelWorkflowOverridesBindFromTheDocumentedConfiguration()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["GitHub:ContentWorkflows:Repositories:0:Repository"] = "customer/knowledge",
+                ["GitHub:ContentWorkflows:Repositories:0:Path"] =
+                    ".github/workflows/publish-content.yml",
+            })
+            .Build();
+        using var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(configuration)
+            .AddGitHubSyncServices()
+            .BuildServiceProvider();
+
+        var configured = services
+            .GetRequiredService<IOptions<GitHubContentWorkflowOptions>>()
+            .Value.Repositories;
+        var entry = Assert.Single(configured);
+        Assert.Equal("customer/knowledge", entry.Repository);
+        Assert.Equal(".github/workflows/publish-content.yml", entry.Path);
     }
 
     [Fact]
@@ -198,8 +247,12 @@ public class GreenBuildPublishSignalTest
     public void CoreContentCiRemainsAtThePublishSignalPath()
     {
         var root = SourceScan.FindRepoRoot();
-        Assert.True(File.Exists(Path.Combine(
-                root, ".github", "workflows", "dotnet-test.yml")),
+        var workflowNames = Directory
+            .EnumerateFiles(Path.Combine(root, ".github", "workflows"))
+            .Select(Path.GetFileName);
+        Assert.Contains(workflowNames,
+            name => string.Equals(name, "dotnet-test.yml", StringComparison.Ordinal));
+        Assert.True(File.Exists(Path.Combine(root, ".github", "workflows", "dotnet-test.yml")),
             "moving core content CI would make every workflow_run fail the path discriminator; "
             + "the renamed workflow must fail red instead of silently freezing GitSync");
         Assert.Equal(".github/workflows/dotnet-test.yml",

@@ -15,6 +15,7 @@ using MeshWeaver.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.GitSync;
 
@@ -64,6 +65,7 @@ public sealed class GitHubWebhookProcessor
     private readonly IMeshService meshService;
     private readonly GitHubRepoIdentityResolver? identities;
     private readonly ILogger? logger;
+    private readonly IReadOnlyList<GitHubContentWorkflow> contentWorkflows;
 
     /// <summary>Initializes a new instance of the <see cref="GitHubWebhookProcessor"/> class.</summary>
     /// <param name="hub">The hub this processor issues its reads and writes from.</param>
@@ -74,16 +76,19 @@ public sealed class GitHubWebhookProcessor
     /// the zero-match warning then says.
     /// </param>
     /// <param name="logger">Optional logger.</param>
+    /// <param name="contentWorkflowOptions">Repository-level content-workflow overrides.</param>
     public GitHubWebhookProcessor(
         IMessageHub hub,
         IMeshService meshService,
         GitHubRepoIdentityResolver? identities = null,
-        ILogger<GitHubWebhookProcessor>? logger = null)
+        ILogger<GitHubWebhookProcessor>? logger = null,
+        IOptions<GitHubContentWorkflowOptions>? contentWorkflowOptions = null)
     {
         this.hub = hub;
         this.meshService = meshService;
         this.identities = identities;
         this.logger = logger;
+        contentWorkflows = contentWorkflowOptions?.Value.Repositories.ToArray() ?? [];
     }
 
     /// <summary>
@@ -591,29 +596,47 @@ public sealed class GitHubWebhookProcessor
     /// <summary>Core predates the node-repo convention and is the one intentional exception.</summary>
     internal const string CoreContentWorkflowPath = ".github/workflows/dotnet-test.yml";
 
+    private static readonly RepoIdentity CoreRepository = new("Systemorph", "MeshWeaver");
+
     /// <summary>
     /// The one workflow whose green verdict proves a repository's CONTENT. A trigger says why a
     /// workflow ran; it does not say what that workflow checked. GitHub sends the stable workflow
     /// file path in every <c>workflow_run</c> payload, so identity is keyed on that path rather than
     /// on the mutable display name.
     ///
-    /// <para>Fail-closed by construction: every ordinary content/node repository uses
-    /// <c>.github/workflows/ci.yml</c>; the platform repository itself uses
-    /// <c>.github/workflows/dotnet-test.yml</c>. A repository with no workflow at its expected path
-    /// has no automatic publish signal — exactly like a repository with no content CI at all. The
-    /// repository's red/missing workflow is the positive signal; an unrelated green workflow can
-    /// never stand in for it.</para>
+    /// <para>Fail-closed by construction: ordinary content/node repositories use
+    /// <c>.github/workflows/ci.yml</c>; <c>Systemorph/MeshWeaver</c> uses its established
+    /// <c>.github/workflows/dotnet-test.yml</c>; and an arbitrary repository with a different path
+    /// declares one repository-level <see cref="GitHubContentWorkflowOptions"/> override. A
+    /// repository with no workflow at its expected path has no automatic publish signal — exactly
+    /// like a repository with no content CI at all. An unrelated green workflow can never stand in
+    /// for it.</para>
     /// </summary>
-    internal static string ExpectedContentWorkflowPath(RepoIdentity repository)
-        => string.Equals(repository.Repo, "MeshWeaver", StringComparison.OrdinalIgnoreCase)
+    internal static string ExpectedContentWorkflowPath(
+        RepoIdentity repository,
+        IEnumerable<GitHubContentWorkflow>? overrides = null)
+    {
+        var configured = overrides?.FirstOrDefault(entry =>
+            GitHubRepoIdentityResolver.Parse(entry.Repository)?.Matches(repository) == true
+            && !string.IsNullOrWhiteSpace(entry.Path));
+        if (configured is not null)
+            return configured.Path.Trim();
+        return CoreRepository.Matches(repository)
             ? CoreContentWorkflowPath
             : StandardContentWorkflowPath;
+    }
 
     /// <summary>Whether this run is the repository's declared-by-convention content CI. Paths are
     /// Git paths and therefore compared case-sensitively; a missing path means nothing was proved.</summary>
-    internal static bool IsRepositoryContentWorkflow(RepoIdentity repository, string? workflowPath)
+    internal static bool IsRepositoryContentWorkflow(
+        RepoIdentity repository,
+        string? workflowPath,
+        IEnumerable<GitHubContentWorkflow>? overrides = null)
         => workflowPath is { Length: > 0 }
-           && string.Equals(workflowPath, ExpectedContentWorkflowPath(repository), StringComparison.Ordinal);
+           && string.Equals(
+               workflowPath,
+               ExpectedContentWorkflowPath(repository, overrides),
+               StringComparison.Ordinal);
 
     /// <summary>
     /// A verified <c>workflow_run</c> → the repository's <see cref="BuildCompletion"/> node.
@@ -716,9 +739,9 @@ public sealed class GitHubWebhookProcessor
         // red (#3978). The workflow FILE is the repository-level identity: display names are mutable,
         // while the fleet's content-CI path is part of the node-repo contract.
         var workflowPath = GetString(run, "path");
-        if (!IsRepositoryContentWorkflow(target, workflowPath))
+        if (!IsRepositoryContentWorkflow(target, workflowPath, contentWorkflows))
         {
-            var expected = ExpectedContentWorkflowPath(target);
+            var expected = ExpectedContentWorkflowPath(target, contentWorkflows);
             if (string.IsNullOrWhiteSpace(workflowPath))
             {
                 logger?.LogWarning(

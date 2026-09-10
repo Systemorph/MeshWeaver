@@ -43,6 +43,12 @@ guards** before a delivery becomes a `BuildCompletion` (`GitHubWebhookProcessor.
    `.github/workflows/ci.yml` for every node/content repository, and the platform's established
    `.github/workflows/dotnet-test.yml` exception.
 
+An arbitrary repository whose content CI lives elsewhere declares one repository-level override
+under `GitHub:ContentWorkflows:Repositories` — `{ Repository: "owner/repo", Path:
+".github/workflows/content.yml" }`. It is deployment policy, not a field copied into every Space:
+all Spaces targeting one repository must trust the same evidence. Repository identity matching is
+case-insensitive; the Git workflow path is deliberately case-sensitive.
+
 All three fail closed: an unknown trigger, an unreadable branch/path, or a different green workflow
 records nothing. The path is the declaration: display names may change; moving the content CI away
 from the conventional path removes the automatic publish signal. Core pins its path in the policy
