@@ -177,10 +177,35 @@ packages hide children from subject-scoped queries, and a batch-shortfall post-c
 writes no install record, so `InstallCompleteness` — the platform's one partial-install detector —
 cannot see it either.
 
-**That is a separate defect with its own design decisions** (ordering, rollback semantics, the
-identity a subtree enumeration runs under) and is tracked on its own issue. This page's change makes
-its consequence *legible and cheap* instead of silent and repeated; it does not stop the half-copy
-from happening.
+**That was a separate defect with its own design decisions** (ordering, rollback semantics, the
+identity a subtree enumeration runs under). This page's change makes its consequence *legible and
+cheap* instead of silent and repeated; it does not stop the half-copy from happening.
+
+**`NodeCopyHelper.CopyNodeTree` is now fixed, and the design is
+[Copy Completeness](../CopyCompleteness).** Both halves were reproduced deterministically first, and
+only one of them was silent — which is worth recording, because the obvious framing is wrong:
+
+```
+A. a descendant the caller may not read
+     subject-scoped enumeration = 5 of the 7 nodes the subtree holds
+     copy RETURNED count = 5                     <- reported success
+     …/Pkg/Restricted   ABSENT                   <- silently left behind
+B. one write refused in the middle
+     copy THREW, naming ONE of five paths
+     …/Pkg/Source         ABSENT
+     …/Pkg/Source/Alpha   PRESENT                <- ORPHAN, under a parent that never landed
+```
+
+The copy now reads the subtree TWICE from the same query — as the caller, which is the read
+row-level security filters, and as System, which is what turns "the listing came back short" from a
+silence into a number — and refuses before writing anything when the two disagree, stating counts
+rather than the paths it cannot show. Writes then go level by level so a failure leaves a
+well-formed tree, and every enumerated node ends with an acknowledgement, so the report names what
+did not land instead of one path out of five.
+
+**`MeshExtensions.HandleCopyNodeRequest` still has the shape described above** — its
+`RequireComplete` guard remains wired only to Move — and a copy still writes no install record, so
+`InstallCompleteness` still cannot see one. Both are named as residuals on that page.
 
 ## Residuals, named rather than left to be rediscovered
 
@@ -204,3 +229,4 @@ from happening.
 - [Retiring a NodeType](../RetiringANodeType) — the deliberate version of "the sources are gone"
 - [Dangling NodeTypes](../DanglingNodeTypes) — the instance-side sibling: a node whose TYPE resolves to nothing
 - [Controls That Cannot Fail](../ControlsThatCannotFail) — why "not determined" and "checked and clean" must never share a shape
+- [Copy Completeness](../CopyCompleteness) — the copy that produced this orphan, and the two readings that stop it
