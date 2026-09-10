@@ -242,6 +242,47 @@ satellite pin land on an identity core CD is still publishing to.
 So the fix is publisher-agnostic: it asks *"are the bytes on the shelf the ones I uploaded"*, never
 *"which repo is the other one"*.
 
+### Reproduced a third time, on a different day — 2026-09-10
+
+The two conclusions above are load-bearing enough to be worth an independent re-measurement rather
+than a citation. **2026-09-09 20:00Z → 2026-09-10 18:09Z, 22 hours: 61 bake jobs that ran to a
+terminal conclusion** (33 core CD, 28 satellite), every job log fetched, none expired, **zero
+unreadable identities**.
+
+| | core CD `plugins-bake` | satellite `publish-bake` |
+|---|---|---|
+| executed to `success`/`failure` | 33 | 28 |
+| **sealed a publication** | 16 | 20 |
+| skipped — already published, content × framework | 2 | 7 |
+| published nothing (failed before the publish) | 15 | 1 |
+
+36 distinct sealed publications over **19 distinct prefixes**. And:
+
+- 🚨 **7 of the 19 prefixes were written by BOTH lanes — and in all 7 the two lanes carried
+  DIFFERENT source commits.** So the premise of #3461 holds exactly: the framework identity is a
+  property of the *platform image's* reference surface, it carries no content commit, and `plugins`
+  is a constant, so the two lanes address one directory routinely. When they meet there the
+  content × framework sealed-skip **cannot** fire, because the content differs — each lane genuinely
+  unseals and overwrites the other's publication.
+- 🚨 **Concurrent publications on one prefix: 4. All four SAME-lane. Cross-lane: 0.** That is the
+  same answer as 2026-09-06 and 2026-09-08, from a third day and a differently built measurement —
+  three independent reproductions. All four carried different content, so all four are cases where
+  the #3496 postcondition is the only thing between the two runs and a sealed mix.
+
+The one cross-lane pair that came close is worth writing down because it shows the *mechanism* that
+keeps them apart, which is not luck about timing. On identity `s546f29f9…`, core CD run
+`34430130924` sealed at **03:27:37.327Z**; satellite run `34430082656` reached its own publish at
+**03:30:57Z**, found *"holds a COMPLETE publication of THIS content"* on both shares and skipped.
+They were baking the **same** plugins commit (`3f7686da2…`), because core CD resolves the plugins
+tip at its gate — so the common cross-lane case is redundant work that the skip absorbs, and the
+dangerous case needs the satellite to have moved on, which is the same-lane shape by another road.
+
+**Nothing here changes the design.** A rule about which *repository* owns the prefix would have
+addressed **0 of the 4** contentions measured on this day, as it would have addressed 0 of the ones
+measured on the previous two. What removes them is the layout — a publication written into its own
+directory is disjoint from every other publication whoever wrote it — which is
+[Sealed Publication Generations](/Doc/Architecture/SealedPublicationGenerations).
+
 ## The writer's postcondition
 
 `publish-bake-bundles.sh` stamps every file it uploads with two metadata values —
@@ -427,9 +468,12 @@ Stated plainly, because a page that only lists what works is how the next sessio
   would keep serving its generation and never see the flat writer's newer publication, a stale serve
   with nothing red anywhere. The writer is behind a per-caller `publication-layout` selector that
   **defaults to `flat`**, so nothing anywhere writes a generation until a caller opts in and
-  **everything on this page still describes what is live**. What remains is each producer's pin
-  reaching the writer, then flipping — `plugins` in ONE change set, because it is the only prefix
-  with two producers.
+  **everything on this page still describes what is live**. **Generation retention — the stated
+  precondition on flipping — has landed too**: the portal's own `PrebuiltBundleStore` sweep now
+  collects a generation no `_current` names, whose pointer resolved cleanly, whose own seal could be
+  read, and that is older than the 30-day window, applying the identity rules' fail-closed discipline
+  one level down. What remains is each producer's pin reaching the writer, then flipping — `plugins`
+  in ONE change set, because it is the only prefix with two producers.
 
   🚨 That page also records what an **OCI registry** does and does not close, since the fleet is
   moving plugin bundles into one: content-addressed blobs make a mix unrepresentable, but a **tag**
@@ -452,7 +496,11 @@ Stated plainly, because a page that only lists what works is how the next sessio
   failures are the two halves of the single mutual supersession above. 🚨 **All 9 overlaps were
   same-lane; zero were cross-lane**, which reproduces the 2026-09-06 finding on a different day and
   is the second independent measurement saying that "one owner per prefix" addresses none of this.
-  The convergence verdict takes that 2 to 1; the layout takes it to 0.
+  The convergence verdict takes that 2 to 1; the layout takes it to 0. **2026-09-10 makes it three**
+  — 4 same-lane contentions, 0 cross-lane, over 61 executed bake jobs; see "Reproduced a third time"
+  above, which also measures the thing the earlier two did not: **every** prefix the two lanes shared
+  that day, they shared carrying *different* content, so the sealed-skip cannot separate them and the
+  premise of #3461 is confirmed rather than narrowed.
 - **The window itself remains.** In this layout it cannot be removed — in-place replacement means
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
