@@ -113,6 +113,32 @@ MeshNodeReference  owner=ds/LocalSyncDemo/_Sync/party-1
 while that data source's own `Streams` dictionary held **one**. Streams reduced from the data source's
 primary stream, retained by nothing that indexes them.
 
+## 4b. It is NOT [#3593](https://github.com/Systemorph/MeshWeaver/issues/3593) — measured, not assumed
+
+#3593 reports a mass event on one memex-cloud pod in which every affected hub was also a `sync/` hub
+also at `RunLevel=Started`, reading `Disposal=Pending`, `buffer=1`, `exec=0`: `Dispose()` HAD been
+called and the action block never dequeued the buffered `ShutdownRequest`, so teardown never started
+and *"each pending hub pins its stream, subscriptions and object graph until restart."* Same family,
+opposite mechanism — so the census asked the question directly rather than reasoning about it. Every
+`sync/` hub on the replica, classified by the same fields `MessageHub.AppendDiagnostics` prints
+(`disposalStarted`, `DisposalSignalled`, and `MessageService.GetQueueSnapshot()`):
+
+```
+CENSUS6  pod=…-f9lb5  upMin=123.5  sync=4649
+         withBufferedMessage=0  executingATurn=0  snapshotUnreadable=0
+   4648  Started  / Disposal=<not started>
+      1  Starting / Disposal=<not started>
+```
+
+**Zero `Pending`, zero buffered, zero executing, and the denominator is the whole population** —
+`snapshotUnreadable=0` means every one of the 4,649 was actually read, not skipped.
+
+So these hubs were **never asked to dispose**. Nothing is wedged, nothing is retained against a
+teardown in progress, and no pump is stuck: they are alive because the stream that owns each of them
+is alive and nothing ever released it. That is the opposite end of the lifecycle from #3593, and it
+rules the wedged-pump explanation out for this population rather than leaving it open. #3593 keeps its
+own defect and its own fix; nothing here should be filed under it.
+
 ## 5. The cause, and the controlled experiment that pins it
 
 `Workspace._localStreamCache` caches a **plain** reduce and deliberately does not cache a
@@ -237,3 +263,4 @@ the same reference and that test would pass on a hub that refused nothing.
 - [The Evicted-Stream Retention](../EvictedStreamRetention) — the mechanism §3 re-scopes to 1 of 475
 - [Portal Heap Is Hubs](../PortalHeapIsHubs) — the dumps, and why the dump is the wrong instrument
 - [Stream Liveness and the Hub Reference](../StreamLivenessAndTheHubReference) — #3321's `Dead` half
+- [Hub Disposal Model](../HubDisposalModel) — the state machine §4b's `Disposal=` reading comes from
