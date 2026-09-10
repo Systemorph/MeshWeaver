@@ -906,8 +906,16 @@ producer of the same publication and is removed — a follow-up, not part of thi
 * **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare
   mirror volume, `git worktree add` per run at the release ref, worktree deleted at job end.
 
+* **The hand-over waits for the full source verdict** — landed with MeshWeaver#3878. The POST to
+  the live registry moved out of the pack leg (where it fired while the run's sibling suites, the
+  portal-host shards, the NodeType compile-check and the Tests-area gate had not reported) into
+  `node-repo-module-publish.yml`, downstream of the caller's whole validation set. `pack` stages
+  under `publish-mode: staged` and everything a downstream gate consumes stays exactly where it
+  was — see [ModulePublicationGate](../ModulePublicationGate).
+
 See also: [ModuleClosureAccounting](../ModuleClosureAccounting) ·
 [ModuleOwnedSiblingsRide](../ModuleOwnedSiblingsRide) ·
+[ModulePublicationGate](../ModulePublicationGate) ·
 [ModuleVersioning](../ModuleVersioning) ·
 [NodeTypeCompilation](../NodeTypeCompilation) · [PluginBuildContract](../PluginBuildContract) ·
 [BuildProcess](../BuildProcess) · [InMeshBuildAndTest](../InMeshBuildAndTest).

@@ -213,9 +213,22 @@ def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
 
     if not errors:
         published = sorted(m for m, r in receipts.items() if r.get("published") is True)
-        notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built"
-                     + (f"; {len(published)} published to the registry" if published
-                        else "; nothing published (not a trunk/release run)"))
+        # 🚨 `staged` is a THIRD outcome, and it must not read as either of the other two
+        # (MeshWeaver#3878). Under `publish-mode: staged` the leg POSTed nothing — the bytes went
+        # to the caller's publication lane, which hands over only on a green validation set. Saying
+        # "nothing published" there would be true and misleading; saying "published" would be false.
+        staged = sorted(m for m, r in receipts.items() if r.get("publication") == "staged")
+        if published:
+            notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; "
+                         f"{len(published)} published to the registry")
+        elif staged:
+            notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; "
+                         f"{len(staged)} STAGED for the publication lane — nothing has reached the "
+                         "registry yet, and nothing will until every required validation job in "
+                         "the caller's run reports success (MeshWeaver#3878)")
+        else:
+            notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; "
+                         "nothing published (not a trunk/release run)")
     return (1 if errors else 0), errors, notes
 
 
