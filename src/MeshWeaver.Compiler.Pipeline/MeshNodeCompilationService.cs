@@ -290,12 +290,18 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// One compile attempt's outcome: the assembly path (null on failure), the CONTENT KEY digest
-    /// of the input that produced it (null when no compile ran — a disk-cache hit; the dependency
-    /// record then simply carries no content key), the <see cref="ActivityLog"/>, and — the point
+    /// of the input that produced it, the <see cref="ActivityLog"/>, and — the point
     /// of carrying it — the ONE source snapshot the attempt was taken against. Every downstream
     /// stage (<see cref="DiscoverSourceVersionSnapshot"/>, <see cref="BuildFailureDiagnostics"/>)
     /// reuses <c>Sources</c> instead of re-discovering; see
     /// <see cref="GetAssemblyLocationWithLog"/>.
+    ///
+    /// <para>🚨 The digest is present on BOTH ways of reaching bytes (#3892): a fresh emit takes it
+    /// three statements before Roslyn, and a disk-cache hit RESTORES the producing compile's own
+    /// from beside the assembly (<see cref="GeneratedInputDigestFile"/>). It used to be null on the
+    /// hit, which made the stamped dependency record — a PRODUCER artifact that ships inside
+    /// bundles — carry the reserved <c>!input</c> guard or not depending on whether this machine's
+    /// cache was warm. Null now means only "this attempt produced no assembly".</para>
     /// </summary>
     private readonly record struct CompileAttempt(
         string? Path, string? InputDigest, ActivityLog Log, IReadOnlyList<MeshNode> Sources);
@@ -425,15 +431,26 @@ internal class MeshNodeCompilationService(
                     if (cacheService.IsDiskCacheEnabled)
                     {
                         var cachedDllPath = cacheService.TryGetLatestCachedDllPath(nodeName, effectiveLastModified);
-                        if (cachedDllPath is not null)
+                        // 🚨 THE CONTENT KEY SURVIVES THE CACHE HIT (#3892). No compile runs here,
+                        // so the digest is RESTORED from beside the bytes rather than recomputed:
+                        // it is the digest of the compile that actually produced them, which is the
+                        // only thing this path is entitled to claim (a recomputed one would fold
+                        // THIS process's compiler and generator identities into a key describing
+                        // someone else's emit). TryGetLatestCachedDllPath already refused an
+                        // artifact without one, so a null here is a race — the directory went away
+                        // under us — and falls through to a fresh compile, which is the right
+                        // answer for bytes that are no longer there.
+                        var cachedInputDigest = cachedDllPath is null
+                            ? null
+                            : GeneratedInputDigestFile.TryRead(cachedDllPath, logger);
+                        if (cachedDllPath is not null && cachedInputDigest is not null)
                         {
                             logger.LogDebug(
                                 "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
                                 node.Path, cachedDllPath, effectiveLastModified);
                             return Observable.Return(new CompileAttempt(
                                 cachedDllPath,
-                                // No compile ran, so there is no generated input to key on.
-                                null,
+                                cachedInputDigest,
                                 AppendInfo(log,
                                         $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).",
                                         "activity.compile.cacheHit",
@@ -1543,9 +1560,17 @@ internal class MeshNodeCompilationService(
     }
 
     /// <param name="generatedInputDigest">The stage-1 CONTENT KEY digest of the compile that
-    /// produced these bytes (#1707 slice 4), or null when no compile ran in this process — a
-    /// disk-cache hit or the assembly-hydration shortcut. Null simply leaves the record without a
-    /// content key; the toolchain entry still governs.</param>
+    /// produced these bytes (#1707 slice 4). A fresh emit takes it inline; a disk-cache hit
+    /// RESTORES it from beside the bytes (<see cref="GeneratedInputDigestFile"/>, #3892), so the
+    /// record this method stamps is the same either way — which matters because the record is a
+    /// PRODUCER artifact that travels into published bundles.
+    /// <para>It is still null on the ASSEMBLY-HYDRATION shortcut
+    /// (<see cref="GetConfigurationsFromExistingAssembly"/>), which loads bytes an
+    /// <c>IAssemblyStore</c> handed over with no local provenance. That path is a READER: its
+    /// result supplies a hub configuration and is never stamped onto a NodeType (it also carries
+    /// no <c>CompiledSources</c>, which is why stamping it would be catastrophic and nothing
+    /// does). Null simply leaves the record without a content key; the toolchain entry still
+    /// governs.</para></param>
     private NodeCompilationResult? CompileResultFromAssembly(
         MeshNode node, string assemblyLocation, ActivityLog log,
         ImmutableDictionary<string, long> compiledSources,
@@ -1955,8 +1980,22 @@ internal class MeshNodeCompilationService(
             var emitted = default(EmittedArtifact);
             actualPath = EmitPipeline.EmitToDiskWithRetry(
                 cacheService.CacheDirectory, nodeName, EmitPipeline.DiskEmitAttempts, logger,
-                releaseDir => emitted = EmitPipeline.EmitCompilationToDirectory(
-                    compilation, nodeName, node.Path, releaseDir, [], ct, _captureEmitFailure));
+                stagingDir =>
+                {
+                    emitted = EmitPipeline.EmitCompilationToDirectory(
+                        compilation, nodeName, node.Path, stagingDir, [], ct, _captureEmitFailure);
+                    // 🚨 The CONTENT KEY's stage-1 digest, recorded BESIDE the bytes it describes
+                    // (#3892) — written into the STAGING directory, so the atomic rename that
+                    // publishes the assembly publishes its provenance with it and a concurrent
+                    // reader can never see one without the other. A write fault propagates:
+                    // EmitToDiskWithRetry discards the staging directory and the compile fails,
+                    // which is the same verdict a lost DLL write gets. An artifact whose
+                    // provenance cannot be recorded is not published — that is what keeps the
+                    // dependency record identical whether these bytes are used now or restored
+                    // from the cache an hour later.
+                    GeneratedInputDigestFile.Write(stagingDir, nodeName, generatedInputDigest);
+                    return emitted;
+                });
             warnings = emitted.Warnings;
         }
         else

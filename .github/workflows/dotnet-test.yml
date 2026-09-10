@@ -2231,6 +2231,20 @@ jobs:
     - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
       run: python3 .github/scripts/test-publish-bake-overlap.py
 
+    # The MODULE registry hand-over (MeshWeaver#3878). `node-repo-module-publish.yml` is a
+    # `workflow_call` lane a SATELLITE invokes, so nothing on a core pull request runs it — the
+    # first execution of an edit to it would otherwise be a satellite's production publication,
+    # POSTing bytes to the live registry. Both of these run here, self-test first:
+    #   * the script's own cases — the verdict refusals (failed/skipped/cancelled/missing/unknown),
+    #     the caller-graph mutations, and the staged-evidence refusals;
+    #   * the harness, which EXTRACTS the lane's real steps by `id:` and executes them against a
+    #     stub registry that RECORDS every request — so "the registry was left untouched" is read
+    #     off the request log rather than off an exit code.
+    - name: "The module publication gate can refuse (self-test)"
+      run: python3 .github/scripts/module-publication.py --self-test
+    - name: "Execute the module publication lane against a stub registry"
+      run: python3 .github/scripts/test-module-publication.py
+
     # The gate and publish-bake lanes compose every external module into /ext/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
     # that LOADS and then 404s every static asset it ships (`meshweaver/moduleassets/`), announced
@@ -2241,6 +2255,18 @@ jobs:
     # the verdict off the landed bytes — with two arms that mutate the real step and must go RED.
     - name: "Execute the lanes' external-module landing against real bundle shapes"
       run: python3 .github/scripts/test-module-asset-landing.py
+
+    # The same composition step now also asserts ONE BUILD PER ASSEMBLY NAME across the whole set
+    # (#3732). A module-owned MeshWeaver.* sibling RIDES every bundle that references it and 19 of
+    # MeshWeaver.Plugins' 37 ride an assembly another package DECLARES as its module — a decision,
+    # resting on the invariant that every copy is the same build. Nothing asserted it at the
+    # producer: measured on memex 2026-09-10, ONE pod held MeshWeaver.Markdown.Collaboration in 15
+    # copies and THREE builds, and the only thing that ever noticed was ReleaseAvailability, days
+    # later, as SealedSetInconsistent — a HOLD for the whole fleet. Same posture as the harness
+    # above: both lanes' step EXTRACTED by `id:` and executed, the verdict read off the exit status,
+    # and both directions covered — divergent copies RED, identical copies GREEN.
+    - name: "Execute the lanes' one-build-per-assembly-name assertion"
+      run: python3 .github/scripts/test-module-set-consistency.py
 
     # carry-forward-bundles.sh is the other half of that publication and had NO CI execution at
     # all: it runs only inside a node repo's publish lane, so the first execution of an edit was a

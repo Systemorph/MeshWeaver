@@ -86,6 +86,54 @@ the image rather than declared in a list — is
 copy that *does* load shadows the image copy, so the fallback never runs; and the sealed-set
 conflict below still HOLDS the roll for the whole fleet whatever one process does at boot.
 
+## A declined bundle risks stale TYPES, not just a slower boot
+
+The bullets above treat *no adopted bundle* as a cost paid in boot time, because the content then
+compiles in the mesh. Measured on 2026-09-10 (memex.systemorph.com, `3.0.0-ci.8238`, core
+`2287decb`, identity `s546f29f9…`) that is not the whole story: a module whose bundle is declined
+can keep serving **types built from source older than the source the instance has installed**,
+while the package's own install record reads installed, current and up to date.
+
+`MeshWeaver.AI` had gained `ModelDefinition.ReasoningEffort` (Plugins#1556, 09-09 12:41Z) and
+`ThreadMessage.Timing` (Plugins#1552, 11:59Z). The install record carried main's own file hashes —
+`src/MeshWeaver.AI/ModelDefinition.cs` = `89fd0a2264…`, byte-identical to `origin/main`, which
+declares the property — so the *sources* were current. The *types* were not: `get
+@…/schema/ModelDefinition` listed no `reasoningEffort`, and a `patch` setting it wrote a new node
+version with the property silently dropped. The instance's own health said why:
+
+```text
+bundle_adoption: Degraded — 25 adoption attempt(s), 0 assembly/assemblies adopted, 25 MISS(es) —
+content the registry was meant to serve is compiled here instead: AI: FrameworkDeclined
+(built against framework s72c27afab89c1007…, live framework is s546f29f90e235e61…)
+```
+
+The registry's bytes were therefore never in play. What served was the previously resolved build,
+kept alive by the same-MAJOR **stale-but-serving** rule recorded on
+[The Execute-Time Interlock](../ExecuteTimeInterlock) (#3844): a moved source fingerprint is
+deliberately *not* a refusal, so `1.5.0 → 1.5.1` kept the old build. That is why a Store
+`RefreshModules` re-land and two restarts each reloaded the identical generation and changed
+nothing. What finally let fresh types through was a new `{package}@{version}` shelf entry —
+`AI/index.json` 1.5 → 1.6 with **no source change** (Plugins#1586) — for which no previously
+adopted build existed. Two minutes after that merged the instance installed `AI 1.6.0`, and the
+property appeared on the served schema and survived a write.
+
+Three consequences worth carrying:
+
+- **"Installed, current version, sources current" is not "running these types."** The install
+  record describes the *content* lane. Which assembly answers `schema/<Type>` is the *module* lane,
+  and on a declined bundle the two can sit days apart with nothing red anywhere.
+- **Re-landing is not re-building.** `RefreshModules` re-lands content; it does not dislodge an
+  adopted build that the compatibility rule still accepts.
+- **A version bump is a delivery lever.** Where a stale adopted build is serving, moving
+  `{package}@{version}` is the supported way to force a fresh one — and it doubles as the
+  experiment that separates "the shelf holds stale bytes" from "an adopted build is being kept".
+
+🚨 **Do not read stale served types as the registry serving bad bytes.** The two are
+indistinguishable from the consumer: same `[ModuleLoad]` line, same generation directory, same
+mvid, and `[ModuleLoad]` never names the commit a bundle was built from. The discriminator is
+`bundle_adoption` on `/health` — `FrameworkDeclined` means the registry's copy was never adopted,
+so a fix aimed at the shelf would be aimed at bytes this instance never ran.
+
 ## What the platform roll gates on
 
 The self-updater and the CD post-promote gate select **the newest release on which no installed module is unloadable**. Concretely, per installed package: a build published for the target identity exists (it will be adopted), *or* the landed generation links against the target's surface, *or* neither can be shown — which is reported as *indeterminate*, never as clearance and never as a hold. Declared floors do not enter. A missing content bake does not enter (it is reported as "would compile at boot: …"). The sealed-set consistency check (#3175/#3221) stays: two builds of one platform assembly in one identity is a torn publication, and torn publications are refused whole.

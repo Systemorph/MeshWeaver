@@ -3169,7 +3169,26 @@ internal static class NodeTypeCompilationHelpers
         string? activityPath,
         string? releasePath,
         string? modulesHash = null)
-        => def with
+    {
+        var assemblyMvid = ServedBuildIdentity.OfFile(result.AssemblyLocation);
+        var dependencies = result.CompiledDependencies;
+        // A disk-cache load did not regenerate source, so its record has no !input. It must
+        // not erase evidence from the original emit of these SAME bytes. Require both the
+        // assembly identity and every other dependency entry to agree; carrying the key to
+        // different bytes or a changed dependency resolution would make an unproved claim.
+        if (dependencies is not null
+            && !dependencies.ContainsKey(CompiledDependencies.ContentKey)
+            && assemblyMvid is not null
+            && string.Equals(assemblyMvid, def.LatestAssemblyMvid, StringComparison.Ordinal)
+            && def.CompiledDependencies is { } previous
+            && previous.TryGetValue(CompiledDependencies.ContentKey, out var input)
+            && !string.IsNullOrEmpty(input)
+            && previous.Count == dependencies.Count + 1
+            && dependencies.All(kv => previous.TryGetValue(kv.Key, out var value)
+                && string.Equals(kv.Value, value, StringComparison.Ordinal)))
+            dependencies = dependencies.Add(CompiledDependencies.ContentKey, input);
+
+        return def with
         {
             DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
             CompilationStatus = CompilationStatus.Ok,
@@ -3232,7 +3251,7 @@ internal static class NodeTypeCompilationHelpers
             // only, nothing loaded); a producer with no readable file leaves the previous stamp
             // alone rather than erasing it, exactly as the other assembly fields do.
             LatestAssemblyMvid =
-                ServedBuildIdentity.OfFile(result.AssemblyLocation) ?? def.LatestAssemblyMvid,
+                assemblyMvid ?? def.LatestAssemblyMvid,
             // The framework the assembly bound against — HasUsableBuild compares this to the
             // live FrameworkVersion so a MeshWeaver redeploy forces a recompile instead of
             // loading an ABI-stale DLL.
@@ -3244,7 +3263,7 @@ internal static class NodeTypeCompilationHelpers
             // The per-type dependency record (#1707 slice 2) — read off the emitted assembly by
             // CompileResultFromAssembly and DECISIVE over the fingerprint above wherever present.
             // Preserved when the result carries none (e.g. a legacy producer), never erased.
-            CompiledDependencies = result.CompiledDependencies ?? def.CompiledDependencies,
+            CompiledDependencies = dependencies ?? def.CompiledDependencies,
             // Clear the consumed release-requester so a later System-only recompile doesn't
             // mis-attribute its release to a stale prior user.
             RequestedReleaseBy = null,
@@ -3263,6 +3282,7 @@ internal static class NodeTypeCompilationHelpers
             // THIS snapshot — which is how a needed rebuild gets suppressed. Consume it.
             RequestedSourceStampAt = null
         };
+    }
 
     /// <summary>
     /// The one-line summary of a FAILED compile for the node's
