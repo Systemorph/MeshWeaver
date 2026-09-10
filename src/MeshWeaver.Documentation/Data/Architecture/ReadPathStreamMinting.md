@@ -218,7 +218,9 @@ done for a plain reduce, and where it matters the answer is a narrower reference
 | `ReadingTheSameReferenceRepeatedly_DoesNotMintASyncHubPerRead` | five reads of one reference add **0** `sync/` hubs to the owner (it fails with **+5** on the pre-fix call site) |
 | `AnUncachedConfiguredReduce_MintsOneSyncHubPerCall` | five genuinely-configured reduces add **5** — the counter can see growth, so the flat arm is not vacuous |
 | `TheSharedReadStream_StaysLive` | a write after the reads is visible to the next read — the shared stream is a live mirror, not a snapshot |
+| `UnifiedUpdate_WaitsUntilTheSharedReadStreamCarriesTheUpdate` | a successful update is withheld while the owner has committed but the shared read actor is parked on the old entity |
 | `UnifiedDelete_WaitsUntilTheSharedReadStreamCarriesAbsence` | a successful delete is withheld while the shared read actor is parked, even after the owner has committed; it answers only after the read view carries absence |
+| `UnifiedDelete_RetainsItsAbsenceAcknowledgementAcrossSameIdRecreation` | the delete's pre-armed absence acknowledgement survives a legitimate same-ID recreation instead of waiting forever on a replaced replay slot |
 
 ### A shared stream makes its propagation boundary observable
 
@@ -230,13 +232,17 @@ the read frame is still queued.
 This distinction did not matter when every read built a new reduction: a reduction built after the
 owner commit starts from the owner's latest replayed store. Once reads share the existing reduction,
 an immediate read can replay that reduction's previous value until its queued frame lands. The
-release gate exposed this as a successful `DeleteUnifiedReferenceRequest` followed immediately by a
-`GetDataRequest` that returned the deleted entity.
+release gate exposed both directions: a successful `UpdateUnifiedReferenceRequest` followed by the
+old entity, and a successful `DeleteUnifiedReferenceRequest` followed by the deleted entity.
 
-The delete handler now waits reactively on the same shared entity stream until it carries `null`
-before reporting success. It does not poll and does not build a replacement stream. The resulting
-contract is precise: owner commit remains the storage boundary, while successful unified deletion is
-also the read-after-write boundary for the API's shared read view.
+Both handlers now observe the same shared entity stream **before** invoking the eager owner write.
+They retain exactly one matching post-baseline frame and combine it with the commit result, so either
+side may arrive first without losing the acknowledgement. Update waits for the requested content;
+delete waits for absence. Pre-arming is load-bearing for delete: a legitimate same-ID recreation can
+otherwise replace the null in the stream's replay slot between owner commit and a late subscription,
+leaving an already committed request without a response. There is no polling and no replacement
+stream. Owner commit remains the storage boundary; successful unified update/delete is also the
+causal read-view boundary for the API's shared read path.
 
 ### One behaviour DID change, and it is the better half of an existing contract
 

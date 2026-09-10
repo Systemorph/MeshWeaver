@@ -3948,8 +3948,8 @@ public static class DataExtensions
 
     /// <summary>
     /// Reactive update for a <c>data:</c> path. Content-provider paths write the file
-    /// directly; entity paths issue <see cref="DataChangeRequest"/> and observe the
-    /// <see cref="Activity"/> completion callback (no <see cref="TaskCompletionSource{TResult}"/>).
+    /// directly; entity paths issue <see cref="DataChangeRequest"/> and report success only after
+    /// both the owner commit and the shared read stream's matching frame.
     /// </summary>
     private static IObservable<UpdateUnifiedReferenceResponse> UpdateDataPath(
         IMessageHub hub,
@@ -3982,11 +3982,22 @@ public static class DataExtensions
         // path that addresses no data (UpdateUnifiedReferenceRequest_InvalidPath_ReturnsError).
         // A valid data collection is one a TypeSource projects; content collections
         // were already handled above.
-        var isKnownCollection = dataContext.TypeSources.Values
-            .Any(ts => string.Equals(ts.TypeDefinition.CollectionName, collection, StringComparison.OrdinalIgnoreCase));
-        if (!isKnownCollection)
+        var typeSource = dataContext.TypeSources.Values
+            .FirstOrDefault(ts => string.Equals(ts.TypeDefinition.CollectionName, collection, StringComparison.OrdinalIgnoreCase));
+        if (typeSource is null)
             return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
                 $"Unknown collection '{collection}': no registered data type source or content provider owns this path."));
+
+        var readId = (object?)entityId ?? typeSource.TypeDefinition.GetKey(content);
+        if (readId is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                $"Cannot determine the entity ID for collection '{collection}'."));
+
+        var stream = workspace.GetNullableStream(
+            new EntityReference(typeSource.TypeDefinition.CollectionName, readId));
+        if (stream is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                $"No readable data stream exists for {collection}/{readId}."));
 
         var changeRequest = new DataChangeRequest
         {
@@ -3994,15 +4005,53 @@ public static class DataExtensions
             ChangedBy = changedBy
         };
 
-        return workspace.RequestChange(changeRequest)
-            .Select(log =>
+        // RequestChange is eager. Observe the shared read stream BEFORE invoking it, otherwise a
+        // fast update can publish the only matching frame before the confirmation subscription is
+        // attached. Replay just that one post-baseline target frame so the owner commit and read
+        // actor may arrive in either order without a lost acknowledgement.
+        return stream.Take(1).SelectMany(initial =>
+        {
+            if (UnifiedContentEquals(initial.Value, content, hub))
+                return workspace.RequestChange(changeRequest).Select(ToResponse);
+
+            var visible = stream
+                .Where(item => item.Version > initial.Version
+                               && UnifiedContentEquals(item.Value, content, hub))
+                .Take(1)
+                .Replay(1);
+
+            return Observable.Using(
+                visible.Connect,
+                _ => workspace.RequestChange(changeRequest)
+                    .SelectMany(log =>
+                    {
+                        var response = new DataChangeResponse(hub.Version, log);
+                        return response.Status != DataChangeStatus.Committed
+                            ? Observable.Return(ToResponse(log))
+                            : visible.Select(_ => UpdateUnifiedReferenceResponse.Ok(response.Version));
+                    }));
+
+            UpdateUnifiedReferenceResponse ToResponse(ActivityLog log)
             {
                 var response = new DataChangeResponse(hub.Version, log);
                 return response.Status == DataChangeStatus.Committed
                     ? UpdateUnifiedReferenceResponse.Ok(response.Version)
                     : UpdateUnifiedReferenceResponse.Fail(
                         response.Log.Messages.LastOrDefault()?.Message ?? "Update failed");
-            });
+            }
+        });
+    }
+
+    private static bool UnifiedContentEquals(object? actual, object expected, IMessageHub hub)
+    {
+        if (actual is null)
+            return false;
+        if (Equals(actual, expected))
+            return true;
+
+        var actualNode = JsonSerializer.SerializeToNode(actual, actual.GetType(), hub.JsonSerializerOptions);
+        var expectedNode = JsonSerializer.SerializeToNode(expected, expected.GetType(), hub.JsonSerializerOptions);
+        return System.Text.Json.Nodes.JsonNode.DeepEquals(actualNode, expectedNode);
     }
 
     /// <summary>
@@ -4147,27 +4196,27 @@ public static class DataExtensions
                     ChangedBy = changedBy
                 };
 
-                return workspace.RequestChange(changeRequest)
-                    .SelectMany(log =>
-                    {
-                        var response = new DataChangeResponse(hub.Version, log);
-                        if (response.Status != DataChangeStatus.Committed)
-                            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
-                                response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
+                // Subscribe before RequestChange: it writes eagerly, and a same-ID recreation can
+                // replace the shared stream's replay slot before the commit observable is consumed.
+                // Filtering by the baseline version makes this a post-request absence frame; the
+                // one-item replay preserves that causal acknowledgement across either ordering.
+                var absent = stream
+                    .Where(item => item.Version > entityValue.Version && item.Value is null)
+                    .Take(1)
+                    .Replay(1);
 
-                        // RequestChange reports when the owning data-source stream has applied the
-                        // deletion. The shared read stream is a separate actor-backed reduction:
-                        // its null frame is posted from the source's turn and can still be queued
-                        // when the commit report arrives. A success response at that seam lets the
-                        // caller's immediate GetDataRequest replay the shared stream's OLD entity
-                        // before that queued frame lands. Wait on the exact read view this API
-                        // serves; no polling and no fresh stream/hub. Success now means a read made
-                        // after the response cannot observe the deleted entity (#3432 follow-up).
-                        return stream
-                            .Where(entity => entity.Value == null)
-                            .Take(1)
-                            .Select(_ => DeleteUnifiedReferenceResponse.Ok());
-                    });
+                return Observable.Using(
+                    absent.Connect,
+                    _ => workspace.RequestChange(changeRequest)
+                        .SelectMany(log =>
+                        {
+                            var response = new DataChangeResponse(hub.Version, log);
+                            if (response.Status != DataChangeStatus.Committed)
+                                return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                                    response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
+
+                            return absent.Select(_ => DeleteUnifiedReferenceResponse.Ok());
+                        }));
             });
     }
 
