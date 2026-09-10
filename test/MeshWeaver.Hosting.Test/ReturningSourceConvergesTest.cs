@@ -70,6 +70,25 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
         await AssertUnchangedRepeat(space);
     }
 
+    [Fact(Timeout = 240_000)]
+    public async Task ScopedRootChange_CannotLeaveThePreviousRootsMarkerCurrent()
+    {
+        repoClient.RootOnly = true;
+        var space = await Prepare();
+        await Import(space, RevisionB);
+        repoClient.ScopedRootChanges = true;
+
+        await Import(space, RevisionA);
+        (await RootName(space)).Should().Be("Root revision A",
+            "the scoped import really refreshed the root before the return to B");
+
+        var restored = await Import(space, RevisionB);
+        (await RootName(space)).Should().Be("Root revision B",
+            "the A import evaluated its root even though Git's index.json path is outside the child scope");
+        restored.Outcome.Should().Be("Imported");
+        await AssertUnchangedRepeat(space);
+    }
+
     [Theory(Timeout = 240_000)]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -209,6 +228,7 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
     private sealed class ScriptedRepoClient : IGitHubRepoClient
     {
         public bool RootOnly { get; set; }
+        public bool ScopedRootChanges { get; set; }
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
         {
@@ -230,7 +250,9 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
 
         public IObservable<IReadOnlyList<string>?> GetChangedPaths(
             string repositoryUrl, string baseSha, string headSha, string? subdirectory, string accessToken)
-            => Observable.Return<IReadOnlyList<string>?>(baseSha == headSha ? Array.Empty<string>() : null);
+            => Observable.Return<IReadOnlyList<string>?>(baseSha == headSha
+                ? Array.Empty<string>()
+                : ScopedRootChanges ? new[] { "index.json" } : null);
 
         public IObservable<GitHubPushResult> Push(GitHubPushRequest request) => NotUsed<GitHubPushResult>();
 

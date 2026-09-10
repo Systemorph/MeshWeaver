@@ -2968,7 +2968,11 @@ public static class StaticRepoImporter
             var builder = map.ToBuilder();
             foreach (var path in map.Keys)
             {
-                if (evaluatedPaths.Contains(path))
+                // EnsureRoot evaluates the root on every import, independently of the child
+                // Git-diff scope. Keeping its old token would let a historical root skip win
+                // after a scoped root change (B -> A -> B).
+                if (string.Equals(path, partition, StringComparison.OrdinalIgnoreCase)
+                    || evaluatedPaths.Contains(path))
                     continue;
                 // Not evaluated: report what we actually know, which is whatever the last run that
                 // DID look at this node recorded — nothing, if none ever did.

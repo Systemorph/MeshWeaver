@@ -261,7 +261,9 @@ Its success is historical evidence. Before skipping, the importer reads the curr
 `import-manifest` authoritatively and compares its source tokens with every requested node and the
 root. A mismatch clears any Git-diff scope and evaluates the full source with the existing conflict
 policy. The manifest remains the same path-to-token map; older maps without a root entry receive
-one incremental full pass before they can authorize a skip.
+one incremental full pass before they can authorize a skip. The root is always recorded as evaluated:
+`EnsureRoot` runs independently of the child Git-diff scope. Retaining its previous token after a
+scoped root change would incorrectly authorize the previous root's historical marker.
 
 `GitHubSyncService.ReconcileAtCommit` likewise evaluates the whole source, without a Git comparison
 or a per-node manifest shortcut. A recorded B SHA makes the Git diff B..B empty even if the live mesh
@@ -288,11 +290,49 @@ also verifies unchanged repeats and a person's two-way edit with its conflict ho
 concurrently importing different selected publications; durable delivery still requires the intended
 publication and actual final source fingerprints to agree.
 
-**Local validation:** the final six-case regression is red on unchanged core `f1a945d5` and green
+**Initial local validation:** the six-case regression is red on unchanged core `f1a945d5` and green
 with this change. All 19 targeted Hosting/GitSync cases and 51 existing Graph importer cases pass.
 Release builds of the touched projects and test dependencies report zero warnings and errors.
 The regression reads actual node content and checks written/pruned paths; it does not assert only
 on the sync SHA or on a success message. Production acceptance remains a separate release step.
+
+**Scoped-root follow-up:** `ScopedRootChange_CannotLeaveThePreviousRootsMarkerCurrent` fails on
+`7aac375b`: a full B import, followed by A with only `index.json` in the Git diff, writes root A but
+retains B's root token; returning to B skips and leaves the actual root at A. Recording the root's
+current token independently of the child scope corrects this. The test checks actual root content
+and the subsequent ordinary zero-content-write repeat. The new case is red on `7aac375b` and green
+with the correction; all 20 targeted Hosting/GitSync cases pass on the corrected source.
+
+**Removal review:** adding the root to the manifest does not make it a prune candidate. `Run` reads
+existing **descendants**, and `ComputePrunableNodes` filters that existing set; manifest keys only
+narrow ownership in Additive mode. Claims, incomplete-listing refusal, protected local edits, held
+NodeTypes and their source subtrees retain their existing guards. Removing an entire compiled
+source partition still uses the independent `Admin/_SourceOwnedCatalogs` registry. Removing its
+root index file instead restores the standard synthesized root; it does not remove the partition.
+
+A separate pre-existing boundary remains outside this fix: `Run` derives touched partitions solely
+from the current child nodes. If a source removes its **last** child, that list is empty and the
+existing-subtree read is empty, so old children are not presented to the prune. The root-inclusive
+manifest does not introduce that omission or repair it. This is a source-path finding; no new
+runtime test or production claim accompanies it here.
+
+**Integration review, 2026-09-10:** main `89c914b64e6b5ff4c70f36de8604ac84c7c6e29b` changes
+`DataExtensions` and read-visibility tests through #3976; PR #3981 head
+`b7d011dd2cddb5c105e87c77420fc519d2575938` adds the content-workflow admission gate and adjusts
+its webhook fixtures. Neither changes this patch's importer/service/test files. The complete
+importer patch, including the scoped-root correction, applies cleanly to each tree and their clean combined tree
+`58d388500f458e2a51ba38d4314b7a1e83585be0`, checked with a temporary Git index without changing
+any checkout. The two fixes govern different decisions: #3981 determines which CI completion may
+request an import; this fix determines whether the requested source is already present.
+
+After the coordinated release hold is lifted, transplant both importer commits in order onto a
+fresh checkout of the then-current main; do not cherry-pick only `7aac375b` and lose the scoped-root
+correction. Re-read main and the owner's final source first, preserve #3981's workflow-path fields
+in the existing webhook fixtures, and rerun the Hosting/GitSync regression selection, Graph importer
+selection and documentation/reactive guards on the combined tree. A clean patch application is not
+a compiled or tested integration receipt. Ship through the normal core/CD and sealed-publication
+workflow; verify the selected publication plus actual Store source/compiled fingerprints after
+normal reconciliation. No force import or conflict-policy bypass is part of the transplant.
 
 ## 🚨 A CONTENT verdict is final for its fingerprint; a transient failure is not
 
