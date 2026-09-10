@@ -67,6 +67,54 @@ public class PrebuiltBundleRetentionTest : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// One GENERATION directory under a source: the bundles, its seal, and the
+    /// <c>source-commit.txt</c> that is a publication's positive identification. Does NOT touch
+    /// the pointer — <see cref="Pointer"/> does, so a test can build a dangling one on purpose.
+    /// </summary>
+    private string Generation(
+        string identity, string source, string token, DateTimeOffset writtenAt,
+        bool isSealed = true, int bytes = 1024)
+    {
+        var dir = Path.Combine(root, identity, source, token);
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "A.zip"), new byte[bytes]);
+        File.SetLastWriteTimeUtc(Path.Combine(dir, "A.zip"), writtenAt.UtcDateTime);
+        var commit = Path.Combine(dir, SealedPublicationIndex.SourceCommitMarkerFileName);
+        File.WriteAllText(commit, token + "\n");
+        File.SetLastWriteTimeUtc(commit, writtenAt.UtcDateTime);
+        if (isSealed)
+        {
+            var sentinel = Path.Combine(dir, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            File.WriteAllText(sentinel, "A.zip\n");
+            File.SetLastWriteTimeUtc(sentinel, writtenAt.UtcDateTime);
+        }
+        Directory.SetLastWriteTimeUtc(dir, writtenAt.UtcDateTime);
+        // Same stamping Sealed() does: the identity's age is the newest write ANYWHERE under it,
+        // seeded from the directory's own stamp, so a fixture that leaves those at "now" builds an
+        // identity the age window keeps and can never exercise a collection.
+        Directory.SetLastWriteTimeUtc(Path.Combine(root, identity, source), writtenAt.UtcDateTime);
+        Directory.SetLastWriteTimeUtc(Path.Combine(root, identity), writtenAt.UtcDateTime);
+        return dir;
+    }
+
+    /// <summary>
+    /// Writes the <c>_current</c> pointer of a source. <paramref name="token"/> may name a
+    /// generation that is not there. <paramref name="writtenAt"/> matters: the pointer is a FILE
+    /// under the identity, so its stamp counts towards the identity's age exactly as it does in
+    /// production, where a live source's pointer is rewritten on every publish.
+    /// </summary>
+    private string Pointer(string identity, string source, string token, DateTimeOffset? writtenAt = null)
+    {
+        var dir = Path.Combine(root, identity, source);
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, ShippedPrebuiltBundles.PublicationPointerFileName);
+        File.WriteAllText(path, token + "\n");
+        if (writtenAt is { } at)
+            File.SetLastWriteTimeUtc(path, at.UtcDateTime);
+        return path;
+    }
+
     private static DateTimeOffset DaysAgo(int days) => Now - TimeSpan.FromDays(days);
 
     private PrebuiltBundleSweepPlan PlanNow(
@@ -444,6 +492,244 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
         plan.Protected.Keys.Should().Contain("s-green");
         Ids(plan).Should().Equal("s-failed");
+    }
+
+    // ---- generations inside a retained identity (#3461) ----------------------------------------
+    //
+    // 🚨 EVERY CASE HERE IS UNDER `Live`, deliberately. The identity rules keep the running
+    // identity however old, so these cases isolate the generation rules from them: an identity the
+    // plan COLLECTS takes its generations with it and must NOT list them separately (the last case
+    // in this block pins that, because listing them would double-count the bytes and delete one
+    // directory twice).
+
+    /// <summary>
+    /// The POSITIVE control. A superseded generation older than the window is collected, and the
+    /// one the pointer names survives beside it — a fix that refused everything would pass a
+    /// one-sided test.
+    /// </summary>
+    [Fact]
+    public void ASupersededGeneration_OlderThanTheWindow_IsCollected_AndTheLiveOneSurvives()
+    {
+        var old = Generation(Live, "plugins", "gen-old", DaysAgo(60));
+        var live = Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+
+        var plan = PlanNow();
+
+        plan.AbortReason.Should().BeNull();
+        plan.CollectableGenerations.Select(g => g.Name).Should().Equal("gen-old");
+        plan.ProtectedGenerations.Should().ContainKey(live);
+        plan.ProtectedGenerations[live].Should().Contain("it is the live publication");
+        plan.ProtectedGenerations.Should().NotContainKey(old);
+        // The bytes it would reclaim are the generation's, and the identity itself stays.
+        plan.CollectableBytes.Should().BeGreaterThan(0);
+        Ids(plan).Should().NotContain(Live);
+    }
+
+    /// <summary>
+    /// The claim the whole sweep rests on, asserted directly rather than assumed: what retention
+    /// calls collectable is what the READERS cannot reach. If this ever fails, the sweep is
+    /// deleting bytes a portal still resolves.
+    /// </summary>
+    [Fact]
+    public void WhatIsCollected_IsExactlyWhatNoReaderResolves()
+    {
+        Generation(Live, "plugins", "gen-old", DaysAgo(60));
+        Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+        var source = Path.Combine(root, Live, "plugins");
+
+        var resolved = ShippedPrebuiltBundles.PublicationDirectoryOf(source);
+
+        resolved.Should().Be(Path.Combine(source, "gen-new"));
+        PlanNow().CollectableGenerations.Select(g => g.Directory).Should().NotContain(resolved);
+    }
+
+    /// <summary>The live generation is kept HOWEVER old — a pointer is a reference, and age never overrides one.</summary>
+    [Fact]
+    public void TheGenerationThePointerNames_IsKept_HoweverOld()
+    {
+        var live = Generation(Live, "plugins", "gen-ancient", DaysAgo(400));
+        Pointer(Live, "plugins", "gen-ancient");
+
+        var plan = PlanNow();
+
+        plan.CollectableGenerations.Should().BeEmpty();
+        plan.ProtectedGenerations[live].Should().Contain("it is the live publication");
+    }
+
+    /// <summary>
+    /// 🚨 A pointer that names a generation which is not on disk is an unreadable publication
+    /// INVENTORY, not an absent one: which generation applies is unknown, so nothing under that
+    /// source may be collected. Same fail-closed direction as an unreadable release marker.
+    /// </summary>
+    [Fact]
+    public void ADanglingPointer_ProtectsEveryGenerationOfItsSource()
+    {
+        Generation(Live, "plugins", "gen-a", DaysAgo(90));
+        Generation(Live, "plugins", "gen-b", DaysAgo(80));
+        Pointer(Live, "plugins", "gen-gone");
+
+        var plan = PlanNow();
+
+        plan.CollectableGenerations.Should().BeEmpty();
+        plan.ProtectedGenerations.Values.Should().AllSatisfy(reason =>
+            reason.Should().Contain("licenses no deletion"));
+    }
+
+    /// <summary>An EMPTY pointer is a pointer being replaced right now — the same fail-closed answer.</summary>
+    [Fact]
+    public void AnEmptyPointer_ProtectsEveryGenerationOfItsSource()
+    {
+        Generation(Live, "plugins", "gen-a", DaysAgo(90));
+        File.WriteAllText(
+            Path.Combine(root, Live, "plugins", ShippedPrebuiltBundles.PublicationPointerFileName), "  \n");
+
+        var plan = PlanNow();
+
+        plan.CollectableGenerations.Should().BeEmpty();
+        plan.ProtectedGenerations.Values.Should().AllSatisfy(reason =>
+            reason.Should().Contain("the pointer is empty"));
+    }
+
+    /// <summary>
+    /// 🚨 A directory is a generation only on POSITIVE evidence that it is a publication. The
+    /// publisher's <c>modules/</c> sits beside the generations in the flat compatibility copy, and
+    /// under an exclusion list it would be collectable the day someone added a second bookkeeping
+    /// directory, silently.
+    /// </summary>
+    [Fact]
+    public void ADirectoryThatIsNotAPublication_IsNeverCollected()
+    {
+        var modules = Path.Combine(root, Live, "plugins", "modules");
+        Directory.CreateDirectory(modules);
+        File.WriteAllBytes(Path.Combine(modules, "AI.module.nupkg"), new byte[2048]);
+        File.SetLastWriteTimeUtc(Path.Combine(modules, "AI.module.nupkg"), DaysAgo(300).UtcDateTime);
+        Directory.SetLastWriteTimeUtc(modules, DaysAgo(300).UtcDateTime);
+        Generation(Live, "plugins", "gen-old", DaysAgo(60));
+        Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+
+        var plan = PlanNow();
+
+        plan.CollectableGenerations.Select(g => g.Name).Should().Equal("gen-old");
+        plan.CollectableGenerations.Select(g => g.Directory).Should().NotContain(modules);
+        plan.ProtectedGenerations.Should().NotContainKey(modules);
+        Directory.Exists(modules).Should().BeTrue();
+    }
+
+    /// <summary>An abort collects NOTHING — generations included. A partial picture licenses no deletion, at either level.</summary>
+    [Fact]
+    public void AnAbortedPlan_CollectsNoGenerations()
+    {
+        Generation(Live, "plugins", "gen-old", DaysAgo(60));
+        Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+        var marker = Marker("3.0.0-ci.7", "s-whatever");
+        File.WriteAllText(marker, "");
+
+        var plan = PlanNow();
+
+        plan.AbortReason.Should().Contain("could not be read");
+        plan.CollectableGenerations.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// A COLLECTABLE identity takes its generations with it: they must not also appear as
+    /// collectable generations, or their bytes are counted twice and the sweep tries to delete one
+    /// directory that its parent's removal already took.
+    /// </summary>
+    [Fact]
+    public void GenerationsOfACollectableIdentity_AreNotListedSeparately()
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Generation("s-dead", "plugins", "gen-old", DaysAgo(400));
+        Pointer("s-dead", "plugins", "gen-old", DaysAgo(400));
+
+        var plan = PlanNow();
+
+        Ids(plan).Should().Equal("s-dead");
+        plan.CollectableGenerations.Should().BeEmpty();
+    }
+
+    /// <summary>End to end: the superseded generation goes, the live one and the identity stay, and the ledger says which.</summary>
+    [Fact]
+    public void SweepCore_RemovesASupersededGeneration_AndLeavesTheLiveOne()
+    {
+        Generation(Live, "plugins", "gen-old", DaysAgo(60), bytes: 4096);
+        Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now);
+
+        result.AbortReason.Should().BeNull();
+        result.Deleted.Should().BeTrue();
+        result.DeletedGenerations.Should().Be(1);
+        result.DeletedIdentities.Should().Be(0);
+        result.DeletedBytes.Should().BeGreaterThan(4096);
+        Directory.Exists(Path.Combine(root, Live, "plugins", "gen-old")).Should().BeFalse();
+        Directory.Exists(Path.Combine(root, Live, "plugins", "gen-new")).Should().BeTrue();
+        File.Exists(Path.Combine(root, Live, "plugins", ShippedPrebuiltBundles.PublicationPointerFileName))
+            .Should().BeTrue();
+
+        var ledger = File.ReadAllLines(PrebuiltBundleStore.LedgerPathOf(root));
+        ledger[0].Should().Contain("1 superseded generation(s)");
+        ledger.Should().Contain(l => l.Contains("removed generation") && l.Contains("gen-old"));
+    }
+
+    /// <summary>Report-only removes no generation either, and still says which one it would have taken.</summary>
+    [Fact]
+    public void SweepCore_ReportOnly_RemovesNoGeneration()
+    {
+        Generation(Live, "plugins", "gen-old", DaysAgo(60));
+        Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = false }, Now);
+
+        result.DeletedGenerations.Should().Be(0);
+        result.Plan!.CollectableGenerations.Select(g => g.Name).Should().Equal("gen-old");
+        Directory.Exists(Path.Combine(root, Live, "plugins", "gen-old")).Should().BeTrue();
+    }
+
+    /// <summary>A failed removal is counted and the next pass re-plans it — never swallowed.</summary>
+    [Fact]
+    public void SweepCore_AFailedGenerationRemoval_IsCounted()
+    {
+        Generation(Live, "plugins", "gen-a", DaysAgo(90));
+        Generation(Live, "plugins", "gen-b", DaysAgo(80));
+        Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now,
+            deleteDirectory: dir =>
+            {
+                if (dir.EndsWith("gen-a", StringComparison.Ordinal))
+                    throw new IOException("locked");
+                Directory.Delete(dir, true);
+            });
+
+        result.FailedDeletes.Should().Be(1);
+        result.DeletedGenerations.Should().Be(1);
+        Directory.Exists(Path.Combine(root, Live, "plugins", "gen-b")).Should().BeFalse();
+    }
+
+    /// <summary>The flat layout has no generations at all — nothing about this reaches a store that has not flipped.</summary>
+    [Fact]
+    public void TheFlatLayout_HasNoGenerations_AndCollectsNone()
+    {
+        Sealed(Live, "plugins", DaysAgo(400));
+        Sealed("s-old", "plugins", DaysAgo(400));
+
+        var plan = PlanNow();
+
+        plan.CollectableGenerations.Should().BeEmpty();
+        plan.ProtectedGenerations.Should().BeEmpty();
+        plan.Identities.SelectMany(i => i.Sources).Should().AllSatisfy(s =>
+        {
+            s.Generations.Should().BeEmpty();
+            s.PointerFault.Should().BeNull();
+        });
     }
 
     // ---- version lines ------------------------------------------------------------------------

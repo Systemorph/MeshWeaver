@@ -144,7 +144,7 @@ directory:
 | `.`, `..`, anything with a separator, anything rooted | 🚨 a pointer is a NAME. It must never be able to address bytes outside its own source directory — refused and logged as a warning, because a publisher wrote something this reader will not follow |
 | names a directory that is not on disk | a retention sweep outran the pointer; logged as a warning |
 
-### Retention
+### Generation retention
 
 Follow [Released Artifact Retention](/Doc/Architecture/ReleasedArtifactRetention)
 (#3842). The 30-day age window and release/consumer references supersede the earlier
@@ -161,9 +161,51 @@ Follow [Released Artifact Retention](/Doc/Architecture/ReleasedArtifactRetention
 - Missing consumer or publication inventory prevents deletion. A retry/backoff duration
   is not an adoption lifetime and cannot authorize collecting a serving fallback.
 
-This is the cleanup contract to implement with the release inventory. The identity-level
-bundle sweep never reaches inside a retained identity and therefore does not itself
-prove that generation-level protection and collection are implemented.
+**Where it runs.** `PrebuiltBundleStore` — the portal's own sweep, one level down from the identity
+rules it already applies, sharing that pass's abort discipline, its report-only mode and its ledger.
+It is deliberately NOT in the publisher: the publisher has no consumer inventory, no release
+markers, no adoption stamps, and it holds none of them at the moment it publishes.
+
+**The rule, ORed as KEEPs, applied only inside an identity the pass RETAINS.** A generation is
+collected when *all* of these hold, and kept when any one fails:
+
+| | keep when |
+|---|---|
+| the pointer | `_current` names it — it is the live publication, however old |
+| the pointer's own health | `_current` could not be resolved to a directory on disk: unreadable, blank, refused, or dangling. Then **every** generation of that source is kept |
+| its own seal | its seal could not be READ — unreadable is never unreferenced |
+| age | its newest write is inside `PreWarm:PrebuiltBundleRetention:MinimumAge` (at least 30 days) |
+
+A generation under a *collectable* identity is not listed separately: that identity's directory goes
+whole, and its byte count already includes them.
+
+🚨 **Why this is sound without a per-generation consumer inventory — the one thing that could make
+it unsound.** A non-current generation is **unreachable**, not merely unfashionable. Every read of a
+published source directory composes under
+`ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory)` — the boot seeder, the same-major
+adopted fallback, `SealedPublicationIndex`, `PublishedBundleCatalogue` and `ServedModuleBytes` alike
+— and nothing anywhere enumerates a source's subdirectories looking for a publication. So the set a
+consumer inventory would have to protect is exactly *{the generation `_current` names}* ∪
+*{everything young}*, and both are kept above by construction. The sweep therefore uses **the
+readers' own resolution** (`ShippedPrebuiltBundles.ResolvePublicationPointer`, which is
+`PublicationDirectoryOf` with the fallback reason kept rather than discarded) instead of a second
+copy of those rules: a sweep that decided reachability differently from the readers would delete
+bytes a portal was still resolving, and the two would drift silently.
+
+🚨 **"Publication must establish protection before moving `_current`" is satisfied by AGE, not by a
+lease.** A generation is protected from the instant its first byte lands, because it is younger than
+the window. A publication in flight can therefore never be collected, and the publisher needs no
+claim, no lock and no ordering with the sweep — which is what makes this implementable at all across
+two repositories that share no lock. `UnsealedGrace` is deliberately *not* consulted here: it is
+hours where the window is at least 30 days, so a branch for it could never fire, and a check that
+cannot fail is not a check.
+
+🚨 **A directory is a generation only on POSITIVE evidence that it is a publication** — it carries
+`source-commit.txt`, `repository.txt` or the completion sentinel, or the pointer names it. It is not
+"every subdirectory except the ones I know about". The publisher's `modules/` sits beside the
+generations in the flat compatibility copy, and under an exclusion list every bookkeeping directory
+added later would become collectable the day it was added, silently. Under positive identification
+it is simply retained, and the worst case is bytes that stay.
 
 ## Who actually publishes — measured, 2026-09-07
 
@@ -281,10 +323,10 @@ green. (`repository.txt` was added under this rule and says so in place.)
   of costing a publication that is already whole, sealed and disjoint. Ordering it before would let
   a race on the OLD layout withhold a publication that is correct on the NEW one — which would make
   flipping a prefix deliver nothing at all until the flat copy is dropped.
-- 🚨 **Retention is NOT implemented, and that is a precondition on flipping rather than a follow-up.**
-  Generations accumulate at ~45 small files each until a sweep removes the ones nothing names, and
-  that sweep DELETES from the production share — it must land as its own reviewed change, with its
-  own harness. Nothing the writer does today deletes anything it did not create.
+- ✅ **Retention landed** — see "Generation retention" above. It was the precondition on flipping:
+  generations accumulate at ~45 small files each, and nothing the writer does deletes anything it
+  did not create. The collector is the portal's own `PrebuiltBundleStore` sweep, one level down from
+  the identity rules it already applies.
 
 ### Phase 3 — every producer's pin reaches phase 2 *(open — the next step)*
 
