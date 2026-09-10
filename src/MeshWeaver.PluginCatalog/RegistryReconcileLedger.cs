@@ -71,4 +71,18 @@ public record RegistryReconcileEntry
     /// <summary><see cref="ViaBoot"/>, <see cref="ViaFeedRead"/>, <see cref="ViaBroadcast"/> or
     /// <see cref="ViaSafetyNet"/>.</summary>
     public string? LastReconciledVia { get; init; }
+
+    /// <summary>
+    /// 🚨 The installed packages that declare a compiled module and which THIS registry did not
+    /// OFFER at <see cref="Ref"/> — so the module funnel never considers them and their bytes can
+    /// never advance from here (Systemorph/MeshWeaver.Plugins#1584). See <see cref="ModuleDelivery"/>
+    /// for what this does and does not claim.
+    ///
+    /// <para>🚨 <b><c>null</c> is NOT an empty list.</b> Null means this process has no successful
+    /// feed read from this registry to answer the question from; an EMPTY list means the registry
+    /// answered in full and offers every installed module package. Reading the first as the second
+    /// is a gate that never ran painted the colour of one that passed — the same distinction
+    /// <see cref="Pending"/> exists to draw, one question further along.</para>
+    /// </summary>
+    public ImmutableList<UndeliveredModule>? UndeliveredModules { get; init; }
 }

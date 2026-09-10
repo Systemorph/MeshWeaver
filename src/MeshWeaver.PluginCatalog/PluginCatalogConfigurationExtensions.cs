@@ -253,6 +253,12 @@ public static class PluginCatalogConfigurationExtensions
             .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery))
             .WithType(typeof(DefaultInstallLedger), nameof(DefaultInstallLedger))
             .WithType(typeof(RegistryReconcileLedger), nameof(RegistryReconcileLedger))
+            // The ledger's own parts. Both were auto-registered under their short names, which
+            // WORKS and logs a Warning on every write — and the auto route is a short-name gamble
+            // across namespaces, where an explicit registration is the documented contract. They
+            // are named here for the same reason ModuleInventoryContent below is.
+            .WithType(typeof(RegistryReconcileEntry), nameof(RegistryReconcileEntry))
+            .WithType(typeof(UndeliveredModule), nameof(UndeliveredModule))
             // 🚨 The module-inventory record every instance writes about ITSELF, and it was the one
             // type on this surface that was never registered (#3625). DeploymentReportService
             // stamped a hand-written discriminator, "ModuleInventoryContent", that named NO CLR

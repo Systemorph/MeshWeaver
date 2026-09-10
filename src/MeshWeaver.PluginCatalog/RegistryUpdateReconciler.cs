@@ -687,14 +687,98 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             // for a new framework MVID has unchanged content, and this lane is what heals it after
             // an image roll.
             .SelectMany(_ => ReconcileModules(bundles, name, packages))
-            .Do(_ => Mark(registry, entry => entry with
+            // The DELIVERY lane (Plugins#1584): the two lanes above only ever visit packages the
+            // registry SERVES, so a package installed here that it does not serve is not "up to
+            // date" and not "failed" — it is absent from both loops, and absence said nothing.
+            // This is where the absence becomes an answer.
+            .SelectMany(_ => UndeliveredModules(name, packages))
+            // ONE mark, so the delivery verdict and the completion it belongs to land in the SAME
+            // ledger snapshot: a reader can never see a reconcile that just finished carrying the
+            // previous pass's verdict.
+            .Do(undelivered => Mark(registry, entry => entry with
             {
                 Pending = false,
                 PendingSince = null,
                 LastFault = null,
                 LastReconciledAt = DateTimeOffset.UtcNow,
                 LastReconciledVia = via,
-            }));
+                UndeliveredModules = undelivered,
+            }))
+            .Select(_ => Unit.Default);
+    }
+
+    /// <summary>How long the delivery lane's ONE install-record listing may take. Bounded for the
+    /// same reason every other read on this path is: a wedged listing must cost this, never the
+    /// reconcile that has already done its work.</summary>
+    private static readonly TimeSpan InstallRecordListingBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 🚨 <b>Records which installed modules this registry does NOT deliver (Plugins#1584).</b>
+    ///
+    /// <para>Measured on memex 2026-09-10: the registry answered its feed with 45 manifests,
+    /// <c>Mail</c> was not among them (the package declares <c>tier: personal</c> and the
+    /// instance's catalog grant covers the baseline plan), and so the module funnel never
+    /// considered it. <c>MeshWeaver.Mail.MicrosoftGraph</c> went on loading an assembly written
+    /// eleven days earlier while the package's CONTENT arrived through the instance's own git
+    /// source and the install record advanced to 1.5 — "installed, up to date, eleven days old",
+    /// with nothing anywhere able to say otherwise. A feature that ships as a module change in
+    /// such a package cannot reach the deployment by merge + roll + restart, and nobody could see
+    /// why.</para>
+    ///
+    /// <para><b>Only reached from a FULL feed read</b> — <see cref="ReconcileFromFeed"/>, i.e. the
+    /// boot pass, a drained deferral or the safety net. Never from the per-package broadcast lane
+    /// (<see cref="ReconcileModule"/>), whose "packages" is the ONE package the registry named: a
+    /// delivery verdict computed there would call every other installed module undelivered.</para>
+    ///
+    /// <para>🚨 <b>An inventory that could not be read is not an empty inventory</b> — the lesson
+    /// the Store's own refresh task states in as many words. A listing that fails yields
+    /// <c>null</c> (not determined) rather than an empty list, so nothing downstream can read
+    /// "I could not look" as "everything is delivered". The lane never faults: a delivery REPORT
+    /// that failed must not withhold a reconcile that already landed content and modules.</para>
+    /// </summary>
+    /// <returns>What this registry does not deliver, or <c>null</c> when the install records could
+    /// not be listed. The caller records it on the ledger in the same mark that closes the pass.</returns>
+    private IObservable<ImmutableList<UndeliveredModule>?> UndeliveredModules(
+        string name,
+        IReadOnlyList<PackageManifest> packages)
+    {
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return<ImmutableList<UndeliveredModule>?>(null);
+        var access = hub.ServiceProvider.GetService<AccessService>();
+
+        // A SET listing is the sanctioned use of Query (CqrsAndContentAccess): no single node's
+        // content is read through it, and a stale entry can only under-report — which costs a
+        // signal, where over-reporting would print a "not delivered" on a package that is fine.
+        var query = $"path:{PackageInstaller.InstalledPartition} scope:children "
+            + $"nodeType:{PackageInstaller.PackageNodeType}";
+        // RunAsSystem, never Observable.Using (#1790): impersonation is an AsyncLocal store/restore
+        // pair, and Observable.Using splits the two across threads — exactly as WriteLedger does.
+        return access.RunAsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query)))
+            .Take(1)
+            .Timeout(InstallRecordListingBudget)
+            .Select(change => ModuleDelivery.NotOffered(
+                change.Items.Select(n => n.ContentAs<PackageManifest>(hub.JsonSerializerOptions)),
+                packages))
+            .Do(undelivered =>
+            {
+                if (!undelivered.IsEmpty)
+                    // Warning, and ONE line for the whole registry: this stays true on every pass
+                    // for as long as the grant does, so a line per package would be a repeated
+                    // flood of the same fact.
+                    logger.LogWarning(
+                        "[RegistryUpdate] {Report} Recorded on {Ledger}.",
+                        ModuleDelivery.Describe(undelivered, name), LedgerPath);
+            })
+            .Select(undelivered => (ImmutableList<UndeliveredModule>?)undelivered)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[RegistryUpdate] could not list this installation's install records, so which "
+                    + "of them {Name} does not deliver is NOT DETERMINED this pass — recorded as "
+                    + "unknown rather than as none. Cause: {Cause}", name, ex.Message);
+                return Observable.Return<ImmutableList<UndeliveredModule>?>(null);
+            });
     }
 
     /// <summary>

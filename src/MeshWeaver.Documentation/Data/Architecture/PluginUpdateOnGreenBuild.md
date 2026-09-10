@@ -229,6 +229,56 @@ to reconcile. The change is that a catalog open now *is* a reconcile when one is
 line had always claimed and the code had never done. (The safety net above reads the feed too, and a
 successful read from it drains a pending registry through this same path — one pass, not two.)
 
+### 🚨 A package the registry does NOT offer is recorded as NOT DELIVERED (Plugins#1584)
+
+Both lanes above iterate **the packages the registry serves** and intersect them with this
+installation's install records. That is right for everything the registry carries — and it means a
+package installed *here* that the registry does **not** carry is neither "up to date" nor "failed".
+It is *absent from both loops*, and absence used to produce no log line, no ledger entry and no card
+state anywhere.
+
+The shape that made this expensive, measured on memex 2026-09-10:
+
+| What was true | What every surface said |
+|---|---|
+| The registry answered its feed with **45 manifests**; `Mail` was not among them | — |
+| `Mail/index.json` declares `tier: personal`; the instance's catalog grant covers the baseline plan, so the registry declined it (`the registry … does not offer a package 'Mail' to this instance`) | — |
+| The package's **content** kept arriving through the instance's own git source, and the install record advanced to `1.5.0` an hour earlier | *installed, version 1.5.0, up to date* |
+| The loaded assembly `MeshWeaver.Mail.MicrosoftGraph` was written **eleven days** earlier | *no module activation pending* — and correctly so: nothing had landed, so nothing was waiting on a restart |
+
+A feature that ships as a module change in such a package therefore cannot reach the deployment by
+merge + roll + restart. Only content moves. An Executive Assistant thread asked for the Teams tools
+that shipped in that module's 1.5 and had none.
+
+**The mechanism fix is to make the absence an answer.** After the content and module lanes, a full
+feed pass lists this installation's install records once and records, on the same ledger entry, the
+installed packages that declare a `module` and which *this registry did not offer*
+(`RegistryReconcileEntry.UndeliveredModules`, one `UndeliveredModule` per package carrying the
+module name and the content identity the record claims). One Warning line names them and points at
+the ledger; `ModuleDelivery.NotDeliveredByAnyRegistry` intersects the entries so a surface can say
+*not delivered* honestly on an installation with several registries — a package one registry serves
+is delivered, whatever the others carry.
+
+Three properties are load-bearing:
+
+- **Absence is evidence only after a SUCCESSFUL, COMPLETE read.** The lane runs from
+  `ReconcileFromFeed`, i.e. the boot pass, a drained deferral or the safety net — never from the
+  per-package broadcast drain, whose "packages" is the one package the registry named and which
+  would call every other installed module undelivered.
+- **`null` is not an empty list.** A listing that fails records *not determined*, not *none*: an
+  inventory that could not be read is not an empty inventory, and reading the first as the second is
+  a gate that never ran painted the colour of one that passed.
+- **It is not an entitlement verdict, and not a fault.** A consumer cannot tell "your grant does not
+  cover this" from "this registry never carried it", and nothing here is broken — the package is
+  simply not delivered from this registry. The remedy is the registry operator's: grant the
+  instance the plan, tier the package differently, or point the installation at a registry that
+  carries it.
+
+What this deliberately does **not** do: fall back to the image's `modules/` seed or to an in-mesh
+compile when the registry has no bundle. That changes what an installation *runs* and belongs with
+the adoption policy ([Module Adoption Policy](/Doc/Architecture/ModuleAdoptionPolicy)), not with
+the reconcile's bookkeeping; the honest first step is that the state stops being invisible.
+
 ## Why a node and not a call
 
 The producer is `MeshWeaver.GitSync` (it owns webhook signature verification, payload parsing and
