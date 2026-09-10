@@ -293,11 +293,17 @@ public static class PackageSources
                 // Skip dot-directories (.git, .github, …) — infrastructure, not repo content.
                 if (relative.Split('/').Any(seg => seg.StartsWith('.')))
                     continue;
-                var info = new FileInfo(path);
-                hash.Append(relative).Append(':').Append(info.Length).Append(';');
-                files.Add(IsProbablyText(relative)
+                var file = IsProbablyText(relative)
                     ? new RepoFile(relative, File.ReadAllText(path))
-                    : new RepoFile(relative, "", File.ReadAllBytes(path)));
+                    : new RepoFile(relative, "", File.ReadAllBytes(path));
+                // Hash the payload we actually return, not its size or timestamp: equal-length
+                // edits must move the source version too. Reading once also keeps the fingerprint
+                // and the returned snapshot about the same bytes if the checkout changes mid-read.
+                var contentHash = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(file.Bytes));
+                hash.Append(relative.Length).Append(':').Append(relative)
+                    .Append(':').Append(contentHash).Append(';');
+                files.Add(file);
             }
 
             var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
