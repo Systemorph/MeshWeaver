@@ -136,6 +136,68 @@ public class NodeTypeCompileStampTest
             "an upload that did not happen has never failed a compile — that contract is unchanged");
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void CacheReload_PreservesInputEvidenceOnlyForTheSameBuildAndDependencies(
+        bool sameBuild, bool changedDependency)
+    {
+        var assemblyPath = typeof(NodeTypeCompileStampTest).Assembly.Location;
+        var emitted = ImmutableSortedDictionary<string, string>.Empty
+            .Add(CompiledDependencies.ToolchainKey, "toolchain")
+            .Add("Dependency", "original")
+            .Add(CompiledDependencies.ContentKey, "generated-input-evidence");
+        var definition = PreviouslyBroken() with
+        {
+            LatestAssemblyMvid = sameBuild ? ServedBuildIdentity.OfFile(assemblyPath) : "other-build",
+            CompiledDependencies = emitted
+        };
+        var reloaded = emitted.Remove(CompiledDependencies.ContentKey);
+        if (changedDependency)
+            reloaded = reloaded.SetItem("Dependency", "changed");
+        var result = SuccessResult() with
+        {
+            AssemblyLocation = assemblyPath,
+            CompiledDependencies = reloaded
+        };
+
+        var stamped = NodeTypeCompilationHelpers.ApplyCompileSuccess(
+            definition, result, 8, null, null);
+
+        Assert.Equal(sameBuild && !changedDependency,
+            stamped.CompiledDependencies!.ContainsKey(CompiledDependencies.ContentKey));
+        Assert.Equal(reloaded["Dependency"], stamped.CompiledDependencies["Dependency"]);
+        if (sameBuild && !changedDependency)
+            Assert.Equal(emitted[CompiledDependencies.ContentKey],
+                stamped.CompiledDependencies[CompiledDependencies.ContentKey]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("fresh-input-evidence")]
+    public void CacheReload_NeverInventsEvidenceOrReplacesAFreshDigest(string? freshInput)
+    {
+        var dependencyRecord = ImmutableSortedDictionary<string, string>.Empty
+            .Add(CompiledDependencies.ToolchainKey, "toolchain");
+        var definition = PreviouslyBroken() with
+        {
+            LatestAssemblyMvid = null,
+            CompiledDependencies = dependencyRecord.Add(CompiledDependencies.ContentKey, "old-evidence")
+        };
+        var result = SuccessResult() with
+        {
+            AssemblyLocation = typeof(NodeTypeCompileStampTest).Assembly.Location,
+            CompiledDependencies = freshInput is null ? dependencyRecord
+                : dependencyRecord.Add(CompiledDependencies.ContentKey, freshInput)
+        };
+
+        var stamped = NodeTypeCompilationHelpers.ApplyCompileSuccess(
+            definition, result, 8, null, null);
+
+        Assert.Equal(result.CompiledDependencies, stamped.CompiledDependencies);
+    }
+
     // ---- ApplyCompileFailure ------------------------------------------------------------------
 
     [Fact]
