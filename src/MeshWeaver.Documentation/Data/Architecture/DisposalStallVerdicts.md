@@ -256,14 +256,15 @@ mesh, which the attached recursive snapshot lists.
 
 ---
 
-## Who asked for the teardown
+## Who asked for the teardown, and why
 
-`[QUIESCE-START]` names the requester (#3510):
+`[QUIESCE-START]` names the requester **and the reason** (#3510):
 
 ```
-[QUIESCE-START] Hosting: requested by portal/installer (routed DisposeRequest); 4 pending callbacks …
-[QUIESCE-START] Hosting: requested by itself — a self-posted DisposeRequest (Hosting), i.e. a rebind or self-heal recycle; …
-[QUIESCE-START] Hosting: requested by a direct Dispose() (no routed DisposeRequest); …
+[QUIESCE-START] Hosting: requested by portal/nodeops-1 (routed DisposeRequest); why: PackageInstaller.SettleRetypedRoot: recycling the root 'Hosting' WHILE INSTALLING that package …; 4 pending callbacks …
+[QUIESCE-START] Hosting: requested by itself — a self-posted DisposeRequest (Hosting), i.e. a rebind or self-heal recycle; why: NodeType rebind: node 'Hosting' is now typed 'Store/Plugin' but its hub activated on '(none)'; …
+[QUIESCE-START] Hosting: requested by a direct Dispose() (no routed DisposeRequest); why: reason not stated by the caller; …
+[QUIESCE-START] Hosting/Admin/_Activity/compile-state: requested by a cascade from its owner Hosting; why: the owner's own teardown — Hosting was torn down by portal/nodeops-1 (routed DisposeRequest); why: PackageInstaller.SettleRetypedRoot: recycling the root 'Hosting' WHILE INSTALLING that package …
 ```
 
 **Why it was missing, and why the obvious source could not supply it.** `Dispose()` posts its
@@ -273,13 +274,41 @@ earlier: whether a `DisposeRequest` arrived over the bus at all, and from where.
 `HandleDispose`, where such a request is *honoured* (not merely received — the root-mesh refusal
 returns without disposing).
 
-**The three readings, and what each rules out:**
+**The four readings, and what each rules out:**
 
 | line says | means | rules out |
 |---|---|---|
 | a named sender | another hub asked — e.g. `PackageInstaller` posting to a package root | a recycle; a host teardown |
-| `itself — a self-posted DisposeRequest` | an automatic recycle: `NodeTypeRebindWatcher`, `WithOverlaySelfHeal` | an external actor |
-| `a direct Dispose() (no routed DisposeRequest)` | host teardown, an owner disposing its children, a `using` | **the whole message path** |
+| `itself — a self-posted DisposeRequest` | an automatic recycle: `NodeTypeRebindWatcher`, the stale-build convergence, `WithOverlaySelfHeal` | an external actor |
+| `a cascade from its owner <address>` | this hub went down because its OWNER did; the `why:` carries the owner's own attribution | this hub having been asked at all |
+| `a direct Dispose() (no routed DisposeRequest)` | host teardown or a `using` | **the whole message path** |
+
+### The `why:` field, and why WHO alone was not enough
+
+Three of core's recyclers post to their **own** hub — `NodeTypeRebindWatcher`, the stale-build
+convergence in `NodeTypeEnrichmentHelpers`, and `WithOverlaySelfHeal` — so the self-posted reading is
+**one word covering three states** ([Controls That Cannot Fail](/Doc/Architecture/ControlsThatCannotFail)).
+#3510's leading hypothesis was exactly *"which of those was it?"*, and the sender could never answer
+it. `DisposeRequest.Reason` closes that: the poster always knew, and now the request carries it.
+
+🚨 **An omission is REPORTED, never blank.** A `DisposeRequest` posted without a reason prints
+`why: reason not stated by the caller` (`DisposeRequest.ReasonNotStated`) — the same rule as
+`NodeDiagnosticsOutcome`: a field that simply disappears reads to the next person as *"there was
+nothing to report"*. One core poster is still unnamed at the time of writing —
+`MeshOperations.cs`'s recycle — and it is that token that says so.
+
+### The cascade reading is the one #3510 actually needed
+
+A hosted hub is torn down by `HostedHubsCollection.DisposeHubsReactive` calling `Dispose()` on it —
+a **direct** dispose, so before this every cascaded child printed the fourth line above: the same
+sentence a `using` produces. That is #3510's trail one level down. Its stranded writes were owed by
+those children (`Hosting/*/_Activity/compile-state`, `Hosting/_Access/Public_Access`), so the child's
+line is where a reader lands — and it attributed the teardown to nobody. The root recycle that took
+it was invisible from there.
+
+The child now names the cascade, its owner, **and the originating teardown**, which is propagated
+unchanged down the tree (so the string cannot grow with depth and a leaf still names the event that
+started it). One line, no second log to correlate against.
 
 🚨 The third is not an absence of information — it is the deduction #3510 could not make. That issue
 turned on one unknown: the Hosting root was disposed at 23:37:51Z *while its own 145-file install was
@@ -295,10 +324,105 @@ the one reading that must not be ambiguous.
 
 **This names the disposer; it does not stop the wedge.** #3510's other two Expectations — deferring a
 recycle while an install holds the root, or NACKing every in-flight write under it so the install
-fails in milliseconds with a name — are untouched. `QuiesceStartNamesTheAskerTest` pins all three
-readings, and the line is `Information`: a test asserting it must raise its own filter
+fails in milliseconds with a name — are untouched here. `QuiesceStartNamesTheAskerTest` pins all four
+readings plus both halves of the `why:` field, and the line is `Information`: a test asserting it must raise its own filter
 (`AddFilter("MeshWeaver", LogLevel.Information)`), because `TestBase` binds levels from
 `test/appsettings.json` and an Information line is otherwise dropped before any provider sees it.
+
+### Where the `why:` is READ — the gate log already asks for it
+
+`PluginGateRunner` raises three categories to `Information` for exactly this question
+(`RecycleAttributionCategories`: `MeshWeaver.Graph.Configuration`,
+`MeshWeaver.PluginCatalog.PackageInstaller`, `MeshWeaver.Messaging.MessageHub`), because the gate
+otherwise runs at `Warning` and every candidate recycler announced itself into a sink with no
+listener. So the reason surfaces in the bake gate log with no further wiring — which is the one log
+where the six occurrences of #3510 were read.
+
+### The rebind hypothesis: possible by construction, excluded by measurement
+
+#3510's leading candidate was `NodeTypeRebindWatcher`. Read from code, it **can** fire against the
+root of the package currently installing, and that is worth stating plainly because two eliminations
+in the thread read as stronger than they are:
+
+- the watcher is armed on **every** instance hub at initialization (`WithInitialization` →
+  `RegisterForDisposal(Arm(...))`), package roots included;
+- `RequiresRebind` fires on any post-commit `Created`/`Updated` event for that node whose `NodeType`
+  differs from the one its hub bound — and the installer's placeholder dance **retypes the root**,
+  which is precisely such an event;
+- it posts at most ONE self-`DisposeRequest` (`Take(1)`), and skips a hub already `IsDisposing`.
+
+So "it cannot happen" is false. What is true is that it has **never been the observed disposer**:
+every measured occurrence carries `PackageInstaller`'s own recycle line at the disposal timestamp,
+and the two are separated by ORDERING — the rebind fires at the retype, in the WRITE stage; the
+installer's `SettleRetypedRoot` fires after the package's own adoption wave. They are also separated
+by TRANSPORT, which is the cheaper discriminator now that the line exists: the rebind posts to
+**itself**, and `SettleRetypedRoot` posts from the node-operation issuing hub, so one reads
+`requested by itself — a self-posted DisposeRequest` and the other `requested by portal/nodeops-… (routed
+DisposeRequest)`. With the reason attached, no ordering argument is needed at all.
+
+## Sighting 2026-09-10 — a verdict that was MINTED and still did not reach the waiter
+
+Recorded here because the evidence is a CI log that ages out, and because it is the *other* half of
+#3510's family: a caller owed a reply from an owner that has gone away.
+
+**Measured.** `MeshWeaver.Graph.Test.NackReachesTheWaiterDuringTeardownTest.OwnerDisposingUnderMeshTeardown_StillAnswersTheWaitingCaller`
+failed on shard 4 of run
+[34513634943](https://github.com/Systemorph/MeshWeaver/actions/runs/34513634943)
+(PR #3956, 2026-09-10T18:29:17Z), `Graph.Test Total: 1519, Failed: 1`:
+
+```
+Did not expect collection {"3YOdHJMOHEKUFJlwHFjJmg"} to contain "3YOdHJMOHEKUFJlwHFjJmg"
+because the owner minted an OwnerDisposing NACK for this …
+  NackReachesTheWaiterDuringTeardownTest.cs(242,0)
+```
+
+Its own trace, in order:
+
+```
+[write]   patch posted with marker teardown-nack-d3197828e2; owner merge is parked
+[fence]   caller is armed on the late watch (request=3YOdHJMOHEKUFJlwHFjJmg)
+[dispose] mesh disposal invoked — parent is past DisposeHostedHubs
+[owner]   TestData/teardown-nack-node is Dead — its disposal registrants have run
+```
+
+**Not the diff, and not a catalogued flake.** #3956 touches `deploy/whisper/**` plus two doc pages
+and cannot reach `MeshWeaver.Graph.Test`; six sibling PRs built in the same window (#3952, #3957,
+#3955, #3959, #3947, #3946) have zero failing jobs; neither twin is in `.github/known-flakes.json`.
+
+### It is a DIFFERENT seam from #3510's, and the difference is where the verdict is
+
+| | #3510's trail | this sighting |
+|---|---|---|
+| the owner | **lives** — the ROOT under it is recycled | **dies** — it reaches `Dead` |
+| the verdict | **never minted**: `PATCH_MERGE_STAMPED → PATCH_ECHO_SEEN → (nothing)`, no bound armed, nobody owes one | minted by the ShutDown-phase registrant, per the assertion this test makes |
+| what the caller sees | `ADVANCE_WITHOUT_HANDOFF` at 5 s, then `OwnerUnreachable … no verdict within 31s` | silence, then the full 31 s budget |
+
+So they are two points on one lane, not one defect: #3510 is *nobody owns the answer*, this is *the
+answer exists and the waiter does not observe it*. Both surface identically to the caller, which is
+why the two get conflated on a first read.
+
+### 🚨 The one thing to check first on the next occurrence
+
+The test's precondition is `owner.RunLevel == Dead`, and its assertion message reads it as *"the
+owner is now terminally Dead, so its ShutDown-phase registrant has already run"*. **That implication
+holds on ONE of the three paths to `Dead`.** `HandleShutdownCore`'s ShutDown case sets `Dead` in the
+success path (after `DisposeImpl()`), **again in the `catch`**, and **again in the `finally`
+backstop** — so a `DisposeImpl()`/`messageService.Dispose()` that threw reaches `Dead` with the
+registrant's work incomplete, and the precondition is satisfied without the causal fact it stands
+for. That is the [Controls That Cannot Fail](/Doc/Architecture/ControlsThatCannotFail) shape *an
+input the operator supplies*, applied to a precondition instead of a check.
+
+This is stated as **the first hypothesis to eliminate, not as the cause** — the run carries no
+evidence of which path was taken, which is precisely the gap. The discriminator is one line: the
+`catch` logs `Error during shutdown of hub {address}` and the success path does not. Read that
+before reading anything else, and see [Teardown Verdicts Are Causal](/Doc/Architecture/TeardownVerdictsAreCausal)
+for why the precondition was made causal in the first place.
+
+🚨 **Both twins must move together.** `NackReachesTheWaiterDuringTeardownTest` and
+`LateNackReenqueueTest` are hand-synced with copies in MeshWeaver.Plugins, compared by that repo's
+`TeardownTwinParityTest` at `MW_PLATFORM_REF` — so it reddens in the PIN BUMP, not in core. A change
+to what either twin asserts is not done until the Plugins copy carries it (break shape 7; see
+[Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) → "Shape 7's worst form").
 
 ## What this page does not claim
 
