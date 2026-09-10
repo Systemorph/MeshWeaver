@@ -1281,41 +1281,48 @@ internal static class NodeTypeEnrichmentHelpers
                         if (recompileAttempts >= MaxRecompileAttempts)
                         {
                             logger?.LogWarning(
-                                "EnrichWithNodeType: latest assembly for {NodeType} still not found in store after {Attempts} recompile attempt(s) (collection={Coll}, version={Version}) — falling back to default config",
+                                "EnrichWithNodeType: latest assembly for {NodeType} still not found in store after {Attempts} recompile attempt(s) (collection={Coll}, version={Version}) — overlaying the assembly-unavailable diagnosis",
                                 nodeType, recompileAttempts, def.LatestAssemblyCollection, compileVersion);
-                            // 🚨 The SECOND sticky class (memex two-pod evidence,
-                            // 2026-07-26): this silent default-config fallback is
-                            // cached for the grain's lifetime exactly like the
-                            // error overlay — an instance on a pod whose local
-                            // store lacks the type's bytes serves only generic
-                            // areas until a manual recycle (and each recycle
-                            // re-rolls placement). Attach the same self-heal
-                            // watcher. The version gate is MANDATORY here, not
-                            // optional: HasUsableBuild is already TRUE in this
-                            // state (only the byte resolution missed), so an
-                            // ungated watcher would fire on the replayed current
-                            // state and hot-loop the recycle. Gated, the instance
-                            // self-recycles once per NodeType write — when the
-                            // compile eventually lands on this pod, re-enrichment
-                            // resolves the bytes and heals.
+                            // 🚨 #3934 CLAUSE 4 — A DIAGNOSIS, NEVER A SILENT DEFAULT.
+                            // This branch used to bind the DEFAULT configuration here: the
+                            // instance activated, served the generic areas, and every area the
+                            // type declares was simply absent. Measured on memex 2026-09-10,
+                            // that is what a reader saw at /Posts/SavThankYou — an HTTP 200
+                            // rendering "Area not found" for Preview, Write and PostCard, while
+                            // the NodeType's own record read compilationStatus: Ok. There is
+                            // nothing in that page, in the node, or in a recycle that names the
+                            // cause, which is why it cost a day.
                             //
-                            // Only wrap when a hub configuration will actually be
-                            // composed (the node's own, or the mesh default the
-                            // factory adds underneath). With NEITHER, the null
-                            // HubConfiguration must survive: routing/grain key
-                            // the fail-fast NACK-fallback hub on it, and that
-                            // hub's DeactivateOnIdle already retries on next
-                            // access — wrapping would swap fail-fast for a bare
-                            // hub that Ignores typed requests (the park class).
-                            var fallback = ApplyEntry(
-                                node, localAssemblyPath: null, hubConfig: null,
-                                nodeType, meshConfiguration);
+                            // The state is EXACTLY the one the pinned-release branch above
+                            // already overlays — a build is recorded, and this process cannot
+                            // resolve its bytes — so it takes the same OverlayCause and the same
+                            // self-heal. It also keeps the fail-fast contract the old comment
+                            // was protecting: WithCompilationErrorOverlay Sets an
+                            // UnhandledMessageNack, so a typed request the missing assembly
+                            // would have handled gets a terminal DeliveryFailure naming this
+                            // NodeType instead of parking — strictly better than the bare
+                            // default config, which Ignores it.
+                            //
+                            // The version gate on the self-heal stays MANDATORY: HasUsableBuild
+                            // is already TRUE in this state (only the byte resolution missed),
+                            // so an ungated watcher would fire on the replayed current state and
+                            // hot-loop the recycle. Gated, the instance self-recycles once per
+                            // NodeType write — when the compile eventually lands on this pod,
+                            // re-enrichment resolves the bytes and heals.
+                            var (storeMissIntro, storeMissCta, storeMissGuidance) =
+                                OverlayCopy(OverlayCause.AssemblyUnavailable);
                             return Observable.Return(
-                                fallback.HubConfiguration is null
-                                && meshConfiguration.DefaultNodeHubConfiguration is null
-                                    ? fallback
-                                    : WithOverlaySelfHeal(
-                                        fallback, meshHub, nodeType, typeNode.Version, logger));
+                                WithOverlaySelfHeal(
+                                    WithCompilationErrorOverlay(node, nodeType,
+                                        $"The compiled assembly for '{nodeType}' is recorded "
+                                        + $"(collection={def.LatestAssemblyCollection}, "
+                                        + $"version={compileVersion}) but could not be resolved in "
+                                        + "this process's assembly store.",
+                                        guidance: storeMissGuidance,
+                                        intro: storeMissIntro,
+                                        callToAction: storeMissCta,
+                                        activityPath: def.LastCompilationActivityPath),
+                                    meshHub, nodeType, typeNode.Version, logger));
                         }
                         return TriggerRecompileAndRetry(
                             node, nodeType, meshConfiguration, compilationService, meshHub,
@@ -1864,8 +1871,18 @@ internal static class NodeTypeEnrichmentHelpers
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub.Address.ToString(),
                             instanceHub.JsonSerializerOptions,
+                            // 🚨 Named, not anonymous (#3510): a self-posted DisposeRequest reads
+                            // as "a rebind or self-heal recycle" — three posters, one sentence —
+                            // and telling them apart cost that issue six occurrences.
                             recycle: () => instanceHub.Post(
-                                new DisposeRequest(), o => o.WithTarget(instanceHub.Address)),
+                                new DisposeRequest
+                                {
+                                    Reason = "Overlay self-heal: the instance is bound to an "
+                                             + $"overlay of NodeType '{nodeType}' that its own "
+                                             + "watcher found stale, so the hub is recycled to "
+                                             + "re-bind against the current build",
+                                },
+                                o => o.WithTarget(instanceHub.Address)),
                             reportStuck: () => ReportStuckOverlayToAdmins(instanceHub, nodeType, logger),
                             nodeType, typeVersionAtOverlay, logger,
                             guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
@@ -2119,7 +2136,16 @@ internal static class NodeTypeEnrichmentHelpers
                             "Stale-build convergence: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — auto-recycling instance '{InstancePath}' ({ConfigKey}=true)",
                             nodeType, published, boundAssemblyPath, instanceHub.Address,
                             AutoRecycleConfigKey);
-                        instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                        // 🚨 Named (#3510) — see the rebind watcher: the three self-posting
+                        // recyclers were indistinguishable in the victim's own log.
+                        instanceHub.Post(
+                            new DisposeRequest
+                            {
+                                Reason = $"Stale-build convergence ({AutoRecycleConfigKey}=true): "
+                                         + $"NodeType '{nodeType}' published build '{published}', "
+                                         + $"superseding the bound '{boundAssemblyPath}'",
+                            },
+                            o => o.WithTarget(instanceHub.Address));
                         return;
                     }
 

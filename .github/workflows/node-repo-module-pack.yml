@@ -189,7 +189,8 @@ name: node-repo module pack
 #     the generators the SDK would have supplied). The platform image ships no /app/mw-plugin-test
 #     and the tester image's /app is not the full reference surface, so the build runs the tester
 #     image against the platform image's extracted /app; both pins move together, from one CD wave.
-#   * the `acr-username`/`acr-password` secrets, to pull them.
+#   * registry authentication: the default `basic` mode uses `acr-username`/`acr-password`;
+#     `oidc` uses the three Azure workload-identity secrets. The mode is explicit and validated.
 #   * `accept` for every construct the evaluator refuses. MeshWeaver.Plugins' own
 #     `src/Directory.Build.props` carries a `<Target>` (the AssemblyVersion contract check), so its
 #     entries need at least `"accept": "targets"`.
@@ -436,6 +437,14 @@ on:
         type: string
         required: false
         default: ''
+      acr-login:
+        description: >
+          How digest-pinned platform images are pulled. `basic` (default) uses acr-username and
+          acr-password. `oidc` uses azure-client-id, azure-tenant-id and azure-subscription-id.
+          Any other value fails before a build; the workflow never guesses from secret presence.
+        type: string
+        required: false
+        default: basic
       registry-source:
         description: >
           The registry SOURCE these packages belong to ("Plugins", "Education", …) — it stamps the
@@ -539,6 +548,15 @@ on:
         required: false
       acr-password:
         description: Pull credential for platform-image's registry. Required when platform-image-digest is set.
+        required: false
+      azure-client-id:
+        description: Azure workload-identity client id. Required when acr-login is oidc.
+        required: false
+      azure-tenant-id:
+        description: Azure workload-identity tenant id. Required when acr-login is oidc.
+        required: false
+      azure-subscription-id:
+        description: Azure subscription id. Required when acr-login is oidc.
         required: false
       content-app-id:
         description: >-
@@ -914,6 +932,9 @@ jobs:
     if: needs.select.result == 'success' && needs.select.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       # The framework identity the PLATFORM host resolves for its /app — what every ledger record
       # and bundle is keyed to (the portal adopts, so the portal's identity is the honest one).
@@ -978,6 +999,34 @@ jobs:
         with:
           path: ${{ runner.temp }}/tester-app
           key: tester-app-${{ inputs.tester-image-digest }}
+      - name: The registry login mode must be explicit
+        env:
+          ACR_LOGIN: ${{ inputs.acr-login }}
+        run: |
+          case "$ACR_LOGIN" in
+            basic|oidc) echo "registry login: $ACR_LOGIN" ;;
+            *) echo "::error::acr-login must be 'basic' or 'oidc', got '$ACR_LOGIN'"; exit 1 ;;
+          esac
+      - name: Azure login for a cold image cache
+        if: >-
+          inputs.acr-login == 'oidc'
+          && inputs.platform-image-digest != ''
+          && (steps.image-cache.outputs.cache-hit != 'true'
+              || steps.refs-cache.outputs.cache-hit != 'true'
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      - name: Log in to ACR with workload identity
+        if: >-
+          inputs.acr-login == 'oidc'
+          && inputs.platform-image-digest != ''
+          && (steps.image-cache.outputs.cache-hit != 'true'
+              || steps.refs-cache.outputs.cache-hit != 'true'
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        run: bash meshweaver/.github/scripts/acr-login.sh
       - name: Fill whichever cache is cold — the run's ONE trip to the registry
         if: >-
           inputs.platform-image-digest != ''
@@ -994,10 +1043,13 @@ jobs:
           TESTER_HIT: ${{ steps.tester-cache.outputs.cache-hit }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
+          ACR_LOGIN: ${{ inputs.acr-login }}
         run: |
           set -euo pipefail
-          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but the acr-username/acr-password secrets are not passed — the cold caches cannot be filled"; exit 1; }
-          echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          if [ "$ACR_LOGIN" = basic ]; then
+            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::acr-login is basic but acr-username/acr-password were not passed — the cold caches cannot be filled"; exit 1; }
+            echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          fi
           case "${IMAGE##*/}" in *:*) NOTAG="${IMAGE%:*}" ;; *) NOTAG="$IMAGE" ;; esac
           pinned="${NOTAG}@${DIGEST}"
           if [ "$IMAGE_HIT" != "true" ] || [ "$REFS_HIT" != "true" ]; then
@@ -1129,6 +1181,9 @@ jobs:
     if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Resolve the content repository's credential
         id: content-repo
@@ -1158,18 +1213,44 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      - name: Check out the ACR login helper
+        if: inputs.acr-login == 'oidc'
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+          sparse-checkout: .github/scripts/acr-login.sh
       - name: Restore the platform image tarball (per-digest cache)
         if: ${{ inputs.platform-image-digest != '' }}
+        id: image-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/platform-image
           key: platform-image-${{ inputs.platform-image-digest }}
       - name: Restore the tester app (per-digest cache)
         if: ${{ inputs.tester-image-digest != '' }}
+        id: tester-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/tester-app
           key: tester-app-${{ inputs.tester-image-digest }}
+      - name: Azure login for registry fallback
+        if: >-
+          inputs.acr-login == 'oidc'
+          && ((inputs.platform-image-digest != '' && steps.image-cache.outputs.cache-hit != 'true')
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      - name: Log in to ACR with workload identity
+        if: >-
+          inputs.acr-login == 'oidc'
+          && ((inputs.platform-image-digest != '' && steps.image-cache.outputs.cache-hit != 'true')
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        run: bash meshweaver/.github/scripts/acr-login.sh
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -1183,6 +1264,7 @@ jobs:
           SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
+          ACR_LOGIN: ${{ inputs.acr-login }}
         run: |
           set -euo pipefail
           mapfile -t projects < <(jq -r '.[] | select(.build == "container") | .project' <<< "$MODULES")
@@ -1215,17 +1297,21 @@ jobs:
             img="$(cat "$RUNNER_TEMP/platform-image/image-id.txt")"
             docker image inspect "$img" >/dev/null 2>&1 || { echo "::error::the cached tarball loaded but image id $img is absent — delete the platform-image-$DIGEST cache entry and rerun"; exit 1; }
           else
-            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image cache MISS and no acr credentials — the image cannot be fetched."; exit 1; }
+            if [ "$ACR_LOGIN" = basic ]; then
+              [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image cache MISS and basic ACR credentials were not passed."; exit 1; }
+              echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+            fi
             echo "platform image: cache MISS for $DIGEST — pulling from ACR (same bytes, only slower)"
-            echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
             docker pull -q --platform linux/amd64 "$pinned"
             img="$pinned"
           fi
           tester_app="$RUNNER_TEMP/tester-app"
           if [ ! -f "$tester_app/mw-plugin-test.dll" ]; then
-            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::tester cache MISS and no acr credentials."; exit 1; }
+            if [ "$ACR_LOGIN" = basic ]; then
+              [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::tester cache MISS and basic ACR credentials were not passed."; exit 1; }
+              echo "$ACR_PASSWORD" | docker login "${TESTER_IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+            fi
             echo "tester-app cache MISS for $TESTER_DIGEST — extracting once"
-            echo "$ACR_PASSWORD" | docker login "${TESTER_IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
             docker pull -q --platform linux/amd64 "$tester_pinned"
             rm -rf "$tester_app"
             tcid=$(docker create --platform linux/amd64 "$tester_pinned")
@@ -1384,6 +1470,9 @@ jobs:
     needs: [select, prepare, build-workspace]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
     # a matrix with no vectors, so an empty selection has to express itself as "this job does not
     # run". What makes it safe is that `verify` below runs UNCONDITIONALLY and asserts the pairing
@@ -1648,6 +1737,16 @@ jobs:
         with:
           path: ${{ runner.temp }}/platform-refs
           key: platform-refs-${{ inputs.platform-image-digest }}
+      - name: Azure login for registry fallback
+        if: inputs.acr-login == 'oidc' && inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      - name: Log in to ACR with workload identity
+        if: inputs.acr-login == 'oidc' && inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
+        run: bash meshweaver/.github/scripts/acr-login.sh
       - name: Take the platform from the image (docker cp /app)
         if: inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
         env:
@@ -1655,11 +1754,14 @@ jobs:
           DIGEST: ${{ inputs.platform-image-digest }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
+          ACR_LOGIN: ${{ inputs.acr-login }}
         run: |
           set -euo pipefail
           [ -n "$IMAGE" ] || { echo "::error::platform-image-digest is set but platform-image is empty — name the image the digest belongs to"; exit 1; }
-          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but the acr-username/acr-password secrets are not passed — the image cannot be pulled"; exit 1; }
-          echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          if [ "$ACR_LOGIN" = basic ]; then
+            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but basic ACR credentials were not passed — the image cannot be pulled"; exit 1; }
+            echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          fi
           # 🚨 --platform linux/amd64 ALWAYS: framework identities are per-architecture build (the
           # ci.6469 manifest list resolves to s770d75c… on x64 and sfe27877f… on arm64), and the
           # bundles are sealed under the x64 identity the portals run. A multi-arch digest pulled on

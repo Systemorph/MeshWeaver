@@ -632,6 +632,49 @@ def run_heal_cases(root, case) -> None:
     case("...and the heal comment is still written, so the delivery record survives",
          "gh issue comment 3176" in joined, f"calls={calls}")
 
+def plugin_module_build_problems(workflow_text: str) -> list[str]:
+    """The platform bake must have one compiler for every module it composes (#3732)."""
+    import yaml
+
+    doc = yaml.safe_load(workflow_text)
+    job = (doc.get("jobs") or {}).get("plugins-modules") or {}
+    inputs = job.get("with") or {}
+    raw = inputs.get("modules")
+    if not raw:
+        return ["plugins-modules has no module catalog"]
+    try:
+        entries = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        return [f"plugins-modules module catalog is not valid JSON: {exc}"]
+    if not entries:
+        return ["plugins-modules module catalog is empty"]
+    problems = []
+    accepts = []
+    for entry in entries:
+        module = entry.get("module") or "<unnamed>"
+        if entry.get("build") != "container":
+            problems.append(f"{module} does not use the shared container workspace")
+            continue
+        accept = entry.get("accept") or ""
+        accepts.append(accept)
+        if "targets" not in accept.split():
+            problems.append(f"{module} does not reuse the shared workspace targets")
+    if len(set(accepts)) > 1:
+        problems.append("plugins-modules container entries do not share one accept contract")
+    for name in ("platform-image", "platform-image-digest", "tester-image", "tester-image-digest"):
+        if not inputs.get(name):
+            problems.append(f"plugins-modules does not pass {name} to the container workspace")
+    if inputs.get("acr-login") != "oidc":
+        problems.append("plugins-modules does not select its available OIDC registry login")
+    secrets = job.get("secrets") or {}
+    for name in ("azure-client-id", "azure-tenant-id", "azure-subscription-id"):
+        if not secrets.get(name):
+            problems.append(f"plugins-modules does not pass {name}")
+    if (job.get("permissions") or {}).get("id-token") != "write":
+        problems.append("plugins-modules does not grant id-token: write for OIDC")
+    return problems
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -662,6 +705,33 @@ def main() -> int:
         if not ok:
             print(f"        {detail}")
             failures.append(name)
+
+    workflow_text = (root / WORKFLOW).read_text()
+    module_problems = plugin_module_build_problems(workflow_text)
+    case("every plugin module composed by CD reuses one container workspace",
+         not module_problems, "; ".join(module_problems))
+    mutated_workflow = workflow_text.replace('"build": "container"', '"build": "sdk"', 1)
+    mutation_problems = plugin_module_build_problems(mutated_workflow)
+    case("the plugin-module workspace guard fails when one entry leaves that workspace",
+         bool(mutation_problems), "the mutation passed having changed one producer")
+    divergent_accept = workflow_text.replace(
+        '"accept": "targets"', '"accept": "targets embedded-resource:build-output"', 1)
+    accept_problems = plugin_module_build_problems(divergent_accept)
+    case("the plugin-module workspace guard fails when one entry changes the accept contract",
+         any("one accept contract" in problem for problem in accept_problems),
+         "the mutation passed with divergent global-build acknowledgments")
+    missing_targets = workflow_text.replace(
+        '"accept": "targets"', '"accept": "embedded-resource:build-output"', 1)
+    targets_problems = plugin_module_build_problems(missing_targets)
+    case("the plugin-module workspace guard still requires target reuse",
+         any("workspace targets" in problem for problem in targets_problems),
+         "the mutation passed without the target-reuse contract")
+    missing_digest = workflow_text.replace(
+        "      platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}\n", "", 1)
+    digest_problems = plugin_module_build_problems(missing_digest)
+    case("the plugin-module workspace guard fails when its image pin is absent",
+         any("platform-image-digest" in problem for problem in digest_problems),
+         "the mutation passed without a platform image digest")
 
     base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA}
 

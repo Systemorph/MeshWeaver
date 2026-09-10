@@ -51,7 +51,7 @@ The EA agent declares the `Mesh` + `ExecutiveAssistant` plugins. The `ExecutiveA
 | Mail | `ListInbox`, `SearchMail`, `ReadMail`, `DraftMail`, `DraftReply`, `GetDraft`, `UpdateDraft`, `DiscardDraft` — and `SendMail`, `ReplyToMail` **only where the deployment opted in**, see below |
 | Mailings | `PrepareMailing` — one subject and body template merged per recipient into personal mails, saved as a page the person reviews; **never sends** — see below |
 | Calendar | `ListEvents`, `GetEvent`, `CreateEvent` (book + invite attendees), `UpdateEvent`, `CancelEvent` |
-| Teams (read-only) | `ListTeams`, `ListChannels`, `ReadChannelMessages`, `ListChats`, `ReadChat` — the user's own organisation's teams and chats; no send tool, see below |
+| Teams | `ListTeams`, `ListChannels`, `ReadChannelMessages`, `ListChats`, `ReadChat` — the user's own organisation's teams and chats; and `PostChannelMessage`, `ReplyToChannelMessage`, `SendChatMessage` **only where the deployment opted in** (`Teams:AgentSend=Send`), see below |
 
 Example asks: *"Book 30 min with Alice next Tuesday afternoon and invite her"*, *"reply to the vendor that
 we accept"*, *"clear my Friday"*, *"email me when an approval needs me"* (the last manages your
@@ -149,25 +149,34 @@ knowing before anyone edits them:
 | `UpdateDraft` | the patch carries **only** `subject`, `body`, `toRecipients`, `ccRecipients` — the four fields Graph documents as *"Updatable only if **isDraft** = true"*. A patch that arrives after the send is rejected by the **server**, atomically. `importance`, `categories`, `flag` and `isRead` *are* updatable on a sent message; adding one would remove that backstop silently, so the field set is pinned by a test. |
 | `DiscardDraft` | nothing beyond the re-read. `DELETE /me/messages/{id}` deletes whatever it is given, draft or sent — which is why this tool's guard is the only thing between "discard that draft" and destroying a delivered message. |
 
-### Teams is read-only, on the same grant — and a guest team is out of reach
+### Teams rides the same grant — reading always, posting where the deployment says so
 
 The Teams tools run on the same delegated grant as mail and calendar (`EaGraphAuth.Scopes` carries
 `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read` since
-2026-09-09). Two consequences the agent states rather than hides:
+2026-09-09, and `ChannelMessage.Send`, `ChatMessage.Send` since 2026-09-10). Three consequences the
+agent states rather than hides:
 
-- **A grant minted before those scopes existed answers 403.** The mailbox still works; only the
-  Teams consent is missing. The tool answers with the connect link (`{BaseUrl}/auth/ea/connect`)
-  and the agent hands it on — one reconnect, a few seconds — instead of reporting Teams as
-  unavailable. `ChannelMessage.Read.All` is admin-restricted: a non-admin sees "Need admin approval"
-  until a tenant admin has consented once.
+- **A grant consented for an earlier, smaller scope set cannot serve this build.** Entra refuses to
+  redeem such a refresh token for the wider set, so the credential read classifies it as
+  *not connected* with a diagnostic that says the mailbox side is intact. The tool answers with the
+  connect link (`{BaseUrl}/auth/ea/connect`), the agent hands it on — one reconnect, a few seconds —
+  and the connect endpoint runs Microsoft's dialog for that user instead of bouncing a "connected"
+  one straight back (the 2026-09-10 loop; see
+  [ExecutiveAssistantCredentialReads](/Doc/Architecture/ExecutiveAssistantCredentialReads)).
+  `ChannelMessage.Read.All` is admin-restricted: a non-admin sees "Need admin approval" until a
+  tenant admin has consented once.
 - **A team the user joined as a guest of another organisation is not visible.** The grant is the
   user's home tenant's; `/me/joinedTeams` omits guest teams and their channels answer 403/404. No
   scope changes that. The agent says so rather than reporting the team as missing. Reading such a
   team needs the other organisation's cooperation — see the repository's `/teams` skill.
-
-There is deliberately **no Teams send tool**: Teams has no draft state, so a send would be immediate
-and irreversible, against this agent's draft-by-default contract. Sending gets its own gate
-(`Teams:AgentSend`, mirroring `Email:AgentSend`) and its own consent when it is built.
+- **Posting is immediate.** Teams has no draft state, so `PostChannelMessage`,
+  `ReplyToChannelMessage` and `SendChatMessage` go out the moment the model calls them. The gate is
+  the same shape as mail's: **`Teams:AgentSend`** defaults to `Off`, in which the posting tools are
+  never handed to the model at all (and refuse by name if reached directly); a deployment sets
+  `Teams:AgentSend=Send` to hand them over. The scopes are consented either way, so turning posting
+  on later does not cost every user a second reconnect. In `Send` mode there is no per-message
+  confirmation — the same boundary `Email:AgentSend=Send` has, and the same approval-gate work
+  closes both.
 
 ### Editing an event is READ then PATCH, never cancel-and-recreate
 
@@ -207,7 +216,7 @@ The EA reuses the portal's **sign-in** app registration (the `Authentication:Mic
 
 1. Add the **delegated** Microsoft Graph permissions: `Mail.ReadWrite`, `Mail.Send`,
    `Calendars.ReadWrite`, `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`,
-   `Chat.Read`, `offline_access`.
+   `Chat.Read`, `ChannelMessage.Send`, `ChatMessage.Send`, `offline_access`.
 2. Add the redirect URI **`{BaseUrl}/auth/ea/callback`** (e.g. `https://portal.example.com/auth/ea/callback`).
 3. No admin pre-consent is required for mail and calendar — each user consents for themselves on
    first use (that's the point). `ChannelMessage.Read.All` is the one exception: it is

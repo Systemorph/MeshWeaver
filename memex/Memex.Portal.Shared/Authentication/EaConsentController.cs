@@ -92,7 +92,11 @@ public sealed class EaConsentController(
         // forcing Microsoft's dialog (BuildConsentUrl carries prompt=consent) on a user whose
         // grant is stored — visiting the connect link twice used to re-prompt every time and read
         // as "my consent is not saved". ?force=true still runs the full consent deliberately
-        // (scope additions, credential rotation, a revoked grant the stored token hides).
+        // (credential rotation, a revoked grant the stored token hides). A SCOPE ADDITION needs no
+        // force: EaGraphAuth classifies a grant consented for a smaller scope set than the build's
+        // as NotConnected, so this fast path is not taken for it — which is what ended the
+        // 2026-09-10 loop where the read scopes had landed, the reconnect link bounced a
+        // "connected" user straight back, and every Teams call kept failing on the refused refresh.
         // Sanitised BEFORE either use: the fast path redirects to it directly, and the consent
         // path round-trips it through the IdP as `state` and redirects to it on the way back —
         // so an unsanitised value is an open redirect on both routes, not just the visible one.

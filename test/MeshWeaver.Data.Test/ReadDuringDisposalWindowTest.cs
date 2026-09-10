@@ -120,11 +120,20 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
         owner.Should().NotBeNull();
         await owner!.Started.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        // The happy path first, so a later non-answer can never be blamed on the reference not
-        // resolving or the source not existing.
+        // The happy path first, so a later non-answer can never be blamed on the source not
+        // existing.
+        //
+        // 🚨 A DIFFERENT REFERENCE from the one read under test, and that is load-bearing since
+        // Systemorph/MeshWeaver#3432. The read path now resolves a SHARED stream per reference
+        // (IWorkspace.GetNullableStream), so warming the SAME reference here would leave a live
+        // mirror in the cache and the read below would be ANSWERED FROM IT instead of having to
+        // build a stream in the frozen window — this test would then pass on a hub that never
+        // refused anything. That answered case is real and is pinned by
+        // AWarmedReferenceIsAnsweredFromTheLiveMirror below; THIS test is about the read that
+        // genuinely FAULTS, so its reference must be one this owner has never reduced.
         var warm = await host
             .Observe<GetDataResponse>(
-                new GetDataRequest(new CollectionReference(nameof(Item))),
+                new GetDataRequest(new EntityReference(nameof(Item), "1")),
                 o => o.WithTarget(OwnerAddress))
             .Should().Within(30.Seconds()).Emit();
         warm.Message.Data.Should().NotBeNull("the read must work before the teardown, or this test proves nothing");
@@ -220,6 +229,92 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
         failure.Message.Should().NotContain("No node found",
             "that phrase turns a retryable stall into a PROVABLE absence "
             + "(MeshNodeStreamCache.IsMissingNodeFailure) — the exact confusion this NACK avoids");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The OTHER half of the same window, after Systemorph/MeshWeaver#3432.</b> A read whose
+    /// stream ALREADY EXISTS is answered from that live mirror — with the data — rather than
+    /// faulting because a fresh stream cannot be built.
+    ///
+    /// <para>This is not a weakening of the test above: what #1470 forbids is answering a teardown
+    /// with a fabricated <c>GetDataResponse{Error}</c> that reads as "this node does not exist".
+    /// Real data is the opposite of that. The two arms together state the whole contract — a read
+    /// that CAN be served is served, a read that cannot be built is NACKed transient — and they are
+    /// the reason the read path may share one stream per reference instead of minting a permanent
+    /// <c>sync/</c> hub per request.</para>
+    /// </summary>
+    [HubFact]
+    public async Task AWarmedReferenceIsAnsweredFromTheLiveMirror()
+    {
+        var host = GetHost();
+
+        var owner = host.GetHostedHub(
+            new Address("data-owner", "2"),
+            c => c.WithTypes(typeof(ParkRequest), typeof(Item))
+                .WithHandler<ParkRequest>((_, d) =>
+                {
+                    try
+                    {
+                        parked.OnNext(Unit.Default);
+                        parked.OnCompleted();
+                        SpinWait.SpinUntil(
+                            () => Volatile.Read(ref release) == 1, TestTimeouts.Convergence);
+                    }
+                    finally
+                    {
+                        Volatile.Write(ref release, 1);
+                    }
+                    return d.Processed();
+                })
+                .AddData(data => data.AddSource(source =>
+                    source.WithType<Item>(type => type
+                        .WithKey(i => i.Id)
+                        .WithInitialData(new[] { new Item("1", "one") }))))
+                .WithPostingIdentity(PostingIdentity.System));
+        owner.Should().NotBeNull();
+        await owner!.Started.WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+
+        var reference = new CollectionReference(nameof(Item));
+
+        // WARM THE SAME REFERENCE — this is the difference from the test above, and the whole point.
+        var warm = await host
+            .Observe<GetDataResponse>(new GetDataRequest(reference), o => o.WithTarget(owner.Address))
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        warm.Message.Data.Should().NotBeNull("the warm read must land, or nothing is cached to serve from");
+
+        // Same ordering discipline as above: occupy the block, enqueue DisposeRequest, then the read.
+        host.Post(new ParkRequest(), o => o.WithTarget(owner.Address));
+        await parked.Should().Within(TestTimeouts.Convergence).Emit(
+            "PRECONDITION: the park must OWN the action block before anything else is posted");
+
+        host.Post(new DisposeRequest(), o => o.WithTarget(owner.Address));
+
+        var answers = new AsyncSubject<object?>();
+        using var reading = host
+            .Observe<GetDataResponse>(new GetDataRequest(reference), o => o.WithTarget(owner.Address))
+            .Select(d => (object?)d.Message)
+            .Catch<object?, Exception>(ex => Observable.Return<object?>(ex))
+            .Take(1)
+            .Subscribe(answers);
+
+        Volatile.Write(ref release, 1);
+
+        var answer = await answers.Should().Within(TestTimeouts.Convergence).Emit();
+        Output.WriteLine($"[TEST] answer: {answer} (owner IsShuttingDown={owner.IsShuttingDown}, RunLevel={owner.RunLevel})");
+
+        owner.IsShuttingDown.Should().BeTrue(
+            "the read must have been served inside the disposal window — that IS the condition "
+            + $"under test (RunLevel={owner.RunLevel})");
+
+        var response = answer.Should().BeOfType<GetDataResponse>(
+            "a read the owner can still serve from its live mirror is SERVED, not refused — the "
+            + "stream-creation refusal only applies when a stream has to be built").Which;
+        response.Error.Should().BeNull(
+            "🚨 an Error here is exactly #1470's fabricated absence — the failure this whole file "
+            + "exists to keep out");
+        response.Data.Should().NotBeNull(
+            "the answer carries the owner's actual data; a null payload is what GetMeshNode maps to "
+            + "'this node does not exist'");
     }
 
 }

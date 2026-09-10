@@ -117,8 +117,10 @@ internal sealed class BakeHost
             return null;
         return $"module(s) {string.Join(", ", shipped)} are composed with --module AND shipped by the "
                + $"platform host at '{appDirectory}' — two builds of one assembly name in one bake. "
-               + "The records this bake would write name the module's build (mvid:…) while a portal "
-               + "carrying the name in its app closure resolves the platform's (ref:…), so every "
+               + "The records this bake would write name the MODULE lane (min:… — a version floor, "
+               + "or mvid:… when the module states no version) while a portal carrying the name in "
+               + "its app closure resolves the PLATFORM's (ref:…). The two schemes never compare, "
+               + "floor or not (#3934), so every "
                + "NodeType binding it would be DECLINED at adoption (\"dependency record mismatch\"). "
                + "A module has exactly one producer: remove the assembly from the platform host's "
                + "closure (it is a module, landed from the registry) or stop composing it (#3175).";
@@ -139,7 +141,8 @@ internal sealed class BakeHost
             IdOf = CompiledDependencies.CreateIdResolver(
                 FrameworkBuildIdentity.ProcessSurfacePairs,
                 TreeBake.ModuleMvidsOf(modules),
-                FrameworkBuildIdentity.ProcessImplMvidOf),
+                FrameworkBuildIdentity.ProcessImplMvidOf,
+                TreeBake.ModuleVersionResolverOf(modules)),
             ToolchainId = CompiledDependencies.ComputeToolchainId(FrameworkBuildIdentity.ProcessImplMvidOf),
             References = CompileReferences.ComposeWithModules(modules),
             Description =
@@ -263,7 +266,9 @@ internal sealed class BakeHost
         {
             FrameworkIdentity = identity,
             AppDirectory = app,
-            IdOf = CompiledDependencies.CreateIdResolver(pairs, TreeBake.ModuleMvidsOf(modules), HostMvidOf),
+            IdOf = CompiledDependencies.CreateIdResolver(
+                pairs, TreeBake.ModuleMvidsOf(modules), HostMvidOf,
+                TreeBake.ModuleVersionResolverOf(modules)),
             ToolchainId = CompiledDependencies.ComputeToolchainId(HostMvidOf),
             References = references,
             Description =

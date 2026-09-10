@@ -11,9 +11,10 @@ allowed-tools:
 # /teams — reading and sending Teams on a user's behalf
 
 **Measured 2026-09-09** by asking the Executive Assistant on memex "can you see my Teams channels,
-in particular PartnerRe ESL?": it answered no, and it was right. Nothing in the fleet can enumerate
-a user's teams or read a channel. This skill records what exists, what the ask needs, and the one
-wall that no scope can climb.
+in particular PartnerRe ESL?": it answered no, and it was right — then. Since Mail 1.5/1.6 (read,
+2026-09-09/10) and Mail 1.7 (post, 2026-09-10) the EA reads a user's own-tenant teams, channels and
+chats, and posts to them where the deployment sets `Teams:AgentSend=Send`. This skill records what
+exists, what the ask needs, and the one wall that no scope can climb.
 
 ## What exists: a bot, not a reader
 
@@ -25,18 +26,29 @@ can answer in a conversation the bot is part of and nothing else. On memex it is
 (`Teams:Enabled=false`, zero `TeamsConversation` nodes).
 
 The Executive Assistant (`src/MeshWeaver.Mail.MicrosoftGraph/ExecutiveAssistantPlugin.cs`) has
-mail and calendar tools only. Its credential is the delegated one minted by the EA consent link,
+mail, calendar and Teams tools. Its credential is the delegated one minted by the EA consent link,
 and that credential is the seam everything below hangs on.
 
 ## The seam: the EA consent link IS a delegated Graph token
 
 `{BaseUrl}/auth/ea/connect` sends the user through Microsoft's authorize endpoint with
-`prompt=consent` and the scope string in `EaGraphAuth.Scopes` — **Memex repo**,
-`Memex.Portal.Shared/Authentication/EaGraphAuth.cs`:
+`prompt=consent` and the scope string in `EaGraphAuth.Scopes` — **this repo**,
+`memex/Memex.Portal.Shared/Authentication/EaGraphAuth.cs`:
 
 ```
-Mail.ReadWrite Mail.Send Calendars.ReadWrite offline_access
+Mail.ReadWrite Mail.Send Calendars.ReadWrite
+Team.ReadBasic.All Channel.ReadBasic.All ChannelMessage.Read.All Chat.Read
+ChannelMessage.Send ChatMessage.Send offline_access
 ```
+
+🚨 **Widening that string invalidates every stored grant.** Entra refuses to redeem a refresh token
+for scopes the user never consented to (400 `invalid_grant`), and the consent controller's fast path
+bounces a user whose credential node exists straight back — so on 2026-09-10 the read scopes landed,
+the reconnect link "just brought me in", and every Teams call kept failing. `EaGraphAuth.Classify`
+now compares the credential's stored `Scopes` with the constant and reports a mismatch as
+`NotConnected`, which hands the user the link AND makes `/auth/ea/connect` run the dialog. Do not
+add a scope without that classification in place; `?force=true` on the connect link is the manual
+escape hatch for a portal that predates it.
 
 Add Teams scopes to that string and every user reconnects once; from then on the same
 `GraphServiceClient` the plugin already builds reaches `/me/joinedTeams`, `/teams/{id}/channels`,
@@ -66,21 +78,25 @@ before adding a scope — a tenant's consent policy can make any of them admin-o
 before the user sees a screen.
 
 🚨 **Teams has no draft state.** Mail is DraftOnly by design (`Email:AgentSend`, the human presses
-Send); a Teams send is immediate and irreversible. A send tool needs the same gate — a
-`Teams:AgentSend` mode defaulting to a preview page the human confirms, the shape `PrepareMailing`
-already has — and the sending tools must never be handed to the model in the default mode, exactly
-as `SendMail`/`ReplyToMail` are not.
+Send); a Teams post is immediate and irreversible. The gate is the same shape: `Teams:AgentSend`
+defaults to `Off`, in which `PostChannelMessage` / `ReplyToChannelMessage` / `SendChatMessage` are
+never handed to the model (and refuse by name when reached directly); `Send` hands them over, with
+no per-message confirmation — the boundary `Email:AgentSend=Send` has too. The scopes are consented
+regardless of the mode, so flipping the mode later costs nobody a reconnect. memex-cloud runs
+`Teams__AgentSend: "Send"` (Memex values); memex.systemorph.com does not.
 
-### The three pieces to write
+### The three pieces (built 2026-09-09/10)
 
-1. **Memex repo:** the scopes in `EaGraphAuth.Scopes`, and the delegated permissions on the app
-   registration (Roland's Entra tenant for the Systemorph portals).
-2. **Plugins repo:** tools on `ExecutiveAssistantPlugin` — `ListTeams`, `ListChannels`,
-   `ReadChannelMessages`, `ListChats`, `ReadChat`, and (gated) `SendChannelMessage` /
-   `SendChatMessage`; the plugin's `ClientAsync()` already yields the delegated
-   `GraphServiceClient`. Model-facing `[Description]`s stay English.
-3. **Plugins repo:** `src/MeshWeaver.AI/Data/Agent/ExecutiveAssistant.md` names the new surface,
-   or the agent will keep answering "I have no Teams tool" from its instructions.
+1. **This repo:** the scopes in `EaGraphAuth.Scopes` plus the stale-grant classification above; the
+   delegated permissions on the app registration (Roland's Entra tenant for the Systemorph portals)
+   are optional under dynamic consent except the admin-restricted `ChannelMessage.Read.All`.
+2. **Plugins repo:** the tools on `ExecutiveAssistantPlugin` — read: `ListTeams`, `ListChannels`,
+   `ReadChannelMessages`, `ListChats`, `ReadChat` (every mode); post: `PostChannelMessage`,
+   `ReplyToChannelMessage`, `SendChatMessage` (`Teams:AgentSend=Send` only). 🚨 A tool exists for
+   the model only when `CreateTools()` LISTS it — Mail 1.5 shipped the read methods without listing
+   them and the EA answered "not in my toolset" (Plugins#1611).
+3. **Plugins repo:** `src/MeshWeaver.AI/Data/Agent/ExecutiveAssistant.md` names the surface, or the
+   agent keeps answering "I have no Teams tool" from its instructions.
 
 ## 🚨 The wall: "PartnerRe ESL" lives in PartnerRe's tenant
 

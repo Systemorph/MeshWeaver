@@ -152,7 +152,20 @@ internal static class NodeTypeRebindWatcher
                             "NodeType rebind: node '{Path}' is now typed '{NewNodeType}' but its hub activated on "
                             + "'{BoundNodeType}' — recycling so the next access binds the real type",
                             path, change.NodeType ?? "(none)", boundNodeType ?? "(none)");
-                        instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                        // 🚨 The reason rides along (#3510). This watcher was that issue's LEADING
+                        // hypothesis for six occurrences precisely because a self-posted
+                        // DisposeRequest renders as "requested by itself — a rebind or self-heal
+                        // recycle": one word covering this watcher, the stale-build convergence and
+                        // the overlay self-heal. Naming it here is what turns the next occurrence
+                        // into a read instead of an ordering argument.
+                        instanceHub.Post(
+                            new DisposeRequest
+                            {
+                                Reason = $"NodeType rebind: node '{path}' is now typed "
+                                         + $"'{change.NodeType ?? "(none)"}' but its hub activated on "
+                                         + $"'{boundNodeType ?? "(none)"}'",
+                            },
+                            o => o.WithTarget(instanceHub.Address));
                     }
                     catch (Exception ex)
                     {

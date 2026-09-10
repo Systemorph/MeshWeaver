@@ -2,11 +2,19 @@
 #   Speech:Endpoint = http://localhost:8080   (or http://whisper:8080 from another compose service)
 #   Speech:Enabled  = true
 #
-# The model is NOT baked into the image (it's ~547 MB and swappable) — drop it in ./models/model.bin first:
-#   mkdir -p models && curl -fSL \
-#     https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin \
-#     -o models/model.bin
-# (Same file the on-device MAUI client downloads — see Doc/Architecture/OnDeviceVoice.)
+# 🚨 The ~547 MB model is a BUILD INPUT, not a runtime mount. Put it in ./models/model.bin BEFORE
+# `docker compose up --build`, or the build fails naming the file:
+#   mkdir -p models
+#   gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins \
+#     --pattern 'ggml-swiss-german-turbo-q5_0.bin' --output models/model.bin
+#
+# That is a PRIVATE repo and needs `gh auth`. It used to be an anonymous curl from a release on the
+# core repo; #2593 moved the asset and left this comment behind, so the documented command 404'd
+# (#3906). It is not coming back: the model is a CC BY-NC-4.0 derivative, so it must not be
+# published for anonymous download. Full reasoning: /Doc/Architecture/VoiceModelDistribution.
+#
+# 🚨 And do NOT bind-mount ./models over /models — an empty or stale host directory SHADOWS the model
+# baked into the image, and whisper-server then starts with nothing to load.
 
 services:
   whisper:
@@ -18,8 +26,6 @@ services:
       WHISPER_MODEL: /models/model.bin
       WHISPER_LANGUAGE: de   # Swiss German transcribes OUT as Standard German
       WHISPER_THREADS: 4
-    volumes:
-      - ./models:/models:ro
     restart: unless-stopped
     healthcheck:
       # whisper.cpp server answers /inference; a bare GET returns a non-5xx once it's up + the model loaded.

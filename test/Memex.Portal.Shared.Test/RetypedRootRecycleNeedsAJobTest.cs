@@ -74,4 +74,31 @@ public class RetypedRootRecycleNeedsAJobTest
         Assert.Null(PackageInstaller.RecycleDeclineReason(rootPath, written: 0));
         Assert.Null(PackageInstaller.RecycleDeclineReason(rootPath, written: 5));
     }
+
+    /// <summary>
+    /// 🚨 <b>The recycle that DOES happen must announce itself IN THE VICTIM'S OWN LOG (#3510).</b>
+    ///
+    /// <para>The decline above is announced by the installer, to whoever is reading the install.
+    /// The recycle is read by somebody else entirely — whoever is looking at the root's
+    /// <c>[QUIESCE-START]</c>, or at one of the per-node children the cascade takes with it, which
+    /// is where #3510's stranded writes were owed. That reader had nothing: attributing CD 7950's
+    /// <c>Hosting</c> took a full read of <c>PackageInstaller</c> plus an ordering argument, because
+    /// every candidate recycler announces itself at Information and none of them announced itself
+    /// where the teardown was visible.</para>
+    ///
+    /// <para>The sentence must name the DISCRIMINATOR the issue settled on, verbatim: <i>"a root
+    /// recycling under a reconcile is usually benign … the discriminator is not the count — it is
+    /// whether the recycled root is the package currently installing"</i>. A reason saying only
+    /// "recycling a root" would satisfy a weaker test and leave the next reader exactly where #3510
+    /// left them.</para>
+    /// </summary>
+    [Fact]
+    public void TheRecycleThatProceeds_NamesTheInstallItIsRunningUnder()
+    {
+        var reason = PackageInstaller.RetypedRootRecycleReason("Hosting");
+
+        Assert.Contains("Hosting", reason);
+        Assert.Contains("SettleRetypedRoot", reason);
+        Assert.Contains("WHILE INSTALLING", reason);
+    }
 }

@@ -80,6 +80,43 @@ also remove it between the module routes' first and second catalogue reads. A st
 `ModuleSetReading.PublicationUnavailable` result preserves the transient response on that second
 read, distinct from a sealed publication with no module index. All four routes are exercised.
 
+🚨 **An existence check leading an open is the DEFECT SHAPE, not the `_complete` file.** Fixing the
+seal readers left two more `File.Exists`-then-open pairs on the very same routes, each throwing the
+same unhandled `FileNotFoundException` from a slightly different frame — which is why the incident
+kept recurring after it had twice been "fixed". Both are now closed:
+
+- **The module set's own seal.** `SealedModulesOf` probed `modules/_index` and then read it
+  unguarded. That index is written strictly *before* `_complete`, so the removal that takes one
+  takes the other. An index absent **at the open** is now discriminated by re-reading the seal, and
+  the ordering is what makes that sound: the publisher unseals first and retention unseals before
+  removing an identity, so a seal that *still reads* means the publication is intact and simply has
+  no module set — it **predates module sealing**, permanent, `404`, republish the source — while a
+  seal that has gone too means the publication is **being replaced right now**, which sets
+  `PublicationUnavailable` and rides the existing transient mapping. The two answers are opposite,
+  and collapsing either into the other is the bug.
+- **The serve itself.** `Results.File(path, …)` resolves the path *again* when the result executes,
+  after the handler has returned — so the listing that stat'ed the file present is several steps in
+  the past, and a file removed in between threw out of result execution, past every handler. The
+  open now happens **in the handler**, and the already-open handle is what the response streams:
+  on POSIX the bytes stay readable through a descriptor after the directory entry is gone, so a
+  publication replaced mid-response is served whole from the generation its `ETag` pins rather than
+  merely being reported as torn. The share is opened `FileShare.Delete` so a read in flight never
+  blocks the publisher.
+
+Both route their failure into the **same** discrimination the seal readers use — source directory
+present ⇒ `503` + `Retry-After`, identity directory gone ⇒ `404` — so there is one mapping, not
+three. The probe that decides it is `Directory.Exists`, which is **total**: it returns `false` for
+every failure rather than throwing, so the race where the directory is removed between the failed
+open and the probe answers `404` (the correct answer for a removed identity) and can never produce
+a `500`. In the opposite order — present at the probe, removed after — the caller gets `503` and
+its next read gets `404`; the consumer contract is built to re-read, so that converges.
+
+🚨 **The bytes are served under the SEAL's spelling, never the request's.** The name match is
+case-insensitive and the share is not, so composing the requested name served `store.zip` out of a
+publication that sealed `Store.zip`: an open that fails on Linux for a permanent client mistake,
+which would now wear the transient answer and have that caller retry for ever. The listing verified
+one exact name present; that is the name the response opens.
+
 🚨 **The BOOT SEEDER reads the same seal, and it is the reader with no status to return.**
 `ShippedPrebuiltBundles.CompletePublishedBundlesOf` walks every source under one identity and skips
 an unsealed one deliberately — the sweep compiles it instead. It kept the racing `File.Exists`
@@ -204,6 +241,47 @@ satellite pin land on an identity core CD is still publishing to.
 
 So the fix is publisher-agnostic: it asks *"are the bytes on the shelf the ones I uploaded"*, never
 *"which repo is the other one"*.
+
+### Reproduced a third time, on a different day — 2026-09-10
+
+The two conclusions above are load-bearing enough to be worth an independent re-measurement rather
+than a citation. **2026-09-09 20:00Z → 2026-09-10 18:09Z, 22 hours: 61 bake jobs that ran to a
+terminal conclusion** (33 core CD, 28 satellite), every job log fetched, none expired, **zero
+unreadable identities**.
+
+| | core CD `plugins-bake` | satellite `publish-bake` |
+|---|---|---|
+| executed to `success`/`failure` | 33 | 28 |
+| **sealed a publication** | 16 | 20 |
+| skipped — already published, content × framework | 2 | 7 |
+| published nothing (failed before the publish) | 15 | 1 |
+
+36 distinct sealed publications over **19 distinct prefixes**. And:
+
+- 🚨 **7 of the 19 prefixes were written by BOTH lanes — and in all 7 the two lanes carried
+  DIFFERENT source commits.** So the premise of #3461 holds exactly: the framework identity is a
+  property of the *platform image's* reference surface, it carries no content commit, and `plugins`
+  is a constant, so the two lanes address one directory routinely. When they meet there the
+  content × framework sealed-skip **cannot** fire, because the content differs — each lane genuinely
+  unseals and overwrites the other's publication.
+- 🚨 **Concurrent publications on one prefix: 4. All four SAME-lane. Cross-lane: 0.** That is the
+  same answer as 2026-09-06 and 2026-09-08, from a third day and a differently built measurement —
+  three independent reproductions. All four carried different content, so all four are cases where
+  the #3496 postcondition is the only thing between the two runs and a sealed mix.
+
+The one cross-lane pair that came close is worth writing down because it shows the *mechanism* that
+keeps them apart, which is not luck about timing. On identity `s546f29f9…`, core CD run
+`34430130924` sealed at **03:27:37.327Z**; satellite run `34430082656` reached its own publish at
+**03:30:57Z**, found *"holds a COMPLETE publication of THIS content"* on both shares and skipped.
+They were baking the **same** plugins commit (`3f7686da2…`), because core CD resolves the plugins
+tip at its gate — so the common cross-lane case is redundant work that the skip absorbs, and the
+dangerous case needs the satellite to have moved on, which is the same-lane shape by another road.
+
+**Nothing here changes the design.** A rule about which *repository* owns the prefix would have
+addressed **0 of the 4** contentions measured on this day, as it would have addressed 0 of the ones
+measured on the previous two. What removes them is the layout — a publication written into its own
+directory is disjoint from every other publication whoever wrote it — which is
+[Sealed Publication Generations](/Doc/Architecture/SealedPublicationGenerations).
 
 ## The writer's postcondition
 
@@ -390,9 +468,12 @@ Stated plainly, because a page that only lists what works is how the next sessio
   would keep serving its generation and never see the flat writer's newer publication, a stale serve
   with nothing red anywhere. The writer is behind a per-caller `publication-layout` selector that
   **defaults to `flat`**, so nothing anywhere writes a generation until a caller opts in and
-  **everything on this page still describes what is live**. What remains is each producer's pin
-  reaching the writer, then flipping — `plugins` in ONE change set, because it is the only prefix
-  with two producers.
+  **everything on this page still describes what is live**. **Generation retention — the stated
+  precondition on flipping — has landed too**: the portal's own `PrebuiltBundleStore` sweep now
+  collects a generation no `_current` names, whose pointer resolved cleanly, whose own seal could be
+  read, and that is older than the 30-day window, applying the identity rules' fail-closed discipline
+  one level down. What remains is each producer's pin reaching the writer, then flipping — `plugins`
+  in ONE change set, because it is the only prefix with two producers.
 
   🚨 That page also records what an **OCI registry** does and does not close, since the fleet is
   moving plugin bundles into one: content-addressed blobs make a mix unrepresentable, but a **tag**
@@ -415,7 +496,11 @@ Stated plainly, because a page that only lists what works is how the next sessio
   failures are the two halves of the single mutual supersession above. 🚨 **All 9 overlaps were
   same-lane; zero were cross-lane**, which reproduces the 2026-09-06 finding on a different day and
   is the second independent measurement saying that "one owner per prefix" addresses none of this.
-  The convergence verdict takes that 2 to 1; the layout takes it to 0.
+  The convergence verdict takes that 2 to 1; the layout takes it to 0. **2026-09-10 makes it three**
+  — 4 same-lane contentions, 0 cross-lane, over 61 executed bake jobs; see "Reproduced a third time"
+  above, which also measures the thing the earlier two did not: **every** prefix the two lanes shared
+  that day, they shared carrying *different* content, so the sealed-skip cannot separate them and the
+  premise of #3461 is confirmed rather than narrowed.
 - **The window itself remains.** In this layout it cannot be removed — in-place replacement means
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).

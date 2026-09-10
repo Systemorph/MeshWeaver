@@ -106,6 +106,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
 - [Data Access Patterns](DataAccessPatterns)
+- [Node Identity and Path Keying](NodeIdentityAndPathKeying) — `(namespace, id)` is the key and `path` is derived, so splitting a path positionally leaves the path identical while re-keying the node into a second row
 - [Workspace References](WorkspaceReferences)
 - [Content Chunk Navigation](ContentChunkNavigation)
 - [Moving Nodes](MovingNodes) — a move relocates the node and everything that belongs to it, or it refuses
@@ -119,6 +120,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Stream Liveness and the Hub Reference](StreamLivenessAndTheHubReference) — a stream outlived the hub it held, and the contract said it could not
 - [The sync/ Hub Population](SyncHubPopulation) — a `sync/` hub is one field of a stream and a subscription makes two of them; the only reaper of a Started one is an idle sweep the traffic keeps re-arming
 - [The Evicted-Stream Retention](EvictedStreamRetention) — a change-feed eviction parks a remote stream and `ReclaimIfUnheld` refuses to dispose one that carries no lease entry, so every unleased call site retains one stream, and two `sync/` hubs, per change event
+- [The Read Path Minted a Hub Per Read](ReadPathStreamMinting) — a live in-process census decomposed a replica's `sync/` hubs into their holders and pinned the growth on the read path: a constant configuration took `GetDataRequest` out of the stream cache, so every read left a permanent hub behind (six reads, six hubs, measured on the running portal)
 - [The Recursive-Delete Drain](RecursiveDeleteDrain) — the plan is a snapshot the removals may exceed, the completion check must include the ROOT, and the stage bound measures progress, not duration
 - [Business Rules & Calculations](BusinessRules)
 - [Data Versioning Strategies](DataVersioning)
@@ -158,6 +160,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [DatabaseBackups](DatabaseBackups)
 - [Declarative export and import](DeclarativeImportExport)
 - [Syncing a Space with GitHub](GitHubSync)
+- [What a Green Build Costs a Synced Space](GitSyncTriggerCost) — one field decides whether a delivery is free or a full clone, and it is deliberately frozen while an import does not converge; so a source that cannot converge re-clones on every green build, at the source repository's CI cadence
 - [The Import Marker Records Convergence](ImportMarkerRecordsConvergence)
 - [Instance Sync — bi-directional space replication between MeshWeaver instances](InstanceSync)
 - [Managing Partition Sync (Admin Guide)](PartitionSyncGuide)
@@ -198,6 +201,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Foreign-Language & Cross-Platform Integration](ForeignLanguageIntegration)
 - [Model Providers and BYO Credentials](ModelProviders)
 - [On-device voice — Whisper + Swiss German](OnDeviceVoice)
+- [Voice model distribution — where a 547 MB CC BY-NC model may live](VoiceModelDistribution)
 - [Python Code Nodes](PythonCodeNodes)
 - [Script Execution — Try It](ScriptExecutionDemo)
 - [Sending Email](SendingEmail)
@@ -214,6 +218,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Markdown Fence Extensions](MarkdownFenceExtensions) — the platform emits a marker, the clients hydrate it; a new fence is always a two-repo change
 - [Localization](Localization) — the viewer's language, resolved explicitly, never from ambient culture
 - [Chrome and Content Language](ChromeAndContentLanguage) — ownership decides the language, and in-flow chrome minimises words
+- [Localized Refusals](LocalizedRefusals) — a `*Response.Error` is a wire field and stays English; the activity transcript is the surface a viewer reads
 - [The Supplied Navigation Rail](SuppliedNavigationRail) — a module supplies its own left-hand index, and core renders it in the order the module gave
 - [The Apps Home](AppsHome)
 - [Content Favicon Rasterization](ContentFaviconRasterization)
@@ -233,6 +238,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Emit Reference Capture](EmitReferenceCapture) — bounded, opt-in CI evidence for runtime compiler failures
 - [Graph / Compiler Layering](GraphCompilerLayering) — the four assemblies, the cycle, and the full-MVID size rule
 - [Toolchain Re-evaluation Lane](ToolchainReevaluationLane) — why a toolchain change stopped rebaking the world
+- [The Dependency Record Floor](DependencyRecordFloor) — a record's module entry says "I need at least X", not "I need exactly this build"; the MVID pin that could not converge because Roslyn hashes absolute source paths, the two-replica recompile ping-pong it produced, and the four things the floor deliberately does not relax
 - [Producer Determinism of the Dependency Record](ProducerDeterminismOfTheDependencyRecord) — the same content must stamp the same record however the producer reached its bytes; the disk-cache hit that shipped a weaker guard, and why the digest is persisted beside the bytes rather than recomputed
 - [Rebake Waves](RebakeWaves) — why a roll rebakes the world anyway, and what one rebake writes
 - [Source-Set Establishment](SourceSetEstablishment) — a resolved source set of ZERO is ambiguous, and only the type's own persisted snapshot tells "owns no Code" from "the discovery pass came back short"; the boot that resolved 91 fewer Code nodes than its neighbours and held a portal out of rotation for the startup probe's full three hours
@@ -277,6 +283,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Module-Owned Siblings Ride](ModuleOwnedSiblingsRide)
 - [The Module Platform Link Gate](ModulePlatformLinkGate)
 - [The Module Publication Gate](ModulePublicationGate) — a bundle used to reach the live registry from inside its own pack leg, before the sibling suites, the portal-host shards, the compile-check and the Tests-area gate had reported; the hand-over moved downstream of the full source verdict, and what it refuses (failed, skipped, cancelled, missing, foreign-lane, substituted)
+- [Module Generation Substitution](ModuleGenerationSubstitution) — `Assembly.LoadFrom` does not promise to load the path it is handed: a byte-identical copy the load context already holds is returned instead, silently, so the loader recorded the generation it ASKED for while the process ran another; the three answers that replace two
 - [Module Set Convergence](ModuleSetConvergence)
 - [Module Versioning](ModuleVersioning)
 - [Modules](Modules)
@@ -350,6 +357,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Container Apps](DeploymentContainerApps)
 - [Local Dev Workflow](LocalDevWorkflow)
 - [Onboarding a New Environment](OnboardingNewEnvironment)
+- [Unclaimed Control-Plane Requests](UnclaimedControlPlaneRequests) — an InstanceAction at version 1 with an empty log means "queued", "nobody is listening" and "the operator died holding it" in the same bytes; the 2026-09-10 measurement, the `Ops/Status` staleness that DOES discriminate, and the acceptance signal that does not exist
 - [Release & Self-Update Strategy](ReleaseStrategy)
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer
