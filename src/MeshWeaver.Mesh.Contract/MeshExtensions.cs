@@ -4821,21 +4821,32 @@ public static class MeshExtensions
         // content-confirmation oracle for callers the owner would have refused.
         void SkipNoOpIfAuthorized(MeshNode existing)
         {
-            (string.IsNullOrEmpty(requestedBy)
-                    ? Observable.Return(false)
-                    // 🚨 TakeDecisionOutsideGate, not a bare Take(1) — #899. Both branches of
-                    // the Subscribe below do real work (PostOk, or ApplyUpdateViaStream — a
-                    // cross-hub stream write that publishes). See
-                    // HubPermissionExtensions.TakeDecisionOutsideGate.
-                    : hub.GetEffectivePermissions(node.Path, requestedBy!)
-                        .TakeDecisionOutsideGate()
-                        .Timeout(NodeOpForwardTimeout)
-                        .Select(p => p.HasFlag(Permission.Update) || p.HasFlag(Permission.Sync))
-                        .Catch((Exception _) => Observable.Return(false)))
+            // 🚨 THREE terminal states, not two (MeshWeaver#2454 / #3674) — and on THIS leg the
+            // empty one is not a theoretical Rx corner, it is a documented outcome of the source.
+            // `GetEffectivePermissions` terminating without ever emitting is half of what
+            // HubPermissionExtensions classifies as `Undetermined` — "because it FAULTED, or
+            // because it terminated without ever emitting (issue #2742)". Against a two-arm
+            // Subscribe that is SILENCE: neither PostOk nor the write path runs, nothing is
+            // logged, the handler has already returned Processed(), and the caller waits out its
+            // whole budget for a verdict that is never coming. That is #3674's shape on the branch
+            // a RE-INSTALL takes (CD 7950: "[FAIL] Chess … idempotence: re-install failed"), since
+            // re-installing identical content is precisely a no-op upsert.
+            DetachedReplyOutcome.Of(
+                    string.IsNullOrEmpty(requestedBy)
+                        ? Observable.Return(false)
+                        // 🚨 TakeDecisionOutsideGate, not a bare Take(1) — #899. Both branches of
+                        // the Subscribe below do real work (PostOk, or ApplyUpdateViaStream — a
+                        // cross-hub stream write that publishes). See
+                        // HubPermissionExtensions.TakeDecisionOutsideGate.
+                        : hub.GetEffectivePermissions(node.Path, requestedBy!)
+                            .TakeDecisionOutsideGate()
+                            .Timeout(NodeOpForwardTimeout)
+                            .Select(p => p.HasFlag(Permission.Update) || p.HasFlag(Permission.Sync))
+                            .Catch((Exception _) => Observable.Return(false)))
                 .Subscribe(
-                    authorized =>
+                    outcome =>
                     {
-                        if (authorized)
+                        if (outcome is { HasValue: true, Value: true })
                         {
                             logger.LogDebug(
                                 "[CreateOrUpdate] no-op upsert for {Path}: identical to persisted state; skipped",
@@ -4843,19 +4854,31 @@ public static class MeshExtensions
                             PostOk(existing, isCreate: false,
                                 $"Node at '{node.Path}' unchanged — no-op upsert skipped",
                                 "activity.node.unchanged");
+                            return;
                         }
-                        else
-                            // Not (provably) authorized → the normal owner path stays the single
-                            // authority on allow/deny; it will refuse exactly as before.
-                            ApplyUpdateViaStream(existing, existing.NodeType);
-                    },
-                    ex =>
-                    {
-                        logger.LogDebug(ex,
-                            "[CreateOrUpdate] no-op permission probe failed for {Path}; taking the write path",
-                            node.Path);
+                        if (outcome.Error is { } probeError)
+                            logger.LogDebug(probeError,
+                                "[CreateOrUpdate] no-op permission probe failed for {Path}; taking the write path",
+                                node.Path);
+                        else if (outcome.CompletedEmpty)
+                            // A NON-VERDICT, not a denial. Treated exactly as the fault is: the
+                            // optimisation steps aside and the owner stays the single authority on
+                            // allow/deny. Answering "skipped" here would be a success-without-write
+                            // on unproven authority; answering nothing at all is what #3674 is.
+                            logger.LogWarning(
+                                "[CreateOrUpdate] the no-op permission probe for {Path} COMPLETED "
+                                + "without a verdict; taking the write path rather than leaving the "
+                                + "caller to wait out its budget (MeshWeaver#3674).",
+                                node.Path);
+                        // Not (provably) authorized → the normal owner path stays the single
+                        // authority on allow/deny; it will refuse exactly as before.
                         ApplyUpdateViaStream(existing, existing.NodeType);
-                    });
+                    },
+                    // The subscriber's OWN contract, never the probe's: the probe's fault arrives
+                    // as `Error` on the outcome above.
+                    ex => logger.LogWarning(ex,
+                        "[CreateOrUpdate] the no-op probe for {Path} threw while acting on its outcome",
+                        node.Path));
         }
 
         // 🚨 THE UPDATE-PATH NODETYPE GATE (issue #2993). The CREATE branch has always refused a
@@ -4893,13 +4916,52 @@ public static class MeshExtensions
                 return;
             }
 
-            NodeTypeResolution.Resolves(hub, node.NodeType)
+            // Total by construction, same rule and same reason as the write leg below
+            // (MeshWeaver#2454 / #3674): this subscription is on the handler's DETACHED reply path,
+            // so a probe that completed without an answer would post nothing at all and leave the
+            // caller to wait out its budget. `Resolves` ends in `IStorageAdapter.Exists`, whose
+            // implementations are free to complete empty — the routing proxy's is a request/response
+            // `Observe(...).Take(1)`, which is empty the moment the partition hub answers nothing.
+            DetachedReplyOutcome.Of(NodeTypeResolution.Resolves(hub, node.NodeType))
                 .Subscribe(
-                    resolves =>
+                    outcome =>
                     {
-                        if (resolves)
+                        if (outcome is { HasValue: true, Value: true })
                         {
                             WriteThroughStream(existing);
+                            return;
+                        }
+                        if (outcome.Error is { } probeError)
+                        {
+                            // 🚨 A VERDICT AND A NON-VERDICT ARE NOT THE SAME ANSWER. The probe
+                            // faulted, so we do NOT know whether the type exists — refuse (a write
+                            // here could strand the node permanently) but say which of the two it
+                            // is, and classify it as Unknown rather than InvalidNodeType so a
+                            // caller cannot read it as "go create that type".
+                            logger.LogWarning(probeError,
+                                "[CreateOrUpdate] {Path}: the NodeType existence probe for '{NodeType}' "
+                                + "faulted; refusing the update rather than risking a dangling type.",
+                                node.Path, node.NodeType);
+                            PostFail(
+                                NodeTypeResolution.ProbeFailedMessage(node.Path, node.NodeType!, probeError),
+                                NodeUpsertRejectionReason.Unknown);
+                            return;
+                        }
+                        if (outcome.CompletedEmpty)
+                        {
+                            // Silence is a non-verdict too, and by the same rule it is a refusal
+                            // that says so — never "not registered", which would send the caller
+                            // off to create a type that may well already exist.
+                            logger.LogWarning(
+                                "[CreateOrUpdate] {Path}: the NodeType existence probe for '{NodeType}' "
+                                + "COMPLETED without an answer; refusing the update rather than "
+                                + "risking a dangling type (MeshWeaver#3674).",
+                                node.Path, node.NodeType);
+                            PostFail(
+                                NodeTypeResolution.ProbeFailedMessage(node.Path, node.NodeType!,
+                                    new InvalidOperationException(
+                                        "the existence probe completed without producing an answer")),
+                                NodeUpsertRejectionReason.Unknown);
                             return;
                         }
                         logger.LogWarning(
@@ -4911,21 +4973,12 @@ public static class MeshExtensions
                             NodeTypeResolution.RejectionMessage(node.Path, node.NodeType!),
                             NodeUpsertRejectionReason.InvalidNodeType);
                     },
-                    ex =>
-                    {
-                        // 🚨 A VERDICT AND A NON-VERDICT ARE NOT THE SAME ANSWER. The probe faulted,
-                        // so we do NOT know whether the type exists — refuse (a write here could
-                        // strand the node permanently) but say which of the two it is, and classify
-                        // it as Unknown rather than InvalidNodeType so a caller cannot read it as
-                        // "go create that type".
-                        logger.LogWarning(ex,
-                            "[CreateOrUpdate] {Path}: the NodeType existence probe for '{NodeType}' "
-                            + "faulted; refusing the update rather than risking a dangling type.",
-                            node.Path, node.NodeType);
-                        PostFail(
-                            NodeTypeResolution.ProbeFailedMessage(node.Path, node.NodeType!, ex),
-                            NodeUpsertRejectionReason.Unknown);
-                    });
+                    // The subscriber's OWN contract, never the probe's: the probe's fault arrives
+                    // as `Error` on the outcome above, so anything reaching here is a throw out of
+                    // PostFail / WriteThroughStream.
+                    ex => logger.LogWarning(ex,
+                        "[CreateOrUpdate] the NodeType gate for {Path} threw while acting on its outcome",
+                        node.Path));
         }
 
         void WriteThroughStream(MeshNode existing)
@@ -4972,7 +5025,7 @@ public static class MeshExtensions
                 // mechanism anywhere able to restore it. Flooring on the row we JUST read makes
                 // the write forward by construction, so the repair lands on the first attempt.
                 // Content is untouched by this: it still comes from `live`.
-                hub.GetMeshNodeStream(node.Path)
+                var write = hub.GetMeshNodeStream(node.Path)
                     // 1b', on the MERGED node. The create path repairs a stale self-default MainNode
                     // before it is ever stored; the update path has to repair it AFTERWARDS, because
                     // the stale value lives on `live` and a full-instance source provably cannot move
@@ -4990,19 +5043,63 @@ public static class MeshExtensions
                             CreatedDate = live.CreatedDate == default ? existing.CreatedDate : live.CreatedDate,
                             CreatedBy = live.CreatedBy ?? existing.CreatedBy,
                         },
-                        upsertMeshConfig))
+                        upsertMeshConfig));
+
+                // 🚨 THREE terminal states, not two (MeshWeaver#2454 / #3674). This was the LAST
+                // two-arm subscription on the upsert's reply path — the read leg and
+                // DispatchInnerCreate above each grew a third arm; this one did not, and it is
+                // the leg an EXISTING node takes. An empty completion here is not hypothetical:
+                // `Update` on a cross-hub path is `IMeshNodeStreamCache.Update`, whose per-path
+                // queue forwards the write's own terminal to the caller's result subject, and its
+                // COMPLETE arm calls `req.Result.OnCompleted()` for "a write that completed
+                // without ever emitting" — MeshNodeStreamCache says so in that arm's own comment.
+                // Upstream, `UpdateRemote`'s late-NACK re-enqueue completes the caller through
+                // `ChainTerminal`, whose onCompleted arm can claim the terminal with no emission
+                // behind it. Both reach a two-arm Subscribe as SILENCE, and the handler has
+                // already returned Processed(), so the caller waits out its whole budget for a
+                // verdict that is never coming — #3674's "neither applied nor refused".
+                //
+                // Composed through DetachedReplyOutcome so exactly one outcome arrives on every
+                // path: totality is a property of the composition, not of remembering to write the
+                // arm. The onError arm below is the subscriber's OWN contract (a throw out of
+                // PostOk/PostFail), never the write's — the write's fault arrives as `Error` on
+                // the outcome.
+                DetachedReplyOutcome.Of(write)
                     .Subscribe(
-                        saved => PostOk(saved, isCreate: false, $"Updated node at '{node.Path}'",
-                            "activity.node.updated"),
-                        ex =>
+                        outcome =>
                         {
-                            logger.LogWarning(ex,
-                                "[CreateOrUpdate] inner UpdateNode faulted for {Path}", node.Path);
-                            PostFail($"Inner UpdateNode faulted: {ex.Message}",
-                                ex is UnauthorizedAccessException
-                                    ? NodeUpsertRejectionReason.Unauthorized
-                                    : NodeUpsertRejectionReason.Unknown);
-                        });
+                            if (outcome.HasValue)
+                            {
+                                PostOk(outcome.Value!, isCreate: false, $"Updated node at '{node.Path}'",
+                                    "activity.node.updated");
+                                return;
+                            }
+                            if (outcome.Error is { } ex)
+                            {
+                                logger.LogWarning(ex,
+                                    "[CreateOrUpdate] inner UpdateNode faulted for {Path}", node.Path);
+                                PostFail($"Inner UpdateNode faulted: {ex.Message}",
+                                    ex is UnauthorizedAccessException
+                                        ? NodeUpsertRejectionReason.Unauthorized
+                                        : NodeUpsertRejectionReason.Unknown);
+                                return;
+                            }
+                            hub.NoteRequestStage(request.Id, "UPSERT_UPDATE_COMPLETED_EMPTY");
+                            logger.LogWarning(
+                                "[CreateOrUpdate] the update write for {Path} COMPLETED without a "
+                                + "result and without a fault. Answering the caller with a refusal "
+                                + "rather than leaving it to wait out its budget (MeshWeaver#3674).",
+                                node.Path);
+                            PostFail(
+                                $"The update of '{node.Path}' completed without producing a result "
+                                + "or a fault, so the write is NOT confirmed. The outcome is "
+                                + "unknown: the owner may have committed it without acknowledging. "
+                                + "Check the node's state before retrying.",
+                                NodeUpsertRejectionReason.Unknown);
+                        },
+                        ex => logger.LogWarning(ex,
+                            "[CreateOrUpdate] the update reply for {Path} threw while being posted",
+                            node.Path));
             }
         }
 
