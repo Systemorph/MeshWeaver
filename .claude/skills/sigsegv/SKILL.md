@@ -127,7 +127,8 @@ sample of one. 🚨 **Nor is it a property of one runtime build, and the zeroed 
 object somebody POINTS AT.** Sighting #15 (2026-09-10) ran on **`10.0.12`**, libcoreclr build-id
 `79945f51…` — a different binary from #4–#14's `10.0.11` / `989b56df…` — so "wait for the next patch"
 is not a plan; and a whole-core scan for its cursor found the address in a field of a live,
-well-formed 96-byte heap object, not only on a free list. Measured base rate on Plugins CI: **0.74 %** over 1,197 runs (2026-08-29 → 09-03,
+well-formed 96-byte heap object, not only on a free list.
+Measured base rate on Plugins CI: **0.74 %** over 1,197 runs (2026-08-29 → 09-03,
 denominator = non-cancelled runs) and **1.17 %** over 343 runs (2026-09-06 → 09-08, denominator =
 runs whose portal-host shard reached a verdict) — **different denominators, so not a trend**; both
 are `Portal hosts (shard 1)` only, `main` included, and the affected suites are

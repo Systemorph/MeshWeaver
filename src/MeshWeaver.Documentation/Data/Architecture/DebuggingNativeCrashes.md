@@ -1270,7 +1270,7 @@ still prints `Passed!`. Whether that is caught depends entirely on the lane. Mea
 |---|---|
 | core `.github/workflows/dotnet-test.yml` (all shards) | **detected** — exit-marker gate plus `record-host-crash.py` writes `<project>.HOST_CRASHED` into the trx |
 | MeshWeaver.Plugins `ci.yml` → `Portal hosts (shard N)` | **detected** — `classify-test-run.py --record-crash-into` plus the platform's `record-host-crash.py`. The step carries no `matrix.shard` condition, so **all four shards are covered equally**; shard 1 is merely where the ALC-heavy suites live |
-| Plugins `ci.yml` → `Memex.Portal.Gui.Test` and `MeshWeaver.MemexTemplate.Test`; `node-repo-module-pack.yml` → "Run the module's tests" | **red, but with a lying trx** — `set -euo pipefail` makes the step fail, so nothing goes green, but no `HOST_CRASHED` record is written and the durable trx reads as a clean pass. module-pack's ledger step is gated on `steps.tests.outcome == 'success'`, so a crash records no receipt |
+| Plugins `ci.yml` → `Memex.Portal.Gui.Test` and `MeshWeaver.MemexTemplate.Test`; `node-repo-module-pack.yml` → "Run the module's tests" | **red, but with a lying trx** — the step's exit code is `dotnet`'s (a bare single command, or `set -euo pipefail` around it), so nothing goes green; but no `HOST_CRASHED` record is written and the durable trx reads as a clean pass. module-pack's ledger step is gated on `steps.tests.outcome == 'success'`, so a crash records no receipt |
 | Plugins `platform-canary.yml` → "Run the canary suites" | 🚨 **can pass undetected** |
 
 The canary is the one real hole, and it is a gate that cannot fail on missing input. The suites run as
