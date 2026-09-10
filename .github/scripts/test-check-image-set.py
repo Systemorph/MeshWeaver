@@ -13,6 +13,13 @@ INDEX = {"manifests": [
     {"platform": {"os": "linux", "architecture": architecture}}
     for architecture in ("amd64", "arm64")
 ]}
+EXPECTED_TAGS = {
+    "memex-portal-ai:abcdef1", "memex-migration:abcdef1", "mw-plugin-test:abcdef1",
+    "memex-portal-ai:abcdef1-p1234567",
+    "memex-portal-ai:main", "memex-migration:main", "mw-plugin-test:main",
+    "mw-plugin-test:latest",
+    "memex-portal-ai:3.0.0-ci.42", "memex-migration:3.0.0-ci.42", "mw-plugin-test:3.0.0-ci.42",
+}
 
 
 class ImageSetTests(unittest.TestCase):
@@ -45,7 +52,7 @@ print(os.environ['INDEX'])
         result, calls = self.check()
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(len(calls), 11)
-        self.assertEqual(len(set(calls)), 11)
+        self.assertEqual(set(calls), EXPECTED_TAGS)
         self.assertIn("All images exist", result.stdout)
 
     def test_registry_errors_remain_red_and_keep_the_actual_diagnostic(self):
@@ -62,6 +69,7 @@ print(os.environ['INDEX'])
                     self.assertNotIn("was NOT built", result.stdout)
                     self.assertEqual(calls.count(tag), 1, "a failed read must not be retried")
                     self.assertEqual(len(calls), 11, "a failed read must not hide later checks")
+                    self.assertEqual(set(calls), EXPECTED_TAGS)
 
     def test_single_architecture_still_fails(self):
         result, _ = self.check(index={"manifests": INDEX["manifests"][:1]})

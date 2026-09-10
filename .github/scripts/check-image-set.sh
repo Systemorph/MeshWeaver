@@ -90,8 +90,8 @@ while [ $# -gt 0 ]; do
     --pointers)
       CHECK_POINTERS=1
       # Deliberately tolerant of an EMPTY value here: an unresolved version is reported below,
-      # AFTER the per-sha diagnostics, so a run whose image leg died still gets "<repo>:<sha> is
-      # MISSING" as its headline instead of a usage message about a flag.
+      # AFTER the per-sha diagnostics, so a run whose image leg died still gets "<repo>:<sha>
+      # could not be verified" as its headline instead of a usage message about a flag.
       if [ $# -ge 2 ]; then POINTER_VERSION="$2"; shift 2; else shift; fi
       ;;
     --*) echo "::error::check-image-set.sh: unknown option '$1'"; usage; exit 1 ;;

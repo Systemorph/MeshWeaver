@@ -151,8 +151,9 @@ supposed to produce.**
 
 There is no skip-trapdoor in any of it: nothing is conditioned on whether a variable is set, nothing
 carries `continue-on-error`, and an empty version reaching the flag is reported RED — after the
-per-image diagnostics, so a run whose image leg died still leads with *"`<repo>:<sha>` is MISSING"*
-rather than with a message about a flag.
+per-image diagnostics, so a run whose image leg died first names the image that could not be
+verified, its registry error and the command's exit status, rather than leading with a message
+about a flag. The registry's own diagnostic distinguishes an absent tag from a failed read.
 
 ## The general lesson
 
