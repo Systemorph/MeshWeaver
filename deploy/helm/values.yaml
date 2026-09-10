@@ -1027,6 +1027,11 @@ config:
     # /api/email webhook rejects mismatches. Global (same across envs is fine —
     # each deployment validates against its own configured value).
     Email__SubscriptionClientState: "meshweaver-emailhook-7f3c9a21e84b46d2b1c05e9af6d3"
+    # ---- What the Executive Assistant may SEND as the user (Mail module, MeshWeaver.Plugins).
+    # Empty = the module's safe default (mail: DraftOnly; Teams posting: Off). The ONLY value
+    # that opens a gate is the word "Send". Set per environment in the overlay.
+    Email__AgentSend: ""
+    Teams__AgentSend: ""
     # ---- GitHub App identity (non-secret half) --------------------------------
     # The App's client id, and which installation to use when the App is installed on more
     # than one account. The PEM key is the secret half (secrets.memex_portal.GitHub__App__
