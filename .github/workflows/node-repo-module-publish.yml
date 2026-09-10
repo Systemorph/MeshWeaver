@@ -79,12 +79,18 @@ name: node-repo module publish
 on:
   workflow_call:
     inputs:
+      # 🚨 NO `${{ … }}` IN A DESCRIPTION, here or in any other workflow_call metadata. GitHub
+      # evaluates expressions in these strings, `needs` is not a context that exists at workflow
+      # level, and the file is then INVALID — which for a reusable workflow means every caller
+      # reds. It does not announce itself either: the push produces one run named after the file
+      # path, `conclusion: failure`, with ZERO jobs and no log (measured on this file, run
+      # 34443383838). Write the expression without the braces, as below.
       verdicts:
         description: >
-          `${{ toJSON(needs) }}` — the calling job's WHOLE needs context, verbatim. Every entry
-          must carry `result: success`; anything else, and anything missing, refuses the
-          publication by name. A curated literal is refused by the caller gate: the point is to
-          read what GitHub computed, not what the caller chose to say.
+          The calling job's WHOLE needs context, verbatim — pass `toJSON(needs)` wrapped in the
+          usual expression braces. Every entry must carry `result: success`; anything else, and
+          anything missing, refuses the publication by name. A curated literal is refused by the
+          caller gate: the point is to read what GitHub computed, not what the caller chose to say.
         required: true
         type: string
       required-jobs:
