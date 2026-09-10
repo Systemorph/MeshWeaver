@@ -19,6 +19,10 @@
 
   <ItemGroup>
     <PackageReference Include="YamlDotNet" />
+    <!-- ContentRoute503DiscriminatorGuard drives ReadBudget's timer in VIRTUAL time: the budget it
+         pins is 10 s, and a guard that spent 10 s of wall clock to read one string would be the
+         first thing anyone deletes. -->
+    <PackageReference Include="Microsoft.Reactive.Testing" />
   </ItemGroup>
 
 </Project>
