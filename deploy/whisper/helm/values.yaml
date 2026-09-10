@@ -7,19 +7,31 @@
 replicaCount: 1
 
 image:
-  # Build deploy/whisper/Dockerfile and push to your registry (e.g. ACR):
+  # 🚨 The image CARRIES THE MODEL — put it in the build context BEFORE building, or the build fails
+  # naming the file (deploy/whisper/Dockerfile):
+  #   gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins \
+  #     --pattern 'ggml-swiss-german-turbo-q5_0.bin' --output deploy/whisper/models/model.bin
   #   az acr build -r meshweaver -t whisper-swiss-german:1.7.4 deploy/whisper
+  # The tag names the whisper.cpp release the binary is built from (v1.7.4), not the model; a model
+  # swap is a rebuild under a tag of your choosing. An image built before 2026-09-10 has NO model in
+  # it and will start with nothing to load — rebuild before rolling this chart.
   repository: meshweaver.azurecr.io/whisper-swiss-german
   tag: "1.7.4"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
 
-# The whisper model is NOT baked into the image (it's ~547 MB and swappable). An initContainer
-# fetches it once per pod into a shared emptyDir; whisper-server then loads it from /models/model.bin.
+# The ~547 MB whisper model IS baked into the image, at /models/model.bin.
+#
+# 🚨 There is no `model.url` any more, and that is the fix for #3906 — not an oversight. The key used
+# to point an initContainer at a GitHub release on THIS repo; #2593 moved that asset to the PRIVATE
+# MeshWeaver.Plugins repo and left the pin behind, so the URL 404'd and every pod died in Init:Error
+# before the server ever ran. There is nothing to repoint it AT: the model is a CC BY-NC-4.0
+# derivative that must not be published for anonymous download, and a cluster secret able to read the
+# private repo would buy one 547 MB blob with read access to the whole private fleet source. The
+# registry this pod already authenticates to for its image is the channel that costs nothing new.
+# Why those two alternatives lost, in full: /Doc/Architecture/VoiceModelDistribution.
 model:
-  # Default: the GitHub-release asset that VoiceModelCatalog + deploy/whisper also use.
-  url: "https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin"
   # Whisper language hint. "de" transcribes Swiss German OUT as Standard German (best for strong
   # dialect); "auto" detects (en/de/…) at some accuracy cost on heavy dialect.
   language: "de"
@@ -40,7 +52,7 @@ resources:
 
 # Model load + first request take time; probes are generous so the pod isn't killed while warming.
 startupProbe:
-  # Gates readiness/liveness until the server answers — covers the model download + load.
+  # Gates readiness/liveness until the server answers — covers the 547 MB model LOAD (no download).
   failureThreshold: 60
   periodSeconds: 10
 readinessProbe:
