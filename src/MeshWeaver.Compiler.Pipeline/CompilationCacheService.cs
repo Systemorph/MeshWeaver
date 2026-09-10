@@ -36,7 +36,10 @@ internal interface ICompilationCacheService
     /// <summary>
     /// Returns the path of the newest cached DLL for <paramref name="nodeName"/>
     /// whose write-time satisfies both the source-modified deadline and the
-    /// framework-DLL deadline. Returns null when no valid cache entry exists.
+    /// framework-DLL deadline, and whose artifact set is COMPLETE — DLL, PDB, the debug source
+    /// mirror when source debugging is on, and the generated-input digest the dependency record's
+    /// content key is restored from (<see cref="GeneratedInputDigestFile"/>, #3892). Returns null
+    /// when no valid cache entry exists.
     /// Use when you need the actual DLL path (not just whether the cache is
     /// valid) — e.g., to feed an ALC LoadContext without re-running Roslyn.
     /// </summary>
@@ -929,7 +932,10 @@ internal class CompilationCacheService(
     /// <summary>
     /// Returns the path of the newest cached DLL for <paramref name="nodeName"/>
     /// whose write-time satisfies both the source-modified deadline and the
-    /// framework-DLL deadline. Returns null when no valid cache entry exists.
+    /// framework-DLL deadline, and whose artifact set is COMPLETE — DLL, PDB, the debug source
+    /// mirror when source debugging is on, and the generated-input digest the dependency record's
+    /// content key is restored from (<see cref="GeneratedInputDigestFile"/>, #3892). Returns null
+    /// when no valid cache entry exists.
     ///
     /// <para>Layout: <c>CompileToDiskAsync</c> writes to
     /// <c>{cacheDir}/{nodeName}_{ticks_hex}/{nodeName}.dll</c> so V1 and V2
@@ -994,6 +1000,26 @@ internal class CompilationCacheService(
         if (_options.EnableSourceDebugging && !File.Exists(sourcePath))
         {
             logger.LogDebug("Cache miss for {NodeName}: Source not found at {SourcePath}", nodeName, sourcePath);
+            return null;
+        }
+
+        // 🚨 THE ARTIFACT SET INCLUDES ITS PROVENANCE (#3892). A cached assembly whose
+        // generated-input digest is not beside it cannot be stamped with the reserved '!input'
+        // CONTENT KEY entry, so reusing it would produce a dependency record WEAKER than the one a
+        // fresh compile of the same content produces — and that record is a PRODUCER artifact: it
+        // travels onto NodeTypeDefinition.CompiledDependencies and into every published bundle. Two
+        // publishes of identical content would then ship different guard strength depending on
+        // whether the baking machine's cache happened to be warm, with nothing downstream able to
+        // tell which it got. Refusing here is the same judgement the PDB check above makes — the
+        // entry is INCOMPLETE, so it is not a cache entry — and it costs at most ONE recompile per
+        // type, for artifacts published by a build that predates the sidecar (which the
+        // framework-timestamp check below usually invalidates anyway). See GeneratedInputDigestFile.
+        if (!GeneratedInputDigestFile.Exists(dllPath))
+        {
+            logger.LogDebug(
+                "Cache miss for {NodeName}: no generated-input digest beside {DllPath} — the "
+                + "artifact predates the sidecar, so its content key cannot be restored",
+                nodeName, dllPath);
             return null;
         }
 
