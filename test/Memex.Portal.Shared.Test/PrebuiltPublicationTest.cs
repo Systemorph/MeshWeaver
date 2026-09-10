@@ -378,6 +378,176 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
         }
     }
 
+    /// <summary>
+    /// 🚨 #3876, the LAST unguarded open on these routes. The seal read lists a name and stats it
+    /// present; <c>Results.File(path, …)</c> then resolves that path AGAIN when the result executes,
+    /// after the handler has returned. The publisher replaces a publication several times an hour
+    /// during a release and retention removes whole identity directories, so a file that went away
+    /// in between threw <see cref="FileNotFoundException"/> (or
+    /// <see cref="DirectoryNotFoundException"/> from a removed parent, which is what Linux raises)
+    /// out of result execution to <c>ExceptionHandlerMiddleware</c> — a 500 for a condition this
+    /// route has had a correct answer for since #3401. The open now happens in the handler, and the
+    /// SAME discrimination decides: the source directory is still there ⇒ transient, 503 +
+    /// <c>Retry-After</c>; the identity directory is gone ⇒ permanent, 404.
+    ///
+    /// <para>Three directions, because a fix that answered 404 for everything would pass a
+    /// two-case test: the healthy publication must still serve its BYTES — the positive control,
+    /// asserted first, on the very route the removal then hits.</para>
+    /// </summary>
+    /// <param name="suffix">The byte route under the publication.</param>
+    /// <param name="openRead">Which <c>PluginBundleEndpoints</c> logger the open sits behind —
+    /// authentication takes the first, each catalogue read the next, and the serve the last. It is
+    /// asserted exactly, so an ordinal that drifts fails LOUDLY instead of removing nothing.</param>
+    /// <param name="removeIdentity">Whether the identity directory goes, or only the bytes.</param>
+    [Theory]
+    [InlineData("/Store.zip", 3, false)]
+    [InlineData("/Store.zip", 3, true)]
+    [InlineData("/modules/ai.module.nupkg", 4, false)]
+    [InlineData("/modules/ai.module.nupkg", 4, true)]
+    public async Task BytesRemovedBetweenTheSealReadAndTheOpen_AreTransientOrNotFound_NeverA500(
+        string suffix, int openRead, bool removeIdentity)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-prebuilt-serve-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(root, Identity, Source);
+        var modules = Path.Combine(directory, PublishedBundleCatalogue.ModulesDirectoryName);
+        Directory.CreateDirectory(modules);
+        try
+        {
+            WriteBundle(Path.Combine(directory, "Store.zip"), "Store");
+            var seal = Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            File.WriteAllText(seal, "Store.zip\n");
+            WriteBundle(Path.Combine(modules, "ai.module.nupkg"), "AI");
+            File.WriteAllText(
+                Path.Combine(modules, PublishedBundleCatalogue.ModulesIndexFileName), "ai.module.nupkg\n");
+            var bytes = Path.Combine(
+                directory, suffix.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+
+            var key = await RegisterInstance(Granted, $"{Source}/*");
+            var armed = false;
+            var reads = 0;
+            await using var app = await StartHost(root, () =>
+            {
+                if (!armed || ++reads != openRead)
+                    return;
+                Assert.True(File.Exists(seal),
+                    "the seal must still be readable here — this test removes the BYTES after the "
+                    + "seal read has listed them, which is the race; a seal already gone would be "
+                    + "the older, already-fixed condition instead");
+                if (removeIdentity)
+                    Directory.Delete(Path.Combine(root, Identity), recursive: true);
+                else
+                    File.Delete(bytes);
+            });
+            var route = $"/api/plugins/bundles/prebuilt/{Identity}/{Source}";
+
+            // POSITIVE CONTROL, on the same route the removal then hits: a healthy sealed
+            // publication still serves its bytes, with no Retry-After.
+            using (var healthy = await Get(app, route + suffix, key))
+            {
+                Assert.Equal(HttpStatusCode.OK, healthy.StatusCode);
+                Assert.True((await healthy.Content.ReadAsByteArrayAsync()).Length > 0,
+                    "a healthy sealed publication must serve the bundle's BYTES");
+                Assert.Null(healthy.Headers.RetryAfter);
+            }
+
+            armed = true;
+            using var response = await Get(app, route + suffix, key);
+            Assert.Equal(openRead, reads);
+            Assert.NotEqual(HttpStatusCode.InternalServerError, response.StatusCode);
+            if (removeIdentity)
+            {
+                Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+                Assert.Null(response.Headers.RetryAfter);
+            }
+            else
+            {
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                Assert.Equal("30", response.Headers.RetryAfter?.ToString());
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* the test may have removed it */ }
+        }
+    }
+
+    /// <summary>
+    /// 🚨 #3876 on the module set's OWN seal. <c>File.Exists(modules/_index)</c> leading an
+    /// unguarded <c>File.ReadAllLines(modules/_index)</c> is the same racing pair the
+    /// <c>_complete</c> readers shed in #3877/#3885, and it threw the same unhandled exception onto
+    /// the same two module routes. The open now decides, and the discrimination is the point: an
+    /// index absent at the open needs the OPPOSITE answer depending on WHY.
+    ///
+    /// <para>Three directions. (1) The index is gone at the open and the seal has gone with it —
+    /// the publisher unseals FIRST and retention unseals before it removes an identity, so this is
+    /// a publication being replaced right now: <c>PublicationUnavailable</c>, which the HTTP
+    /// readers already turn into 503 + <c>Retry-After</c> while the directory is there and 404 once
+    /// it is not (<see cref="RemovedSealAndRemovedIdentity_HaveDistinctAnswersOnEveryPublicationRoute"/>
+    /// pins that mapping). (2) The index was never there and the seal reads fine — the publication
+    /// predates module sealing, which is PERMANENT and must stay a 404 that says to republish;
+    /// collapsing either into the other is the defect. (3) A healthy publication still yields its
+    /// module set.</para>
+    /// </summary>
+    /// <param name="removeDirectory">Whether the whole <c>modules</c> directory goes at the open
+    /// (<see cref="DirectoryNotFoundException"/>) or only the index
+    /// (<see cref="FileNotFoundException"/>) — a removed parent raises neither the same exception
+    /// nor the same message, and both must classify.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AModuleIndexRemovedAtTheOpen_IsTransient_NotAPublicationThatPredatesModuleSealing(
+        bool removeDirectory)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-prebuilt-index-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(root, Identity, Source);
+        var modules = Path.Combine(directory, PublishedBundleCatalogue.ModulesDirectoryName);
+        Directory.CreateDirectory(modules);
+        try
+        {
+            WriteBundle(Path.Combine(directory, "Store.zip"), "Store");
+            var seal = Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            File.WriteAllText(seal, "Store.zip\n");
+            WriteBundle(Path.Combine(modules, "ai.module.nupkg"), "AI");
+            var index = Path.Combine(modules, PublishedBundleCatalogue.ModulesIndexFileName);
+            File.WriteAllText(index, "ai.module.nupkg\n");
+
+            // POSITIVE CONTROL: healthy, so a reading that refused everything could not pass.
+            var healthy = PublishedBundleCatalogue.SealedModulesOf(directory);
+            Assert.Equal(["ai.module.nupkg"], healthy.Modules);
+            Assert.False(healthy.PublicationUnavailable);
+
+            // 1. gone AT THE OPEN, seal gone with it — the publisher's own order — is TRANSIENT.
+            var removedAtTheOpen = PublishedBundleCatalogue.ReadModuleSet(directory, null, path =>
+            {
+                if (removeDirectory)
+                    Directory.Delete(modules, recursive: true);
+                else
+                    File.Delete(index);
+                File.Delete(seal);
+                return File.ReadAllLines(path);
+            });
+            Assert.Null(removedAtTheOpen.Modules);
+            Assert.True(removedAtTheOpen.PublicationUnavailable,
+                "an index that was there for the seal read and gone at the open is a publication "
+                + "being replaced — 503 + Retry-After, never 'republish the source'");
+            Assert.Contains("being replaced right now", removedAtTheOpen.Refusal);
+
+            // 2. never there, seal intact — PERMANENT, and it must keep saying so.
+            File.WriteAllText(seal, "Store.zip\n");
+            Directory.CreateDirectory(modules);
+            var predates = PublishedBundleCatalogue.SealedModulesOf(directory);
+            Assert.Null(predates.Modules);
+            Assert.False(predates.PublicationUnavailable,
+                "a sealed publication that simply carries no module set is a permanent 404 telling "
+                + "the caller to republish — it must not wear the transient answer");
+            Assert.Contains("predates module sealing", predates.Refusal);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* the test may have removed it */ }
+        }
+    }
+
     private sealed class PublicationReadLoggerFactory(Action beforeRead) : ILoggerFactory
     {
         private readonly ILoggerFactory inner = LoggerFactory.Create(_ => { });

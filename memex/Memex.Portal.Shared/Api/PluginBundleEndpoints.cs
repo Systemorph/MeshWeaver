@@ -310,14 +310,20 @@ public static class PluginBundleEndpoints
             return BeingRepublished(http, identity, source, directory, reading.TornReason!);
         if (HeldGeneration(http) is { } held && held != reading.Generation)
             return GenerationMoved(held, reading.Generation!);
-        if (!reading.Bundles.Contains(bundle, StringComparer.OrdinalIgnoreCase))
+        // 🚨 The SEAL's own spelling, never the request's (#3876). The match is
+        // case-INSENSITIVE while the share is not, so composing the requested name served
+        // `store.zip` out of a publication that sealed `Store.zip` — an open that fails on Linux
+        // for a permanent client mistake, which would now wear the transient answer and have that
+        // caller retry for ever. The listing verified THIS name present; serve THIS name.
+        if (reading.Bundles.FirstOrDefault(
+                name => name.Equals(bundle, StringComparison.OrdinalIgnoreCase)) is not { } sealedName)
             return NoSuchBundle();
         // 🚨 #3461: the bytes come from the directory the READING resolved — the generation this
         // source's `_current` names, or the source directory in the flat layout. Composing under
         // `directory` here would serve the flat publication's bytes under the generation this
         // response's ETag pins, which is precisely the mix the generation exists to prevent.
-        var path = Path.Combine(reading.Directory ?? directory, bundle);
-        return Results.File(path, "application/zip", fileDownloadName: bundle);
+        var path = Path.Combine(reading.Directory ?? directory, sealedName);
+        return SealedBytes(http, identity, source, directory, path, sealedName);
     }
 
     /// <summary>The module bundles the sealed publication composed — its NodeType assemblies'
@@ -372,11 +378,63 @@ public static class PluginBundleEndpoints
         var reading = PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
         if (reading.PublicationUnavailable)
             return BeingRepublished(http, identity, source, directory, reading.Refusal!);
-        if (reading.Modules is null || !reading.Modules.Contains(bundle, StringComparer.OrdinalIgnoreCase))
+        // The index's own spelling, for the reason given on the bundle route above (#3876).
+        if (reading.Modules?.FirstOrDefault(
+                name => name.Equals(bundle, StringComparison.OrdinalIgnoreCase)) is not { } sealedName)
             return NoSuchBundle();
         var path = Path.Combine(
-            reading.Directory ?? directory, PublishedBundleCatalogue.ModulesDirectoryName, bundle);
-        return Results.File(path, "application/zip", fileDownloadName: bundle);
+            reading.Directory ?? directory, PublishedBundleCatalogue.ModulesDirectoryName, sealedName);
+        return SealedBytes(http, identity, source, directory, path, sealedName);
+    }
+
+    /// <summary>
+    /// 🚨 #3876 — THE serve, and the OPEN is what decides. <c>Results.File(path, …)</c> resolves the
+    /// path again when the RESULT executes, which is after the handler has returned: the seal read
+    /// that listed this name (and stat'ed it present) is by then several steps in the past, and the
+    /// publisher replaces a publication several times an hour during a release while retention
+    /// removes whole identity directories. A file that went away in between threw
+    /// <see cref="FileNotFoundException"/> — or <see cref="DirectoryNotFoundException"/>, which is
+    /// what a removed parent throws on Linux — out of result execution, past every handler, to
+    /// <c>ExceptionHandlerMiddleware</c>: a 500 for a condition this route has had a correct answer
+    /// for since #3401. The listing check upstream cannot close it; only the open can.
+    ///
+    /// <para>Opening HERE and handing the result an already-open handle also removes the window
+    /// rather than merely reporting it: on POSIX the bytes stay readable through an open descriptor
+    /// after the directory entry is gone, so a publication replaced mid-response is served whole
+    /// from the generation the ETag pins instead of being torn across two. The share is opened
+    /// <see cref="FileShare.Delete"/> so the publisher is never blocked by a read in flight.</para>
+    ///
+    /// <para>🚨 Only ABSENCE is classified, exactly as
+    /// <c>ShippedPrebuiltBundles.ReadSealLines</c> does it. A file that is present but unreadable —
+    /// denied, locked, a share fault — is NOT a republish window, and must keep surfacing: dressing
+    /// a permanent fault as "come back in thirty seconds" would have every consumer retry forever
+    /// against a publication that will never be readable.</para>
+    /// </summary>
+    private static IResult SealedBytes(
+        HttpContext http, string identity, string source, string directory, string path, string bundle)
+    {
+        // Obtained before the open so the vanishing can be REPORTED — this is the event the
+        // incident behind #3876 was filed from, and a 503 with nothing in the log behind it is not
+        // something the next reader can act on.
+        var logger = Log(http);
+        FileStream bytes;
+        try
+        {
+            bytes = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            logger?.LogInformation(error,
+                "PrebuiltPublication: '{Bundle}' was listed by the seal read a moment ago and was gone at "
+                + "the open — source '{Source}', framework identity '{Identity}'. The publication is "
+                + "being replaced or reclaimed; answering transiently rather than 500",
+                bundle, source, identity);
+            return BeingRepublished(http, identity, source, directory,
+                $"the publication's bytes moved while it was being served — '{bundle}' is listed by "
+                + "the seal that was read a moment ago and was gone at the open");
+        }
+        return Results.File(bytes, "application/zip", fileDownloadName: bundle);
     }
 
     /// <summary>
