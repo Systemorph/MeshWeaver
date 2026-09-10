@@ -11,12 +11,35 @@ Icon: Cloud
 access of aks etc"* · *"build the api in a way that you don't need any az access"*.
 
 An instance is a **record** (`Deployments/<name>`, a `Hosting/Deployment` node on the control
-instance `memex.meshweaver.cloud`, GitSynced to the private `Systemorph/Memex` repo), and every
+instance **`memex.systemorph.com`**, GitSynced to the private `Systemorph/Memex` repo), and every
 change to it is an **action node** (`Hosting/InstanceAction`) that the control instance's operator
 executes **in-cluster** under its own service account. The operator's credential lives in the
 cluster; the person or agent who asks holds none. That is the whole design: an operator who never
 had `az`, `kubectl` or a Loki endpoint can still roll, restart, suspend, audit and reconcile an
 instance — and can read what it is running.
+
+### 🚨 Which portal am I talking to? The MCP server named `memex` is NOT the instance named `memex`
+
+Measured 2026-09-10, and it cost two sessions an hour on the same morning:
+
+| MCP server | Host | What it is |
+|---|---|---|
+| `systemorph` | `memex.systemorph.com` | the **control instance** — the live, GitSynced `Deployments` space |
+| `memex` | `memex.meshweaver.cloud` | the public portal and the **plugin registry** |
+
+The instance *named* `memex` is `memex.systemorph.com`, so the server named after it is the *other*
+one. Both portals hold nodes at `Deployments/<name>`, and they are **two independently created
+nodes, not a replica and its lag**: on 2026-09-10 the control instance's `Deployments/memex-cloud`
+was version 60, `createdDate` 2026-08-10, `lastModifiedBy` `system-security`, written 64 s after the
+config-repo merge; `memex.meshweaver.cloud`'s was version 9, `createdDate` 2026-08-30,
+`lastModifiedBy` a person, and 40 versions behind. Reading the second one and concluding "the
+GitSync is frozen" is the trap — it is not a sync target at all. Three facts settle which is which
+without guessing: the `Deployments/memex` record's own `host` and `purpose`, and every other
+instance's `Hosting__ReportTo`, which points at `https://memex.systemorph.com`.
+
+**So confirm the portal before drawing any conclusion from a read of it** — `/api/version`, or the
+MCP server's configured URL. This is the same class as the `namespace: memex` confusion in #3883,
+where the word named a Kubernetes namespace rather than an instance.
 
 The rest of this doc tree still carries `az aks command invoke …` / `kubectl …` recipes. **They are
 evidence, not procedure**: each one is either a measurement that was taken through the cluster
@@ -92,9 +115,13 @@ and how to reconcile it in the same session. Do not re-derive that list here —
 
 ### The one WRITE with no action kind: retiring an inline `env:` entry
 
-Rule 1 has exactly one known miss, and it is a write rather than a read. **Nothing can remove an
-inline `env:` entry from a Deployment.** The chart never rendered one (it emits five fixed portal
-entries and two per gate sidecar, and no values-driven list), the record's `inlineEnv` is
+Rule 1 has exactly one known miss, and it is a write rather than a read. **No repository change and
+no `InstanceAction` can remove an inline `env:` entry from a Deployment** — a break-glass
+`kubectl set env deploy/<name> <KEY>-` still can, and is the whole point: it is the one routine act
+with no lane back into the API. The chart never rendered one (it emits four unconditional
+portal entries — the `DOTNET_Dbg*` crash-dump set — plus `AZURE_CLIENT_ID` when
+`selfUpdate.azureClientId` is set, and two per gate sidecar; every name is fixed and no values key
+extends the list), the record's `inlineEnv` is
 declarative by contract — *dropping an entry does not delete one* — and `Reconcile`'s only
 configuration remedy, `ReapplyRecord`, is a `helm upgrade`, whose three-way merge removes only what
 helm previously owned. `Audit` detects the drift precisely, under `envLiveOnly` and

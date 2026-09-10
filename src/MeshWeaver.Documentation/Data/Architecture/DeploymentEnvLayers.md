@@ -201,10 +201,12 @@ instance's operator executes in-cluster, and a cluster command is break-glass
 this page that has no such action.** Four sources say so, and they agree — measured 2026-09-10:
 
 - **The chart cannot render it away, because the chart never rendered it.**
-  `deploy/helm/templates/memex-portal/deployment.yaml` emits exactly **five** inline `env:` entries
-  on the portal container — four `DOTNET_Dbg*`/`DOTNET_CreateDumpDiagnostics` crash-dump variables
-  and, when `selfUpdate.azureClientId` is set, `AZURE_CLIENT_ID` — and exactly **two** on a gate
-  sidecar (`MESH_GRPC_URL`, `MESH_GATE_ADDRESS`). There is no values-driven inline-env list anywhere
+  `deploy/helm/templates/memex-portal/deployment.yaml` emits **four unconditional** inline `env:`
+  entries on the portal container — the `DOTNET_Dbg*`/`DOTNET_CreateDumpDiagnostics` crash-dump
+  variables — plus a fifth, `AZURE_CLIENT_ID`, **only** when `selfUpdate.azureClientId` is set; and
+  exactly **two** on a gate sidecar (`MESH_GRPC_URL`, `MESH_GATE_ADDRESS`). None of the five is
+  values-driven in the sense that matters here: `AZURE_CLIENT_ID` is a values-*gated* entry with a
+  fixed name, not a list an overlay can extend. There is no values-driven inline-env list anywhere
   in the chart: every configurable key reaches the pod through `envFrom`. So **no values edit, in
   any overlay or on any record, can delete an inline entry — nothing in a repository created one.**
   The one committed JSON patch in the fleet, `deployments/aks/memex-cloud/portal-patch.json`, adds

@@ -396,7 +396,8 @@ a Key Vault entry at all"* stopped being true on 2026-09-06 for `memex` and by 2
 `memex-cloud`: `Systemorph/Memex#180` declared a chart-owned `keyVaultSecrets` class on both, and
 re-measured 2026-09-08T01:03Z the inline value and the vault copy are **EQUAL** on each portal. The
 table stays as it was measured; read this line with it. The remaining act — delete the inline entry
-— has no repository half and no operator action
+— has no repository half and no `Hosting/InstanceAction` kind; what remains possible is the
+break-glass `kubectl set env deploy/<name> <KEY>-`
 ([DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Step 2 has NO API action"*).
 
 Zero `COLLIDES` and zero `CHART-ONLY` — as on 2026-09-03, which is the only other run since #3168
