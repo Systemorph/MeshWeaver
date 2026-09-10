@@ -1,16 +1,16 @@
 ---
-Name: Deleted data stays gone on the next read
+Name: Saved changes appear on the next read
 Category: Fix
-Description: A successful delete now waits until the shared read view has applied the deletion, so an immediate follow-up read cannot return the removed item.
+Description: Successful updates and deletes now wait for the shared read view, so an immediate follow-up read no longer replays stale data.
 Icon: Sparkle
 Order: -20260910
 ---
 
-# Deleted data stays gone on the next read
+# Saved changes appear on the next read
 
-Deleting an item could report success just before the portal's shared read view had processed the
-same change. An immediate follow-up read could therefore briefly return the item that had just been
-deleted.
+Updating or deleting an item could report success just before the portal's shared read view had
+processed the same change. An immediate follow-up read could therefore return the previous value or
+briefly return an item that had just been deleted.
 
-The delete response now waits for that read view to carry the item's absence. Once deletion reports
-success, the next read agrees and the removed item stays gone.
+Update and delete responses now wait for their matching change to reach that read view. Once the
+operation reports success, the next read no longer replays the state from before the operation.
