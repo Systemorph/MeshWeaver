@@ -10,8 +10,13 @@ Point the portal at it so POST /api/speech/transcribe has somewhere to forward:
     Speech__Enabled = true
     Speech__Language = {{ .Values.model.language }}
 
-First pod start downloads the model (~547 MB) via an initContainer, then loads it — the
-startupProbe covers this, so give the pod a minute or two to become Ready.
+The model (~547 MB) is BAKED INTO THE IMAGE at /models/model.bin — nothing is downloaded at
+run time. First pod start pulls the image, then loads the model; the startupProbe covers
+this, so give the pod a minute or two to become Ready.
+
+🚨 If the pod starts but never becomes Ready and the log says the model could not be loaded,
+the image was built WITHOUT one. Rebuild it with the model in the build context — see
+deploy/whisper/README.md and Doc/Architecture/VoiceModelDistribution.
 
 Check readiness from inside the cluster (a bare GET returns non-5xx once the model is loaded):
 
