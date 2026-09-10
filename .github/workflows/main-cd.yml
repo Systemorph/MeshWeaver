@@ -753,7 +753,7 @@ jobs:
           # The batching window cannot see this either — it compares against the newest PUBLISHED
           # set, and neither had published.
           #
-          # So before any other verdict: is an OLDER run of this workflow on THIS sha still running?
+          # So before any other verdict: is an OLDER run of this workflow on THIS sha still live?
           # Older by run id, deliberately — two runs deciding at the same instant would otherwise
           # each see the other and BOTH defer, and one commit would yield no set at all. The older
           # proceeds, the newer defers, and if the older one dies the next reconcile tick heals
@@ -761,8 +761,14 @@ jobs:
           # The probe FAILS OPEN, and says so: an API error here must not stop a publication that
           # was correct before the probe existed — the worst case is the duplicate set this guards
           # against, and the log names the reason instead of an empty answer.
+          # A workflow held behind a concurrency group reports `pending`, not `queued`. That was
+          # the exact live shape on 2026-09-10: workflow_run 34506317727 was pending behind the
+          # preceding delivery when scheduled reconcile 34508198977 made this decision, so the
+          # two subsequently built the same c3b6fdf image set concurrently. Match the terminal
+          # boundary instead of trying to enumerate GitHub's live vocabulary: every live status
+          # is non-completed, and terminal runs report status=completed plus their conclusion.
           if INFLIGHT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&per_page=30" \
-                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id < $RUN_ID and (.status == \"in_progress\" or .status == \"queued\"))] | .[0] // empty | .html_url"); then
+                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id < $RUN_ID and .status != \"completed\")] | .[0] // empty | .html_url"); then
             :
           else
             echo "::warning::the in-flight probe failed (exit $?) — cannot tell whether an older run is publishing $SHORT; proceeding as before MeshWeaver#3376 (a duplicate image set is the worst case)"
@@ -2803,7 +2809,7 @@ jobs:
             # or newer, push lane or reconcile lane — is a fact that falsifies "nobody is publishing
             # it", and all of them count.
             if LIVE=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=50" \
-                        --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and (.status == \"in_progress\" or .status == \"queued\"))]
+                        --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and .status != \"completed\")]
                               | sort_by(.id) | .[0] // empty
                               | \"\(.id) \(.status) \(.run_started_at) \(.html_url)\""); then
               :
@@ -2825,7 +2831,7 @@ jobs:
               echo "   This verdict is suppressed ONLY while a run is observably live on \`$SHORT\`. If that run does not complete the set, the next hourly reconcile finds nothing in flight and this job goes RED — no timer, no retry, nothing to un-stick by hand."
               exit 0
             fi
-            echo "::error::main \`$SHORT\` is GREEN and has an INCOMPLETE image set, this reconcile published nothing, and NO run of this workflow is queued or in progress on \`$SHORT\` — so nobody is publishing it. Delivery is stuck: every self-updating install stays on the previous image. This job exists because that state is otherwise INVISIBLE — the run reports success and every image job simply reads as skipped."
+            echo "::error::main \`$SHORT\` is GREEN and has an INCOMPLETE image set, this reconcile published nothing, and NO non-completed run of this workflow exists on \`$SHORT\` — so nobody is publishing it. Delivery is stuck: every self-updating install stays on the previous image. This job exists because that state is otherwise INVISIBLE — the run reports success and every image job simply reads as skipped."
             exit 1
           fi
 
