@@ -300,6 +300,10 @@ public static class BuildVerbs
 
     /// <summary>Write a source's bytes INTO this registry.</summary>
     public const string Publish = "publish";
+
+    /// <summary>Read this portal's release inputs and record an off-portal compatibility verdict.
+    /// The resource is <c>combo</c>; this grants no general mesh or update-policy access.</summary>
+    public const string Verify = "verify";
 }
 
 /// <summary>The control-plane verbs <see cref="BuildPrincipal.RequestedAction"/> accepts.</summary>

@@ -29,7 +29,7 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class ReleaseGateAuthTest
 {
-    private static async Task<HttpResponseMessage> Get(string route, string? authorization)
+    private static async Task<HttpResponseMessage> Get(string route, string? authorization, HttpMethod? method = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -43,11 +43,18 @@ public class ReleaseGateAuthTest
         app.MapReleaseGate();
         await app.StartAsync();
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, route);
+        using var request = new HttpRequestMessage(method ?? HttpMethod.Get, route);
         if (authorization is not null)
             request.Headers.TryAddWithoutValidation("Authorization", authorization);
 
         return await app.GetTestClient().SendAsync(request);
+    }
+
+    [Fact]
+    public async Task VerificationWriteAuthenticatesBeforeReadingTheBodyOrResolvingTheMesh()
+    {
+        using var response = await Get(ReleaseGateEndpoints.VerificationRoute, null, HttpMethod.Post);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
