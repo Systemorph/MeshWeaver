@@ -8,7 +8,9 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Mesh;
 
 /// <summary>
-/// A read whose owning hub never answered within the caller's budget. Derives from
+/// A read whose answer did not reach the caller within the caller's budget. 🚨 That is NOT the same
+/// claim as "the owning hub never answered" — the owner may simply not have finished STARTING, and
+/// on <c>/api/content</c> that is the most common shape (MeshWeaver#3931). Derives from
 /// <see cref="TimeoutException"/> on purpose: every classifier in the framework
 /// (<c>AreaErrorClassifier.IsTransientHubFailure</c>,
 /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c>, <c>RoutingGrain.IsTransientFailure</c>)
@@ -16,15 +18,15 @@ namespace MeshWeaver.Mesh;
 /// brand-new exception type would have silently fallen out of all three — turning a retryable stall
 /// into a negative-cached "missing node".
 ///
-/// <para>It carries the two facts a bare timeout does not: WHICH address never answered, and WHAT
-/// budget expired. Those are what let a caller answer "temporarily unavailable, retry" instead of
+/// <para>It carries the two facts a bare timeout does not: WHICH address the caller was waiting on,
+/// and WHAT budget expired. Those are what let a caller answer "temporarily unavailable, retry" instead of
 /// "not found" or a generic 500.</para>
 /// </summary>
 public sealed class HubUnreachableException : TimeoutException
 {
     /// <summary>Creates the exception.</summary>
     /// <param name="message">The full diagnostic message (see <see cref="ReadBudget"/>).</param>
-    /// <param name="target">The address that never answered.</param>
+    /// <param name="target">The address the caller was waiting on.</param>
     /// <param name="budget">The budget that expired.</param>
     /// <param name="innerException">The underlying cause, when there is one.</param>
     public HubUnreachableException(string message, string target, TimeSpan budget, Exception? innerException = null)
@@ -34,7 +36,7 @@ public sealed class HubUnreachableException : TimeoutException
         Budget = budget;
     }
 
-    /// <summary>The address whose hub never answered.</summary>
+    /// <summary>The address the caller was waiting on.</summary>
     public string Target { get; }
 
     /// <summary>The wall-clock budget that expired.</summary>
@@ -225,11 +227,19 @@ public static class ReadBudget
     }
 
     /// <summary>
-    /// The failure a lapsed budget produces, carrying everything needed to tell the three causes
-    /// apart WITHOUT re-running anything: the reader's own in-flight snapshot (our request still
-    /// pending ⇒ the reply never came), and whether the target hub exists in this process at all
-    /// (⇒ it never activated here, or it is owned by another silo and the reply was lost in
-    /// transit — MeshWeaver#1742).
+    /// The failure a lapsed budget produces, carrying everything needed to tell the causes apart
+    /// WITHOUT re-running anything: the reader's own in-flight snapshot (our request still
+    /// pending ⇒ the reply never came), and what the target hub was doing — not started yet,
+    /// started and idle, or not in this process at all (⇒ it never activated here, or it is owned
+    /// by another silo and the reply was lost in transit — MeshWeaver#1742).
+    ///
+    /// <para>🚨 <b>The headline states what the READER observed, never what the OWNER did</b>
+    /// (MeshWeaver#3931). It used to assert "the owning hub never answered", which is FALSE for the
+    /// most common shape on <c>/api/content</c>: the owner had not finished STARTING, answered
+    /// seconds after the budget lapsed, and served every later read of the same node in
+    /// milliseconds. Two sessions read that sentence as evidence of an unreachable hub and
+    /// eliminated the one cause that was actually live. A budget knows one thing — that no
+    /// notification arrived in time — and the clauses after it are where the evidence goes.</para>
     /// </summary>
     private static HubUnreachableException Unreachable(
         IMessageHub? reader, string target, string what, TimeSpan budget)
@@ -237,13 +247,36 @@ public static class ReadBudget
         var readerState = Describe(() => reader?.GetPendingRequestDiagnostics() ?? "<no reader hub>");
         var targetState = Describe(() => DescribeTarget(reader, target));
         return new HubUnreachableException(
-            $"Reading {what} from '{target}' gave up after {budget.TotalSeconds:F0}s — the owning hub "
-            + "never answered. This is NOT 'not found' and NOT a denial: no verdict was reached, so "
-            + $"the read is retryable. Reader: {readerState} {targetState}",
+            $"Reading {what} from '{target}' gave up after {budget.TotalSeconds:F0}s — no answer "
+            + "reached this reader within the budget. This is NOT 'not found' and NOT a denial: no "
+            + $"verdict was reached, so the read is retryable. Reader: {readerState} {targetState}",
             target,
             budget);
     }
 
+    /// <summary>
+    /// What the owning hub was doing when the budget lapsed, as a sentence rather than a field to
+    /// decode.
+    ///
+    /// <para>🚨 <b><c>RunLevel</c> is the discriminator this clause exists to surface</b>
+    /// (MeshWeaver#3931). <c>GetHostedHub</c> answers as soon as a hub has been CONSTRUCTED, which
+    /// happens long before it reaches <see cref="MessageHubRunLevel.Started"/>: until every
+    /// initialization gate opens, <c>MessageService</c> parks each arriving delivery in the
+    /// deferred queue instead of dispatching it. A read issued into that window is not lost and the
+    /// owner is not unreachable — the read is queued behind a start-up that completes on its own,
+    /// and every bound on that start-up is larger than this budget. Printing the run level inside
+    /// the snapshot was not enough: the documented discriminator reads the READER's queue, which
+    /// under this shape is idle and therefore prints an unreachable owner's signature exactly. So
+    /// the verdict is stated in words, before the snapshot.</para>
+    ///
+    /// <para>🚨 <b>And the probe asks the MESH hub, not the reader.</b> <c>GetHostedHub</c> searches
+    /// ONE hub's own collection — it neither walks the hosted tree nor the parent chain — and every
+    /// per-node hub is hosted by the MESH hub (<c>MonolithRoutingService.CreateHub</c> and
+    /// <c>MessageHubGrain.CompleteActivation</c> both go through <c>meshHub.GetHostedHub</c>). The
+    /// reader on the interactive read seams is <c>portal/reads-{meshId}</c>, which hosts nothing at
+    /// all, so probing IT answered <i>"NO LOCAL HUB"</i> for every read alike — a clause that reads
+    /// as hard evidence about the owner and was in fact a constant.</para>
+    /// </summary>
     private static string DescribeTarget(IMessageHub? reader, string target)
     {
         if (reader is null)
@@ -251,10 +284,15 @@ public static class ReadBudget
         if (string.Equals(reader.Address.ToString(), target, StringComparison.Ordinal))
             return "Target: this hub itself.";
         // HostedHubCreation.Never — a pure dictionary probe. Diagnosing a hub must never activate it.
-        return reader.GetHostedHub(new Address(target), HostedHubCreation.Never) is { } owner
-            ? $"Target: {owner.GetPendingRequestDiagnostics()}"
-            : $"Target: NO LOCAL HUB at '{target}' — it never activated in this process (or it is "
-              + "owned by another silo and the reply was lost in transit).";
+        if (reader.GetMeshHub().GetHostedHub(new Address(target), HostedHubCreation.Never)
+            is not { } owner)
+            return $"Target: NO LOCAL HUB at '{target}' — it never activated in this process (or it "
+                   + "is owned by another silo and the reply was lost in transit).";
+        return owner.RunLevel < MessageHubRunLevel.Started
+            ? $"Target: STILL STARTING — '{target}' exists in this process but has not reached "
+              + "RunLevel=Started, so this read was DEFERRED behind its start-up rather than lost. "
+              + $"{owner.GetPendingRequestDiagnostics()}"
+            : $"Target: {owner.GetPendingRequestDiagnostics()}";
     }
 
     private static string Describe(Func<string> probe)
