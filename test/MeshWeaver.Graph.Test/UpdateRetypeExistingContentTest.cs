@@ -113,6 +113,15 @@ public class UpdateRetypeExistingContentTest(ITestOutputHelper output) : Monolit
         Content = new RetypeBeforeContent("Edited", 6),
     };
 
+    /// <summary>Same degraded content, but under the NodeType that DECLARES its content type.</summary>
+    private static MeshNode StoredUnderRegisteredType(string id) => new(id, TestPartition)
+    {
+        Name = "Original",
+        NodeType = RetypeTypeProvider.RegisteredBeforeType,
+        State = MeshNodeState.Active,
+        Content = DegradedBefore(),
+    };
+
     /// <summary>
     /// 🚨 THE DEFECT. A NodeType-changing update must never hand a validator an "existing" content
     /// that is an instance of the type the update is PROPOSING — that value describes no state the
@@ -184,6 +193,60 @@ public class UpdateRetypeExistingContentTest(ITestOutputHelper output) : Monolit
             + "#3056 cure — a JsonElement here is the silent validator pass that reopened");
         ((RetypeBeforeContent)seen!).Sequence.Should().Be(5);
     }
+
+    /// <summary>
+    /// 🚨 THE CLAIM THE FIX RESTS ON, MEASURED RATHER THAN INFERRED — and the answer to "does a
+    /// retype now leave validators permissive?"
+    ///
+    /// <para>Leaving the snapshot alone on a retype is only correct if the EXACT recovery has
+    /// already been tried by the time the pipeline sees it: <c>MeshNodeStreamExtensions.
+    /// EnsureTypedContent</c> calls <c>IMeshContentTypeRegistry.TryRecoverForNodeType</c> keyed on
+    /// the node's OWN NodeType, on every emission of the stream <c>NodeUpdatePipeline</c> reads.
+    /// Reading that in the source is an inference. This measures it: the probe node's NodeType
+    /// DECLARES its content type (<c>WithContentType&lt;RetypeBeforeContent&gt;</c>), the node is
+    /// stored with the SAME degraded, discriminator-less JSON as the test above, and the update
+    /// retypes it. If the NodeType-keyed recovery really runs upstream, the validator sees
+    /// <c>RetypeBeforeContent</c> — recovered from a payload whose bytes name no type at all, so
+    /// the ONLY thing that could have recovered it is the NodeType route.</para>
+    ///
+    /// <para>🚨 That also bounds what the fix gives up. A retype hands validators UNTYPED content
+    /// only where nothing in the process can type it — which is #3056's own precondition, and the
+    /// state in which the old code was equally broken (it manufactured a ghost of the proposal's
+    /// type instead, or left the snapshot untyped anyway when the conversion threw). Wherever the
+    /// content type is known ANYWHERE in the process, a retype's validators get it correctly typed
+    /// and their typed comparison does NOT skip. The fix narrows the untyped window; it does not
+    /// open one.</para>
+    /// </summary>
+    // 300_000 ms — see the note on the first test.
+    [Fact(Timeout = 300_000)]
+    public async Task ARetypeStillGetsTheExactRecovery_WhenTheExistingNodeTypeDeclaresItsContentType()
+    {
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+
+        await MeshService.CreateNode(StoredUnderRegisteredType(id)).Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit("the node to retype must exist first");
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+
+        await Record.ExceptionAsync(() =>
+            MeshService.UpdateNode(ProposedRetyped(id)).Take(1).Timeout(TestTimeouts.Convergence).Await());
+
+        var seen = await Validator.ObservedExistingContent
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+
+        seen.Should().BeOfType<RetypeBeforeContent>(
+            "the stored bytes carry NO $type, so the only route that can type them is "
+            + "IMeshContentTypeRegistry.TryRecoverForNodeType keyed on the node's OWN NodeType — "
+            + "seeing the old type here MEASURES that the exact recovery runs on every emission of "
+            + "the stream the update pipeline reads, which is what makes leaving the snapshot alone "
+            + "on a retype correct rather than a silent pass. It also bounds the cost of the fix: a "
+            + "retype only ever hands validators untyped content where nothing in the process can "
+            + "type it at all");
+        ((RetypeBeforeContent)seen!).Sequence.Should().Be(5,
+            "and the recovered value is the node's real stored state, not a default-valued shell");
+    }
 }
 
 /// <summary>The content a probe node is created with. Registered on NO hub on purpose.</summary>
@@ -218,7 +281,8 @@ public sealed class RetypeObservingValidator : INodeValidator
     /// <inheritdoc />
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
     {
-        if (context.ExistingNode?.NodeType == RetypeTypeProvider.BeforeType)
+        if (context.ExistingNode?.NodeType is RetypeTypeProvider.BeforeType
+            or RetypeTypeProvider.RegisteredBeforeType)
             observed.OnNext(context.ExistingNode.Content);
         return Observable.Return(NodeValidationResult.Valid());
     }
@@ -233,15 +297,25 @@ internal sealed class RetypeTypeProvider : IStaticNodeProvider
     /// <summary>The NodeType the update retypes it to.</summary>
     public const string AfterType = "RetypeAfterProbe";
 
+    /// <summary>
+    /// Same shape as <see cref="BeforeType"/>, but it DECLARES its content type — so the mesh-wide
+    /// <c>IMeshContentTypeRegistry</c> can resolve it by NodeType path even for stored bytes that
+    /// carry no <c>$type</c>. This is what makes the exact-recovery claim measurable.
+    /// </summary>
+    public const string RegisteredBeforeType = "RetypeRegisteredBeforeProbe";
+
     public IEnumerable<MeshNode> GetStaticNodes()
     {
-        foreach (var name in new[] { BeforeType, AfterType })
+        foreach (var name in new[] { BeforeType, AfterType, RegisteredBeforeType })
         {
+            var declaresContentType = name == RegisteredBeforeType;
             yield return new MeshNode(name)
             {
                 Name = name,
                 NodeType = "NodeType",
-                HubConfiguration = c => c.AddMeshDataSource(),
+                HubConfiguration = declaresContentType
+                    ? c => c.AddMeshDataSource(s => s.WithContentType<RetypeBeforeContent>())
+                    : c => c.AddMeshDataSource(),
                 Content = new NodeTypeDefinition { Description = "Test NodeType for the in-place retype contract." },
             };
             yield return new MeshNode(name, "Admin/Partition")
