@@ -4097,7 +4097,8 @@ public static class DataExtensions
     /// <summary>
     /// Reactive delete for a <c>data:</c> path. Content-provider paths delete the file directly;
     /// entity paths read the entity once via <see cref="System.Reactive.Linq.Observable.Take{TSource}(IObservable{TSource}, int)"/>,
-    /// then issue a <see cref="DataChangeRequest"/> and observe the activity completion callback.
+    /// then issue a <see cref="DataChangeRequest"/> and report success after both the owner commit
+    /// and the shared read stream's absence frame.
     /// </summary>
     private static IObservable<DeleteUnifiedReferenceResponse> DeleteDataPath(
         IMessageHub hub,
@@ -4147,13 +4148,25 @@ public static class DataExtensions
                 };
 
                 return workspace.RequestChange(changeRequest)
-                    .Select(log =>
+                    .SelectMany(log =>
                     {
                         var response = new DataChangeResponse(hub.Version, log);
-                        return response.Status == DataChangeStatus.Committed
-                            ? DeleteUnifiedReferenceResponse.Ok()
-                            : DeleteUnifiedReferenceResponse.Fail(
-                                response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed");
+                        if (response.Status != DataChangeStatus.Committed)
+                            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                                response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
+
+                        // RequestChange reports when the owning data-source stream has applied the
+                        // deletion. The shared read stream is a separate actor-backed reduction:
+                        // its null frame is posted from the source's turn and can still be queued
+                        // when the commit report arrives. A success response at that seam lets the
+                        // caller's immediate GetDataRequest replay the shared stream's OLD entity
+                        // before that queued frame lands. Wait on the exact read view this API
+                        // serves; no polling and no fresh stream/hub. Success now means a read made
+                        // after the response cannot observe the deleted entity (#3432 follow-up).
+                        return stream
+                            .Where(entity => entity.Value == null)
+                            .Take(1)
+                            .Select(_ => DeleteUnifiedReferenceResponse.Ok());
                     });
             });
     }

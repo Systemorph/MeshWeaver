@@ -218,6 +218,25 @@ done for a plain reduce, and where it matters the answer is a narrower reference
 | `ReadingTheSameReferenceRepeatedly_DoesNotMintASyncHubPerRead` | five reads of one reference add **0** `sync/` hubs to the owner (it fails with **+5** on the pre-fix call site) |
 | `AnUncachedConfiguredReduce_MintsOneSyncHubPerCall` | five genuinely-configured reduces add **5** — the counter can see growth, so the flat arm is not vacuous |
 | `TheSharedReadStream_StaysLive` | a write after the reads is visible to the next read — the shared stream is a live mirror, not a snapshot |
+| `UnifiedDelete_WaitsUntilTheSharedReadStreamCarriesAbsence` | a successful delete is withheld while the shared read actor is parked, even after the owner has committed; it answers only after the read view carries absence |
+
+### A shared stream makes its propagation boundary observable
+
+The data-source stream and a reduced read stream are separate actor-backed streams. Applying a change
+to the owner synchronously publishes a source frame, but forwarding that frame to the reduced stream
+posts work to the reduced stream's own hub. The owner's post-apply callback can therefore run while
+the read frame is still queued.
+
+This distinction did not matter when every read built a new reduction: a reduction built after the
+owner commit starts from the owner's latest replayed store. Once reads share the existing reduction,
+an immediate read can replay that reduction's previous value until its queued frame lands. The
+release gate exposed this as a successful `DeleteUnifiedReferenceRequest` followed immediately by a
+`GetDataRequest` that returned the deleted entity.
+
+The delete handler now waits reactively on the same shared entity stream until it carries `null`
+before reporting success. It does not poll and does not build a replacement stream. The resulting
+contract is precise: owner commit remains the storage boundary, while successful unified deletion is
+also the read-after-write boundary for the API's shared read view.
 
 ### One behaviour DID change, and it is the better half of an existing contract
 
