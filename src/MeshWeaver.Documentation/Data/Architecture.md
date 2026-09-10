@@ -237,6 +237,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Source-Set Establishment](SourceSetEstablishment) — a resolved source set of ZERO is ambiguous, and only the type's own persisted snapshot tells "owns no Code" from "the discovery pass came back short"; the boot that resolved 91 fewer Code nodes than its neighbours and held a portal out of rotation for the startup probe's full three hours
 - [Missing Declared Sources](MissingDeclaredSources) — emptiness measured on the UNION is invisible for any type that also draws on a shared library; the NodeType whose own Source subtree was gone, reported itself as broken C#, and had the identical doomed compile taken again on every boot for four days
 - [Install-Time Prebuilt Adoption](InstallTimePrebuiltAdoption) — the only lane that serves a package installed AFTER boot, and the four answers its zero must keep apart because a silent non-adoption reads exactly like a successful one
+- [Adoption and the Sweep Count Different Things](AdoptionAndTheSweepCountDifferentThings) — the cold boot that adopted 78 prebuilt assemblies and then reported 5, with nothing wrong on the share: what each instrument counts, why the sweep could not see its own process's writes, and the node-version ordering that keeps the fix from becoming a stale serve
 - [Import Write Ordering](ImportWriteOrdering) — type before instance, and what a foreign type does
 - [Language Services](LanguageServices)
 - [Extensible Defaults](ExtensibleDefaults)
