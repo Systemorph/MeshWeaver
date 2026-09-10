@@ -221,6 +221,63 @@ public class MapToToggleableControlTest(ITestOutputHelper output) : HubTestBase(
     }
 
     /// <summary>
+    /// 🚨 The click-to-edit input must carry its caption as an ACCESSIBLE name (MeshWeaver#3863).
+    ///
+    /// <para>
+    /// This form paints the caption as a SIBLING <see cref="LabelControl"/> above the field — a
+    /// <c>FluentLabel</c> that carries no <c>for</c>, with no id to point it at — and the input
+    /// itself was created with no <c>Label</c> and no <c>AriaLabel</c>. So the field rendered as a
+    /// bare <c>textbox</c> with no name: exactly the defect reported against the skinned editor,
+    /// on the OTHER generated form. The assertion is that the name on the input is the SAME string
+    /// as the sibling caption, because both are read from <c>GetToggleableDisplayName</c> and so
+    /// cannot drift (WCAG label-in-name).
+    /// </para>
+    ///
+    /// <para>
+    /// 🚨 View-model level, which is all core can see — core ships no renderer. The markup control
+    /// is in MeshWeaver.Plugins beside the Blazor views, where an <c>HtmlRenderer</c> asserts the
+    /// <c>aria-label</c> that is actually emitted.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ClickToEditInput_IsNamedByItsCaption()
+    {
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            new LayoutAreaReference(DataBindingTestView));
+
+        var control = await stream
+            .GetControlStream(DataBindingTestView)
+            .Should().Within(10.Seconds()).Match(x => x is not null);
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+
+        // The visible caption: the first area is the sibling label this form paints by hand.
+        var captionAreaId = stack.Areas.First().Area.ToString()!;
+        var caption = await stream
+            .GetControlStream(captionAreaId)
+            .Should().Within(5.Seconds()).Match(x => x is LabelControl);
+        var captionText = caption.Should().BeOfType<LabelControl>().Subject.Data.Should().BeOfType<string>().Subject;
+
+        var reactiveAreaId = stack.Areas.Skip(1).First().Area.ToString()!;
+        var editControlStream = stream
+            .GetControlStream(reactiveAreaId)
+            .Where(x => x is TextFieldControl);
+
+        client.Post(new ClickedEvent(reactiveAreaId, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
+
+        var editControl = await editControlStream.Should().Within(5.Seconds()).Emit();
+        var textField = editControl.Should().BeOfType<TextFieldControl>().Subject;
+
+        textField.AriaLabel.Should().Be(captionText,
+            "the click-to-edit input is named only by the caption beside it, which carries no <label for> to associate with (#3863)");
+        textField.Label.Should().BeNull(
+            "the caption is already painted as a sibling label, so a second visible one would duplicate it");
+    }
+
+    /// <summary>
     /// Test that blur on edit control switches back to readonly mode.
     /// </summary>
     [Fact]
