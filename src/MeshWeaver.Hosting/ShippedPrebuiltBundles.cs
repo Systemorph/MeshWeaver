@@ -14,6 +14,23 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
+/// How a source directory's <c>_current</c> pointer resolved (MeshWeaver#3461) — the answer every
+/// reader takes, plus the reason it fell back, which retention needs and readers discard.
+/// </summary>
+/// <param name="Directory">The directory that holds the publication which applies: the generation
+/// the pointer names, or the source directory itself. Never null, never outside the source
+/// directory — this is the value <see cref="ShippedPrebuiltBundles.PublicationDirectoryOf"/> returns.</param>
+/// <param name="Named">The name the pointer carried, or null when there is no pointer or it was
+/// blank. Set even when the name was REFUSED, so a diagnostic can quote what a publisher wrote.</param>
+/// <param name="Fault">Why the pointer did not resolve to a generation on disk, or null. Null with
+/// a null <paramref name="Named"/> is the flat layout — the normal state today, not a fault.</param>
+public readonly record struct PublicationPointer(string Directory, string? Named, string? Fault)
+{
+    /// <summary>True when the pointer resolved to a generation subdirectory of the source.</summary>
+    public bool IsGeneration => Fault is null && Named is not null;
+}
+
+/// <summary>
 /// Adopts the prebuilt-assembly bundles the IMAGE ITSELF ships (issue #1660 WS1): at boot, before
 /// the dynamic-NodeType sweep decides what to build, every <c>*.zip</c> under the image's
 /// <c>prebuilt/</c> directory is read with <c>BundleReader</c> and seeded through
@@ -158,13 +175,35 @@ public static class ShippedPrebuiltBundles
     /// <param name="logger">Diagnostics. A REFUSED pointer is a warning — it means a publisher
     /// wrote something this reader will not follow, which is worth seeing.</param>
     public static string PublicationDirectoryOf(string sourceDirectory, ILogger? logger = null)
+        => ResolvePublicationPointer(sourceDirectory, logger).Directory;
+
+    /// <summary>
+    /// The SAME resolution <see cref="PublicationDirectoryOf"/> performs, with the reason it fell
+    /// back kept instead of discarded.
+    ///
+    /// <para>🚨 <b>It exists so retention and the readers can never disagree about which
+    /// generation applies.</b> A sweep that decides a generation is unreferenced is deciding it is
+    /// unreachable, and "unreachable" is defined by exactly these rules — so re-deriving them
+    /// beside the sweep would be two implementations of one contract, drifting silently, with the
+    /// failure landing as a DELETED publication that readers were still resolving. Every reader
+    /// calls <see cref="PublicationDirectoryOf"/>, which is this method with
+    /// <see cref="PublicationPointer.Directory"/> taken and the rest dropped.</para>
+    ///
+    /// <para>🚨 A non-null <see cref="PublicationPointer.Fault"/> means <b>a publisher wrote a
+    /// pointer this reader will not follow</b> — which is NOT the same as "there is no pointer".
+    /// Retention treats it as an unreadable publication inventory and protects every generation of
+    /// the source: an inventory that could not be read licenses no deletion.</para>
+    /// </summary>
+    /// <param name="sourceDirectory">A <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;</c> directory.</param>
+    /// <param name="logger">Diagnostics — the same lines <see cref="PublicationDirectoryOf"/> has always logged.</param>
+    public static PublicationPointer ResolvePublicationPointer(string sourceDirectory, ILogger? logger = null)
     {
         var pointer = Path.Combine(sourceDirectory, PublicationPointerFileName);
         string? named;
         try
         {
             if (!File.Exists(pointer))
-                return sourceDirectory;
+                return new PublicationPointer(sourceDirectory, null, null);
             named = File.ReadAllLines(pointer)
                 .Select(l => l.Trim())
                 .FirstOrDefault(l => l.Length > 0);
@@ -178,11 +217,14 @@ public static class ShippedPrebuiltBundles
                 "ShippedPrebuiltBundles: {Pointer} could not be read — reading {SourceDirectory} "
                 + "as its own publication directory; a pointer being replaced reads this way, and "
                 + "the next read resolves it", pointer, sourceDirectory);
-            return sourceDirectory;
+            return new PublicationPointer(sourceDirectory, null,
+                $"the pointer could not be read ({ex.GetType().Name}: {ex.Message})");
         }
 
         if (string.IsNullOrEmpty(named))
-            return sourceDirectory;
+            // An EMPTY pointer is the mid-write reading of a pointer being replaced, so it is a
+            // fault for retention's purposes too: which generation applies is unknown right now.
+            return new PublicationPointer(sourceDirectory, null, "the pointer is empty");
 
         if (named is "." or ".."
             || named != Path.GetFileName(named)
@@ -194,7 +236,8 @@ public static class ShippedPrebuiltBundles
                 + "directory name — a publication pointer may only address a subdirectory of its "
                 + "own source directory. Reading {SourceDirectory} as its own publication "
                 + "directory instead", pointer, named, sourceDirectory);
-            return sourceDirectory;
+            return new PublicationPointer(sourceDirectory, named,
+                $"the pointer names '{named}', which is not a single directory name");
         }
 
         var generation = Path.Combine(sourceDirectory, named);
@@ -205,9 +248,10 @@ public static class ShippedPrebuiltBundles
                 + "disk — reading {SourceDirectory} as its own publication directory instead. A "
                 + "generation the pointer names must outlive the pointer",
                 pointer, named, sourceDirectory);
-            return sourceDirectory;
+            return new PublicationPointer(sourceDirectory, named,
+                $"the pointer names generation '{named}', which is not on disk");
         }
-        return generation;
+        return new PublicationPointer(generation, named, null);
     }
 
     /// <summary>The conventional location — <c>prebuilt/</c> beside the app binaries, which is
