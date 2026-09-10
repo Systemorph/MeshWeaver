@@ -23,9 +23,10 @@ setting that turned it off.
 ## What changes
 
 **A suggestion is now filtered exactly like opening the node is.** The same check that decides
-whether you may read a node decides whether it may be suggested to you. The two answers come from
-the same place, so they can no longer disagree: if the portal would refuse to open it, it will not
-offer it.
+whether you may read a node decides whether it may be suggested to you — for every suggestion that
+comes from your portal's own store, which is where your spaces, pages and documents live. The two
+answers come from the same place, so they can no longer disagree: if the portal would refuse to
+open it, it will not offer it.
 
 **Nothing you are entitled to has been taken away.** Your own space, spaces shared with you, and
 anything public are suggested exactly as before — including their names. The filter is per node,
@@ -43,6 +44,10 @@ type and the icon — never the document itself, and never anything you could op
 **Suggestions of the built-in catalogs are unaffected.** Roles, type definitions and the portal's
 own shipped entries are catalog content, published to everyone on purpose, and are still suggested
 to everyone.
+
+**An installation that has added an optional third-party search index gets the matching change to
+that index with a later update.** Your portal's own store — the one this entry is about — is covered
+now.
 
 **One diagnostic trick stops working, deliberately.** Because the old behaviour named nodes a
 `Not found` was hiding, people had started using it to tell *"you may not read this"* apart from

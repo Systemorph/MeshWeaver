@@ -1063,9 +1063,12 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         //     GetEffectiveUserId at subscribe time keeps the answer correct if this path ever
         //     grows a Defer or a pool hop, as the Query surface already has.
         //  2. Stamp ONLY what was actually resolved — the same rule MeshService.StampViewer
-        //     documents. Pinning the Anonymous FALLBACK here would make this line the last word,
-        //     and it is not: a caller whose ambient context is empty at CALL time can still have
-        //     one at SUBSCRIBE time. Left null, the provider's own late resolution runs unchanged.
+        //     documents. Pinning the Anonymous FALLBACK here would make this line the LAST word on
+        //     the viewer, and this line is not entitled to be that: GetEffectiveUserId, inside
+        //     CollectMatched, is. Leaving UserId null when nothing resolved therefore preserves
+        //     that resolution byte-for-byte — today it reaches the same answer at the same
+        //     instant (CollectMatched runs eagerly, on this thread), and it is the ONE place that
+        //     would still be correct if this path ever grew a Defer or a pool hop.
         var viewer = QueryIdentityResolver.Resolve(
             queryRequest,
             accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId);

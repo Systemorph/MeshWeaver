@@ -1864,12 +1864,18 @@ different sets of rows:
 | | runs as | rows considered |
 |---|---|---|
 | `DynamicTypePreWarmer` boot sweep (the gate) | system | every NodeType in every partition on this replica |
-| `search`, `get`, `get_diagnostics`, `autocomplete` (the pre-prod sweep) | the caller | only partitions the caller may read |
+| `search`, `get`, `get_diagnostics` (the pre-prod sweep) | the caller | only the NODES the caller may read |
 
 `IMeshQueryProvider.Query` filters through `ValidateRead`; `IMeshQueryCore.Query` does not
 (`StorageAdapterMeshQueryProvider`, `useSecurityFilter`). So **a NodeType parked at `Error` inside a
 partition the sweeper has no grant on is not counted — the sweep returns a smaller number, never an
 error**, and the two instruments part company exactly where it matters.
+
+🚨 **"Rows the caller may read" is per NODE, not per partition** — a grant can sit on a single node
+below a partition root, so a sweeper denied `Helvetia` may still be shown one NodeType inside it.
+Which is why the denominator has to be counted, never inferred from the list of partitions you can
+open. (`autocomplete` joined this filtered set in #3890 and is *not* a compilation instrument: it
+returns suggestion projections — path, name, node type, icon — and never a `compilationStatus`.)
 
 🚨 **And `get`/`get_diagnostics` answer `Not found` for a node they may not read.** Denied and
 absent are the same string. That is not a hypothetical reading of the code:
@@ -1904,10 +1910,19 @@ What is left is one read you can run and one answer that comes from the system:
 2. **The pod's `nodetype_bake` payload — the only instrument with the full denominator.** The boot
    sweep (`DynamicTypePreWarmer`) enumerates `nodeType:NodeType` mesh-wide under
    `ImpersonateAsSystem`, so it sees every NodeType in every partition on the replica, not the ones
-   you may read. It also already carries the distinction: `Regressions` / `Unevaluated` /
-   `ContentBroken` name a type that EXISTS and did not build, while `Retired` / `Removed` is the
-   sweep reporting that the repository withdrew it or that a listing no longer names the node
-   (`PreWarmStatus.Removed`, established by a LISTING that came back — never by a point read).
+   you may read. And its buckets already draw the distinction this section needs — but they are
+   FOUR different statements, not one, and reading them as one is its own false negative:
+
+   | bucket | what it actually says |
+   |---|---|
+   | `Regressions` | the type EXISTS and failed to build on this image — an image verdict, and the only gating one |
+   | `Unevaluated` | NO verdict was reached (the warm timed out, or an upstream was itself unevaluated) — evidence of nothing, in either direction |
+   | `ContentBroken` | a CONTENT verdict (`NoSources` / `UpstreamContentBroken`): the type node is still there, its source queries now match ZERO Code nodes — its SOURCES were deleted out from under it |
+   | `Retired` / `Removed` | the repository withdrew the type, or a listing no longer names the node at all (`PreWarmStatus.Removed`, established by a LISTING that came back — never by a point read) |
+
+   So `Regressions` is "denied, not deleted" answered from the system side; `Retired`/`Removed` is
+   "deleted" answered the same way; `ContentBroken` is the half-way case worth naming out loud (the
+   type survived, its sources did not); and `Unevaluated` must never be read as either.
    🚨 Read the arming caveat below before trusting its silence.
 
 🚨 **And re-read what the sweep is actually FOR.** Its question is not *"does this node

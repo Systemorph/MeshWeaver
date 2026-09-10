@@ -50,6 +50,15 @@ public class AutocompleteHonoursReadAccessTest(ITestOutputHelper output) : Monol
     private const string SecretPath = $"{TestPartition}/{SecretId}";
 
     /// <summary>
+    /// A SECOND node in the same partition, on which <see cref="Outsider"/> holds a Viewer grant of
+    /// its own. The pair is what makes the filter's granularity measurable — see
+    /// <see cref="ADeniedPartitionStillSuggestsTheOneNodeSharedWithYou"/>.
+    /// </summary>
+    private const string SharedId = "SharedNotes";
+    private const string SharedPath = $"{TestPartition}/{SharedId}";
+    private const string SharedName = "Shared Notes";
+
+    /// <summary>
     /// A node NAME that is business content rather than an identifier — the half of the disclosure
     /// that made #3890 more than an existence leak.
     /// </summary>
@@ -72,8 +81,13 @@ public class AutocompleteHonoursReadAccessTest(ITestOutputHelper output) : Monol
     // grants Public→Admin on every default partition and would make every identity an
     // administrator, so "the outsider cannot read this" would be vacuously… false. RLS has to be
     // genuinely enforced for any of this to mean anything.
+    //
+    // The one grant this suite seeds is deliberately NOT at the partition root: it is on ONE NODE
+    // inside it, which is the shape a partition-level narrowing would get wrong.
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => ConfigureMeshBase(builder);
+        => ConfigureMeshBase(builder)
+            .AddMeshNodes(AssignmentNodeFactory.UserRole(
+                Outsider.ObjectId, roleId: "Viewer", scope: SharedPath));
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -82,6 +96,11 @@ public class AutocompleteHonoursReadAccessTest(ITestOutputHelper output) : Monol
     private Task<MeshNode> CreateSecret() =>
         MeshService.CreateNode(
                 new MeshNode(SecretId, TestPartition) { Name = SecretName, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin owns this partition");
+
+    private Task<MeshNode> CreateSharedNote() =>
+        MeshService.CreateNode(
+                new MeshNode(SharedId, TestPartition) { Name = SharedName, NodeType = "Markdown" })
             .Should().Within(TestTimeouts.Convergence).Emit("the admin owns this partition");
 
     /// <summary>
@@ -179,5 +198,35 @@ public class AutocompleteHonoursReadAccessTest(ITestOutputHelper output) : Monol
 
         suggestions.Select(s => s.Name).Should().Contain(SecretName,
             "and the suggestion still carries the node's display name for the people entitled to it");
+    }
+
+    /// <summary>
+    /// The GRANULARITY assertion, and the one that forbids the "obvious" optimisation. The fix
+    /// filters per ROW, not per partition, because a grant can sit on a single node BELOW a
+    /// partition root: <see cref="Outsider"/> holds no grant on <c>TestData</c> and is refused
+    /// <see cref="SecretPath"/>, yet holds Viewer on <see cref="SharedPath"/> alone.
+    ///
+    /// <para>Both halves are read out of the SAME snapshot, so neither can pass for the wrong
+    /// reason: a partition-level narrowing (restrict the base paths to readable partitions before
+    /// the walk — the cheaper shape #3890 proposed) would drop the shared node too and fail the
+    /// first assertion, while dropping the filter altogether fails the second.</para>
+    /// </summary>
+    [Fact]
+    public async Task ADeniedPartitionStillSuggestsTheOneNodeSharedWithYou()
+    {
+        await CreateSecret();
+        await CreateSharedNote();
+
+        BecomeTheOutsider();
+
+        var suggestions = await DrillDown(
+            "the drill-down answers for any authenticated caller");
+
+        suggestions.Select(s => s.Path).Should().Contain(SharedPath,
+            "the grant is on this NODE, not on the partition — filtering per partition would hide "
+            + "a document its owner deliberately shared, which is a different bug of the same size");
+
+        suggestions.Select(s => s.Path).Should().NotContain(SecretPath,
+            "and the sibling the caller was NOT granted stays out of the same snapshot (#3890)");
     }
 }
