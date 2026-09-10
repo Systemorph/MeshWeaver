@@ -167,11 +167,22 @@ the first N in the window.
 ## Which portal is the instrument on
 
 `Logs` runs against the deployment its `deployment` field names, from whichever portal hosts the
-action node — and the two are routinely different. `memex` → memex.systemorph.com (the control
-instance), `meshweaver` → memex.meshweaver.cloud; the record names and the namespaces are crossed
-on this fleet, so never infer one from the other. `Ops/Logs` on a portal holds only what somebody
-ran **there**, which is why the same query answers 2 498 rows on one and 13 on the other. Confirm
-the portal before drawing any conclusion from a read — see
+action node — and the two are routinely different. **`Ops/Logs` on a portal holds only what somebody
+ran there**, which is why the same query answers 2 498 rows on one and 13 on the other.
+
+🚨 **Two different naming systems collide here, and reading one as the other is the mistake.**
+
+| Thing | `memex` names… | `memex-cloud` / `systemorph` names… |
+|---|---|---|
+| **MCP server name** | memex.**meshweaver.cloud** — the public portal | `systemorph` → memex.systemorph.com, the control instance |
+| **`Deployments/<id>` record** | a record whose `Logs` runs resolve to `{namespace="memex"}` — not the public portal | `Deployments/memex-cloud`: `content.host` reads **memex.meshweaver.cloud**, namespace `memex-cloud` (measured 2026-09-10) |
+
+So the MCP server called `memex` and the deployment record called `memex` are **different portals**.
+Never infer a namespace from a name — the `ingest-logs` script carries the same warning for the
+older record ids (*"the record called `meshweaver` runs in namespace `memex-cloud`, and
+`systemorph` runs in `memex`"*), and a `Logs` run attributes one portal's lines to another exactly
+as confidently as a correct one. Confirm the portal (`/api/version`, or the record's own `host`)
+before drawing any conclusion from a read — see
 [Operating from the portal, not the cluster](../OperatingFromThePortal).
 
 ## Before you read an absence
