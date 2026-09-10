@@ -3090,8 +3090,14 @@ public class MeshOperations
 
     /// <summary>
     /// Copies a node and all its descendants to a target namespace. Delegates to
-    /// <see cref="NodeCopyHelper.CopyNodeTree"/> — fully reactive pipeline (Query +
-    /// MeshNodeReference streams + CreateNode observables chained sequentially).
+    /// <see cref="NodeCopyHelper.CopyNodeTree"/> — fully reactive, no <c>await</c> anywhere.
+    ///
+    /// <para>🚨 The helper REFUSES rather than half-landing a tree: it establishes how big the
+    /// source subtree is independently of what this caller may read, and writes nothing at all when
+    /// the two disagree. A copy that ran and fell short reports every path that did not land. Both
+    /// arrive here as an <c>OnError</c> and are rendered as the <c>Error:</c> answer below —
+    /// deliberately, because a partial copy used to arrive as a COUNT. See
+    /// <c>Doc/Architecture/CopyCompleteness</c>.</para>
     /// </summary>
     public IObservable<string> Copy(string sourcePath, string targetNamespace, bool force = false)
     {

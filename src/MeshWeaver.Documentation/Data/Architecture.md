@@ -109,6 +109,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Workspace References](WorkspaceReferences)
 - [Content Chunk Navigation](ContentChunkNavigation)
 - [Moving Nodes](MovingNodes) — a move relocates the node and everything that belongs to it, or it refuses
+- [Copy Completeness](CopyCompleteness) — a copy asserts a set equality it never established; the two readings that turn a short enumeration from a silence into a number, and why the failure stops instead of rolling back
 - [Moved-Node Redirects](NodeRedirects) — keeping links alive after a move
 - [MainNode and Rebasing](MainNodeRebasing) — a `with { Namespace = … }` copy un-lists a node with nothing logged
 - [Write Verdict Totality](WriteVerdictTotality) — a write whose base read ends empty answers nobody, and arms no deadline either
