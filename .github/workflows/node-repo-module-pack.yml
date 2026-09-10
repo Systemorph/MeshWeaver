@@ -932,9 +932,11 @@ jobs:
     if: needs.select.result == 'success' && needs.select.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: read
-      id-token: write
+    # Deliberately inherit the caller's token permissions. `basic` callers grant only the reads
+    # they use; the platform CD's `oidc` caller additionally grants `id-token: write`. A called
+    # workflow may maintain or reduce the caller's permissions but cannot elevate them, so naming
+    # `id-token: write` here makes EVERY basic-auth caller fail workflow validation before a job
+    # exists — even though its Azure steps are correctly conditional.
     outputs:
       # The framework identity the PLATFORM host resolves for its /app — what every ledger record
       # and bundle is keyed to (the portal adopts, so the portal's identity is the honest one).
@@ -1181,9 +1183,8 @@ jobs:
     if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
+    # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
+    # callers must remain able to grant `actions: read` without also granting an identity token.
     steps:
       - name: Resolve the content repository's credential
         id: content-repo
@@ -1470,9 +1471,8 @@ jobs:
     needs: [select, prepare, build-workspace]
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: read
-      id-token: write
+    # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
+    # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
     # a matrix with no vectors, so an empty selection has to express itself as "this job does not
     # run". What makes it safe is that `verify` below runs UNCONDITIONALLY and asserts the pairing
