@@ -121,16 +121,21 @@ So the rule for a `Logs` action is:
 
 > **Filter on the text of the line you want to READ, not on the record you want to find.**
 
-Worked example — the `/api/content` 503 discriminator. The line that decides Cause A from Cause B
-is the `HubUnreachableException` message built by `ReadBudget.Unreachable`, and it is a **single
-physical line** because `MessageHub.GetPendingRequestDiagnostics` is a single-line snapshot by
-contract:
+Worked example — the `/api/content` 503 discriminator. The line that separates that route's **three**
+causes is the `HubUnreachableException` message built by `ReadBudget.Unreachable`, and it is a
+**single physical line** because `MessageHub.GetPendingRequestDiagnostics` is a single-line snapshot
+by contract. Both clauses ride on it: `Target:` decides Cause C, `Reader:` then decides A from B, so
+one grep hit carries the whole verdict.
 
 ```text
 MeshWeaver.Mesh.HubUnreachableException: Reading content collection config from '…' gave up
 after 10s — … Reader: Hub portal/reads-… RunLevel=Started Queue(buffer=0,deferred=0,drainsInFlight=0)
-PendingCallbacks=1[…=GetDataRequest@…(10003ms)]
+PendingCallbacks=1[…=GetDataRequest@…(10003ms)] Target: …
 ```
+
+That is the case for fetching the LINE rather than reconstructing the verdict from behaviour: the
+black-box table on that page answers with no portal at all, but it cannot tell you a run level or a
+queue depth.
 
 Ask for that line:
 
@@ -143,7 +148,7 @@ Ask for that line:
     "requestedAction": "Logs",
     "query": "Reading content collection config from",
     "sinceMinutes": 240, "limit": 200,
-    "reason": "Read-only. Adjudicate ContentRoute503 Cause A vs Cause B for the 14:46Z probe failure." } }
+    "reason": "Read-only. ContentRoute503: Target clause for Cause C, then Reader clause for A vs B." } }
 ```
 
 Then read `logQl`, `entryCount` and `truncated` back off the same node, and the matched lines under

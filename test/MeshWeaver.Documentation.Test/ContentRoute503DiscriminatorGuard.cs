@@ -49,6 +49,13 @@ public class ContentRoute503DiscriminatorGuard(ITestOutputHelper output) : HubTe
     /// <summary>The Cause-A / Cause-B field, as the page quotes it.</summary>
     private const string QueueField = "Queue(buffer=";
 
+    /// <summary>
+    /// The clause that decides Cause C, and the one ContentRoute503 says to read FIRST. It must ride
+    /// the same physical line as <see cref="QueueField"/>, or the two halves of the verdict cannot
+    /// be fetched by one filter.
+    /// </summary>
+    private const string TargetClause = "Target:";
+
     /// <summary>A target that exists nowhere — this read is never meant to be answered.</summary>
     private const string AbsentTarget = "TestData/ContentProbe";
 
@@ -94,6 +101,19 @@ public class ContentRoute503DiscriminatorGuard(ITestOutputHelper output) : HubTe
         message.Should().Contain(QueueField,
             "ContentRoute503's discriminator IS this field; it reaches the message only because "
             + "ReadBudget.Unreachable asks the reader hub for GetPendingRequestDiagnostics()");
+        message.Should().Contain(TargetClause,
+            "the TARGET clause is the OTHER half of the verdict — it is what separates Cause C "
+            + "(the owner had not finished STARTING) from Cause A, which the reader clause cannot "
+            + "see because a start-up leaves the reader idle (#3931). ContentRoute503 says to read "
+            + "it FIRST, so it has to be on the line you fetch");
+        // 🚨 CONTROL for the assertion above: the two clauses come from DIFFERENT code — the reader
+        // snapshot alone carries no Target:, so finding both on one line is a fact about the
+        // composed message rather than a substring that was always going to be there.
+        GetHost().GetPendingRequestDiagnostics().Should().NotContain(TargetClause,
+            "GetPendingRequestDiagnostics is the READER half only; the Target clause is "
+            + "ReadBudget.DescribeTarget's. If the snapshot started carrying it, the assertion "
+            + "above would pass without ReadBudget composing the two, and Cause C could go "
+            + "undetectable while this guard stayed green");
         Assert.True(
             !message.Contains('\n') && !message.Contains('\r'),
             "🚨 The /api/content 503 discriminator must stay on ONE physical line. "

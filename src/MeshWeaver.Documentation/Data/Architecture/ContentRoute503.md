@@ -275,10 +275,18 @@ Target: NO LOCAL HUB at '<owner>'
 
 ### The black-box discriminator — no logs required
 
-🚨 This is the durable one, because on `memex.meshweaver.cloud` **the log line the other
-discriminators need is unreachable through the sanctioned API**: `search 'nodeType:Hosting/LogEntry'`
-returns no content-route entries at all, so the ingest carries nothing from this route. Everything
-below is `curl` against the public route.
+🚨 This is the durable one, because it needs **no log at all** — everything below is `curl` against
+the public route, from anywhere, with no credential and no portal.
+
+> 🚨 **It is NOT durable because the log line is unreachable.** That reading — *"`search
+> 'nodeType:Hosting/LogEntry'` returns no content-route entries, so the ingest carries nothing from
+> this route"* — was measured on 2026-09-10 and is a **wrong inference from a correct observation**.
+> `Hosting/LogEntry` is not a feed: it is the output of one `Logs` `Hosting/InstanceAction`, and
+> that portal's whole population is 13 rows from one query about assessment routing. The log line
+> IS reachable through the sanctioned API — see *"What the discriminator costs to obtain"* below and
+> [Log Entries Are a Query Result, Not a Feed](../LogEntriesAreAQueryResult). Prefer the black-box
+> table when you want an answer with no portal access; prefer the line when you want the run level
+> and the queue depths, which the black box cannot give you.
 
 | Observation | Cause C | Cause A | Cause B |
 |---|---|---|---|
@@ -337,10 +345,12 @@ builds (`ReadBudget.cs`), and it reaches a log only because `BlazorHostingExtens
 (Plugins) does `logger.LogWarning(ex, "Content read timed out for {Path}", path)` — the exception
 rides along as the warning's detail. Three things follow, and each has misled a reader:
 
-- **It is greppable, and on ONE line.** `MessageHub.GetPendingRequestDiagnostics` is a single-line
-  snapshot by contract, so `Reader: … Queue(buffer=…) [Executing(…, Nms)] PendingCallbacks=…` sits
-  on the same physical line as the sentence above. *"Read the `Queue(` on the same line"* is
-  therefore literally true — and `ContentRoute503DiscriminatorGuard` (core,
+- **It is greppable, and on ONE line — BOTH clauses.** `MessageHub.GetPendingRequestDiagnostics` is
+  a single-line snapshot by contract, so `Reader: … Queue(buffer=…) [Executing(…, Nms)]
+  PendingCallbacks=…` **and** the `Target: …` clause that decides Cause C both sit on the same
+  physical line as the sentence above. *"Read the `Queue(` on the same line"* is therefore literally
+  true, and one grep hit carries the whole three-way verdict — which is exactly why the line is
+  worth fetching rather than reconstructing. `ContentRoute503DiscriminatorGuard` (core,
   `test/MeshWeaver.Documentation.Test`) fails if a newline ever gets into it.
 - **No level or category filter can select it.** It is a continuation line: the `warn:` header and
   the `MeshWeaver.Hosting.Blazor…` category are on the PRECEDING line, which the log store keeps as
@@ -356,7 +366,8 @@ takes the LogQL, so this is one node and no cluster credential:
 { "namespace": "Ops/Actions", "nodeType": "Hosting/InstanceAction",
   "content": { "$type": "InstanceActionContent", "deployment": "Deployments/memex-cloud",
     "requestedAction": "Logs", "query": "Reading content collection config from",
-    "sinceMinutes": 240, "limit": 200, "reason": "Read-only — adjudicate Cause A vs Cause B." } }
+    "sinceMinutes": 240, "limit": 200,
+    "reason": "Read-only — read the Target clause for Cause C, then the Reader clause for A vs B." } }
 ```
 
 Read `logQl`, `entryCount` and `truncated` back off the run; the matched lines land as
