@@ -29,12 +29,16 @@ namespace MeshWeaver.Mesh;
 /// <para>🚨 <b>TOTALITY IS NOT LIVENESS, and this type gives only the first.</b> A source that
 /// never emits AND never completes — <c>Observable.Never</c>, a request whose response is lost, the
 /// starvation shape behind <see href="https://github.com/Systemorph/MeshWeaver/issues/2742">#2742</see>
-/// — reaches no arm at all, and no composition OVER a source can invent a termination it never
-/// produces. Read the guarantee strictly: <i>if the source terminates, exactly one outcome is
-/// emitted.</i> A leg whose source can starve still owes its own <c>Timeout</c>, exactly as
-/// <c>DispatchInnerCreate</c> (<c>InnerCreateVerdictBound</c>) and the no-op probe
-/// (<c>NodeOpForwardTimeout</c>) carry one — and composing through this type neither adds nor
-/// excuses that bound. See <c>Doc/Architecture/WriteVerdictTotality</c> → "The FOURTH outcome".</para>
+/// — reaches no arm at all, and <c>Of</c> cannot rescue it: every operator it applies
+/// (<c>Take(1)</c>, <c>Select</c>, <c>Catch</c>, <c>DefaultIfEmpty</c>) reacts to a termination and
+/// none MANUFACTURES one. Read the guarantee strictly: <i>if the source terminates, exactly one
+/// outcome is emitted.</i> The operator that DOES manufacture a termination is <c>Timeout</c> — it
+/// is a composition over the source too, and it is the right tool here — so a leg whose source can
+/// starve still owes its own, exactly as <c>DispatchInnerCreate</c>
+/// (<c>InnerCreateVerdictBound</c>) and the no-op probe (<c>NodeOpForwardTimeout</c>) carry one.
+/// Compose <c>Of</c> AROUND that bound and both properties hold; composing through this type alone
+/// neither adds nor excuses it. See <c>Doc/Architecture/WriteVerdictTotality</c> → "The FOURTH
+/// outcome".</para>
 ///
 /// <para>🚨 <b>Empty is NOT a value.</b> <c>DefaultIfEmpty()</c> on the source itself would emit
 /// <c>default(T)</c> — <c>null</c> for a reference type — which the value arm then reads as a real
@@ -65,8 +69,10 @@ internal static class DetachedReplyOutcome
     /// <summary>
     /// <c>value → HasValue</c>, <c>fault → Error</c>, <c>completed empty → CompletedEmpty</c> — one
     /// emission for each of the three terminations Rx delivers, so a subscriber cannot fail to
-    /// answer a source that TERMINATES. It adds no deadline: a source that never terminates still
-    /// reaches nobody, and bounding that is the caller's own job (see the type's remarks).
+    /// answer a source that TERMINATES. <b>It adds no deadline</b> — none of its operators
+    /// manufactures a termination, they only react to one — so a source that never terminates still
+    /// reaches nobody. Bounding that is a <c>Timeout</c> the caller composes UNDER this (see the
+    /// type's remarks).
     ///
     /// <para><c>Take(1)</c> comes FIRST so the outcome is the source's own first terminal: a
     /// source that emits and then faults has already answered, and its late fault must not
