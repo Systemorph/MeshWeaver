@@ -145,27 +145,35 @@ public class ContentReadPaysTheOwningHubsStartupTest(ITestOutputHelper output)
         await _parked.Should().Within(TestTimeouts.Convergence)
             .Emit("the owning hub's start-up must actually be in flight, or this test proves nothing");
 
-        var notification = await coldRead;
+        try
+        {
+            var notification = await coldRead;
 
-        notification.Exception.Should().BeOfType<HubUnreachableException>(
-            "a lapsed read budget is reported as a retryable HubUnreachableException, which "
-            + "BlazorHostingExtensions.ContentFailure maps to 503");
-        var message = notification.Exception!.Message;
-        message.Should().Contain(ColdNodePath,
-            "the diagnostic must name the address that did not answer");
-        message.Should().Contain("STILL STARTING",
-            "the owner exists in this process and has not reached RunLevel=Started — a read "
-            + "DEFERRED behind a start-up is not a lost reply, and saying 'the owning hub never "
-            + "answered' is what made two sessions eliminate the one live cause (#3931)");
-        message.Should().NotContain("NO LOCAL HUB",
-            "the target probe must ask the MESH hub, which hosts every per-node hub — probing the "
-            + "reader (portal/reads-{meshId}, which hosts nothing) answered this for every read "
-            + "alike, so the clause carried no information at all");
-
-        // 🚨 The half that makes the diagnosis a FALSE NEGATIVE rather than a measurement: nothing
-        // about the node changed, only its hub finished starting.
-        _release.OnNext(Unit.Default);
-        _release.OnCompleted();
+            notification.Exception.Should().BeOfType<HubUnreachableException>(
+                "a lapsed read budget is reported as a retryable HubUnreachableException, which "
+                + "BlazorHostingExtensions.ContentFailure maps to 503");
+            var message = notification.Exception!.Message;
+            message.Should().Contain(ColdNodePath,
+                "the diagnostic must name the address that did not answer");
+            message.Should().Contain("STILL STARTING",
+                "the owner exists in this process and has not reached RunLevel=Started — a read "
+                + "DEFERRED behind a start-up is not a lost reply, and saying 'the owning hub never "
+                + "answered' is what made two sessions eliminate the one live cause (#3931)");
+            message.Should().NotContain("NO LOCAL HUB",
+                "the target probe must ask the MESH hub, which hosts every per-node hub — probing "
+                + "the reader (portal/reads-{meshId}, which hosts nothing) answered this for every "
+                + "read alike, so the clause carried no information at all");
+        }
+        finally
+        {
+            // 🚨 In a finally so a failing assertion cannot strand the parked start-up — a hub left
+            // mid-initialization holds its gate until the 120 s buildup timeout, and teardown would
+            // wait behind it. Releasing it is also the half that makes the diagnosis above a FALSE
+            // NEGATIVE rather than a measurement: nothing about the node changed, only its hub
+            // finished starting.
+            _release.OnNext(Unit.Default);
+            _release.OnCompleted();
+        }
 
         var resolution = await ContentFileResolver.Resolve(Mesh, reference)
             .Should().Within(TestTimeouts.Convergence)
