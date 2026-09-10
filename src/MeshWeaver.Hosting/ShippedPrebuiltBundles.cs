@@ -455,20 +455,25 @@ public static class ShippedPrebuiltBundles
             var seal = ReadSealLines(sentinel, readLines);
             if (seal is null)
             {
-                // Say WHICH absence: a publication directory that is gone is a different fact from
-                // one that is present and unsealed, and only the second is worth a re-publish.
-                logger?.LogWarning(
-                    Directory.Exists(sourceDir)
-                        ? "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
-                          + "publication is incomplete (it died before the seal, or it is being "
-                          + "replaced right now: the publisher removes the seal first and restores "
-                          + "it last); NOT seeding it, the sweep compiles instead and the next CI "
-                          + "publish re-publishes the source"
-                        : "ShippedPrebuiltBundles: {SourceDirectory} is gone — its publication "
-                          + "directory disappeared while this pass was reading it (retention, or a "
-                          + "replace that moved the generation); NOT seeding it, the sweep compiles "
-                          + "instead and the next pass reads whatever is published then",
-                    sourceDir, CompletionSentinelFileName);
+                // Say WHICH absence: a publication directory that is GONE is a different fact from
+                // one that is present and unsealed, and only the second is worth a re-publish. Two
+                // literal templates rather than one chosen at runtime — a template that varies is
+                // not greppable in Loki and is invisible to the logging analyzers.
+                if (Directory.Exists(sourceDir))
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
+                        + "publication is incomplete (it died before the seal, or it is being "
+                        + "replaced right now: the publisher removes the seal first and restores it "
+                        + "last); NOT seeding it, the sweep compiles instead and the next CI publish "
+                        + "re-publishes the source",
+                        sourceDir, CompletionSentinelFileName);
+                else
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: {SourceDirectory} is gone — its publication "
+                        + "directory disappeared while this pass was reading it (retention, or a "
+                        + "replace that moved the generation); NOT seeding it, the sweep compiles "
+                        + "instead and the next pass reads whatever is published then",
+                        sourceDir);
                 continue;
             }
             var listed = seal
