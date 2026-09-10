@@ -173,8 +173,23 @@ collected when *all* of these hold, and kept when any one fails:
 |---|---|
 | the pointer | `_current` names it — it is the live publication, however old |
 | the pointer's own health | `_current` could not be resolved to a directory on disk: unreadable, blank, refused, or dangling. Then **every** generation of that source is kept |
-| its own seal | its seal could not be READ — unreadable is never unreferenced |
 | age | its newest write is inside `PreWarm:PrebuiltBundleRetention:MinimumAge` (at least 30 days) |
+
+There is deliberately **no "it could not be read" rule**, and it is not missing: a generation the
+sweep's walk could not enter contributes no files, so it is never *identified* as a publication and
+never becomes a candidate. Unreadable still means kept — it arrives by not being enumerated rather
+than by a branch, which is the stronger of the two. Nor is there a rule on whether the generation was
+sealed: a superseded one is collected on age whether it was sealed, torn, or abandoned mid-upload.
+The entry records which (`HasSentinel`) so an operator can tell a wave of *abandoned* publications —
+a different problem — from ordinary supersession, and that field decides nothing.
+
+**One walk per identity, not one per generation.** The bytes, the newest write and the marker files
+all come from the single recursive enumeration the identity-level sweep already performs. That is
+not a micro-optimisation: the root is an Azure Files share where every enumeration is a network round
+trip, and per-generation walks would have made the cost grow with the number of generations — the
+exact quantity this cleanup exists to bound. It is why `HasSentinel` reports the sentinel's
+*presence* rather than verifying its listing the way the source-level `IsSealed` does; verifying
+would cost one file read per generation per pass to answer a question no rule asks.
 
 A generation under a *collectable* identity is not listed separately: that identity's directory goes
 whole, and its byte count already includes them.

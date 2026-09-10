@@ -117,6 +117,9 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
     private static DateTimeOffset DaysAgo(int days) => Now - TimeSpan.FromDays(days);
 
+    /// <summary>A fixture AGE, not a timeout — for a publication that is in flight right now.</summary>
+    private static DateTimeOffset MinutesAgo(int minutes) => Now - TimeSpan.FromMinutes(minutes);
+
     private PrebuiltBundleSweepPlan PlanNow(
         string? liveVersion = "3.1.0-ci.9000", ImmutableHashSet<string>? stamps = null,
         ImmutableList<PinnedPlatformReference>? pinned = null) =>
@@ -665,6 +668,62 @@ public class PrebuiltBundleRetentionTest : IDisposable
         plan.CollectableGenerations.Select(g => g.Directory).Should().NotContain(modules);
         plan.ProtectedGenerations.Should().NotContainKey(modules);
         Directory.Exists(modules).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 An UNSEALED generation is a publication that died mid-upload — a cancelled run, a network
+    /// fault — and it is collected on AGE like any other superseded one. Deliberately not a
+    /// separate keep rule: `UnsealedGrace` is hours against a 30-day floor, so a branch for it
+    /// could never fire, and an abandoned directory that nothing can ever point at is exactly what
+    /// the sweep exists to reclaim. The entry still RECORDS which it was, so an operator reading
+    /// the plan can tell an abandoned publication from a superseded one.
+    /// </summary>
+    [Fact]
+    public void AnAbandonedGeneration_IsCollectedOnAge_AndTheEntrySaysItWasNeverSealed()
+    {
+        Generation(Live, "plugins", "gen-abandoned", DaysAgo(60), isSealed: false);
+        Generation(Live, "plugins", "gen-superseded", DaysAgo(60));
+        // A publication in flight RIGHT NOW: unsealed and minutes old. Age alone must keep it —
+        // this is what makes "protection is established before `_current` moves" true without a
+        // lease between the publisher and this sweep.
+        var inFlight = Generation(Live, "plugins", "gen-in-flight", MinutesAgo(1), isSealed: false);
+        Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+
+        var plan = PlanNow();
+
+        plan.CollectableGenerations.Select(g => g.Name).Should().Equal("gen-abandoned", "gen-superseded");
+        plan.CollectableGenerations.Single(g => g.Name == "gen-abandoned").HasSentinel.Should().BeFalse();
+        plan.CollectableGenerations.Single(g => g.Name == "gen-superseded").HasSentinel.Should().BeTrue();
+        plan.ProtectedGenerations[inFlight].Should().Contain("retention window");
+    }
+
+    /// <summary>
+    /// 🚨 <c>HasSentinel</c> says the sentinel is THERE — deliberately not that the publication is
+    /// whole. A TORN generation (its seal lists a bundle that is not on disk) still reports
+    /// <c>true</c>, unlike the source-level <c>IsSealed</c>, which does verify the listing. Pinned
+    /// here so nobody later reads the field as "sealed and complete" and builds a rule on it: the
+    /// verdict is age, and the field is a note for the operator.
+    /// </summary>
+    [Fact]
+    public void ATornGeneration_StillReportsItsSentinel_AndIsCollectedOnAgeRegardless()
+    {
+        var torn = Generation(Live, "plugins", "gen-torn", DaysAgo(60));
+        File.WriteAllText(Path.Combine(torn, ShippedPrebuiltBundles.CompletionSentinelFileName), "A.zip\nB.zip\n");
+        File.SetLastWriteTimeUtc(
+            Path.Combine(torn, ShippedPrebuiltBundles.CompletionSentinelFileName), DaysAgo(60).UtcDateTime);
+        Generation(Live, "plugins", "gen-new", DaysAgo(1));
+        Pointer(Live, "plugins", "gen-new");
+
+        var plan = PlanNow();
+
+        plan.CollectableGenerations.Select(g => g.Name).Should().Equal("gen-torn");
+        // The sentinel IS there — the field reports that and nothing more…
+        plan.CollectableGenerations.Single().HasSentinel.Should().BeTrue();
+        // …while the SOURCE-level reading, which does verify the listing, calls the same
+        // publication torn. The two questions are different, and only the source's decides anything.
+        var source = plan.Identities.Single(i => i.Identity == Live).Sources.Single(s => s.Name == "plugins");
+        source.Generations.Single(g => g.Name == "gen-torn").HasSentinel.Should().BeTrue();
     }
 
     /// <summary>An abort collects NOTHING — generations included. A partial picture licenses no deletion, at either level.</summary>

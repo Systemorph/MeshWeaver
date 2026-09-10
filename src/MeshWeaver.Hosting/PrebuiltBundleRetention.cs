@@ -124,18 +124,25 @@ public delegate IObservable<ImmutableList<PinnedPlatformReference>> PinnedPlatfo
 /// <param name="Name">The directory name — the publisher's run-unique publication token.</param>
 /// <param name="Directory">Full path.</param>
 /// <param name="IsCurrent">The source's <c>_current</c> pointer names it — the LIVE publication.</param>
-/// <param name="IsSealed">Its completion sentinel is present and every bundle it lists is on disk.</param>
+/// <param name="HasSentinel">
+/// The completion sentinel is present at its root — so a publication that DIED mid-upload (a
+/// cancelled run, a network fault) is distinguishable from one that was merely superseded, which is
+/// worth an operator's attention for a different reason.
+/// <para>🚨 It says the sentinel is THERE, deliberately not that the publication is whole: unlike
+/// <see cref="PrebuiltSourceEntry.IsSealed"/> it does not verify that every bundle the sentinel
+/// lists is on disk. Nothing here branches on it — a superseded generation is collected on age
+/// whether it was sealed, torn or abandoned — and verifying it would cost one file read per
+/// generation per pass on a share whose generation count is the very thing being cleaned up.</para>
+/// </param>
 /// <param name="NewestWriteUtc">The newest write under it (any file), or the directory's own stamp when it holds none.</param>
 /// <param name="Bytes">Total bytes under it.</param>
-/// <param name="ReadFault">Why its seal could not be READ, or null. A read fault PROTECTS the generation.</param>
 public sealed record PrebuiltGenerationEntry(
     string Name,
     string Directory,
     bool IsCurrent,
-    bool IsSealed,
+    bool HasSentinel,
     DateTimeOffset NewestWriteUtc,
-    long Bytes,
-    string? ReadFault);
+    long Bytes);
 
 /// <summary>One source directory under an identity, as the sweep read it.</summary>
 /// <param name="Name">The source segment (<c>plugins</c>, <c>education</c>, …).</param>
@@ -401,24 +408,61 @@ public static class PrebuiltBundleStore
     {
         var bytes = 0L;
         var newestWrite = new DateTimeOffset(Directory.GetLastWriteTimeUtc(identityDirectory), TimeSpan.Zero);
+        // 🚨 ONE recursive walk per identity, and everything below is DERIVED from it — the identity's
+        // bytes and newest write, each source's newest write, and each generation's bytes, newest
+        // write and whether it carries the files that identify a publication. This used to be one
+        // walk of the identity plus one of every source; adding a walk per generation would have made
+        // it 1 + S + G walks and touched every file three times. On the store this sweep exists for
+        // that is not a micro-optimisation: the root is an Azure Files share, every enumeration is a
+        // network round trip, and the very condition being cleaned up is "one more generation per CI
+        // run" — the cost would grow with exactly the thing the sweep is here to remove.
+        var sourceNewest = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var generationTallies = new Dictionary<(string Source, string Name), GenerationTally>();
         foreach (var file in Directory.EnumerateFiles(identityDirectory, "*", SearchOption.AllDirectories))
         {
             var info = new FileInfo(file);
             bytes += info.Length;
             var write = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
             if (write > newestWrite) newestWrite = write;
+
+            var segments = Path.GetRelativePath(identityDirectory, file)
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                    StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length < 2)
+                continue;
+            var source = segments[0];
+            if (!sourceNewest.TryGetValue(source, out var seenSource) || write > seenSource)
+                sourceNewest[source] = write;
+            // <source>/<name>/… — a candidate generation. `<source>/<file>` (the flat copy) has
+            // length 2 and lands nowhere; `<source>/modules/x.nupkg` DOES land here, and is then
+            // dropped by the positive identification below, which is the whole point of that test.
+            if (segments.Length < 3)
+                continue;
+            var key = (source, segments[1]);
+            if (!generationTallies.TryGetValue(key, out var tally))
+                generationTallies[key] = tally = new GenerationTally();
+            tally.Bytes += info.Length;
+            if (write > tally.NewestWrite) tally.NewestWrite = write;
+            if (segments.Length == 3)
+            {
+                var leaf = segments[2];
+                if (string.Equals(leaf, ShippedPrebuiltBundles.CompletionSentinelFileName, StringComparison.Ordinal))
+                    tally.HasSentinel = true;
+                if (string.Equals(leaf, SealedPublicationIndex.SourceCommitMarkerFileName, StringComparison.Ordinal)
+                    || string.Equals(leaf, SealedPublicationIndex.RepositoryMarkerFileName, StringComparison.Ordinal)
+                    || string.Equals(leaf, ShippedPrebuiltBundles.CompletionSentinelFileName, StringComparison.Ordinal))
+                    tally.IsPublication = true;
+            }
         }
 
         var sources = ImmutableList.CreateBuilder<PrebuiltSourceEntry>();
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory).OrderBy(d => d, StringComparer.Ordinal))
         {
             var sourceName = Path.GetFileName(sourceDirectory);
-            var sourceNewest = new DateTimeOffset(Directory.GetLastWriteTimeUtc(sourceDirectory), TimeSpan.Zero);
-            foreach (var file in Directory.EnumerateFiles(sourceDirectory, "*", SearchOption.AllDirectories))
-            {
-                var write = new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
-                if (write > sourceNewest) sourceNewest = write;
-            }
+            var sourceStamp = new DateTimeOffset(Directory.GetLastWriteTimeUtc(sourceDirectory), TimeSpan.Zero);
+            if (sourceNewest.TryGetValue(sourceName, out var newestFile) && newestFile > sourceStamp)
+                sourceStamp = newestFile;
+            var sourceNewestWrite = sourceStamp;
             // 🚨 Composed under the RESOLVED publication directory (#3461): a pointer may name a
             // generation subdirectory, and the seal lives there, not beside the pointer. The
             // resolution is the READERS' — ShippedPrebuiltBundles.ResolvePublicationPointer is the
@@ -426,12 +470,12 @@ public static class PrebuiltBundleStore
             // what a portal can reach can never drift apart.
             var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
             var publication = pointer.Directory;
-            var generations = ReadGenerations(sourceDirectory, pointer, logger);
+            var sourceGenerations = ReadGenerations(sourceDirectory, sourceName, pointer, generationTallies, logger);
             var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
             if (!File.Exists(sentinel))
             {
-                sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewest, null)
-                    { Generations = generations, PointerFault = pointer.Fault });
+                sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewestWrite, null)
+                    { Generations = sourceGenerations, PointerFault = pointer.Fault });
                 continue;
             }
             try
@@ -441,15 +485,15 @@ public static class PrebuiltBundleStore
                     .Select(l => l.Trim())
                     .Where(l => l.Length > 0)
                     .Any(name => !File.Exists(Path.Combine(publication, name)));
-                sources.Add(new PrebuiltSourceEntry(sourceName, !torn, torn ? null : sealUtc, sourceNewest, null)
-                    { Generations = generations, PointerFault = pointer.Fault });
+                sources.Add(new PrebuiltSourceEntry(sourceName, !torn, torn ? null : sealUtc, sourceNewestWrite, null)
+                    { Generations = sourceGenerations, PointerFault = pointer.Fault });
             }
             catch (Exception ex)
             {
                 // 🚨 Every read failure, not just IOException — a denied ACL is every bit as much
                 // "I cannot evaluate this seal" as a locked file. It PROTECTS the identity.
-                sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewest, $"{ex.GetType().Name}: {ex.Message}")
-                    { Generations = generations, PointerFault = pointer.Fault });
+                sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewestWrite, $"{ex.GetType().Name}: {ex.Message}")
+                    { Generations = sourceGenerations, PointerFault = pointer.Fault });
             }
         }
         return new PrebuiltIdentityEntry(identity, identityDirectory, sources.ToImmutable(), bytes, newestWrite);
@@ -457,6 +501,12 @@ public static class PrebuiltBundleStore
 
     /// <summary>
     /// Every generation directory under one source, with the one the pointer names marked.
+    ///
+    /// <para>🚨 <b>It performs NO recursive walk of its own.</b> The bytes, the newest write and the
+    /// marker files all come from <paramref name="tallies"/> — the single walk of the identity that
+    /// <see cref="ReadIdentity"/> already had to do. Walking each generation here instead would touch
+    /// every file three times per pass on an Azure Files share, and would grow with the exact thing
+    /// this sweep exists to remove.</para>
     ///
     /// <para>🚨 <b>A directory is a generation only on POSITIVE evidence that it is a
     /// publication</b> — it carries one of the files every publication carries
@@ -469,7 +519,11 @@ public static class PrebuiltBundleStore
     /// worst case is bytes that stay.</para>
     /// </summary>
     private static ImmutableList<PrebuiltGenerationEntry> ReadGenerations(
-        string sourceDirectory, PublicationPointer pointer, ILogger? logger)
+        string sourceDirectory,
+        string sourceName,
+        PublicationPointer pointer,
+        Dictionary<(string Source, string Name), GenerationTally> tallies,
+        ILogger? logger)
     {
         List<string> directories;
         try
@@ -496,61 +550,39 @@ public static class PrebuiltBundleStore
             // name", and then the positive test.
             if (string.IsNullOrEmpty(name) || name.StartsWith('_') || name.StartsWith('.'))
                 continue;
-            if (!string.Equals(name, pointer.Named, StringComparison.Ordinal) && !LooksLikeAPublication(directory))
+            var isCurrent = string.Equals(name, pointer.Named, StringComparison.Ordinal);
+            tallies.TryGetValue((sourceName, name), out var tally);
+            if (!isCurrent && tally?.IsPublication != true)
                 continue;
 
-            var bytes = 0L;
-            var newest = new DateTimeOffset(Directory.GetLastWriteTimeUtc(directory), TimeSpan.Zero);
-            string? readFault = null;
-            var isSealed = false;
-            try
-            {
-                foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
-                {
-                    var info = new FileInfo(file);
-                    bytes += info.Length;
-                    var write = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
-                    if (write > newest) newest = write;
-                }
-                var sentinel = Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-                if (File.Exists(sentinel))
-                    isSealed = !File.ReadAllLines(sentinel)
-                        .Select(l => l.Trim())
-                        .Where(l => l.Length > 0)
-                        .Any(bundle => !File.Exists(Path.Combine(directory, bundle)));
-            }
-            catch (Exception ex)
-            {
-                readFault = $"{ex.GetType().Name}: {ex.Message}";
-            }
-
+            // An EMPTY generation directory holds no file the walk could have seen, so its own
+            // stamp is the only reading there is.
+            var newest = tally is null
+                ? new DateTimeOffset(Directory.GetLastWriteTimeUtc(directory), TimeSpan.Zero)
+                : tally.NewestWrite;
             entries.Add(new PrebuiltGenerationEntry(
-                name, directory,
-                IsCurrent: string.Equals(name, pointer.Named, StringComparison.Ordinal),
-                isSealed, newest, bytes, readFault));
+                name, directory, isCurrent,
+                HasSentinel: tally?.HasSentinel ?? false,
+                newest, tally?.Bytes ?? 0L));
         }
         return entries.ToImmutable();
     }
 
-    /// <summary>
-    /// The POSITIVE test: does this directory carry a file that only a publication carries? An
-    /// unreadable directory answers <c>false</c> — it is then never enumerated and so never
-    /// collectable, which is the fail-safe answer.
-    /// </summary>
-    private static bool LooksLikeAPublication(string directory)
+    /// <summary>What the identity's single recursive walk learned about one generation directory.</summary>
+    private sealed class GenerationTally
     {
-        try
-        {
-            return File.Exists(Path.Combine(directory, SealedPublicationIndex.SourceCommitMarkerFileName))
-                || File.Exists(Path.Combine(directory, SealedPublicationIndex.RepositoryMarkerFileName))
-                || File.Exists(Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName));
-        }
-        catch
-        {
-            return false;
-        }
-    }
+        /// <summary>Total bytes under it.</summary>
+        public long Bytes;
 
+        /// <summary>The newest write under it. Always set — a tally exists only once a file was seen.</summary>
+        public DateTimeOffset NewestWrite = DateTimeOffset.MinValue;
+
+        /// <summary>The completion sentinel is present at its root.</summary>
+        public bool HasSentinel;
+
+        /// <summary>It carries a file only a publication carries — the positive identification.</summary>
+        public bool IsPublication;
+    }
     /// <summary>
     /// Decide what may be collected. Pure — no filesystem, no clock — so the rules are testable
     /// exactly as they are enforced.
@@ -740,7 +772,14 @@ public static class PrebuiltBundleStore
         // younger than the window — so a publication in flight can never be collected, and the
         // publisher needs no claim, no lock and no ordering with this sweep. `UnsealedGrace` is
         // deliberately not consulted here: it is hours and the window is at least 30 days, so a
-        // branch for it could never fire, and a check that cannot fail is not a check.
+        // branch for it could never fire, and a check that cannot fail is not a check. Nor is
+        // `HasSentinel`: a superseded generation is collected on age whether it was sealed, torn or
+        // abandoned mid-upload — it records WHICH for the operator, and decides nothing.
+        //
+        // 🚨 There is no "it could not be read" rule here, and it is not missing — a generation the
+        // walk could not enter contributes no files, so it is never IDENTIFIED as a publication and
+        // is therefore never a candidate at all. Unreadable still means kept; it simply arrives by
+        // not being enumerated rather than by a branch, which is the stronger of the two.
         var generationReasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
         var collectableGenerations = ImmutableList.CreateBuilder<PrebuiltGenerationEntry>();
         foreach (var identity in scan.Identities)
@@ -757,8 +796,6 @@ public static class PrebuiltBundleStore
                             ? $"the {ShippedPrebuiltBundles.PublicationPointerFileName} pointer of '{source.Name}' names it — it is the live publication"
                         : source.PointerFault is not null
                             ? $"which generation of '{source.Name}' applies is unknown ({source.PointerFault}) — an inventory that could not be read licenses no deletion"
-                        : generation.ReadFault is not null
-                            ? $"it could not be read ({generation.ReadFault}) — unreadable is never unreferenced"
                         : nowUtc - generation.NewestWriteUtc < minimumAge
                             ? $"within the {minimumAge.TotalDays:N0}-day retention window"
                             : null;
