@@ -126,6 +126,142 @@ bounded below the 45 s the test waited:
 Exactly one terminal is both silent and leaves storage unchanged, and it is the one that requires the
 mirror to already carry the marker. That is the reading; the code that produces it is above.
 
+### 🚨 A correction to that elimination: the bounds compose ADDITIVELY
+
+The table above reads every terminal's deadline from a **common origin** — the NACK — and concludes
+that all of them fall inside the 45 s the test waited. They do not. The re-attempt's bounds are
+**sequential**, and the same page of `LatePatchResponseRegistry` says so about its own window: *"The
+owner-side paths were enumerated as ALTERNATIVES, taking their maximum; in
+`ApplyMeshNodePatchInTurn` they compose ADDITIVELY."* The re-attempt is the same shape:
+
+```
+BaseStateWaitBound (30 s, from SUBSCRIBE)  →  post  →  WriteVerdictBound (31 s, from the POST)
+                                              └─ plus GetMeshNode's 10 s when the base is a phantom
+```
+
+So `VERDICT_TIMEOUT` is due at *(base-read latency) + 31 s*, not at 31 s. A re-attempt whose base
+arrives after 14 s produces its first Warning at 45 s or later — **outside the window the test was
+watching**. The region from T+30 to T+61 is therefore silent BY DESIGN, and the failing observation
+sat inside it.
+
+That does not make the phantom reading wrong; it makes the sighting **under-determined**. It is
+consistent with two things, and this page's change closes the first while the observation contract
+described below closes the second:
+
+1. the re-attempt settled silently against a phantom base (this page), or
+2. the re-attempt had simply not reached any terminal yet, and the test stopped watching first.
+
+## The residual: the write path has TWO no-write exits, and #3633 guarded ONE
+
+`UpdateRemote` decides not to post a patch in two separate places:
+
+| # | gate | where | logs |
+|---|---|---|---|
+| 1 | `IsRecordNoOp(current, updated)` | before anything is serialised | `NO-OP … contentType=…` (Debug; Warning only for a raw `JsonElement`) |
+| 2 | `ComputeMergePatchDiff(...).Count == 0` | after serialisation | `NO-OP … diff empty after serialisation` (Debug) |
+
+Both post nothing, both complete the caller as a **success**, both are Debug. They are one decision
+wearing two coats — and `ReattemptBaseSource`'s phantom test was originally written at its call site
+as **gate 1 alone**. A phantom base that fails record equality but serialises identically therefore
+walked straight past the guard and out through gate 2, into precisely the silent loss the guard
+exists to refuse.
+
+**That pair is not contrived — it is the cache hub's ordinary shape.** Gate 2 exists because "a
+rebuilt-but-identical content slips past the record-Equals check above", and `MeshNode` says which
+cases those are in two places of its own:
+
+- `MeshNode.ContentEquals` compares two `JsonElement`s structurally, but a **MIXED** pair — one
+  `JsonElement`, one typed — is `false` by construction, and says so: *"no `JsonSerializerOptions` is
+  available here to bridge representations"*.
+- `MeshNode.SerializedEquals` enumerates the same witnesses: *"a rebuilt-but-identical typed content,
+  a re-parsed `JsonElement` …, or a content record holding collections (compared by reference) all
+  read as 'changed' while the persisted JSON is byte-identical"*.
+
+And the mixed pair is what this path always has. `UpdateRemote` runs on the **cache hub**, whose
+mirror content is a `JsonElement` because — in `MeshNode.Equals`'s own words — that hub *"does not
+know domain types"*; the caller's lambda produces a **typed** content. So every such write fails gate
+1 by construction and is decided at gate 2, which is precisely where the phantom guard was not
+looking.
+
+The fix is to ask the write path's own question once:
+
+```csharp
+internal static bool PostsNothing(MeshNode current, MeshNode updated, JsonSerializerOptions o)
+    => IsRecordNoOp(current, updated)
+       || ComputeMergePatchDiff(ToJsonObject(current, o), ToJsonObject(updated, o)).Count == 0;
+```
+
+`UpdateRemote` passes `PostsNothing` as `baseAlreadyCarriesTheWrite`, and spells both of its own
+gates through the same helpers, so the guard and the decision cannot drift apart again. The extra
+serialisation is paid **only where the guard runs at all** — a re-attempt whose owner said the write
+never applied — never on a first attempt, a `Conflict` re-attempt, or a write that yields a real
+diff.
+
+## The second half: observing a write through its own contract
+
+The sighting that opened #3477 could not name its own cause, and that was a property of the
+**instrument**, not of the race. Three defects, all in the test:
+
+1. **It waited on a proxy before the contract.** The ground truth was `storage.Read(path)` reaching
+   the marker; the caller's terminal — the only wait with a bound and a diagnosis of its own — was
+   checked *afterwards*. So when `UpdateRemote` was about to report `OwnerUnreachable` with the
+   `corr=` request trail, the test had already failed with `System.TimeoutException : The operation
+   has timed out.` and thrown the explanation away. This is #2819 restated: *anything waiting on a
+   write must bound itself STRICTLY ABOVE the framework's bound, so the framework's terminal wins and
+   names the cause.*
+2. **The decisive bound was a hand-written `45.Seconds()`** — not CI-scaled while every other wait in
+   the same test was `TestTimeouts.Convergence`, and below what one re-enqueue may legitimately cost
+   before the framework gives up (see the additive arithmetic above).
+3. **`[Fact(Timeout = 90_000)]` was BELOW the inner waits on a runner.** `TestTimeouts.Convergence`
+   is 108 s at the CI factor, so on CI xunit killed the test before any inner wait could report.
+   That is not hypothetical: core merge-queue run `34332482683` (2026-09-09, shard 4) failed
+   `LateNackReenqueueCorrelationTest` as a bare *"Test execution timed out after 90000
+   milliseconds"* — no assertion, no named wait — and #3477 has been unable to attribute that
+   sighting since. `TestTimeouts` exists to prevent exactly this: *"the inner bound must be strictly
+   less than the outer one, and that is why both live here."*
+
+The corrected order asserts the caller's terminal first and durable storage second, which is also a
+**strictly stronger** claim than the old poll made: on the owner the ack FOLLOWS the flush
+(`PATCH_MERGE_STAMPED → PATCH_ECHO_SEEN → Flush → ack`), so once the caller holds a success the store
+already holds the value. A phantom success — the write reported saved while no store holds it, which
+is the class this test exists to refuse — now fails on the storage assertion and **says so**, instead
+of hiding inside an anonymous timeout.
+
+🚨 **`TestTimeoutLiteralRatchetGuard` does not see either literal.** It is deliberately narrow — it
+counts `30.Seconds()`, `TimeSpan.FromSeconds(30)` and `Timeout = 30_000` — so a test carrying a
+*different* guessed number is invisible to it. Both of this issue's sightings were that shape
+(`45.Seconds()`, `Timeout = 90_000`), and there are ~700 `Timeout = <literal>` sites in core's test
+tree, so widening the ratchet is a fleet-scale change rather than part of this fix. When you write
+one, write the standard comment beside it: the constant must DOMINATE `TestTimeouts.TestMilliseconds`
+(216 s at the CI factor), because an attribute argument cannot be a property.
+
+## 🚨 Still open: `WriteVerdictBound` is not the bound it says it is
+
+`LatePatchResponseRegistry.WriteVerdictBound` documents itself as *"the outer bound on a
+caller-visible mesh WRITE: the instant `UpdateRemote` gives up and reports `OwnerUnreachable`"*, and
+`TestTimeouts.Convergence` derives from it so that every waiter in the fleet dominates it by
+construction. **For a write that re-enqueues, it is false.** Each attempt arms its own deadline from
+its own post, `MaxOwnerDisposingReenqueues` is 2, and each attempt also pays a base read outside that
+deadline — so the true worst case before a caller sees any terminal is
+
+```
+3 attempts x (BaseStateWaitBound 30 s + GetMeshNode 10 s + WriteVerdictBound 31 s) ≈ 213 s
+```
+
+against a published 31 s. Nothing in this change alters that; the two candidate fixes are a
+maintainer decision, not an implementation detail:
+
+- **Mint the deadline ONCE per write** (at attempt 0's entry) and thread the remaining budget into
+  every re-attempt, exactly as `correlationId` is threaded. The published bound becomes true, and a
+  NACK arriving late in the budget makes the re-attempt fail fast rather than land — a write that
+  would have landed at 90 s is now refused at 31 s with a diagnosis.
+- **Publish the composite bound** instead. Honest, but `TestTimeouts.Convergence` then becomes ~218 s
+  locally and ~654 s on CI, which inflates every convergence wait in the fleet to buy a bound almost
+  nothing needs.
+
+The first is the better shape; it changes caller-visible behaviour on the slow path, so it is stated
+here rather than smuggled in.
+
 🚨 The corroboration is that `ClassifyPatchException`'s own remarks already predicted the shape
 without naming the mechanism: *"Routing more faults here makes that class MORE likely, not less, and
 it is silent when it happens."* The faults it routes are the post-echo ones.
@@ -153,7 +289,16 @@ no cluster, no scheduler and no wall clock are involved:
   for a durable write);
 - a mirror that is behind ⇒ the mirror is used and the authoritative read is **never subscribed**;
 - an ordinary write ⇒ untouched, even when its lambda is a legitimate no-op;
-- an authoritative read that cannot answer ⇒ raises, never falls back.
+- an authoritative read that cannot answer ⇒ raises, never falls back;
+- 🚨 a phantom mirror holding the value as **untyped JSON** against a lambda producing it **typed**
+  ⇒ still rebases on the owner. That case also asserts that the pre-#3477 predicate (`IsRecordNoOp`
+  alone) does **not** see it, so it is a positive control on the gap rather than a restatement of the
+  fix.
+
+🚨 The cases call `MeshNodeStreamHandle.PostsNothing` — the predicate `UpdateRemote` itself passes —
+rather than a local copy of it. An earlier version of this file spelled the record comparison out in
+the test, so the production guard could be narrowed without a single case going red: a test asserting
+a rule nothing under test was using.
 
 🚨 It was falsified by planting the pre-fix behaviour (`=> mirrorBase`, unconditionally) and watching
 it go red. It is deliberately **not** verified by re-running `LateNackReenqueueTest` hoping to catch

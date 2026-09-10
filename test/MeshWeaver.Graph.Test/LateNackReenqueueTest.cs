@@ -51,8 +51,17 @@ namespace MeshWeaver.Graph.Test;
 /// commit's own ack, dispatched to the armed watch; the OwnerDisposing NACK and its re-enqueue
 /// remain the safety net for a merge the owner could not run at all (a post refused by an
 /// already-closing sync hub, a store that completes before the echo). Both paths end in the same
-/// ground truth this test asserts. Without the late watch either verdict is dropped and the
-/// storage poll times out at the pre-write state.</para>
+/// ground truth this test asserts. Without the late watch either verdict is dropped, the caller is
+/// never settled, and durable storage stays at the pre-write state.</para>
+///
+/// <para>🚨 The two assertions are in this order ON PURPOSE — #3477. The CALLER'S TERMINAL is the
+/// only wait here with a contract of its own (<c>UpdateRemote</c> settles every write inside its
+/// own bound and says why), so it is waited on FIRST and durable storage is checked second. The old
+/// order polled storage for a hand-written 45 s — below what one re-enqueue may legitimately cost,
+/// and inside a region that is silent by design — so the failure could only ever read "The
+/// operation has timed out.", with the write's own diagnosis discarded unread. The new order also
+/// makes the claim STRONGER: the owner acks only after its durable flush, so a write reported
+/// committed while no store holds it fails on the storage assertion and says so.</para>
 ///
 /// <para>🚨 Since #2661 the caller is NOT completed at the 2 s bound — a bound expiring is not
 /// a commit, so the write's terminal is the owner's verdict wherever it arrives. Here that
@@ -62,7 +71,17 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    [Fact(Timeout = 90_000)]
+    // 240_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a constant, so
+    // the property cannot be written here. The value must still DOMINATE it — 216 s at the CI
+    // factor (Convergence 108 s x OuterMargin 2) — or the xunit kill pre-empts the inner wait and
+    // the failure cannot say what it was waiting for.
+    //
+    // 🚨 It was 90_000, which is BELOW TestTimeouts.Convergence on a runner (108 s), so every
+    // internal wait in this test was killed anonymously before it could report. That is exactly the
+    // defect TestTimeouts exists to prevent, and it is what the 2026-09-09 sighting of this test's
+    // sibling looked like: "Test execution timed out after 90000 milliseconds", no assertion, no
+    // named wait (#3477).
+    [Fact(Timeout = 240_000)]
     public async Task LateOwnerDisposingNack_AfterOptimisticEmit_ReenqueuesAndLands()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -77,7 +96,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(10.Seconds()).Await(ct);
+            .FirstAsync().Timeout(TestTimeouts.Quick).Await(ct);
 
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         nodeHub.Should().NotBeNull();
@@ -110,7 +129,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
         }), _ => { });
         try
         {
-            await gateEntered.Should().Within(10.Seconds()).Emit(
+            await gateEntered.Should().Within(TestTimeouts.Quick).Emit(
                 "the gated turn must be running on the primary stream's executor before the write");
 
             // Cross-hub cache write — the production mirror path (UpdateRemote via the
@@ -138,7 +157,7 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             // Fence: the patch handler has provably run on the owner (registered the
             // disposal NACK) before the dispose below.
             await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
-                .Should().Within(10.Seconds()).Emit();
+                .Should().Within(TestTimeouts.Quick).Emit();
 
             // Dispose the owner AFTER the caller's response bound has expired — its
             // OwnerDisposing NACK (posted from the ShutDown-phase disposal action) is
@@ -147,26 +166,44 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             nodeHub!.Dispose();
             Output.WriteLine($"[dispose] owner per-node hub disposal invoked for {path}");
 
-            // Ground truth: the write eventually lands in durable storage. Without the
-            // late-NACK re-enqueue the store stays frozen at 'initial' (the parked merge
-            // turn died with the sync hub; nobody re-applies) and this poll times out —
-            // the WaitForPersistedBeyond signature of the TwoSilo failure.
-            var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-                .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
-                .Where(n => n is not null && n.Name == marker)
-                .FirstAsync().Timeout(45.Seconds()).Await(ct);
-            persisted!.Name.Should().Be(marker,
-                "a write whose owner NACKed OwnerDisposing must be re-enqueued and applied on "
-                + "the fresh activation — never silently lost");
-
+            // 🚨 THE CALLER'S TERMINAL IS WAITED ON FIRST, and that ordering is the point.
             // #2661: the re-attempt's verdict is the CALLER's verdict. Chaining it back is what
-            // makes "saved" mean the owner committed, on the late path as much as the early one.
+            // makes "saved" mean the owner committed, on the late path as much as the early one —
+            // and it is the only wait here with a CONTRACT of its own: UpdateRemote settles every
+            // write inside its own bound and says why (VERDICT_TIMEOUT / OwnerUnreachable, carrying
+            // the corr= trail of every attempt). TestTimeouts.Convergence derives from that bound
+            // precisely so this assertion dominates it.
+            //
+            // 🚨 The old order asked durable storage FIRST, for a hand-written 45 s. Storage is a
+            // PROXY with no bound of its own, 45 s is below what one re-enqueue may legitimately
+            // cost before the framework itself gives up (BaseStateWaitBound 30 s, then
+            // WriteVerdictBound 31 s measured from the RE-ATTEMPT's post — additive, not
+            // alternatives), and it is not CI-scaled while every other wait in this test is. So the
+            // window closed inside a region that is silent BY DESIGN and the failure could only ever
+            // read "System.TimeoutException : The operation has timed out." — which is verbatim what
+            // #3477 recorded, with the write's own diagnosis discarded unread.
             await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
                 .Where(_ => callerTerminal is not null || callerError is not null)
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
             callerError.Should().BeNull("the re-enqueued attempt landed, so the caller must see a success");
             callerTerminal!.Name.Should().Be(marker,
                 "the caller's terminal is the verdict of the attempt that actually committed");
+
+            // Ground truth, and now a STRICTLY STRONGER claim than the old poll made. On the owner
+            // the ack FOLLOWS the durable flush (PATCH_MERGE_STAMPED → PATCH_ECHO_SEEN →
+            // IPostCommitFlush.Flush → ack), so the instant the caller holds a success the value is
+            // already in the store. Without the late-NACK re-enqueue the store stays frozen at
+            // 'initial' (the parked merge turn died with the sync hub; nobody re-applies) — and a
+            // PHANTOM success, the write reported saved while no store anywhere holds it, fails
+            // HERE and says so, instead of hiding inside an anonymous storage timeout.
+            var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+                .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
+                .Where(n => n is not null && n.Name == marker)
+                .FirstAsync().Timeout(TestTimeouts.Quick).Await(ct);
+            persisted!.Name.Should().Be(marker,
+                "a write whose owner NACKed OwnerDisposing must be re-enqueued and applied on "
+                + "the fresh activation — never silently lost, and never reported to the caller as "
+                + "committed while durable storage still holds the pre-write state");
         }
         finally
         {

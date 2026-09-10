@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -55,11 +56,21 @@ public class ReattemptBaseIsAuthoritativeTest
 
     private static MeshNode Update(MeshNode node) => node with { Name = Marker };
 
-    private static bool AlreadyCarriesTheWrite(MeshNode node)
-    {
-        var candidate = Update(node);
-        return ReferenceEquals(candidate, node) || Equals(candidate, node);
-    }
+    private static readonly JsonSerializerOptions JsonOptions = new();
+
+    /// <summary>
+    /// 🚨 PRODUCTION's predicate, not a local re-implementation of it. An earlier version of this
+    /// file spelled the record comparison out here, so the guard could be narrowed in
+    /// <c>UpdateRemote</c> without a single case going red — a test asserting a rule nothing under
+    /// test was using. <see cref="MeshNodeStreamHandle.PostsNothing"/> is the one the write path
+    /// calls, so narrowing it now fails <see cref="NeverAppliedReattempt_WhoseMirrorCarriesAPhantomThatIsNotRecordEqual_StillRebasesOnTheOwner"/>.
+    /// </summary>
+    private static bool AlreadyCarriesTheWrite(MeshNode node) =>
+        MeshNodeStreamHandle.PostsNothing(node, Update(node), JsonOptions);
+
+    /// <summary>A typed content payload — what a caller's lambda produces, against a mirror that
+    /// holds the same value as untyped JSON.</summary>
+    private sealed record Payload(string Text);
 
     /// <summary>What a subscriber actually observed — all three Rx terminations, separately.</summary>
     private sealed record Observed(IReadOnlyList<MeshNode> Values, Exception? Error, bool Completed);
@@ -110,6 +121,78 @@ public class ReattemptBaseIsAuthoritativeTest
                 + "against that phantom produces an EMPTY patch, posts nothing, and reports the "
                 + "write as saved when it is in no store at all — #3477's silent loss.");
         phantomNoted.Should().Be(1, "the swap must be nameable in the log, not invisible");
+    }
+
+    /// <summary>
+    /// 🚨 THE RESIDUAL #3633 LEFT OPEN — the same phantom, reached through the write path's OTHER
+    /// no-write exit.
+    ///
+    /// <para><c>UpdateRemote</c> decides not to post a patch in TWO places: the record comparison
+    /// (<c>IsRecordNoOp</c>), and — for a lambda whose output is not record-equal — the SERIALISED
+    /// merge patch coming out empty (<c>NO-OP … diff empty after serialisation</c>). Both post
+    /// nothing, both complete the caller as a SUCCESS, both log at Debug. #3633's phantom guard was
+    /// written as the record comparison alone, so a phantom base that fails record equality but
+    /// serialises identically walked past the guard and out through the second exit — into exactly
+    /// the silent loss the guard exists to refuse.</para>
+    ///
+    /// <para><b>Not a contrived pair — it is the cache hub's ordinary shape.</b>
+    /// <c>MeshNode.ContentEquals</c> compares two <c>JsonElement</c>s structurally, but a MIXED
+    /// pair — one <c>JsonElement</c>, one typed — is <c>false</c> by construction, and says so:
+    /// "no JsonSerializerOptions is available here to bridge representations". The mirror
+    /// <c>UpdateRemote</c> reads lives on the cache hub, "whose hub does not know domain types",
+    /// so its content IS a <c>JsonElement</c>; the caller's lambda produces a TYPED content. Every
+    /// such write is not record-equal and serialises identically when the value has not changed —
+    /// which is exactly what the write path's own comment predicts ("a rebuilt-but-identical
+    /// content slips past the record-Equals check above") and why gate 2 exists at all.
+    /// <c>MeshNode.SerializedEquals</c> documents the same three witnesses.</para>
+    ///
+    /// <para><b>Falsified.</b> Narrowing <c>PostsNothing</c> back to the record comparison alone
+    /// (the pre-#3477 predicate) turns this case red on the BEHAVIOUR assertion, measured:
+    /// <c>Expected value to be "initial" … but found "post-nack-4b7556aa5983"</c> — the re-attempt
+    /// diffing against the phantom, which is the loss itself. The first assertion states why the old
+    /// guard cannot see it; the last states why the write path would nevertheless post nothing.</para>
+    /// </summary>
+    [Fact]
+    public void NeverAppliedReattempt_WhoseMirrorCarriesAPhantomThatIsNotRecordEqual_StillRebasesOnTheOwner()
+    {
+        // The cache hub's mirror carries UNTYPED content; the caller's lambda produces a TYPED
+        // value. ContentEquals refuses that mixed pair outright, and the two serialise identically.
+        static JsonElement Mirrored() =>
+            JsonDocument.Parse("""{"Text":"unchanged"}""").RootElement.Clone();
+        static MeshNode UpdateRebuildingContent(MeshNode node) =>
+            node with { Name = Marker, Content = new Payload("unchanged") };
+
+        var phantom = new MeshNode(Path) { Name = Marker, Version = 5, Content = Mirrored() };
+        var owned = new MeshNode(Path) { Name = "initial", Version = 4, Content = Mirrored() };
+
+        // The two halves of the gap, stated before the behaviour: gate 1 does not see this base,
+        // and the write path would nevertheless post nothing against it.
+        MeshNodeStreamHandle.IsRecordNoOp(phantom, UpdateRebuildingContent(phantom)).Should().BeFalse(
+            "the pre-#3477 guard was this comparison alone, and it does NOT see this phantom — an "
+            + "untyped mirror value and a typed one are never record-equal, whatever they hold");
+
+        var phantomNoted = 0;
+        var observed = Watch(MeshNodeStreamHandle.ReattemptBaseSource(
+            ownerSaidNeverApplied: true,
+            mirrorBase: Observable.Return(phantom),
+            authoritativeBase: Observable.Return<MeshNode?>(owned),
+            baseAlreadyCarriesTheWrite: node =>
+                MeshNodeStreamHandle.PostsNothing(node, UpdateRebuildingContent(node), JsonOptions),
+            path: Path,
+            onPhantomBase: () => phantomNoted++));
+
+        observed.Error.Should().BeNull();
+        observed.Values.Should().ContainSingle().Which.Name.Should().Be("initial",
+            "the owner has just stated it does not hold this write, and the mirror base would have "
+            + "produced an empty patch — posting nothing and reporting success for a write that is "
+            + "in no store at all. #3633 closed that exit for a record-equal no-op; this is the "
+            + "same exit one gate later (#3477)");
+        phantomNoted.Should().Be(1, "the swap must be nameable in the log, not invisible");
+        MeshNodeStreamHandle.PostsNothing(phantom, UpdateRebuildingContent(phantom), JsonOptions)
+            .Should().BeTrue(
+                "…and this is WHY: the write path would post NOTHING against this base, because the "
+                + "serialised merge patch is empty. That — not record equality — is the only "
+                + "measure that decides whether a PatchDataRequest is sent");
     }
 
     /// <summary>

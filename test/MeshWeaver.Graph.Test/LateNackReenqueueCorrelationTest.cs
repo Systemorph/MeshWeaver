@@ -55,7 +55,18 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
                         filter: null));
                 }));
 
-    [Fact(Timeout = 90_000)]
+    // 240_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a constant, so
+    // the property cannot be written here. The value must still DOMINATE it — 216 s at the CI
+    // factor (Convergence 108 s x OuterMargin 2) — or the xunit kill pre-empts the inner wait and
+    // the failure cannot say what it was waiting for.
+    //
+    // 🚨 It was 90_000, and EVERY wait below is TestTimeouts.Convergence, which is 108 s on a
+    // runner. So on CI this test could never report which wait failed — the xunit kill always won.
+    // That is not a hypothetical: core merge-queue run 34332482683 (2026-09-09, shard 4) failed it
+    // as a bare "Test execution timed out after 90000 milliseconds", no assertion and no named
+    // wait, and #3477 has been unable to attribute that sighting since. An outer bound below the
+    // inner one is the exact defect TestTimeouts exists to prevent.
+    [Fact(Timeout = 240_000)]
     public async Task AReenqueuedAttemptInheritsTheCorrelationIdOfTheNackThatCausedIt()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -70,7 +81,7 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(10.Seconds()).Await(ct);
+            .FirstAsync().Timeout(TestTimeouts.Quick).Await(ct);
 
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         Assert.NotNull(nodeHub);
@@ -109,7 +120,7 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
 
         try
         {
-            await gateEntered.Should().Within(10.Seconds()).Emit(
+            await gateEntered.Should().Within(TestTimeouts.Quick).Emit(
                 "the gated turn must be running before the cross-hub write");
 
             captured.Clear();

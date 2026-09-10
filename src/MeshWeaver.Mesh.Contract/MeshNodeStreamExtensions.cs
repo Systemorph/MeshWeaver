@@ -471,6 +471,65 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             + "that read produced no state. The write did NOT land; re-issue it."))));
             });
 
+    /// <summary>
+    /// 🚨 "Does this base make the write a no-op?" — asked in ONE place, because it is asked
+    /// TWICE and the two askers had drifted (issue #3477).
+    ///
+    /// <para><b>The write path decides not to post in two separate places.</b> First
+    /// <see cref="IsRecordNoOp"/>, on the records, before anything is serialised. Then — for a
+    /// lambda whose output is NOT record-equal — again on the SERIALISED merge patch:
+    /// <c>if (patch.Count == 0)</c>, <c>NO-OP … diff empty after serialisation</c>. Both exits
+    /// post no <c>PatchDataRequest</c>, complete the caller as a SUCCESS, and log at
+    /// <c>LogDebug</c>. They are one decision wearing two coats.</para>
+    ///
+    /// <para><b>#3633 guarded only the first coat.</b> <see cref="ReattemptBaseSource"/>'s phantom
+    /// test was written inline at its call site as the record comparison alone, so a phantom base
+    /// that is not record-equal to <c>update(base)</c> but serialises identically walked straight
+    /// past the guard and out through the second exit — into exactly the silent success #3633
+    /// exists to refuse: nothing posted, storage untouched, the caller told the marker was saved,
+    /// not one line above Debug.</para>
+    ///
+    /// <para><b>That pair is not contrived — it is this path's ordinary shape.</b>
+    /// <c>MeshNode.ContentEquals</c> compares two <c>JsonElement</c>s structurally, but a MIXED
+    /// pair — one <c>JsonElement</c>, one typed — is <c>false</c> by construction, and says why:
+    /// "no <c>JsonSerializerOptions</c> is available here to bridge representations". The mirror
+    /// <c>UpdateRemote</c> reads lives on the CACHE hub, which (in <c>MeshNode.Equals</c>'s own
+    /// words) "does not know domain types", so its content IS a <c>JsonElement</c>, while the
+    /// caller's lambda produces a TYPED content. Every such write therefore fails gate 1 by
+    /// construction and is decided at gate 2 — the gate the phantom test was not looking at.
+    /// <c>MeshNode.SerializedEquals</c> enumerates the same witnesses.</para>
+    ///
+    /// <para>So the guard now asks the write path's OWN question, through the write path's own
+    /// serialisation and diff. The extra serialisation is paid only where the guard runs at all —
+    /// a re-attempt whose owner said the write never applied — never on a first attempt, a
+    /// CONFLICT re-attempt, or any write that yields a real diff.</para>
+    /// </summary>
+    /// <param name="current">The candidate base.</param>
+    /// <param name="updated">What the caller's lambda produced from it.</param>
+    /// <param name="jsonOptions">The hub's serializer options — the same ones the write path uses,
+    /// so the diff computed here is the diff that would have been posted.</param>
+    internal static bool PostsNothing(MeshNode current, MeshNode updated, JsonSerializerOptions jsonOptions)
+        => IsRecordNoOp(current, updated)
+            || ComputeMergePatchDiff(
+                ToJsonObject(current, jsonOptions),
+                ToJsonObject(updated, jsonOptions)).Count == 0;
+
+    /// <summary>
+    /// The write path's FIRST no-write gate: a lambda that returned the node unchanged. Named so
+    /// that <see cref="PostsNothing"/> and the write path cannot spell it differently.
+    /// </summary>
+    internal static bool IsRecordNoOp(MeshNode current, MeshNode updated)
+        => ReferenceEquals(updated, current) || Equals(updated, current);
+
+    /// <summary>
+    /// The write path's serialisation of a node for the merge diff — one spelling, so
+    /// <see cref="PostsNothing"/> measures what would actually be posted.
+    /// </summary>
+    internal static System.Text.Json.Nodes.JsonObject ToJsonObject(
+        MeshNode node, JsonSerializerOptions jsonOptions)
+        => JsonSerializer.SerializeToNode(node, jsonOptions) as System.Text.Json.Nodes.JsonObject
+            ?? new System.Text.Json.Nodes.JsonObject();
+
     internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
         IMeshNodeStreamCache? cache = null, bool bypassCache = false)
     {
@@ -1788,11 +1847,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // aside for a still-shutting-down activation, so what answers is the fresh one.
                     Observable.Defer(() => MeshNodeStreamExtensions
                         .GetMeshNode(_workspace.Hub, _path!)),
+                    // 🚨 The write path's OWN no-write decision, not a re-spelling of half of it.
+                    // This used to be the record comparison alone, which is only the FIRST of the
+                    // two exits that post nothing; the second — an empty patch after serialisation
+                    // — walked past the guard into the very silent success it exists to refuse.
+                    // See PostsNothing.
                     baseAlreadyCarriesTheWrite: node =>
-                    {
-                        var candidate = update(node);
-                        return ReferenceEquals(candidate, node) || Equals(candidate, node);
-                    },
+                        PostsNothing(node, update(node), _workspace.Hub.JsonSerializerOptions),
                     path: _path!,
                     onPhantomBase: () => diagLogger?.LogWarning(
                         "[UpdateRemote] PHANTOM_BASE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — "
@@ -1818,7 +1879,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         try
                         {
                             var updated = update(current);
-                            if (ReferenceEquals(updated, current) || Equals(updated, current))
+                            // 🚨 Gate ONE of two. The other is `patch.Count == 0` below. Both are
+                            // spelled through the helpers PostsNothing composes, so the phantom
+                            // guard above and this decision cannot drift apart again (#3477).
+                            if (IsRecordNoOp(current, updated))
                             {
                                 // A lambda that returns the node unchanged is a legitimate
                                 // no-op (an identical upsert, a guard `return node`, a
@@ -1853,12 +1917,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             }
 
                             var jsonOpts = _workspace.Hub.JsonSerializerOptions;
-                            var currentNode = System.Text.Json.JsonSerializer
-                                .SerializeToNode(current, jsonOpts) as System.Text.Json.Nodes.JsonObject
-                                ?? new System.Text.Json.Nodes.JsonObject();
-                            var updatedNode = System.Text.Json.JsonSerializer
-                                .SerializeToNode(updated, jsonOpts) as System.Text.Json.Nodes.JsonObject
-                                ?? new System.Text.Json.Nodes.JsonObject();
+                            var currentNode = ToJsonObject(current, jsonOpts);
+                            var updatedNode = ToJsonObject(updated, jsonOpts);
                             // 🚨 Diff the lambda's ACTUAL output FIRST — before the audit stamp
                             // below. The stamp used to run first, so a lambda that changed
                             // NOTHING (a rebuilt-but-identical content slips past the
@@ -1868,6 +1928,14 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // change earns the audit stamp and the send.
                             var patch = ComputeMergePatchDiff(currentNode, updatedNode);
 
+                            // 🚨 Gate TWO of two, and the one #3633's phantom guard could not see:
+                            // reached precisely when a "rebuilt-but-identical content slips past
+                            // the record-Equals check above" — which on THIS hub is every write,
+                            // because the cache mirror's content is untyped JSON and the caller's
+                            // lambda yields a typed value, a pair MeshNode.ContentEquals refuses
+                            // outright. PostsNothing now covers both gates, so a re-attempt whose
+                            // owner said the write never applied can no longer exit here against a
+                            // phantom base (#3477).
                             if (patch.Count == 0)
                             {
                                 diagLogger?.LogDebug(
