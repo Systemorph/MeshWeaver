@@ -96,6 +96,26 @@ The satellite side was repaired separately — MeshWeaver.Reinsurance now resolv
 
 ## The gate: pointer symmetry, asserted at promotion time
 
+### A failed registry read is not proof of an absent image (#3882)
+
+CD run 8239 pushed `memex-migration:main` at 02:55:08 UTC on September 10, 2026.
+Its verifier reported that tag missing at 02:58:31, but a subsequent registry read returned
+the promoted digest with the same 02:55:08 last-update timestamp and both Linux architectures.
+The checker had discarded the command's error output and called every nonzero exit "MISSING".
+Those observations do not establish a deletion or explain the original read failure.
+
+The checker now retains the registry error and reports the command's exit status for both
+image-index reads and the core/plugins pair tag. It suppresses only Azure CLI's preview warning
+with `--only-show-errors`. Failed reads still fail the gate, are not retried, and do not skip
+the remaining image checks. Use the retained error to investigate the failed operation before
+attributing it to retention, changing registry configuration, or rebuilding an existing image.
+
+The executable regression exercises the real shell checker against successful multi-architecture
+responses, single-architecture responses, missing tags, unavailable reads and refused operations.
+It verifies that all eleven requested identities and pointers are attempted once.
+
+### Required pointers
+
 `check-image-set.sh` takes `--pointers <version>` and, when given it, asserts that **every named
 pointer the promotion publishes resolves — as a `linux/amd64 + linux/arm64` image index — on every
 repository the promotion publishes it to**:
@@ -131,8 +151,9 @@ supposed to produce.**
 
 There is no skip-trapdoor in any of it: nothing is conditioned on whether a variable is set, nothing
 carries `continue-on-error`, and an empty version reaching the flag is reported RED — after the
-per-image diagnostics, so a run whose image leg died still leads with *"`<repo>:<sha>` is MISSING"*
-rather than with a message about a flag.
+per-image diagnostics, so a run whose image leg died first names the image that could not be
+verified, its registry error and the command's exit status, rather than leading with a message
+about a flag. The registry's own diagnostic distinguishes an absent tag from a failed read.
 
 ## The general lesson
 
