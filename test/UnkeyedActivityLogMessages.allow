@@ -43,9 +43,12 @@ src/MeshWeaver.Compiler.Pipeline/NodeTypeCompilationHelpers.cs	1
 # eight GitHubActivityExtensions operations onto them: the `string title` forwarder, the
 # `Log(string, level)` convenience, and the terminal line carrying the command's own ex.Message.
 src/MeshWeaver.GitSync/ActivityRunner.cs	3
-# f.Error (a descendant hub's own refusal), PostFail's `error` (which is also the response text) and
-# the ex.Message arm of the terminal delete failure. All upstream text.
-src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	3
+# f.Error (a descendant hub's own refusal) and the ex.Message arm of the terminal delete failure.
+# Both upstream text. The upsert PostFail left this list in #3917: its refusals now travel as a
+# LocalizableText (English + key + args) from the guard that composes them, so the handler no longer
+# has to re-derive a key it cannot know. The DELETE leg's PostFailed is the same shape and is NOT
+# done — it is the remaining migratable population in this file.
+src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	2
 # Two composed multi-clause run summaries (each folds 6+ conditional notes carrying #604/#3101
 # incident wording) and the stranded-instances report built by NodeTypeInstanceProbe. The
 # content-sync ledger left this list in #3281 — LedgerNode now takes the LogMessage its two callers

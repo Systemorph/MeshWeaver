@@ -214,6 +214,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Markdown Fence Extensions](MarkdownFenceExtensions) — the platform emits a marker, the clients hydrate it; a new fence is always a two-repo change
 - [Localization](Localization) — the viewer's language, resolved explicitly, never from ambient culture
 - [Chrome and Content Language](ChromeAndContentLanguage) — ownership decides the language, and in-flow chrome minimises words
+- [Localized Refusals](LocalizedRefusals) — a `*Response.Error` is a wire field and stays English; the activity transcript is the surface a viewer reads
 - [The Supplied Navigation Rail](SuppliedNavigationRail) — a module supplies its own left-hand index, and core renders it in the order the module gave
 - [The Apps Home](AppsHome)
 - [Content Favicon Rasterization](ContentFaviconRasterization)
