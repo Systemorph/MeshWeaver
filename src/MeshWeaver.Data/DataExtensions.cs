@@ -3413,7 +3413,10 @@ public static class DataExtensions
         GetDataRequest _)
     {
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+        // 🚨 The SHARED stream, never `GetStream(reference, x => x.ReturnNullWhenNotPresent())`: a
+        // configured reduce is uncached, and every read then minted a permanent `sync/` hub on the
+        // owning node hub (#3432). See IWorkspace.GetNullableStream.
+        var stream = workspace.GetNullableStream(reference);
 
         if (stream == null)
             return Observable.Return(new GetDataResponse(null, 0));
@@ -3781,7 +3784,10 @@ public static class DataExtensions
         WorkspaceReference<TReference> reference)
     {
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+        // 🚨 The SHARED stream, never `GetStream(reference, x => x.ReturnNullWhenNotPresent())`: a
+        // configured reduce is uncached, and every read then minted a permanent `sync/` hub on the
+        // owning node hub (#3432). See IWorkspace.GetNullableStream.
+        var stream = workspace.GetNullableStream(reference);
 
         if (stream == null)
             return Observable.Return(new GetDataResponse(null, 0)
@@ -4119,7 +4125,8 @@ public static class DataExtensions
                 "Entity ID must be specified for data deletion. Collection-level deletion is not supported."));
 
         var entityRef = new EntityReference(collection, entityId);
-        var stream = workspace.GetStream(entityRef, x => x.ReturnNullWhenNotPresent());
+        // Shared stream — see IWorkspace.GetNullableStream (#3432).
+        var stream = workspace.GetNullableStream(entityRef);
         if (stream == null)
             return Observable.Return(DeleteUnifiedReferenceResponse.Fail($"Entity not found: {collection}/{entityId}"));
 

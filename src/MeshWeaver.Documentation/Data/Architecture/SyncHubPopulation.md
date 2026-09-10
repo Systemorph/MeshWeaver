@@ -12,6 +12,11 @@ at `RunLevel=Started`** — about 2.7 GB of a 3.5 GB live heap (#3432). This pag
 about where they come from and what is supposed to take them away. It is a **narrowing, not a
 diagnosis**: the sections marked 🚨 NOT ESTABLISHED are still open.
 
+🚨 **The cause was established on 2026-09-10, by experiment on a live replica: the READ path minted one
+`sync/` hub per `GetDataRequest`.** See [The Read Path Minted a Hub Per Read](../ReadPathStreamMinting),
+which also carries the live census that decomposes the population into its holders — and re-scopes the
+evicted-stream mechanism to 1 parked stream in 475.
+
 ## 1. A `sync/` hub is not a population — it is one field of a stream
 
 `SynchronizationStream<T>`'s constructor mints exactly one, unconditionally, for every stream:
