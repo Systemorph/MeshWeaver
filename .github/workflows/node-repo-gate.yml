@@ -1102,7 +1102,7 @@ jobs:
               echo "::error::$dupe reaches this mesh as more than one build — the loader keeps whichever it sees first and the other copy's bytes never enter memory, so callers compiled against the loser silently run the winner (MeshWeaver#3732)."
               awk -v n="$dupe" '$1 == n {printf "          sealed %s %s %s\n", substr($2, 1, 16), ($4 == "declared" ? "as the declared module of" : "as a sibling riding"), $3}' "$DIGESTS" | sort -u
             done < <(awk '{if (!seen[$1 SUBSEP $2]++) d[$1]++} END {for (k in d) if (d[k] > 1) print k}' "$DIGESTS" | sort)
-            echo "::error::the composed module set carries $DIVERGED assembly name(s) at more than one build. A version floor can keep the affected NodeTypes adoptable (MeshWeaver#3934), but cannot make the loader use both builds or prove their behavior agrees. Refusing here is the only point where every copy is visible. Build the whole set in ONE compilation, or stop the divergent copy riding — Doc/Architecture/ModuleOwnedSiblingsRide."
+            echo "::error::the composed module set carries $DIVERGED assembly name(s) at more than one build. A version floor can keep the affected NodeTypes adoptable (MeshWeaver#3934), but cannot make the loader use both builds or prove their behaviour agrees. Refusing here is the only point where every copy is visible. Build the whole set in ONE compilation, or stop the divergent copy riding — Doc/Architecture/ModuleOwnedSiblingsRide."
             exit 1
           fi
           echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s) landed module-relative under /ext/<module>/"
