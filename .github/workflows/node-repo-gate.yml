@@ -996,6 +996,38 @@ jobs:
           MODULE_COUNT=0
           ASSET_MODULES=0
           ASSET_FILES=0
+          # ───── ONE BUILD PER ASSEMBLY NAME, ACROSS THE WHOLE COMPOSED SET (MeshWeaver#3732) ─────
+          # 🚨 A module-owned `MeshWeaver.*` sibling RIDES every bundle that references it, and some
+          # of those siblings are ANOTHER package's declared module (Doc/Architecture/
+          # ModuleOwnedSiblingsRide). That decision stands, and it rests on exactly ONE invariant:
+          # every copy of a name in the set is the SAME BUILD. `MeshWeaver.*` assemblies bind by a
+          # strictly synchronised AssemblyVersion, so the copies are ONE assembly identity — whichever
+          # this host loads FIRST wins the process, and every NodeType the bake compiles is stamped
+          # `mvid:` of THAT build. A portal that loaded another one declines every one of them at
+          # adoption ("dependency record mismatch — built against mvid:A, live is mvid:B"), falls back
+          # to a local compile, and with two replicas holding two builds ping-pongs between them for
+          # ever while the partition serves the default config and its pages render empty.
+          #
+          # 🚨 NOTHING ASSERTED THAT INVARIANT AT THE PRODUCER. The design page believed re-keying
+          # preserved it — bake-scope.sh and module-build-key.py fold a sibling's SOURCES into every
+          # bundle that carries it — but re-keying only makes those bundles REBUILD, and one
+          # publication is composed from SEVERAL independent compilations (MeshWeaver.Plugins: two
+          # `build-workspace` jobs, one per module-pack lane call, plus a
+          # `dotnet build -p:Version=<module version>` per legacy `sdk` entry). Same sources, three
+          # compilations, three MVIDs — measured on memex 2026-09-10, where ONE pod held
+          # MeshWeaver.Markdown.Collaboration in 15 copies and 3 builds, grouped exactly by which
+          # compilation produced them.
+          #
+          # This step is the first point where every copy is in ONE hand, and it is the point where
+          # the damage is done: what the bake loads becomes the record every consumer must match. So
+          # the assertion lives here, over the composed BYTES, and it is a REFUSAL — a publication
+          # carrying two builds of one name is what ReleaseAvailability later answers
+          # `SealedSetInconsistent` for, i.e. NOTHING ROLLS, for the whole fleet, until it is rebuilt.
+          digest_of() {
+            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+            else shasum -a 256 "$1" | cut -d' ' -f1; fi
+          }
+          DIGESTS="${RUNNER_TEMP:-/tmp}/ext-module-builds"; : > "$DIGESTS"
           for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
             u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
             unzip -o -q "$b" -d "$u"
@@ -1007,6 +1039,19 @@ jobs:
               name=$(basename "$1" .dll)
             fi
             test -f "$u/meshweaver/modules/$name.dll" || { echo "::error::$(basename "$b"): meshweaver/modules/$name.dll is missing from the bundle"; exit 1; }
+            # 🚨 DIGESTED FROM THIS BUNDLE'S OWN UNPACKED FOLDER, BEFORE THE MERGE — never from
+            # /ext afterwards. Two bundles that declare the same `module.assemblyName` land in the
+            # SAME /ext/<name>/ directory and the second `cp -R` OVERWRITES the first, so a scan of
+            # /ext cannot see a collision between an artifact bundle and a registry bundle — which
+            # is precisely the case this lane's own notice calls an accident of glob order
+            # (`*.nupkg` before `*.zip`, so a registry copy silently wins). Reading each bundle's own
+            # folder sees every input copy, and names the BUNDLE each one came from — the same
+            # wording `UpdatePolicy.heldReason` uses when the consumer finds it days later.
+            while IFS= read -r dll; do
+              simple="$(basename "$dll" .dll)"
+              printf '%s %s %s %s\n' "$simple" "$(digest_of "$dll")" "$(basename "$b")" \
+                "$(if [ "$simple" = "$name" ]; then echo declared; else echo riding; fi)" >> "$DIGESTS"
+            done < <(find "$u/meshweaver/modules" -maxdepth 1 -type f \( -name 'MeshWeaver.*.dll' -o -name 'MeshWeaver.dll' \) | sort)
             mkdir -p "$EXT/$name"
             cp -R "$u"/meshweaver/modules/. "$EXT/$name/"
             # 🚨 A module bundle carries its STATIC WEB ASSETS separately from the flat closure,
@@ -1041,41 +1086,7 @@ jobs:
             echo "external module composed: $name ($(basename "$b")) — $assets static asset file(s)"
           done
           [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
-          # ───── ONE BUILD PER ASSEMBLY NAME, ACROSS THE WHOLE COMPOSED SET (MeshWeaver#3732) ─────
-          # 🚨 A module-owned `MeshWeaver.*` sibling RIDES every bundle that references it, and some
-          # of those siblings are ANOTHER package's declared module (Doc/Architecture/
-          # ModuleOwnedSiblingsRide). That decision stands, and it rests on exactly ONE invariant:
-          # every copy of a name in the set is the SAME BUILD. `MeshWeaver.*` assemblies bind by a
-          # strictly synchronised AssemblyVersion, so the copies below are ONE assembly identity —
-          # whichever this host loads FIRST wins the process, and every NodeType the bake compiles is
-          # stamped `mvid:` of THAT build. A portal that loaded another one declines every one of them
-          # at adoption ("dependency record mismatch — built against mvid:A, live is mvid:B"), falls
-          # back to a local compile, and with two replicas holding two builds ping-pongs between them
-          # for ever while the partition serves the default config and its pages render empty.
-          #
-          # 🚨 NOTHING ASSERTED THAT INVARIANT AT THE PRODUCER. The design page believed re-keying
-          # preserved it — bake-scope.sh and module-build-key.py fold a sibling's SOURCES into every
-          # bundle that carries it — but re-keying only makes those bundles REBUILD, and one
-          # publication is composed from SEVERAL independent compilations (MeshWeaver.Plugins: two
-          # `build-workspace` jobs, one per module-pack lane call, plus a
-          # `dotnet build -p:Version=<module version>` per legacy `sdk` entry). Same sources, three
-          # compilations, three MVIDs — measured on memex 2026-09-10, where ONE pod held
-          # MeshWeaver.Markdown.Collaboration in 15 copies and 3 builds, grouped exactly by which
-          # compilation produced them.
-          #
-          # This step is the first point where every copy is in ONE hand, and it is the point where
-          # the damage is done: what the bake loads becomes the record every consumer must match. So
-          # the assertion lives here, over the composed BYTES, and it is a REFUSAL — a publication
-          # carrying two builds of one name is what ReleaseAvailability later answers
-          # `SealedSetInconsistent` for, i.e. NOTHING ROLLS, for the whole fleet, until it is rebuilt.
-          digest_of() {
-            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
-            else shasum -a 256 "$1" | cut -d' ' -f1; fi
-          }
-          DIGESTS="${RUNNER_TEMP:-/tmp}/ext-module-builds"; : > "$DIGESTS"
-          while IFS= read -r dll; do
-            printf '%s %s %s\n' "$(basename "$dll" .dll)" "$(digest_of "$dll")" "$(basename "$(dirname "$dll")")" >> "$DIGESTS"
-          done < <(find "$EXT" -mindepth 2 -maxdepth 2 -type f \( -name 'MeshWeaver.*.dll' -o -name 'MeshWeaver.dll' \) | sort)
+          # ───── THE VERDICT ON THE SET (MeshWeaver#3732; the reading is collected above) ─────
           COPIES=$(awk 'END {print NR + 0}' "$DIGESTS")
           NAMES=$(awk '{print $1}' "$DIGESTS" | sort -u | awk 'END {print NR + 0}')
           SHARED=$(awk '{c[$1]++} END {n = 0; for (k in c) if (c[k] > 1) n++; print n}' "$DIGESTS")
@@ -1085,11 +1096,11 @@ jobs:
           # measurement, so the count that would expose it is never hidden. Zero is legitimate only
           # for a repo whose modules carry no `MeshWeaver.*` assembly at all; anywhere else it is the
           # wrong directory, and it is on the log.
-          echo "module set: $COPIES MeshWeaver.* assembly file(s) under /ext, $NAMES distinct name(s), $SHARED carried by more than one module, $DIVERGED carried at more than one BUILD"
+          echo "module set: $COPIES MeshWeaver.* assembly file(s) across $MODULE_COUNT bundle(s), $NAMES distinct name(s), $SHARED carried by more than one bundle, $DIVERGED carried at more than one BUILD"
           if [ "$DIVERGED" -ne 0 ]; then
             while IFS= read -r dupe; do
               echo "::error::$dupe reaches this mesh as more than one build — the loader keeps whichever it sees first, and the other's NodeTypes are declined at adoption (MeshWeaver#3732)."
-              awk -v n="$dupe" '$1 == n {printf "          build %s  composed from module %s%s\n", substr($2, 1, 16), $3, ($3 == n ? "   <- the DECLARED module" : "   <- a RIDING sibling")}' "$DIGESTS" | sort -u
+              awk -v n="$dupe" '$1 == n {printf "          sealed %s %s %s\n", substr($2, 1, 16), ($4 == "declared" ? "as the declared module of" : "as a sibling riding"), $3}' "$DIGESTS" | sort -u
             done < <(awk '{if (!seen[$1 SUBSEP $2]++) d[$1]++} END {for (k in d) if (d[k] > 1) print k}' "$DIGESTS" | sort)
             echo "::error::the composed module set carries $DIVERGED assembly name(s) at more than one build. The bake would stamp every NodeType against whichever copy it loaded first, and every consumer that loaded another would decline them. Build the whole set in ONE compilation, or stop the divergent copy riding — Doc/Architecture/ModuleOwnedSiblingsRide."
             exit 1

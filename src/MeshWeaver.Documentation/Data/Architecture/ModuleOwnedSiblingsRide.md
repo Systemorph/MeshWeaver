@@ -152,15 +152,22 @@ Two consequences, both measured:
 ### The producer asserts it, where every copy is first in one hand
 
 The `ext-modules` composition step of `node-repo-gate.yml` and `node-repo-publish-bake.yml` digests
-every `MeshWeaver.*` assembly it composed under `/ext/<module>/`, groups them by simple name, and
-**refuses a set carrying one name at more than one build** — naming each copy's digest, the module
-folder it came from, and whether it is the DECLARED module or a RIDING sibling, which is the half
-that says which producer to change. It prints its denominator on every run, green or red (copies,
-distinct names, names carried by more than one module, names carried at more than one build), because
-a check pointed at the wrong directory refuses nothing while ticking exactly like a clean
-measurement. Identical copies PASS — that is the decision this page took, and
-`test-module-set-consistency.py` executes both directions plus two falsification arms against the
-lanes' own extracted shell.
+every `MeshWeaver.*` assembly of every bundle it composes, groups them by simple name, and **refuses
+a set carrying one name at more than one build** — naming each copy's digest, the BUNDLE it was
+sealed in, and whether it arrived as the DECLARED module or a RIDING sibling, which is the half that
+says which producer to change (the same wording `UpdatePolicy.heldReason` uses when the consumer
+finds it days later). It prints its denominator on every run, green or red, because a check pointed
+at the wrong directory refuses nothing while ticking exactly like a clean measurement. Identical
+copies PASS — that is the decision this page took, and `test-module-set-consistency.py` executes
+both directions plus two falsification arms against the lanes' own extracted shell.
+
+🚨 **The reading is taken per bundle, BEFORE the merge — never off the composed directory.** The
+landing loop copies each bundle's module folder into `/ext/<module.assemblyName>/`, so two bundles
+declaring the same entry assembly (an artifact bundle and a registry bundle — a precedence the lane's
+own notice calls an accident of glob order, `*.nupkg` before `*.zip`) land in ONE directory and the
+second `cp -R` overwrites the first. Measured against a scan of `/ext`: two bundles carrying
+`MeshWeaver.Alpha` at two builds reported **one** copy and passed. Reading each bundle's own unpacked
+folder has both, and the harness carries that case.
 
 That placement is not incidental: it is the first moment every copy is in one hand, **and** the
 moment the damage is done, since what the bake loads is what every consumer must then match.

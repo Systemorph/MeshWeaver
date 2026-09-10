@@ -96,7 +96,8 @@ def die(message: str) -> None:
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────────────────────
-def make_bundle(path: Path, module: str, rides: dict[str, bytes]) -> None:
+def make_bundle(path: Path, module: str, rides: dict[str, bytes],
+                entry: bytes | None = None) -> None:
     """One module bundle in the shape `ModulePackCommand` writes: a manifest naming the entry
     assembly, the entry DLL, and a FLAT closure beside it — which is where a riding sibling lives."""
     folder = module_folder()
@@ -106,7 +107,7 @@ def make_bundle(path: Path, module: str, rides: dict[str, bytes]) -> None:
             "version": "1.2.3",
             "module": {"assemblyName": module},
         }))
-        archive.writestr(f"{folder}/{module}.dll", b"MZ-entry-" + module.encode())
+        archive.writestr(f"{folder}/{module}.dll", entry or b"MZ-entry-" + module.encode())
         for name, content in rides.items():
             archive.writestr(f"{folder}/{name}.dll", content)
 
@@ -128,6 +129,14 @@ def bundles(tmp: Path, case: str) -> list[Path]:
     elif case == "agreeing":
         make_bundle(out / "alpha.module.nupkg", "MeshWeaver.Alpha", {"MeshWeaver.Shared": BUILD_A})
         make_bundle(out / "beta.module.nupkg", "MeshWeaver.Beta", {"MeshWeaver.Shared": BUILD_A})
+    elif case == "same-entry-two-bundles":
+        # 🚨 The collision a scan of /ext CANNOT see: both bundles declare MeshWeaver.Alpha, so the
+        # landing loop merges them into ONE /ext/MeshWeaver.Alpha/ and the second `cp -R` overwrites
+        # the first. Only a reading taken per bundle, before the merge, has both copies.
+        make_bundle(out / "alpha-artifact.module.nupkg", "MeshWeaver.Alpha", {},
+                    entry=b"MZ-MeshWeaver.Alpha-from-this-run's-artifact")
+        make_bundle(out / "alpha-registry.bundle.zip", "MeshWeaver.Alpha", {},
+                    entry=b"MZ-MeshWeaver.Alpha-from-the-registry\x00")
     elif case == "disjoint":
         make_bundle(out / "alpha.module.nupkg", "MeshWeaver.Alpha", {})
         make_bundle(out / "beta.module.nupkg", "MeshWeaver.Beta", {})
@@ -137,7 +146,7 @@ def bundles(tmp: Path, case: str) -> list[Path]:
 
 
 # ── mutating the real step ──────────────────────────────────────────────────────────────────
-MARKER = "ONE BUILD PER ASSEMBLY NAME"
+MARKER = "THE VERDICT ON THE SET"
 OPENER = 'if [ "$DIVERGED" -ne 0 ]; then'
 
 
@@ -159,7 +168,7 @@ def block_bounds(body: str, lane: str) -> tuple[int, int]:
 
 
 def strip_assertion(body: str, lane: str) -> str:
-    """The lane as it was before #3732: no assertion at all."""
+    """The verdict block removed: the reading still runs, nothing decides on it."""
     start, closer = block_bounds(body, lane)
     lines = body.splitlines()
     out = "\n".join(lines[:start] + lines[closer + 1:])
@@ -170,14 +179,14 @@ def strip_assertion(body: str, lane: str) -> str:
 
 def blind_assertion(body: str, lane: str) -> str:
     """The assertion kept, pointed at an empty directory — what a misdirected check looks like."""
-    needle = 'done < <(find "$EXT" -mindepth 2 -maxdepth 2 -type f'
+    needle = 'done < <(find "$u/meshweaver/modules" -maxdepth 1 -type f'
     if needle not in body:
-        die(f"{lane}: the assertion's `find` is not in the step — the blind arm has nothing to aim "
+        die(f"{lane}: the reading's `find` is not in the step — the blind arm has nothing to aim "
             "elsewhere")
     return body.replace(
         needle,
         'mkdir -p "${RUNNER_TEMP:-/tmp}/nowhere"\n'
-        '          done < <(find "${RUNNER_TEMP:-/tmp}/nowhere" -mindepth 2 -maxdepth 2 -type f')
+        '              done < <(find "${RUNNER_TEMP:-/tmp}/nowhere" -maxdepth 1 -type f')
 
 
 # ── cases ───────────────────────────────────────────────────────────────────────────────────
@@ -201,13 +210,13 @@ def case_divergent_is_refused(lane: str, body: str, tmp: Path) -> None:
     combined = result.stdout + result.stderr
     missing = [needle for needle in
                ("MeshWeaver.Shared reaches this mesh as more than one build",
-                "a RIDING sibling",
+                "as a sibling riding",
                 "1 carried at more than one BUILD")
                if needle not in combined]
     if missing:
         fail(f"{lane}: the refusal does not say what is wrong — missing {missing}")
         return
-    digests = {chunk.split()[1] for chunk in combined.splitlines() if "composed from module" in chunk}
+    digests = {chunk.split()[1] for chunk in combined.splitlines() if chunk.strip().startswith("sealed ")}
     if len(digests) != 2:
         fail(f"{lane}: the refusal named {len(digests)} build(s); an operator needs BOTH to tell "
              "which producer to change")
@@ -224,11 +233,43 @@ def case_declared_vs_riding_is_labelled(lane: str, body: str, tmp: Path) -> None
         fail(f"{lane}: a bundle riding a DIFFERENT build of another package's DECLARED module "
              "passed — that is the exact shape measured on memex")
         return
-    if "<- the DECLARED module" not in combined or "<- a RIDING sibling" not in combined:
+    if ("as the declared module of" not in combined
+            or "as a sibling riding" not in combined):
         fail(f"{lane}: the refusal does not distinguish the declared copy from the riding one, "
              "which is the half that tells an operator which producer to change")
         return
     ok(f"{lane}: declared-vs-riding divergence is refused and each copy's ROLE is named")
+
+
+def case_same_entry_from_two_bundles_is_refused(lane: str, body: str, tmp: Path) -> None:
+    """🚨 The collision a scan of the COMPOSED directory cannot see.
+
+    Two bundles declaring the same `module.assemblyName` land in ONE `/ext/<name>/` and the second
+    `cp -R` overwrites the first — the lane's own notice calls the precedence between an artifact
+    bundle and a registry bundle an accident of glob order. So the reading has to be taken per
+    bundle, before the merge; a version of this check that scanned `/ext` afterwards passed here.
+    """
+    work = tmp / "same-entry"
+    work.mkdir()
+    result = run_step(body, work, bundles(tmp, "same-entry-two-bundles"))
+    line = summary_line(result.stdout)
+    print(f"        {line or '(no denominator line)'}")
+    combined = result.stdout + result.stderr
+    if result.returncode == 0:
+        fail(f"{lane}: two bundles declared MeshWeaver.Alpha at DIFFERENT builds and the step "
+             "exited 0 — the merge hid one of them, so the reading is being taken after the "
+             "collision instead of before it")
+        return
+    if "MeshWeaver.Alpha reaches this mesh as more than one build" not in combined:
+        fail(f"{lane}: the refusal does not name MeshWeaver.Alpha as the colliding entry")
+        return
+    named = {chunk.split()[-1] for chunk in combined.splitlines()
+             if chunk.strip().startswith("sealed ")}
+    if named != {"alpha-artifact.module.nupkg", "alpha-registry.bundle.zip"}:
+        fail(f"{lane}: the refusal names {sorted(named)} rather than both source bundles — an "
+             "operator cannot tell which producer to change")
+        return
+    ok(f"{lane}: two bundles declaring one module at two builds are refused, both bundles named")
 
 
 def case_agreeing_copies_pass(lane: str, body: str, tmp: Path) -> None:
@@ -242,7 +283,7 @@ def case_agreeing_copies_pass(lane: str, body: str, tmp: Path) -> None:
              "decision (ModuleOwnedSiblingsRide) and byte equality is the invariant — a check that "
              f"refuses agreement refuses 19 of 37 bundles. stderr: {result.stderr.strip()[-400:]}")
         return
-    if "1 carried by more than one module" not in line:
+    if "1 carried by more than one bundle" not in line:
         fail(f"{lane}: the step passed but its denominator does not show it SAW the shared copies "
              f"({line!r}) — a check that looked at nothing passes the same way")
         return
@@ -261,7 +302,7 @@ def case_disjoint_reports_a_denominator(lane: str, body: str, tmp: Path) -> None
     if result.returncode != 0:
         fail(f"{lane}: a set with no shared sibling was refused: {result.stderr.strip()[-400:]}")
         return
-    if not line.startswith("module set: 2 MeshWeaver.* assembly file(s)"):
+    if not line.startswith("module set: 2 MeshWeaver.* assembly file(s) across 2 bundle(s)"):
         fail(f"{lane}: the two composed entry assemblies are not in the denominator ({line!r}) — "
              "the assertion is not reading the entries, so a module composed twice at two builds "
              "would be invisible to it")
@@ -300,6 +341,7 @@ def case_blind_arm_shows_its_zero(lane: str, body: str, tmp: Path) -> None:
 CASES = (
     case_divergent_is_refused,
     case_declared_vs_riding_is_labelled,
+    case_same_entry_from_two_bundles_is_refused,
     case_agreeing_copies_pass,
     case_disjoint_reports_a_denominator,
     case_strip_arm_goes_green,
