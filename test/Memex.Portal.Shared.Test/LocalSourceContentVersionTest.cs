@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -34,21 +35,21 @@ public class LocalSourceContentVersionTest(ITestOutputHelper output) : MonolithM
             var source = PackageSources.FromRepo(Mesh, root, "", nodeRepo: PackageSources.IsNodeRepoFormat("node-repo"));
             Assert.NotNull(source);
 
-            var first = (await source.ListPackages("HEAD").Should().Within(30.Seconds()).Emit()).Single();
-            var unchanged = (await source.ListPackages("HEAD").Should().Within(30.Seconds()).Emit()).Single();
+            var first = (await source.ListPackages("HEAD").Should().Within(TestTimeouts.Quick).Emit()).Single();
+            var unchanged = (await source.ListPackages("HEAD").Should().Within(TestTimeouts.Quick).Emit()).Single();
             unchanged.Version.Should().Be(first.Version, "an unchanged source must keep its version");
 
             // Keep both the byte count and timestamp: neither is evidence of equal content.
             var modified = File.GetLastWriteTimeUtc(path);
             File.WriteAllBytes(path, [68, 69, 70]);
             File.SetLastWriteTimeUtc(path, modified);
-            var edited = (await source.ListPackages("HEAD").Should().Within(30.Seconds()).Emit()).Single();
+            var edited = (await source.ListPackages("HEAD").Should().Within(TestTimeouts.Quick).Emit()).Single();
             edited.Version.Should().NotBe(first.Version, "a mounted source version must identify its content, including equal-length edits");
 
             // Infrastructure outside the package payload must not move the advertised version.
             Directory.CreateDirectory(Path.Combine(root, ".git"));
             File.WriteAllText(Path.Combine(root, ".git", "HEAD"), "ref: refs/heads/elsewhere");
-            var infrastructureOnly = (await source.ListPackages("HEAD").Should().Within(30.Seconds()).Emit()).Single();
+            var infrastructureOnly = (await source.ListPackages("HEAD").Should().Within(TestTimeouts.Quick).Emit()).Single();
             infrastructureOnly.Version.Should().Be(edited.Version);
         }
         finally
