@@ -907,12 +907,24 @@ public static class ShippedPrebuiltBundles
                                     .Aggregate(default(SeedTally), (total, one) => total + one)
                                     .Do(tally =>
                                     {
+                                        // 🚨 THE UNITS ARE BUNDLE ENTRIES (#3703). This counts
+                                        // ASSEMBLIES whose bytes are on the store — two bundles may
+                                        // legitimately name the same NodeType — and it says nothing
+                                        // about how many NodeTypes a later reader will find current,
+                                        // because that reader judges each type from its RECORD. The
+                                        // two were read as one population on memex's 2026-09-08
+                                        // 00:31 boot ("78 adopted" against the sweep's "baked=5"),
+                                        // so the line now names its own denominator.
                                         logger?.LogInformation(
                                             "ShippedPrebuiltBundles: {Covered} prebuilt assembly(ies) from "
                                             + "{Bundles} shipped bundle(s) under {Directory} are backed by "
                                             + "the assembly store — {Adopted} adopted now, {Current} already "
                                             + "current and skipped WITHOUT activating their NodeType hubs — "
-                                            + "in {Elapsed}",
+                                            + "in {Elapsed}. Counted in ASSEMBLIES (bundle entries — two "
+                                            + "bundles may name one NodeType); the bake sweep's counts are "
+                                            + "over NODETYPES judged from their records, so the two are not "
+                                            + "the same population and a difference between them is not a "
+                                            + "disagreement (#3703)",
                                             tally.Covered, bundles.Count, dir, tally.Adopted,
                                             tally.AlreadyCurrent, DateTimeOffset.UtcNow - startedAt);
                                         // 🚨 A mount that backed NOTHING needs its reason at the SAME level as
