@@ -1894,6 +1894,12 @@ does:
 3. A partition you CAN read, asked the same three ways, as the negative control — otherwise a
    broken instrument reads like a deleted node.
 
+🚨 **Step 2 leans on a bypass that is itself under review (#3890).** Autocomplete answers without
+the caller's identity, which is what makes it a witness here and is also a disclosure surface. If
+it starts filtering, this control dies with it — so whichever change lands must replace step 2 in
+the same diff. The durable substitute is the system-side read: the pod's `nodetype_bake` payload,
+or asking the partition's owner.
+
 **So a zero from this sweep is not a green mesh; it is a green *readable* mesh.** State the
 denominator with the result — "0 of N NodeTypes over M readable partitions" — and when the deploy
 being gated spans partitions the sweeper has no grant on, the honest instruments are the ones that
