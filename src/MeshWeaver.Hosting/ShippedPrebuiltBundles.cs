@@ -69,6 +69,42 @@ public static class ShippedPrebuiltBundles
     public const string CompletionSentinelFileName = "_complete";
 
     /// <summary>
+    /// 🚨 THE seal read, in ONE place (#3876): the sentinel's lines, or <c>null</c> when the
+    /// sentinel is not there AT THE OPEN. Every reader of
+    /// <see cref="CompletionSentinelFileName"/> goes through here —
+    /// <see cref="CompletePublishedBundlesOf"/> in this file, and the three catalogue readings
+    /// (<c>PublishedBundleCatalogue.SealedPublicationOf</c>, <c>CompletePublicationOf</c> and
+    /// <c>DeclaredBundlesOf</c>, which delegate to this method).
+    ///
+    /// <para><b>Why the existence check cannot lead.</b> The publisher UNSEALS before it
+    /// republishes and re-seals LAST (<c>publish-bake-bundles.sh</c>), and retention deletes a
+    /// sentinel before removing an identity — so a seal observed by <c>File.Exists</c> can be gone
+    /// by the time the read opens it. <c>File.Exists</c> followed by <c>File.ReadAllLines</c>
+    /// therefore throws <see cref="FileNotFoundException"/> (or
+    /// <see cref="DirectoryNotFoundException"/>, which is what a removed parent throws) for a
+    /// condition every one of these readers already has a correct answer for. Only the OPEN can
+    /// decide whether a seal is readable.</para>
+    ///
+    /// <para>🚨 <b>Only ABSENCE is classified.</b> A seal that is present but unreadable — locked,
+    /// denied, a short read — is NOT an absent seal, and must keep surfacing: answering "torn" for
+    /// it would let a permanent fault wear the self-healing "come back in a moment" costume.</para>
+    /// </summary>
+    /// <param name="sentinel">The full path of the sentinel file.</param>
+    /// <param name="readLines">The read to perform. Tests inject one that removes the seal AT the
+    /// open, which is the only way to exercise the race deterministically.</param>
+    public static string[]? ReadSealLines(string sentinel, Func<string, string[]>? readLines = null)
+    {
+        try
+        {
+            return (readLines ?? File.ReadAllLines)(sentinel);
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 🚨 The publication POINTER of a source directory (must match the <c>POINTER</c> in
     /// <c>.github/scripts/publish-bake-bundles.sh</c>): one line naming the SUBDIRECTORY that
     /// holds the publication which currently applies.
@@ -386,8 +422,15 @@ public static class ShippedPrebuiltBundles
     /// before the sentinel) or a listed-but-missing bundle (torn beyond the seal) skips that
     /// WHOLE source, loudly, and the sweep compiles instead. Runs inside the seeding pool's
     /// blocking leg.
+    ///
+    /// <para>🚨 Skipping one source is the whole point: a seal that is absent — including one the
+    /// publisher removes WHILE this pass reads it (#3876) — must never abandon the other sources
+    /// under the same identity. The read goes through <see cref="ReadSealLines"/>, which classifies
+    /// absence at the open and lets every other I/O failure surface.</para>
     /// </summary>
-    private static List<string> CompletePublishedBundlesOf(string identityDirectory, ILogger? logger)
+    /// <param name="readLines">Test seam: the seal read to perform. Production passes none.</param>
+    internal static List<string> CompletePublishedBundlesOf(
+        string identityDirectory, ILogger? logger, Func<string, string[]>? readLines = null)
     {
         var bundles = new List<string>();
         foreach (var source in Directory
@@ -401,16 +444,39 @@ public static class ShippedPrebuiltBundles
             // migration is a silent wrong answer rather than a missing one.
             var sourceDir = PublicationDirectoryOf(source, logger);
             var sentinel = Path.Combine(sourceDir, CompletionSentinelFileName);
-            if (!File.Exists(sentinel))
+            // 🚨 #3876: the OPEN decides absence, never a preceding File.Exists. The publisher
+            // unseals before it republishes (several times an hour during a release) and retention
+            // unseals before it removes an identity, so an existence check here observed a seal
+            // that the read then failed to open — and the FileNotFoundException travelled to
+            // SeedBundles' outer Catch, which abandons the WHOLE identity's adoption pass. One
+            // source being replaced mid-boot made every OTHER sealed source on that identity
+            // recompile too. An absent seal is a fact this loop already answers correctly: skip
+            // THIS source, loudly, and seed the rest.
+            var seal = ReadSealLines(sentinel, readLines);
+            if (seal is null)
             {
-                logger?.LogWarning(
-                    "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
-                    + "publication is incomplete (it died before the seal); NOT seeding it, the "
-                    + "sweep compiles instead and the next CI publish re-publishes the source",
-                    sourceDir, CompletionSentinelFileName);
+                // Say WHICH absence: a publication directory that is GONE is a different fact from
+                // one that is present and unsealed, and only the second is worth a re-publish. Two
+                // literal templates rather than one chosen at runtime — a template that varies is
+                // not greppable in Loki and is invisible to the logging analyzers.
+                if (Directory.Exists(sourceDir))
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
+                        + "publication is incomplete (it died before the seal, or it is being "
+                        + "replaced right now: the publisher removes the seal first and restores it "
+                        + "last); NOT seeding it, the sweep compiles instead and the next CI publish "
+                        + "re-publishes the source",
+                        sourceDir, CompletionSentinelFileName);
+                else
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: {SourceDirectory} is gone — its publication "
+                        + "directory disappeared while this pass was reading it (retention, or a "
+                        + "replace that moved the generation); NOT seeding it, the sweep compiles "
+                        + "instead and the next pass reads whatever is published then",
+                        sourceDir);
                 continue;
             }
-            var listed = File.ReadAllLines(sentinel)
+            var listed = seal
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .OrderBy(l => l, StringComparer.Ordinal)
