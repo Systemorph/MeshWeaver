@@ -1514,9 +1514,14 @@ Leg 1 varies the `MetadataReference` instances. Leg 2 varies the instances **and
 mappings. Leg 4 varies the source shape. Leg 3 leaves the emit altogether. **All four execute the
 same `Microsoft.CodeAnalysis.dll` and `Microsoft.CodeAnalysis.CSharp.dll`** — the same loaded
 `Assembly` objects, the same mapped image, the same JIT-compiled native code, the same statics. Those
-two files contain every symbol the verdict names: `Microsoft.Cci.MetadataWriter`,
-`NamedTypeSymbol.AsNestedTypeDefinitionImpl`, and the `ITypeDefinitionMember.ContainingTypeDefinition`
-getter.
+two files contain every symbol the verdict names — and **the fault spans both of them**, measured by
+scanning the 5.9.0 assemblies rather than assumed:
+
+| symbol | `Microsoft.CodeAnalysis.dll` | `Microsoft.CodeAnalysis.CSharp.dll` |
+|---|---|---|
+| `FullMetadataWriter`, `GetConsolidatedTypeParameters` (the caller, and the two stack frames) | **present** | absent |
+| `AsNestedTypeDefinitionImpl` (the guard that must answer FALSE) | absent | **present** |
+| `ITypeDefinitionMember` (the getter that throws, on `NamedTypeSymbol`) | present | **present** |
 
 So `BELOW-ROSLYN`'s closing sentence — *"the broken state is below Roslyn (CLR heap / JIT / GC), so no
 reference-set change can fix it"* — reads **"not the references"** as **"not Roslyn"**, and there is a
@@ -1537,8 +1542,9 @@ analogue of what leg 2 did for CoreLib:
 1. Create a collectible `AssemblyLoadContext` and load **both** Roslyn assemblies into it from
    *freshly read bytes* (`LoadFromStream(new MemoryStream(File.ReadAllBytes(location)))`) — fresh
    managed bytes, no shared mmap, no shared page-cache pages, and a fresh JIT from IL.
-   Loading only `Microsoft.CodeAnalysis.CSharp.dll` is a dead probe: `MetadataWriter` lives in
-   `Microsoft.CodeAnalysis.dll`, so that one must be private too or the leg tests nothing.
+   Per the table above this is not a detail: the caller and the guard live in **different**
+   assemblies, so loading either one alone is a dead probe that leaves half the fault on the shared
+   copy.
 2. Drive the same `EmitCanarySource` through the private copy by reflection and record the outcome.
 
 | verdict | what it settles |
