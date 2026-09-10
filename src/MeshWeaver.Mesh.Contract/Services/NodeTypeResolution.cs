@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -83,6 +84,22 @@ public static class NodeTypeResolution
         + "type that exists. (Updating this node WITHOUT changing its NodeType is always allowed, "
         + "so an already-mistyped node can still be repaired by naming a type that resolves.)";
 
+    /// <summary>The catalog key whose English is <see cref="RejectionMessage"/>.</summary>
+    public const string RejectionMessageKey = "activity.nodeType.notRegistered";
+
+    /// <summary>
+    /// <see cref="RejectionMessage"/> paired with <see cref="RejectionMessageKey"/>, so a write
+    /// boundary that logs it into an activity transcript gets the viewer's language instead of the
+    /// author's. The English is byte-identical to <see cref="RejectionMessage"/> — it IS that call —
+    /// so the wire <c>Error</c> and the transcript fallback cannot drift.
+    /// </summary>
+    /// <param name="path">The node being written.</param>
+    /// <param name="nodeType">The NodeType that does not resolve.</param>
+    /// <returns>The localizable refusal.</returns>
+    public static LocalizableText Rejection(string path, string nodeType) =>
+        LocalizableText.Keyed(RejectionMessage(path, nodeType), RejectionMessageKey,
+            ("path", path), ("nodeType", nodeType));
+
     /// <summary>
     /// The refusal for the case where the existence probe itself FAULTED. 🚨 A verdict and a
     /// non-verdict are not the same answer — the same distinction <c>NodeUpdatePipeline</c> draws
@@ -94,4 +111,21 @@ public static class NodeTypeResolution
         + $"refused rather than risk writing a NodeType that resolves to nothing: {error.Message}. "
         + "This is NOT 'the type does not exist' — do not create anything on the strength of it. "
         + "Retry shortly.";
+
+    /// <summary>The catalog key whose English is <see cref="ProbeFailedMessage"/>.</summary>
+    public const string ProbeFailedMessageKey = "activity.nodeType.probeFailed";
+
+    /// <summary>
+    /// <see cref="ProbeFailedMessage"/> paired with <see cref="ProbeFailedMessageKey"/>. The
+    /// upstream <c>error.Message</c> travels as an ARGUMENT rather than being folded into the key:
+    /// the sentence around it is ours and translates, the fault text is the storage adapter's and
+    /// does not.
+    /// </summary>
+    /// <param name="path">The node being written.</param>
+    /// <param name="nodeType">The NodeType whose existence could not be established.</param>
+    /// <param name="error">The fault the probe raised.</param>
+    /// <returns>The localizable refusal.</returns>
+    public static LocalizableText ProbeFailed(string path, string nodeType, Exception error) =>
+        LocalizableText.Keyed(ProbeFailedMessage(path, nodeType, error), ProbeFailedMessageKey,
+            ("path", path), ("nodeType", nodeType), ("error", error.Message));
 }
