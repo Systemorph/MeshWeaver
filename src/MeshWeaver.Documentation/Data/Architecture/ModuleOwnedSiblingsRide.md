@@ -208,6 +208,18 @@ and there are exactly two:
    platform but leaves `InformationalVersion` at the SDK default, i.e. `$(Version)` — so on the
    `sdk` lane the host module's package version is still compiled into every sibling it rebuilds.
    Carrying #3022's pin across removes that producer without touching a lane.
+🚦 **The refusal reaches a satellite only when that satellite MOVES ITS PIN, so the ordering is
+free.** Every node repo consumes these lanes at a full sha (`uses:
+Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@<40-char sha>`), and moving that
+pin is a deliberate, reviewed act by each repo's own rule. So this assertion is INERT for
+MeshWeaver.Plugins and every other satellite until its pin bump — which is the moment to land the
+remedy below and the pin move together, rather than discovering the refusal on a publish that had
+nowhere to go. Measured 2026-09-10: on today's bytes the strip that #3751 added would keep the
+`MeshWeaver.Markdown.Collaboration` and `MeshWeaver.AI` rides out of the portal-pinned lane (the
+image seeds both), but `MeshWeaver.Maps` is seeded by nothing and is declared by the `floor` call
+while `Northwind` rides it from the `sdk` lane — two compilations, so that is where the refusal
+would first speak.
+
 2. **Stop the ride.** Argued and rejected above, and the argument still holds: `AI` `requires`
    `[Store]` while `Essentials` — which DECLARES `MeshWeaver.Markdown.Collaboration` — `requires`
    `[AI, …]`, so making `AI` resolve the sibling from `Essentials` is a package cycle. It becomes
