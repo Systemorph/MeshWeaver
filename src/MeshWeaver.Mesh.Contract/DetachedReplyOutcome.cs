@@ -19,12 +19,22 @@ namespace MeshWeaver.Mesh;
 ///
 /// <para><b>Totality by construction, not by discipline.</b> Remembering to write a third arm at
 /// each site is exactly the discipline that failed: <c>MeshExtensions</c> states the rule twice in
-/// its own comments and still left the upsert's UPDATE leg on two arms. Composing through
-/// <c>DetachedReplyOutcome.Of</c> makes the source emit <b>exactly one</b> outcome on every path, so the
-/// site cannot be silent whatever the source does — and the leg becomes drivable without a mesh,
-/// which is what makes the empty-completion case testable at all (a live mesh cannot arrange it on
-/// demand — the same reason <c>PresentationScreenExtensions.LastKnownOnFault</c> is observable-in /
-/// observable-out).</para>
+/// its own comments and still left three of its upsert legs on two arms. Composing through
+/// <c>DetachedReplyOutcome.Of</c> turns each of the three terminations Rx DELIVERS into exactly one
+/// outcome, so the site cannot be silent when its source terminates — and the leg becomes drivable
+/// without a mesh, which is what makes the empty-completion case testable at all (a live mesh
+/// cannot arrange it on demand — the same reason
+/// <c>PresentationScreenExtensions.LastKnownOnFault</c> is observable-in / observable-out).</para>
+///
+/// <para>🚨 <b>TOTALITY IS NOT LIVENESS, and this type gives only the first.</b> A source that
+/// never emits AND never completes — <c>Observable.Never</c>, a request whose response is lost, the
+/// starvation shape behind <see href="https://github.com/Systemorph/MeshWeaver/issues/2742">#2742</see>
+/// — reaches no arm at all, and no composition OVER a source can invent a termination it never
+/// produces. Read the guarantee strictly: <i>if the source terminates, exactly one outcome is
+/// emitted.</i> A leg whose source can starve still owes its own <c>Timeout</c>, exactly as
+/// <c>DispatchInnerCreate</c> (<c>InnerCreateVerdictBound</c>) and the no-op probe
+/// (<c>NodeOpForwardTimeout</c>) carry one — and composing through this type neither adds nor
+/// excuses that bound. See <c>Doc/Architecture/WriteVerdictTotality</c> → "The FOURTH outcome".</para>
 ///
 /// <para>🚨 <b>Empty is NOT a value.</b> <c>DefaultIfEmpty()</c> on the source itself would emit
 /// <c>default(T)</c> — <c>null</c> for a reference type — which the value arm then reads as a real
@@ -53,8 +63,10 @@ internal readonly record struct DetachedReplyOutcome<T>(bool HasValue, T? Value,
 internal static class DetachedReplyOutcome
 {
     /// <summary>
-    /// <c>value → HasValue</c>, <c>fault → Error</c>, <c>completed empty → CompletedEmpty</c> —
-    /// one emission on every path, so a subscriber cannot fail to answer.
+    /// <c>value → HasValue</c>, <c>fault → Error</c>, <c>completed empty → CompletedEmpty</c> — one
+    /// emission for each of the three terminations Rx delivers, so a subscriber cannot fail to
+    /// answer a source that TERMINATES. It adds no deadline: a source that never terminates still
+    /// reaches nobody, and bounding that is the caller's own job (see the type's remarks).
     ///
     /// <para><c>Take(1)</c> comes FIRST so the outcome is the source's own first terminal: a
     /// source that emits and then faults has already answered, and its late fault must not
