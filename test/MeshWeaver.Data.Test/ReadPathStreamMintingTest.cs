@@ -146,6 +146,7 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
 
         var blockerEntered = new AsyncSubject<System.Reactive.Unit>();
         var releaseBlocker = 0;
+        Exception? blockerException = null;
         readStream.Hub.InvokeAsync(
             _ =>
             {
@@ -157,7 +158,12 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
                     throw new TimeoutException("The test did not release the shared-read-stream actor.");
                 return Task.CompletedTask;
             },
-            _ => Task.CompletedTask);
+            ex =>
+            {
+                Interlocked.CompareExchange(ref blockerException, ex, null);
+                Volatile.Write(ref releaseBlocker, 1);
+                return Task.CompletedTask;
+            });
 
         await blockerEntered.Should().Within(TestTimeouts.Quick)
             .Emit("the shared stream actor must be occupied before the deletion is issued");
@@ -189,6 +195,8 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
 
         var answer = await answers.Should().Within(TestTimeouts.Convergence)
             .Emit("releasing the shared read actor lets its null frame land and completes the delete");
+        Volatile.Read(ref blockerException).Should().BeNull(
+            "the parked actor turn must complete normally; swallowing a fault would make the ordering assertion vacuous");
         answer.Success.Should().BeTrue();
         readStream.Current?.Value.Should().BeNull(
             "a successful delete response is now a read-after-write consistency boundary");
