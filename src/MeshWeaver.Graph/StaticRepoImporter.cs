@@ -945,7 +945,10 @@ public static class StaticRepoImporter
                 // the attempt node carries the full log, and the next unscoped import re-evaluates
                 // the content instead of trusting a claim nobody checked. The routine webhook path
                 // is unaffected — it is scoped, so it never reached the short-circuit anyway.
-                var isScopedRun = changedNodePaths is not null;
+                // A measured live-source mismatch cannot be bounded by a Git diff, which only
+                // describes changes between commits and may be empty at the recorded commit.
+                var effectiveChangedNodePaths = policy?.Reconcile == true ? null : changedNodePaths;
+                var isScopedRun = effectiveChangedNodePaths is not null;
 
                 // Terminal stamp on the LOCK — through Upsert, the repair-capable verb, so it lands on a
                 // node that may not exist yet (the early-failure path) AND on one left forked by a prior
@@ -1036,7 +1039,7 @@ public static class StaticRepoImporter
                         // 2. Open a FRESH attempt node — the only node this run logs progress to (#919).
                         .SelectMany(_ => Upsert(hub, BookkeepingNode(
                             attemptId, $"{lockName} — attempt {DateTime.UtcNow:u}", ActivityStatus.Running)))
-                        .SelectMany(_ => Run(hub, source, nodes, root, attemptPath, fingerprint, syncMode, logger, policy, changedNodePaths))
+                        .SelectMany(_ => Run(hub, source, nodes, root, attemptPath, fingerprint, syncMode, logger, policy, effectiveChangedNodePaths))
                         // 3. Stamp the verdict on the lock. Succeeded here is what makes the NEXT boot
                         //    skip; ImportedWithErrors stays Warning and a guarded-to-Failed run stays
                         //    Failed, so both re-import — exactly the statuses Run wrote before the split.
@@ -1197,23 +1200,48 @@ public static class StaticRepoImporter
                 // re-import instead of skipping. Eventually-consistent query: a stale miss re-imports
                 // idempotently — wasteful, not wrong, which is the same property that lets two replicas
                 // import concurrently (nothing serialises them; every write on the path is an upsert).
-                var contentSentinel = nodes.FirstOrDefault(n =>
-                    n.NodeType != "PartitionAccessPolicy"
-                    && !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')));
-                if (contentSentinel is null)
-                    return SkipWithGovernanceHeal(); // governance-only source — no content to verify
-
-                return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{contentSentinel.Path}"))
-                    .Take(1)
-                    .SelectMany(sentinelChange =>
+                return ReadNodeManifest(hub, source.Partition).SelectMany(currentManifest =>
+                {
+                    // A success marker is history; this manifest describes the LAST evaluated
+                    // source. B -> A -> B must not skip merely because B succeeded before A
+                    // replaced its nodes. Include the root so a root-only rollback is covered too.
+                    // Older manifests omit the root and safely buy one incremental full pass.
+                    var sourceTokens = nodes.Append(root)
+                        .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(g => g.Key,
+                            g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), hub.JsonSerializerOptions),
+                            StringComparer.OrdinalIgnoreCase);
+                    if (currentManifest.Count != sourceTokens.Count
+                        || sourceTokens.Any(entry => !currentManifest.TryGetValue(entry.Key, out var token)
+                            || !string.Equals(token, entry.Value, StringComparison.Ordinal)))
                     {
-                        if (sentinelChange.Items.Any())
-                            return SkipWithGovernanceHeal();
-                        logger?.LogWarning(
-                            "[StaticRepoImport] {Partition}: marker at {Fingerprint} says imported, but content sentinel '{Path}' is MISSING — self-healing via full re-import.",
-                            source.Partition, fingerprint, contentSentinel.Path);
+                        logger?.LogInformation(
+                            "[StaticRepoImport] {Partition}: historical marker at {Fingerprint} no longer "
+                            + "matches the current import manifest — evaluating the full source.",
+                            source.Partition, fingerprint);
+                        effectiveChangedNodePaths = null;
+                        isScopedRun = false;
                         return Reimport();
-                    });
+                    }
+
+                    var contentSentinel = nodes.FirstOrDefault(n =>
+                        n.NodeType != "PartitionAccessPolicy"
+                        && !n.Segments.Skip(1).Any(seg => seg.StartsWith('_')));
+                    if (contentSentinel is null)
+                        return SkipWithGovernanceHeal(); // governance-only source — no content to verify
+
+                    return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{contentSentinel.Path}"))
+                        .Take(1)
+                        .SelectMany(sentinelChange =>
+                        {
+                            if (sentinelChange.Items.Any())
+                                return SkipWithGovernanceHeal();
+                            logger?.LogWarning(
+                                "[StaticRepoImport] {Partition}: marker at {Fingerprint} says imported, but content sentinel '{Path}' is MISSING — self-healing via full re-import.",
+                                source.Partition, fingerprint, contentSentinel.Path);
+                            return Reimport();
+                        });
+                });
             });
     }
 
@@ -1529,7 +1557,9 @@ public static class StaticRepoImporter
                             // expensive cross-hub upsert + owner re-render. Token is over the RAW source node,
                             // matching what the manifest stored.
                             var token = PartitionSourceFingerprint.ComputeNodeToken(sourceNode, hub.JsonSerializerOptions);
-                            if (target is not null
+                            // Reconcile was requested because this ledger disagrees with the live
+                            // sources; evaluate the write with conflict protection instead of trusting it.
+                            if (policy?.Reconcile != true && target is not null
                                 && manifest.TryGetValue(path, out var prevToken)
                                 && string.Equals(prevToken, token, StringComparison.Ordinal))
                             {
@@ -1890,7 +1920,7 @@ public static class StaticRepoImporter
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteContentSyncLedgers(hub, source.Partition, content, logger)
-                            .SelectMany(_ => WriteManifest(hub, source.Partition, nodes, manifest, changedNodePaths,
+                            .SelectMany(_ => WriteManifest(hub, source.Partition, nodes.Append(root).ToArray(), manifest, changedNodePaths,
                             heldPaths, hub.JsonSerializerOptions, logger)).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →

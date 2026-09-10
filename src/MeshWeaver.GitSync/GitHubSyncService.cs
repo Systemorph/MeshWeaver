@@ -647,7 +647,9 @@ public sealed class GitHubSyncService
             // under-import. This is what stops a routine push from re-materialising the whole
             // partition and storming the live compiler (the memex-cloud outage loop, 2026-07-23).
             var readmePolicy = ReadmeFilePolicy.From(snapshot);
-            var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true
+            // Reconciliation measures drift in the live mesh, not changes between Git commits.
+            // B..B is empty even when another import replaced the live nodes with A.
+            var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true || policy?.Reconcile == true
                 ? Observable.Return<IReadOnlyList<string>?>(null)
                 : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
             return diff.SelectMany(changedFiles =>
