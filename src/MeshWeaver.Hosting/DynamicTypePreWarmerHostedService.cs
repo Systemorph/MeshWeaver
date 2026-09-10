@@ -466,6 +466,7 @@ public sealed class DynamicTypePreWarmerHostedService(
                         // Broken by deleted CONTENT, not by this image — the gate files these
                         // under ContentBroken (never gating); the count keeps them visible here.
                         case PreWarmStatus.NoSources:
+                        case PreWarmStatus.DeclaredSourcesMissing:
                         case PreWarmStatus.UpstreamContentBroken: Interlocked.Increment(ref contentBroken); break;
                         default: Interlocked.Increment(ref faulted); break;
                     }

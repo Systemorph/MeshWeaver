@@ -94,6 +94,12 @@ public static class NodeTypeOperationalContent
         // happened to match this deployment's live inputs would SUPPRESS the one automatic retry a
         // never-compiled failure gets. Stripped on export, preserved from the live node on import.
         "failedBuildInputs",
+        // #3903 — the declared source queries that matched NOTHING when the standing failure was
+        // recorded. Operational for the same reason failedBuildInputs is: it is a measurement of
+        // THIS mesh's content (which nodes a query matches here), so an authored copy would assert
+        // a finding about a partition it was never taken on — and the empty list is the shape that
+        // reads as "checked, all present".
+        "failedSourceQueries",
     };
 
     /// <summary>
