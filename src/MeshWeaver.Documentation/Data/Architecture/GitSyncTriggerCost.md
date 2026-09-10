@@ -211,8 +211,17 @@ that repository off the shared baseline: its 33 siblings — `Store`, `Publish`,
 `BusinessRules`, … — all carried `f4570459…` with `lastSyncedAt` **equal to** `lastSyncAttemptAt`.
 Same repository, same webhook, same schedule; the difference is convergence.
 
+🚨 **Both are on the `Preserved > 0` arm, and it is worth naming HOW that is known**, because it is
+the arm §7's skip turns on. Read again 2026-09-10T19:41Z, `Essentials/_GitSync` was at version 378
+with `lastSyncAttemptAt` **30 minutes old** and `lastSyncOutcome: Imported` — and `Imported` means
+`Failed == 0` and the outcome is not `Failed`, so of `MayAdvanceBaseline`'s three clauses only
+`Preserved > 0` can be holding the baseline. By elimination, on live data. Note that it does **not**
+carry `twoWay`, so its preservation is the *bidirectional prune* protecting server-side additions
+(#604), not two-way overwrite protection — two different mechanisms feeding the same counter.
+
 `Deployments/_GitSync` is the only source in the set carrying `twoWay: true`, i.e. the
-`Preserved > 0` arm — and the **independent** node of the same path on `memex.systemorph.com` reads
+kept-not-overwritten half of the same arm — and the **independent** node of the same path on
+`memex.systemorph.com` reads
 `lastSyncedAt: 2026-08-19T20:06:37Z` against a `lastSyncAttemptAt` of 2026-09-10T15:27:00Z: **22
 days** of attempts that never reconciled. (The two portals hold two independent nodes here, not a
 replica and its lag — read both before concluding anything about either.)
