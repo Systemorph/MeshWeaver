@@ -594,6 +594,13 @@ public static class GitHubSyncSettingsTab
                 ? Esc(LocalizationCatalog.Get("ui.gitSync.atCommit", locale))
                   + $" <span style=\"font-family:monospace;\">{Esc(sha)}</span>"
                 : null,
+            // 🚨 #3945 — a SETTLED source stops attempting, so without this line its recency stamp
+            // simply freezes and the reader has no way to tell "the webhook stopped arriving" from
+            // "the webhook arrives and is deliberately skipped". Rendered only in the settled state,
+            // which is exactly when the frozen dates need explaining.
+            cfg.LastAttemptWasFinal && cfg.LastAttemptedCommitSha is { Length: > 0 }
+                ? Esc(LocalizationCatalog.Get("ui.gitSync.settled", locale))
+                : null,
         };
         return $"<p style=\"{Style}\">{string.Join(" — ", parts.Where(x => x is not null))}</p>";
     }
