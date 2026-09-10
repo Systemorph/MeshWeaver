@@ -90,6 +90,25 @@ and how to reconcile it in the same session. Do not re-derive that list here —
 3. **Is it a measurement in a war story?** Leave it — it is the reason the rule on the page exists.
    Do not run it to "check"; ask the API question the page's rule now points at.
 
+### The one WRITE with no action kind: retiring an inline `env:` entry
+
+Rule 1 has exactly one known miss, and it is a write rather than a read. **Nothing can remove an
+inline `env:` entry from a Deployment.** The chart never rendered one (it emits five fixed portal
+entries and two per gate sidecar, and no values-driven list), the record's `inlineEnv` is
+declarative by contract — *dropping an entry does not delete one* — and `Reconcile`'s only
+configuration remedy, `ReapplyRecord`, is a `helm upgrade`, whose three-way merge removes only what
+helm previously owned. `Audit` detects the drift precisely, under `envLiveOnly` and
+`plainSecretEntries`, so the finding is reported and no remedy can act on it.
+
+The record already carries the intent: `InlineEnvOverride.RetiredBy` names what retires an entry,
+and no code reads it. **The gap is a `RetireInlineEnv` remedy** that removes the keys a record marks
+retired, ordered after `ReapplyRecord` so the key has a declared home before the shadow goes — the
+two-step in
+[DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Retiring a shadow takes two steps"*,
+with the equality precondition that page states. Until it exists, `kubectl set env deploy/<name>
+<KEY>-` is break-glass and the live worked example (MeshWeaver#3201, a plugin-registry credential in
+plaintext on two portals' pod specs) stays open on the instrument, not on the analysis.
+
 ## Related rules decided the same day
 
 - **The Deployment record is the ONE input.** Aspire and Helm render from it; the image receives

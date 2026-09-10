@@ -193,6 +193,48 @@ the pod template, which creates a new ReplicaSet and supersedes an in-flight rol
 `kubectl rollout status` first and hold if a deploy is already in progress — a cleanup that ejects a
 release roll costs more than the shadow it clears.
 
+### 🚨 Step 2 has NO API action — the audit finds it, and no remedy can act on it
+
+Under the 2026-09-08 operating directive every operation is a `Hosting/InstanceAction` the control
+instance's operator executes in-cluster, and a cluster command is break-glass
+([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)). **Step 2 is the one act on
+this page that has no such action.** Four sources say so, and they agree — measured 2026-09-10:
+
+- **The chart cannot render it away, because the chart never rendered it.**
+  `deploy/helm/templates/memex-portal/deployment.yaml` emits exactly **five** inline `env:` entries
+  on the portal container — four `DOTNET_Dbg*`/`DOTNET_CreateDumpDiagnostics` crash-dump variables
+  and, when `selfUpdate.azureClientId` is set, `AZURE_CLIENT_ID` — and exactly **two** on a gate
+  sidecar (`MESH_GRPC_URL`, `MESH_GATE_ADDRESS`). There is no values-driven inline-env list anywhere
+  in the chart: every configurable key reaches the pod through `envFrom`. So **no values edit, in
+  any overlay or on any record, can delete an inline entry — nothing in a repository created one.**
+  The one committed JSON patch in the fleet, `deployments/aks/memex-cloud/portal-patch.json`, adds
+  volumes, mounts, an `envFrom` source, `resources` and a `nodeSelector`, and touches
+  `/containers/0/env` not at all.
+- **The record cannot delete it either, and that is the contract.** `InlineEnvOverride` is
+  declarative: recording an entry does not create one and *dropping it does not delete one*.
+- **`Reconcile` cannot.** Its only configuration remedy is `RepairRemedy.ReapplyRecord` — re-render
+  values from the record and run `hosting-deploy`, which is a `helm upgrade`. Three-way merge
+  removes only what helm previously OWNED, so a live-only inline entry survives it; that is the same
+  measurement (helm v3.21.1 and v4.2.4, positive control) this page already rests on.
+- **`Audit` sees it exactly, twice.** `hosting-audit` reports the key under `envLiveOnly` (an env
+  name on the live portal container that no manifest renders) *and* under `plainSecretEntries` (a
+  name matching `token|secret|key|password` carried as a plain value). The operator's own test suite
+  asserts the finding by its literal name,
+  `env:memex-portal:PluginCatalog__RegistryToken`.
+
+**So the audit names the drift and nothing can repair it.** `kubectl -n <ns> set env
+deployment/<name> <KEY>-` remains the only instrument. Read that under rule 2 of
+OperatingFromThePortal: an audit finding with no remedy is **a gap to file against the Hosting
+package**, not a recipe to promote back into a procedure. The remedy the record's shape already
+anticipates is the one that does not exist — `InlineEnvOverride.RetiredBy` names what retires an
+entry, and no code reads it.
+
+**Why this matters more than one duplicated variable.** MeshWeaver#3201 has outlived three merged
+PRs. Every deferral until 2026-09-08 was about *rollout timing* — a fleet freeze, then the newly
+armed readiness gate (#3404, #3395), then the bake-gate stall (#3663). All three closed by
+2026-09-08. What is left is not a schedule and not a risk: the last step's instrument is the one the
+operating model withdrew, and the entry's `retiredBy` therefore has no lane to travel.
+
 ## What else the record gained
 
 - **`gates`** — the language gate sidecars (`python`, `node`, `pandas`). The chart has been able to
