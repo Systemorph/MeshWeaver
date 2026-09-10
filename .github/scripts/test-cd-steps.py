@@ -39,6 +39,7 @@ import tempfile
 from pathlib import Path
 
 WORKFLOW = ".github/workflows/main-cd.yml"
+MODULE_PACK_WORKFLOW = ".github/workflows/node-repo-module-pack.yml"
 STEP_ID = "release"
 DECIDE_STEP_ID = "decide"
 VERDICT_STEP_ID = "verdict"
@@ -648,6 +649,23 @@ def plugin_module_build_problems(workflow_text: str) -> list[str]:
     return problems
 
 
+def module_pack_permission_problems(workflow_text: str) -> list[str]:
+    """OIDC is selected by the caller, so the called jobs must inherit its permission map."""
+    import yaml
+
+    doc = yaml.safe_load(workflow_text)
+    problems = []
+    if "permissions" in doc:
+        problems.append("the called workflow declares permissions instead of inheriting its caller")
+    for name in ("prepare", "build-workspace", "pack"):
+        job = (doc.get("jobs") or {}).get(name) or {}
+        if "permissions" in job:
+            problems.append(
+                f"{name} declares permissions instead of inheriting the caller's login mode"
+            )
+    return problems
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -705,6 +723,31 @@ def main() -> int:
     case("the plugin-module workspace guard fails when its image pin is absent",
          any("platform-image-digest" in problem for problem in digest_problems),
          "the mutation passed without a platform image digest")
+
+    module_pack_text = (root / MODULE_PACK_WORKFLOW).read_text()
+    permission_problems = module_pack_permission_problems(module_pack_text)
+    case("the reusable module jobs inherit the caller's basic-or-OIDC permission map",
+         not permission_problems, "; ".join(permission_problems))
+    narrowed_module_pack = module_pack_text.replace(
+        "    timeout-minutes: 45\n    # Deliberately inherit the caller's token permissions.",
+        "    timeout-minutes: 45\n    permissions:\n      contents: read\n      id-token: write\n"
+        "    # Deliberately inherit the caller's token permissions.",
+        1,
+    )
+    narrowed_problems = module_pack_permission_problems(narrowed_module_pack)
+    case("the permission guard catches a called job that tries to elevate basic callers",
+         any(problem.startswith("prepare declares permissions") for problem in narrowed_problems),
+         "the mutation passed with id-token: write inside the called workflow")
+    workflow_narrowed_module_pack = module_pack_text.replace(
+        "jobs:\n",
+        "permissions:\n  contents: read\n  id-token: write\njobs:\n",
+        1,
+    )
+    workflow_narrowed_problems = module_pack_permission_problems(workflow_narrowed_module_pack)
+    case("the permission guard catches a workflow-level attempt to elevate basic callers",
+         any(problem.startswith("the called workflow declares permissions")
+             for problem in workflow_narrowed_problems),
+         "the mutation passed with workflow-level id-token: write")
 
     base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA}
 
