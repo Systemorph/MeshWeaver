@@ -371,8 +371,13 @@ public static class ReleaseAvailability
         {
             foreach (var (name, id) in record.Dependencies.OrderBy(d => d.Key, StringComparer.Ordinal))
             {
-                if (name.StartsWith('!')
-                    || !id.StartsWith(CompiledDependencies.MvidScheme, StringComparison.Ordinal))
+                // 🚨 THE MODULE LANE, not one spelling of it (#3934). A module entry is now a
+                // FLOOR (min:<version>) wherever the module states a version, and falls back to
+                // mvid: only where it does not — so a predicate that matched mvid: alone would
+                // have stopped seeing most module entries the day producers started stating
+                // versions, and this gate would have gone quietly green over a torn publication.
+                // That is the one failure mode a roll gate may not have.
+                if (name.StartsWith('!') || !CompiledDependencies.IsModuleLaneId(id))
                     continue;
 
                 var set = artifacts.Modules;
@@ -396,7 +401,16 @@ public static class ReleaseAvailability
                         + "the other's NodeTypes are declined at adoption; the set is inconsistent and "
                         + "nothing rolls");
 
-                if (set.MvidByModule.TryGetValue(name, out var sealedMvid)
+                // 🚨 THE ONE CHECK THE FLOOR RETIRES, and only for a floor-shaped id (#3934):
+                // "the bundle and the module are two BUILDS" stopped being a refusal the moment a
+                // record stopped naming a build. An instance no longer declines that at adoption,
+                // so a gate holding a roll for it would be refusing on a fact nothing downstream
+                // acts on. The two checks above — the set could not be read, and the set carries
+                // one name at two builds — are untouched and still fire for every module entry,
+                // floor or pin: a torn publication is refused whole, exactly as
+                // Doc/Architecture/ModuleAdoptionPolicy requires.
+                if (id.StartsWith(CompiledDependencies.MvidScheme, StringComparison.Ordinal)
+                    && set.MvidByModule.TryGetValue(name, out var sealedMvid)
                     && !string.Equals(sealedMvid, id, StringComparison.Ordinal))
                     return new PackageAvailability(
                         package.Name,

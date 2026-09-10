@@ -94,6 +94,15 @@ conflict is unfixable by agreement — one producer must go.
 Module-vs-module is `mvid:` on **both** sides. Identical bytes compare **equal**. The conflict is
 fixable by agreement, and agreement is cheaper than exclusivity.
 
+🚨 **That last sentence was the wrong remedy, and #3934 replaced it.** "Agreement" here means every
+producer of every copy emitting byte-identical output *forever*, and the section below measures why
+that is unsatisfiable: Roslyn's deterministic MVID hashes the absolute source paths, so two lanes
+compiling one file at two paths fork the MVID with identical properties. The CONSUMER half is the
+fix — a module entry of a dependency record is now a **floor** (`min:<version>`), so a moved build
+is not a mismatch at all. See [The Dependency Record Floor](../DependencyRecordFloor); everything
+below about *why the copies diverge*, and the producer-side refusals, stands unchanged and is still
+the right verdict for a torn publication.
+
 ## The invariant that replaces it
 
 > **One assembly name, one framework identity, one build — across every copy in the sealed set,
@@ -270,6 +279,7 @@ and still disagree with each other. See
 two ways to close it (the seal composes the registry's bytes, or the instance adopts module bytes
 for its identity from the sealed publication).
 
-See also: [Module Closure Accounting](../ModuleClosureAccounting) ·
+See also: [The Dependency Record Floor](../DependencyRecordFloor) ·
+[Module Closure Accounting](../ModuleClosureAccounting) ·
 [Module Build Architecture](../ModuleBuildArchitecture) ·
 [Candidate Release Protocol](../CandidateReleaseProtocol) · [Release Gates](../ReleaseGates)

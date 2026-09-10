@@ -347,6 +347,36 @@ public static class TreeBake
         return map;
     }
 
+    /// <summary>
+    /// Installed module simple name → its ORDERED build version (#3934), for the resolver's
+    /// <c>min:</c> floor ids. Deliberately the same projection the mesh makes
+    /// (<c>NodeTypeCompilationHelpers.ModuleVersionsOf</c>), reading the same
+    /// <see cref="InstalledModuleAssembly.Version"/> — a producer that derived the floor
+    /// differently would stamp a value no consumer computes, and every bundle would be declined
+    /// for a reason nobody could name.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> ModuleVersionsOf(
+        IReadOnlyList<InstalledModuleAssembly> modules)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var module in modules)
+        {
+            var name = module.Assembly.GetName().Name;
+            if (!string.IsNullOrEmpty(name) && module.Version is { Length: > 0 } version)
+                map[name] = version;
+        }
+        return map;
+    }
+
+    /// <summary>The bake host's floor resolver over <paramref name="modules"/> — the exact shape
+    /// <c>NodeTypeCompilationHelpers.DependencyIdResolverOf</c> builds on a live mesh.</summary>
+    internal static Func<string, string?> ModuleVersionResolverOf(
+        IReadOnlyList<InstalledModuleAssembly> modules)
+    {
+        var versions = ModuleVersionsOf(modules);
+        return name => versions.TryGetValue(name, out var version) ? version : null;
+    }
+
     private static Report BakeAll(
         Options options,
         ImmutableArray<TreeNodeLoader.TreeNode> treeNodes,

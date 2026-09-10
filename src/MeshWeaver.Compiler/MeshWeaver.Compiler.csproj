@@ -46,6 +46,15 @@
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <!-- 🚨 #3934 — NuGetVersionComparer, the ONE version fold in the repo. A module entry of a
+         dependency record is a FLOOR (min:<version>), so the toolchain has to ORDER versions, and
+         re-implementing that ordering here is the failure check-module-platform-floor.py's own
+         header warns about ("two call sites computing the same fold differently either never
+         converge or never fire, and both are silent"). MeshWeaver.Plugin.Packaging is a leaf with
+         no project references of its own, so this closes no cycle; the consequence — it joins
+         FrameworkBuildIdentity.FullMvidAssemblies, so a body change to the comparer rebakes
+         content — is CORRECT, because the comparer now decides which builds are adopted. -->
+    <ProjectReference Include="..\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
     <ProjectReference Include="..\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
   </ItemGroup>
 

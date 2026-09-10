@@ -155,6 +155,21 @@ public class FrameworkBuildIdentityTest
             "MeshWeaver.Mesh.Contract",
             "MeshWeaver.Messaging.Contract",
             "MeshWeaver.Messaging.Hub",
+            // 🚨 WIDENED DELIBERATELY (#3934), and this is the reason the ratchet asks for. A
+            // dependency record's MODULE entry is now a FLOOR (min:<version>), so the toolchain has
+            // to ORDER versions, and the repo has exactly one version fold — NuGetVersionComparer,
+            // which lives here. Re-implementing it inside MeshWeaver.Compiler is the failure
+            // check-module-platform-floor.py's own header warns about ("two call sites computing
+            // the same fold differently either never converge or never fire, and both are silent"),
+            // so MeshWeaver.Compiler references the assembly that owns it.
+            //
+            // The cost was measured before taking it: MeshWeaver.Plugin.Packaging is a LEAF (zero
+            // ProjectReferences of its own, so it pulls no subtree in behind it) at 3 commits/60d,
+            // against a union already carrying MeshWeaver.Mesh.Contract (190/30d) and
+            // MeshWeaver.Messaging.Hub (135/30d). And the membership is CORRECT rather than merely
+            // cheap: the comparer now decides which prebuilt builds are adopted, which is precisely
+            // the property this set exists to invalidate on.
+            "MeshWeaver.Plugin.Packaging",
             "MeshWeaver.Reflection",
             "MeshWeaver.ServiceProvider",
             "MeshWeaver.ShortGuid",

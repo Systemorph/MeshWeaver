@@ -207,7 +207,7 @@ public static class NodeSetCompiler
     /// <param name="references">The metadata references to compile against —
     /// <see cref="CompileReferences.Default"/> composed with the deployment's installed modules.</param>
     /// <param name="dependencyIdOf">The surface-id resolver for the dependency record
-    /// (<see cref="CompiledDependencies.CreateIdResolver"/> over the PRODUCING environment).</param>
+    /// (<c>CompiledDependencies.CreateIdResolver</c> over the PRODUCING environment).</param>
     /// <param name="toolchainId">This process's toolchain id
     /// (<see cref="CompiledDependencies.ComputeToolchainId"/>).</param>
     /// <param name="outputDirectory">Directory the DLL/PDB are written into. Created if absent.</param>
