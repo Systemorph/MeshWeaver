@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+
 namespace MeshWeaver.Mesh.Services.LanguageServer;
 
 /// <summary>
@@ -92,11 +94,62 @@ public interface IMeshLanguageService
     /// <c>MetadataReference</c> set so per-check cost is just parse + bind + diagnose
     /// (~200–500ms for typical NodeTypes; no NuGet resolution, no emit).
     /// </para>
+    ///
+    /// <para>🚨 <b>This overload is the EDITOR's contract, and its empty list is not a verdict.</b>
+    /// Monaco wants silence when the owner cannot be resolved — squiggles computed under the wrong
+    /// language rules are worse than none — so a path that resolves to NOTHING answers exactly what
+    /// a clean compile answers. A caller that RENDERS a verdict (<c>lsp_check_node</c>'s
+    /// <c>{ok, diagnostics}</c>, any pre-flight gate) must call
+    /// <see cref="CheckSpeculativeOutcome"/> instead: it carries the same diagnostics plus the
+    /// status that says whether anything was checked at all (Systemorph/MeshWeaver#3888).</para>
     /// </summary>
+    /// <param name="nodeTypePath">Path of the NodeType whose compilation hosts the source.</param>
+    /// <param name="sourcePath">Path of the Code MeshNode to substitute; added as a new file when absent.</param>
+    /// <param name="proposedCode">The proposed full source text for that file.</param>
     IObservable<IReadOnlyList<DiagnosticInfo>> CheckSpeculative(
         string nodeTypePath,
         string sourcePath,
         string proposedCode);
+
+    /// <summary>
+    /// The INTERROGABLE form of <see cref="CheckSpeculative"/> — the same speculative compile,
+    /// returning a <see cref="NodeDiagnosticsOutcome"/> so "I did not check" is a distinct answer
+    /// from "I checked and it is clean". Every caller that renders a VERDICT uses this one.
+    ///
+    /// <para>🚨 <b>Why it exists.</b> <see cref="CheckSpeculative"/> can only express diagnostics,
+    /// and two of its branches produce an empty list without compiling anything: an unresolvable
+    /// owner, and a node with no compilation inputs. The <c>lsp_check_node</c> tool renders that
+    /// list as <c>{"ok":true,"diagnostics":[]}</c> — so the <c>/code</c> skill's pre-flight blessed
+    /// a NodeType it could not resolve, for proposed text that was not even C#, on
+    /// <c>memex.systemorph.com</c> on 2026-09-10 (Systemorph/MeshWeaver#3888). That is the same
+    /// defect <see cref="GetDiagnostics"/> carried until #1592/#1618, left in the sibling method
+    /// because ONE return type was serving two consumers with opposite needs — the editor, for
+    /// which silence is right, and the tool, for which silence reads as approval.</para>
+    ///
+    /// <para>Read <see cref="NodeDiagnosticsOutcome.Status"/>, or
+    /// <see cref="NodeDiagnosticsOutcome.IsClean"/>, which is false for every status that did not
+    /// actually compile. <see cref="NodeDiagnosticsOutcome.DescribeProblem"/> writes the reason with
+    /// the path in it.</para>
+    ///
+    /// <para>🚨 The DEFAULT implementation answers
+    /// <see cref="NodeDiagnosticsStatus.Unavailable"/> — deliberately fail-CLOSED. It exists so a
+    /// new member cannot oblige every implementer at once (an addition's core half lands FIRST; see
+    /// <c>Doc/Architecture/CrossRepoPairGate</c>), and an implementation that has not supplied one
+    /// has genuinely not checked anything. Mapping <see cref="CheckSpeculative"/>'s list onto
+    /// <see cref="NodeDiagnosticsStatus.Compiled"/> here would re-create #3888 for every
+    /// implementer that never noticed the member appear.</para>
+    /// </summary>
+    /// <param name="nodeTypePath">Path of the NodeType whose compilation hosts the source.</param>
+    /// <param name="sourcePath">Path of the Code MeshNode to substitute; added as a new file when absent.</param>
+    /// <param name="proposedCode">The proposed full source text for that file.</param>
+    /// <returns>The outcome — diagnostics when, and only when, something was actually compiled.</returns>
+    IObservable<NodeDiagnosticsOutcome> CheckSpeculativeOutcome(
+        string nodeTypePath,
+        string sourcePath,
+        string proposedCode)
+        => Observable.Return(NodeDiagnosticsOutcome.Unavailable(new NotSupportedException(
+            $"{GetType().Name} does not implement CheckSpeculativeOutcome, so the speculative "
+            + "check was never run. This is NOT evidence that the proposed source compiles.")));
 
     /// <summary>
     /// Remembers that this user accepted <paramref name="label"/> while <paramref name="prefix"/>
