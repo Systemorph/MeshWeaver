@@ -3948,8 +3948,8 @@ public static class DataExtensions
 
     /// <summary>
     /// Reactive update for a <c>data:</c> path. Content-provider paths write the file
-    /// directly; entity paths issue <see cref="DataChangeRequest"/> and observe the
-    /// <see cref="Activity"/> completion callback (no <see cref="TaskCompletionSource{TResult}"/>).
+    /// directly; entity paths issue <see cref="DataChangeRequest"/> and report success only after
+    /// both the owner commit and the shared read stream's matching frame.
     /// </summary>
     private static IObservable<UpdateUnifiedReferenceResponse> UpdateDataPath(
         IMessageHub hub,
@@ -3982,11 +3982,29 @@ public static class DataExtensions
         // path that addresses no data (UpdateUnifiedReferenceRequest_InvalidPath_ReturnsError).
         // A valid data collection is one a TypeSource projects; content collections
         // were already handled above.
-        var isKnownCollection = dataContext.TypeSources.Values
-            .Any(ts => string.Equals(ts.TypeDefinition.CollectionName, collection, StringComparison.OrdinalIgnoreCase));
-        if (!isKnownCollection)
+        var typeSource = dataContext.TypeSources.Values
+            .FirstOrDefault(ts => string.Equals(ts.TypeDefinition.CollectionName, collection, StringComparison.OrdinalIgnoreCase));
+        if (typeSource is null)
             return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
                 $"Unknown collection '{collection}': no registered data type source or content provider owns this path."));
+
+        var readId = (object?)entityId ?? typeSource.TypeDefinition.GetKey(content);
+        if (readId is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                $"Cannot determine the entity ID for collection '{collection}'."));
+
+        var stream = workspace.GetNullableStream(
+            new EntityReference(typeSource.TypeDefinition.CollectionName, readId));
+        if (stream is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                $"No readable data stream exists for {collection}/{readId}."));
+
+        var partition = (typeSource as IPartitionedTypeSource)?.GetPartition(content);
+        var ownerStream = dataContext.DataSourcesByCollection[typeSource.TypeDefinition.CollectionName]
+            .GetStreamForPartition(partition);
+        if (ownerStream is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                $"No owning data stream exists for {collection}/{readId}."));
 
         var changeRequest = new DataChangeRequest
         {
@@ -3994,16 +4012,64 @@ public static class DataExtensions
             ChangedBy = changedBy
         };
 
-        return workspace.RequestChange(changeRequest)
-            .Select(log =>
+        // Warm the exact stream served by GetDataRequest before the eager owner write. A genuinely
+        // idempotent write needs no new read frame; otherwise the owner's committed version is the
+        // causal barrier — a same-value coincidence from an older frame is not sufficient.
+        return stream.Take(1).SelectMany(initial =>
+        {
+            if (UnifiedContentEquals(initial.Value, content, hub))
+                return workspace.RequestChange(changeRequest).Select(ToResponse);
+
+            return workspace.RequestChange(changeRequest)
+                .SelectMany(log =>
+                {
+                    var response = new DataChangeResponse(hub.Version, log);
+                    if (response.Status != DataChangeStatus.Committed)
+                        return Observable.Return(ToResponse(log));
+                    if (ownerStream.Current is not { } ownerCommit)
+                        return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                            $"The owning data stream for {collection}/{readId} did not expose its committed version."));
+
+                    return WaitForSharedReadVersion(stream, ownerCommit.Version)
+                        .Select(_ => UpdateUnifiedReferenceResponse.Ok(response.Version));
+                });
+
+            UpdateUnifiedReferenceResponse ToResponse(ActivityLog log)
             {
                 var response = new DataChangeResponse(hub.Version, log);
                 return response.Status == DataChangeStatus.Committed
                     ? UpdateUnifiedReferenceResponse.Ok(response.Version)
                     : UpdateUnifiedReferenceResponse.Fail(
                         response.Log.Messages.LastOrDefault()?.Message ?? "Update failed");
-            });
+            }
+        });
     }
+
+    private static bool UnifiedContentEquals(object? actual, object expected, IMessageHub hub)
+    {
+        if (actual is null)
+            return false;
+        if (Equals(actual, expected))
+            return true;
+
+        var actualNode = JsonSerializer.SerializeToNode(actual, actual.GetType(), hub.JsonSerializerOptions);
+        var expectedNode = JsonSerializer.SerializeToNode(expected, expected.GetType(), hub.JsonSerializerOptions);
+        return System.Text.Json.Nodes.JsonNode.DeepEquals(actualNode, expectedNode);
+    }
+
+    /// <summary>
+    /// Waits until a shared read stream has applied the owner's committed version or a newer one.
+    /// The current snapshot is checked inside <see cref="Observable.Defer{TValue}(Func{IObservable{TValue}})"/>
+    /// and the stream itself replays its latest frame, so a frame landing between the check and the
+    /// subscription cannot be missed. A newer version is valid: it represents a later committed
+    /// write, never the stale state that preceded this operation.
+    /// </summary>
+    internal static IObservable<ChangeItem<object>> WaitForSharedReadVersion(
+        ISynchronizationStream<object> stream,
+        long committedVersion) =>
+        Observable.Defer(() => stream.Current is { } current && current.Version >= committedVersion
+            ? Observable.Return(current)
+            : stream.Where(item => item.Version >= committedVersion).Take(1));
 
     /// <summary>
     /// Reactive update for a <c>content:</c> path — parses collection/file and writes via the file provider.
@@ -4147,6 +4213,17 @@ public static class DataExtensions
                     ChangedBy = changedBy
                 };
 
+                var typeSource = dataContext.GetTypeSource(entityValue.Value.GetType());
+                if (typeSource is null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                        $"No registered data type source owns {collection}/{entityId}."));
+                var partition = (typeSource as IPartitionedTypeSource)?.GetPartition(entityValue.Value);
+                var ownerStream = dataContext.DataSourcesByCollection[typeSource.TypeDefinition.CollectionName]
+                    .GetStreamForPartition(partition);
+                if (ownerStream is null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                        $"No owning data stream exists for {collection}/{entityId}."));
+
                 return workspace.RequestChange(changeRequest)
                     .SelectMany(log =>
                     {
@@ -4154,18 +4231,11 @@ public static class DataExtensions
                         if (response.Status != DataChangeStatus.Committed)
                             return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
                                 response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
+                        if (ownerStream.Current is not { } ownerCommit)
+                            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                                $"The owning data stream for {collection}/{entityId} did not expose its committed version."));
 
-                        // RequestChange reports when the owning data-source stream has applied the
-                        // deletion. The shared read stream is a separate actor-backed reduction:
-                        // its null frame is posted from the source's turn and can still be queued
-                        // when the commit report arrives. A success response at that seam lets the
-                        // caller's immediate GetDataRequest replay the shared stream's OLD entity
-                        // before that queued frame lands. Wait on the exact read view this API
-                        // serves; no polling and no fresh stream/hub. Success now means a read made
-                        // after the response cannot observe the deleted entity (#3432 follow-up).
-                        return stream
-                            .Where(entity => entity.Value == null)
-                            .Take(1)
+                        return WaitForSharedReadVersion(stream, ownerCommit.Version)
                             .Select(_ => DeleteUnifiedReferenceResponse.Ok());
                     });
             });
