@@ -1469,5 +1469,17 @@
   "setup.problem.noCompany": "Give the organisation this instance belongs to.",
   "setup.problem.noOwnerName": "Give the name of the person who owns this instance.",
   "setup.problem.noOwnerEmail": "Give a valid email address — it is how the registry reaches the owner about this instance.",
-  "setup.problem.noConsent": "Accept the privacy statement and the platform terms to register. Nothing is sent until you do."
+  "setup.problem.noConsent": "Accept the privacy statement and the platform terms to register. Nothing is sent until you do.",
+  "unifiedData.error.unknownCollection": "Unknown collection '{0}': no registered data type source or content provider owns this path.",
+  "unifiedData.error.collectionMismatch": "The path addresses collection '{0}', but the submitted content belongs to collection '{1}'.",
+  "unifiedData.error.entityIdMismatch": "The path addresses entity '{0}', but the submitted content identifies entity '{1}'.",
+  "unifiedData.error.missingEntityId": "Cannot determine the entity ID for collection '{0}'.",
+  "unifiedData.error.readStreamUnavailable": "No readable data stream exists for {0}/{1}.",
+  "unifiedData.error.ownerStreamUnavailable": "No owning data stream exists for {0}/{1}.",
+  "unifiedData.error.typeSourceUnavailable": "No registered data type source owns {0}/{1}.",
+  "unifiedData.error.ownerReceiptUnavailable": "The owning data stream for {0}/{1} did not report an observable commit version.",
+  "unifiedData.error.readStreamEnded": "The shared read stream for {0}/{1} ended before it exposed its current state.",
+  "unifiedData.error.readBarrierEnded": "The shared read stream for {0}/{1} ended before it reached the committed version.",
+  "unifiedData.error.updateFailed": "Update failed.",
+  "unifiedData.error.deleteFailed": "Delete failed."
 }

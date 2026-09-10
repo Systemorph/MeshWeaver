@@ -38,7 +38,26 @@ public static class WorkspaceOperations
     /// <param name="workspace">The workspace to apply the change to.</param>
     /// <param name="change">The change request to validate and apply.</param>
     /// <returns>A single-emission observable carrying the finished <see cref="ActivityLog"/>.</returns>
-    public static IObservable<ActivityLog> Change(this IWorkspace workspace, DataChangeRequest change)
+    public static IObservable<ActivityLog> Change(this IWorkspace workspace, DataChangeRequest change) =>
+        workspace.ChangeCore(change, observePublishedVersions: false).Select(result => result.Log);
+
+    /// <summary>
+    /// Applies a data change and also reports the owner versions that can be observed by reduced
+    /// read streams. The receipt observes the owner's replay across the serialized apply turn, so
+    /// a value-changing patch reports its new frame while any number of value-equal patches retain
+    /// the last version that was actually published.
+    /// The public <see cref="Change(IWorkspace,DataChangeRequest)"/> surface deliberately projects
+    /// this back to the established <see cref="ActivityLog"/> contract.
+    /// </summary>
+    internal static IObservable<DataChangeReceipt> ChangeWithReceipt(
+        this IWorkspace workspace,
+        DataChangeRequest change) =>
+        workspace.ChangeCore(change, observePublishedVersions: true);
+
+    private static IObservable<DataChangeReceipt> ChangeCore(
+        this IWorkspace workspace,
+        DataChangeRequest change,
+        bool observePublishedVersions)
     {
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(WorkspaceOperations));
@@ -46,12 +65,18 @@ public static class WorkspaceOperations
 
         var (isValid, messages) = workspace.Validate(change, logger);
         if (!isValid)
-            return Observable.Return(Finish(workspace.Hub, messages));
+            return Observable.Return(new DataChangeReceipt(Finish(workspace.Hub, messages), []));
 
         logger.LogDebug("Update called: Creations={Creations}, Updates={Updates}, Deletions={Deletions}",
             change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
-        return workspace.UpdateStreams(change, messages, logger);
+        return workspace.UpdateStreams(change, messages, logger, observePublishedVersions);
     }
+
+    /// <summary>
+    /// Internal acknowledgement for callers that must establish a causal read boundary after a
+    /// write. <see cref="VisibleVersions"/> contains one version per affected owner stream.
+    /// </summary>
+    internal sealed record DataChangeReceipt(ActivityLog Log, IReadOnlyList<long> VisibleVersions);
 
     /// <summary>
     /// Runs the creation / update / deletion validators and folds every failure into log messages.
@@ -95,8 +120,8 @@ public static class WorkspaceOperations
         return (isValid, messages);
     }
 
-    private static IObservable<ActivityLog> UpdateStreams(this IWorkspace workspace, DataChangeRequest change,
-        ImmutableList<LogMessage> messages, ILogger logger)
+    private static IObservable<DataChangeReceipt> UpdateStreams(this IWorkspace workspace, DataChangeRequest change,
+        ImmutableList<LogMessage> messages, ILogger logger, bool observePublishedVersions)
     {
         logger.LogDebug("Updating streams for workspace {Address} with {Creations} creations, {Updates} updates, {Deletions} deletions", workspace.Hub.Address, change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
 
@@ -119,15 +144,20 @@ public static class WorkspaceOperations
         // ToArray() forces the writes NOW — Change is eager by contract; the observables only
         // report when each stream has applied its part.
         var applied = groups.Where(g => g.Key.DataSource is not null)
-            .Select(group => UpdateStream(change, group, logger))
+            .Select(group => UpdateStream(change, group, logger, observePublishedVersions))
             .ToArray();
 
         if (applied.Length == 0)
-            return Observable.Return(Finish(workspace.Hub, messages));
+            return Observable.Return(new DataChangeReceipt(Finish(workspace.Hub, messages), []));
 
         return applied.Merge()
-            .Aggregate(messages, (acc, streamMessages) => acc.AddRange(streamMessages))
-            .Select(all => Finish(workspace.Hub, all));
+            .ToArray()
+            .Select(results => new DataChangeReceipt(
+                Finish(workspace.Hub,
+                    results.Aggregate(messages, (acc, result) => acc.AddRange(result.Messages))),
+                results.Where(result => result.VisibleVersion is not null)
+                    .Select(result => result.VisibleVersion!.Value)
+                    .ToArray()));
     }
 
     /// <summary>
@@ -141,11 +171,12 @@ public static class WorkspaceOperations
     /// store still holds the pre-change state — ack-on-accept, the shape that raced read-after-write.
     /// The seam runs after the apply, in that same turn, so it costs no extra hub message.</para>
     /// </summary>
-    private static IObservable<ImmutableList<LogMessage>> UpdateStream(
+    private static IObservable<StreamApplyResult> UpdateStream(
         DataChangeRequest change,
         IGrouping<(IDataSource? DataSource, object? Partition), (object Instance, OperationType Op, ITypeSource?
             TypeSource, IDataSource? DataSource, object? Partition)> group,
-        ILogger logger)
+        ILogger logger,
+        bool observePublishedVersion)
     {
         var stream = group.Key.DataSource!.GetStreamForPartition(group.Key.Partition);
         if (stream is null)
@@ -160,7 +191,26 @@ public static class WorkspaceOperations
         if (!streamHub.Started.IsCompleted)
             throw new DataException($"Data source {group.Key.DataSource.Reference} for partition {group.Key.Partition} is not initialized.");
 
-        var applied = new AsyncSubject<ImmutableList<LogMessage>>();
+        var applied = new AsyncSubject<StreamApplyResult>();
+
+        // Observe the owner's replay BEFORE posting our update and keep that subscription through
+        // the serialized apply turn. SetCurrent publishes synchronously, so when `applied` runs the
+        // value below is exactly the last version an ordinary reduced stream could have received.
+        // It deliberately does not use Current.Version: value-equal patches adopt that clock
+        // silently, and after two no-ops even the preceding Current version was never published.
+        var lastPublishedVersion = long.MinValue;
+        Exception? publicationError = null;
+        var publicationEnded = 0;
+        var publicationSubscription = observePublishedVersion
+            ? stream.Subscribe(
+                item => Volatile.Write(ref lastPublishedVersion, item.Version),
+                ex =>
+                {
+                    Interlocked.Exchange(ref publicationError, ex);
+                    Volatile.Write(ref publicationEnded, 1);
+                },
+                () => Volatile.Write(ref publicationEnded, 1))
+            : null;
 
         // Synchronous update — the transform is pure in-memory; the stream's
         // handler serializes UpdateStreamRequests, so no retry logic is needed.
@@ -173,32 +223,57 @@ public static class WorkspaceOperations
             },
             ex =>
             {
+                publicationSubscription?.Dispose();
                 // The failure is REPORTED, never rethrown: every invocation of this callback is
                 // wrapped by the stream in a log-only try/catch, so a throw here could reach no
                 // caller — it only produced a secondary "exceptionCallback threw" ERROR. The log
                 // below is what the caller actually sees.
                 //
-                // A DISPOSED stream is the benign teardown marker the rest of the stream classifies
-                // as Debug-only ("stop the source"), so it stays a WARNING — which still commits
-                // (DataChangeResponse maps Warning → Committed) and keeps shutdown quiet. Any other
-                // failure is a real one and must surface as Failed rather than the silent
-                // "Succeeded" the sub-activity used to report.
+                // A disposed owner is normal during shutdown, but THIS requested write was not
+                // applied. Its activity result must therefore be Failed rather than Committed;
+                // otherwise a caller can acknowledge a mutation that never happened.
                 logger.LogError(ex, "Update of {Stream} failed", stream.StreamIdentity);
-                applied.OnNext([new LogMessage(
+                applied.OnNext(new StreamApplyResult([new LogMessage(
                     $"Update of {stream.StreamIdentity} failed: {ex.Message}",
-                    ex is ObjectDisposedException ? LogLevel.Warning : LogLevel.Error)
+                    LogLevel.Error)
                     .WithKey("activity.dataUpdate.streamUpdateFailed",
-                        ("stream", stream.StreamIdentity), ("error", ex.Message))]);
+                        ("stream", stream.StreamIdentity), ("error", ex.Message))], null));
                 applied.OnCompleted();
             },
             () =>
             {
-                applied.OnNext(streamMessages);
+                var ended = Volatile.Read(ref publicationEnded) == 1;
+                var error = Volatile.Read(ref publicationError);
+                var publishedVersion = Volatile.Read(ref lastPublishedVersion);
+                publicationSubscription?.Dispose();
+
+                if (!observePublishedVersion)
+                {
+                    applied.OnNext(new StreamApplyResult(streamMessages, null));
+                }
+                else if (ended)
+                {
+                    var reason = error?.Message ?? "the owner stream completed before its applied receipt";
+                    applied.OnNext(new StreamApplyResult(streamMessages.Add(new LogMessage(
+                            $"Update of {stream.StreamIdentity} failed: {reason}", LogLevel.Error)
+                        .WithKey("activity.dataUpdate.streamUpdateFailed",
+                            ("stream", stream.StreamIdentity), ("error", reason))), null));
+                }
+                else
+                {
+                    applied.OnNext(new StreamApplyResult(
+                        streamMessages,
+                        publishedVersion == long.MinValue ? null : publishedVersion));
+                }
                 applied.OnCompleted();
             }
         );
         return applied;
     }
+
+    private sealed record StreamApplyResult(
+        ImmutableList<LogMessage> Messages,
+        long? VisibleVersion);
 
     /// <summary>Finishes a data-update log: status is rolled up from the message levels.</summary>
     private static ActivityLog Finish(IMessageHub hub, ImmutableList<LogMessage> messages) =>
@@ -509,4 +584,3 @@ public static class WorkspaceOperations
 #pragma warning restore IDE0060
 
 }
-

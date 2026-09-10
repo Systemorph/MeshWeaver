@@ -218,7 +218,14 @@ done for a plain reduce, and where it matters the answer is a narrower reference
 | `ReadingTheSameReferenceRepeatedly_DoesNotMintASyncHubPerRead` | five reads of one reference add **0** `sync/` hubs to the owner (it fails with **+5** on the pre-fix call site) |
 | `AnUncachedConfiguredReduce_MintsOneSyncHubPerCall` | five genuinely-configured reduces add **5** — the counter can see growth, so the flat arm is not vacuous |
 | `TheSharedReadStream_StaysLive` | a write after the reads is visible to the next read — the shared stream is a live mirror, not a snapshot |
+| `UnifiedUpdate_WaitsUntilTheSharedReadStreamCarriesTheUpdate` | a successful update is withheld while the owner has committed but the shared read actor is parked on the old entity |
+| `UnifiedUpdate_OwnerNoOpUsesTheLastObservableVersion` | an idempotent owner write does not wait for its silently adopted, unpublished version; it fences on the last owner frame the shared read can observe |
+| `RepeatedNoOpReceiptTest.ASecondNoOpRetainsTheLastPublishedOwnerVersion` | consecutive idempotent writes keep the last actually emitted owner version instead of advancing the receipt through silent versions |
+| `UnifiedUpdate_InitiallyMatchingStaleReadStillNeedsItsOwnReadBoundary` | a cached value equal to the request is not mistaken for an owner no-op when an intervening owner frame is already queued |
+| `UnifiedUpdate_RejectsPathAndContentIdentityMismatchBeforeWriting` | a URL/payload key mismatch is refused before it can update one entity while waiting on another |
 | `UnifiedDelete_WaitsUntilTheSharedReadStreamCarriesAbsence` | a successful delete is withheld while the shared read actor is parked, even after the owner has committed; it answers only after the read view carries absence |
+| `UnifiedDelete_RetainsItsAbsenceAcknowledgementAcrossSameIdRecreation` | the read view reaches the delete's committed version before a later same-ID recreation becomes its newest state, so the delete still answers without mistaking the recreation for stale data |
+| `ReadVersionBarrier_AcceptsNewerStateAfterTheDeleteFrameWasReplaced` | a late barrier subscription completes from the newer recreation after the delete's exact null frame has been replaced in the shared one-item replay slot |
 
 ### A shared stream makes its propagation boundary observable
 
@@ -230,13 +237,29 @@ the read frame is still queued.
 This distinction did not matter when every read built a new reduction: a reduction built after the
 owner commit starts from the owner's latest replayed store. Once reads share the existing reduction,
 an immediate read can replay that reduction's previous value until its queued frame lands. The
-release gate exposed this as a successful `DeleteUnifiedReferenceRequest` followed immediately by a
-`GetDataRequest` that returned the deleted entity.
+release gate exposed both directions: a successful `UpdateUnifiedReferenceRequest` followed by the
+old entity, and a successful `DeleteUnifiedReferenceRequest` followed by the deleted entity.
 
-The delete handler now waits reactively on the same shared entity stream until it carries `null`
-before reporting success. It does not poll and does not build a replacement stream. The resulting
-contract is precise: owner commit remains the storage boundary, while successful unified deletion is
-also the read-after-write boundary for the API's shared read view.
+Both handlers now warm the same shared entity stream **before** invoking the owner write. The data
+change pipeline returns an internal receipt from the owner's serialized apply turn. A short-lived
+subscription observes the owner's replay from before the write through its post-apply callback, so a
+value-changing patch reports the new frame it published while any number of true no-ops retain the
+last version that was actually emitted. This cannot be derived from `Current.Version`: the stream
+adopts a no-op's new version silently, and after two no-ops even the preceding current version was
+never published. The handler waits until the shared read stream has applied the receipt's observable
+version or a newer one. This distinction is what makes both edges correct: equality with a stale
+cached read cannot bypass a real write, and an idempotent write cannot wait forever for a frame that
+by design does not exist.
+
+Checking the current snapshot inside a deferred subscription, then relying on the stream's own
+one-item replay, means the boundary cannot miss a frame that lands between those operations. A
+legitimate same-ID recreation after a delete is accepted as newer state instead of leaving the delete
+waiting forever for a null that has already been replaced. A URL/payload identity mismatch is rejected
+before mutation, the caller's access context is restored at the deferred write call, and stream
+completion in either read phase produces one explicit failure response instead of silent completion.
+There is no polling, retry, or replacement stream. The existing owner commit remains the in-memory
+mutation boundary; successful unified data-entity update/delete is also the causal read-view
+boundary for the API's shared read path.
 
 ### One behaviour DID change, and it is the better half of an existing contract
 
