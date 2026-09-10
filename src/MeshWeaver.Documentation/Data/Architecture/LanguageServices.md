@@ -38,7 +38,7 @@ Behind all three sits one `IMeshLanguageService` interface with one in-process i
   <line x1="645" y1="72" x2="422" y2="128" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
   <rect x="175" y="130" width="410" height="68" rx="10" fill="#37474f"/>
   <text x="380" y="154" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#fff">IMeshLanguageService</text>
-  <text x="380" y="172" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">GetDiagnostics · GetHover · GetCompletions · CheckSpeculative</text>
+  <text x="380" y="172" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#cfd8dc">GetDiagnostics · GetHover · GetCompletions · CheckSpeculative(Outcome)</text>
   <text x="380" y="188" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#90a4ae">all return IObservable&lt;T&gt;</text>
   <line x1="380" y1="198" x2="380" y2="230" stroke="#90a4ae" stroke-width="1.5" marker-end="url(#arr)"/>
   <rect x="175" y="232" width="410" height="72" rx="10" fill="#455a64"/>
@@ -60,7 +60,7 @@ Behind all three sits one `IMeshLanguageService` interface with one in-process i
    ┌──────────────────────────────────────────────────────┐
    │       IMeshLanguageService (Mesh.Contract)           │
    │   GetDiagnostics / GetHover / GetCompletions /       │
-   │   CheckSpeculative                                   │
+   │   CheckSpeculative / CheckSpeculativeOutcome         │
    │   — all return IObservable<T>                        │
    └────────────────────────┬─────────────────────────────┘
                             │
@@ -106,7 +106,40 @@ Two tools are exposed via `McpMeshPlugin` for external MCP clients (`lsp_check_n
 
 **Position convention.** All positions are **0-based line/character** (LSP convention). Monaco's 1-based coordinates are converted at the JS bridge.
 
-**`{ok: true}` semantics.** This means there are no `Error`-severity diagnostics — warnings alone don't fail the check, mirroring how a real `Compile` succeeds with warnings.
+**`{ok: true}` semantics.** This means Roslyn ran **and** there are no `Error`-severity diagnostics — warnings alone don't fail the check, mirroring how a real `Compile` succeeds with warnings. Both halves are load-bearing; the section below is why.
+
+## An empty diagnostic list is not evidence of health
+
+🚨 **A verification step that cannot fail is not a verification step**, and this surface has now produced that defect twice — the second time in the method next door to the one that was fixed.
+
+`[]` is what a clean compile looks like. It is *also* what "I could not resolve that path" looks like, and what "the owning hub never answered" looks like. Nothing in an `IReadOnlyList<DiagnosticInfo>` separates them, so a tool rendering `ok = !diagnostics.Any(Error)` reports a **clean bill of health for a check that never ran**.
+
+| | Fixed in | The symptom |
+|---|---|---|
+| `GetDiagnostics` | #1592 / #1618 | `lsp_diagnostics_for_node @Edu/DefinitelyNotARealNodeType` → `{"ok":true,"diagnostics":[]}`; the mandated pre-prod sweep reported all-green over stale paths having verified nothing |
+| `CheckSpeculative` | #3888 | `lsp_check_node` on a NodeType in a partition the caller cannot read → `{"ok":true,"diagnostics":[]}` — **including for `proposedCode` that is not C# at all**; the `/code` edit loop's pre-flight blessed every proposed edit against every path it could not reach |
+
+**Why one fix did not cover the other, and why it looked reasonable at the time.** One return type was serving two consumers whose needs are *opposite*:
+
+- the **Monaco editor** wants silence when the owner cannot be resolved — a squiggle computed under the wrong language rules is worse than no squiggle;
+- the **`lsp_check_node` tool** renders a **verdict**, and silence there reads as *approved*.
+
+The comment in the code said "stay silent rather than paint squiggles computed under the wrong language rules". That is correct — for one of the two callers. The compromise return type made it wrong for the other, invisibly.
+
+**The shape of the fix: two surfaces, not one compromise.**
+
+| Method | Returns | For |
+|---|---|---|
+| `CheckSpeculative` | `IReadOnlyList<DiagnosticInfo>` | the **editor**. Deliberately silent when nothing was checked — Monaco's contract is "no diagnostics means no squiggles" |
+| `CheckSpeculativeOutcome` | `NodeDiagnosticsOutcome` | **every caller that renders a verdict** — the MCP tool, the agent plugin, any pre-flight gate |
+
+`NodeDiagnosticsOutcome` carries `Compiled` / `Absent` / `NotCompilable` / `Unavailable` plus `IsClean` (false for every status that did not actually compile) and `DescribeProblem(path)` (the reason, with the path in it, so a sweep's output says *which* entry could not be checked). The list overload is **derived from** the outcome overload — `CheckSpeculativeOutcome(...).Select(o => o.Diagnostics)` — so the two can never drift apart about what a given path produces; the only difference is that one drops the status.
+
+The interface member carries a **default implementation that answers `Unavailable`**, deliberately fail-closed. It exists so an addition cannot oblige every implementer at once (an addition's core half lands first — see [Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate)), and an implementation that has not supplied one has genuinely not checked anything. Mapping the list onto `Compiled` in the default would have re-created the defect for every implementer that never noticed the member appear.
+
+> **What #3888 also corrected about its own reading of the code.** The issue named *two* silent branches and could not say which produced the live observation. It can only have been the unresolvable-owner one: the other — `GetCompilationInputsAsync` answering `null` — is unreachable from the speculative path, because that method refuses exactly one shape (a node whose `NodeType` is unset) and such a node is classified as a **script** here, never as a NodeType. The `NotCompilable` mapping stays as the honest reading of a nullable contract, and the test suite says so rather than pinning a branch that could never fail.
+
+The controls live in `test/MeshWeaver.Compiler.Pipeline.Test/SpeculativeCheckCannotAnswerGreenForAnUncheckedNodeTest.cs` and run **in both directions**: an unresolvable path must not read clean, *and* a real NodeType must still compile its proposal and report errors when the proposal is broken. A fix that made everything fail would be no better than one that made everything pass. See [Controls That Cannot Fail](/Doc/Architecture/ControlsThatCannotFail).
 
 ## The /code Pre-Flight Loop
 
@@ -174,14 +207,15 @@ The following capabilities were considered but are not yet implemented:
 | Concern | File |
 |---|---|
 | Interface + DTOs | `src/MeshWeaver.Mesh.Contract/Services/IMeshLanguageService.cs` |
-| In-process implementation | `src/MeshWeaver.Graph/Configuration/MeshNodeLanguageService.cs` |
-| Speculative compile + `#r` handling | `src/MeshWeaver.Graph/Configuration/SpeculativeCompilation.cs` |
+| In-process implementation | `src/MeshWeaver.Compiler.Pipeline/MeshNodeLanguageService.cs` |
+| Speculative compile + `#r` handling | `src/MeshWeaver.Compiler/SpeculativeCompilation.cs` |
 | `CompilationInputs` (shared with emit path) | `src/MeshWeaver.Graph/Configuration/CompilationInputs.cs` |
-| `GetCompilationInputsAsync` (the per-file pipeline) | `src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs` |
+| `GetCompilationInputsAsync` (the per-file pipeline) | `src/MeshWeaver.Compiler.Pipeline/MeshNodeCompilationService.cs` |
 | DI registration | `src/MeshWeaver.Graph/Configuration/GraphConfigurationExtensions.cs` (`AddGraph`) |
 | Agent plugin | `src/MeshWeaver.AI/Plugins/LspPlugin.cs` |
 | MCP tools | `src/MeshWeaver.Mcp/McpMeshPlugin.cs` (the `Lsp*` methods) |
 | Monaco wiring | `src/MeshWeaver.Blazor/Components/Monaco/MonacoEditorView.razor[.js]`, `CodeEditorView.razor` |
 | Editor opt-in | `src/MeshWeaver.Layout/CodeEditorControl.cs` (`LanguageServer` property) |
 | Edit-view opt-in | `src/MeshWeaver.Graph/CodeLayoutAreas.cs` (`Edit` area) |
-| Integration tests | `test/MeshWeaver.Hosting.Monolith.Test/MeshNodeLanguageServiceTest.cs` |
+| Integration tests | `MeshWeaver.Plugins/src/MeshWeaver.Hosting.Monolith.Test/MeshNodeLanguageServiceTest.cs` |
+| The pre-flight's honesty controls | `test/MeshWeaver.Compiler.Pipeline.Test/SpeculativeCheckCannotAnswerGreenForAnUncheckedNodeTest.cs` |
