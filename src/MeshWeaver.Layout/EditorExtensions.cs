@@ -590,13 +590,13 @@ public static class EditorExtensions
         if (dimensionAttribute != null)
         {
             if (dimensionAttribute.Options is not null)
-                return editor.WithView((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options), skinConfiguration);
+                return editor.WithView((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options).WithAriaLabel(propertySkinLabel), skinConfiguration);
             return editor.WithView((host, ctx) =>
             {
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
                     GetStream(host, dimensionAttribute).Subscribe(x => host.UpdateData(id, x)));
-                return RenderListControl(host, Controls.Select, jsonPointerReference, id);
+                return RenderListControl(host, Controls.Select, jsonPointerReference, id).WithAriaLabel(propertySkinLabel);
             }, skinConfiguration);
         }
 
@@ -666,6 +666,25 @@ public static class EditorExtensions
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo) =>
         new(propertyInfo.Name.ToCamelCase()!);
 
+    /// <summary>
+    /// Gives <paramref name="control"/> the accessible name <paramref name="accessibleName"/> when
+    /// it is an input — the one place the generated editors express "this input is named by the
+    /// caption beside it" (MeshWeaver#3863).
+    ///
+    /// <para>A control that is not an <see cref="IFormControl"/> is returned unchanged: a composite
+    /// (the <c>[ContentItem]</c> text-field + Browse row, a collection section, the markdown editor)
+    /// has no single input to name, and a <see cref="LabelControl"/> read-only view is not an input
+    /// at all. Those surfaces are named where they are built, or recorded as not yet named in
+    /// Doc/GUI/Editor — never silently skipped here.</para>
+    /// </summary>
+    private static UiControl WithAccessibleName(UiControl control, object? accessibleName)
+        => accessibleName is null || control is not IFormControl formControl
+            ? control
+            : (UiControl)formControl.WithAriaLabel(accessibleName);
+
+    private static IFormControl WithAccessibleName(IFormControl control, object? accessibleName)
+        => accessibleName is null ? control : control.WithAriaLabel(accessibleName);
+
 
     private static UiControl RenderControl(
         LayoutAreaHost host,
@@ -675,10 +694,29 @@ public static class EditorExtensions
         JsonPointerReference reference,
         object? parameter = null)
     {
+        // 🚨 The ACCESSIBLE name, and it is NOT the same thing as `label` (MeshWeaver#3863).
+        // On the skinned path `label` is deliberately null so the caption is not painted twice —
+        // the PropertySkin renders it as the surrounding <dt>. That left the input with no
+        // accessible name at all: `getByRole('textbox', { name: question })` matched nothing.
+        // Read from GetEditorLabel() — the SAME single source the PropertySkin's own label comes
+        // from — so the accessible name and the visible term can never disagree (WCAG
+        // label-in-name). When `label` IS set the Fluent host paints its own associated <label>,
+        // so an aria-label would only shadow it: leave it alone.
+        var ariaLabel = label is null ? propertyInfo.GetEditorLabel() : null;
+
         if (BasicControls.TryGetValue(controlType, out var factory))
-            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter!)).WithLabel(label!);
+            return (UiControl)WithAccessibleName(
+                ((IFormControl)factory.Invoke(reference, propertyInfo, parameter!)).WithLabel(label!),
+                ariaLabel);
         if (ListControls.TryGetValue(controlType, out var factory2))
-            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter!)).WithLabel(label!);
+            return (UiControl)WithAccessibleName(
+                ((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter!)).WithLabel(label!),
+                ariaLabel);
+        // 🚨 NOT covered, and deliberately so rather than by oversight. A SpecialControl is not an
+        // IFormControl — MarkdownEditorControl is a composite editor with its own toolbar and its
+        // own Blazor view, so its accessible name is an aria-labelledby/region question about that
+        // composite, not an aria-label on a single input, and guessing at it here would ship an
+        // unmeasured answer. Recorded in Doc/GUI/Editor.
         if (SpecialControls.TryGetValue(controlType, out var specialFactory))
             return specialFactory.Invoke(propertyInfo, reference);
 
@@ -1314,7 +1352,8 @@ public static class EditorExtensions
         else if (property.GetCustomAttribute<ContentItemAttribute>() is { } contentItemAttr
                  && propType == typeof(string))
         {
-            editCtrl = CreateContentItemControl(host, jsonPointer, dataId, editStateId, isRequired, isToggleable, contentItemAttr.Collection);
+            editCtrl = CreateContentItemControl(host, jsonPointer, dataId, editStateId, isRequired, isToggleable, contentItemAttr.Collection,
+                GetToggleableDisplayName(property, host));
         }
         else if (property.GetCustomAttribute<DimensionAttribute>() is { } dimAttr)
         {
@@ -1382,6 +1421,14 @@ public static class EditorExtensions
                 : textCtrl;
         }
 
+        // 🚨 The accessible name for the CLICK-TO-EDIT form (MeshWeaver#3863). Here the caption is
+        // painted as a SIBLING LabelControl above the input (MapToToggleableControl) — a FluentLabel
+        // that carries no `for`, with no id to point it at — so without this the field renders as a
+        // bare `textbox` with no accessible name at all, exactly as the skinned path did. Read from
+        // GetToggleableDisplayName, the SAME single source that caption comes from, so the two can
+        // never drift apart (WCAG label-in-name).
+        editCtrl = WithAccessibleName(editCtrl, GetToggleableDisplayName(property, host));
+
         // Apply style from UiControlAttribute if present, otherwise no default constraints
         var attrStyle = property.GetCustomAttribute<UiControlAttribute>()?.Style;
         editCtrl = editCtrl with
@@ -1410,13 +1457,17 @@ public static class EditorExtensions
         string editStateId,
         bool isRequired,
         bool isToggleable,
-        string collection)
+        string collection,
+        string accessibleName)
     {
         var textCtrl = new TextFieldControl(jsonPointer)
         {
             Required = isRequired,
             Immediate = true,
-            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            DataContext = LayoutAreaReference.GetDataPointer(dataId),
+            // The row is a composite (field + Browse), so BuildEditControl's blanket naming cannot
+            // reach the input — name it here instead of leaving it unnamed (MeshWeaver#3863).
+            AriaLabel = accessibleName
         };
 
         var browseButton = Controls.Button(host.Localize("ui.browse"))
