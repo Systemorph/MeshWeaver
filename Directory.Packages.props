@@ -144,16 +144,16 @@
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.3" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.8.3" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.14.0" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.14.2" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.14.2" />
-    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.2.2" />
+    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.3.1" />
     <!-- 1.17.0 is where the agent-store abstractions MeshWeaver.AI.Stores implements over mesh
          nodes (AgentFileStore, AgentSkillsSource) reached their current shape. Kept in lockstep —
          these three ship together and mixing versions breaks their shared abstractions. -->
@@ -167,8 +167,8 @@
          packages and the base image stays as it is — the font is supplied from an embedded
          resource instead. linux-x64 AND linux-arm64 natives ship in the package, which the
          multi-arch portal image requires. -->
-    <PackageVersion Include="SkiaSharp" Version="4.151.2" />
-    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.151.2" />
+    <PackageVersion Include="SkiaSharp" Version="4.152.0" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.152.0" />
     <!-- 🚨 SkiaSharp DRAWS; it does not PARSE. The favicon rasterizer (IconRasterizer, issue
          #2075) has to turn a node's AUTHORED &lt;svg&gt; mark into PNG bytes because Safari
          renders no SVG favicon at all, so the whole per-content favicon feature was invisible on
@@ -187,31 +187,31 @@
          NoDependencies posture above is preserved: the portal base image still needs no apt
          packages. -->
     <PackageVersion Include="Svg.Skia" Version="5.2.3" />
-    <PackageVersion Include="System.CommandLine" Version="2.0.11" />
+    <PackageVersion Include="System.CommandLine" Version="2.0.12" />
     <PackageVersion Include="System.Composition.AttributedModel" Version="10.0.10" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Features" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.9.0" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="3.1.512801" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.8.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.8.0" />
-    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.3.1" />
     <!-- Orleans test cluster — a src pin because MeshWeaver.Hosting.Orleans.TestBase ships it. -->
-    <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.2.2" />
+    <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.3.1" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.62.0" />
     <PackageVersion Include="NuGet.Protocol" Version="7.9.0" />
     <PackageVersion Include="NuGet.Packaging" Version="7.9.0" />
@@ -223,12 +223,12 @@
     <PackageVersion Include="Pgvector" Version="0.3.2" />
     <PackageVersion Include="Snowflake.Data" Version="5.7.0" />
     <!-- OpenTelemetry.Api pinned to override transitive 1.13.1 / 1.15.2 (CVE-2026-40894 / GHSA-g94r-2vxg-569j) -->
-    <PackageVersion Include="OpenTelemetry.Api" Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Api" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0" />
     <PackageVersion Include="System.Interactive" Version="7.0.1" />
     <!-- The memex test container package (src/MeshWeaver.Testcontainers): a real memex from the
          platform build as a test substrate, the way Testcontainers.PostgreSql gives a test a real
@@ -245,10 +245,10 @@
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.14.4" />
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.14.4" />
     <PackageVersion Include="Namotion.Reflection" Version="3.5.1" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.2.2" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.3.1" />
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.6" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
@@ -284,8 +284,8 @@
     <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.17.0" />
     <PackageVersion Include="Microsoft.Extensions.AI.AzureAIInference" Version="10.0.0-preview.1.25559.3" />
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.8.3" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.7" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Graph" Version="6.2.0" />
     <PackageVersion Include="OpenAI" Version="2.12.0" />
   </ItemGroup>
