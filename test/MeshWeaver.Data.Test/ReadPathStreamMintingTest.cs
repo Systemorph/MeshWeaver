@@ -50,6 +50,172 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
     /// hub counted is one this test caused.</summary>
     private static readonly TimeSpan LongHeartbeat = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// A true owner no-op adopts a new version without publishing a value-equal frame. The write
+    /// receipt must therefore fence on the preceding observable owner version, not wait forever
+    /// for the silently adopted one.
+    /// </summary>
+    [HubFact]
+    public async Task UnifiedUpdate_OwnerNoOpUsesTheLastObservableVersion()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var workspace = host.ServiceProvider.GetRequiredService<IWorkspace>();
+        var read = workspace.GetNullableStream(new EntityReference(nameof(BusinessUnit), "1"))!;
+        await read.Should().Within(TestTimeouts.Convergence).Match(x => x.Value is BusinessUnit);
+
+        var entered = new AsyncSubject<System.Reactive.Unit>();
+        var release = 0;
+        var desired = new BusinessUnit("1", "Already committed by another writer");
+        read.Hub.InvokeAsync(() =>
+        {
+            entered.OnNext(System.Reactive.Unit.Default);
+            entered.OnCompleted();
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Convergence))
+                throw new TimeoutException("The read actor hold was not released.");
+        });
+
+        var answers = new ReplaySubject<UpdateUnifiedReferenceResponse>(1);
+        try
+        {
+            await entered.Should().Within(TestTimeouts.Quick).Emit();
+            await workspace.RequestChange(DataChangeRequest.Update([desired]))
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("the owner already holds our target while the shared read is stale");
+            var owner = workspace.DataContext.DataSourcesByCollection[nameof(BusinessUnit)]
+                .GetStreamForPartition(null)!;
+            var priorVersion = owner.Current!.Version;
+            using var observation = client.Observe(
+                    new UpdateUnifiedReferenceRequest($"data:{nameof(BusinessUnit)}/1", desired),
+                    o => o.WithTarget(CreateHostAddress()))
+                .Select(d => d.Message).Subscribe(answers);
+
+            await Observable.Interval(PollInterval).StartWith(0L)
+                .Select(_ => owner.Current!.Version)
+                .Should().Within(TestTimeouts.Convergence).Match(version => version > priorVersion,
+                    "the idempotent owner write adopts its next version silently");
+            await answers.Should().NotEmit(TimeSpan.FromMilliseconds(300),
+                "the shared read still has not crossed the last observable owner version");
+
+            Volatile.Write(ref release, 1);
+            await read.Should().Within(TestTimeouts.Convergence)
+                .Match(x => x.Value is BusinessUnit b && b == desired,
+                    "the earlier real change must reach the shared read view");
+            var response = await answers.Should().Within(TestTimeouts.Quick).Emit(
+                "the no-op must answer at the last version the shared read can observe");
+            response.Success.Should().BeTrue();
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>
+    /// Equality with the cached read is not proof of an owner no-op: an intervening owner frame can
+    /// already be queued. The exact owner-side receipt must keep this update pending until its own
+    /// value-changing frame crosses the shared read actor.
+    /// </summary>
+    [HubFact]
+    public async Task UnifiedUpdate_InitiallyMatchingStaleReadStillNeedsItsOwnReadBoundary()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var workspace = host.ServiceProvider.GetRequiredService<IWorkspace>();
+        var read = workspace.GetNullableStream(new EntityReference(nameof(BusinessUnit), "1"))!;
+        var initial = await read.Should().Within(TestTimeouts.Convergence)
+            .Match(x => x.Value is BusinessUnit, "warm the real cached read stream");
+        var desired = (BusinessUnit)initial.Value!;
+        var firstEntered = new AsyncSubject<System.Reactive.Unit>();
+        var secondEntered = new AsyncSubject<System.Reactive.Unit>();
+        var releaseFirst = 0;
+        var releaseSecond = 0;
+        read.Hub.InvokeAsync(() =>
+        {
+            firstEntered.OnNext(System.Reactive.Unit.Default);
+            firstEntered.OnCompleted();
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref releaseFirst) == 1, TestTimeouts.Convergence))
+                throw new TimeoutException("The first read actor hold was not released.");
+        });
+
+        var answers = new ReplaySubject<UpdateUnifiedReferenceResponse>(1);
+        try
+        {
+            await firstEntered.Should().Within(TestTimeouts.Quick).Emit();
+            await workspace.RequestChange(DataChangeRequest.Update([new BusinessUnit("1", "Concurrent value")]))
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("the foreign write commits while the cached view still equals our desired value");
+            read.Hub.InvokeAsync(() =>
+            {
+                secondEntered.OnNext(System.Reactive.Unit.Default);
+                secondEntered.OnCompleted();
+                if (!SpinWait.SpinUntil(() => Volatile.Read(ref releaseSecond) == 1,
+                        TestTimeouts.Convergence))
+                    throw new TimeoutException("The second read actor hold was not released.");
+            });
+
+            using var observation = client.Observe(
+                    new UpdateUnifiedReferenceRequest($"data:{nameof(BusinessUnit)}/1", desired),
+                    o => o.WithTarget(CreateHostAddress()))
+                .Select(d => d.Message).Subscribe(answers);
+            var owner = workspace.DataContext.DataSourcesByCollection[nameof(BusinessUnit)]
+                .GetStreamForPartition(null)!;
+            await owner.Should().Within(TestTimeouts.Convergence).Match(x =>
+                    x.Value?.GetCollection(nameof(BusinessUnit))?.Instances.GetValueOrDefault("1")
+                        is BusinessUnit b && b == desired,
+                "our own update has committed after the concurrent value");
+
+            Volatile.Write(ref releaseFirst, 1);
+            await secondEntered.Should().Within(TestTimeouts.Quick)
+                .Emit("the read actor applied the intervening write while our own frame remains queued");
+            ((BusinessUnit)read.Current!.Value!).DisplayName.Should().Be("Concurrent value");
+            await answers.Should().NotEmit(TimeSpan.FromMilliseconds(300),
+                "an initially matching stale read is not an acknowledgement for this update");
+
+            Volatile.Write(ref releaseSecond, 1);
+            var response = await answers.Should().Within(TestTimeouts.Convergence)
+                .Emit("the response must follow this update's own shared-read frame");
+            response.Success.Should().BeTrue();
+            ((BusinessUnit)read.Current!.Value!).DisplayName.Should().Be(desired.DisplayName);
+        }
+        finally
+        {
+            Volatile.Write(ref releaseFirst, 1);
+            Volatile.Write(ref releaseSecond, 1);
+        }
+    }
+
+    /// <summary>
+    /// The entity addressed by the URL and the entity carried by the payload are one target. A
+    /// mismatch must be rejected before the write instead of updating one entity while waiting on
+    /// another entity's read stream forever.
+    /// </summary>
+    [HubFact]
+    public async Task UnifiedUpdate_RejectsPathAndContentIdentityMismatchBeforeWriting()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var owner = host.GetWorkspace().DataContext.DataSourcesByCollection[nameof(BusinessUnit)]
+            .GetStreamForPartition(null)!;
+        var ownerState = await owner.Should().Within(TestTimeouts.Convergence)
+            .Match(item => item.Value?.GetCollection(nameof(BusinessUnit))?.Instances.ContainsKey("2") == true,
+                "the owner must expose the entity whose accidental mutation is the control");
+        var before = ownerState.Value!.GetCollection(nameof(BusinessUnit))!.Instances["2"];
+
+        var response = await client.Observe(
+                new UpdateUnifiedReferenceRequest(
+                    $"data:{nameof(BusinessUnit)}/1",
+                    new BusinessUnit("2", "Must not be written")),
+                o => o.WithTarget(CreateHostAddress()))
+            .Select(delivery => delivery.Message)
+            .Should().Within(TestTimeouts.Quick)
+            .Emit("a mismatched target must receive one explicit refusal instead of waiting forever");
+
+        response.Success.Should().BeFalse();
+        owner.Current!.Value!.GetCollection(nameof(BusinessUnit))!.Instances["2"]
+            .Should().Be(before, "the request is rejected before any differently keyed entity is changed");
+    }
+
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
             .WithServices(services => services

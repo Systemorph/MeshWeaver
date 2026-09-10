@@ -1468,5 +1468,17 @@
   "setup.problem.noCompany": "Geben Sie die Organisation an, zu der diese Instanz gehört.",
   "setup.problem.noOwnerName": "Geben Sie den Namen der Person an, der diese Instanz gehört.",
   "setup.problem.noOwnerEmail": "Geben Sie eine gültige E-Mail-Adresse an — darüber erreicht die Registry die Eigentümerin oder den Eigentümer dieser Instanz.",
-  "setup.problem.noConsent": "Akzeptieren Sie die Datenschutzerklärung und die Plattform-Nutzungsbedingungen, um zu registrieren. Bis dahin wird nichts gesendet."
+  "setup.problem.noConsent": "Akzeptieren Sie die Datenschutzerklärung und die Plattform-Nutzungsbedingungen, um zu registrieren. Bis dahin wird nichts gesendet.",
+  "unifiedData.error.unknownCollection": "Unbekannte Sammlung '{0}': Keine registrierte Datenquelle und kein Inhaltsanbieter ist für diesen Pfad zuständig.",
+  "unifiedData.error.collectionMismatch": "Der Pfad verweist auf die Sammlung '{0}', der übermittelte Inhalt gehört jedoch zur Sammlung '{1}'.",
+  "unifiedData.error.entityIdMismatch": "Der Pfad verweist auf die Entität '{0}', der übermittelte Inhalt bezeichnet jedoch die Entität '{1}'.",
+  "unifiedData.error.missingEntityId": "Die Entitäts-ID für die Sammlung '{0}' konnte nicht bestimmt werden.",
+  "unifiedData.error.readStreamUnavailable": "Für {0}/{1} ist kein lesbarer Datenstrom verfügbar.",
+  "unifiedData.error.ownerStreamUnavailable": "Für {0}/{1} ist kein besitzender Datenstrom verfügbar.",
+  "unifiedData.error.typeSourceUnavailable": "Für {0}/{1} ist keine registrierte Datenquelle zuständig.",
+  "unifiedData.error.ownerReceiptUnavailable": "Der besitzende Datenstrom für {0}/{1} hat keine beobachtbare Commit-Version gemeldet.",
+  "unifiedData.error.readStreamEnded": "Der gemeinsame Lesedatenstrom für {0}/{1} endete, bevor er seinen aktuellen Zustand bereitstellte.",
+  "unifiedData.error.readBarrierEnded": "Der gemeinsame Lesedatenstrom für {0}/{1} endete, bevor er die bestätigte Version erreichte.",
+  "unifiedData.error.updateFailed": "Die Aktualisierung ist fehlgeschlagen.",
+  "unifiedData.error.deleteFailed": "Das Löschen ist fehlgeschlagen."
 }
