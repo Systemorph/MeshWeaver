@@ -2736,16 +2736,20 @@ internal static class NodeTypeCompilationHelpers
 
     /// <summary>
     /// The surface-id resolver over THIS mesh's environment (process surface manifest + the
-    /// mesh's installed modules) — see <see cref="Compiler.CompiledDependencies.CreateIdResolver"/>.
+    /// mesh's installed modules) — see <c>CompiledDependencies.CreateIdResolver</c>.
     /// </summary>
-    internal static Func<string, string?> DependencyIdResolverOf(IMessageHub hub) =>
-        Compiler.CompiledDependencies.CreateIdResolver(
+    internal static Func<string, string?> DependencyIdResolverOf(IMessageHub hub)
+    {
+        var versions = ModuleVersionsOf(hub);
+        return Compiler.CompiledDependencies.CreateIdResolver(
             FrameworkBuildIdentity.ProcessSurfacePairs,
             ModuleMvidsOf(hub),
-            FrameworkBuildIdentity.ProcessImplMvidOf);
+            FrameworkBuildIdentity.ProcessImplMvidOf,
+            name => versions.TryGetValue(name, out var version) ? version : null);
+    }
 
-    /// <summary>Installed module simple name → implementation MVID ("N"), for the resolver's
-    /// exact-build module ids.</summary>
+    /// <summary>Installed module simple name → implementation MVID ("N"), the resolver's fallback
+    /// module id for a module that states no version (#3934).</summary>
     internal static IReadOnlyDictionary<string, string> ModuleMvidsOf(IMessageHub hub)
     {
         var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
@@ -2755,6 +2759,25 @@ internal static class NodeTypeCompilationHelpers
             var name = module.Assembly.GetName().Name;
             if (!string.IsNullOrEmpty(name))
                 map[name] = module.Assembly.ManifestModule.ModuleVersionId.ToString("N");
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Installed module simple name → its ORDERED build version (#3934), for the resolver's
+    /// <c>min:</c> floor ids. Modules carrying no version stamp are simply absent from the map and
+    /// resolve their MVID instead — an environment that cannot state a version has no floor to
+    /// offer, and inconclusive stays on the rebuild side.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> ModuleVersionsOf(IMessageHub hub)
+    {
+        var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var module in modules)
+        {
+            var name = module.Assembly.GetName().Name;
+            if (!string.IsNullOrEmpty(name) && module.Version is { Length: > 0 } version)
+                map[name] = version;
         }
         return map;
     }

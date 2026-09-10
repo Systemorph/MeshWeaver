@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.Compiler;
 
@@ -21,11 +22,24 @@ namespace MeshWeaver.Compiler;
 ///
 /// <para><b>Surface-id schemes:</b> a platform assembly resolves its REFERENCE-ASSEMBLY hash from
 /// the process's surface manifest (<c>ref:&lt;sha&gt;</c> — moves only on a breaking surface
-/// change, the same oracle the framework identity uses); an installed module resolves its
-/// implementation MVID (<c>mvid:&lt;id&gt;</c> — modules pin by exact build, matching the bundle
-/// lane's strict-MVID gate); a platform assembly with no manifest pair falls back to its
-/// loaded/on-disk MVID. The scheme prefix keeps the two from ever comparing equal by accident.
-/// The reserved <see cref="ToolchainKey"/> entry carries the toolchain's identity
+/// change, the same oracle the framework identity uses); an installed module resolves a
+/// <b>FLOOR</b> over its build version (<c>min:&lt;version&gt;</c> — "I need at least this",
+/// satisfied by anything at or above it, #3934), falling back to its implementation MVID
+/// (<c>mvid:&lt;id&gt;</c>) only when no version can be read; a platform assembly with no manifest
+/// pair falls back to its loaded/on-disk MVID. The scheme prefix keeps them from ever comparing
+/// equal by accident.</para>
+///
+/// <para>🚨 <b>Why a module is a FLOOR and a platform assembly is not.</b> Platform assemblies are
+/// compared by API SURFACE, so a rebuild with an unchanged API compares equal and adopts. Modules
+/// were compared by raw MVID — which moves on every compilation BY CONSTRUCTION, including a
+/// rebuild of identical source — so every NodeType binding a module was declined whenever the
+/// module was rebuilt anywhere. There is no incompatibility to protect against: MeshWeaver
+/// assemblies bind by a fleet-synchronised <c>AssemblyVersion</c>, so two builds of one module name
+/// are ONE assembly identity and <c>Assembly.LoadFrom</c> returns the already-loaded copy. The
+/// measured cost of the pin, and the outage it produced, are on
+/// <c>Doc/Architecture/DependencyRecordFloor</c>.</para>
+///
+/// <para>The reserved <see cref="ToolchainKey"/> entry carries the toolchain's identity
 /// (the <see cref="FrameworkBuildIdentity.FullMvidAssemblies"/> closure members' MVIDs): the
 /// emitted code never REFERENCES the toolchain, but its generated input was shaped by it, so a
 /// record cannot claim validity across a toolchain change.</para>
@@ -41,6 +55,30 @@ public static class CompiledDependencies
 
     /// <summary>Scheme prefix for an implementation MVID.</summary>
     public const string MvidScheme = "mvid:";
+
+    /// <summary>
+    /// 🚨 Scheme prefix for a module's VERSION FLOOR (#3934) — <c>min:&lt;version&gt;</c>, meaning
+    /// "the bytes were built against this module at version X, and any build at or above X will
+    /// serve them". The ONE relaxation this scheme expresses, stated so it cannot spread:
+    ///
+    /// <list type="bullet">
+    /// <item><description>It applies to MODULE entries only. A platform <c>ref:</c> surface, a
+    /// platform fallback <c>mvid:</c>, <see cref="AbsentId"/> and both reserved <c>!</c> keys are
+    /// compared by ORDINAL EQUALITY exactly as before — <see cref="Satisfies"/> is the only place
+    /// the floor is applied, and it refuses to compare across schemes.</description></item>
+    /// <item><description>It does NOT loosen the toolchain proxy (<see cref="ToolchainKey"/>) or
+    /// the direct content-key observation (<see cref="ContentKey"/>). A module rebuild no longer
+    /// moves a record's module entry, which is precisely why it also stops moving the content key
+    /// — see <see cref="LiveContentKeyOf"/>, which folds a SATISFIED entry at its recorded value.
+    /// The toolchain entry still decides every case the content key cannot answer.</description>
+    /// </item>
+    /// <item><description>It is not a claim about compatibility that anything AUTHORS. The floor
+    /// is the version of the module the producer actually compiled against — a measured fact, not
+    /// a hand-written <c>minMeshVersion</c> claim, which <c>Doc/Architecture/ModuleAdoptionPolicy</c>
+    /// rule R2 rightly refuses to let decide anything.</description></item>
+    /// </list>
+    /// </summary>
+    public const string MinVersionScheme = "min:";
 
     /// <summary>Recorded when a name is in scope but nothing resolves an id for it — absence is
     /// part of the record, never silently skipped (two environments with different presence sets
@@ -103,7 +141,7 @@ public static class CompiledDependencies
     /// </summary>
     /// <param name="referencedSimpleNames">The emitted assembly's AssemblyRef simple names
     /// (<c>Assembly.GetReferencedAssemblies()</c> on the compiled output).</param>
-    /// <param name="idOf">The surface-id resolver (see <see cref="CreateIdResolver"/>) —
+    /// <param name="idOf">The surface-id resolver (see <c>CreateIdResolver</c>) —
     /// null = out of scope (System/TPA), excluded from the record.</param>
     /// <param name="toolchainId">The producing process's toolchain id
     /// (<see cref="ComputeToolchainId"/>).</param>
@@ -146,12 +184,29 @@ public static class CompiledDependencies
     /// provably compatible.
     /// </summary>
     /// <param name="record">The stamped record.</param>
-    /// <param name="liveIdOf">The live surface-id resolver (<see cref="CreateIdResolver"/>).</param>
+    /// <param name="liveIdOf">The live surface-id resolver (<c>CreateIdResolver</c>).</param>
     /// <param name="liveToolchainId">The live toolchain id (<see cref="ComputeToolchainId"/>).</param>
     /// <param name="liveContentKey">The content key the caller computed by REGENERATING this
     /// type's compile input (<see cref="GeneratedInputIdentity"/>), or null when it did not — see
     /// <see cref="ContentKey"/>.</param>
     public static string? FindMismatch(
+        IReadOnlyDictionary<string, string> record,
+        Func<string, string?> liveIdOf,
+        string liveToolchainId,
+        string? liveContentKey = null)
+        => Validate(record, liveIdOf, liveToolchainId, liveContentKey).Problem;
+
+    /// <summary>
+    /// <see cref="FindMismatch"/> answering WHICH outcome (#3934) — drifted, below a recorded
+    /// floor, or not checked at all. <see cref="FindMismatch"/> is a projection of this
+    /// (<see cref="DependencyRecordOutcome.Problem"/>), so the two can never disagree.
+    /// </summary>
+    /// <param name="record">The stamped record.</param>
+    /// <param name="liveIdOf">The live surface-id resolver (<c>CreateIdResolver</c>).</param>
+    /// <param name="liveToolchainId">The live toolchain id (<see cref="ComputeToolchainId"/>).</param>
+    /// <param name="liveContentKey">The content key the caller computed by REGENERATING this
+    /// type's compile input, or null when it did not — see <see cref="ContentKey"/>.</param>
+    public static DependencyRecordOutcome Validate(
         IReadOnlyDictionary<string, string> record,
         Func<string, string?> liveIdOf,
         string liveToolchainId,
@@ -184,11 +239,27 @@ public static class CompiledDependencies
     /// rebuild side.</para>
     /// </summary>
     /// <param name="record">The stamped record.</param>
-    /// <param name="liveIdOf">The live surface-id resolver (<see cref="CreateIdResolver"/>).</param>
+    /// <param name="liveIdOf">The live surface-id resolver (<c>CreateIdResolver</c>).</param>
     /// <param name="liveToolchainId">The live toolchain id (<see cref="ComputeToolchainId"/>).</param>
     /// <param name="liveContentKey">The content key the caller computed by REGENERATING this
     /// type's compile input — <see cref="LiveContentKeyOf"/>. Null when it did not.</param>
     public static string? FindMismatchAfterReevaluation(
+        IReadOnlyDictionary<string, string> record,
+        Func<string, string?> liveIdOf,
+        string liveToolchainId,
+        string? liveContentKey)
+        => ValidateAfterReevaluation(record, liveIdOf, liveToolchainId, liveContentKey).Problem;
+
+    /// <summary>
+    /// <see cref="FindMismatchAfterReevaluation"/> answering WHICH outcome (#3934).
+    /// <see cref="FindMismatchAfterReevaluation"/> is a projection of this.
+    /// </summary>
+    /// <param name="record">The stamped record.</param>
+    /// <param name="liveIdOf">The live surface-id resolver (<c>CreateIdResolver</c>).</param>
+    /// <param name="liveToolchainId">The live toolchain id (<see cref="ComputeToolchainId"/>).</param>
+    /// <param name="liveContentKey">The content key the caller computed by REGENERATING this
+    /// type's compile input — <see cref="LiveContentKeyOf"/>. Null when it did not.</param>
+    public static DependencyRecordOutcome ValidateAfterReevaluation(
         IReadOnlyDictionary<string, string> record,
         Func<string, string?> liveIdOf,
         string liveToolchainId,
@@ -202,7 +273,7 @@ public static class CompiledDependencies
         return Compare(record, liveIdOf, liveToolchainId, liveContentKey, demoteToolchain: proven);
     }
 
-    private static string? Compare(
+    private static DependencyRecordOutcome Compare(
         IReadOnlyDictionary<string, string> record,
         Func<string, string?> liveIdOf,
         string liveToolchainId,
@@ -218,8 +289,10 @@ public static class CompiledDependencies
         // always carries it; anything else (an empty or hand-assembled record) declines and the
         // type compiles, the always-safe direction.
         if (!record.ContainsKey(ToolchainKey))
-            return $"the record carries no '{ToolchainKey}' entry, so it cannot invalidate on "
-                + "toolchain changes and is not trusted";
+            return DependencyRecordOutcome.NotChecked(
+                entry: null,
+                $"the record carries no '{ToolchainKey}' entry, so it cannot invalidate on "
+                + "toolchain changes and is not trusted");
 
         foreach (var (name, stamped) in record)
         {
@@ -247,10 +320,74 @@ public static class CompiledDependencies
             }
             else
                 live = liveIdOf(name) ?? AbsentId;
-            if (!string.Equals(stamped, live, StringComparison.Ordinal))
-                return $"'{name}' built against {stamped}, live is {live}";
+            if (Classify(name, stamped, live) is { } problem)
+                return problem;
         }
-        return null;
+        return DependencyRecordOutcome.Satisfied;
+    }
+
+    /// <summary>
+    /// 🚨 THE ONE COMPARISON (#3934): whether a live id SATISFIES a stamped one. Ordinal equality
+    /// everywhere, plus exactly one relaxation — two <see cref="MinVersionScheme"/> values compare
+    /// as SemVer with <see cref="NuGetVersionComparer"/>, and the live side satisfies the stamped
+    /// one when it is at or above it.
+    ///
+    /// <para>🚨 It refuses to compare ACROSS schemes, and that refusal is the safety property. A
+    /// recorded floor against an environment that can only report an MVID is not "satisfied by
+    /// default" and not "drifted" — it is UNCOMPARABLE, which <see cref="Classify"/> reports as
+    /// <see cref="DependencyRecordStatus.NotChecked"/> and every consumer treats as rebuild. The
+    /// comparer lives in <c>MeshWeaver.Plugin.Packaging</c> and is used verbatim rather than
+    /// re-implemented: two call sites computing the same version fold differently either never
+    /// converge or never fire, and both are silent (<c>check-module-platform-floor.py</c>).</para>
+    /// </summary>
+    /// <param name="stamped">The recorded id.</param>
+    /// <param name="live">The live id.</param>
+    public static bool Satisfies(string stamped, string live)
+    {
+        if (string.Equals(stamped, live, StringComparison.Ordinal))
+            return true;
+        if (!IsFloor(stamped) || !IsFloor(live))
+            return false;
+        return NuGetVersionComparer.Instance.Compare(VersionOf(live), VersionOf(stamped)) >= 0;
+    }
+
+    /// <summary>True for a <see cref="MinVersionScheme"/> id.</summary>
+    private static bool IsFloor(string id) =>
+        id.StartsWith(MinVersionScheme, StringComparison.Ordinal);
+
+    /// <summary>The version text of a <see cref="MinVersionScheme"/> id.</summary>
+    private static string VersionOf(string id) => id[MinVersionScheme.Length..];
+
+    /// <summary>
+    /// The per-entry verdict: null when the entry holds, else the outcome naming WHY it does not.
+    /// The three non-satisfied shapes are deliberately distinct — a floor that is genuinely below
+    /// is a different fact, with a different remedy, from a surface that moved and from an entry
+    /// nothing could compare.
+    /// </summary>
+    private static DependencyRecordOutcome? Classify(string name, string stamped, string live)
+    {
+        if (Satisfies(stamped, live))
+            return null;
+        if (IsFloor(stamped) && IsFloor(live))
+            // Compared, and genuinely below. The remedy names itself: land a newer module.
+            return DependencyRecordOutcome.FloorNotMet(name,
+                $"'{name}' needs at least {VersionOf(stamped)} — this environment has "
+                + $"{VersionOf(live)}, below the recorded floor");
+        if ((IsFloor(stamped) || IsFloor(live))
+            && !string.Equals(live, AbsentId, StringComparison.Ordinal)
+            && !string.Equals(stamped, AbsentId, StringComparison.Ordinal))
+            // 🚨 One side records a floor and the other cannot express one (a legacy record's
+            // exact-build pin, an environment that reads no version off the module, a module the
+            // platform now ships as a ref: surface). Nothing was established either way.
+            //
+            // 🚨 AbsentId is deliberately NOT in here. "The name is in scope and nothing resolves
+            // it" is a MEASURED fact about this environment — the build binds something that is
+            // not here — so it is a drift with a definite answer, not an inability to compare.
+            return DependencyRecordOutcome.NotChecked(name,
+                $"'{name}' recorded {stamped} and this environment reports {live} — the two cannot "
+                + "be compared, so nothing was checked and the build is not adopted");
+        // The pre-#3934 sentence, byte-for-byte: every exact-id entry still reports exactly this.
+        return DependencyRecordOutcome.Drifted(name, $"'{name}' built against {stamped}, live is {live}");
     }
 
     /// <summary>
@@ -272,7 +409,7 @@ public static class CompiledDependencies
     /// treat it as "rebuild", never as "match".</para>
     /// </summary>
     /// <param name="record">The stamped record.</param>
-    /// <param name="liveIdOf">The live surface-id resolver (<see cref="CreateIdResolver"/>).</param>
+    /// <param name="liveIdOf">The live surface-id resolver (<c>CreateIdResolver</c>).</param>
     /// <param name="liveGeneratedInputDigest">The stage-1 digest
     /// (<see cref="GeneratedInputIdentity.OfGeneratedInput"/>) of the compile input as REGENERATED
     /// now, or null when the caller did not regenerate.</param>
@@ -288,8 +425,20 @@ public static class CompiledDependencies
         return GeneratedInputIdentity.Combine(
             liveGeneratedInputDigest,
             record.Where(pair => !IsReservedKey(pair.Key))
-                .Select(pair => new KeyValuePair<string, string>(
-                    pair.Key, liveIdOf(pair.Key) ?? AbsentId)));
+                .Select(pair =>
+                {
+                    var live = liveIdOf(pair.Key) ?? AbsentId;
+                    // 🚨 FOLD A SATISFIED ENTRY AT ITS RECORDED VALUE (#3934). The key's assembly
+                    // half asks "does every entry the build binds still HOLD here" — and under
+                    // floor semantics holding is satisfaction, not identity. Folding the live
+                    // value verbatim would make a module rebuilt ABOVE the floor move the key, so
+                    // the toolchain demotion this key exists to license would be lost on exactly
+                    // the environments the floor was added for. It cannot widen anything: a
+                    // non-satisfying entry folds its LIVE value (so the key differs and nothing is
+                    // demoted), and Compare re-checks every entry independently afterwards.
+                    return new KeyValuePair<string, string>(
+                        pair.Key, Satisfies(pair.Value, live) ? pair.Value : live);
+                }));
     }
 
     /// <summary>
@@ -322,6 +471,23 @@ public static class CompiledDependencies
         key.StartsWith('!');
 
     /// <summary>
+    /// True for an id in the MODULE lane — <see cref="MinVersionScheme"/> (a floor) or
+    /// <see cref="MvidScheme"/> (the exact pin a version-less module still resolves). The ONE
+    /// predicate for "this entry names a module rather than a platform surface", so a reader that
+    /// enumerates a record's module entries cannot silently stop seeing half of them when a
+    /// producer starts stating versions (#3934).
+    ///
+    /// <para>🚨 <see cref="MvidScheme"/> is deliberately included even though it is ALSO the
+    /// platform fallback for a manifest-less assembly: that ambiguity predates the floor, every
+    /// reader already lived with it, and narrowing it here would change what those readers see for
+    /// a reason unrelated to this change.</para>
+    /// </summary>
+    /// <param name="id">A record entry's value.</param>
+    public static bool IsModuleLaneId(string id) =>
+        id.StartsWith(MinVersionScheme, StringComparison.Ordinal)
+        || id.StartsWith(MvidScheme, StringComparison.Ordinal);
+
+    /// <summary>
     /// The surface-id resolver over one environment: installed modules FIRST (exact-build MVID —
     /// a module name wins even when it starts with <c>MeshWeaver.</c>, because modules pin by
     /// build), then platform assemblies (<c>MeshWeaver.*</c>: manifest ref-asm hash, else
@@ -339,10 +505,40 @@ public static class CompiledDependencies
         IReadOnlyDictionary<string, string> surfaceByName,
         IReadOnlyDictionary<string, string> moduleMvidByName,
         Func<string, string?> implMvidOf)
+        => CreateIdResolver(surfaceByName, moduleMvidByName, implMvidOf, static _ => null);
+
+    /// <summary>
+    /// <see cref="CreateIdResolver(IReadOnlyDictionary{string, string}, IReadOnlyDictionary{string, string}, Func{string, string})"/>
+    /// with the module lane resolving a VERSION FLOOR (#3934) instead of an exact build.
+    ///
+    /// <para>A module name that <paramref name="moduleVersionOf"/> answers resolves
+    /// <c>min:&lt;version&gt;</c>; a module it cannot answer for falls back to
+    /// <c>mvid:&lt;id&gt;</c> — the pre-#3934 exact pin — because an environment that cannot state
+    /// a version has no floor to offer and INCONCLUSIVE must stay on the rebuild side. The
+    /// three-argument overload is exactly this one with a resolver that answers nothing, which is
+    /// the honest reading of a caller that has no version to give.</para>
+    ///
+    /// <para>🚨 Producer and consumer must resolve the version the SAME way, or a floor is
+    /// compared against a value nobody else computes — <c>InstalledModuleAssembly.Version</c> is
+    /// the one reader, and both the portal (<c>NodeTypeCompilationHelpers</c>) and the bake host
+    /// (<c>mw-plugin-test</c>) go through it.</para>
+    /// </summary>
+    /// <param name="surfaceByName">The process's surface-manifest pairs.</param>
+    /// <param name="moduleMvidByName">Installed module assembly simple name → MVID ("N").</param>
+    /// <param name="implMvidOf">Fallback MVID resolution for manifest-less platform assemblies.</param>
+    /// <param name="moduleVersionOf">Installed module assembly simple name → its build version
+    /// (<c>InstalledModuleAssembly.Version</c>), or null when none can be read.</param>
+    public static Func<string, string?> CreateIdResolver(
+        IReadOnlyDictionary<string, string> surfaceByName,
+        IReadOnlyDictionary<string, string> moduleMvidByName,
+        Func<string, string?> implMvidOf,
+        Func<string, string?> moduleVersionOf)
         => name =>
         {
             if (moduleMvidByName.TryGetValue(name, out var moduleMvid))
-                return MvidScheme + moduleMvid;
+                return moduleVersionOf(name) is { Length: > 0 } version
+                    ? MinVersionScheme + version
+                    : MvidScheme + moduleMvid;
             if (!name.StartsWith("MeshWeaver.", StringComparison.Ordinal))
                 return null;
             if (surfaceByName.TryGetValue(name, out var surface))

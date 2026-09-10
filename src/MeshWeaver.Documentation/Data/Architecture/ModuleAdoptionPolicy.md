@@ -155,7 +155,7 @@ All four steps are implemented: 1 is [#3661](https://github.com/Systemorph/MeshW
 
 ## What stays exactly as it is
 
-- The **content bake identity rule**: a NodeType assembly adopts only for the identity it was baked against. Wrong bytes are worse than no bytes.
+- The **content bake identity rule**: a NodeType assembly adopts only for the identity it was baked against. Wrong bytes are worse than no bytes. 🚨 The per-type DEPENDENCY RECORD beneath it changed on 2026-09-10 and this rule did not: a module entry is now a FLOOR over the module's version rather than its MVID, so a module REBUILD stops declining a bundle while a genuinely older module still does — [The Dependency Record Floor](../DependencyRecordFloor). That is the same instinct as R2 one layer down (a different build is not evidence of incompatibility), and it relaxes nothing about the framework identity, the toolchain entry or the content key.
 - The **seal**: a publication is real when `_complete` is written last and every listed file exists; a torn publication is refused whole (#3461, #3401).
 - **Never roll back unattended**: an older served version is never adopted over a newer landed one (`SkipOlder`).
 - **Never swap a module in a running process**: a new generation loads at the next restart; the policy makes that restart happen (step 3), it does not make the swap live.
