@@ -370,7 +370,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // Successful/transient probes remove their claim; a missing result keeps it only for the
     // lifetime of the negative entry, so this registry has the same bounded cardinality as the
     // in-flight probes + _negative rather than growing once per path ever seen (#3954).
-    private sealed class NegativeProbeClaim(int priorFailCount)
+    internal sealed class NegativeProbeClaim(int priorFailCount)
     {
         private int invalidated;
         public int PriorFailCount { get; } = priorFailCount;
@@ -837,8 +837,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     internal void ResetFailureState(string path)
     {
-        InvalidateNegativeProbe(path);
-        if (_negative.TryRemove(path, out var cleared))
+        var invalidatedClaim = InvalidateNegativeProbe(path);
+        if (TryRemoveNegativeGeneration(path, invalidatedClaim, out var cleared))
         {
             // One line when a genuinely-suppressed storm is lifted (mirrors the
             // single "[STORM-BREAKER] suppressing" warning); routine clears stay at Debug.
@@ -1034,10 +1034,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
         // 5. Storm-breaker negative cache — drop the cached failure windows so
         //    nothing roots the disposed mesh's exceptions/identities.
-        _negative.Clear();
         foreach (var claim in _negativeClaims.Values)
             claim.Invalidate();
         _negativeClaims.Clear();
+        _negative.Clear();
         _transientStreaks.Clear();
 
 
@@ -1185,7 +1185,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 {
                     if (node is not null)
                     {
-                        _negative.TryRemove(p, out _);
+                        TryRemoveNegativeGeneration(p, negativeClaim, out _);
                         CompleteNegativeProbe(p, negativeClaim);
                         _transientStreaks.TryRemove(p, out _);
                     }
@@ -1224,6 +1224,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 },
                 () => CompleteNegativeProbe(p, negativeClaim));
             disposal.Add(bookkeeping);
+            disposal.Add(System.Reactive.Disposables.Disposable.Create(
+                () => CompleteNegativeProbeUnlessRetained(p, negativeClaim)));
             return entry;
         }
         catch
@@ -1507,41 +1509,98 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// write, in which case the pair-exact removal retracts the stale entry. Readers also validate
     /// the claim, so even that short-lived entry can never fast-fail a caller (#3954).
     /// </summary>
-    private bool TryRecordNegative(string path, Exception error, NegativeProbeClaim? claim)
+    private bool TryRecordNegative(string path, Exception error, NegativeProbeClaim? claim) =>
+        TryRecordNegative(path, error, claim, afterClaimCheck: null);
+
+    /// <summary>Test seam for the one CAS interleaving that cannot be held from outside the
+    /// dictionary: <paramref name="afterClaimCheck"/> runs after the final claim check and after
+    /// the expected dictionary pair was captured, immediately before publication.</summary>
+    internal bool TryRecordNegativeForTest(
+        string path,
+        Exception error,
+        NegativeProbeClaim claim,
+        Action afterClaimCheck) =>
+        TryRecordNegative(path, error, claim, afterClaimCheck);
+
+    /// <summary>The write-side admission stays a named seam so its independent use of the claim
+    /// protocol is pinned without having to substitute a mesh owner.</summary>
+    private bool TryRecordWriteNegative(string path, Exception error, NegativeProbeClaim claim) =>
+        IsMissingNodeFailure(error) && TryRecordNegative(path, error, claim);
+
+    internal bool TryRecordWriteNegativeForTest(
+        string path, Exception error, NegativeProbeClaim claim) =>
+        TryRecordWriteNegative(path, error, claim);
+
+    private bool TryRecordNegative(
+        string path,
+        Exception error,
+        NegativeProbeClaim? claim,
+        Action? afterClaimCheck)
     {
-        if (claim is not null && !ClaimStillHeld(path, claim))
-            return false;
-        var priorFails = Math.Max(
-            _negative.TryGetValue(path, out var existing) ? existing.FailCount : 0,
-            claim?.PriorFailCount ?? 0);
-        var failCount = priorFails + 1;
-        // 2^(n-1) capped at 20 shifts (~12 days) before the Min — StormMaxCooldown
-        // is the real ceiling; the cap just keeps the intermediate from overflowing.
-        var backoffTicks = Math.Min(
-            StormBaseCooldown.Ticks * (1L << Math.Min(failCount - 1, 20)),
-            StormMaxCooldown.Ticks);
-        var recorded = new NegativeEntry(
-            error,
-            failCount,
-            DateTimeOffset.UtcNow + TimeSpan.FromTicks(backoffTicks),
-            Claim: claim);
-        _negative[path] = recorded;
-        if (claim is not null && !ClaimStillHeld(path, claim))
+        while (true)
         {
-            _negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, recorded));
-            return false;
+            if (claim is not null && !ClaimStillHeld(path, claim))
+                return false;
+
+            var hasExisting = _negative.TryGetValue(path, out var existing);
+            if (hasExisting && existing!.Claim is not null
+                && !ReferenceEquals(existing.Claim, claim))
+            {
+                // A stale claimed entry is dead state and may be removed pair-exact. A CURRENT
+                // different claim means this caller is stale (or is the claim-less test seam) and
+                // must never overwrite the current probe's verdict.
+                if (!IsCurrentNegative(path, existing))
+                {
+                    _negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, existing));
+                    continue;
+                }
+                return false;
+            }
+
+            var priorFails = Math.Max(hasExisting ? existing!.FailCount : 0, claim?.PriorFailCount ?? 0);
+            var failCount = priorFails + 1;
+            // 2^(n-1) capped at 20 shifts (~12 days) before the Min — StormMaxCooldown
+            // is the real ceiling; the cap just keeps the intermediate from overflowing.
+            var backoffTicks = Math.Min(
+                StormBaseCooldown.Ticks * (1L << Math.Min(failCount - 1, 20)),
+                StormMaxCooldown.Ticks);
+            var recorded = new NegativeEntry(
+                error,
+                failCount,
+                DateTimeOffset.UtcNow + TimeSpan.FromTicks(backoffTicks),
+                Claim: claim);
+
+            if (claim is not null && !ClaimStillHeld(path, claim))
+                return false;
+
+            // Test-only rendezvous; production always passes null. It holds the exact race:
+            // another probe can replace this claim and publish between validation and CAS.
+            afterClaimCheck?.Invoke();
+            afterClaimCheck = null;
+
+            var published = hasExisting
+                ? _negative.TryUpdate(path, recorded, existing!)
+                : _negative.TryAdd(path, recorded);
+            if (!published)
+                continue;
+
+            if (claim is not null && !ClaimStillHeld(path, claim))
+            {
+                _negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, recorded));
+                return false;
+            }
+            if (failCount == StormFailThreshold)
+                logger.LogWarning(
+                    "[STORM-BREAKER] Suppressing re-probe of '{Path}' after {FailCount} consecutive access failures: {Error}. "
+                    + "Reads AND writes fast-fail until the backoff window elapses. A point node-access to a node that does "
+                    + "not exist is a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath); "
+                    + "bring a new node into being with CreateNode, not Update.",
+                    path, failCount, error.Message);
+            return true;
         }
-        if (failCount == StormFailThreshold)
-            logger.LogWarning(
-                "[STORM-BREAKER] Suppressing re-probe of '{Path}' after {FailCount} consecutive access failures: {Error}. "
-                + "Reads AND writes fast-fail until the backoff window elapses. A point node-access to a node that does "
-                + "not exist is a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath); "
-                + "bring a new node into being with CreateNode, not Update.",
-                path, failCount, error.Message);
-        return true;
     }
 
-    private NegativeProbeClaim BeginNegativeProbe(string path)
+    internal NegativeProbeClaim BeginNegativeProbe(string path)
     {
         while (true)
         {
@@ -1584,13 +1643,70 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             claim.Invalidate();
     }
 
-    private void InvalidateNegativeProbe(string path)
+    private void CompleteNegativeProbeUnlessRetained(string path, NegativeProbeClaim claim)
+    {
+        if (_negative.TryGetValue(path, out var negative)
+            && ReferenceEquals(negative.Claim, claim)
+            && ClaimStillHeld(path, claim))
+            return;
+        CompleteNegativeProbe(path, claim);
+    }
+
+    internal NegativeProbeClaim? InvalidateNegativeProbe(string path)
     {
         if (!_negativeClaims.TryGetValue(path, out var claim))
-            return;
+            return null;
         claim.Invalidate();
         _negativeClaims.TryRemove(new KeyValuePair<string, NegativeProbeClaim>(path, claim));
+        return claim;
     }
+
+    private bool TryRemoveNegativeGeneration(
+        string path,
+        NegativeProbeClaim? invalidatedClaim,
+        out NegativeEntry removed)
+    {
+        while (_negative.TryGetValue(path, out var candidate))
+        {
+            // A claimed entry from a replacement probe began after this invalidation. Never let a
+            // path-only clear erase that newer genuine miss and its backoff (#3954 review).
+            if (candidate.Claim is not null
+                && !ReferenceEquals(candidate.Claim, invalidatedClaim))
+            {
+                if (IsCurrentNegative(path, candidate))
+                {
+                    removed = null!;
+                    return false;
+                }
+                // It belongs to an already-invalidated generation. Removing that dead pair is
+                // safe and prevents an explicit clear from leaving stale state merely because
+                // its claim had already been detached by another terminal path.
+                if (_negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, candidate)))
+                {
+                    removed = candidate;
+                    return true;
+                }
+                continue;
+            }
+            if (_negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, candidate)))
+            {
+                removed = candidate;
+                return true;
+            }
+        }
+        removed = null!;
+        return false;
+    }
+
+    internal bool TryRemoveNegativeGenerationForTest(string path, NegativeProbeClaim? invalidatedClaim) =>
+        TryRemoveNegativeGeneration(path, invalidatedClaim, out _);
+
+    internal Exception? CurrentNegativeErrorForTest(string path) =>
+        _negative.TryGetValue(path, out var negative) && IsCurrentNegative(path, negative)
+            ? negative.Error
+            : null;
+
+    internal bool HasNegativeProbeClaimForTest(string path) => _negativeClaims.ContainsKey(path);
 
     /// <summary>
     /// Records an owner fault that is NOT a genuine missing node — the transient class
@@ -2307,8 +2423,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
                         // A successful write proves the owner is live ⇒ clear any storm-breaker
                         // window so reads/writes re-probe normally.
-                        InvalidateNegativeProbe(path);
-                        _negative.TryRemove(path, out _);
+                        var invalidatedClaim = InvalidateNegativeProbe(path);
+                        TryRemoveNegativeGeneration(path, invalidatedClaim, out _);
                         // Write activity refreshes the read entry's idle window — GetEntry
                         // pinned it at write START; touching again on each terminal keeps
                         // an in-flight write's upstream out of the idle sweep's reach.
@@ -2328,8 +2444,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         // instead of re-enqueueing doomed PatchDataRequests against a hub that can't
                         // activate. Only missing-node failures record (not RLS denial / transient),
                         // so a legitimately-existing node is never falsely suppressed.
-                        if (IsMissingNodeFailure(ex)
-                            && TryRecordNegative(path, ex, negativeClaim))
+                        if (TryRecordWriteNegative(path, ex, negativeClaim))
                             Volatile.Write(ref keepNegativeClaim, 1);
                         entry.Touch();
                         // 🚨 A Conflict NACK is the owner PRESCRIBING the remedy: "re-read and
@@ -3126,8 +3241,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     public void Invalidate(string path)
     {
-        InvalidateNegativeProbe(path);
-        _negative.TryRemove(path, out _);
+        var invalidatedClaim = InvalidateNegativeProbe(path);
+        TryRemoveNegativeGeneration(path, invalidatedClaim, out _);
         if (_streams.TryRemove(path, out var lazyEntry))
         {
             // Dispose the upstream SubscribeRequest so it doesn't dangle in

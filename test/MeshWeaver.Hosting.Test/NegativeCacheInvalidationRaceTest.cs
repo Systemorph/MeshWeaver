@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
@@ -35,7 +36,7 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
     /// </summary>
     private sealed class HeldMissingOwner : IDisposable
     {
-        private readonly IDisposable registration;
+        private IDisposable? registration;
         private readonly AsyncSubject<Unit> requestEntered = new();
         private int release;
         private int gateTimedOut;
@@ -73,7 +74,8 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
         public IObservable<Unit> RequestEntered => requestEntered;
         public bool GateTimedOut => Volatile.Read(ref gateTimedOut) != 0;
         public void Release() => Volatile.Write(ref release, 1);
-        public void Dispose() => registration.Dispose();
+        public void RestoreRealOwner() => Interlocked.Exchange(ref registration, null)?.Dispose();
+        public void Dispose() => RestoreRealOwner();
     }
 
     private async Task<string> CreateNodeAsync()
@@ -154,8 +156,134 @@ public class NegativeCacheInvalidationRaceTest(ITestOutputHelper output) : Monol
                 "the delayed verdict must be exactly the failure class that normally opens the negative window");
             owner.GateTimedOut.Should().BeFalse(
                 "the test must release the parked verdict; a self-expired gate proves no ordering");
+
+            // Do NOT call IsStormWindowOpen first: that diagnostic helper rejects and removes a
+            // stale-claim entry itself. The real read and write surfaces must both recover without
+            // help from the diagnostic seam.
+            owner.RestoreRealOwner();
+            var recovered = await Cache.GetStream(path, Mesh.JsonSerializerOptions)
+                .Take(1).Timeout(TestTimeouts.Convergence).Await();
+            recovered.Path.Should().Be(path);
+            var updated = await Cache.Update(
+                    path,
+                    node => node with { Name = "Recovered after stale read verdict" },
+                    Mesh.JsonSerializerOptions)
+                .Take(1).Timeout(TestTimeouts.Convergence).Await();
+            updated.Name.Should().Be("Recovered after stale read verdict");
             Cache.IsStormWindowOpen(path).Should().BeFalse(
                 "the change event is authoritative over a missing verdict minted in the older failure era");
+        }
+        finally
+        {
+            owner.Release();
+        }
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task WriteMissingVerdictThatLandsAfterInvalidation_DoesNotRearmOrFastFailTheNextWrite()
+    {
+        var path = await CreateNodeAsync();
+        var writeClaim = Cache.BeginNegativeProbe(path);
+        PublishAuthoritativeChange(path);
+        var lateMissing = new InvalidOperationException(
+            $"No node found at '{path}'. Closest ancestor is 'TestData'.");
+
+        Cache.TryRecordWriteNegativeForTest(path, lateMissing, writeClaim).Should().BeFalse(
+            "the exact claim captured before the write's owner round-trip was invalidated by the change");
+
+        // Exercise the real write fast-fail guard before IsStormWindowOpen gets a chance to clean
+        // stale state. A mistakenly admitted old write verdict would fail this synchronously.
+        var updated = await Cache.Update(
+                path,
+                node => node with { Name = "write recovered" },
+                Mesh.JsonSerializerOptions)
+            .Take(1).Timeout(TestTimeouts.Convergence).Await();
+        updated.Name.Should().Be("write recovered");
+        Cache.IsStormWindowOpen(path).Should().BeFalse();
+    }
+
+    /// <summary>Holds the review's exact critical interleaving: the old claim has passed its last
+    /// validation and captured the dictionary pair; a replacement then publishes before the old
+    /// caller executes its CAS. The replacement must remain present.</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task OlderProbeCannotOverwriteOrRemoveANewerProbesNegativeEntry()
+    {
+        var path = $"{TestPartition}/negative-cas-{Guid.NewGuid():N}";
+        var oldClaim = Cache.BeginNegativeProbe(path);
+        var oldError = new InvalidOperationException("old missing verdict");
+        var newError = new InvalidOperationException("new missing verdict");
+        var oldReachedPublish = new AsyncSubject<Unit>();
+        var oldResult = new AsyncSubject<bool>();
+        var releaseOld = 0;
+
+        Observable.Start(
+                () => Cache.TryRecordNegativeForTest(path, oldError, oldClaim, () =>
+                {
+                    oldReachedPublish.OnNext(Unit.Default);
+                    oldReachedPublish.OnCompleted();
+                    SpinWait.SpinUntil(
+                        () => Volatile.Read(ref releaseOld) == 1,
+                        TestTimeouts.Convergence);
+                }),
+                TaskPoolScheduler.Default)
+            .Subscribe(oldResult);
+
+        try
+        {
+            await oldReachedPublish.Should().Within(TestTimeouts.Convergence).Emit(
+                "the old probe must be parked after validation and before publication");
+            var newClaim = Cache.BeginNegativeProbe(path);
+            Cache.TryRecordNegativeForTest(path, newError, newClaim, static () => { }).Should().BeTrue();
+
+            Volatile.Write(ref releaseOld, 1);
+            (await oldResult.Should().Within(TestTimeouts.Convergence).Emit()).Should().BeFalse(
+                "the stale claim lost publication ownership");
+            Cache.CurrentNegativeErrorForTest(path).Should().BeSameAs(newError,
+                "the stale writer must neither overwrite nor pair-remove the newer entry");
+        }
+        finally
+        {
+            Volatile.Write(ref releaseOld, 1);
+            Cache.Invalidate(path);
+        }
+    }
+
+    [Fact]
+    public void PairExactClearCannotDeleteAReplacementProbesNegativeEntry()
+    {
+        var path = $"{TestPartition}/negative-clear-{Guid.NewGuid():N}";
+        var oldClaim = Cache.BeginNegativeProbe(path);
+        Cache.TryRecordNegativeForTest(
+            path, new InvalidOperationException("old"), oldClaim, static () => { }).Should().BeTrue();
+        var invalidated = Cache.InvalidateNegativeProbe(path);
+        var newClaim = Cache.BeginNegativeProbe(path);
+        var newError = new InvalidOperationException("new");
+        Cache.TryRecordNegativeForTest(path, newError, newClaim, static () => { }).Should().BeTrue();
+
+        Cache.TryRemoveNegativeGenerationForTest(path, invalidated).Should().BeFalse(
+            "ResetFailureState and Invalidate may clear only the generation they invalidated");
+        Cache.CurrentNegativeErrorForTest(path).Should().BeSameAs(newError);
+        Cache.Invalidate(path);
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task TeardownOfAPendingReadReleasesItsNegativeProbeClaim()
+    {
+        var path = await CreateNodeAsync();
+        using var owner = new HeldMissingOwner(
+            Mesh,
+            Mesh.ServiceProvider.GetRequiredService<IRoutingService>(),
+            path);
+        using var subscriber = Cache.GetStream(path, Mesh.JsonSerializerOptions).Subscribe(_ => { }, _ => { });
+        try
+        {
+            await owner.RequestEntered.Should().Within(TestTimeouts.Convergence).Emit();
+            Cache.HasNegativeProbeClaimForTest(path).Should().BeTrue();
+            subscriber.Dispose();
+            Cache.ReleaseIfUnwatched(path).Should().BeTrue(
+                "the final-subscriber path is the teardown that can win before an owner terminal");
+            Cache.HasNegativeProbeClaimForTest(path).Should().BeFalse(
+                "a pending hydration with no negative entry retains no claim after teardown");
         }
         finally
         {
