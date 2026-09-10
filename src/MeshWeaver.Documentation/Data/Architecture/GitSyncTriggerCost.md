@@ -150,8 +150,9 @@ necessarily disarms the first:
 So the allow-list's stated invariant — *"a sync source already sitting on the built sha is skipped …
 so a scheduled re-verification triggers no import at all"* — holds for every source that converges
 and **for no source that does not**. On the converging sources the 15-minute probe costs nothing at
-all; on one that cannot converge, the same probe is a full clone of that repository, 96 times a day,
-on top of roughly three per merge.
+all; on one that cannot converge, the same probe is a full clone of that repository — 87 times in the
+measured 24 h (the cron offers 96; only the green runs are publish signals) — on top of roughly three
+per merge.
 
 None of the three freeze conditions resolves by itself:
 
