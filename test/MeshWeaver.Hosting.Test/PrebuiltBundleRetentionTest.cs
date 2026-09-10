@@ -894,4 +894,52 @@ public class PrebuiltBundleRetentionTest : IDisposable
         read.Interval.Should().Be(TimeSpan.FromHours(6));
         read.UnsealedGrace.Should().Be(PrebuiltBundleRetention.Default.UnsealedGrace);
     }
+
+    /// <summary>
+    /// #3963 — the report states the DENOMINATOR, so "the sweep examined 482 identities and none
+    /// was collectable" can never be mistaken for "the sweep examined nothing".
+    ///
+    /// <para>Both read <c>collectable=0</c> and neither writes a removal line, so a ledger that
+    /// counted only ACTIONS would make a sweep pointed at the wrong directory — an unmounted share,
+    /// a typo'd root, a store the pod cannot see — indistinguishable from a clean one. That is this
+    /// fleet's recurring failure: a zero whose denominator nobody printed.</para>
+    ///
+    /// <para>The two halves are asserted against EACH OTHER, not merely against a substring: the
+    /// point is that the two situations produce DIFFERENT text.</para>
+    /// </summary>
+    [Fact]
+    public void TheReportNamesItsDenominator_SoAnUnexaminedStoreCannotReadAsACleanOne()
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Sealed("s-recent-a", "plugins", DaysAgo(2));
+        Sealed("s-recent-b", "plugins", DaysAgo(3));
+
+        var examined = PlanNow();
+
+        // Nothing is collectable here — every identity is inside the 30-day window — so the ONLY
+        // thing separating this from a sweep that saw an empty store is the count it prints.
+        examined.Collectable.Should().BeEmpty();
+        examined.Summary.Should().StartWith("3 identity directory(ies)");
+        examined.Summary.Should().Contain("collectable=0");
+
+        var emptyRoot = Path.Combine(Path.GetTempPath(), $"mw-prebuilt-empty-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(emptyRoot);
+        try
+        {
+            var unexamined = PrebuiltBundleStore.Plan(
+                Live, "3.1.0-ci.9000", PrebuiltBundleStore.Scan(emptyRoot), [], [], retention, Now);
+
+            unexamined.Collectable.Should().BeEmpty();
+            unexamined.Summary.Should().StartWith("0 identity directory(ies)");
+            unexamined.Summary.Should().Contain("collectable=0");
+
+            examined.Summary.Should().NotBe(unexamined.Summary,
+                "a sweep that examined 3 identities and one that examined none must not produce "
+                + "the same report — otherwise a sweep pointed at the wrong root reads as clean");
+        }
+        finally
+        {
+            try { Directory.Delete(emptyRoot, recursive: true); } catch { /* best effort */ }
+        }
+    }
 }

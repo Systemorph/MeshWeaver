@@ -121,6 +121,26 @@ data:
          Empty renders harmlessly: the host skips blank values, and the seeding logs "no published
          bundle root configured" at debug and stays inert. */}}
   PreWarm__PrebuiltBundleRoot: "{{ .Values.config.memex_portal.PreWarm__PrebuiltBundleRoot }}"
+  {{- /* PreWarm__PrebuiltBundleRetention__Delete: ARMS DELETION in the retention sweep over the
+         store the key above mounts (PrebuiltBundleRetentionExtensions.DeleteConfigKey). The scan,
+         the plan and the ledger line happen either way; this key alone decides whether the pass
+         REMOVES anything.
+
+         🚨 THE CODE DEFAULT IS THE OPPOSITE. PrebuiltBundleRetention.Delete is `true`, so until
+         this line existed the sweep ran ARMED on every instance that mounts a bundle root — and
+         the knob to disarm it was UNREACHABLE, because this configmap enumerates keys explicitly
+         (see the PreWarm__PrebuiltBundleRoot note above): a values file, an overlay or a
+         Deployment record's extraPortalConfig setting it reached no container, silently. That is
+         the Memex#53 / #1660 WS3 shape again, this time on a knob whose omission DELETES.
+
+         🚨 What this sweep removes is bytes something is EXECUTING — the framework identity a
+         portal adopted, or the sealed publication a consumer pulls over the HTTP prebuilt
+         surface. It belongs to the AssemblyCache__Retention__Delete class below, never to the
+         armed-by-default Notifications one, and it carries the same rule: read one ledger line,
+         confirm the protected set covers every instance AND every CI gate that pins an older
+         platform build, then arm it. A first run that deletes on unexamined defaults is the one
+         mistake here that cannot be undone. See Doc/Architecture/PrebuiltBundleRetention. */}}
+  PreWarm__PrebuiltBundleRetention__Delete: "{{ .Values.config.memex_portal.PreWarm__PrebuiltBundleRetention__Delete | default "false" }}"
   # ---- Assembly-cache retention -------------------------------------------
   # The bake writes one WHOLE GENERATION of NodeType assemblies per image, because the store
   # keys every file by the MeshWeaver.Graph MVID and a CI build changes it on every publish.
