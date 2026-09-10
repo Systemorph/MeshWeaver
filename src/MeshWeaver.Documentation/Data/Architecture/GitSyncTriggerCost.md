@@ -405,8 +405,9 @@ repository's own CONTENT CI prove this tree"*. The discriminator for that is alr
 satellite, `dotnet-test.yml` in core). Keyed on that, the probe, the PR-updater, `Deployment Smoke`,
 `Arm credential`, `Chart Gate` and `Hosting Operator` all fall out under one rule, no repository
 loses its only signal, and the trigger allow-list can stay as wide as it is. That is a separate
-change with its own risk (a repository that declares the wrong workflow stops syncing silently), and
-it is filed as such.
+change with its own risk — a repository that declares the wrong workflow stops syncing silently,
+which is exactly MeshWeaver.Plugins#1194 recreated — and it is filed as #3978, together with the
+correctness finding above.
 
 ## See also
 
