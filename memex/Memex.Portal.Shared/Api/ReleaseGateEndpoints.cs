@@ -1,7 +1,11 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using Memex.Portal.Shared.SelfUpdate;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.AspNetCore.Builder;
@@ -24,7 +28,7 @@ namespace Memex.Portal.Shared.Api;
 /// of recomputing it. The portal's own poller calls the same
 /// <see cref="ReleaseAvailabilityService"/> in-process.</para>
 ///
-/// <para>🚨 <b>Auth is the instance key</b>, the same <c>mwi_</c> gate as the bundle routes, and it
+/// <para>🚨 <b>Auth is an instance key or a build granted <c>verify:combo</c></b>, the same <c>mwi_</c> gate as the bundle routes, and it
 /// fails CLOSED: the response names installed packages and the reasons a release is unsafe, which
 /// is deployment inventory, not public information.</para>
 ///
@@ -78,6 +82,12 @@ public static class ReleaseGateEndpoints
     /// </summary>
     public const string ComboRoute = "/api/plugins/combo";
 
+    /// <summary>Accepts one compatibility verdict from an explicitly trusted build.</summary>
+    public const string VerificationRoute = "/api/plugins/combo-verification";
+
+    /// <summary>The local resource named by a build's <c>verify:combo</c> grant.</summary>
+    public const string VerificationResource = "combo";
+
     /// <summary>Maps the instance-key-gated release gate. Call alongside <c>MapPluginBundles</c>.</summary>
     public static IEndpointRouteBuilder MapReleaseGate(this IEndpointRouteBuilder endpoints)
     {
@@ -88,6 +98,9 @@ public static class ReleaseGateEndpoints
                 Selection(http, current, ct))
             .AllowAnonymous();
         endpoints.MapGet(ComboRoute, (HttpContext http, CancellationToken ct) => Combo(http, ct))
+            .AllowAnonymous();
+        endpoints.MapPost(VerificationRoute, (HttpContext http, CancellationToken ct) =>
+                RecordVerification(http, ct))
             .AllowAnonymous();
         return endpoints;
     }
@@ -108,9 +121,9 @@ public static class ReleaseGateEndpoints
         return authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
             .SelectMany(outcome => outcome.IsUnavailable
                 ? Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger))
-                : outcome.Instance is null
+                : outcome.Instance is null && !CanVerify(outcome)
                     ? Observable.Return(Results.Json(
-                        new { error = "A registered instance key is required (Authorization: Bearer mwi_… or Basic)." },
+                        new { error = "A registered instance key or an authorized build identity is required." },
                         statusCode: StatusCodes.Status401Unauthorized))
                     : Choose(http, current))
             .FirstAsync()
@@ -175,9 +188,9 @@ public static class ReleaseGateEndpoints
         return authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
             .SelectMany(outcome => outcome.IsUnavailable
                 ? Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger))
-                : outcome.Instance is null
+                : outcome.Instance is null && !CanVerify(outcome)
                     ? Observable.Return(Results.Json(
-                        new { error = "A registered instance key is required (Authorization: Bearer mwi_… or Basic)." },
+                        new { error = "A registered instance key or an authorized build identity is required." },
                         statusCode: StatusCodes.Status401Unauthorized))
                     : Answer(http, version))
             .FirstAsync()
@@ -263,9 +276,9 @@ public static class ReleaseGateEndpoints
         return authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
             .SelectMany(outcome => outcome.IsUnavailable
                 ? Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger))
-                : outcome.Instance is null
+                : outcome.Instance is null && !CanVerify(outcome)
                     ? Observable.Return(Results.Json(
-                        new { error = "A registered instance key is required (Authorization: Bearer mwi_… or Basic)." },
+                        new { error = "A registered instance key or an authorized build identity is required." },
                         statusCode: StatusCodes.Status401Unauthorized))
                     : StateCombo(http, logger))
             .FirstAsync()
@@ -273,6 +286,79 @@ public static class ReleaseGateEndpoints
                 ex => logger?.LogWarning(ex,
                     "Instance combo read faulted after the response had already been sent"),
                 ct)!;
+    }
+
+    private static bool CanVerify(InstanceAuthResult outcome) =>
+        outcome.Build?.Allows(BuildVerbs.Verify, VerificationResource) == true;
+
+    private static Task<IResult> RecordVerification(HttpContext http, CancellationToken ct)
+    {
+        var logger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(ReleaseGateEndpoints));
+        return http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>()
+            .AuthenticateOutcome(http.Request.Headers.Authorization)
+            .SelectMany(outcome => outcome.IsUnavailable
+                ? Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger))
+                : !CanVerify(outcome)
+                    ? Observable.Return(Results.Json(
+                        new { error = "An authorized build identity is required." },
+                        statusCode: StatusCodes.Status401Unauthorized))
+                    : ReadAndRecordVerification(http, outcome.Build!, logger, ct))
+            .FirstAsync()
+            .ObserveCompletion(ex => logger?.LogWarning(ex,
+                "Combo verification recording failed after the response was sent"), ct)!;
+    }
+
+    private static IObservable<IResult> ReadAndRecordVerification(
+        HttpContext http, AuthenticatedBuild build, ILogger? logger, CancellationToken ct)
+    {
+        // Authenticate before reading the body or resolving any mesh service. The caller never
+        // becomes System: only the existing, narrowly scoped RecordVerification primitive writes.
+        var hub = http.RequestServices.GetRequiredService<IMessageHub>();
+        var pool = hub.ServiceProvider.GetRequiredService<IoPoolRegistry>().Get(IoPoolNames.Http);
+        return pool.Invoke(_ => http.Request.ReadFromJsonAsync<ComboVerification>(
+                InstanceComboAssembler.Json, ct).AsTask())
+            .SelectMany(verdict =>
+            {
+                if (verdict is null || string.IsNullOrWhiteSpace(verdict.CandidateTag)
+                    || verdict.VerifiedAt == default || !Enum.IsDefined(verdict.Verdict)
+                    || verdict.Modules is null || verdict.Caveats is null
+                    || verdict.Modules.Any(m => m is null || string.IsNullOrWhiteSpace(m.ModuleId)
+                        || !Enum.IsDefined(m.Outcome) || m.Failures is null)
+                    || verdict.Modules.Select(m => m.ModuleId).Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count() != verdict.Modules.Count
+                    || (verdict.Verdict == ComboVerdictKind.Green
+                        && (verdict.Modules.Count == 0 || string.IsNullOrWhiteSpace(verdict.ImageDigest)
+                            || string.IsNullOrWhiteSpace(verdict.VerifiedPlatform)
+                            || verdict.ComboReadAt == default
+                            || verdict.Modules.Any(m => m.Outcome != ModuleVerificationOutcome.Passed))))
+                    return Observable.Return(Results.BadRequest(new
+                        { error = "A complete, internally consistent combo verification is required." }));
+
+                var expected = JsonSerializer.Serialize(verdict, InstanceComboAssembler.Json);
+                return UpdatePolicyNodeType.RecordVerification(hub, verdict)
+                    // Update is optimistic across hubs. A 200 promises that the owning node has
+                    // recorded this exact verdict, so observe its reconciled state before replying.
+                    .SelectMany(_ => Observable.Create<IResult>(observer =>
+                    {
+                        using (AccessContextScope.AsSystem(hub.ServiceProvider.GetRequiredService<AccessService>()))
+                            return hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                                .Select(node => UpdatePolicyNodeType.Parse(node, hub.JsonSerializerOptions)
+                                    .VerificationFor(verdict.CandidateTag))
+                                .Where(recorded => JsonSerializer.Serialize(recorded,
+                                    InstanceComboAssembler.Json) == expected)
+                                .Take(1)
+                                .Select(_ => (IResult)Results.Ok(new
+                                    { recorded = true, candidateTag = verdict.CandidateTag }))
+                                .Subscribe(observer);
+                    }))
+                    .Timeout(TimeSpan.FromSeconds(30))
+                    .Do(_ => logger?.LogInformation(
+                        "Build {Repository} run {RunId} recorded combo verdict {Verdict} for {Candidate}",
+                        build.Repository, build.Claims.RunId, verdict.Verdict, verdict.CandidateTag));
+            })
+            .Catch<IResult, JsonException>(_ => Observable.Return(Results.BadRequest(new
+                { error = "The combo verification body is not valid JSON." })));
     }
 
     private static IObservable<IResult> StateCombo(HttpContext http, ILogger? logger) =>

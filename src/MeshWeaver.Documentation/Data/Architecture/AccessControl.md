@@ -1094,8 +1094,26 @@ verdict cache expires.
 
 ## Where a build principal is admitted
 
-Only the **prebuilt-publication routes** (`/api/plugins/bundles/prebuilt/…`), requiring
-`fetch:<source>`. A build is not an installation: it has no instance record, no plan and no
+The **prebuilt-publication routes** (`/api/plugins/bundles/prebuilt/…`) require
+`fetch:<source>`. The release-input routes (`GET /api/plugins/roll-target`,
+`GET /api/plugins/is-updatable`, and `GET /api/plugins/combo`) also admit a build explicitly
+granted `verify:combo`. `POST /api/plugins/combo-verification` accepts that build's off-portal
+verification result and records it through `UpdatePolicyNodeType.RecordVerification`. It accepts
+a `ComboVerification`, never a mesh path or a policy patch. The existing policy, including `None`,
+is preserved, and success is returned only after the node carries the recorded verdict.
+
+This is a system identity for the build process, not a user or a global-admin token. The grant
+is local to the portal whose configured OIDC audience the token must match. Provision
+`Admin/_BuildPrincipal/systemorph--meshweaver` for `Systemorph/MeshWeaver`, binding its immutable
+repository and owner IDs. Permit `verify` only for `workflow_run` and `workflow_dispatch`, both
+restricted to `refs/heads/main`; grant only `verify:combo`. This gives pull requests and other
+repositories no compatibility-check rights. Revocation applies on the next request.
+
+The verifier runs outside production; its grant does not install modules, apply an update, read
+arbitrary user content, edit access grants, or change update policy. Authentication outages still
+return 503, distinct from a refused credential.
+
+A build is not an installation: it has no instance record, no plan and no
 `PluginGrant`, so every other bundle route — which decides per package against exactly those — keeps
 refusing it with the same 401 as before. The narrowing is expressed once, in the group filter, so a
 route added later is refused by default rather than by remembering to.
