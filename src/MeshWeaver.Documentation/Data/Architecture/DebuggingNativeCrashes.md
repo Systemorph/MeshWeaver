@@ -1102,6 +1102,194 @@ Plugins #1507 (`fix/1390-teardown-resolve-guard`, merged 13:13Z) converts 22 Rx 
 (shard 1)` passing on the 13:13 push run `34230683846` is one green sample at a low-single-digit-percent
 rate — the reading the base-rate section above already warns against — not the fix working.
 
+### 2026-09-10: sighting #15 — a NEW RUNTIME BUILD (`10.0.12`), and the corrupt block is a LIVE, REFERENCED object
+
+`MeshWeaver.Futu-51647.dmp` (MeshWeaver.Plugins run
+[`34476948303`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34476948303), job
+`102870602506`, `Portal hosts (shard 1)`, on PR #1603 — whose diff is two Python files under
+`scripts/` and cannot reach a .NET test host). Filed as
+[MeshWeaver.Plugins#1605](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1605). Read the
+same way as #11–#14: `struct.unpack` over the ELF core, the `rbp` chain unwound by hand, RVAs
+resolved against the `.debug` for the build-id read out of the crashed process's own `libcoreclr`
+mapping.
+
+| | **#15** `MeshWeaver.Futu-51647.dmp` (pid 51647) |
+|---|---|
+| `[FATAL ERROR]` | 2026-09-10 12:46:24Z (fault ≈ 12:45:24Z; `createdump` wrote 849 MiB before the runner saw the exit) |
+| `si_signo` / `si_code` / `si_addr` | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** |
+| `TRAPNO` / `ERR` / `CR2` | 14 / `0x4` / `0x0` |
+| **runtime / build-id** | **`10.0.12` / `79945f51fb2612f13b7667a10a8fd29122664791`** — a DIFFERENT binary from #8–#14's `10.0.11` / `989b56df…` |
+| faulting RVA | `0x5d5d82` |
+| frame | `WKS::gc_heap::find_first_object(unsigned char*, unsigned char*) + 0x132` |
+| instruction | `4c 89 d0 / 4d 8b 12 / 49 83 e2 f8 / 45 8b 32` — `mov %r10,%rax ; mov (%r10),%r10 ; and $-8,%r10 ; mov (%r10),%r14d`, **`R10 = 0`** |
+| thread | **mutator** (tid 51726), inside a **blocking, allocation-triggered** GC — not a dedicated BGC thread |
+| the word at the source | `[RAX]` (the cursor, `0x7f5dd6e057a0`) reads **8 zero bytes**; the rest of the 32-byte block is intact |
+| `Unwind: exception type` in the job log | **none** |
+
+Same fingerprint, a fourth register pair (`rax` in #4–#8, `r8`/`rcx` in #9, `r15`→`rax` in #12/#13,
+`r13` in #14, **`r10`** here), and the frame REVISITS again: `find_first_object+0x132` is byte-for-byte
+the same offset within the same function as sighting #7's `10.0.11` RVA `0x5d5ab2`, two runtime
+builds apart.
+
+#### The two things this sighting adds
+
+**1. The family is not a property of one runtime build.** Every sighting from #4 on ran on
+`10.0.11`, libcoreclr build-id `989b56df…`; #1–#3 on `10.0.10`. This one ran on **`10.0.12`**, a
+binary whose build-id (`79945f51…`) differs — verified as mapped *inside the crashed process*, not
+merely as shipped. So "wait for the next runtime patch" is not a plan, and any upstream report should
+be written against three patch releases rather than one.
+
+**2. The corrupt block is a live object that something POINTS AT.** The 2026-08-17 entry established
+the free-list shape by finding that *no managed object points at the cursor*. Run the same scan here
+and the answer inverts. Exactly **three** 8-byte-aligned occurrences of the cursor value
+`0x7f5dd6e057a0` exist in the whole 849 MiB core:
+
+- `0x7f5dacd91b50` — the saved `RAX` in the signal `ucontext` (i.e. the fault itself);
+- `0x7f5d86ff4d08` — one scratch slot on the faulting thread's stack;
+- **`0x7f5dd6e05640` — a field at `+0x20` inside a live, well-formed 96-byte heap object at
+  `0x7f5dd6e05620` whose own MethodTable (`0x7f61caeb75d0`) is valid.**
+
+So this is not GC bookkeeping losing a `g_pFreeObjectMethodTable`: a **published, referenced managed
+object lost its type slot** while every other word of it survived. That is the strongest form the
+invariant has taken, and it removes the last reading in which the zeroing could be dismissed as
+free-space housekeeping.
+
+#### The walk is synchronised — measured, not asserted
+
+`find_first_object(start, first_object)` walks objects forward from `first_object` looking for the one
+containing `start`. Here `RDI` (`start`) is `0x7f5dd6e05900` — a card-marked address. 🚨 **`first_object`
+itself is only partly recoverable, and saying otherwise would be inventing a derivation**: by the fault
+`RSI` has been overwritten with `first_object >> 12` (`0x5d5d18: shrq $0xc,%rsi`), so it pins the *page*
+`0x7f5dd6dde000` and nothing finer; the byte offset `0x818` is taken from `R13`, whose assignment is
+outside the loop and was not traced. **What validates the start is the walk, not the register.** Replaying
+it from `0x7f5dd6dde818` over the core:
+
+```
+… 0x7f5dd6e056a0  MT=0x7f61caf24c78  size=48
+  0x7f5dd6e056d0  MT=0x7f61cb8fecc0  size=112
+  0x7f5dd6e05740  MT=0x7f61cbc334e0  size=24
+  0x7f5dd6e05758  MT=0x7f61caf1d6e8  size=32
+  0x7f5dd6e05778  MT=0x7f61caf17220  size=40     <- ends EXACTLY on the cursor
+  0x7f5dd6e057a0  MT=0x0000000000000000          <- FAULT
+```
+
+**172 consecutive well-formed objects** were walked before it — every one a valid MethodTable and a
+size that lands on the next header — and the chain arrives **exactly** on the cursor, the predecessor's
+40 bytes ending on it to the byte. A wrong starting offset does not produce that: it desynchronises
+within a few objects and reads garbage headers. So the start is confirmed by its consequence, and the
+cursor sits on a genuine object boundary. The cursor's own successor at `+0x20` (`0x7f5dd6e057c0`,
+MT `0x7f61caf24bb8`, 56 bytes) is a valid object — which the cursor's surviving field at `+0x08` also
+points at. The contiguous zero run is **8 bytes**: the header word alone. The walk is neither
+desynchronised nor past the allocated end; one word is gone out of a coherent heap.
+
+#### The phase: a blocking GC on a MUTATOR, reached through the card scan
+
+The `rbp` chain, resolved end to end:
+
+```
+Array_CreateInstance+0x3f9
+ → AllocateSzArray(MethodTable*, int, GC_ALLOC_FLAGS)+0x268
+   → Alloc(ee_alloc_context*, size_t, GC_ALLOC_FLAGS)+0x1b3
+     → WKS::GCHeap::Alloc(gc_alloc_context*, size_t, uint32_t)+0xf0
+       → WKS::gc_heap::try_allocate_more_space(...)+0x24b
+         → WKS::gc_heap::trigger_gc_for_alloc(...)+0x3a
+           → WKS::GCHeap::GarbageCollectGeneration(unsigned, gc_reason)+0x3db
+             → WKS::gc_heap::garbage_collect(int)+0x6cb
+               → WKS::gc_heap::gc1()+0xff
+                 → WKS::gc_heap::mark_phase(int)+0x802
+                   → WKS::gc_heap::mark_through_cards_for_segments(...)+0x7dd
+                     → WKS::gc_heap::find_first_object(...)+0x132        ← FAULT
+```
+
+A managed thread allocated an array, the allocation triggered a **blocking** collection, and the mark
+phase's card-table scan read the header of the object the card pointed into. The family now spans
+dedicated BGC threads, mutators inside the JIT, and mutators inside a foreground GC — which is what
+"the GC finds a zeroed object header wherever it next looks" predicts, and what no single-phase
+hypothesis does.
+
+#### The trace log — complete, clean, and dead in CONSTRUCTION
+
+`_meshweaver-test-trace.log`'s two `FAULT-BUDGET` suppression lines belong to pid **3114**, not to the
+crashing pid 51647, so this process's record has no gaps — the precondition this page insists on.
+
+| | #15 (pid 51647) |
+|---|---|
+| `DISPOSE_DONE` / of which `teardown clean` | 17 / **17** |
+| `DISPOSE_QUIESCE_LEAK`, `DISPOSE_DIRTY_TEARDOWN`, `leakedIoLeaves>0` | **0** |
+| `TEST_START` / `TEST_END` | 17 / **17** — every test that started also finished |
+| `CTOR` / `INIT_START` | **18** / 18 — the 18th fixture was being BUILT |
+| `alc` / `asm` at the last `INIT_MEM` | **1** / 127 |
+| GCs at the last checkpoint | `gc0=493 gc1=184 gc2=29` in ~40 s, rss 580 MiB |
+
+The last five records are `CTOR 12:45:24.607`, `INIT_START .607`, `INIT_BASE_DONE .609`,
+`INIT_PREWARM_DONE .617`, `INIT_DEVLOGIN_DONE .617` — and then nothing. **The host died building
+fixture 18, not tearing down fixture 17**, which had completed cleanly 18 ms earlier. Read the bottom
+of the stack, not the top: this is construction, exactly as in sightings #1 and #3, and no teardown
+guard could have been in the path. `alc=1` throughout — no collectible context survived any teardown.
+
+The truncation machinery did its job: the trx carries **18** results — 17 `Passed` plus
+`MeshWeaver.FutuRe.Test.HOST_CRASHED` `Failed` — so the `Passed! … Passed: 17` console line is
+contradicted in the durable artifact, which is the whole point of core #2495.
+
+#### Disk pressure, excluded explicitly
+
+The job warned `only 33G free after reclaim — if this job dies with no failing step, disk is the first
+suspect again`, and it *did* die with no failing step. It is still not disk, on four independent
+grounds:
+
+- The dying process wrote a **complete 889,839,616-byte core dump** and a 1,153,250-byte trx at the
+  moment of the fault; both parse end to end, so ≥849 MiB was free at crash time.
+- **Nine further suites ran green after it** (12:46:24 → 12:49:19: Auth 160, PathResolution 168,
+  Blazor.Views 192, Snowflake 50, Northwind 8, AccessControl 21, ContentCollections.Indexing.Graph 33,
+  Kernel 11, Serialization 14), each writing a trx and per-test logs; 693 files uploaded.
+- No `ENOSPC` / `No space left on device` appears anywhere in the job log.
+- The mechanism does not fit. A full filesystem produces `ENOSPC` and IO exceptions; it cannot produce
+  a `SEGV_MAPERR` at address `0x0` with a recovered `TRAPNO=14` / `ERR=0x4` page-fault `ucontext`
+  inside `libcoreclr`.
+
+#### Controls run on this read
+
+- **Managed exception ruled OUT, not assumed away.** The job log's only `Unwind` hit is the verdict's
+  own prose quoting the instruction to grep for it; `strings` over the core finds `Unwind: exception
+  type` **zero** times. Together with `TRAPNO=14`/`ERR=0x4` this is a native page fault.
+- **RVA vs file offset** — the `0x1000` trap of sighting #10. `libcoreclr.so`'s second `PT_LOAD` maps
+  vaddr `0x1c99a0+` at file offset `0x1c89a0+`, so RVA `0x5d5d82` lives at file offset `0x5d4d82`.
+  The bytes there (`45 8b 32 45 85 f6 78 c6 …`) are **byte-identical** to the bytes at `RIP` in the
+  core; the bytes at `0x5d5d82` *as a file offset* are entirely different.
+- **Instruction boundary.** `llvm-objdump` puts `movl (%r10),%r14d` at exactly `0x5d5d82`.
+- **The symbols are the crashed binary's.** The build-id read out of libcoreclr **as mapped in the
+  crashed process** is `79945f51fb2612f13b7667a10a8fd29122664791`, equal to the build-id of the stock
+  `10.0.12` `libcoreclr.so` and of the `.debug` the RVAs were resolved against.
+- **The `ucontext` is unique.** Scanning every `PT_LOAD` for a `gregs[]` block with `TRAPNO=14`, a
+  `RIP` inside libcoreclr's mapping and `CR2 == si_addr` yields **exactly one** match in the core.
+- **The crashing thread is identified by its signal frame, not by guessing.** The `gregs[]` block sits
+  at `0x7f5dacd91ae8`, `0x1e8` above tid **51726**'s recorded (in-handler, alternate-stack) `RSP`
+  `0x7f5dacd91900`; no other thread's recorded `RSP` is within 16 MB of it. `NT_PRSTATUS` for that
+  thread describes the handler, and the pre-signal `RSP` (`0x7f5d86ff5b48`) is on its normal stack —
+  which is why the two do not match and must not be expected to.
+
+#### Which lanes turn a signal death into a verdict — and the one that does not
+
+A host killed by a signal exits 139, which `dotnet test` flattens to exit 1 while its console summary
+still prints `Passed!`. Whether that is caught depends entirely on the lane. Measured 2026-09-10:
+
+| lane | on a signal death |
+|---|---|
+| core `.github/workflows/dotnet-test.yml` (all shards) | **detected** — exit-marker gate plus `record-host-crash.py` writes `<project>.HOST_CRASHED` into the trx |
+| MeshWeaver.Plugins `ci.yml` → `Portal hosts (shard N)` | **detected** — `classify-test-run.py --record-crash-into` plus the platform's `record-host-crash.py`. The step carries no `matrix.shard` condition, so **all four shards are covered equally**; shard 1 is merely where the ALC-heavy suites live |
+| Plugins `ci.yml` → `Memex.Portal.Gui.Test` and `MeshWeaver.MemexTemplate.Test`; `node-repo-module-pack.yml` → "Run the module's tests" | **red, but with a lying trx** — the step's exit code is `dotnet`'s (a bare single command, or `set -euo pipefail` around it), so nothing goes green; but no `HOST_CRASHED` record is written and the durable trx reads as a clean pass. module-pack's ledger step is gated on `steps.tests.outcome == 'success'`, so a crash records no receipt |
+| Plugins `platform-canary.yml` → "Run the canary suites" | 🚨 **can pass undetected** |
+
+The canary is the one real hole, and it is a gate that cannot fail on missing input. The suites run as
+`dotnet test … || true`, and the verdict is computed by `platform-canary-delta.py` from the two arms'
+trx as **sets of test names**: `drift = pin_passed & cand_failed`. A host killed mid-arm leaves a
+truncated trx, so every test that never ran is absent from *both* sets and cannot appear in `drift` —
+the job prints `No drift — every test that passes at the pin also passes at core main` over an arm
+that measured a fraction of its suites. The only denominators guarded are `built.txt` and "the pin arm
+ran no tests"; the two arms' totals are printed in the `Observed:` line but never compared, and
+neither the exit code nor a signal is looked at anywhere. Tracked as
+[MeshWeaver.Plugins#1620](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1620).
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is
