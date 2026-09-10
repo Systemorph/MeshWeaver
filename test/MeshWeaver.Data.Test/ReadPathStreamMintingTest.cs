@@ -196,10 +196,10 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
     }
 
     /// <summary>
-    /// The delete acknowledgement is subscribed before the eager write. This pins the ordering in
-    /// which the delete's null frame is followed by a legitimate same-ID recreation before the
-    /// delete result is consumed; the committed delete must still answer instead of waiting forever
-    /// on a null frame that has already been replaced in the shared replay slot.
+    /// The read-version barrier survives the ordering in which the delete's null frame is followed
+    /// by a legitimate same-ID recreation before the delete result is consumed. The committed delete
+    /// must still answer once the read view reaches its version instead of waiting forever on a null
+    /// frame that has already been replaced in the shared replay slot.
     /// </summary>
     [HubFact]
     public async Task UnifiedDelete_RetainsItsAbsenceAcknowledgementAcrossSameIdRecreation()
@@ -263,11 +263,51 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
         }
 
         var answer = await answers.Should().Within(TestTimeouts.Convergence)
-            .Emit("the pre-armed absence observation retains the delete acknowledgement after recreation");
+            .Emit("the committed-version barrier retains the delete acknowledgement after recreation");
         answer.Success.Should().BeTrue();
         await readStream.Should().Within(TestTimeouts.Convergence)
             .Match(item => item.Value is BusinessUnit { DisplayName: "Recreated display" },
                 "the recreation remains the latest state after the delete acknowledgement");
+    }
+
+    /// <summary>
+    /// A late barrier subscriber must accept a newer frame after the exact delete frame has left the
+    /// shared stream's replay slot. This is the deterministic control for the race that a value-only
+    /// <c>Where(Value is null)</c> tail cannot survive.
+    /// </summary>
+    [HubFact]
+    public async Task ReadVersionBarrier_AcceptsNewerStateAfterTheDeleteFrameWasReplaced()
+    {
+        var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
+        var readStream = workspace.GetNullableStream(new EntityReference(nameof(BusinessUnit), "1"))
+                         ?? throw new InvalidOperationException(
+                             "The BusinessUnit entity reference did not resolve to a stream.");
+        var initial = await readStream.Should().Within(TestTimeouts.Convergence)
+            .Match(item => item.Value is BusinessUnit, "the initial entity must be visible");
+        var owner = workspace.DataContext.DataSourcesByCollection[nameof(BusinessUnit)]
+            .GetStreamForPartition(null)!;
+
+        await workspace.RequestChange(new DataChangeRequest { Deletions = [initial.Value!] })
+            .Should().Within(TestTimeouts.Convergence).Emit("the delete must commit");
+        var deleteVersion = owner.Current?.Version
+                            ?? throw new InvalidOperationException("The owner did not expose the delete version.");
+        await readStream.Should().Within(TestTimeouts.Convergence)
+            .Match(item => item.Version >= deleteVersion && item.Value is null,
+                "the shared stream must apply the delete before its replay slot is replaced");
+
+        await workspace.RequestChange(DataChangeRequest.Update(
+                [new BusinessUnit("1", "Recreated after delete")]))
+            .Should().Within(TestTimeouts.Convergence).Emit("the same ID must be recreated");
+        await readStream.Should().Within(TestTimeouts.Convergence)
+            .Match(item => item.Value is BusinessUnit { DisplayName: "Recreated after delete" },
+                "the recreation must replace the delete frame in the one-item replay slot");
+
+        var observed = await DataExtensions.WaitForSharedReadVersion(readStream, deleteVersion)
+            .Should().Within(TestTimeouts.Quick)
+            .Emit("a newer committed frame proves the read view crossed the delete boundary");
+        observed.Version.Should().BeGreaterThan(deleteVersion);
+        observed.Value.Should().BeOfType<BusinessUnit>()
+            .Which.DisplayName.Should().Be("Recreated after delete");
     }
 
     /// <summary>

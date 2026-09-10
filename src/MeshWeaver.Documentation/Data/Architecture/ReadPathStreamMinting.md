@@ -220,7 +220,8 @@ done for a plain reduce, and where it matters the answer is a narrower reference
 | `TheSharedReadStream_StaysLive` | a write after the reads is visible to the next read — the shared stream is a live mirror, not a snapshot |
 | `UnifiedUpdate_WaitsUntilTheSharedReadStreamCarriesTheUpdate` | a successful update is withheld while the owner has committed but the shared read actor is parked on the old entity |
 | `UnifiedDelete_WaitsUntilTheSharedReadStreamCarriesAbsence` | a successful delete is withheld while the shared read actor is parked, even after the owner has committed; it answers only after the read view carries absence |
-| `UnifiedDelete_RetainsItsAbsenceAcknowledgementAcrossSameIdRecreation` | the delete's pre-armed absence acknowledgement survives a legitimate same-ID recreation instead of waiting forever on a replaced replay slot |
+| `UnifiedDelete_RetainsItsAbsenceAcknowledgementAcrossSameIdRecreation` | the read view reaches the delete's committed version before a later same-ID recreation becomes its newest state, so the delete still answers without mistaking the recreation for stale data |
+| `ReadVersionBarrier_AcceptsNewerStateAfterTheDeleteFrameWasReplaced` | a late barrier subscription completes from the newer recreation after the delete's exact null frame has been replaced in the shared one-item replay slot |
 
 ### A shared stream makes its propagation boundary observable
 
@@ -235,14 +236,15 @@ an immediate read can replay that reduction's previous value until its queued fr
 release gate exposed both directions: a successful `UpdateUnifiedReferenceRequest` followed by the
 old entity, and a successful `DeleteUnifiedReferenceRequest` followed by the deleted entity.
 
-Both handlers now observe the same shared entity stream **before** invoking the eager owner write.
-They retain exactly one matching post-baseline frame and combine it with the commit result, so either
-side may arrive first without losing the acknowledgement. Update waits for the requested content;
-delete waits for absence. Pre-arming is load-bearing for delete: a legitimate same-ID recreation can
-otherwise replace the null in the stream's replay slot between owner commit and a late subscription,
-leaving an already committed request without a response. There is no polling and no replacement
-stream. Owner commit remains the storage boundary; successful unified update/delete is also the
-causal read-view boundary for the API's shared read path.
+Both handlers now warm the same shared entity stream **before** invoking the eager owner write. After
+commit they capture the owning stream's committed version and wait until the shared read stream has
+applied that version or a newer one. Checking the current snapshot inside a deferred subscription,
+then relying on the stream's own one-item replay, means the boundary cannot miss a frame that lands
+between those two operations. The version is the causal proof: a same-value older frame cannot release
+an update, while a legitimate same-ID recreation after a delete is accepted as newer state instead
+of leaving the delete waiting forever for a null that has already been replaced. There is no polling
+and no replacement stream. Owner commit remains the storage boundary; successful unified
+update/delete is also the causal read-view boundary for the API's shared read path.
 
 ### One behaviour DID change, and it is the better half of an existing contract
 

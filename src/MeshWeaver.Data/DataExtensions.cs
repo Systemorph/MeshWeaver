@@ -3999,37 +3999,40 @@ public static class DataExtensions
             return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
                 $"No readable data stream exists for {collection}/{readId}."));
 
+        var partition = (typeSource as IPartitionedTypeSource)?.GetPartition(content);
+        var ownerStream = dataContext.DataSourcesByCollection[typeSource.TypeDefinition.CollectionName]
+            .GetStreamForPartition(partition);
+        if (ownerStream is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                $"No owning data stream exists for {collection}/{readId}."));
+
         var changeRequest = new DataChangeRequest
         {
             Updates = [content],
             ChangedBy = changedBy
         };
 
-        // RequestChange is eager. Observe the shared read stream BEFORE invoking it, otherwise a
-        // fast update can publish the only matching frame before the confirmation subscription is
-        // attached. Replay just that one post-baseline target frame so the owner commit and read
-        // actor may arrive in either order without a lost acknowledgement.
+        // Warm the exact stream served by GetDataRequest before the eager owner write. A genuinely
+        // idempotent write needs no new read frame; otherwise the owner's committed version is the
+        // causal barrier — a same-value coincidence from an older frame is not sufficient.
         return stream.Take(1).SelectMany(initial =>
         {
             if (UnifiedContentEquals(initial.Value, content, hub))
                 return workspace.RequestChange(changeRequest).Select(ToResponse);
 
-            var visible = stream
-                .Where(item => item.Version > initial.Version
-                               && UnifiedContentEquals(item.Value, content, hub))
-                .Take(1)
-                .Replay(1);
+            return workspace.RequestChange(changeRequest)
+                .SelectMany(log =>
+                {
+                    var response = new DataChangeResponse(hub.Version, log);
+                    if (response.Status != DataChangeStatus.Committed)
+                        return Observable.Return(ToResponse(log));
+                    if (ownerStream.Current is not { } ownerCommit)
+                        return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                            $"The owning data stream for {collection}/{readId} did not expose its committed version."));
 
-            return Observable.Using(
-                visible.Connect,
-                _ => workspace.RequestChange(changeRequest)
-                    .SelectMany(log =>
-                    {
-                        var response = new DataChangeResponse(hub.Version, log);
-                        return response.Status != DataChangeStatus.Committed
-                            ? Observable.Return(ToResponse(log))
-                            : visible.Select(_ => UpdateUnifiedReferenceResponse.Ok(response.Version));
-                    }));
+                    return WaitForSharedReadVersion(stream, ownerCommit.Version)
+                        .Select(_ => UpdateUnifiedReferenceResponse.Ok(response.Version));
+                });
 
             UpdateUnifiedReferenceResponse ToResponse(ActivityLog log)
             {
@@ -4053,6 +4056,20 @@ public static class DataExtensions
         var expectedNode = JsonSerializer.SerializeToNode(expected, expected.GetType(), hub.JsonSerializerOptions);
         return System.Text.Json.Nodes.JsonNode.DeepEquals(actualNode, expectedNode);
     }
+
+    /// <summary>
+    /// Waits until a shared read stream has applied the owner's committed version or a newer one.
+    /// The current snapshot is checked inside <see cref="Observable.Defer{TValue}(Func{IObservable{TValue}})"/>
+    /// and the stream itself replays its latest frame, so a frame landing between the check and the
+    /// subscription cannot be missed. A newer version is valid: it represents a later committed
+    /// write, never the stale state that preceded this operation.
+    /// </summary>
+    internal static IObservable<ChangeItem<object>> WaitForSharedReadVersion(
+        ISynchronizationStream<object> stream,
+        long committedVersion) =>
+        Observable.Defer(() => stream.Current is { } current && current.Version >= committedVersion
+            ? Observable.Return(current)
+            : stream.Where(item => item.Version >= committedVersion).Take(1));
 
     /// <summary>
     /// Reactive update for a <c>content:</c> path — parses collection/file and writes via the file provider.
@@ -4196,27 +4213,31 @@ public static class DataExtensions
                     ChangedBy = changedBy
                 };
 
-                // Subscribe before RequestChange: it writes eagerly, and a same-ID recreation can
-                // replace the shared stream's replay slot before the commit observable is consumed.
-                // Filtering by the baseline version makes this a post-request absence frame; the
-                // one-item replay preserves that causal acknowledgement across either ordering.
-                var absent = stream
-                    .Where(item => item.Version > entityValue.Version && item.Value is null)
-                    .Take(1)
-                    .Replay(1);
+                var typeSource = dataContext.GetTypeSource(entityValue.Value.GetType());
+                if (typeSource is null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                        $"No registered data type source owns {collection}/{entityId}."));
+                var partition = (typeSource as IPartitionedTypeSource)?.GetPartition(entityValue.Value);
+                var ownerStream = dataContext.DataSourcesByCollection[typeSource.TypeDefinition.CollectionName]
+                    .GetStreamForPartition(partition);
+                if (ownerStream is null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                        $"No owning data stream exists for {collection}/{entityId}."));
 
-                return Observable.Using(
-                    absent.Connect,
-                    _ => workspace.RequestChange(changeRequest)
-                        .SelectMany(log =>
-                        {
-                            var response = new DataChangeResponse(hub.Version, log);
-                            if (response.Status != DataChangeStatus.Committed)
-                                return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
-                                    response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
+                return workspace.RequestChange(changeRequest)
+                    .SelectMany(log =>
+                    {
+                        var response = new DataChangeResponse(hub.Version, log);
+                        if (response.Status != DataChangeStatus.Committed)
+                            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                                response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed"));
+                        if (ownerStream.Current is not { } ownerCommit)
+                            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                                $"The owning data stream for {collection}/{entityId} did not expose its committed version."));
 
-                            return absent.Select(_ => DeleteUnifiedReferenceResponse.Ok());
-                        }));
+                        return WaitForSharedReadVersion(stream, ownerCommit.Version)
+                            .Select(_ => DeleteUnifiedReferenceResponse.Ok());
+                    });
             });
     }
 
