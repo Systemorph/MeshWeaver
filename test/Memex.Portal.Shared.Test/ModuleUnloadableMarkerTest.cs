@@ -155,4 +155,58 @@ public sealed class ModuleUnloadableMarkerTest : IDisposable
         Assert.Empty(ModuleActivationBoot.RecordMeasuredLoadability(root, tried, [], [], _ => reports++));
         Assert.Equal(2, reports);
     }
+
+    /// <summary>
+    /// 🚨 <b>THE THIRD ANSWER (MeshWeaver#3911): a boot that did not LOOK writes nothing and clears
+    /// nothing.</b> When the default load context already held the module's simple name,
+    /// <c>Assembly.LoadFrom</c> handed back that copy and the head generation's bytes never reached
+    /// the loader — so this boot has no verdict on them.
+    ///
+    /// <para><b>Both collapses are wrong, in opposite directions, and each is asserted here.</b>
+    /// Reading the fallback as UNLOADABLE writes a marker that makes the update reconcile
+    /// permanently <c>SkipUnloadable</c> every rebuild of a version nobody executed; reading it as
+    /// LOADED clears a marker an earlier boot wrote from a real measurement. The two assertions
+    /// below are that pair — a not-measured boot over a clean sidecar leaves it clean, and over an
+    /// existing marker leaves the marker exactly as it found it.</para>
+    /// </summary>
+    [Fact]
+    public void ABootThatNeverReachedTheHeadsBytes_NeitherWritesNorClearsItsMarker()
+    {
+        WriteHead();
+        var tried = new[] { ReadEntry() };
+        var substituted = new FallbackModule(
+            Module, $"/pin/{Head}/{Module}.dll", $"/pin/{Previous}/{Module}.dll",
+            "this process had already loaded an assembly of that name")
+        {
+            RunsAlreadyLoadedCopy = true,
+        };
+
+        // The measurement says so in as many words: not unloadable, and not a measurement.
+        var verdict = Assert.Single(ModuleActivationBoot.MeasureLoadability([tried[0]], [substituted], []));
+        Assert.True(verdict.HeadNotMeasured);
+        Assert.False(verdict.Unloadable,
+            "nothing executed these bytes, so calling them unloadable would permanently skip every rebuild");
+
+        // Direction 1 — nothing to clear: the boot writes no marker.
+        var overClean = ModuleActivationBoot.RecordMeasuredLoadability(root, tried, [substituted], []);
+        Assert.Empty(overClean);
+        Assert.Null(ReadEntry().UnloadableFrameworkMvid);
+
+        // Direction 2 — a marker a REAL measurement wrote survives untouched.
+        var measured = new FallbackModule(
+            Module, $"/pin/{Head}/{Module}.dll", $"/pin/{Previous}/{Module}.dll", "no type");
+        Assert.Single(ModuleActivationBoot.RecordMeasuredLoadability(root, tried, [measured], []));
+        Assert.Equal(HeadMvid, ReadEntry().UnloadableFrameworkMvid);
+
+        var overMarked = ModuleActivationBoot.RecordMeasuredLoadability(root, tried, [substituted], []);
+        Assert.Empty(overMarked);
+        Assert.Equal(HeadMvid, ReadEntry().UnloadableFrameworkMvid);
+
+        // 🚨 The negative control on the control: the SAME sidecar, the SAME entry, one boot that
+        // genuinely measured the head as loading — and the marker goes. Without this the two
+        // assertions above would also pass if RecordMeasuredLoadability had simply stopped
+        // clearing markers at all.
+        Assert.Single(ModuleActivationBoot.RecordMeasuredLoadability(root, tried, [], []));
+        Assert.Null(ReadEntry().UnloadableFrameworkMvid);
+    }
 }
