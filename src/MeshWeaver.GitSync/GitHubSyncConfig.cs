@@ -170,6 +170,52 @@ public record GitHubSyncConfig
     public string? LastSyncOutcome { get; init; }
 
     /// <summary>
+    /// 🚨 <b>The commit the last IMPORT ATTEMPT targeted — which is NOT
+    /// <see cref="LastSyncCommitSha"/></b> (issue #3945). That field means "the mesh is known to
+    /// hold this commit's content" and is deliberately held back whenever an import did not fully
+    /// converge (<c>GitHubSyncService.MayAdvanceBaseline</c>); this one means only "we have already
+    /// looked at exactly these bytes". One field could not be both, which is why a source that can
+    /// never converge re-cloned its whole repository on every green build of the source repository
+    /// — at that repository's CI cadence, ~10/h on core.
+    ///
+    /// <para>Written on EVERY import conclusion, alongside
+    /// <see cref="LastAttemptWasFinal"/>. CLEARED (null) by an export/commit and by a hold, because
+    /// both change what a re-import would do: an export moves the conflict horizon, and a hold means
+    /// no attempt ran at all. Absent on a source that has never imported, and on one whose last
+    /// import predates this field — in both cases the next delivery attempts, which is the safe
+    /// direction.</para>
+    ///
+    /// <para>Set by the sync operation; not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? LastAttemptedCommitSha { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>Whether the attempt at <see cref="LastAttemptedCommitSha"/> reached a verdict that
+    /// re-attempting the SAME commit provably cannot change</b>
+    /// (<c>StaticRepoImportResult.VerdictIsFinal</c>) — the second half of the pair, and the half
+    /// that stops issue #3945's fix becoming a worse bug.
+    ///
+    /// <para>🚨 <b>Without it, the fix would strand every self-healing source.</b> Today's
+    /// re-clone-on-every-delivery is also, accidentally, the retry loop for the failures
+    /// <c>StaticRepoImporter.IsContentVerdict</c> deliberately refuses to call final — an
+    /// unreachable store, an owner that did not answer, a hub that went down mid-import. Skipping on
+    /// "same commit, already attempted" alone would make those wait for the next commit, which on an
+    /// idle repository is never. So the skip requires this flag too: a preserved node or an
+    /// all-content-verdict refusal settles (skip — the same bytes meet the same rules), while
+    /// <c>ImportedWithErrors</c>, a whole-import <c>Failed</c> and a truncated listing do not
+    /// (attempt — the next delivery may land it).</para>
+    ///
+    /// <para>🚨 <b>Never true without <see cref="LastAttemptedCommitSha"/>.</b> The two are written
+    /// in one <c>stream.Update</c> and mean nothing apart; <c>false</c> is the default and the safe
+    /// reading of an absent value.</para>
+    ///
+    /// <para>Set by the sync operation; not user-editable.</para>
+    /// </summary>
+    [Browsable(false)]
+    public bool LastAttemptWasFinal { get; init; }
+
+    /// <summary>
     /// WHY the last attempt did not move the source — the hold reason of the sealed-publication
     /// gate ("built at X, not sealed for this instance …"), or the reconciler's finding — so an
     /// operator reading the config sees the cause rather than only the outcome. Cleared by the

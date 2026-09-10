@@ -262,7 +262,9 @@ public sealed class GitHubWebhookProcessor
     /// Every source of the repo is brought to the built commit; an unchanged subdirectory imports as
     /// a no-op. The <c>lastSyncCommitSha</c> check below is what keeps that cheap — it makes a re-run
     /// of an already-imported commit (a flake re-run, a manual re-dispatch) trigger nothing at all,
-    /// and now compares like with like: what the source RECORDS is the commit it was told to fetch.</para>
+    /// and now compares like with like: what the source RECORDS is the commit it was told to fetch.
+    /// 🚨 …and for a source whose import does NOT converge, that check never fires by construction,
+    /// which is why <see cref="SkipReason"/> carries a second, weaker one (#3945).</para>
     /// </summary>
     private IObservable<int> TriggerSyncForGreenBuild(RepoIdentity repo, string branch, string headSha)
         => MatchingBuildTargets(repo, branch, headSha).Select(targets =>
@@ -396,6 +398,32 @@ public sealed class GitHubWebhookProcessor
     /// Why a config that DOES target this repo is not being updated, or <c>null</c> when it is.
     /// The reason strings are log copy — a skipped Space must be traceable to the exact predicate
     /// that dropped it, never inferred from its absence.
+    ///
+    /// <para>🚨 <b>Issue #3945 — the last arm is the one that stops a non-converging source
+    /// re-cloning its whole repository on every green build.</b> Until it existed, exactly ONE
+    /// reason made a delivery free — <c>lastSyncCommitSha == headSha</c> — and that same field is
+    /// deliberately HELD by <c>GitHubSyncService.MayAdvanceBaseline</c> whenever an import did not
+    /// converge (#675 / #677 / #2229 item C). So the cheapness gate and the convergence guard were
+    /// one field, and a source that could never converge paid a full <c>git fetch --depth 1</c> of
+    /// its ENTIRE repository plus a full parse on every delivery, at the SOURCE repository's CI
+    /// cadence: measured 2026-09-10, <c>Essentials/_GitSync</c> on memex.meshweaver.cloud had been
+    /// doing that against MeshWeaver.Plugins since 2026-08-10 — 31 days, 436 commits — while its 33
+    /// siblings on the same repository, same webhook, same schedule, were skipped for free.</para>
+    ///
+    /// <para>🚨 <b>And why it is TWO conditions, not one.</b> Today's re-clone-on-every-delivery is
+    /// also, accidentally, the retry loop for the failures <c>StaticRepoImporter.IsContentVerdict</c>
+    /// deliberately refuses to call final — an unreachable store, an owner that did not answer, a
+    /// hub that went down mid-import. Skipping on "same commit, already attempted" ALONE would make
+    /// every one of those wait for the next commit, which on a quiet repository is never: a fix that
+    /// strands every self-healing source. So the skip also requires the recorded verdict to be FINAL
+    /// at that commit (<see cref="GitHubSyncConfig.LastAttemptWasFinal"/> ←
+    /// <see cref="StaticRepoImportResult.VerdictIsFinal"/>) — a preserved node or an
+    /// all-content-verdict refusal settles; <c>ImportedWithErrors</c>, a whole-import <c>Failed</c>
+    /// and a truncated listing do not.</para>
+    ///
+    /// <para>The baseline stays untouched, so nothing here weakens the guards above it: the next
+    /// NEW commit re-attempts the whole source unscoped, and the GUI's own "Update to latest"
+    /// (<c>GitHubSyncService.ReimportAtCommit</c>) never consults this predicate at all.</para>
     /// </summary>
     private static string? SkipReason(GitHubSyncConfig? cfg, string branch, string headSha)
         => cfg is null ? "config content could not be read"
@@ -404,6 +432,13 @@ public sealed class GitHubWebhookProcessor
                 ? $"branch '{cfg.Branch}' != built branch '{branch}'"
             : string.Equals(cfg.LastSyncCommitSha, headSha, StringComparison.OrdinalIgnoreCase)
                 ? "already at this commit"
+            // 🚨 Ordered AFTER "already at this commit" on purpose: a converged source keeps
+            // reporting the reason it has always reported, so this arm's appearance in a log is
+            // itself the signal that a source is settled-but-not-converged.
+            : cfg.LastAttemptWasFinal
+              && string.Equals(cfg.LastAttemptedCommitSha, headSha, StringComparison.OrdinalIgnoreCase)
+                ? $"already attempted at this commit with a final verdict ('{cfg.LastSyncOutcome}') — "
+                  + "re-reading the same bytes re-derives it; the next new commit re-attempts"
             : null;
 
     /// <summary>Maps a config node path (<c>{space}/_GitSync</c> or <c>{space}/_GitSync/{sourceId}</c>)
@@ -511,6 +546,14 @@ public sealed class GitHubWebhookProcessor
     /// push-triggered chart check could do the same. The workflow-path guard is deliberately not
     /// folded into this trigger predicate: HOW and WHAT are independent payload facts and each must
     /// fail closed.</para>
+    ///
+    /// <para><b>An accepted re-verification of unchanged content must not cause churn.</b> A source
+    /// already sitting on the built sha is skipped by <see cref="SkipReason"/>. 🚨 That claim was
+    /// FALSE for two years for a source whose import did not converge, because
+    /// <c>lastSyncCommitSha</c> is deliberately held back there. #3945 supplies the separate
+    /// "already attempted these exact bytes with a final verdict" arm. Dropping <c>schedule</c> or
+    /// <c>repository_dispatch</c> would lose genuine content-CI signals; the trigger set remains
+    /// broad, while #3978 independently proves which workflow may carry the verdict.</para>
     /// </summary>
     private static readonly ImmutableHashSet<string> PublishSignalTriggers =
         ImmutableHashSet.Create(
