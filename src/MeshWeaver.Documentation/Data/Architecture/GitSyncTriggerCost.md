@@ -180,10 +180,10 @@ Measured across all 67 readable `_GitSync` nodes on `memex.meshweaver.cloud` (se
 | `Deployments/_GitSync` | Memex / `mesh/Deployments` | 2026-09-09T01:10:46Z | 2026-09-10T15:27:00Z | `Imported` | 1 d 14 h |
 
 `Essentials` sits on `lastSyncCommitSha: 709e7307…`, **436 commits behind** the repository's head,
-with at least 11 unimported files under `Essentials/`. Its 32 siblings on the same portal and the
-same repository — `Store`, `Publish`, `Hosting`, `Chess`, `BusinessRules`, … — all carried
-`f4570459…` with `lastSyncedAt` **equal to** `lastSyncAttemptAt`. Same repository, same webhook, same
-schedule; the difference is convergence.
+with at least 11 unimported files under `Essentials/`. It is the **only** one of the 34 sources on
+that repository off the shared baseline: its 33 siblings — `Store`, `Publish`, `Hosting`, `Chess`,
+`BusinessRules`, … — all carried `f4570459…` with `lastSyncedAt` **equal to** `lastSyncAttemptAt`.
+Same repository, same webhook, same schedule; the difference is convergence.
 
 `Deployments/_GitSync` is the only source in the set carrying `twoWay: true`, i.e. the
 `Preserved > 0` arm — and the **independent** node of the same path on `memex.systemorph.com` reads
