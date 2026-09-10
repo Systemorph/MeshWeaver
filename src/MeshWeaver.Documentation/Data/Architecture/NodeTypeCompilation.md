@@ -1439,6 +1439,136 @@ hub-disposal cascade on `type/AppendDemo` on 09-07; `CompileStateMirror` satelli
 Adding a fifth read-probe would not change that; leg 4 and the split-arm run are the two instruments
 left, and they measure different things — mechanism and population.
 
+#### 2026-09-10 — the first `flat=EMITS` in the wild, a local negative, and the control NO leg has ever been
+
+MeshWeaver.Plugins run [`34519677252`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34519677252),
+job `103014057395`, `Portal hosts (shard 2)`, PR #1630. Runner `ubuntu-24.04`, **runtime `10.0.12`,
+SDK `10.0.401`, `linux-x64`** (read off the job's own `dotnet-install` lines, not assumed).
+
+| reading | count |
+|---|---|
+| `canary=BELOW-ROSLYN` | **64** |
+| `PROCESS CANNOT EMIT (#890)` | **64** (job log) |
+| `dissect=READS-HEALTHY symbol:OK cci:OK` | **64** |
+| `flat=` verdict | **`flat=EMITS`** |
+| distinct failed tests / classes | **14 / 8** |
+
+Both legs threw at `NamedTypeSymbol.Microsoft.Cci.ITypeDefinitionMember.get_ContainingTypeDefinition`,
+byte-identical to every prior occurrence. **`flat=EMITS` is the reading leg 4 was built for**: a
+top-level, non-generic, member-less class emitted fine in the same process microseconds after the
+nested source could not, so this process was **not emit-dead** and the fault needs the recursion.
+Note that this contradicts the 2026-09-08 occurrence's `flat=SAME-FRAME` — the flat leg's answer is
+**not constant across occurrences**, so neither branch may be quoted as a property of the defect.
+
+🚨 **ALC churn is refuted a third time, and this time by a whole-process constant rather than a
+before/after comparison.** All **51** `INIT_MEM`/`DISPOSE_MEM` records of pid `3233` — from
+`19:25:08.743` to the onset at `19:26:44.700` — read `alc=1`. Not "one at onset": one throughout.
+`asm` moved 110 → 121, `gc2` 2 → 12, RSS 149 → 526 MiB. Onset landed 462 ms into
+`CompileSingleDriverConsistencyTest.ConcurrentRequests_OnFreshNodeType_BothSucceedConsistently`, the
+first test of its class, ~96 s into the host — and per the rule above that says nothing: onset is the
+first emit attempted after the fault, and the test that owns it is whichever one was running.
+**A concurrency test being first is not evidence that concurrency is the trigger.**
+
+🚨 One caveat that applies to every occurrence report on this thread: **a compile that returns real
+diagnostics does not prove the metadata writer was healthy.** `Emit` returns before the writer runs
+when the compilation has errors, so the deliberately-broken NodeTypes (here
+`PreWarmTestBatchDown/Broken` at `19:25:24`, a correct `CompilationException`) establish that parse
+and bind work — never that the writer did.
+
+##### `exit 124` is arithmetic, not a second fault
+
+Measured end to end on this job. Onset `19:26:44.700`; last `PROCESS CANNOT EMIT` `19:38:38.462`; the
+final test — `CellSurfaceScriptingSeamTest.CellSurfacePackType_IsCallableByBareName_FromAKernelCell` —
+failed at `19:39:37.597` with *"Expected the observable to emit a value matching the predicate within
+60s"* and its own `[WATCHDOG-SOFT] … ran 60.0s`; the mesh then disposed **clean in 14 ms** ("all
+pooled I/O joined, async dispose queue drained"); the harness killed the host at `19:40:03`.
+
+So after the fault every compile-dependent test burns its full reactive budget instead of finishing
+in ~1 s, and thirteen minutes of that exhausts the wall-clock cap. **The 124 is the accumulated cost
+of the poisoning, not an independent hang** — which is exactly why raising the cap is refused: it
+would buy more 60-second waits and end the same way, one verdict later.
+
+##### A local negative worth having: the emit loop alone does not reach the state
+
+Run in Docker on the CI runtime — `mcr.microsoft.com/dotnet/sdk:10.0` resolving **SDK 10.0.401 /
+runtime 10.0.12**, the same pair CI installs — driving `EmitPipeline`'s own shapes: the canonical
+parse options (`DocumentationMode.Diagnose`), the canonical compilation options
+(`DynamicallyLinkedLibrary` + `OptimizationLevel.Debug` + `Platform.AnyCpu`), `Emit` to memory with a
+portable PDB and an XML doc stream, 175 `CreateFromFile` references off
+`TRUSTED_PLATFORM_ASSEMBLIES`, six rotating nested-generic source shapes, 4 threads, and a collectible
+`AssemblyLoadContext` loaded from the emitted bytes and unloaded every 7th emit.
+
+**400,000 emits in 144 s. Zero failures.** (`gc0=80268 gc1=71050 gc2=294`.)
+
+At the measured CI rate — roughly one occurrence per 20,000–40,000 compiles — that is ~10–20 expected
+events, so the null is worth stating: **whatever precedes the fault is not in the emit path.** Roslyn,
+the reference set, collectible-ALC load/unload, GC pressure and concurrent emits, on the exact
+runtime, do not reach it. The residual is the architecture: this host is `linux/arm64`, CI is
+`linux/x64`, and the x64 arm of the same harness under qemu-user emulation did not reach its first
+progress checkpoint, so it is not a usable control. **A repro attempt on this hardware must run x64
+natively (or under Rosetta) to be worth anything.**
+
+##### 🚨 The control no leg has ever been: the COMPILER itself
+
+Leg 1 varies the `MetadataReference` instances. Leg 2 varies the instances **and** their file
+mappings. Leg 4 varies the source shape. Leg 3 leaves the emit altogether. **All four execute the
+same `Microsoft.CodeAnalysis.dll` and `Microsoft.CodeAnalysis.CSharp.dll`** — the same loaded
+`Assembly` objects, the same mapped image, the same JIT-compiled native code, the same statics. Those
+two files contain every symbol the verdict names: `Microsoft.Cci.MetadataWriter`,
+`NamedTypeSymbol.AsNestedTypeDefinitionImpl`, and the `ITypeDefinitionMember.ContainingTypeDefinition`
+getter.
+
+So `BELOW-ROSLYN`'s closing sentence — *"the broken state is below Roslyn (CLR heap / JIT / GC), so no
+reference-set change can fix it"* — reads **"not the references"** as **"not Roslyn"**, and there is a
+third possibility sitting between them that no leg has ever varied: *Roslyn's own image, mapping or
+native code, in this process*. That would produce every observation on this thread — total, permanent,
+process-scoped, on freshly parsed source, with parse and bind healthy and direct symbol reads correct
+(reflection dispatches to whatever native code the method currently has, which need not be the copy
+the writer's call site reaches).
+
+**This is the third time the same reasoning error has been found on this issue**, and the pattern is
+now explicit enough to name: *a control is only a control for what it does not share.* Leg 2 found it
+in the CoreLib file mapping; leg 3's polarity note found it in the reads the dissection made; this
+finds it in the compiler binary that every leg shares by construction.
+
+**Leg 5 — a pristine COMPILER control — is the experiment that settles it**, and it is the exact
+analogue of what leg 2 did for CoreLib:
+
+1. Create a collectible `AssemblyLoadContext` and load **both** Roslyn assemblies into it from
+   *freshly read bytes* (`LoadFromStream(new MemoryStream(File.ReadAllBytes(location)))`) — fresh
+   managed bytes, no shared mmap, no shared page-cache pages, and a fresh JIT from IL.
+   Loading only `Microsoft.CodeAnalysis.CSharp.dll` is a dead probe: `MetadataWriter` lives in
+   `Microsoft.CodeAnalysis.dll`, so that one must be private too or the leg tests nothing.
+2. Drive the same `EmitCanarySource` through the private copy by reflection and record the outcome.
+
+| verdict | what it settles |
+|---|---|
+| `compiler=PRIVATE-COPY-EMITS` | a second, freshly loaded and freshly JIT-compiled Roslyn emits the shape the shared one cannot ⇒ the fault travels with **this process's copy of the compiler**, not with the CLR heap. `BELOW-ROSLYN`'s "below Roslyn" is then void, the `dotnet/runtime` venue is wrong, and the search moves to the image, its mapping, or the native code produced for it |
+| `compiler=PRIVATE-COPY-THREW@<same frame>` | the compiler binary is intact and freshly compiled code fails identically ⇒ **the first evidence that actually earns `BELOW-ROSLYN`**, and the first thing a `dotnet/runtime` report could carry that is not an absence |
+| `compiler=UNAVAILABLE(…)` / `NOT-RUN` | the private copy could not be built or driven — its own verdict, never folded into either of the above (the same rule leg 2's `INCONCLUSIVE` follows) |
+
+Two residuals, stated because the leg is only a control for what it does not share: the BCL,
+`System.Collections.Immutable` and `System.Reflection.Metadata` still resolve to the Default context,
+and the private copy starts cold at tier 0 with no profile — so a `PRIVATE-COPY-EMITS` on a single
+emit does not by itself separate "fresh mapping" from "fresh native code". The follow-up is one more
+step, not another design: repeat the private emit until it tiers up. If it then fails, the fault is
+in what tiering produces; if it never does, it is in the shared image or its mapping.
+
+🚨 **This also supersedes the split-arm `DOTNET_TieredPGO=0` run as the cheapest next measurement.**
+That experiment needs ~5 events in the control arm for a one-sided Fisher *p* ≈ 2⁻ᵃ to mean anything —
+~500 control runs at ~1 %/run, ~1000 runs total. Leg 5 asks the same question of the **next single
+occurrence**, for one ~10 MB read on a path that is already dead.
+
+##### Is this the same root cause as the #613/#1605 SIGSEGV? Consistent — not established
+
+Both are on runtime **10.0.12**, `linux-x64`, and both are *"one value is wrong while everything around
+it reads correct"*. But #1605 SIGNALS (a `SIGSEGV`, a `createdump` core, a zeroed MethodTable word on a
+live object in `WKS::gc_heap::find_first_object` — see
+[Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes)) and #890 never signals; and #890's
+`READS-HEALTHY` + `flat=EMITS` say the object graph the writer is walking is intact, which is the
+opposite of heap corruption. **Leg 5 is also the discriminator here**: `PRIVATE-COPY-EMITS` puts #890
+in the compiler's own image and separates the two; `PRIVATE-COPY-THREW` leaves them joinable.
+
 ### Framework-version freezing
 
 A compiled NodeType DLL references the MeshWeaver framework assemblies present
