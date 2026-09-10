@@ -488,6 +488,7 @@
   "comments.add": "Kommentar hinzufügen",
   "comments.placeholder": "Kommentar schreiben…",
   "ui.icon": "Symbol",
+  "ui.numericInput": "Zahleneingabe",
   "ui.submit": "Absenden",
   "ui.open": "Öffnen",
   "ui.readOnlyContent": "Schreibgeschützter Inhalt",

@@ -488,6 +488,7 @@
   "comments.add": "Add comment",
   "comments.placeholder": "Write your comment...",
   "ui.icon": "Icon",
+  "ui.numericInput": "Numeric input",
   "ui.submit": "Submit",
   "ui.open": "Open",
   "ui.readOnlyContent": "Read-only content",
