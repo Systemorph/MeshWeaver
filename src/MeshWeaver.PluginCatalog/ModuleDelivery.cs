@@ -101,6 +101,64 @@ public static class ModuleDelivery
     }
 
     /// <summary>
+    /// 🚨 <b>The install records whose declared module HAS NO BINARY on this installation — the
+    /// half of a mixed package that can go missing in total silence
+    /// (Systemorph/MeshWeaver.Plugins#1597).</b>
+    ///
+    /// <para><b>Why <see cref="NotOffered"/> does not cover it.</b> That answers whether the
+    /// REGISTRY offered the package, and offering is not delivering. A self-registry install offers
+    /// its own checkout perfectly well and still cannot produce a module: a mounted checkout can
+    /// never land a module BINARY (Systemorph/MeshWeaver#2417). So the unreported state is the next
+    /// one along — offered, installed, its nodes present, and no lane here able to produce the
+    /// bytes its layout areas and node types live in.</para>
+    ///
+    /// <para><b>What that costs, measured.</b> On a <c>memex-local</c> self-registry install
+    /// (platform 3.0.0-ci.8118) the <c>Export</c> package was installed, <c>Export/Guide</c>
+    /// rendered, and <c>get @Export/Guide/area/ExportPdf</c> answered <i>Area not found</i>; the
+    /// node menu carried no Export group at all and <c>MeshWeaver.Markdown.Export.dll</c> was in
+    /// neither <c>/app</c> nor <c>/app/modules</c>. The package reported a clean install throughout.
+    /// It is invisible until someone tries to export, which on a course is the CERTIFICATE — the one
+    /// artefact a learner is meant to keep.</para>
+    ///
+    /// <para>🚨 <b>It REPORTS. It never refuses.</b> The same discipline
+    /// <see cref="ModuleLoadReport"/> keeps and for the same reason: a portal that will not boot
+    /// cannot be given the fix for whatever is wrong with it. Nor is it an entitlement verdict or a
+    /// fault — which modules a deployment SHOULD carry is a policy question this does not answer.
+    /// Making the shortfall visible is the whole deliverable.</para>
+    ///
+    /// <para>Pure and total, like <see cref="NotOffered"/>: the caller supplies the probe, so the
+    /// rule is testable with no filesystem, no registry and no host.</para>
+    /// </summary>
+    /// <param name="installedRecords">This installation's install records (<c>Plugins/*</c>).
+    /// Nulls — an unreadable record's content — and records with no id are skipped.</param>
+    /// <param name="moduleBinaryExists">Whether a module's ENTRY ASSEMBLY resolves through any lane
+    /// this installation has: the app closure, the image's <c>modules/</c> seed, or a landed
+    /// generation. 🚨 Null means NOTHING IS KNOWN, and the answer is then empty rather than "every
+    /// package is fine" — a probe that cannot be consulted must not clear anything.</param>
+    public static ImmutableList<UndeliveredModule> BinaryAbsent(
+        IEnumerable<PackageManifest?>? installedRecords,
+        Func<string, bool>? moduleBinaryExists)
+    {
+        if (moduleBinaryExists is null)
+            return [];
+
+        return (installedRecords ?? [])
+            // 🚨 A content-only record is not probed AT ALL, not merely excluded from the result.
+            // Its whole delivery is the content lane, so there are no module bytes to be missing —
+            // and probing for a module no record declares would put a name in the log that nothing
+            // ever claimed. Most installed packages are content-only, so naming them would bury the
+            // ones that really have lost half of themselves.
+            .Where(record => record is not null
+                && !string.IsNullOrWhiteSpace(record.Id)
+                && !string.IsNullOrWhiteSpace(record.Module))
+            .Where(record => !moduleBinaryExists(record!.Module!))
+            .Select(record => new UndeliveredModule(
+                record!.Id, record.Name, record.Module, record.ModuleVersion))
+            .OrderBy(u => u.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableList();
+    }
+
+    /// <summary>
     /// The packages NO configured registry offers — the consumer-wide verdict a surface renders as
     /// <b>not delivered</b>, read off the ledger <see cref="RegistryUpdateReconciler"/> owns.
     ///
