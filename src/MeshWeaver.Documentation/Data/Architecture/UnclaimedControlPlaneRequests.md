@@ -1,7 +1,7 @@
 ---
 Name: Unclaimed Control-Plane Requests
 Category: Architecture
-Description: An InstanceAction that shows no progress means four different things — queued, unclaimed, withdrawn by its requester, or running under an observer that died — and the node spells three of them the same way. The 2026-09-10 measurement, what it falsified, and the two defects it actually contains.
+Description: An InstanceAction that shows no progress means four different things — queued, unclaimed, withdrawn by its requester, or running under an observer that died — and the node spells three of them the same way. The 2026-09-10 measurement, what it falsified, the two defects it actually contains, and which of them is now fixed.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M4.5 4.5l15 15" opacity="0.35"/></svg>
 ---
 
@@ -74,6 +74,35 @@ like.
 **A bound the phase is measured against is the missing piece**, not a watchdog that re-runs the
 action: re-running a restart whose rollout already succeeded restarts a healthy deployment.
 
+#### ✅ Fixed in MeshWeaver.Plugins — and reading the code found a fourth fact
+
+Neither this page nor #3961 had the decisive one: **the operator Job's NAME was never written to the
+node.** `run.JobName` lived only in the watcher's in-process run state, while the content type
+declared a `JobName` property and the run page rendered an "Operator job" row from it — so that row
+was always blank, and, far worse, a run whose process went away lost the one identifier needed to go
+and ask Kubernetes what happened. The measured node confirms it: `content` carries no `jobName` at
+all. **Such a run is not merely unobserved; it is unobservABLE.**
+
+And the mechanism is stronger than "the window expired". The reporting chain is an in-process
+reactive subscription, and this action was a `Restart` **of the deployment that hosts the control
+plane**. The observer was inside the thing being replaced, so it did not merely stop watching — it
+ceased to exist, at 11:34-ish, long before the 12:24Z window could matter. For `Restart`/`Roll` of
+the control instance that is an identity, not a race.
+
+What now happens, in `Hosting/InstanceAction` ([When an instance action outlives its
+observer](https://github.com/Systemorph/MeshWeaver.Plugins/blob/main/Hosting/ObserverExpiry.md)):
+the job name **and** the bound (`observedUntil`, from the Job's own `activeDeadlineSeconds` — the
+same function that produces the observer's own `.Timeout`) are stamped at launch; a fifth state
+`Unobserved` says *the outcome was not measured*, claiming neither success nor failure; a node found
+already `Running` on a hub's **first** emission is adopted and its job **re-observed** — terminal
+only on the Job's own status, `Unobserved` when the job is gone or unreadable, and simply *watched*
+when it is still running; and the fleet run log **derives** the same verdict from `observedUntil`
+where no process has had the chance to record one. Nothing re-runs the action.
+
+🚨 **This needed no decision about where a claim stamp lives** — see below. The bound is computed
+from data the run already held, and adoption is demand-driven rather than a poll, so it adds no
+steady-state write at all.
+
 ### B. No acceptance signal on the request itself — **real, but the live evidence is thin**
 
 | State | What the node shows | How long it is normal |
@@ -111,6 +140,11 @@ declared window becomes a statable fact rather than an ellipsis.
 record, or a per-operator lease node) has real write-volume consequences on a shared record. **It is a
 maintainer decision, and this page states it rather than guessing.**
 
+🚨 **This decision is defect B's alone.** Defect A is fixed without it: an action that has been
+*picked up* already has a bound on its own node and a job to re-read, so nothing has to be stamped
+periodically by anybody. A request nobody has picked up has neither, which is exactly why it still
+needs a claim — and why the two halves could be separated in the first place.
+
 🚨 What it must NOT be: a watchdog that re-posts the request, or a timeout that marks the action
 failed. Neither answers *why* nothing claimed it, and re-posting against a live-but-slow operator
 executes the operation twice — which for a `Restart` means restarting a healthy deployment.
@@ -133,7 +167,10 @@ whose population is not the thing under suspicion:
 1. `Ops/Status/<deployment>` — is `sampledAt` moving? If it is stale, nothing will be picked up and
    the action node has nothing to tell you.
 2. The action's `state`/`phase` — `Running` with an old `startedAt` and no advancing log is **defect
-   A**, not progress. Check whether the underlying operation *already succeeded*.
+   A**, not progress. Check whether the underlying operation *already succeeded*. On a portal
+   carrying the fix, the node says this itself: `Unobserved`, or `Running` past its own
+   `observedUntil`, which the page renders as one sentence. **Opening such a node is what triggers
+   its re-observation**, so read it and then read it again.
 3. `version 1` with `log: []` is **unclaimed OR pending**, and the difference is not on the node.
    `version 2` with no `requestedAction` is a **withdrawal by a person**.
 4. State the **window**, never a cause — and say how many requests were in it.
