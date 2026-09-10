@@ -993,7 +993,28 @@ public static class ModuleActivationBoot
     /// (<see cref="IncompatibleModule"/>).</param>
     /// <param name="Reason">Why, when unloadable.</param>
     public sealed record MeasuredLoadability(
-        string Name, string Generation, string? FrameworkMvid, bool Unloadable, string? Reason);
+        string Name, string Generation, string? FrameworkMvid, bool Unloadable, string? Reason)
+    {
+        /// <summary>
+        /// 🚨 <b>The third answer: this boot did not MEASURE these bytes at all</b> (MeshWeaver#3911).
+        /// True when the loader fell back with <see cref="FallbackModule.RunsAlreadyLoadedCopy"/> —
+        /// the default load context already held an assembly of that name, so
+        /// <c>Assembly.LoadFrom</c> handed back that copy and the head generation never reached the
+        /// loader. <see cref="Unloadable"/> is false, and that is NOT the same as "it loaded".
+        ///
+        /// <para><b>Why it cannot collapse into either.</b> Recorded as unloadable it would write
+        /// the marker that makes the update reconcile permanently <c>SkipUnloadable</c> every
+        /// rebuild of that version — a verdict on bytes nobody executed. Recorded as loaded it
+        /// would CLEAR a marker an earlier boot wrote from a real measurement. So a boot that did
+        /// not look writes nothing and clears nothing, and the fallback record — on stderr, in the
+        /// log, and as a row on the activation report — is what says so out loud.</para>
+        ///
+        /// <para>An init property, not a fifth positional parameter: replacing a public record's
+        /// constructor is a binary break for a host compiled against the previous platform, which
+        /// is the incident <see cref="IncompatibleModule"/> exists for.</para>
+        /// </summary>
+        public bool HeadNotMeasured { get; init; }
+    }
 
     /// <summary>
     /// Reads the loader's records back onto the entries it was handed (#3650): for every enabled
@@ -1003,6 +1024,15 @@ public static class ModuleActivationBoot
     /// <see cref="IncompatibleModule"/> whose generation IS that directory says the head did not
     /// load; the absence of both says it did. A record naming another generation of the same
     /// module says nothing about this one. Pure.
+    ///
+    /// <para>🚨 <b>THREE answers, never two.</b> A fallback carrying
+    /// <see cref="FallbackModule.RunsAlreadyLoadedCopy"/> is the third: the head generation was
+    /// never handed to the loader, because the default load context already held that name, so
+    /// nothing about those bytes was measured. It comes back with
+    /// <see cref="MeasuredLoadability.HeadNotMeasured"/> and <see cref="MeasuredLoadability.Unloadable"/>
+    /// false, and <see cref="RecordMeasuredLoadability"/> neither writes nor clears its marker —
+    /// see that property for why collapsing it into either of the other two is wrong in a
+    /// different direction each way.</para>
     /// </summary>
     public static ImmutableList<MeasuredLoadability> MeasureLoadability(
         IEnumerable<ModuleActivationEntry> tried,
@@ -1026,10 +1056,14 @@ public static class ModuleActivationBoot
                     string.Equals(m.Name, entry.Name, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(GenerationOf(m.Entry), entry.Directory, StringComparison.Ordinal))
                 : null;
+            var notMeasured = fallback is { RunsAlreadyLoadedCopy: true };
             verdicts.Add(new MeasuredLoadability(
                 entry.Name, entry.Directory!, entry.FrameworkMvid,
-                Unloadable: fallback is not null || refused is not null,
-                Reason: fallback?.Reason ?? refused?.Error));
+                Unloadable: !notMeasured && (fallback is not null || refused is not null),
+                Reason: fallback?.Reason ?? refused?.Error)
+            {
+                HeadNotMeasured = notMeasured,
+            });
         }
         return verdicts.ToImmutable();
     }
@@ -1054,6 +1088,19 @@ public static class ModuleActivationBoot
         var transitions = ImmutableList.CreateBuilder<MeasuredLoadability>();
         foreach (var verdict in MeasureLoadability(tried, fallbacks, incompatible))
         {
+            // 🚨 A boot that did not look writes nothing and clears nothing (#3911). The marker
+            // answers "do these bytes load on this platform build"; this boot never asked, because
+            // the load context already held the name. Writing it would permanently SkipUnloadable
+            // every rebuild of a version nobody executed; clearing it would erase an earlier boot's
+            // real measurement. The FallbackModule record is what makes the state visible.
+            if (verdict.HeadNotMeasured)
+            {
+                onReport?.Invoke(
+                    $"module '{verdict.Name}': generation '{verdict.Generation}' was NOT measured this "
+                    + "boot — the load context already held that name, so its bytes never reached the "
+                    + "loader. The unloadable marker is left exactly as it was: " + verdict.Reason);
+                continue;
+            }
             var current = ModuleActivationSidecar.ReadUnloadable(baseDirectory, verdict.Name);
             try
             {

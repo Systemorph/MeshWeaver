@@ -108,7 +108,7 @@ Both are SIGSEGV. They are different bugs and the dump distinguishes them in one
 field the faulting code happened to read. Sighting #10 faults at `si_addr = 0x4` and is the same bug.
 Match on *"a MethodTable word that is exactly zero"*, never on the literal address.
 
-The second one is the FutuRe family — **ten sightings, and the collectible-ALC hypothesis has been
+The second one is the FutuRe family — **fifteen sightings, and the collectible-ALC hypothesis has been
 falsified three separate ways** (RIP is in file-backed runtime code; a freed `LoaderAllocator` yields
 a non-null *unmapped* pointer, never `0x0`; a free-list item has no ALC at all). Do not keep paying
 that hypothesis forward, and **do not "fix" it by disabling concurrent GC** — that was tried
@@ -123,7 +123,12 @@ dereferences it. 🚨 **And the frame REVISITS — it is not a progression.** Si
 inside the JIT, the other is back in `background_sweep()+0xa61` with `si_addr = 0x0` on a dedicated
 BGC thread — same runtime binary, 33 hours apart, `[R15]` reading zero in both. So do not read #10's
 move out of `gc_heap` as the family migrating toward the LCG/serialization workload; that was a
-sample of one. Measured base rate on Plugins CI: **0.74 %** over 1,197 runs (2026-08-29 → 09-03,
+sample of one. 🚨 **Nor is it a property of one runtime build, and the zeroed block can be a LIVE
+object somebody POINTS AT.** Sighting #15 (2026-09-10) ran on **`10.0.12`**, libcoreclr build-id
+`79945f51…` — a different binary from #4–#14's `10.0.11` / `989b56df…` — so "wait for the next patch"
+is not a plan; and a whole-core scan for its cursor found the address in a field of a live,
+well-formed 96-byte heap object, not only on a free list.
+Measured base rate on Plugins CI: **0.74 %** over 1,197 runs (2026-08-29 → 09-03,
 denominator = non-cancelled runs) and **1.17 %** over 343 runs (2026-09-06 → 09-08, denominator =
 runs whose portal-host shard reached a verdict) — **different denominators, so not a trend**; both
 are `Portal hosts (shard 1)` only, `main` included, and the affected suites are

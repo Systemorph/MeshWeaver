@@ -481,5 +481,6 @@ All GitHub HTTP and serialization run through the controlled I/O pool — see
 
 - [DataSyncSetup.md](/Doc/Architecture/DataSyncSetup) — the import-source model (platform content synced from a repo at a release tag).
 - [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport) — the import mechanism reused here (fingerprint, activity lock, upsert, prune).
+- [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost) — what one webhook delivery costs, the single field that makes it free, and why a source that never converges re-clones its repository on every green build.
 - [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling) — why every GitHub HTTP call runs in the I/O pool.
 - [AccessControl.md](/Doc/Architecture/AccessControl) — credential encryption + the master key.

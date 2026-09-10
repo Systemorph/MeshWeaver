@@ -1,3 +1,4 @@
+using MeshWeaver.Data;
 using System.Collections.Frozen;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -66,15 +67,31 @@ public static class AccessAssignmentGuard
     /// </summary>
     public static bool IsScopeInvalid(MeshNode? node, out string reason)
     {
-        reason = "";
+        reason = ScopeRefusal(node)?.English ?? "";
+        return reason.Length > 0;
+    }
+
+    /// <summary>
+    /// <see cref="IsScopeInvalid"/>'s refusal as text PLUS the catalog key that renders it in the
+    /// viewer's language, or null when the grant is consistent.
+    ///
+    /// <para>The keyed form is the one a write boundary should log: handing a handler only the
+    /// finished English throws the key away at this frame, and the handler cannot recover it —
+    /// it does not know which of the two branches below fired. That is how the upsert handler's
+    /// refusals stayed English while its confirmations localized (MeshWeaver#3917).</para>
+    /// </summary>
+    /// <param name="node">The node being written.</param>
+    /// <returns>The refusal, or null when the grant is internally consistent.</returns>
+    public static LocalizableText? ScopeRefusal(MeshNode? node)
+    {
         if (node is null)
-            return false;
+            return null;
         if (!string.Equals(node.NodeType, AccessAssignmentNodeType, StringComparison.OrdinalIgnoreCase))
-            return false;
+            return null;
 
         var pathScope = ScopeFromPath(node.Path);
         if (pathScope is null)
-            return false;                       // not a grant path — leave it alone
+            return null;                        // not a grant path — leave it alone
 
         var mainNode = node.MainNode ?? "";
 
@@ -99,20 +116,30 @@ public static class AccessAssignmentGuard
         // is a root grant written deliberately, in code, with both halves agreeing; that is the
         // harness's convention, and narrowing it further means rescoping those call sites first.
         if (mainNode.Length == 0 && pathScope.Length == 0)
-            return false;
+            return null;
 
         if (string.Equals(mainNode, pathScope, StringComparison.OrdinalIgnoreCase))
-            return false;                       // consistent — the good case
+            return null;                        // consistent — the good case
 
-        reason = mainNode.Length == 0
-            ? $"AccessAssignment '{node.Path}' has an EMPTY MainNode. A grant is scoped by MainNode, "
-              + $"NOT by its folder — so this grants ROOT (every partition), not '{pathScope}'. "
-              + $"Set MainNode='{pathScope}'."
-            : $"AccessAssignment '{node.Path}' has MainNode='{mainNode}' but its path encodes scope "
-              + $"'{pathScope}'. A grant must be scoped to the node it is filed under; a mismatch "
-              + "silently grants somewhere else.";
-        return true;
+        return mainNode.Length == 0
+            ? LocalizableText.Keyed(
+                $"AccessAssignment '{node.Path}' has an EMPTY MainNode. A grant is scoped by MainNode, "
+                + $"NOT by its folder — so this grants ROOT (every partition), not '{pathScope}'. "
+                + $"Set MainNode='{pathScope}'.",
+                EmptyMainNodeKey, ("path", node.Path), ("scope", pathScope))
+            : LocalizableText.Keyed(
+                $"AccessAssignment '{node.Path}' has MainNode='{mainNode}' but its path encodes scope "
+                + $"'{pathScope}'. A grant must be scoped to the node it is filed under; a mismatch "
+                + "silently grants somewhere else.",
+                MainNodeMismatchKey,
+                ("path", node.Path), ("mainNode", mainNode), ("scope", pathScope));
     }
+
+    /// <summary>The catalog key for the EMPTY-MainNode branch of <see cref="ScopeRefusal"/>.</summary>
+    public const string EmptyMainNodeKey = "activity.accessAssignment.emptyMainNode";
+
+    /// <summary>The catalog key for the MainNode/path-scope mismatch branch of <see cref="ScopeRefusal"/>.</summary>
+    public const string MainNodeMismatchKey = "activity.accessAssignment.mainNodeMismatch";
 
     /// <summary>
     /// A grant can be made at <paramref name="scopePath"/> — i.e. it names a partition/node to
@@ -208,30 +235,51 @@ public static class AccessAssignmentGuard
     public static bool IsForbiddenOnSystemOwned(
         MeshNode? node, AccessAssignment? assignment, bool systemOwned, out string reason)
     {
-        reason = "";
+        reason = SystemOwnedRefusal(node, assignment, systemOwned)?.English ?? "";
+        return reason.Length > 0;
+    }
+
+    /// <summary>The catalog key whose English is <see cref="SystemOwnedRefusal"/>'s refusal.</summary>
+    public const string SystemOwnedKey = "activity.accessAssignment.systemOwned";
+
+    /// <summary>
+    /// <see cref="IsForbiddenOnSystemOwned"/>'s refusal as text PLUS the catalog key that renders it
+    /// in the viewer's language, or null when the grant is allowed. See <see cref="ScopeRefusal"/>
+    /// for why the pair has to travel together rather than being re-derived by the handler.
+    /// </summary>
+    /// <param name="node">The grant node, already normalised.</param>
+    /// <param name="assignment">Its content, materialised by the caller through the typed accessor.</param>
+    /// <param name="systemOwned">Whether the partition is system-owned — a ONE-WAY <c>_GitSync</c>.</param>
+    /// <returns>The refusal, or null when the grant is allowed.</returns>
+    public static LocalizableText? SystemOwnedRefusal(
+        MeshNode? node, AccessAssignment? assignment, bool systemOwned)
+    {
         if (!systemOwned || node is null)
-            return false;
+            return null;
         if (!string.Equals(node.NodeType, AccessAssignmentNodeType, StringComparison.OrdinalIgnoreCase))
-            return false;
+            return null;
 
         var scope = ScopeFromPath(node.Path);
         if (string.IsNullOrEmpty(scope))
-            return false;                       // not a grant path, or the root shape IsScopeInvalid owns
+            return null;                        // not a grant path, or the root shape IsScopeInvalid owns
 
         var subject = assignment?.AccessObject ?? "";
         if (string.Equals(subject, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
-            return false;                       // the importer's own identity — this is the one Admin
+            return null;                        // the importer's own identity — this is the one Admin
 
         if (!ConfersWriteAccess(assignment))
-            return false;                       // an entitlement, not an ownership claim
+            return null;                        // an entitlement, not an ownership claim
 
         var partition = PartitionOf(scope);
-        reason = $"AccessAssignment '{node.Path}' would give '{subject}' write access to "
-               + $"'{partition}', which is SYSTEM-OWNED (it has {partition}/_GitSync and is rewritten "
-               + "from its repo on every sync). Only '" + WellKnownUsers.System + "' may write it; a "
-               + "live edit by anyone else is reverted by the next sync. Grant Viewer as an "
-               + "entitlement instead, or change the repo and sync it.";
-        return true;
+        return LocalizableText.Keyed(
+            $"AccessAssignment '{node.Path}' would give '{subject}' write access to "
+            + $"'{partition}', which is SYSTEM-OWNED (it has {partition}/_GitSync and is rewritten "
+            + "from its repo on every sync). Only '" + WellKnownUsers.System + "' may write it; a "
+            + "live edit by anyone else is reverted by the next sync. Grant Viewer as an "
+            + "entitlement instead, or change the repo and sync it.",
+            SystemOwnedKey,
+            ("path", node.Path), ("subject", subject), ("partition", partition),
+            ("system", WellKnownUsers.System));
     }
 
     /// <summary>

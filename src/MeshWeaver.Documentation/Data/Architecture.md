@@ -158,6 +158,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [DatabaseBackups](DatabaseBackups)
 - [Declarative export and import](DeclarativeImportExport)
 - [Syncing a Space with GitHub](GitHubSync)
+- [What a Green Build Costs a Synced Space](GitSyncTriggerCost) — one field decides whether a delivery is free or a full clone, and it is deliberately frozen while an import does not converge; so a source that cannot converge re-clones on every green build, at the source repository's CI cadence
 - [The Import Marker Records Convergence](ImportMarkerRecordsConvergence)
 - [Instance Sync — bi-directional space replication between MeshWeaver instances](InstanceSync)
 - [Managing Partition Sync (Admin Guide)](PartitionSyncGuide)
@@ -215,6 +216,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Markdown Fence Extensions](MarkdownFenceExtensions) — the platform emits a marker, the clients hydrate it; a new fence is always a two-repo change
 - [Localization](Localization) — the viewer's language, resolved explicitly, never from ambient culture
 - [Chrome and Content Language](ChromeAndContentLanguage) — ownership decides the language, and in-flow chrome minimises words
+- [Localized Refusals](LocalizedRefusals) — a `*Response.Error` is a wire field and stays English; the activity transcript is the surface a viewer reads
 - [The Supplied Navigation Rail](SuppliedNavigationRail) — a module supplies its own left-hand index, and core renders it in the order the module gave
 - [The Apps Home](AppsHome)
 - [Content Favicon Rasterization](ContentFaviconRasterization)
@@ -234,6 +236,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Emit Reference Capture](EmitReferenceCapture) — bounded, opt-in CI evidence for runtime compiler failures
 - [Graph / Compiler Layering](GraphCompilerLayering) — the four assemblies, the cycle, and the full-MVID size rule
 - [Toolchain Re-evaluation Lane](ToolchainReevaluationLane) — why a toolchain change stopped rebaking the world
+- [The Dependency Record Floor](DependencyRecordFloor) — a record's module entry says "I need at least X", not "I need exactly this build"; the MVID pin that could not converge because Roslyn hashes absolute source paths, the two-replica recompile ping-pong it produced, and the four things the floor deliberately does not relax
 - [Producer Determinism of the Dependency Record](ProducerDeterminismOfTheDependencyRecord) — the same content must stamp the same record however the producer reached its bytes; the disk-cache hit that shipped a weaker guard, and why the digest is persisted beside the bytes rather than recomputed
 - [Rebake Waves](RebakeWaves) — why a roll rebakes the world anyway, and what one rebake writes
 - [Source-Set Establishment](SourceSetEstablishment) — a resolved source set of ZERO is ambiguous, and only the type's own persisted snapshot tells "owns no Code" from "the discovery pass came back short"; the boot that resolved 91 fewer Code nodes than its neighbours and held a portal out of rotation for the startup probe's full three hours
@@ -278,6 +281,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Module-Owned Siblings Ride](ModuleOwnedSiblingsRide)
 - [The Module Platform Link Gate](ModulePlatformLinkGate)
 - [The Module Publication Gate](ModulePublicationGate) — a bundle used to reach the live registry from inside its own pack leg, before the sibling suites, the portal-host shards, the compile-check and the Tests-area gate had reported; the hand-over moved downstream of the full source verdict, and what it refuses (failed, skipped, cancelled, missing, foreign-lane, substituted)
+- [Module Generation Substitution](ModuleGenerationSubstitution) — `Assembly.LoadFrom` does not promise to load the path it is handed: a byte-identical copy the load context already holds is returned instead, silently, so the loader recorded the generation it ASKED for while the process ran another; the three answers that replace two
 - [Module Set Convergence](ModuleSetConvergence)
 - [Module Versioning](ModuleVersioning)
 - [Modules](Modules)
