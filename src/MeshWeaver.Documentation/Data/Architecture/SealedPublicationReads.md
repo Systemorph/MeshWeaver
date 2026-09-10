@@ -70,6 +70,13 @@ distinction is the whole point — before it, all three were `404`:
 | `503` + `Retry-After` | the publication exists and is **being replaced right now** | wait it out; it is self-healing |
 | `412` | the caller pinned a generation and the publication has since moved | **re-read the publication that now applies** |
 
+The seal's file open decides whether it is present (#3876). A separate `File.Exists` observation
+cannot protect a later read: a publisher can remove the seal between those two operations. The
+catalogue's seal readers therefore handle `FileNotFoundException` and `DirectoryNotFoundException`
+at the read and report an absent seal. Other I/O failures still surface. An existing source without
+a seal gets `503` with `Retry-After`; an absent source directory gets `404`. Tests remove the seal
+or its parent after observing it, and exercise all four publication routes over HTTP.
+
 🚨 **A `404` for a name the index just listed used to be the *only* signal for all of this, and it
 named the wrong thing.** The route re-evaluates the seal on every request, so a `404` on
 `Export.zip` was equally consistent with *some other* bundle having gone absent a moment earlier —

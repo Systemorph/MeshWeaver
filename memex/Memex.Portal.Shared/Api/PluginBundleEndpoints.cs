@@ -232,7 +232,7 @@ public static class PluginBundleEndpoints
             return NothingPublished(identity, source);
         var reading = PublishedBundleCatalogue.SealedPublicationOf(directory, Log(http));
         if (reading.Bundles is null)
-            return BeingRepublished(http, identity, source, reading.TornReason!);
+            return BeingRepublished(http, identity, source, directory, reading.TornReason!);
         http.Response.Headers.ETag = $"\"{reading.Generation}\"";
         return Results.Json(
             new { identity, source, bundles = reading.Bundles, generation = reading.Generation });
@@ -255,8 +255,11 @@ public static class PluginBundleEndpoints
     /// the wrong status cost the whole investigation.
     /// </summary>
     private static IResult BeingRepublished(
-        HttpContext http, string identity, string source, string reason)
+        HttpContext http, string identity, string source, string directory, string reason)
     {
+        // Retention may remove the directory after PrebuiltDirectory observed it (#3876).
+        if (!Directory.Exists(directory))
+            return NothingPublished(identity, source);
         http.Response.Headers.RetryAfter = "30";
         return Results.Json(
             new { error = $"{reason} — source '{source}', framework identity '{identity}'" },
@@ -304,7 +307,7 @@ public static class PluginBundleEndpoints
             return NothingPublished(identity, source);
         var reading = PublishedBundleCatalogue.SealedPublicationOf(directory, Log(http));
         if (reading.Bundles is null)
-            return BeingRepublished(http, identity, source, reading.TornReason!);
+            return BeingRepublished(http, identity, source, directory, reading.TornReason!);
         if (HeldGeneration(http) is { } held && held != reading.Generation)
             return GenerationMoved(held, reading.Generation!);
         if (!reading.Bundles.Contains(bundle, StringComparer.OrdinalIgnoreCase))
@@ -334,7 +337,7 @@ public static class PluginBundleEndpoints
         // reason (#3401) — separate it from a module set that is genuinely unusable.
         var publication = PublishedBundleCatalogue.SealedPublicationOf(directory, Log(http));
         if (publication.Bundles is null)
-            return BeingRepublished(http, identity, source, publication.TornReason!);
+            return BeingRepublished(http, identity, source, directory, publication.TornReason!);
         var reading = PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
         if (reading.Modules is null)
             return Results.Json(
@@ -361,7 +364,7 @@ public static class PluginBundleEndpoints
             return NothingPublished(identity, source);
         var publication = PublishedBundleCatalogue.SealedPublicationOf(directory, Log(http));
         if (publication.Bundles is null)
-            return BeingRepublished(http, identity, source, publication.TornReason!);
+            return BeingRepublished(http, identity, source, directory, publication.TornReason!);
         if (HeldGeneration(http) is { } held && held != publication.Generation)
             return GenerationMoved(held, publication.Generation!);
         var reading = PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));

@@ -681,14 +681,15 @@ public static class PublishedBundleCatalogue
         var directory = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
         var sentinel = Path.Combine(
             directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-        if (!File.Exists(sentinel))
+        var lines = ReadSealLines(sentinel);
+        if (lines is null)
             return new SealedPublicationReading(
                 null, null,
                 "the publication is being republished right now (no completion sentinel) — the "
                 + "publisher removes it before uploading and restores it last, so this is a "
                 + "transient window, not a missing publication") { Directory = directory };
 
-        var listed = File.ReadAllLines(sentinel)
+        var listed = lines
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
@@ -722,6 +723,21 @@ public static class PublishedBundleCatalogue
     private static IReadOnlyList<string>? CompleteBundlesOf(string sourceDirectory, ILogger? logger)
         => CompletePublicationOf(sourceDirectory, logger).Bundles;
 
+    // The publisher removes the seal before replacing a publication. File.Exists followed by
+    // ReadAllLines races that removal (#3876): only the open can decide whether it is readable.
+    // Other I/O failures must still surface; they do not establish an absent seal.
+    internal static string[]? ReadSealLines(string sentinel)
+    {
+        try
+        {
+            return File.ReadAllLines(sentinel);
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// The same reading as <see cref="CompleteBundlesOf"/>, plus the directory the bytes are
     /// actually in — the generation this source's pointer names, or the source directory itself
@@ -735,7 +751,8 @@ public static class PublishedBundleCatalogue
         var directory = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
         var sentinel = Path.Combine(
             directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-        if (!File.Exists(sentinel))
+        var lines = ReadSealLines(sentinel);
+        if (lines is null)
         {
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} carries no {Sentinel} — the publication "
@@ -744,7 +761,7 @@ public static class PublishedBundleCatalogue
             return (directory, null);
         }
 
-        var listed = File.ReadAllLines(sentinel)
+        var listed = lines
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
@@ -791,10 +808,7 @@ public static class PublishedBundleCatalogue
         var sentinel = Path.Combine(
             ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory),
             ShippedPrebuiltBundles.CompletionSentinelFileName);
-        if (!File.Exists(sentinel))
-            return null;
-        return File.ReadAllLines(sentinel)
-            .Select(line => line.Trim())
+        return ReadSealLines(sentinel)?.Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
     }

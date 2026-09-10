@@ -290,6 +290,45 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
         }
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task RemovedSealAndRemovedIdentity_HaveDistinctAnswersOnEveryPublicationRoute()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-prebuilt-removed-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(root, Identity, Source);
+        Directory.CreateDirectory(directory);
+        try
+        {
+            WriteBundle(Path.Combine(directory, "Store.zip"), "Store");
+            var seal = Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            File.WriteAllText(seal, "Store.zip\n");
+            var key = await RegisterInstance(Granted, $"{Source}/*");
+            await using var app = await StartHost(root);
+            var route = $"/api/plugins/bundles/prebuilt/{Identity}/{Source}";
+            Assert.Equal(HttpStatusCode.OK, (await Get(app, route, key)).StatusCode);
+
+            File.Delete(seal);
+            string[] suffixes = ["", "/Store.zip", "/modules", "/modules/ai.module.nupkg"];
+            foreach (var suffix in suffixes)
+            {
+                using var response = await Get(app, route + suffix, key);
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+                Assert.Equal(TimeSpan.FromSeconds(30), response.Headers.RetryAfter?.Delta);
+            }
+
+            Directory.Delete(Path.Combine(root, Identity), recursive: true);
+            foreach (var suffix in suffixes)
+            {
+                using var response = await Get(app, route + suffix, key);
+                Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+                Assert.Null(response.Headers.RetryAfter);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static async Task<HttpResponseMessage> Get(
         WebApplication app, string route, string key, string? ifMatch = null)
     {
