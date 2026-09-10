@@ -3,7 +3,7 @@
 # Is the COMPLETE deployment image set present in ACR for one commit?
 #
 #   .github/scripts/check-image-set.sh <short-sha> [<plugins-short-sha>] [--pointers <version>]
-#   exit 0 = complete   exit 1 = something is missing / malformed
+#   exit 0 = complete   exit 1 = something is missing / malformed / could not be verified
 #
 # 🚨 THE SECOND ARGUMENT IS WHAT MAKES THE IDENTITY HONEST (MeshWeaver#2622). The portal HOSTS
 # live in MeshWeaver.Plugins, so a merge THERE that edits a file shipping in the image — an
@@ -90,8 +90,8 @@ while [ $# -gt 0 ]; do
     --pointers)
       CHECK_POINTERS=1
       # Deliberately tolerant of an EMPTY value here: an unresolved version is reported below,
-      # AFTER the per-sha diagnostics, so a run whose image leg died still gets "<repo>:<sha> is
-      # MISSING" as its headline instead of a usage message about a flag.
+      # AFTER the per-sha diagnostics, so a run whose image leg died still gets "<repo>:<sha>
+      # could not be verified" as its headline instead of a usage message about a flag.
       if [ $# -ge 2 ]; then POINTER_VERSION="$2"; shift 2; else shift; fi
       ;;
     --*) echo "::error::check-image-set.sh: unknown option '$1'"; usage; exit 1 ;;
@@ -114,8 +114,8 @@ fi
 REGISTRY="${ACR_NAME:-meshweaver}"
 
 # Reads manifests through ARM (an `az login` is enough — `az acr login` is for docker push creds).
-# `az acr manifest show` is an Azure-CLI PREVIEW command group (it prints a warning on stderr,
-# discarded here). If it is ever withdrawn, the equivalent is
+# `az acr manifest show` is an Azure-CLI PREVIEW command group. --only-show-errors suppresses
+# its preview warning while retaining registry failures. If it is ever withdrawn, the equivalent is
 # `docker buildx imagetools inspect --raw <acr>/<repo>:<tag>` after `az acr login`.
 fail=0
 summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && echo "$1" >> "$GITHUB_STEP_SUMMARY"; return 0; }
@@ -140,9 +140,12 @@ REPOS="memex-portal-ai memex-migration mw-plugin-test"
 # nothing would be gained by letting the two answers drift apart.
 #   assert_index <repo> <tag> <what-a-miss-means>
 assert_index() {
-  local repo="$1" tag="$2" consequence="$3" m arches
-  if ! m=$(az acr manifest show --registry "$REGISTRY" --name "$repo:$tag" -o json 2>/dev/null); then
-    report "$repo:$tag is MISSING from ACR — $consequence"
+  local repo="$1" tag="$2" requirement="$3" m arches status
+  if m=$(az acr manifest show --registry "$REGISTRY" --name "$repo:$tag" -o json --only-show-errors); then
+    :
+  else
+    status=$?
+    report "$repo:$tag could not be verified in ACR (az exit $status) — see the registry diagnostic above. $requirement"
     return 1
   fi
   arches=$(printf '%s' "$m" | jq -r '[(.manifests // [])[] | select(.platform.os == "linux") | .platform.architecture] | sort | join(",")')
@@ -155,7 +158,7 @@ assert_index() {
 }
 
 for repo in $REPOS; do
-  assert_index "$repo" "$SHA" "main $SHA has an INCOMPLETE image set" || true
+  assert_index "$repo" "$SHA" "Commit $SHA requires all three images." || true
 done
 
 # 🚨 memex-portal-next is NOT checked here any more: its sources and its build lane moved to
@@ -170,10 +173,11 @@ done
 # the one place the answer may narrow, and it narrows only for callers that opted in.
 if [ -n "$PLUGINS_SHA" ]; then
   pair="$SHA-p$PLUGINS_SHA"
-  if az acr manifest show --registry "$REGISTRY" --name "memex-portal-ai:$pair" -o json >/dev/null 2>&1; then
+  if az acr manifest show --registry "$REGISTRY" --name "memex-portal-ai:$pair" -o json --only-show-errors >/dev/null; then
     ok "memex-portal-ai:$pair — built from plugins $PLUGINS_SHA"
   else
-    report "memex-portal-ai:$pair is MISSING — the published portal image was NOT built from the current plugins HEAD ($PLUGINS_SHA). The portal hosts live in MeshWeaver.Plugins, so a merge there ships in the image while core's sha does not move (#2622). The reconciler will rebuild."
+    status=$?
+    report "memex-portal-ai:$pair could not be verified in ACR (az exit $status) — see the registry diagnostic above. The pair tag must identify the image built from plugins $PLUGINS_SHA (#2622)."
   fi
 fi
 
@@ -196,28 +200,28 @@ fi
 #                   `latest`; see the header. Do not generalise this line into the loop.
 #
 # No `if:` on a variable and no tolerated failure anywhere in here: a pointer that cannot be checked
-# is reported RED naming what is missing, exactly like one that is missing. A gate that can decline
+# is reported RED naming the failed read, exactly like one that is missing. A gate that can decline
 # to run is indistinguishable from one that passed.
 if [ "$CHECK_POINTERS" -eq 1 ]; then
   summary "### Pointers"
   for repo in $REPOS; do
     assert_index "$repo" main \
-      "the promotion's moving pointer is not on every repository of the set. Phase B writes \`main\` on all three; a set where only one half carries it is exactly MeshWeaver#3670 (Doc/Architecture/ImageTagContract)." || true
+      "Phase B must publish \`main\` on all three repositories (Doc/Architecture/ImageTagContract)." || true
   done
   assert_index mw-plugin-test latest \
-    "the satellites resolve this tag as \`vars.MW_TEST_IMAGE\`, so their CI cannot pull a tester. Phase B writes it beside \`mw-plugin-test:main\`." || true
+    "Satellites resolve this tag as \`vars.MW_TEST_IMAGE\`; phase B must publish it beside \`mw-plugin-test:main\`." || true
   if [ -z "$POINTER_VERSION" ]; then
     report "--pointers was given an EMPTY version, so the set's immutable pointer could not be asserted. The caller must pass the version this run promoted (every leg's \$(Version), e.g. 3.0.0-ci.8079). An empty value means the leg that computes it never ran — the set is not promoted."
   else
     for repo in $REPOS; do
       assert_index "$repo" "$POINTER_VERSION" \
-        "the promoted set is ASYMMETRIC: $POINTER_VERSION does not resolve on every repository. The portal's is phase C, the arming write SelfUpdateHostedService acts on; the other two are phase A." || true
+        "Version $POINTER_VERSION must resolve on every repository. The portal's is phase C; the other two are phase A." || true
     done
   fi
 fi
 
 if [ "$fail" -ne 0 ]; then
-  echo "::error::main $SHA does NOT have a complete image set — see the errors above: an image is missing or malformed, or a pointer the promotion publishes does not resolve on every repository of the set. Every self-updating install stays on the previous image until a CD run publishes all of them, and a consumer naming a missing pointer cannot resolve anything at all."
+  echo "::error::The complete image set for main $SHA could not be verified — see the errors above for missing or malformed images, or failed registry reads. A failed read does not establish that an image is absent; this gate remains red until the complete set is verified."
   exit 1
 fi
 echo "All images exist in ACR for $SHA${PLUGINS_SHA:+ (built from plugins $PLUGINS_SHA)}${POINTER_VERSION:+, and every promoted pointer resolves ($POINTER_VERSION)}."
