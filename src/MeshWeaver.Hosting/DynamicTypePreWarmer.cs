@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -383,7 +384,9 @@ public static class DynamicTypePreWarmer
                 {
                     // The full nodes (not just their definitions): the batch driver feeds the
                     // compiler the enumerated MeshNode directly — no re-fetch, no activation.
-                    var (nodes, definitions) = DynamicTypesOf(change.Items);
+                    var dynamicTypes = DynamicTypesOf(
+                        change.Items, mesh.JsonSerializerOptions, logger);
+                    var (nodes, definitions) = (dynamicTypes.Nodes, dynamicTypes.Definitions);
 
                     // 🚨 ASK THE SHARE WHAT IS ACTUALLY THERE, before deciding what to build.
                     //
@@ -398,13 +401,29 @@ public static class DynamicTypePreWarmer
                     // which buys three properties at once: a cleared cache re-bakes by itself, an
                     // interrupted bake RESUMES (what already landed comes back Baked), and a second
                     // pod inherits the first pod's work instead of repeating it.
+                    //
+                    // 🚨 #3703 — the enumeration is a PROJECTION, and this process's own prebuilt
+                    // adoptions may already have superseded it. Classify from the newer of the two.
+                    //
+                    // 🚨 The overlay moves DEFINITIONS and deliberately NOT `nodes`. A node carries
+                    // the VERSION the compiler's store upload keys on, and an overlaid definition on
+                    // a snapshot node would pair a fresh record with a stale version — strictly
+                    // worse than either. It costs nothing: an adopted type classifies Baked, so the
+                    // batch driver (which is the only consumer of `nodes`) never reaches it.
+                    var overlay = OverlayThisProcessAdoptions(mesh, definitions, nodes, logger);
+                    var classified = overlay.Definitions;
+
                     var store = ResolveAssemblyStore(mesh);
                     return NodeTypeBakeStatus
-                        .Probe(definitions, store, logger: logger,
+                        .Probe(classified, store, logger: logger,
                             liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
                             liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
+                        .Select(report => report with
+                        {
+                            ClassifiedFromLocalAdoption = overlay.Applied.Count,
+                        })
                         .SelectMany(report => BakeOrFollow(
-                            mesh, workspace, accessService, definitions, nodes, store, report,
+                            mesh, workspace, accessService, classified, nodes, store, report,
                             budget, pacing, batchBake, buildProtocol, logger));
                 })
                 // 🚨 NO Catch HERE, AND NO LOG-AND-SWALLOW — DELIBERATELY.
@@ -430,29 +449,70 @@ public static class DynamicTypePreWarmer
     /// (<see cref="ProbeDynamicTypes"/>) so the two can never disagree about WHAT the mesh's
     /// dynamic types are — a drift there would make the adopt-only report describe a different
     /// population than the sweep it replaces.
+    ///
+    /// <para>🚨 <b>The typing is <c>ContentAs</c>, never <c>Content is NodeTypeDefinition</c>, and
+    /// a failure to type is COUNTED</b> (#3703). A query row's <c>Content</c> is deserialised by
+    /// whichever hub served it, so an unresolvable <c>$type</c> degrades to a raw
+    /// <c>JsonElement</c> and a pattern-match on the CLR type silently drops that NodeType from
+    /// this population — out of <c>total</c>, out of <c>baked</c>, out of <c>pending</c>, with
+    /// nothing to grep. That is the same defect this whole issue is about wearing a different hat:
+    /// an instrument that cannot say "I did not check". It can now, via
+    /// <see cref="DynamicTypes.Untyped"/>.</para>
     /// </summary>
-    private static (Dictionary<string, MeshNode> Nodes,
-        Dictionary<string, NodeTypeDefinition?> Definitions) DynamicTypesOf(
-        IEnumerable<MeshNode> items)
+    /// <param name="items">The enumeration snapshot.</param>
+    /// <param name="options">The mesh hub's serializer options — the registry that resolves the
+    /// content's <c>$type</c>.</param>
+    /// <param name="logger">Diagnostics; an unconvertible value is named by node path.</param>
+    internal static DynamicTypes DynamicTypesOf(
+        IEnumerable<MeshNode> items, JsonSerializerOptions options, ILogger? logger)
     {
-        var nodes = items
-            .Where(n => !string.IsNullOrEmpty(n.Path)
-                && n.State == MeshNodeState.Active
-                && n.Content is NodeTypeDefinition d
-                // Only DYNAMIC types have source to compile. Static/framework
-                // NodeTypes ship their assembly with the process — nothing to warm.
-                && HasCompilableSource(d))
-            .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => g.First(),
-                StringComparer.OrdinalIgnoreCase);
-        var definitions = nodes.ToDictionary(
-            kvp => kvp.Key,
-            kvp => (NodeTypeDefinition?)kvp.Value.Content,
-            StringComparer.OrdinalIgnoreCase);
-        return (nodes, definitions);
+        var untyped = ImmutableList.CreateBuilder<string>();
+        var typed = items
+            .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
+            .Select(n => (Node: n, Definition: n.ContentAs<NodeTypeDefinition>(options, logger)))
+            .Where(pair =>
+            {
+                if (pair.Definition is { } d)
+                    // Only DYNAMIC types have source to compile. Static/framework
+                    // NodeTypes ship their assembly with the process — nothing to warm.
+                    return HasCompilableSource(d);
+                if (pair.Node.Content is not null)
+                    untyped.Add(pair.Node.Path!);
+                return false;
+            })
+            .GroupBy(pair => pair.Node.Path!, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var nodes = typed.ToDictionary(
+            g => g.Key, g => g.First().Node, StringComparer.OrdinalIgnoreCase);
+        var definitions = typed.ToDictionary(
+            g => g.Key, g => g.First().Definition, StringComparer.OrdinalIgnoreCase);
+
+        if (untyped.Count > 0)
+            // Warning, not silence: a NodeType this pass could not type is a type NOTHING in the
+            // bake decides anything about, and the whole point of the report is that a number it
+            // prints is a number over a population it can name.
+            logger?.LogWarning(
+                "DynamicTypePreWarmer: {Count} node(s) matched the NodeType enumeration but their "
+                + "content did not resolve to a NodeTypeDefinition on this hub — they are NOT in "
+                + "this report's population and NOTHING decided anything about them (#3703). "
+                + "Unresolved: {Paths}",
+                untyped.Count, string.Join(", ", untyped.Order(StringComparer.OrdinalIgnoreCase)));
+
+        return new DynamicTypes(nodes, definitions, untyped.ToImmutable());
     }
+
+    /// <summary>
+    /// The dynamic NodeTypes an enumeration snapshot yielded, WITH what it could not read.
+    /// </summary>
+    /// <param name="Nodes">The nodes, keyed by path.</param>
+    /// <param name="Definitions">Their definitions, keyed by path.</param>
+    /// <param name="Untyped">Paths whose content this hub could not resolve to a
+    /// <see cref="NodeTypeDefinition"/> — checked by nothing, so named by this.</param>
+    internal sealed record DynamicTypes(
+        Dictionary<string, MeshNode> Nodes,
+        Dictionary<string, NodeTypeDefinition?> Definitions,
+        ImmutableList<string> Untyped);
 
     /// <summary>
     /// 🚨 ASKS, NEVER BUILDS — the adopt-only pass that every boot runs.
@@ -489,12 +549,23 @@ public static class DynamicTypePreWarmer
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
                 .Take(1)
                 .Timeout(EnumerationBudget)
-                .SelectMany(change => NodeTypeBakeStatus.Probe(
-                    DynamicTypesOf(change.Items).Definitions,
-                    ResolveAssemblyStore(mesh),
-                    logger: logger,
-                    liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
-                    liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)));
+                .SelectMany(change =>
+                {
+                    var dynamicTypes = DynamicTypesOf(
+                        change.Items, mesh.JsonSerializerOptions, logger);
+                    var (nodes, definitions) = (dynamicTypes.Nodes, dynamicTypes.Definitions);
+                    var overlay = OverlayThisProcessAdoptions(mesh, definitions, nodes, logger);
+                    return NodeTypeBakeStatus.Probe(
+                            overlay.Definitions,
+                            ResolveAssemblyStore(mesh),
+                            logger: logger,
+                            liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+                            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
+                        .Select(report => report with
+                        {
+                            ClassifiedFromLocalAdoption = overlay.Applied.Count,
+                        });
+                }));
     }
 
     /// <summary>
@@ -505,6 +576,61 @@ public static class DynamicTypePreWarmer
     /// </summary>
     private static IAssemblyStore ResolveAssemblyStore(IMessageHub mesh) =>
         mesh.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+
+    /// <summary>
+    /// 🚨 <b>THE ENUMERATION IS A PROJECTION, AND THIS PROCESS MAY ALREADY HAVE SUPERSEDED IT</b>
+    /// (#3703).
+    ///
+    /// <para>The sweep decides what to compile from ONE mesh-wide
+    /// <c>Query&lt;MeshNode&gt;(…).Take(1)</c>. That is a CQRS read — eventually consistent, and
+    /// explicitly not the authoritative source for a node's content — while the prebuilt seeding
+    /// pass that runs immediately before it writes each adopted type's record through
+    /// <c>GetMeshNodeStream(path).Update(…)</c>, which IS authoritative. So the sweep can be handed
+    /// records that predate writes made seconds earlier by the same process, and nothing in the
+    /// classification can tell that apart from a genuinely stale record: both are the same
+    /// bytes.</para>
+    ///
+    /// <para><b>What that cost, measured.</b> memex, 2026-09-08 00:31 UTC, one cold boot: the
+    /// seeding pass reported <c>78 adopted now, 0 already current</c>, and ten seconds later the
+    /// sweep reported <c>baked=5 pending=204 frameworkstale=201</c> on the SAME framework identity —
+    /// 197 compiles instead of ~20. The two numbers were never comparable (see
+    /// <see cref="NodeTypeBakeReport.ClassifiedFromLocalAdoption"/>), and the compiles the
+    /// disagreement caused are what put four already-adopted <c>Doc/**</c> types on the compile path
+    /// where a short source-discovery pass could turn them into false regressions (#3663).</para>
+    ///
+    /// <para>The fix is neither a retry nor a wait: it is to classify each type from the NEWER of
+    /// the two facts. <see cref="NodeTypeAdoptionRegistry.OverlayOnto"/> applies the process's own
+    /// stamp only where the snapshot's <see cref="MeshNode.Version"/> proves the snapshot predates
+    /// it, so a record that has since moved on — an owner refusal, a recompile — always wins.</para>
+    /// </summary>
+    private static AdoptionOverlay OverlayThisProcessAdoptions(
+        IMessageHub mesh,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyDictionary<string, MeshNode> nodes,
+        ILogger? logger)
+    {
+        var registry = mesh.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
+        if (registry is null)
+            return new AdoptionOverlay(
+                definitions.ToImmutableDictionary(
+                    kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase),
+                []);
+
+        var overlay = registry.OverlayOnto(definitions, nodes);
+        // 🚨 SAY IT. An instrument that silently corrected its own input would be the next version
+        // of the defect: the operator reading "197 compiles" needs to know the enumeration was
+        // behind, because a snapshot that is behind for 73 types on a 35-second seeding pass is a
+        // fact about this deployment's read path, not about its content.
+        if (!overlay.Applied.IsEmpty)
+            logger?.LogInformation(
+                "DynamicTypePreWarmer: the NodeType enumeration snapshot PREDATES this process's own "
+                + "prebuilt adoptions for {Count} type(s) — classifying those from the record this "
+                + "process wrote, not from the snapshot (#3703). A snapshot at or below the node "
+                + "version an adoption wrote over cannot contain that write; one above it wins and is "
+                + "used unchanged. Superseded: {Types}",
+                overlay.Applied.Count, string.Join(", ", overlay.Applied));
+        return overlay;
+    }
 
     /// <summary>
     /// 🚨 ONE PROCESS BAKES; the rest SUBSCRIBE TO THE GO.
@@ -637,9 +763,19 @@ public static class DynamicTypePreWarmer
                 + "{Missing} is not registered — falling back to the activation-driven sweep",
                 batchCompiler is null ? "IMeshNodeCompilationService" : "IMeshService");
 
+        // 🚨 THE UNITS ARE NODETYPES AND THE SOURCE IS THE RECORD (#3703). "already on the share"
+        // used to stand where "need no build" now does, and it invited exactly one misreading: that
+        // this number is a census of the assembly store, comparable with the adoption pass's "N
+        // prebuilt assembly(ies) … are backed by the assembly store". It never was. The store is
+        // asked ONE question per type — "bytes at the version this type's RECORD names?" — so this
+        // counts types whose record and the share agree, over the enumeration snapshot, in
+        // NodeTypes; the adoption line counts BUNDLE ENTRIES whose bytes were written, in
+        // assemblies. Two populations, two units, two sources.
         logger?.LogInformation(
             "DynamicTypePreWarmer: {Pending} of {Total} dynamic NodeType(s) need building "
-            + "(sequential, dependency order, {Mode}, perTypeBudget={Budget}) — {Baked} already on the share. "
+            + "(sequential, dependency order, {Mode}, perTypeBudget={Budget}) — {Baked} need no build "
+            + "(record and share agree; this is a count of NodeTypes judged from their records, NOT a "
+            + "census of the assembly store). "
             + "{Report}. Building: {Order}",
             pending.Count, order.Count, useBatch ? "batch direct-compile" : "activation-driven",
             budget, baked.Count, report.Summary,

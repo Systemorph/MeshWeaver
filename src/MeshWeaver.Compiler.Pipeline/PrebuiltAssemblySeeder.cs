@@ -676,6 +676,12 @@ public static class PrebuiltAssemblySeeder
             // (the hub began leaving between the upload and the write), so the caller is told the
             // truth — "not adopted" — rather than the ADOPTED line below over a write that no-opped.
             var stamped = false;
+            // 🚨 #3703 — WHAT we stamped, captured on the same run that set `stamped`. The bake
+            // sweep decides what to compile from a mesh-wide enumeration, which is a PROJECTION and
+            // can answer with the record this write is replacing; this definition is the fact that
+            // outranks it. Captured rather than recomputed so it is BY CONSTRUCTION the record the
+            // owner received. See NodeTypeAdoptionRegistry.RecordAdopted.
+            NodeTypeDefinition? stampedDefinition = null;
 
             return store
                 .PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
@@ -700,75 +706,83 @@ public static class PrebuiltAssemblySeeder
                         }
 
                         stamped = true;
-                        return current with
+                        var adopted = def with
                         {
-                            Content = def with
-                            {
-                                DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
-                                CompilationStatus = CompilationStatus.Ok,
-                                CompilationError = null,
-                                CompilationDiagnostics = null,
-                                LastCompileSucceededAt = DateTimeOffset.UtcNow,
-                                LastCompiledVersion = version,
-                                LatestAssemblyCollection = location.Collection,
-                                LatestAssemblyPath = location.ContentPath,
-                                // The adopted bytes' own identity (#2471), read from the image
-                                // in hand — no file, no load. An adopted build is exactly the
-                                // case where a path says least: several pods adopt the same
-                                // bundle under the same key, and a replica that later serves a
-                                // different build is invisible to a path comparison.
-                                LatestAssemblyMvid =
-                                    ServedBuildIdentity.OfBytes(assemblyBytes)
-                                    ?? def.LatestAssemblyMvid,
-                                CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
-                                // The adopted build retires any standing FAILURE verdict, so
-                                // the inputs it was formed from go with it (#1793) — exactly as
-                                // ApplyCompileSuccess does. A token left behind would describe a
-                                // verdict this node no longer holds.
-                                FailedBuildInputs = null,
-                                // 🚨 The source snapshot is stamped BY THE OWNER, not here
-                                // (#1834). The producer's own ticks are meaningless on this
-                                // mesh (the bake writes zeros), so adoption asserts "these
-                                // bytes correspond to the LIVE source set" — and only the
-                                // owner knows that set. This write is CROSS-HUB: the lambda
-                                // diffs against the MIRROR's snapshot, which predates the
-                                // first-activation write of CurrentSourceVersions that this
-                                // very subscribe triggers (InstallSourcesWatcher). Reading the
-                                // field here therefore stamped CompiledSources = null under a
-                                // non-empty CurrentSourceVersions — IsDirty — and the release
-                                // request PackageInstaller issues one step later recompiled
-                                // the type that had just been adopted. Requesting the stamp
-                                // instead has no ordering to lose: whichever of the two writes
-                                // lands second carries the owner's authoritative pair.
-                                RequestedSourceStampAt = DateTimeOffset.UtcNow,
-                                // 🚨 #2813 — WHAT the producer says these bytes were built
-                                // from. The owner checks it against its own live source set
-                                // when it fulfils the request above; it cannot be checked
-                                // here, for the same cross-hub reason the request exists.
-                                // Null (a legacy bundle) is carried as null, never as a
-                                // match: the owner then records AdoptedUnverified rather
-                                // than AdoptedVerified.
-                                AdoptedSourceFingerprint = sourceFingerprint,
-                                // #3583 — the module version these bytes were released at, for the
-                                // compatibility rule the owner applies when the source later moves.
-                                // Null from a producer that recorded none is carried as null: the
-                                // rule then answers UNKNOWN, which never refuses.
-                                AdoptedModuleVersion = moduleVersion,
-                                // The producer's dependency record (#1707 slice 2) — validated
-                                // above; stamped so ongoing validity checks judge the adopted
-                                // build like a locally-compiled one. Legacy bundles (null)
-                                // leave any prior stamp untouched.
-                                CompiledDependencies = dependencies is null
-                                    ? def.CompiledDependencies
-                                    : dependencies.ToImmutableSortedDictionary(
-                                        kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
-                            },
+                            DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
+                            CompilationStatus = CompilationStatus.Ok,
+                            CompilationError = null,
+                            CompilationDiagnostics = null,
+                            LastCompileSucceededAt = DateTimeOffset.UtcNow,
+                            LastCompiledVersion = version,
+                            LatestAssemblyCollection = location.Collection,
+                            LatestAssemblyPath = location.ContentPath,
+                            // The adopted bytes' own identity (#2471), read from the image
+                            // in hand — no file, no load. An adopted build is exactly the
+                            // case where a path says least: several pods adopt the same
+                            // bundle under the same key, and a replica that later serves a
+                            // different build is invisible to a path comparison.
+                            LatestAssemblyMvid =
+                                ServedBuildIdentity.OfBytes(assemblyBytes)
+                                ?? def.LatestAssemblyMvid,
+                            CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+                            // The adopted build retires any standing FAILURE verdict, so
+                            // the inputs it was formed from go with it (#1793) — exactly as
+                            // ApplyCompileSuccess does. A token left behind would describe a
+                            // verdict this node no longer holds.
+                            FailedBuildInputs = null,
+                            // 🚨 The source snapshot is stamped BY THE OWNER, not here
+                            // (#1834). The producer's own ticks are meaningless on this
+                            // mesh (the bake writes zeros), so adoption asserts "these
+                            // bytes correspond to the LIVE source set" — and only the
+                            // owner knows that set. This write is CROSS-HUB: the lambda
+                            // diffs against the MIRROR's snapshot, which predates the
+                            // first-activation write of CurrentSourceVersions that this
+                            // very subscribe triggers (InstallSourcesWatcher). Reading the
+                            // field here therefore stamped CompiledSources = null under a
+                            // non-empty CurrentSourceVersions — IsDirty — and the release
+                            // request PackageInstaller issues one step later recompiled
+                            // the type that had just been adopted. Requesting the stamp
+                            // instead has no ordering to lose: whichever of the two writes
+                            // lands second carries the owner's authoritative pair.
+                            RequestedSourceStampAt = DateTimeOffset.UtcNow,
+                            // 🚨 #2813 — WHAT the producer says these bytes were built
+                            // from. The owner checks it against its own live source set
+                            // when it fulfils the request above; it cannot be checked
+                            // here, for the same cross-hub reason the request exists.
+                            // Null (a legacy bundle) is carried as null, never as a
+                            // match: the owner then records AdoptedUnverified rather
+                            // than AdoptedVerified.
+                            AdoptedSourceFingerprint = sourceFingerprint,
+                            // #3583 — the module version these bytes were released at, for the
+                            // compatibility rule the owner applies when the source later moves.
+                            // Null from a producer that recorded none is carried as null: the
+                            // rule then answers UNKNOWN, which never refuses.
+                            AdoptedModuleVersion = moduleVersion,
+                            // The producer's dependency record (#1707 slice 2) — validated
+                            // above; stamped so ongoing validity checks judge the adopted
+                            // build like a locally-compiled one. Legacy bundles (null)
+                            // leave any prior stamp untouched.
+                            CompiledDependencies = dependencies is null
+                                ? def.CompiledDependencies
+                                : dependencies.ToImmutableSortedDictionary(
+                                    kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
                         };
+                        stampedDefinition = adopted;
+                        return current with { Content = adopted };
                     }))
                 .Select(_ =>
                 {
                     if (!stamped)
                         return SeedOutcome.NotSeeded;
+                    // 🚨 #3703 — the ledger entry, written on the same branch as the ADOPTED line
+                    // and never without it. `version` is the node version the write went over, so
+                    // any later enumeration at or below it provably predates this stamp; anything
+                    // above it contains this write or something newer, and then the enumeration is
+                    // the better evidence. Absent registry (a host that registered none) simply
+                    // loses the optimisation — the sweep compiles, as it does today.
+                    if (stampedDefinition is { } written)
+                        hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>()
+                            ?.RecordAdopted(nodeTypePath, version, written);
                     logger?.LogInformation(
                         "Prebuilt assembly ADOPTED for {NodeTypePath} at version {Version} "
                         + "(framework {Framework}, module version {Module}) — no compile needed",
