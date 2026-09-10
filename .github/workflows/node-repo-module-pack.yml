@@ -48,6 +48,39 @@ name: node-repo module pack
 #             || github.event_name == 'schedule' }}
 #     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
 #
+# ────────── WHERE the hand-over happens: `publish-mode` (MeshWeaver#3878) ──────────
+# 🚨 `publish: true` alone still POSTs from inside the matrix leg, and that is the defect #3878
+# names: the leg publishes right after its OWN suite, while a sibling module's suite, the
+# portal-host shards, the NodeType compile-check and the Tests-area gate are still running or have
+# not started. A red twenty minutes later changes nothing about what portals have already adopted.
+# Making this job `needs:` those gates is a CYCLE — they consume its artifacts.
+#
+# `publish-mode: staged` moves only the POST. The leg builds, uploads, tests and stages exactly the
+# bytes it would have published — plus a record naming them by sha256 and stating the framework
+# identity read back OFF them — as `module-publication-<lane>-<module>`. The caller then runs the
+# publication lane in a job wired to its whole validation set:
+#
+#   module-pack:
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-pack.yml@<pin>
+#     with: { publish: <trunk-only>, publish-mode: staged, … }
+#
+#   publish-modules:
+#     if: <the SAME trunk-only condition — and NO status function: this job runs under GitHub's
+#         default all-needs-succeeded rule or not at all>
+#     needs: [<every required validation job>, module-pack]
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@<pin>
+#     with:
+#       verdicts: ${{ toJSON(needs) }}
+#       required-jobs: <the same list, by name>
+#       lane:     ${{ needs.module-pack.outputs.lane }}
+#       selected: ${{ needs.module-pack.outputs.selected }}
+#       modules:  <the same JSON matrix this call was given>
+#       platform-ref: <the same pin>
+#     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
+#
+# One publication call per pack call: the lane key, the selection and the declared matrix all
+# belong to ONE call, and artifacts are RUN-WIDE (Plugins#1077).
+#
 # ─────────────────────────── Narrowing (the `select` job) ───────────────────────────
 # 🚨 "in plugins we only re-run concerned modules ⇒ we can estimate the required count and
 # validate it" · "all plugins should only re-build what changed" · "there is always a notion of
@@ -93,7 +126,10 @@ name: node-repo module pack
 #
 #   * `publish: true`  — the suite runs INLINE in `pack`, after the bundle upload and BEFORE the
 #     hand-over. That ordering buys exactly one property, and it is worth its cost here: a failing
-#     suite never publishes, and every installation reads what the registry serves.
+#     suite never publishes, and every installation reads what the registry serves. (Under
+#     `publish-mode: staged` the property is unchanged and stronger: the leg reds, so the caller's
+#     `uses:` job reds, so the publication lane's verdict refuses the whole hand-over — this
+#     module's AND its siblings'.)
 #   * `publish: false` — the hand-over step cannot fire at all (its own `if:` is `inputs.publish
 #     && …`), so the ordering protects nothing. The suite runs in the `tests` job, in PARALLEL
 #     with select → prepare → build-workspace → pack, and the lane finishes when the slower of the
@@ -260,6 +296,37 @@ on:
           FrameworkDeclined (#2088). See the caller contract at the top of this file.
         type: boolean
         default: false
+      publish-mode:
+        description: >
+          WHERE the live-registry hand-over happens, when `publish` is true. Both values are
+          printed in the log and the job summary on every run, so the two outcomes can never be
+          told apart only by what is missing.
+
+
+          `direct` — the DEFAULT, and what a caller that says nothing inherits: this leg POSTs the
+          bundle to the registry itself, right after its own suite. 🚨 Its cost is the one
+          MeshWeaver#3878 names: a SIBLING module's suite, the portal-host shards, the NodeType
+          compile-check and the Tests-area gate all run beside or after this leg, so the module is
+          already being served to every installation while the run is still deciding whether the
+          source is any good. Making this job `needs:` those gates is a cycle — they consume its
+          artifacts.
+
+
+          `staged` — this leg packs, uploads, tests and STAGES: the bytes it would have POSTed,
+          plus a publication record naming them by sha256 and stating the framework identity read
+          back off them, go up as `module-publication-<lane>-<module>`. Nothing reaches the
+          registry here. The caller then runs `node-repo-module-publish.yml` in a job that
+          `needs:` its whole validation set, and THAT lane hands over — refusing on any dependency
+          that failed, was skipped, was cancelled or is missing. A leg that owes no hand-over
+          (the build ledger already serves its key) stages a record saying so, so "not owed" and
+          "never staged" are distinguishable there.
+
+
+          Any other value — the empty string included — is RED. A flag that cannot be read must
+          never resolve to "publish anyway", and must never resolve to "publish nothing" either.
+        required: false
+        type: string
+        default: direct
       always-modules:
         description: >
           Comma-separated module names (entry assembly names from `modules`) that the caller's
@@ -499,6 +566,21 @@ on:
           bundles built`) still asserts the receipts AND the pack job's result, so a failed suite
           keeps the lane red wherever the lane itself is required.
         value: ${{ jobs.verify.outputs.bundles-built }}
+      lane:
+        description: >
+          THIS call's lane key — the artifact namespace every marker, receipt and staged
+          publication of this call is named with and stamped with. A caller wiring
+          `node-repo-module-publish.yml` (publish-mode: staged) passes it there, so the
+          publication can only ever reach evidence THIS call produced (artifacts are run-wide;
+          Plugins#1077). Empty when `select` did not succeed — and the publication lane refuses an
+          empty lane rather than falling back to a name-only match.
+        value: ${{ jobs.select.outputs.lane }}
+      selected:
+        description: >
+          The module names this call SELECTED, space-separated — the same list `verify` accounts
+          the receipts against. The publication lane requires a staged record for every one of
+          them, so "its leg never staged" cannot read like "there was nothing to stage".
+        value: ${{ jobs.select.outputs.selected }}
 
 jobs:
   # ─────────────────────── WHICH BUNDLES THIS DIFF CAN REACH ───────────────────────
@@ -542,6 +624,33 @@ jobs:
       # construction — there is no input a caller can forget. It is also stamped INTO every
       # marker and receipt this call drops, so the verifier can refuse a foreign lane's evidence
       # even if the names ever collide again.
+      # 🚨 READ THE FLAG FIRST, AND REFUSE AN UNREADABLE ONE. `publish-mode` decides whether this
+      # call's legs POST to the live registry or stage for the downstream publication lane
+      # (MeshWeaver#3878) — and a value neither arm recognises must never fall through to either.
+      # Falling through to `direct` would publish before the source verdict, which is the defect;
+      # falling through to `staged` would publish nothing at all while every step ticked green.
+      - name: Read the publication mode
+        env:
+          MODE: ${{ inputs.publish-mode }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            direct|staged) ;;
+            *) echo "::error::inputs.publish-mode is '$MODE'. The only values are 'direct' (the default — this lane POSTs the bundle itself) and 'staged' (this lane stages the bytes and node-repo-module-publish.yml hands them over after the full source verdict, MeshWeaver#3878). A flag that cannot be read must NEVER resolve to either arm."; exit 1 ;;
+          esac
+          if [ "$PUBLISH" != "true" ]; then
+            echo "publish: false — no hand-over on this run, in either mode (publish-mode: $MODE)."
+          elif [ "$MODE" = "staged" ]; then
+            echo "publish-mode: staged — every leg stages its bundle as module-publication-<lane>-<module>; the registry hears nothing until the caller's node-repo-module-publish.yml job runs on a green validation set."
+          else
+            echo "publish-mode: direct — every leg POSTs its own bundle to the registry, BEFORE the run's sibling suites and gates have reported (MeshWeaver#3878)."
+          fi
+          {
+            echo "### Publication mode"
+            echo
+            echo "\`publish: $PUBLISH\`, \`publish-mode: $MODE\`."
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: This call's lane key
         id: lane
         env:
@@ -2322,9 +2431,18 @@ jobs:
       # `need_publish`: the caller's `publish` AND, with the ledger on, "no earlier run published this
       # key" — a key the registry already serves at these bytes is not re-handed (Plugins#889: a push
       # publishes every module whose key has no Published record, and only those).
+      #
+      # 🚨 `publish-mode: direct` ONLY. This is the hand-over MeshWeaver#3878 moves: it fires while
+      # the run's sibling suites, the portal-host shards, the NodeType compile-check and the
+      # Tests-area gate are still running or have not started, so a red twenty minutes later
+      # changes nothing about what portals have already adopted. Under `staged` the two steps below
+      # take these exact bytes to the publication lane instead, and this step does not run — the
+      # two arms are mutually exclusive by construction, and the staged record RECORDS which arm
+      # owned the hand-over, so a bundle whose publication belongs to neither is not possible to
+      # produce quietly.
       - name: Hand the bundle to the registry
         id: publish
-        if: ${{ inputs.publish && steps.plan.outputs.need_publish == 'true' }}
+        if: ${{ inputs.publish && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' }}
         env:
           TOKEN: ${{ secrets.publish-token }}
           REGISTRY: ${{ inputs.registry-url }}
@@ -2386,6 +2504,88 @@ jobs:
           set -euo pipefail
           python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Published
 
+      # ═════════ THE STAGED HAND-OVER — `publish-mode: staged` (MeshWeaver#3878) ═════════
+      # 🚨 The exact COMPLEMENT of the hand-over above, on the same input. Under `staged` this leg
+      # publishes NOTHING: it writes down what it WOULD have published — the bytes, named by their
+      # sha256, and the framework identity read back OFF those bytes — and takes both to the
+      # caller's `node-repo-module-publish.yml` job, which `needs:` the whole validation set. The
+      # registry hears nothing until every sibling suite, the portal-host shards, the compile-check
+      # and the Tests-area gate have reported `success`.
+      #
+      # 🚨 EVERY LEG STAGES, INCLUDING ONE THAT OWES NOTHING. A leg whose key the build ledger
+      # already serves has no hand-over to make — and if it simply staged nothing, "the registry
+      # already has these bytes" and "this leg never got here" would be the same absence at the
+      # publication lane. So it stages a record that SAYS so, with the reason, and the publication
+      # lane accounts for it instead of missing it. Same rule as the receipt below: positive
+      # evidence, never an inference from what is not there.
+      #
+      # 🚨 And NO ledger transition here. A staged artifact is not a `Published` record (#3878,
+      # repair contract 4): the ledger learns of a publication only from the lane that got a 2xx
+      # out of the registry, so a run that stages and then fails validation leaves a key that a
+      # later run will republish rather than one the fleet believes is already served.
+      - name: Stage the bundle for the publication lane
+        id: stage
+        if: ${{ inputs.publish && inputs.publish-mode == 'staged' }}
+        env:
+          LANE: ${{ needs.select.outputs.lane }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          REGISTRY_SOURCE: ${{ inputs.registry-source }}
+          OWED: ${{ steps.plan.outputs.need_publish }}
+          DECISION: ${{ steps.plan.outputs.decision }}
+          HOLDER: ${{ steps.plan.outputs.holder }}
+          LEDGER_KEY: ${{ steps.plan.outputs.key }}
+          # The same expression the receipt and the direct hand-over use: the build leg's packed
+          # bundle, or the artifact the reuse leg downloaded and sha256-verified against the ledger.
+          BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/staged"
+          [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so this staged publication could not be attributed to this call and the publication lane would refuse it anyway. Failing here, where it is readable."; exit 1; }
+          [ -n "${BUNDLE:-}" ] || { echo "::error::this leg produced no bundle path — neither the build nor the reuse leg recorded one, so there are no bytes to stage for $MODULE and none to read its framework identity off."; exit 1; }
+          # THE IDENTITY, OFF THE BYTES — never from a step output. The packer's exit code, the
+          # inspection's tick and the value inside the artifact are three different claims, and the
+          # publication lane compares this record against the THIRD one before it POSTs.
+          if ! manifest_json="$(unzip -p "$BUNDLE" meshweaver/manifest.json)" || [ -z "$manifest_json" ]; then
+            echo "::error::cannot read meshweaver/manifest.json out of $BUNDLE (see unzip's message above) — refusing to stage bytes whose manifest this lane could not check (#3211)"
+            exit 1
+          fi
+          identity="$(printf '%s' "$manifest_json" | jq -r '.frameworkMvid // ""' | tr -d '[:space:]')"
+          [ -n "$identity" ] || { echo "::error::REFUSING to stage $MODULE@$VERSION — the bundle states no framework identity (manifest .frameworkMvid is $(printf '%s' "$manifest_json" | jq -c '.frameworkMvid')). A registry that shelves a null advertises a null, and every consumer answers 'already landed — the identity could not be checked' on every reconcile, for ever (#3154/#3211). Repack with the platform's MeshWeaver.Compiler.dll as --graph-dll; if these bytes were REUSED, that run packed them before the identity was recorded — rebuild them."; exit 1; }
+          name="$(basename "$BUNDLE")"
+          sha="$(sha256sum "$BUNDLE" | cut -d' ' -f1)"
+          reason=""
+          if [ "$OWED" = "true" ]; then
+            cp "$BUNDLE" "$RUNNER_TEMP/staged/$name"
+            echo "staged $MODULE@$VERSION ($name, sha256 $sha, built against $identity) — the publication lane hands it over once this run's validation is green"
+          else
+            reason="no hand-over owed: the module build ledger already serves this key (decision '$DECISION'${HOLDER:+, holder $HOLDER})"
+            echo "staged $MODULE@$VERSION as NOT OWED — $reason"
+          fi
+          jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" --arg v "$VERSION" \
+                --arg src "$REGISTRY_SOURCE" --arg fid "$identity" --arg n "$name" --arg s "$sha" \
+                --arg r "$reason" --arg lk "$LEDGER_KEY" --arg d "$DECISION" \
+                --argjson owed "$([ "$OWED" = "true" ] && echo true || echo false)" \
+                --argjson size "$(wc -c < "$BUNDLE" | tr -d ' ')" \
+             '{lane:$l, package:$p, module:$m, version:$v, registrySource:$src,
+               frameworkIdentity:$fid, owed:$owed, reason:$r,
+               bundle:{name:$n, sha256:$s, size:$size},
+               ledger:{key:$lk, decision:$d}}' \
+             > "$RUNNER_TEMP/staged/$MODULE.publication.json"
+          cat "$RUNNER_TEMP/staged/$MODULE.publication.json"
+      - name: Upload the staged publication
+        if: ${{ inputs.publish && inputs.publish-mode == 'staged' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-publication-${{ needs.select.outputs.lane }}-${{ matrix.entry.module }}
+          path: ${{ runner.temp }}/staged
+          retention-days: 1
+          # An upload that found nothing means this leg staged nothing while reporting success —
+          # the publication lane would then name a SELECTED module with no record, which is the
+          # right verdict but the wrong place to discover it. Fail here, where the cause is.
+          if-no-files-found: error
+
       # ───────── THE LEDGER'S VERDICT WHEN THIS LEG DID NOT GET HERE — never a reason for red ─────────
       # `failure()`: the phase is read off the step outcomes, so the record says WHERE it failed and the
       # tolerance rule (compile blocks; a test failure blocks from the 2nd attempt; pack/publish never)
@@ -2402,6 +2602,10 @@ jobs:
           INSPECT_OUTCOME: ${{ steps.bundle.outcome }}
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          # A staging failure is a PUBLISH-phase failure: the bytes exist and are tested, and what
+          # did not happen is the hand-over. Recording it as `pack` would tell a later run to
+          # rebuild something that is already built (MeshWeaver#3878).
+          STAGE_OUTCOME: ${{ steps.stage.outcome }}
           MODE: ${{ matrix.entry.build || 'sdk' }}
           MW_LEDGER_URL: ${{ inputs.registry-url }}
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
@@ -2410,12 +2614,12 @@ jobs:
           set -uo pipefail
           phase="pack"
           if   [ "$TESTS_OUTCOME" = "failure" ]; then phase="test"
-          elif [ "$PUBLISH_OUTCOME" = "failure" ]; then phase="publish"
+          elif [ "$PUBLISH_OUTCOME" = "failure" ] || [ "$STAGE_OUTCOME" = "failure" ]; then phase="publish"
           elif [ "$BUILD_OUTCOME" = "failure" ] && [ "$MODE" = "sdk" ]; then phase="compile"
           elif [ "$BUILD_OUTCOME" = "failure" ] || [ "$PACK_OUTCOME" = "failure" ] || [ "$INSPECT_OUTCOME" = "failure" ] || [ "$REUSED_OUTCOME" = "failure" ]; then phase="pack"
           fi
-          printf 'step outcomes — build:%s reused:%s pack:%s inspect:%s tests:%s publish:%s (%s)\n' \
-            "$BUILD_OUTCOME" "$REUSED_OUTCOME" "$PACK_OUTCOME" "$INSPECT_OUTCOME" "$TESTS_OUTCOME" "$PUBLISH_OUTCOME" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/failure.txt"
+          printf 'step outcomes — build:%s reused:%s pack:%s inspect:%s tests:%s publish:%s stage:%s (%s)\n' \
+            "$BUILD_OUTCOME" "$REUSED_OUTCOME" "$PACK_OUTCOME" "$INSPECT_OUTCOME" "$TESTS_OUTCOME" "$PUBLISH_OUTCOME" "$STAGE_OUTCOME" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/failure.txt"
           trx="$RUNNER_TEMP/trx/ledger.trx"
           trxarg=()
           if [ -f "$trx" ]; then trxarg=(--trx "$trx"); fi
@@ -2449,7 +2653,18 @@ jobs:
           MODULE: ${{ matrix.entry.module }}
           VERSION: ${{ steps.identity.outputs.version }}
           COMPILER: ${{ steps.plan.outputs.decision == 'reuse' && 'reused' || steps.build.outputs.compiler }}
-          PUBLISHED: ${{ inputs.publish }}
+          # 🚨 "THIS LEG POSTED THE BUNDLE", not "this call was asked to publish". Under
+          # `publish-mode: staged` nothing reached the registry from here, and a receipt saying
+          # otherwise would make the lane's own report ("N published to the registry") a claim
+          # about something that has not happened yet.
+          PUBLISHED: ${{ inputs.publish && inputs.publish-mode == 'direct' }}
+          # 🚨 WHICH ARM OWNED THIS LEG'S HAND-OVER, written down rather than inferred from an
+          # `if:` nobody can read after the fact — the same discipline as `TESTS` below. `direct`:
+          # this leg POSTed the bundle itself. `staged`: it staged the bytes for the caller's
+          # publication lane, which hands over after the full source verdict (MeshWeaver#3878).
+          # `none`: this call does not publish at all. Two mutually exclusive conditions can BOTH
+          # be false; this is what makes that impossible to do quietly.
+          PUBLICATION: ${{ !inputs.publish && 'none' || inputs.publish-mode }}
           # 🚨 WHICH LANE OWNS THIS MODULE'S SUITE, written down rather than inferred from an `if:`
           # nobody can read after the fact. `none` — the selection says this entry owes no test run
           # (a floor-only entry, or a ledger record that already carries a verdict); `inline` — the
@@ -2471,6 +2686,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/receipts"
           [ -n "$LANE" ]  || { echo "::error::the lane key is empty — the select job did not produce one, so this receipt could not be attributed to this call."; exit 1; }
           [ -n "$TESTS" ] || { echo "::error::this leg recorded no owner for $MODULE's suite — a receipt that cannot say whether the suite ran here, ran in the tests lane, or was not owed leaves 'it ran nowhere' reading as green."; exit 1; }
+          [ -n "$PUBLICATION" ] || { echo "::error::this leg recorded no owner for $MODULE's hand-over — a receipt that cannot say whether the bundle was POSTed here, staged for the publication lane, or not published at all leaves 'it reached the registry from nowhere' reading as green (MeshWeaver#3878)."; exit 1; }
           # ───────── THE FRAMEWORK IDENTITY THIS BUNDLE STATES, ON THE RECEIPT (#3310) ─────────
           # 🚨 THE ONLY EVIDENCE THAT LETS `verify` SEE THE OUTCOME. #3293 and #3306 made the anchor
           # correct and their guards assert the lane's TEXT and the anchor's LOCATION — neither can
@@ -2491,10 +2707,10 @@ jobs:
           echo "$MODULE states framework identity $IDENTITY"
           jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" \
                 --arg v "$VERSION" --arg c "$COMPILER" --arg t "$TESTS" \
-                --argjson pub "$PUBLISHED" \
+                --argjson pub "$PUBLISHED" --arg pm "$PUBLICATION" \
                 --arg lk "$LEDGER_KEY" --arg ld "$LEDGER_DECISION" \
                 --arg fid "$IDENTITY" \
-             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, frameworkIdentity:$fid, ledger:{key:$lk, decision:$ld}}' \
+             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, publication:$pm, frameworkIdentity:$fid, ledger:{key:$lk, decision:$ld}}' \
              > "$RUNNER_TEMP/receipts/$MODULE.json"
           cat "$RUNNER_TEMP/receipts/$MODULE.json"
       - name: Upload the receipt
