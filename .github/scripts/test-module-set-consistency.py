@@ -210,6 +210,8 @@ def case_divergent_is_refused(lane: str, body: str, tmp: Path) -> None:
     combined = result.stdout + result.stderr
     missing = [needle for needle in
                ("MeshWeaver.Shared reaches this mesh as more than one build",
+                "other copy's bytes never enter memory",
+                "A version floor can keep the affected NodeTypes adoptable",
                 "as a sibling riding",
                 "1 carried at more than one BUILD")
                if needle not in combined]
