@@ -1588,7 +1588,7 @@ public class MeshOperations
             if (meshNode == null)
                 return Observable.Return("Invalid node: deserialized to null.");
 
-            meshNode = SanitizeNodeId(meshNode);
+            // 🚨 The id is written AS GIVEN — slashes included. See NormalizeNamespace's note.
             meshNode = NormalizeNamespace(meshNode);
 
             var identityError = ValidateNodeIdentity(meshNode, "create");
@@ -1665,7 +1665,8 @@ public class MeshOperations
                     continue;
                 }
 
-                var meshNode = NormalizeNamespace(SanitizeNodeId(rawNode));
+                // 🚨 The id is written AS GIVEN — slashes included. See NormalizeNamespace's note.
+                var meshNode = NormalizeNamespace(rawNode);
 
                 var identityError = ValidateNodeIdentity(meshNode, "update");
                 if (identityError != null)
@@ -2286,9 +2287,16 @@ public class MeshOperations
     private static string? ValidateNodeIdentity(MeshNode node, string operation)
     {
         if (string.IsNullOrWhiteSpace(node.Id))
-            return $"Error: cannot {operation}: 'id' is not set. The id is the node's own slug — the final path segment, " +
-                   "no slashes (e.g. \"PricingTool\"). Put the parent path in 'namespace' (e.g. \"ACME/Projects\"); " +
-                   "the node's path is derived as {namespace}/{id}.";
+            // 🚨 "no slashes" was a FALSE rule (#3894): an id may contain '/', and several node
+            // families rely on it (every LanguageModel id is the provider's wire id, e.g.
+            // "z-ai/glm-5.3"). Say what the id IS — the remainder of the path below the namespace
+            // — rather than forbidding a separator the store accepts and the keying depends on.
+            return $"Error: cannot {operation}: 'id' is not set. The id is the node's own key below its " +
+                   "namespace — usually the final path segment (e.g. \"PricingTool\"), but it MAY contain " +
+                   "slashes where that is the node's real key (e.g. \"z-ai/glm-5.3\"). Put the parent path in " +
+                   "'namespace' (e.g. \"ACME/Projects\"); the node's path is derived as {namespace}/{id}. " +
+                   "When a node already exists, keep its 'id' and 'namespace' EXACTLY as read back — " +
+                   "re-splitting a path across the two changes the node's identity and creates a duplicate.";
 
         if (string.IsNullOrWhiteSpace(node.NodeType))
             return $"Error: cannot {operation} '{node.Path}': 'nodeType' is not set. Every node must declare a nodeType — " +
@@ -2316,6 +2324,24 @@ public class MeshOperations
     /// path arguments: strips a leading '@' / '/' and surrounding whitespace. Models routinely
     /// copy the namespace out of an absolute reference ("@/ACME/Projects") — that intent is
     /// unambiguous, so fix it instead of failing the write.
+    ///
+    /// <para>🚨 THE NAMESPACE IS NORMALISED; THE ID IS NOT TOUCHED. An id may contain '/', and
+    /// re-keying one is DATA LOSS — do not reintroduce a "SanitizeNodeId" here or anywhere else
+    /// (issue #3894, the mirror of the adapter's own "THERE IS NO POSITIONAL (namespace, id) SPLIT
+    /// OF A PATH" note, issue #2212).</para>
+    ///
+    /// <para>Until #3894 this pair ran behind a <c>SanitizeNodeId</c> that split a slash-bearing id
+    /// at its LAST slash, on the stated premise that "the DB has a CHECK constraint blocking
+    /// slashes in id". There is no such constraint — every <c>mesh_nodes</c> DDL declares plain
+    /// <c>id TEXT NOT NULL</c>. What the split actually did was re-key the node: the PRIMARY KEY is
+    /// <c>(namespace, id)</c> while <c>path</c> is a GENERATED column, and moving a slash across
+    /// the two leaves <c>path</c> IDENTICAL while changing the key. Writes upsert
+    /// <c>ON CONFLICT (namespace, id)</c>, so the re-keyed write found no conflict and INSERTED a
+    /// SECOND row at the same path; reads and deletes address <c>WHERE path = $1</c>, so the read
+    /// then resolved an arbitrary one of the two and a delete removed BOTH. That is how
+    /// <c>Provider/OpenRouter</c> + <c>z-ai/glm-5.3</c> — a LanguageModel node whose id is the
+    /// provider's wire id, like every one of its siblings — was split across two rows and then
+    /// vanished from production.</para>
     /// </summary>
     private static MeshNode NormalizeNamespace(MeshNode node)
     {
@@ -2327,29 +2353,6 @@ public class MeshOperations
         // WithNamespace, not `with { Namespace = … }`: MainNode is a STORED default and would keep
         // the un-normalised "@/ACME/Projects/x" while Path became "ACME/Projects/x" (#2939).
         return normalized == ns ? node : node.WithNamespace(normalized);
-    }
-
-    /// <summary>
-    /// Sanitizes a MeshNode's Id: if the Id contains slashes, splits it into proper Id + Namespace.
-    /// This prevents duplicate rows in the DB (the DB has a CHECK constraint blocking slashes in id).
-    /// </summary>
-    private MeshNode SanitizeNodeId(MeshNode node)
-    {
-        if (string.IsNullOrEmpty(node.Id) || !node.Id.Contains('/'))
-            return node;
-
-        var lastSlash = node.Id.LastIndexOf('/');
-        var ns = node.Id[..lastSlash];
-        var id = node.Id[(lastSlash + 1)..];
-
-        if (!string.IsNullOrEmpty(node.Namespace))
-            ns = $"{node.Namespace}/{ns}";
-
-        logger.LogWarning("SanitizeNodeId: Fixed slash in id. Was id='{OldId}', now id='{NewId}' namespace='{Namespace}'",
-            node.Id, id, ns);
-
-        // WithPath keeps MainNode on the node's own (new) path when it was never set explicitly.
-        return node.WithPath(id, ns);
     }
 
     /// <summary>
