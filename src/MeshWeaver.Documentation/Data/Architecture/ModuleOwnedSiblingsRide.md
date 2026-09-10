@@ -114,11 +114,24 @@ trap"), so two copies under one simple name are **one assembly identity**: `Asse
 the already-loaded one and ignores the second path. Whichever copy loads first wins the process, and
 the loser's bytes are never in memory.
 
-What that costs when the copies differ is exactly the `#3175` incident:
-`NodeTypeCompilationHelpers.ModuleMvidsOf` reports the MVID of the assembly that actually loaded, so
-every NodeType whose dependency record named the other build is declined at adoption —
-*"dependency record mismatch — 'MeshWeaver.Markdown.Collaboration' built against mvid:A, live is
-mvid:B"* — and the view renders empty.
+What that costs when the copies differ is a **behaviour** hazard first: every caller compiled against
+the loser silently runs the winner, and nothing anywhere reports it. Where the two builds differ in
+more than their MVID — a partially updated lane, a half-landed source change, two commits reaching
+two `build-workspace` calls — that is a process running code its callers were not built against.
+
+🚨 **The adoption decline that used to be quoted here is no longer the harm, and must not be cited as
+it.** Until #3934 a dependency record named an exact build, so `NodeTypeCompilationHelpers.ModuleMvidsOf`
+reporting the MVID of the assembly that actually loaded declined every NodeType whose record named the
+other one — *"dependency record mismatch — 'MeshWeaver.Markdown.Collaboration' built against mvid:A,
+live is mvid:B"*, and the view rendered empty (the `#3175` incident). #3946 replaced the pin with a
+FLOOR, so for same-version copies — the only case the composed-set guard has ever actually fired on —
+that decline no longer happens. A floor still declines a live copy genuinely **below** it.
+
+The record was therefore only ever a **proxy**: it never detected the loader coin toss, it merely
+fired on the same input. Removing the proxy makes the composed-set refusal **more** load-bearing, not
+less — see [Module Adoption Policy](../ModuleAdoptionPolicy) → "What the platform roll gates on",
+which states the rule independently of any mechanism: two builds of one platform assembly in one
+identity is a torn publication, and torn publications are refused whole.
 
 ### 🚨 The copies do NOT agree, and the reason is structural (#3732)
 

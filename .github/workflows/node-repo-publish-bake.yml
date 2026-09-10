@@ -1144,7 +1144,7 @@ jobs:
           echo "module set: $COPIES MeshWeaver.* assembly file(s) across $MODULE_COUNT bundle(s), $NAMES distinct name(s), $SHARED carried by more than one bundle, $DIVERGED carried at more than one BUILD"
           if [ "$DIVERGED" -ne 0 ]; then
             while IFS= read -r dupe; do
-              echo "::error::$dupe reaches this mesh as more than one build — the loader keeps whichever it sees first, and the other's NodeTypes are declined at adoption (MeshWeaver#3732)."
+              echo "::error::$dupe reaches this mesh as more than one build — the loader keeps whichever it sees first and the loser's bytes are never in memory, so callers compiled against the loser silently run the winner (MeshWeaver#3732). Since MeshWeaver#3934 a dependency record expresses a FLOOR rather than an exact build, so the adoption decline that used to accompany this no longer fires for same-version copies — the loader coin toss is the harm that remains, and it is why a torn publication is refused HERE, at the one place every copy is in one hand."
               awk -v n="$dupe" '$1 == n {printf "          sealed %s %s %s\n", substr($2, 1, 16), ($4 == "declared" ? "as the declared module of" : "as a sibling riding"), $3}' "$DIGESTS" | sort -u
             done < <(awk '{if (!seen[$1 SUBSEP $2]++) d[$1]++} END {for (k in d) if (d[k] > 1) print k}' "$DIGESTS" | sort)
             echo "::error::the composed module set carries $DIVERGED assembly name(s) at more than one build. The bake would stamp every NodeType against whichever copy it loaded first, and every consumer that loaded another would decline them. Build the whole set in ONE compilation, or stop the divergent copy riding — Doc/Architecture/ModuleOwnedSiblingsRide."
