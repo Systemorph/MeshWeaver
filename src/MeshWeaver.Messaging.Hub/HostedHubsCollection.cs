@@ -28,6 +28,20 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
 
     private readonly ConcurrentDictionary<Address, IMessageHub> messageHubs = new(AddressComparer.Instance);
 
+    /// <summary>
+    /// 🚨 <b>Why the owner is going down, so its children can say so (#3510).</b> Set by the owning
+    /// <see cref="MessageHub"/> at construction and read once per teardown, inside
+    /// <see cref="DisposeHubsReactive"/>.
+    ///
+    /// <para>Children are torn down by a direct <c>Dispose()</c>, so without this every one of them
+    /// printed <c>[QUIESCE-START] … requested by a direct Dispose() (no routed DisposeRequest)</c> —
+    /// the same line a <c>using</c> and a host teardown produce. #3510's stranded writes were owed
+    /// by exactly these children: the reader who found them had no way, from the child's own line,
+    /// to learn that a root recycle had taken it. A <c>Func</c> rather than a value because the
+    /// owner's own attribution is settled a phase earlier than this one runs.</para>
+    /// </summary>
+    internal Func<string>? OwnerDisposalCause { get; set; }
+
     private readonly Subject<IMessageHub> _hubAdded = new();
     /// <summary>
     /// Emits each <see cref="IMessageHub"/> as it's added to this collection.
@@ -541,11 +555,16 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         logger.LogDebug("Starting disposal of {count} hosted hubs: [{hubAddresses}]",
             hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())));
 
+        // Read ONCE for the whole wave: every child of this teardown shares one originating cause,
+        // and re-invoking per child would let the answer drift mid-teardown.
+        var originatingCause = ReadOwnerCause();
+
         var childCompletions = hubs.Select(h =>
         {
             var address = h.Address;
             try
             {
+                AttributeCascade(h, originatingCause);
                 h.Dispose();
             }
             catch (Exception ex)
@@ -600,6 +619,10 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 {
                     try
                     {
+                        // Attributed too: a hub that finished constructing after disposal began
+                        // still goes down BECAUSE its owner did, and a line that says otherwise
+                        // would be the one unattributed cascade in the tree.
+                        AttributeCascade(h, originatingCause);
                         h.Dispose();
                     }
                     catch (Exception ex)
@@ -640,6 +663,40 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     // Complete anyway — a faulted join must not block the owning hub's ShutDown.
                     SignalDone();
                 });
+    }
+
+    /// <summary>
+    /// The owner's own teardown attribution, or <c>null</c> when nobody installed one. Best-effort
+    /// by design — a diagnostic must never be able to fault the teardown it describes — and a
+    /// throw here degrades to the pre-#3510 reading (the child prints
+    /// <c>MessageHub.DirectDisposeSource</c>), never to a wrong one.
+    /// </summary>
+    private string? ReadOwnerCause()
+    {
+        try
+        {
+            return OwnerDisposalCause?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Could not read the disposal cause of host {Host} — its children's [QUIESCE-START] "
+                + "lines will not name the cascade", Host);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Tells <paramref name="hub"/> that it is going down because this collection's host is
+    /// (#3510), immediately before disposing it. A no-op when the cause is unknown, so an
+    /// unattributed cascade keeps reading as a direct dispose rather than acquiring a name it
+    /// cannot support.
+    /// </summary>
+    private void AttributeCascade(IMessageHub hub, string? originatingCause)
+    {
+        if (originatingCause is null || hub is not MessageHub concrete)
+            return;
+        concrete.NoteCascadeFrom(Host, originatingCause);
     }
 
     private void SignalDone()

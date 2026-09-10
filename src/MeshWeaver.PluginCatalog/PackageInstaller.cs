@@ -1601,6 +1601,32 @@ public static class PackageInstaller
               + "cancel the work in flight beneath the root.";
     }
 
+    /// <summary>
+    /// 🚨 <b>What this recycle tells the hub it tears down (#3510).</b> Pure, so the sentence is
+    /// pinned without a mesh — and separate from the installer-side log line because the two are
+    /// read by different people: that one reaches whoever is looking at the install, this one
+    /// reaches whoever is looking at the ROOT's <c>[QUIESCE-START]</c>, or at one of the per-node
+    /// children the cascade takes with it.
+    ///
+    /// <para>The second reader is the one #3510 could not serve. Its trail — <i>"the Hosting root
+    /// was disposed at 23:37:51Z while its own 145-file install was in flight; its per-node
+    /// children went with it, and the writes they owed acks for were stranded"</i> — was assembled
+    /// over six occurrences and four lost bake seals, and attributing it took a full read of THIS
+    /// file plus an ordering argument, because every candidate recycler announces itself at
+    /// Information and none of them announced itself in the victim's log.</para>
+    ///
+    /// <para>Names the install explicitly ("while installing"), because that is the discriminator
+    /// the issue settled on: a root recycling under a reconcile is usually benign, and <i>"the
+    /// discriminator is not the count — it is whether the recycled root is the package currently
+    /// installing"</i>. A reader who greps one line now has that fact.</para>
+    /// </summary>
+    /// <param name="rootPath">The retyped root being recycled.</param>
+    /// <returns>The sentence carried on the <see cref="DisposeRequest"/>.</returns>
+    internal static string RetypedRootRecycleReason(string rootPath) =>
+        $"PackageInstaller.SettleRetypedRoot: recycling the root '{rootPath}' WHILE INSTALLING that "
+        + "package, now that this install has rebuilt its in-package NodeType — the hub re-activates "
+        + "against the package's own configuration instead of the placeholder binding";
+
     private static IObservable<Unit> SettleRetypedRoot(
         IMessageHub hub, string? rootPath, IReadOnlyCollection<MeshNode> nodes, int written,
         ILogger? logger)
@@ -1662,9 +1688,17 @@ public static class PackageInstaller
                     + "anything still pending at that bound is force-cancelled and surfaces to its "
                     + "issuer as HubDisposedBeforeResponseException.",
                     rootPath);
+                // 🚨 The reason travels WITH the request (#3510). The log line above says why to
+                // whoever reads the INSTALLER's log; the root's own [QUIESCE-START] — and, through
+                // the cascade, every per-node child that goes down with it, which is where #3510's
+                // stranded writes were owed — says why to whoever reads the HUB's. Those were two
+                // different readers on every occurrence of this issue, and only the first was
+                // served.
                 using (accessService?.ImpersonateAsSystem())
                     hub.NodeOperationIssuingHub()
-                        .Post(new DisposeRequest(), o => o.WithTarget(new Address(rootPath!)));
+                        .Post(
+                            new DisposeRequest { Reason = RetypedRootRecycleReason(rootPath!) },
+                            o => o.WithTarget(new Address(rootPath!)));
                 return WaitForRootReady(hub, rootPath!, logger);
             });
     }

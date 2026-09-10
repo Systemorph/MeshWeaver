@@ -51,13 +51,25 @@ public static class HubRecycleExtensions
     /// <param name="path">Path of the node whose hub is recycled.</param>
     /// <param name="budget">How long to wait for the address to answer again;
     /// <see cref="DefaultRecycleBudget"/> when omitted.</param>
+    /// <param name="reason">One sentence saying WHY, carried on the <see cref="DisposeRequest"/>
+    /// and printed by the target's <c>[QUIESCE-START]</c> (Systemorph/MeshWeaver#3510). Omitted, it
+    /// falls back to naming this API and the asking hub — which is still an answer, unlike the
+    /// blank it replaces.</param>
     /// <returns>The node as served by the re-activated address. Errors with
     /// <c>AddressRecyclingException</c> if the address is still recycling when the budget runs out.</returns>
     public static IObservable<MeshNode?> RecycleNode(
-        this IMessageHub hub, string path, TimeSpan? budget = null)
+        this IMessageHub hub, string path, TimeSpan? budget = null, string? reason = null)
         => Observable.Defer(() =>
         {
-            hub.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
+            hub.Post(
+                new DisposeRequest
+                {
+                    Reason = reason
+                             ?? $"HubRecycleExtensions.RecycleNode: {hub.Address} asked for this "
+                                + "address to be recycled and is waiting for a fresh activation to "
+                                + "answer",
+                },
+                o => o.WithTarget(new Address(path)));
             // The read is issued AFTER the dispose is posted, so it queues behind it at the target
             // and is answered by the reactivated hub (or NACKed ShuttingDown and re-probed until it
             // is). Deliberately NOT ReadTimeoutBehavior.EmitNull: "I could not tell" must reach the

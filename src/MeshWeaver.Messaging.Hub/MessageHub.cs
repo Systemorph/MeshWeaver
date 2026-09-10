@@ -131,11 +131,86 @@ public sealed class MessageHub : IMessageHub
     private volatile string? disposeRequestedBy;
 
     /// <summary>
+    /// WHY, as stated by whoever posted the <see cref="DisposeRequest"/> — <c>null</c> when they
+    /// did not say, which prints as <see cref="DisposeRequest.ReasonNotStated"/> rather than as
+    /// nothing. See <see cref="DisposeRequest.Reason"/> for why the sender alone is not enough.
+    /// </summary>
+    private volatile string? disposeReason;
+
+    /// <summary>
+    /// 🚨 <b>Set when this hub goes down because its OWNER is going down (#3510).</b> A hosted hub
+    /// is torn down by <c>HostedHubsCollection.DisposeHubsReactive</c> calling <c>Dispose()</c> on
+    /// it — a DIRECT dispose, so before this field existed every cascaded child printed
+    /// <see cref="DirectDisposeSource"/>, indistinguishable from a <c>using</c> and from host
+    /// teardown.
+    ///
+    /// <para>That indistinguishability IS #3510's wedge one level down. The issue's trail is
+    /// <i>"the Hosting root was disposed while its own 145-file install was in flight; its per-node
+    /// children went with it, and the writes they owed acks for were stranded"</i> — and the
+    /// stranded writes were owed by those CHILDREN, whose own <c>[QUIESCE-START]</c> lines
+    /// attributed their teardown to nobody. Reading the child told you nothing about the root.</para>
+    /// </summary>
+    private volatile string? cascadeOwner;
+
+    /// <summary>
+    /// The ORIGINATING teardown, propagated unchanged down a cascade, so a leaf hub's line names
+    /// the event that actually started it rather than only its immediate parent. Set together with
+    /// <see cref="cascadeOwner"/>.
+    /// </summary>
+    private volatile string? cascadeOrigin;
+
+    /// <summary>
     /// What <c>[QUIESCE-START]</c> prints when no routed <see cref="DisposeRequest"/> brought this
-    /// hub down — host teardown, an owner disposing its children, or a <c>using</c>. Spelled once so
+    /// hub down and no owner claimed the cascade — host teardown or a <c>using</c>. Spelled once so
     /// a log reader and a log QUERY agree on the token.
     /// </summary>
     internal const string DirectDisposeSource = "a direct Dispose() (no routed DisposeRequest)";
+
+    /// <summary>WHO — the first half of the <c>[QUIESCE-START]</c> attribution.</summary>
+    private string DisposalRequestedBy =>
+        cascadeOwner is { } owner
+            ? $"a cascade from its owner {owner}"
+            : disposeRequestedBy ?? DirectDisposeSource;
+
+    /// <summary>
+    /// WHY — the second half. Never empty: a poster that said nothing is reported as having said
+    /// nothing (<see cref="DisposeRequest.ReasonNotStated"/>), which is a different statement from
+    /// printing no reason at all.
+    /// </summary>
+    private string DisposalReason =>
+        cascadeOwner is not null
+            ? $"the owner's own teardown — {cascadeOrigin ?? DisposeRequest.ReasonNotStated}"
+            : disposeReason ?? DisposeRequest.ReasonNotStated;
+
+    /// <summary>
+    /// What this hub's hosted children are told when they go down with it. A hub that is itself
+    /// part of a cascade passes the ORIGIN along unchanged, so the chain names the event that
+    /// started it however deep the tree is — and the string cannot grow with depth.
+    /// </summary>
+    internal string DisposalOriginForChildren =>
+        cascadeOrigin
+        ?? $"{Address} was torn down by {disposeRequestedBy ?? DirectDisposeSource}; why: "
+           + (disposeReason ?? DisposeRequest.ReasonNotStated);
+
+    /// <summary>
+    /// Records that this hub is going down because <paramref name="owner"/> is (#3510). Called by
+    /// the owning <see cref="HostedHubsCollection"/> immediately before it disposes this hub.
+    ///
+    /// <para>FIRST CAUSE WINS: a child that had already been asked to recycle by name keeps that
+    /// attribution, because that request is what actually started its teardown — the owner's
+    /// cascade then arrives at a hub already going down. Idempotent, and safe from any thread; the
+    /// fields are only read when the Quiescing phase renders the line.</para>
+    /// </summary>
+    /// <param name="owner">The hub whose teardown is taking this one with it.</param>
+    /// <param name="originatingCause">The originating teardown, from
+    /// <see cref="DisposalOriginForChildren"/>.</param>
+    internal void NoteCascadeFrom(Address owner, string originatingCause)
+    {
+        if (disposeRequestedBy is not null || cascadeOwner is not null)
+            return;
+        cascadeOrigin = originatingCause;
+        cascadeOwner = owner.ToString();
+    }
 
     /// <summary>
     /// Disposal-health diagnostic: how many <see cref="ShutdownRequest"/> turns this hub
@@ -441,6 +516,10 @@ public sealed class MessageHub : IMessageHub
         InitializeTypes(this);
 
         this.hostedHubs = hostedHubs;
+        // 🚨 #3510: a child torn down with its owner must be able to say so. Installed here, at
+        // construction, because the collection disposes children a phase AFTER this hub's own
+        // attribution is settled — a value captured now would be the empty one.
+        hostedHubs.OwnerDisposalCause = () => DisposalOriginForChildren;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
         unhandledNack = configuration.Get<UnhandledMessageNack>();
@@ -2745,9 +2824,9 @@ public sealed class MessageHub : IMessageHub
 
                 var initialPendingSnapshot = SnapshotPendingCallbacks();
                 TryLog(LogLevel.Information,
-                    "[QUIESCE-START] {Address}: requested by {RequestedBy}; {Count} pending callbacks "
-                    + "at dispose entry: {Pending}",
-                    Address, disposeRequestedBy ?? DirectDisposeSource,
+                    "[QUIESCE-START] {Address}: requested by {RequestedBy}; why: {Reason}; "
+                    + "{Count} pending callbacks at dispose entry: {Pending}",
+                    Address, DisposalRequestedBy, DisposalReason,
                     initialPendingSnapshot.Length, FormatPendingCallbacks(initialPendingSnapshot));
 
                 // CRITICAL: do the wait OFF the action block. The action block processes
@@ -3410,6 +3489,12 @@ public sealed class MessageHub : IMessageHub
         // which: a recycle this hub asked for, a teardown someone else asked for, or no message at
         // all. #3510's leading hypothesis is precisely the first, and the installer
         // (PackageInstaller posting to a package root) is the second.
+        // 🚨 WHO is only half of it. The self-posted reading below is ONE WORD COVERING THREE
+        // STATES — NodeTypeRebindWatcher, the stale-build convergence and WithOverlaySelfHeal all
+        // post to their own hub — and #3510's leading hypothesis was precisely "which of those
+        // was it?". The poster always knew; the request had nowhere to carry it. It does now, and
+        // an omission is reported as an omission rather than as silence.
+        disposeReason = request.Message.Reason;
         disposeRequestedBy = request.Sender is null
             ? "an unnamed sender (routed DisposeRequest)"
             : Equals(request.Sender, Address)
