@@ -92,9 +92,13 @@ and how to reconcile it in the same session. Do not re-derive that list here —
 
 ### The one WRITE with no action kind: retiring an inline `env:` entry
 
-Rule 1 has exactly one known miss, and it is a write rather than a read. **Nothing can remove an
-inline `env:` entry from a Deployment.** The chart never rendered one (it emits five fixed portal
-entries and two per gate sidecar, and no values-driven list), the record's `inlineEnv` is
+Rule 1 has exactly one known miss, and it is a write rather than a read. **No repository change and
+no `InstanceAction` can remove an inline `env:` entry from a Deployment** — a break-glass
+`kubectl set env deploy/<name> <KEY>-` still can, and is the whole point: it is the one routine act
+with no lane back into the API. The chart never rendered one (it emits four unconditional
+portal entries — the `DOTNET_Dbg*` crash-dump set — plus `AZURE_CLIENT_ID` when
+`selfUpdate.azureClientId` is set, and two per gate sidecar; every name is fixed and no values key
+extends the list), the record's `inlineEnv` is
 declarative by contract — *dropping an entry does not delete one* — and `Reconcile`'s only
 configuration remedy, `ReapplyRecord`, is a `helm upgrade`, whose three-way merge removes only what
 helm previously owned. `Audit` detects the drift precisely, under `envLiveOnly` and
