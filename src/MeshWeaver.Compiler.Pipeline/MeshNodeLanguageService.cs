@@ -224,18 +224,42 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
         => ResolveNodeOutcome(nodeTypePath)
             .SelectMany(outcome => outcome.Node is { } node
                 ? SpeculativeFor(node, nodeTypePath, sourcePath, proposedCode)
-                : Observable.Return(outcome.Status switch
-                {
-                    // Genuinely not there, or its delete is in flight — either way the proposed
-                    // source was never compiled against anything.
-                    NodeReadStatus.Absent or NodeReadStatus.DeleteInProgress =>
-                        NodeDiagnosticsOutcome.Absent,
-                    // 🚨 The owner did not answer inside the budget, the read faulted, or a
-                    // delivery-level denial came back as a failure. Precisely when a pre-flight
-                    // most needs to refuse, and precisely where it used to be most confidently
-                    // green.
-                    _ => NodeDiagnosticsOutcome.Unavailable(outcome.Failure),
-                }));
+                : Observable.Return(NothingWasChecked(outcome)));
+
+    /// <summary>
+    /// The no-answer mapping: what a read that produced no node means for a pre-flight VERDICT.
+    /// Extracted so a test can drive it over every <see cref="NodeReadStatus"/> directly — the
+    /// wedged-owner arm cannot be arranged on demand against a live mesh, and an arm no control can
+    /// reach is exactly how a regression putting it back on <see cref="NodeDiagnosticsStatus.Compiled"/>
+    /// would leave the suite green. Same idiom as <see cref="CanReuseWorkspace"/>: the WHOLE
+    /// decision, not a fragment of it.
+    ///
+    /// <para>🚨 The invariant is not "Absent here and Unavailable there" — it is that <b>no</b>
+    /// status reachable with a null node may produce <see cref="NodeDiagnosticsStatus.Compiled"/>,
+    /// including a status added later. That is what
+    /// <c>NoReadThatProducedNoNodeMayReadAsCompiled</c> pins, over the live enum.</para>
+    /// </summary>
+    /// <param name="outcome">The read that produced no node.</param>
+    internal static NodeDiagnosticsOutcome NothingWasChecked(NodeReadOutcome outcome)
+        => outcome.Status switch
+        {
+            // Genuinely not there, its delete is in flight, or a read validator HID it — a filtered
+            // node is invisible to the reader by contract, which is how #3888's live case (a
+            // NodeType in a partition the caller held no grant on) reached this arm. Either way the
+            // proposed source was never compiled against anything.
+            NodeReadStatus.Absent or NodeReadStatus.DeleteInProgress => NodeDiagnosticsOutcome.Absent,
+            // 🚨 The owner did not answer inside the budget, the read faulted, or the payload could
+            // not be materialised. Precisely when a pre-flight most needs to refuse, and precisely
+            // where it used to be most confidently green. `Present` cannot honestly land here (the
+            // caller took the other branch on a non-null node), and if it ever did — a Present
+            // outcome with no node is a contradiction — Unavailable is the fail-closed reading.
+            //
+            // 🚨 A DELIVERY-level RLS denial does NOT arrive here: GetMeshNodeOutcome rides a raw
+            // GetDataRequest whose NACK surfaces as OnError (DeliveryFailureException), which the
+            // tool boundary converts into the same {ok:false} shape (#2554). Two different routes,
+            // both refusing; neither may read as clean.
+            _ => NodeDiagnosticsOutcome.Unavailable(outcome.Failure),
+        };
 
     // The speculative half, given an already-resolved node. Environment() cannot answer Unknown
     // for a non-null node, so the two arms below are the whole space.
