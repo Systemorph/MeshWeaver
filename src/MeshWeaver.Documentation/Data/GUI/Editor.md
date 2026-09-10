@@ -250,6 +250,68 @@ Each property becomes a named area inside the `EditorControl`. The reactive over
 
 ---
 
+# Accessible names
+
+A generated field paints its caption **outside** the input, and both generated forms do it
+differently:
+
+| Form | Where the caption is painted | What names the input |
+|---|---|---|
+| `Edit<T>()` / `EditorControl` | the `PropertySkin`'s `<dt>` | a `<label for>` the renderer targets at the input's id, **plus** `aria-label` |
+| The node editor's click-to-edit form (`MapToToggleableControl`) | a **sibling** `LabelControl` above the field | `aria-label` only — a `FluentLabel` carries no `for`, and there is no id to point it at |
+
+In both the control itself is created with **no `Label`**, so the caption is not drawn twice. That is
+deliberate, and it costs the input its accessible name unless something puts one back.
+
+So the generators set **`AriaLabel`** on every generated **input** — every `IFormControl`: text,
+multi-line text, number, date, checkbox, switch, select, combobox, listbox, radio group, mesh-node
+picker.
+
+**Each form reads it from the same helper its own caption comes from**, so within a form the
+accessible name and the visible term can never disagree — which is what WCAG's *label in name* asks
+for. The two helpers do not resolve the caption the same way, and that predates this:
+
+| Form | caption helper | resolution order |
+|---|---|---|
+| `Edit<T>()` | `GetEditorLabel` | `[Display(Name = …)]` → `[DisplayName(…)]` → the property name word-split |
+| click-to-edit | `GetToggleableDisplayName` | `[Display(Name = …)]` → the viewer-localized `[Description]` / `[Translation]` → the property name word-split |
+
+🚨 So `[DisplayName("…")]` names an `Edit<T>()` field and does **not** name a click-to-edit one, which
+falls through to the wordified property name. That divergence is stated here rather than smoothed
+over: it is a question about the visible CAPTION, not about the accessible name, and changing it
+would re-word every click-to-edit caption in the portal.
+
+```csharp
+public record Assessment
+{
+    [DisplayName("1. What topics do you want to cover?")]
+    [UiControl<TextAreaControl>]
+    public string Topics { get; init; } = null!;
+}
+// Edit<T>() renders: <dt><label for="property-…">1. What topics …</label></dt>
+//                    <dd><fluent-text-area id="property-…" aria-label="1. What topics …"> …
+```
+
+🚨 **`aria-label` is not decoration on top of `<label for>`.** A Fluent input is a web component that
+keeps its real `<input>` inside a **shadow root**, and the generated form used to emit
+`<label for="topics">` pointing at an element that could not exist: the caption was visible, the
+textbox was unnamed, and `getByRole('textbox', { name: question })` matched nothing
+(MeshWeaver#3863). `aria-label` sits on the host element, needs no id plumbing, and is the only one
+of the two the click-to-edit form can use at all.
+
+Setting `Label` yourself still works and still renders a second, visible caption — use it for a
+control you compose by hand, not for a field the editor generates. A control that carries its own
+`Label` is left alone: the Fluent host paints its own associated label, and an `aria-label` would
+only shadow it.
+
+**One generated surface is NOT covered**, and it is named here rather than left to be rediscovered
+from a symptom: a `[Markdown]` / `[UiControl<MarkdownEditorControl>]` property. `MarkdownEditorControl`
+is not an `IFormControl` — it is a composite editor with its own toolbar and its own view, so its
+accessible name is an `aria-labelledby` question about that composite, not an `aria-label` on one
+input.
+
+---
+
 # See Also
 
 - [Property Attributes](../Attributes) — every supported attribute in detail

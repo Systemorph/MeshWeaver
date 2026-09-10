@@ -67,8 +67,8 @@ public record DateTimeControl(object Data) : FormControlBase<DateTimeControl>(Da
     /// </summary>
     public object? PopupHorizontalPosition { get; init; }
 
-    /// <summary>
-    /// Gets or initializes the ARIA label for accessibility.
-    /// </summary>
-    public object? AriaLabel { get; init; }
+    // NB: AriaLabel used to be declared here. It moved UP to FormControlBase (MeshWeaver#3863) so
+    // that EVERY form control can carry an accessible name, not just this one — it is still
+    // readable and settable on DateTimeControl exactly as before, by inheritance. Re-declaring it
+    // here would shadow the base property and give the record two backing fields.
 }
