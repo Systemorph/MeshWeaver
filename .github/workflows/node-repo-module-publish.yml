@@ -1,0 +1,283 @@
+name: node-repo module publish
+
+# THE MODULE REGISTRY HAND-OVER — downstream of the FULL source validation verdict.
+#
+# 🚨 WHY THIS IS A LANE OF ITS OWN (MeshWeaver#3878; requirement 3 of #3842, "a red or cancelled
+# source build must not become visible to portals").
+#
+# `node-repo-module-pack.yml` used to POST every module bundle to the live registry from INSIDE
+# its own matrix leg, immediately after that module's own suite. Everything else that validates
+# the source — a SIBLING module's suite, the portal-host shards, the NodeType compile-check, the
+# Tests-area gate — runs beside or after that leg. So a module was being served to every
+# installation while the run that produced it was still deciding whether the source was any good,
+# and a red twenty minutes later changed nothing about what portals had already adopted.
+#
+# Adding those gates to the pack job's `needs:` is not available: they CONSUME the pack lane's
+# artifacts (`modules-floor` is an input to compile-check and to the Tests-area gate), so the edge
+# is a cycle. The repair is therefore a MOVE, not a re-ordering:
+#
+#   pack (unchanged, same point in the run)      this lane (after everything)
+#   ─────────────────────────────────────       ────────────────────────────────────────
+#   build → upload artifact → built marker      verdict: every dependency reported `success`
+#   → tests → STAGE the bytes + a record        caller gate: the caller really waits for them
+#   → receipt                                   → validate the staged set → hand over → ledger
+#
+# Everything a downstream gate consumes still exists at exactly the moment it did before; only
+# the POST moved. `bundles-built`, the built markers, the receipts and the module suites are
+# untouched.
+#
+# ─────────────────────────── The no-skip-trapdoor posture ───────────────────────────
+# A hand-over that completes before its inputs are validated is the same defect class as a gate
+# that skips on missing input: "it did not run" and "it passed" must never be indistinguishable
+# (AGENTS.md). So this lane never asks whether something happens to be set, and it never lets an
+# absent answer read as a positive one:
+#
+#   * `verdicts` is `${{ toJSON(needs) }}` — the whole context, verbatim. FAILED, SKIPPED,
+#     CANCELLED, MISSING and UNKNOWN are each a refusal that NAMES the job and what it said. An
+#     empty needs context is a refusal too: a publication that waited for nothing is the defect.
+#   * The caller's own workflow file is read at the caller's commit and its graph is checked —
+#     the publishing job must transitively `needs:` every job it declares required, must carry no
+#     status function in its `if:` (`always()`/`!cancelled()` re-open the door the verdict closes),
+#     and must account for every OTHER job in the workflow: upstream, downstream, or named in
+#     `unrelated-jobs` with a reason. That is the half the runtime verdict cannot see — a
+#     dependency dropped from `needs:` AND from `required-jobs` is invisible at run time.
+#   * The staged set is matched against the SELECTION before one byte is POSTed: exactly one
+#     record per selected module, stamped with THIS call's lane, naming the bytes by sha256 and
+#     the framework identity read back off those bytes. Missing, foreign-lane or substituted
+#     evidence refuses the WHOLE publication — the registry is left untouched, never half-served.
+#   * A staged artifact is NOT a `Published` ledger record. The ledger transition is written after
+#     the registry's 2xx and never before, so a failed hand-over cannot be recorded as published.
+#
+# ─────────────────────────── Caller contract ───────────────────────────
+#   publish-modules:
+#     # Trunk-only, exactly like the pack call's `publish:` input — and NO status function: this
+#     # job must run under GitHub's default rule (every `needs:` succeeded) or not at all.
+#     if: >
+#       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+#       github.event_name == 'repository_dispatch' || github.event_name == 'schedule'
+#     needs: [preflight, validate, repo-gates, compile-check, test-repos, tests-ratchet,
+#             portal-hosts-gate, modules-floor, modules-rest]
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@<pin>
+#     with:
+#       verdicts: ${{ toJSON(needs) }}
+#       required-jobs: preflight validate repo-gates compile-check test-repos tests-ratchet portal-hosts-gate modules-floor
+#       lane:     ${{ needs.modules-floor.outputs.lane }}
+#       selected: ${{ needs.modules-floor.outputs.selected }}
+#       modules:  ${{ ... the same JSON the modules-floor call was given ... }}
+#       platform-ref: ${{ needs.platform-ref.outputs.sha }}
+#     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
+#
+# One call per pack call: the lane, the selection and the declared matrix all belong to ONE call
+# of the pack workflow (Plugins runs two — floor and rest), and mixing them would be exactly the
+# run-wide-artifact confusion the lane key exists to prevent (Plugins#1077).
+#
+# WHAT IS NOT IN SCOPE HERE, and must not be described as solved by it (#3878): atomic visibility
+# if the publication ITSELF fails or is cancelled part-way, every publisher's source provenance,
+# and last-green source selection remain #3842 and #3461. Core's own main-CD publishes a NodeType
+# and module set through `plugins-bake`; that separate path is untouched by this lane.
+
+on:
+  workflow_call:
+    inputs:
+      verdicts:
+        description: >
+          `${{ toJSON(needs) }}` — the calling job's WHOLE needs context, verbatim. Every entry
+          must carry `result: success`; anything else, and anything missing, refuses the
+          publication by name. A curated literal is refused by the caller gate: the point is to
+          read what GitHub computed, not what the caller chose to say.
+        required: true
+        type: string
+      required-jobs:
+        description: >
+          The validation jobs whose positive verdict entitles this run to publish, space- or
+          comma-separated. Each must exist in the caller's workflow AND be a (transitive)
+          dependency of the publishing job. An empty list is RED — it would assert nothing.
+        required: true
+        type: string
+      unrelated-jobs:
+        description: >
+          `name: reason` per line, for the caller's jobs that validate no source and therefore
+          need not precede the publication (an auto-merge armer, a summary job). Every job in the
+          caller's workflow that is neither upstream nor downstream of the publishing job must be
+          declared here — an omission is RED and names the job, so "we forgot it" and "it does not
+          matter" can never look the same. A name the workflow no longer has is RED too.
+        required: false
+        type: string
+        default: ''
+      lane:
+        description: >
+          The lane key of the pack call whose bundles this publishes — `needs.<pack
+          call>.outputs.lane`. Artifacts are RUN-WIDE and a repo may call the pack lane twice in
+          one run, so this is what makes the staged evidence attributable to ONE validated call.
+          Empty is RED.
+        required: true
+        type: string
+      selected:
+        description: >
+          The module names that pack call SELECTED (`needs.<pack call>.outputs.selected`). Every
+          one of them must have a staged publication record; a selected module with no record is
+          RED, because "its leg never staged" must not read like "there was nothing to stage".
+        required: true
+        type: string
+      modules:
+        description: >
+          The same JSON matrix the pack call was given. Used to set aside — and NAME — a staged
+          record from a call this publication does not speak for.
+        required: true
+        type: string
+      platform-ref:
+        description: The Systemorph/MeshWeaver commit this lane's scripts are fetched at (a pin, not a branch).
+        required: true
+        type: string
+      registry-url:
+        description: The registry that will serve these bundles onward.
+        required: false
+        type: string
+        default: https://memex.meshweaver.cloud
+      registry-source:
+        description: >
+          The registry SOURCE these packages belong to ("Plugins", "Education", …) — it stamps the
+          landed entry's packagePath, which is the key every PluginGrant and the bundle index match
+          on. An unstamped landing is servable to nobody.
+        required: false
+        type: string
+        default: Plugins
+      ledger:
+        description: >
+          `required` — record `Published` in the CI module build ledger after each accepted
+          hand-over (pass the same value the pack call was given, and the same `ledger-token`).
+          `off` — the default. Anything else is RED.
+        required: false
+        type: string
+        default: off
+    secrets:
+      publish-token:
+        description: >
+          The registry's Plugins:Registry:PublishToken. ASSERTED when a hand-over is owed — an
+          empty token fails the job rather than publishing nothing quietly.
+        required: false
+      ledger-token:
+        description: A `mw_` ApiToken of the registry portal's CI user for the module build ledger.
+        required: false
+
+jobs:
+  publish:
+    name: Hand the validated bundles to the registry
+    runs-on: ubuntu-latest
+    # A LITERAL, never an input: the fleet cap is 45 minutes for every job in every workflow
+    # (check-workflow-timeouts.py). This lane downloads a few megabytes and POSTs them.
+    timeout-minutes: 20
+    # 🚨 NO `if:` HERE, deliberately. The caller's job carries the trunk-only condition; this job
+    # must run whenever that one does, so that a caller who weakened its own gate is CAUGHT by the
+    # verdict step rather than quietly skipped past it.
+    permissions:
+      contents: read
+    steps:
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Assert the tools this lane needs
+        env:
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
+          head -c 400 meshweaver/.github/scripts/module-publication.py | grep -q "module-publication" \
+            || { echo "::error::meshweaver/.github/scripts/module-publication.py at ${PLATFORM_REF} does not look like the publisher"; exit 1; }
+
+      # 🚨 THE GATE ITSELF IS PROVEN BEFORE IT JUDGES ANYTHING. An unproven gate is no gate: every
+      # refusal below must be shown to FIRE on its defect and stay SILENT on its fix before its
+      # verdict on this run means anything. Same posture as check-workflow-shell.py's self-test.
+      - name: Prove the publication gate can refuse (self-test)
+        run: python3 meshweaver/.github/scripts/module-publication.py --self-test
+
+      # ─────────────── 1. THE VERDICT — before a token is read, before a byte moves ───────────────
+      - name: Every required validation job reported success
+        id: verdict
+        env:
+          VERDICTS: ${{ inputs.verdicts }}
+          REQUIRED: ${{ inputs.required-jobs }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$VERDICTS" > "$RUNNER_TEMP/verdicts.json"
+          python3 meshweaver/.github/scripts/module-publication.py verdict \
+            --verdicts "@$RUNNER_TEMP/verdicts.json" --required "$REQUIRED"
+
+      # ─────────────── 2. THE CALLER'S GRAPH — the half the verdict cannot see ───────────────
+      # A dependency dropped from `needs:` alone is caught above (its name is still in
+      # `required-jobs`, and a required job absent from the needs context is a refusal). A
+      # dependency dropped from BOTH is invisible at run time — so the caller's own workflow file
+      # is read, at the caller's commit, and its graph is asserted. `github.workflow_ref` names the
+      # top-level workflow of this run, which is the one that called this lane.
+      - name: Check out the caller's workflow at the commit being published
+        uses: actions/checkout@v7
+        with:
+          path: caller
+          persist-credentials: false
+      - name: The caller really waits for the validation set
+        id: caller-gate
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REQUIRED: ${{ inputs.required-jobs }}
+          UNRELATED: ${{ inputs.unrelated-jobs }}
+        run: |
+          set -euo pipefail
+          # Systemorph/Repo/.github/workflows/ci.yml@refs/heads/main -> .github/workflows/ci.yml
+          path="${WORKFLOW_REF%@*}"
+          path="${path#*/}"; path="${path#*/}"
+          [ -n "$path" ] || { echo "::error::github.workflow_ref ('$WORKFLOW_REF') does not name a workflow file — this check cannot run, so it must not pass"; exit 1; }
+          echo "caller workflow: $path"
+          python3 meshweaver/.github/scripts/module-publication.py check-caller \
+            --workflow "caller/$path" \
+            --uses node-repo-module-publish.yml \
+            --required "$REQUIRED" --unrelated "$UNRELATED"
+
+      # ─────────────── 3. THE STAGED EVIDENCE ───────────────
+      # 🚨 SCOPED TO THIS CALL'S LANE, and `continue-on-error` is on the DOWNLOAD alone for one
+      # reason: a pattern that matches nothing must REACH the checker as zero evidence, which is a
+      # named refusal there, instead of dying here with "no artifacts found" and no module names.
+      # The step immediately after judges the result unconditionally — that is what keeps this from
+      # being a skip-trapdoor (`verify` in the pack lane collects its receipts the same way).
+      - name: Collect this call's staged publications
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: module-publication-${{ inputs.lane }}-*
+          path: ${{ runner.temp }}/staged
+
+      # ─────────────── 4. THE HAND-OVER ───────────────
+      - name: Hand the validated bundles to the registry
+        id: publish
+        env:
+          MW_PUBLISH_TOKEN: ${{ secrets.publish-token }}
+          MW_LEDGER_URL: ${{ inputs.registry-url }}
+          MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
+          MW_LEDGER_LANE: ${{ inputs.lane }}
+          LANE: ${{ inputs.lane }}
+          SELECTED: ${{ inputs.selected }}
+          DECLARED: ${{ inputs.modules }}
+          REGISTRY: ${{ inputs.registry-url }}
+          REGISTRY_SOURCE: ${{ inputs.registry-source }}
+          LEDGER: ${{ inputs.ledger }}
+        run: |
+          set -euo pipefail
+          case "$LEDGER" in
+            off|required) ;;
+            *) echo "::error::inputs.ledger is '$LEDGER'. The only values are 'off' (the default) and 'required'."; exit 1 ;;
+          esac
+          printf '%s' "$DECLARED" > "$RUNNER_TEMP/declared.json"
+          python3 meshweaver/.github/scripts/module-publication.py publish \
+            --staged "$RUNNER_TEMP/staged" \
+            --lane "$LANE" \
+            --selected "$SELECTED" \
+            --declared "@$RUNNER_TEMP/declared.json" \
+            --registry "$REGISTRY" \
+            --source "$REGISTRY_SOURCE" \
+            --ledger "$LEDGER" \
+            --ledger-script meshweaver/.github/scripts/module-build-ledger.py

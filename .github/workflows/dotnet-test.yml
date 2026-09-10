@@ -2231,6 +2231,20 @@ jobs:
     - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
       run: python3 .github/scripts/test-publish-bake-overlap.py
 
+    # The MODULE registry hand-over (MeshWeaver#3878). `node-repo-module-publish.yml` is a
+    # `workflow_call` lane a SATELLITE invokes, so nothing on a core pull request runs it — the
+    # first execution of an edit to it would otherwise be a satellite's production publication,
+    # POSTing bytes to the live registry. Both of these run here, self-test first:
+    #   * the script's own cases — the verdict refusals (failed/skipped/cancelled/missing/unknown),
+    #     the caller-graph mutations, and the staged-evidence refusals;
+    #   * the harness, which EXTRACTS the lane's real steps by `id:` and executes them against a
+    #     stub registry that RECORDS every request — so "the registry was left untouched" is read
+    #     off the request log rather than off an exit code.
+    - name: "The module publication gate can refuse (self-test)"
+      run: python3 .github/scripts/module-publication.py --self-test
+    - name: "Execute the module publication lane against a stub registry"
+      run: python3 .github/scripts/test-module-publication.py
+
     # The gate and publish-bake lanes compose every external module into /ext/<Name>/ for the
     # tester container, and until #3514 they copied `meshweaver/modules/` alone — leaving a module
     # that LOADS and then 404s every static asset it ships (`meshweaver/moduleassets/`), announced

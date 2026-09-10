@@ -272,6 +272,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Module Identity Anchor](ModuleIdentityAnchor)
 - [Module-Owned Siblings Ride](ModuleOwnedSiblingsRide)
 - [The Module Platform Link Gate](ModulePlatformLinkGate)
+- [The Module Publication Gate](ModulePublicationGate) — a bundle used to reach the live registry from inside its own pack leg, before the sibling suites, the portal-host shards, the compile-check and the Tests-area gate had reported; the hand-over moved downstream of the full source verdict, and what it refuses (failed, skipped, cancelled, missing, foreign-lane, substituted)
 - [Module Set Convergence](ModuleSetConvergence)
 - [Module Versioning](ModuleVersioning)
 - [Modules](Modules)
