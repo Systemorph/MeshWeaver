@@ -1,6 +1,9 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
+using System.Threading.Tasks;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
@@ -110,6 +113,85 @@ public class ReadPathStreamMintingTest(ITestOutputHelper output) : HubTestBase(o
                 + "so bounding the sync/ hub population did not freeze the mirror");
 
         Output.WriteLine($"DIAG live: instances={settled.Instances.Count}");
+    }
+
+    /// <summary>
+    /// A successful unified delete is a read-after-write boundary: once it answers, the shared
+    /// read stream must already carry absence. The data-source owner and its reduced read stream
+    /// are separate actors, so applying the owner store only QUEUES the reduced null frame. Before
+    /// the fix the handler answered at owner commit and an immediate read could replay the old
+    /// entity — the exact failure in the plugin release gate immediately after #3432's shared-read
+    /// change.
+    ///
+    /// This test parks the shared stream's actor after its initial entity arrived, then proves the
+    /// owner has applied the deletion while the read view cannot yet consume it. The delete reply
+    /// must remain absent until that actor is released. The park is the subject, so it uses the
+    /// repository's bounded SpinWait + finally release pattern; no sleeps, retries, or widened
+    /// production bounds.
+    /// </summary>
+    [HubFact]
+    public async Task UnifiedDelete_WaitsUntilTheSharedReadStreamCarriesAbsence()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var workspace = host.ServiceProvider.GetRequiredService<IWorkspace>();
+        var reference = new EntityReference(nameof(BusinessUnit), "1");
+        var readStream = workspace.GetNullableStream(reference)
+            ?? throw new InvalidOperationException("The BusinessUnit entity reference did not resolve to a stream.");
+
+        await readStream
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(item => item.Value is BusinessUnit { SystemName: "1" },
+                "the shared read stream must carry the entity before its actor is parked");
+
+        var blockerEntered = new AsyncSubject<System.Reactive.Unit>();
+        var releaseBlocker = 0;
+        readStream.Hub.InvokeAsync(
+            _ =>
+            {
+                blockerEntered.OnNext(System.Reactive.Unit.Default);
+                blockerEntered.OnCompleted();
+                if (!SpinWait.SpinUntil(
+                        () => Volatile.Read(ref releaseBlocker) == 1,
+                        TestTimeouts.Convergence))
+                    throw new TimeoutException("The test did not release the shared-read-stream actor.");
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask);
+
+        await blockerEntered.Should().Within(TestTimeouts.Quick)
+            .Emit("the shared stream actor must be occupied before the deletion is issued");
+
+        var answers = new ReplaySubject<DeleteUnifiedReferenceResponse>(1);
+        using var answerSubscription = client
+            .Observe(
+                new DeleteUnifiedReferenceRequest($"data:{nameof(BusinessUnit)}/1"),
+                o => o.WithTarget(CreateHostAddress()))
+            .Select(delivery => delivery.Message)
+            .Subscribe(answers);
+
+        try
+        {
+            var source = workspace.DataContext.DataSourcesByCollection[nameof(BusinessUnit)]
+                .GetStreamForPartition(null)!;
+            await source
+                .Should().Within(TestTimeouts.Convergence)
+                .Match(item => item.Value?.GetCollection(nameof(BusinessUnit))?.Instances.ContainsKey("1") == false,
+                    "the owner must have applied the deletion while the shared read actor is still parked");
+
+            await answers.Should().NotEmit(TimeSpan.FromMilliseconds(300),
+                "owner commit alone is not enough: success must wait for the read view's queued null frame");
+        }
+        finally
+        {
+            Volatile.Write(ref releaseBlocker, 1);
+        }
+
+        var answer = await answers.Should().Within(TestTimeouts.Convergence)
+            .Emit("releasing the shared read actor lets its null frame land and completes the delete");
+        answer.Success.Should().BeTrue();
+        readStream.Current?.Value.Should().BeNull(
+            "a successful delete response is now a read-after-write consistency boundary");
     }
 
     /// <summary>
