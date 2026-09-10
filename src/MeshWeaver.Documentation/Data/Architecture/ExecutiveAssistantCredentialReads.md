@@ -118,6 +118,20 @@ public sealed record EaGraphAccess(
 `Undetermined` always carries a `Diagnostic`, because an undetermined state with nothing to say is
 indistinguishable from the swallow it replaces.
 
+### A grant is only as wide as its consent
+
+`NotConnected` has a second cause besides an absent node, added 2026-09-10: a credential whose
+stored `Scopes` differ from the build's `EaGraphAuth.Scopes`. The constant is the only writer of
+that field, so any difference is a scope-set change — and Entra refuses to redeem a refresh token
+for scopes the user never consented to (400 `invalid_grant`). Calling such a grant "connected" was
+a lie every Teams call disproved, and it closed a loop nobody could leave: the plugin reported the
+refused refresh as undetermined, the user clicked the reconnect link, and the consent controller —
+reading the same credential as connected — bounced them back without ever showing the dialog.
+Classified as `NotConnected`, the same value both hands the user the consent link and makes
+`/auth/ea/connect` run consent; the diagnostic says the mailbox side is intact, so the plugin's
+sentence is "reconnect once", never "you never connected". The token endpoint is not asked at all
+(`AStaleGrant_IsNotOfferedToTheTokenEndpoint` counts the calls).
+
 ### What a caller must do with `Undetermined`
 
 Say so. "I could not check your mailbox connection just now" is the honest sentence, and it is
