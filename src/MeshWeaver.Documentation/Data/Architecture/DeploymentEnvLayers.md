@@ -225,7 +225,8 @@ this page that has no such action.** Four sources say so, and they agree — mea
 **So the audit names the drift and nothing can repair it.** `kubectl -n <ns> set env
 deployment/<name> <KEY>-` remains the only instrument. Read that under rule 2 of
 OperatingFromThePortal: an audit finding with no remedy is **a gap to file against the Hosting
-package**, not a recipe to promote back into a procedure. The remedy the record's shape already
+package**, not a recipe to promote back into a procedure — filed as
+[MeshWeaver.Plugins#1593](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1593). The remedy the record's shape already
 anticipates is the one that does not exist — `InlineEnvOverride.RetiredBy` names what retires an
 entry, and no code reads it.
 

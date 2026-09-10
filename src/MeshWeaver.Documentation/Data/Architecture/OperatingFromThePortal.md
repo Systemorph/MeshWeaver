@@ -101,7 +101,8 @@ helm previously owned. `Audit` detects the drift precisely, under `envLiveOnly` 
 `plainSecretEntries`, so the finding is reported and no remedy can act on it.
 
 The record already carries the intent: `InlineEnvOverride.RetiredBy` names what retires an entry,
-and no code reads it. **The gap is a `RetireInlineEnv` remedy** that removes the keys a record marks
+and no code reads it. **The gap is a `RetireInlineEnv` remedy** (filed as
+[MeshWeaver.Plugins#1593](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1593)) that removes the keys a record marks
 retired, ordered after `ReapplyRecord` so the key has a declared home before the shadow goes — the
 two-step in
 [DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Retiring a shadow takes two steps"*,
