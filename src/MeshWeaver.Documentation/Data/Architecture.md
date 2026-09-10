@@ -160,7 +160,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [DatabaseBackups](DatabaseBackups)
 - [Declarative export and import](DeclarativeImportExport)
 - [Syncing a Space with GitHub](GitHubSync)
-- [What a Green Build Costs a Synced Space](GitSyncTriggerCost) — one field decides whether a delivery is free or a full clone, and it is deliberately frozen while an import does not converge; so a source that cannot converge re-clones on every green build, at the source repository's CI cadence
+- [What a Green Build Costs a Synced Space](GitSyncTriggerCost) — one field decided whether a delivery was free or a full clone, and it is deliberately frozen while an import does not converge; the second, weaker pointer that makes a settled source free again, and why the skip needs the verdict to be FINAL and not merely recorded
 - [The Import Marker Records Convergence](ImportMarkerRecordsConvergence)
 - [Instance Sync — bi-directional space replication between MeshWeaver instances](InstanceSync)
 - [Managing Partition Sync (Admin Guide)](PartitionSyncGuide)

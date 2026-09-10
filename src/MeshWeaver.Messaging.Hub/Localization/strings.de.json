@@ -821,6 +821,7 @@
   "ui.gitSync.neverSynced": "Noch nicht synchronisiert.",
   "ui.gitSync.lastRun": "Letzter Synchronisierungslauf: {when} UTC",
   "ui.gitSync.atCommit": "bei Commit",
+  "ui.gitSync.settled": "dieser Commit hat ein endgültiges Ergebnis — der nächste neue Commit versucht es erneut",
   "ui.gitSync.outcome.Imported": "importiert",
   "ui.gitSync.outcome.ImportedWithErrors": "mit Fehlern importiert",
   "ui.gitSync.outcome.Skipped": "nichts zu importieren — dieser Inhalt liegt bereits vor",
