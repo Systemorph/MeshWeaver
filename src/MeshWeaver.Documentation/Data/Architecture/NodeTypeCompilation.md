@@ -1897,8 +1897,8 @@ does:
 🚨 **Step 2 leans on a bypass that is itself under review (#3890).** Autocomplete answers without
 the caller's identity, which is what makes it a witness here and is also a disclosure surface. If
 it starts filtering, this control dies with it — so whichever change lands must replace step 2 in
-the same diff. The durable substitute is the system-side read: the pod's `nodetype_bake` payload,
-or asking the partition's owner.
+the same diff. The durable substitute is the system-side read: the pod's `nodetype_bake` payload
+(see the caveat below), or asking the partition's owner.
 
 **So a zero from this sweep is not a green mesh; it is a green *readable* mesh.** State the
 denominator with the result — "0 of N NodeTypes over M readable partitions" — and when the deploy
@@ -1906,6 +1906,22 @@ being gated spans partitions the sweeper has no grant on, the honest instruments
 run as the system: the pod's own `nodetype_bake` health payload, which names every non-`Ok` type it
 enumerated, and the boot line's `compileErrors=` / `previouslybroken=` counters. Elevation to read
 someone else's partition is break-glass and is the owner's decision, never a sweep step.
+
+🚨 **`nodetype_bake` is CONDITIONAL, and an absent check reads exactly like a passing one.**
+It is not in this repo — the state lives here (`src/MeshWeaver.Hosting/NodeTypeBakeGate.cs`) but the
+`IHealthCheck` that surfaces it belongs to the host, `Memex.Portal.Distributed` in
+**MeshWeaver.Plugins** (`Program.cs`, registered as `nodetype_bake`), so grepping core's `src/` for
+the name finds nothing and reads as "no such instrument". Two ways its silence means nothing:
+
+- **It is registered only `if (gateBake)`.** With readiness gating off the check is not present at
+  all, and `/health` names no NodeType because none was asked for — not because none failed.
+- **`GateReadiness=true` with `DynamicTypes=false` is registered, permanently green, and protects
+  nothing** (the gate reads bake state that only the sweep writes, and the sweep never runs). The
+  two PreWarm keys are one setting; the host's own comment says so.
+
+So before trusting a green `nodetype_bake`, confirm the check is REGISTERED **and** ARMED — the
+payload must name a positive count of types it actually enumerated. A verdict with no denominator is
+the skip-trapdoor this whole page argues against, wearing a health check's colours.
 
 ### The obligation on framework changes
 
