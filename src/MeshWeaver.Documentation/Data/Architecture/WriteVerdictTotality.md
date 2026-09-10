@@ -466,10 +466,16 @@ subscriber cannot fail to answer:
 
 🚨 **None of this bounds a source that NEVER terminates.** `DetachedReplyOutcome.Of` is about the
 three terminations Rx *delivers*; the fourth outcome — never emits, never completes, the section
-"The FOURTH outcome" above — reaches no arm at all, and no composition over the source can invent
-one. A liveness bound stays the leg's own responsibility and is separately present where the
-source can starve: `InnerCreateVerdictBound` on the inner create, `NodeOpForwardTimeout` inside the
-no-op probe. Totality and liveness are different properties; this section is about the first.
+"The FOURTH outcome" above — reaches no arm at all, and `Of` cannot rescue it, because every
+operator it applies is **notification-driven**: `Take(1)` synthesises a completion but only *after
+a value*, `Catch` substitutes a sequence but only *after a fault*, `DefaultIfEmpty` fires only *on
+a completion*. From a source that has produced nothing, none of them can fire. The one
+**clock**-driven operator is `Timeout`, which is why it — and only it — can terminate a silent
+source; it is separately present where the source can starve:
+`InnerCreateVerdictBound` on the inner create, `NodeOpForwardTimeout` inside the no-op probe.
+Compose `Of` **around** that bound and both properties hold — the timeout supplies liveness, `Of`
+turns whichever termination arrives into an answer. Totality and liveness are different properties;
+this section is about the first.
 
 ### #3674: the no-op probe is the one that was actually silent, and it is a RE-INSTALL
 
