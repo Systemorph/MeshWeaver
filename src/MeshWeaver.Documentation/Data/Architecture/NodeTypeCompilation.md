@@ -1854,6 +1854,75 @@ precisely by `DbVersionGate`. The escape hatch is `PreWarm:AllowUnprovenBake` �
 verdict only, never the record: the phase stays `Faulted` and the payload keeps saying the bake was
 never proven. It cannot waive a real regression.
 
+### 🚨 The pre-prod sweep is ACCESS-FILTERED — it agrees with the gate only over what the sweeper can read
+
+`search 'nodeType:NodeType content.compilationStatus:Error'` reads the same field
+`ClassifyDetailed` branches on, so its VERDICT per row matches the gate's. Its **denominator does
+not**. The sweep runs as the person typing it and the gate runs as the system, and those see
+different sets of rows:
+
+| | runs as | rows considered |
+|---|---|---|
+| `DynamicTypePreWarmer` boot sweep (the gate) | system | every NodeType in every partition on this replica |
+| `search`, `get`, `get_diagnostics` (the pre-prod sweep) | the caller | only partitions the caller may read |
+
+`IMeshQueryProvider.Query` filters through `ValidateRead`; `IMeshQueryCore.Query` does not
+(`StorageAdapterMeshQueryProvider`, `useSecurityFilter`). So **a NodeType parked at `Error` inside a
+partition the sweeper has no grant on is not counted — the sweep returns a smaller number, never an
+error**, and the two instruments part company exactly where it matters.
+
+🚨 **And `get`/`get_diagnostics` answer `Not found` for a node they may not read.** Denied and
+absent are the same string. That is not a hypothetical reading of the code:
+
+> #1391 recorded `BinaryClickerV2/BinaryToggle` at `CompileError` on every boot of the `memex`
+> namespace, and noted in the same thread that *"`BinaryClickerV2` is not visible to an admin MCP
+> read"* — it is a private partition. It was then **closed** on
+> `get_diagnostics @BinaryClickerV2/BinaryToggle → {"status":"Unknown","message":"Not found: …"}`,
+> read as *the type is gone*. It was not gone. Four weeks later the same `CS1929` on the same two
+> source nodes re-surfaced, unchanged, as #3883 — while
+> `search 'nodeType:NodeType content.compilationStatus:Error'` on that portal returned **0**.
+
+**Positive control for "denied, not deleted".** Three cheap reads separate them, and no single one
+does:
+
+1. `get @Admin/Partition/<Namespace>` — the partition record survives its data. `Active` means the
+   partition was never torn down.
+2. `autocomplete '@/<Namespace>/'` — the partition drill-down runs
+   `RunQueryNodes(…, useSecurityFilter: false)`, so it enumerates names, paths and node types the
+   caller cannot `get`. Same storage, same query shape, one differing input: if autocomplete names
+   the node and `get` says `Not found`, the answer is **denied**.
+3. A partition you CAN read, asked the same three ways, as the negative control — otherwise a
+   broken instrument reads like a deleted node.
+
+🚨 **Step 2 leans on a bypass that is itself under review (#3890).** Autocomplete answers without
+the caller's identity, which is what makes it a witness here and is also a disclosure surface. If
+it starts filtering, this control dies with it — so whichever change lands must replace step 2 in
+the same diff. The durable substitute is the system-side read: the pod's `nodetype_bake` payload
+(see the caveat below), or asking the partition's owner.
+
+**So a zero from this sweep is not a green mesh; it is a green *readable* mesh.** State the
+denominator with the result — "0 of N NodeTypes over M readable partitions" — and when the deploy
+being gated spans partitions the sweeper has no grant on, the honest instruments are the ones that
+run as the system: the pod's own `nodetype_bake` health payload, which names every non-`Ok` type it
+enumerated, and the boot line's `compileErrors=` / `previouslybroken=` counters. Elevation to read
+someone else's partition is break-glass and is the owner's decision, never a sweep step.
+
+🚨 **`nodetype_bake` is CONDITIONAL, and an absent check reads exactly like a passing one.**
+It is not in this repo — the state lives here (`src/MeshWeaver.Hosting/NodeTypeBakeGate.cs`) but the
+`IHealthCheck` that surfaces it belongs to the host, `Memex.Portal.Distributed` in
+**MeshWeaver.Plugins** (`Program.cs`, registered as `nodetype_bake`), so grepping core's `src/` for
+the name finds nothing and reads as "no such instrument". Two ways its silence means nothing:
+
+- **It is registered only `if (gateBake)`.** With readiness gating off the check is not present at
+  all, and `/health` names no NodeType because none was asked for — not because none failed.
+- **`GateReadiness=true` with `DynamicTypes=false` is registered, permanently green, and protects
+  nothing** (the gate reads bake state that only the sweep writes, and the sweep never runs). The
+  two PreWarm keys are one setting; the host's own comment says so.
+
+So before trusting a green `nodetype_bake`, confirm the check is REGISTERED **and** ARMED — the
+payload must name a positive count of types it actually enumerated. A verdict with no denominator is
+the skip-trapdoor this whole page argues against, wearing a health check's colours.
+
 ### The obligation on framework changes
 
 Removing or renaming any public framework surface — extension methods on
