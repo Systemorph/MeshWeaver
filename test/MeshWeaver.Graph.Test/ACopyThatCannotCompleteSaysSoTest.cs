@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -64,8 +65,12 @@ public class ACopyThatCannotCompleteSaysSoTest(ITestOutputHelper output) : Monol
     private const string RestrictedFolder = $"{SourceRoot}/Restricted";
     private const string RestrictedLeaf = $"{RestrictedFolder}/Beta";
 
-    /// <summary>The five content nodes a complete copy must produce.</summary>
-    private static readonly string[] SourcePaths =
+    /// <summary>
+    /// The five content nodes a complete copy must produce. <see cref="ImmutableArray{T}"/> rather
+    /// than an array: <c>static readonly</c> freezes only the reference, and a process-wide
+    /// collection whose elements one test could rewrite is the shape NoStaticState.md bans.
+    /// </summary>
+    private static readonly ImmutableArray<string> SourcePaths =
         [SourceRoot, SourceFolder, SourceLeaf, RestrictedFolder, RestrictedLeaf];
 
     /// <summary>
