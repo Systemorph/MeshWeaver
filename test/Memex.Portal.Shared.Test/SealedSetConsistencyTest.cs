@@ -455,6 +455,83 @@ public class SealedSetConsistencyTest
         Assert.True(verdict.IsUpdatable, verdict.HoldReason);
     }
 
+    // ── #3934: a module entry is a FLOOR, and this gate must not go quiet on it ──────────────────
+    //
+    // A record's module entry is now `min:<version>` wherever the module states a version. The
+    // predicate that enumerates module entries therefore had to widen, and the risk of the change
+    // is entirely in one direction: a gate that silently stops seeing its input reports GREEN over
+    // a torn publication, which is the one failure a roll gate may not have. Both surviving checks
+    // are pinned on the floor shape, and the one that is deliberately RETIRED is pinned too, so a
+    // future reader can tell "retired on purpose" from "quietly stopped firing".
+
+    /// <summary>🚨 A floor-shaped record must STILL be held by a set carrying one name at two
+    /// builds. If the module-lane predicate had stayed <c>mvid:</c>-only, this would answer
+    /// AVAILABLE over a publication the loader resolves by coin toss.</summary>
+    [Fact]
+    public void AFloorShapedRecord_IsStillHeldByASealedSetConflict()
+    {
+        var conflict = $"module {Module}: source 'plugins' sealed mvid:aaaa, source 'socialmedia' sealed mvid:bbbb";
+        var artifacts = ReleaseArtifacts.Of([Bundle + ".zip"]) with
+        {
+            Modules = new SealedModuleSet(
+                ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal),
+                [conflict],
+                null),
+            DependencyRecords = [Record(Module, CompiledDependencies.MinVersionScheme + "3.0.0")],
+        };
+
+        var verdict = ReleaseAvailability.IsUpdatable(Target, [Required], artifacts);
+
+        Assert.False(verdict.IsUpdatable);
+        var package = Assert.Single(verdict.Packages);
+        Assert.Equal(PackageAvailabilityKind.SealedSetInconsistent, package.Kind);
+        Assert.Contains(conflict, package.Reason!, StringComparison.Ordinal);
+    }
+
+    /// <summary>🚨 And an unreadable set is still INDETERMINATE for a floor-shaped record — "I
+    /// could not check" is not clearance, floor or pin.</summary>
+    [Fact]
+    public void AFloorShapedRecord_IsStillIndeterminateWhenTheSetCannotBeRead()
+    {
+        var artifacts = ReleaseArtifacts.Of([Bundle + ".zip"]) with
+        {
+            Modules = null,
+            DependencyRecords = [Record(Module, CompiledDependencies.MinVersionScheme + "3.0.0")],
+        };
+
+        var verdict = ReleaseAvailability.IsUpdatable(Target, [Required], artifacts);
+
+        Assert.True(verdict.IsIndeterminate);
+        Assert.Equal(PackageAvailabilityKind.Indeterminate, Assert.Single(verdict.Packages).Kind);
+    }
+
+    /// <summary>
+    /// 🚨 THE ONE CHECK THE FLOOR RETIRES, pinned so nobody has to guess whether it was retired or
+    /// merely broken. "The sealed set carries a DIFFERENT build of this module" was a hold because
+    /// an instance declined that at adoption; under a floor it does not, so holding a whole fleet's
+    /// roll for it would be refusing on a fact nothing downstream acts on.
+    ///
+    /// <para>Its falsification arm is <see cref="ABundleBuiltAgainstAnotherBuildOfTheSealedModule_IsHeld_NamingBothBuilds"/>:
+    /// the same set, an <c>mvid:</c>-shaped record, still held.</para>
+    /// </summary>
+    [Fact]
+    public void AFloorShapedRecord_IsNotHeldMerelyBecauseTheSealedBuildDiffers()
+    {
+        var artifacts = ReleaseArtifacts.Of([Bundle + ".zip"]) with
+        {
+            Modules = new SealedModuleSet(
+                ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal)
+                    .Add(Module, "mvid:whatever-this-wave-produced"),
+                [],
+                null),
+            DependencyRecords = [Record(Module, CompiledDependencies.MinVersionScheme + "3.0.0")],
+        };
+
+        var verdict = ReleaseAvailability.IsUpdatable(Target, [Required], artifacts);
+
+        Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+    }
+
     // ── fixtures ────────────────────────────────────────────────────────────────────────────────
 
     private static ReleaseTarget Target => new(Version, Identity);

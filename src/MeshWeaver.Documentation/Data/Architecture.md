@@ -234,6 +234,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Emit Reference Capture](EmitReferenceCapture) — bounded, opt-in CI evidence for runtime compiler failures
 - [Graph / Compiler Layering](GraphCompilerLayering) — the four assemblies, the cycle, and the full-MVID size rule
 - [Toolchain Re-evaluation Lane](ToolchainReevaluationLane) — why a toolchain change stopped rebaking the world
+- [The Dependency Record Floor](DependencyRecordFloor) — a record's module entry says "I need at least X", not "I need exactly this build"; the MVID pin that could not converge because Roslyn hashes absolute source paths, the two-replica recompile ping-pong it produced, and the four things the floor deliberately does not relax
 - [Producer Determinism of the Dependency Record](ProducerDeterminismOfTheDependencyRecord) — the same content must stamp the same record however the producer reached its bytes; the disk-cache hit that shipped a weaker guard, and why the digest is persisted beside the bytes rather than recomputed
 - [Rebake Waves](RebakeWaves) — why a roll rebakes the world anyway, and what one rebake writes
 - [Source-Set Establishment](SourceSetEstablishment) — a resolved source set of ZERO is ambiguous, and only the type's own persisted snapshot tells "owns no Code" from "the discovery pass came back short"; the boot that resolved 91 fewer Code nodes than its neighbours and held a portal out of rotation for the startup probe's full three hours

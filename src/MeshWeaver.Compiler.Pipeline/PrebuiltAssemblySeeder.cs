@@ -515,16 +515,22 @@ public static class PrebuiltAssemblySeeder
         // PLATFORM surface matches; this proves the MODULE/toolchain bindings do too — the store
         // key cannot see either, so an unvalidated adopt would suppress a needed rebuild exactly
         // like a framework mismatch would.
+        // 🚨 #3934 — the DECLINE NAMES ITS OWN SHAPE. A module entry is a FLOOR, so "the record did
+        // not validate" now has three distinguishable causes with three different remedies, and a
+        // fixed sentence for all three is what left three investigations across three repos unable
+        // to tell an ordinary framework roll from a module drift (Doc/Architecture/DependencyRecordFloor).
+        // FloorNotMet says "land a newer module"; NotChecked says "nothing was established here",
+        // which is never a clean bill and is exactly as declining as a drift.
         if (dependencies is not null
-            && CompiledDependencies.FindMismatch(
+            && CompiledDependencies.Validate(
                 dependencies,
                 NodeTypeCompilationHelpers.DependencyIdResolverOf(hub),
-                NodeTypeCompilationHelpers.ProcessToolchainId) is { } dependencyMismatch)
+                NodeTypeCompilationHelpers.ProcessToolchainId) is { IsSatisfied: false } outcome)
         {
             logger?.LogInformation(
-                "Prebuilt assembly for {NodeTypePath} DECLINED: dependency record mismatch — "
+                "Prebuilt assembly for {NodeTypePath} DECLINED: dependency record {Status} — "
                 + "{Mismatch} — compiling instead",
-                nodeTypePath, dependencyMismatch);
+                nodeTypePath, outcome.Status, outcome.Problem);
             return Observable.Return(SeedOutcome.DeclinedDependencies);
         }
 

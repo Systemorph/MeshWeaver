@@ -70,7 +70,7 @@ public static class ContentKeyReevaluation
     /// <param name="record">The build's stamped dependency record
     /// (<c>NodeTypeDefinition.CompiledDependencies</c>), or null when none was stamped.</param>
     /// <param name="liveIdOf">The live surface-id resolver
-    /// (<see cref="CompiledDependencies.CreateIdResolver"/>), or null when this environment cannot
+    /// (<c>CompiledDependencies.CreateIdResolver</c>), or null when this environment cannot
     /// resolve one — which is itself inconclusive.</param>
     /// <param name="liveToolchainId">The live toolchain id
     /// (<see cref="CompiledDependencies.ComputeToolchainId"/>).</param>
