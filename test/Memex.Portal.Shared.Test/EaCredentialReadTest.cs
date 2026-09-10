@@ -44,6 +44,17 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
 {
     private const string ConnectedUser = "ea-connected-user";
     private const string NeverConnectedUser = "ea-never-connected-user";
+    private const string StaleGrantUser = "ea-stale-grant-user";
+
+    /// <summary>
+    /// The scope string every grant minted before 2026-09-09 was consented for — mail and
+    /// calendar only. A credential carrying it is exactly the production shape of 2026-09-10: the
+    /// Teams scopes landed, the user's stored grant predates them, and Entra refuses to redeem the
+    /// refresh token for the wider set.
+    /// </summary>
+    private const string PreTeamsScopes =
+        "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send " +
+        "https://graph.microsoft.com/Calendars.ReadWrite offline_access";
 
     /// <summary>An arbitrary, valid AES-256 key: the protector is real, only the key source is local.</summary>
     private sealed class FixedMasterKey : IMasterKeyProvider
@@ -71,6 +82,16 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
                     Scopes = EaGraphAuth.Scopes,
                     AcquiredAt = DateTimeOffset.UtcNow,
                 }
+            })
+            .AddMeshNodes(EaGraphAuth.NewCredentialNode(StaleGrantUser) with
+            {
+                Content = new EaCredential
+                {
+                    UserObjectId = StaleGrantUser,
+                    RefreshTokenEncrypted = "enc:v1:seeded-for-the-stale-grant-test",
+                    Scopes = PreTeamsScopes,
+                    AcquiredAt = DateTimeOffset.UtcNow.AddDays(-30),
+                }
             });
 
     /// <summary>
@@ -79,7 +100,7 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <c>budget</c> are reachable — so the undetermined branch can be reached deterministically
     /// instead of waited for.
     /// </summary>
-    private EaGraphAuth NewAuth(TimeSpan? readTimeout = null) => new(
+    private EaGraphAuth NewAuth(TimeSpan? readTimeout = null, HttpMessageHandler? tokenEndpoint = null) => new(
         Mesh.ServiceProvider,
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -87,14 +108,30 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
             ["Authentication:Microsoft:ClientSecret"] = "test-secret",
         }).Build(),
         new ProviderKeyProtector(new FixedMasterKey()),
-        // Never used: every test here exercises GetConnection, which reads the node and posts
-        // nothing. A handler that throws would be reached only by a regression that started
-        // calling the token endpoint from a pure connection check.
-        new HttpClient(),
+        // Unused by the GetConnection tests, which read the node and post nothing. The one test
+        // that calls GetAccessToken passes a handler that RECORDS, so "the token endpoint was not
+        // asked" is a measured zero rather than the absence of a network.
+        tokenEndpoint is null ? new HttpClient() : new HttpClient(tokenEndpoint),
         Mesh.ServiceProvider.GetRequiredService<ILogger<EaGraphAuth>>())
     {
         CredentialReadTimeout = readTimeout ?? TimeSpan.FromSeconds(10),
     };
+
+    /// <summary>Counts token-endpoint calls; answers every one of them as Entra would refuse a stale grant.</summary>
+    private sealed class RecordingTokenEndpoint : HttpMessageHandler
+    {
+        private int calls;
+        public int Calls => Volatile.Read(ref calls);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent("""{"error":"invalid_grant","error_description":"AADSTS65001: consent required"}"""),
+            });
+        }
+    }
 
     // ── The mechanism ────────────────────────────────────────────────────────────────────────────
 
@@ -207,6 +244,62 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
         access.Connection.Should().Be(EaConnection.NotConnected,
             "an absent credential is a completed read with a negative answer, and the consent link "
             + "is the correct response to it");
+    }
+
+    // ── A grant is only as wide as its consent ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// 🚨 2026-09-10, on memex-cloud. The Teams scopes were added to <see cref="EaGraphAuth.Scopes"/>;
+    /// the user's stored grant predated them; Entra refused every refresh-token redemption for the
+    /// wider set (400 <c>invalid_grant</c>); the plugin reported the connection as undetermined; the
+    /// user clicked the reconnect link; and the consent controller — reading the SAME credential as
+    /// "connected" — bounced them straight back without ever showing Microsoft's dialog. Nothing in
+    /// that loop could end it, because the classification called a grant that cannot serve this
+    /// build "connected".
+    ///
+    /// <para>The truthful answer is <see cref="EaConnection.NotConnected"/>: the read completed and
+    /// found a credential consented for a smaller scope set. That one value both hands the user the
+    /// consent link and makes <c>/auth/ea/connect</c> run the dialog. The diagnostic must say the
+    /// mailbox side is intact, so the plugin's sentence is "reconnect once", never "you never
+    /// connected".</para>
+    /// </summary>
+    [Fact]
+    public async Task AGrantConsentedForASmallerScopeSet_ReadsAsNotConnected_SoTheReconnectRunsConsent()
+    {
+        var stale = await NewAuth().GetConnection(StaleGrantUser)
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        var current = await NewAuth().GetConnection(ConnectedUser)
+            .Should().Within(TestTimeouts.Convergence).Emit();
+
+        Output.WriteLine($"stale-grant verdict: {stale}");
+
+        stale.Connection.Should().Be(EaConnection.NotConnected,
+            "a credential consented for fewer scopes than this build asks for cannot mint a token, "
+            + "and NotConnected is the one state that makes the connect link run the consent dialog "
+            + "instead of bouncing a 'connected' user back");
+        stale.Diagnostic.Should().Contain("reconnect",
+            "the user must be told what to do, and it is not 'connect for the first time'");
+        current.Connection.Should().Be(EaConnection.Connected,
+            "the positive control: the same read on a grant consented for THIS build's scopes");
+    }
+
+    /// <summary>
+    /// The token endpoint is never asked to redeem a grant the classification already knows it will
+    /// refuse. A recorded zero, not an assumed one: the handler counts.
+    /// </summary>
+    [Fact]
+    public async Task AStaleGrant_IsNotOfferedToTheTokenEndpoint()
+    {
+        var endpoint = new RecordingTokenEndpoint();
+
+        var access = await NewAuth(tokenEndpoint: endpoint).GetAccessToken(StaleGrantUser)
+            .Should().Within(TestTimeouts.Convergence).Emit();
+
+        access.Connection.Should().Be(EaConnection.NotConnected);
+        access.AccessToken.Should().BeNull();
+        endpoint.Calls.Should().Be(0,
+            "redeeming a refresh token for scopes it was never consented for is the 400 Entra "
+            + "answered all day on 2026-09-10; the classification exists so that call is not made");
     }
 
     /// <summary>
