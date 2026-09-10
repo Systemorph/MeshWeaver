@@ -204,17 +204,37 @@ and there are exactly two:
 1. **One compilation per publication.** Every bundle of one publication is packed from ONE workspace
    build. Today `MeshWeaver.Plugins` splits `module-pack` into a `floor` call and a `rest` call
    (deliberately — the floor's four bundles are what the gates compose, Plugins#1438) and still has
-   five legacy `sdk` entries, each rebuilding its siblings under its own `-p:Version`. Merging the
-   two calls, or making the second reuse the first's workspace output for shared siblings, is a lane
-   change; converting the last `sdk` entries is the standing direction anyway (maintainer,
-   2026-09-01: *"one global one and finish"*).
-   🚨 One part of this is cheap and independent: core's own `Directory.Build.props` pins the
-   COMPILED version attributes to the commit precisely so `-p:Version=` cannot move an assembly's
-   MVID (#3022 — *"two publishes of one commit fork the identity and the bake goes inert"*).
-   MeshWeaver.Plugins' `src/Directory.Build.props` sets `AssemblyVersion`/`FileVersion` from the
-   platform but leaves `InformationalVersion` at the SDK default, i.e. `$(Version)` — so on the
-   `sdk` lane the host module's package version is still compiled into every sibling it rebuilds.
-   Carrying #3022's pin across removes that producer without touching a lane.
+   FOUR legacy `sdk` entries (it had five until `Chat` was converted, below), each rebuilding its
+   siblings under its own `-p:Version`. Merging the two calls, or making the second reuse the
+   first's workspace output for shared siblings, is a lane change; converting the last `sdk` entries
+   is the standing direction anyway (maintainer, 2026-09-01: *"one global one and finish"*).
+   🚨 **A COMPILED-VERSION PIN DOES NOT REMOVE A PRODUCER, and this page said it did.** The claim
+   here was that carrying core's #3022 pin into MeshWeaver.Plugins — core's own
+   `Directory.Build.props` pins the COMPILED version attributes to the commit precisely so
+   `-p:Version=` cannot move an assembly's MVID (*"two publishes of one commit fork the identity and
+   the bake goes inert"*) — would remove the `sdk` producer *"without touching a lane"*. Measured
+   2026-09-10, it does not, and no version property can:
+
+   * **What the pin DOES fix, and why it was kept** (Plugins#1604): Plugins'
+     `src/Directory.Build.props` set `AssemblyVersion`/`FileVersion` from the platform but left
+     `InformationalVersion` at the SDK default `$(Version)`, so on the `sdk` lane the HOST module's
+     package version was compiled into every sibling it rebuilt. Pinning it stops that LEAK — two
+     `sdk` entries sharing a sibling now agree with each other instead of forking it once per module
+     version. That is a real defect, and a different one.
+   * **What it cannot fix**: Roslyn's deterministic MVID also hashes the **absolute source paths**,
+     and neither core nor MeshWeaver.Plugins sets `DeterministicSourcePaths` / `PathMap` /
+     `ContinuousIntegrationBuild`. The `sdk` lane compiles at `$GITHUB_WORKSPACE`; a
+     `build-workspace` compiles the same file at `/repo` inside the image. Measured: the same
+     commit, the same properties, and the same emitted `InformationalVersion` attribute, built from
+     two different absolute paths, produced `dace9bf7-c458-47ce-90f8-6bd9a7c7fa07` and
+     `202e6e4f-20fa-40bf-a9d1-ccbb0be2d62c`. The version attributes were IDENTICAL in both.
+
+   So **removing a compilation is always a LANE change** — there is no props-only remedy, and a
+   reading of this page that promised one cost a session's work before the MVIDs were compared.
+   `MeshWeaver.Blazor.Chat`, the one `sdk` entry that reaches `MeshWeaver.Markdown.Collaboration`,
+   was therefore moved to `build: container` in MeshWeaver.Plugins' `.github/workflows/ci.yml`
+   (MeshWeaver#3732). That takes this assembly from THREE builds to **TWO**; the remaining two are
+   the `floor` and `rest` `build-workspace` calls, whose merge is the separate remedy above.
 🚦 **The refusal reaches a satellite only when that satellite MOVES ITS PIN, so the ordering is
 free.** Every node repo consumes these lanes at a full sha (`uses:
 Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@<40-char sha>`), and moving that
