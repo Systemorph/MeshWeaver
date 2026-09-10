@@ -127,7 +127,7 @@ physical line** because `MessageHub.GetPendingRequestDiagnostics` is a single-li
 contract:
 
 ```text
-MeshWeaver.Messaging.HubUnreachableException: Reading content collection config from '…' gave up
+MeshWeaver.Mesh.HubUnreachableException: Reading content collection config from '…' gave up
 after 10s — … Reader: Hub portal/reads-… RunLevel=Started Queue(buffer=0,deferred=0,drainsInFlight=0)
 PendingCallbacks=1[…=GetDataRequest@…(10003ms)]
 ```
