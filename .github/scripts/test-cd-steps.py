@@ -655,6 +655,8 @@ def module_pack_permission_problems(workflow_text: str) -> list[str]:
 
     doc = yaml.safe_load(workflow_text)
     problems = []
+    if "permissions" in doc:
+        problems.append("the called workflow declares permissions instead of inheriting its caller")
     for name in ("prepare", "build-workspace", "pack"):
         job = (doc.get("jobs") or {}).get(name) or {}
         if "permissions" in job:
@@ -736,6 +738,16 @@ def main() -> int:
     case("the permission guard catches a called job that tries to elevate basic callers",
          any(problem.startswith("prepare declares permissions") for problem in narrowed_problems),
          "the mutation passed with id-token: write inside the called workflow")
+    workflow_narrowed_module_pack = module_pack_text.replace(
+        "jobs:\n",
+        "permissions:\n  contents: read\n  id-token: write\njobs:\n",
+        1,
+    )
+    workflow_narrowed_problems = module_pack_permission_problems(workflow_narrowed_module_pack)
+    case("the permission guard catches a workflow-level attempt to elevate basic callers",
+         any(problem.startswith("the called workflow declares permissions")
+             for problem in workflow_narrowed_problems),
+         "the mutation passed with workflow-level id-token: write")
 
     base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA}
 
