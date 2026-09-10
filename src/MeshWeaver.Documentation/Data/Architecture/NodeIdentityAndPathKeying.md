@@ -114,13 +114,18 @@ A create at that path **does** clear it: the post-commit `MeshChangeEvent.Create
 `MeshNodeStreamCache.OnMeshChange` → `ResetFailureState(path)`, which drops the negative entry and
 evicts a faulted read entry. That behaviour is pinned by a test.
 
-The gap is a race, not a missing mechanism (tracked as **#3954**): `RecordNegative` writes `_negative[path]` unconditionally,
-with no epoch or claim guard. A `NotFound` minted by a read that subscribed *before* the create can
-therefore land *after* the `Created` broadcast has already reset the state, re-arming a window of up
-to five minutes that nothing then evicts until it expires — or until another change event for that
-path arrives. A `recycle` publishes exactly such an event, which is why recycling clears the symptom.
-`PathResolutionService` guards the identical race with its `_pendingFills` claims; the stream cache
-has no counterpart.
+The remaining race was fixed in **#3954**. Every read/write that can conclude `NotFound` now claims
+the path *before* opening its owner round-trip. A change event revokes the current claim before it
+clears the negative entry. When an older `NotFound` lands, `RecordNegative` checks that exact claim
+both before and after attempting the dictionary write; readers also refuse an entry whose claim is
+no longer current. The two checks close both interleavings, including an invalidation between the
+first check and the write itself.
+
+Claims are not a second permanent path cache: a successful or transient probe removes its claim,
+while a genuine miss keeps one only for the lifetime of the existing negative entry. Natural
+re-probes replace the claim and keep the established exponential backoff; no timer, retry, or
+sweeper was added. This mirrors `PathResolutionService._pendingFills`: invalidation is authoritative
+over work that began in the older failure era.
 
 ## See also
 
