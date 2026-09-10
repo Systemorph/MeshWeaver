@@ -145,17 +145,69 @@ internal static class NodeUpdatePipeline
     // consumer, done once for every validator instead of being each one's problem. A snapshot
     // that will not deserialise as the proposal's type is left as it was (logged loud by As):
     // hiding a shape mismatch from the validators would be a second silent pass.
-    private static MeshNode WithContentTypedLikeTheProposal(IMessageHub hub, MeshNode node, MeshNode existing)
+    //
+    // 🚨 "SAME NODETYPE" IS A PRECONDITION, NOT AN ASIDE — and an in-place retype is exactly
+    // where it is false (#3803). An update may legitimately change a node's NodeType (it is the
+    // sanctioned repair for a mistyped node — DanglingNodeTypeUpdateTest pins that route), and
+    // then the proposal's CLR type is the type of the content the node is MOVING TO, never the
+    // type of the snapshot it is moving FROM. Typing the snapshot by it is not recovery, it is
+    // MANUFACTURE, and System.Text.Json makes the manufacture silent: UnmappedMemberHandling is
+    // Skip, so the old node's bytes deserialise CLEANLY into the new type whenever the new
+    // type's members are present or defaultable. The validators are then handed a well-formed
+    // instance of a state the node was never in — old values under new member names, every
+    // member the old content did not carry defaulted — and a typed comparison
+    // (`ExistingNode.Content is TNew e && Node.Content is TNew p && …`) compares the proposal
+    // against that ghost and answers on it. Where the conversion instead throws, `As` returns
+    // null and the snapshot is left untyped, which is the #3056 silent pass all over again.
+    //
+    // 🚨 And the pipeline can add NOTHING legitimate here. MeshNodeStreamExtensions.
+    // EnsureTypedContent runs on EVERY emission of the stream this `existing` came from, and it
+    // already offers the snapshot the EXACT recovery — IMeshContentTypeRegistry.
+    // TryRecoverForNodeType keyed on the node's OWN NodeType — plus a late re-type wait for a
+    // content type that is not registered yet. A snapshot still untyped by the time it reaches
+    // this method is untyped because nothing in the process can type it. So on a retype: leave
+    // it, and SAY SO, rather than fabricating an answer no one asked for.
+    private static MeshNode WithExistingContentTyped(IMessageHub hub, MeshNode node, MeshNode existing)
     {
         var proposed = node.Content;
         if (proposed is null or JsonElement or JsonNode || existing.Content is null)
             return existing;
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeUpdatePipeline));
+
+        if (RetypesTheNode(node, existing))
+        {
+            if (existing.Content is JsonElement or JsonNode)
+                // Warning, not Error: the update itself is legitimate and proceeds. What is worth
+                // knowing is that the validators are deciding on untyped existing content — the
+                // one state in which a typed comparison silently skips. Names the two NodeTypes
+                // and the path; carries no content (see ObjectAsExtensions.LogRecoveryFailure).
+                logger?.LogWarning(
+                    "Update retypes {Path} from NodeType '{ExistingNodeType}' to "
+                    + "'{ProposedNodeType}' and its existing content is untyped. The proposal's "
+                    + "content type belongs to the type the node is moving TO, so it cannot type "
+                    + "the snapshot it is moving FROM, and the exact recovery "
+                    + "(IMeshContentTypeRegistry keyed on the EXISTING NodeType) has already been "
+                    + "tried at the stream read. Update validators will see this side untyped, so "
+                    + "a typed comparison will skip: register the existing NodeType's content type "
+                    + "where this update runs.",
+                    existing.Path, existing.NodeType, node.NodeType);
+            return existing;
+        }
+
         var typed = existing.Content.As(proposed.GetType(), hub.JsonSerializerOptions, logger, existing.Path);
         return typed is null || ReferenceEquals(typed, existing.Content)
             ? existing
             : existing with { Content = typed };
     }
+
+    // 🚨 BOTH SIDES MUST NAME A TYPE for this to be a retype. A proposal that omits NodeType is
+    // not changing it — treating "absent" as "changed" would route ordinary partial updates down
+    // the no-recovery branch and hand every one of their validators an untyped snapshot, which is
+    // the #3056 silent pass this pipeline step exists to close. Absent reads as unchanged.
+    private static bool RetypesTheNode(MeshNode node, MeshNode existing)
+        => !string.IsNullOrWhiteSpace(node.NodeType)
+           && !string.IsNullOrWhiteSpace(existing.NodeType)
+           && !string.Equals(node.NodeType, existing.NodeType, StringComparison.OrdinalIgnoreCase);
 
     // 2. Run client-side Update validators sequentially (Concat preserves short-circuit:
     //    the chain stops at the first failure). Returns the mapped exception or null.
@@ -174,7 +226,7 @@ internal static class NodeUpdatePipeline
         {
             Operation = NodeOperation.Update,
             Node = node,
-            ExistingNode = WithContentTypedLikeTheProposal(hub, node, existing),
+            ExistingNode = WithExistingContentTyped(hub, node, existing),
             AccessContext = ctx,
         };
 
