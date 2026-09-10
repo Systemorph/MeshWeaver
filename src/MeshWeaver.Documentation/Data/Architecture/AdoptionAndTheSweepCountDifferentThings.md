@@ -48,6 +48,18 @@ So `baked=5` and `frameworkstale=201` are both statements about **records**, fil
 store lookup each. Reading either as "what the share holds" is a category error, and it is the
 error the issue's own title makes.
 
+### Why 5 and not 0 — the number that looked unexplainable
+
+#3703 closed its reading with *"what is left unexplained by all three is the **5**: not 0, not 78"*,
+and the answer is what turns this from a race into a defect. `baked=5` is over **all 209** types.
+The 78 the seeding pass had just adopted contributed **zero** of them; the 5 were types already
+current from an earlier boot. So the adoption's effect on the sweep was not *reduced* by a lag — it
+was **absent**, completely, for every type it touched.
+
+That matters because it rules out waiting. A probabilistic index lag would have shown up as *some*
+of the 78 landing; a total miss is a missing ordering, and the only thing that can supply an ordering
+between two sources is a fact one of them already holds.
+
 ## Why the sweep could not see its own process's writes
 
 The seeding pass writes each adopted type's record through

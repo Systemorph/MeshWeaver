@@ -404,6 +404,12 @@ public static class DynamicTypePreWarmer
                     //
                     // 🚨 #3703 — the enumeration is a PROJECTION, and this process's own prebuilt
                     // adoptions may already have superseded it. Classify from the newer of the two.
+                    //
+                    // 🚨 The overlay moves DEFINITIONS and deliberately NOT `nodes`. A node carries
+                    // the VERSION the compiler's store upload keys on, and an overlaid definition on
+                    // a snapshot node would pair a fresh record with a stale version — strictly
+                    // worse than either. It costs nothing: an adopted type classifies Baked, so the
+                    // batch driver (which is the only consumer of `nodes`) never reaches it.
                     var overlay = OverlayThisProcessAdoptions(mesh, definitions, nodes, logger);
                     var classified = overlay.Definitions;
 
