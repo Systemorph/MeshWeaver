@@ -245,6 +245,22 @@ public record MeshBuilder
             if (newest.Loaded is not null)
             {
                 pending.Add(newest.Loaded);
+                // 🚨 The generation loaded — but not necessarily THIS one. When the default load
+                // context already held this identity, LoadFrom silently handed back that copy, and
+                // what runs is the generation at LoadedFrom. Recorded as a FallbackModule for the
+                // same reason the link-refusal fallbacks are: the module is present and running,
+                // one generation is in effect and another is not, and a surface that cannot say
+                // which reports a restart no restart can clear.
+                if (newest.LoadedFrom is { } already)
+                    fallbacks.Add(ReportFallback(new FallbackModule(
+                        newest.Loaded.Assembly.GetName().Name ?? Path.GetFileNameWithoutExtension(module.Location),
+                        module.Location, already,
+                        "this process had already loaded an assembly of that name, and the default "
+                        + "load context holds one copy per name")
+                    {
+                        Version = module.Version,
+                        RunsAlreadyLoadedCopy = true,
+                    }));
                 continue;
             }
 
@@ -276,11 +292,14 @@ public record MeshBuilder
                 if (retry.Loaded is not null)
                 {
                     pending.Add(retry.Loaded);
+                    // The row names the file that is RUNNING, which is the previous generation
+                    // unless the load context already held this identity elsewhere — then it is
+                    // that copy, and saying "previous" would name a generation nothing is running.
                     fallbacks.Add(ReportFallback(new FallbackModule(
-                        newest.Refused.Name, module.Location, previous, reason)
+                        newest.Refused.Name, module.Location, retry.LoadedFrom ?? previous, reason)
                     {
                         Version = module.Version,
-                        PreviousVersion = module.PreviousVersion,
+                        PreviousVersion = retry.LoadedFrom is null ? module.PreviousVersion : null,
                     }));
                     continue;
                 }
@@ -309,10 +328,19 @@ public record MeshBuilder
                 {
                     pending.Add(image.Loaded);
                     fallbacks.Add(ReportFallback(new FallbackModule(
-                        newest.Refused.Name, module.Location, baseline, reason)
+                        newest.Refused.Name, module.Location, image.LoadedFrom ?? baseline, reason)
                     {
                         Version = module.Version,
-                        RunsImageBaseline = true,
+                        // RunsImageBaseline only when the image copy is what actually loaded: a
+                        // substituted load runs neither the head nor the image, and stamping the
+                        // '@image' generation on it would record a generation nothing is running.
+                        //
+                        // 🚨 And NOT RunsAlreadyLoadedCopy, whatever was substituted here. That
+                        // flag means "the HEAD was never measured", which is false on this branch:
+                        // the head was measured and refused, and the unloadable marker it earns
+                        // must still be written. The substitution here decides only WHICH copy the
+                        // row names as running.
+                        RunsImageBaseline = image.LoadedFrom is null,
                     }));
                     continue;
                 }
@@ -480,8 +508,121 @@ public record MeshBuilder
     /// previous generation can be tried from: an assembly that loaded and then failed to
     /// materialise holds its simple name in the default load context, and a second assembly of
     /// that name cannot be loaded beside it.</param>
+    /// <param name="LoadedFrom">The file the loaded assembly ACTUALLY came from, when it is not
+    /// the one <see cref="TryLoad"/> was asked for (<see cref="SubstitutedLocationOf"/>); null
+    /// when the load did what it was asked, and always null when nothing loaded.</param>
     private sealed record LoadAttempt(
-        PendingModuleInstall? Loaded, IncompatibleModule? Refused, bool NeverLoaded);
+        PendingModuleInstall? Loaded, IncompatibleModule? Refused, bool NeverLoaded,
+        string? LoadedFrom = null);
+
+    /// <summary>
+    /// 🚨 <b>The file <paramref name="loaded"/> actually came from, when it is NOT the one that was
+    /// asked for — otherwise <c>null</c>. <c>Assembly.LoadFrom</c> does not promise to load the
+    /// path it is given, and this is the only thing that can tell.</b>
+    ///
+    /// <para><b>Measured, 2026-09-10.</b> <c>Assembly.LoadFrom</c> against a copy of an assembly the
+    /// default load context already holds returns THAT copy — same instance, its own
+    /// <see cref="Assembly.Location"/>, no exception, no diagnostic. (Only a copy carrying
+    /// DIFFERENT bytes throws <c>FileLoadException: Assembly with same name is already loaded</c>,
+    /// which the loader already handles as "never loaded" and falls back from.) So the silent
+    /// branch is exactly the one nothing was watching: a module the image ships as a
+    /// <c>MeshModuleClosure</c> SEED under <c>modules/&lt;name&gt;/</c> and the registry lands again
+    /// under <c>modules/&lt;name&gt;@&lt;generation&gt;/</c> binds whichever path was reached first,
+    /// and every later reading of "which generation is this process running" —
+    /// <see cref="InstalledModuleAssembly"/>, <c>ModuleActivationStatus.LoadedModuleGenerations</c>,
+    /// the per-NodeType dependency record, the module-set adoption — inherits the answer without
+    /// anyone comparing it to the one that was requested.</para>
+    ///
+    /// <para>🚨 <b>Why that silence is the defect and not the substitution.</b> The activation
+    /// record names the generation it landed; the process runs another; the derivation reads the
+    /// difference as an ordinary pending update and prints <i>restart to activate</i> — a prompt no
+    /// restart can clear, because the next boot resolves the same two paths the same way. Naming it
+    /// turns an invisible, self-renewing state into a <see cref="FallbackModule"/>: present,
+    /// running, and behind, which every status surface already knows how to say.</para>
+    ///
+    /// <para>🚨 <b>The comparison is over the GENERATION, not the path</b> — the containing
+    /// directory's leaf, the same identity <see cref="FallbackModule.Generation"/> and
+    /// <c>ModuleActivationStatus.LoadedModuleGenerations</c> use, so all three agree by
+    /// construction. A different PATH with the same leaf is the same generation reached twice, and
+    /// that is routine rather than a finding: every boot copies the generation WITH its leaf into
+    /// fresh process-local storage before loading (<c>ModuleGenerationPin</c>, #2509), so a second
+    /// boot in one process legitimately asks for a new path holding the generation already running.
+    /// Reporting that would put a row on every status surface saying a module runs the generation
+    /// it runs — noise, and an operator who learns to scroll past this line has lost the signal it
+    /// exists to carry. Case-INSENSITIVE, because a generation is <c>&lt;name&gt;@&lt;id&gt;</c> or
+    /// the seed's <c>&lt;name&gt;</c> and never two leaves differing only in case, while comparing
+    /// case-sensitively would invent a finding on a case-insensitive filesystem.</para>
+    ///
+    /// <para>An assembly with no readable location (loaded from bytes) answers <c>null</c>: "cannot
+    /// see" is never reported as a finding.</para>
+    /// </summary>
+    /// <param name="loaded">The assembly <c>Assembly.LoadFrom</c> returned.</param>
+    /// <param name="requestedLocation">The path it was asked to load.</param>
+    internal static string? SubstitutedLocationOf(Assembly loaded, string requestedLocation)
+    {
+        ArgumentNullException.ThrowIfNull(loaded);
+        if (string.IsNullOrWhiteSpace(requestedLocation))
+            return null;
+        string actual;
+        try
+        {
+            actual = loaded.Location;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+        if (string.IsNullOrEmpty(actual))
+            return null;
+        try
+        {
+            var actualGeneration = Path.GetFileName(Path.GetDirectoryName(Path.GetFullPath(actual)));
+            var requestedGeneration =
+                Path.GetFileName(Path.GetDirectoryName(Path.GetFullPath(requestedLocation)));
+            // An unreadable leaf on either side is "cannot see", not "they differ".
+            if (string.IsNullOrEmpty(actualGeneration) || string.IsNullOrEmpty(requestedGeneration))
+                return null;
+            return string.Equals(actualGeneration, requestedGeneration, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : actual;
+        }
+        catch (Exception exception) when (exception is ArgumentException or PathTooLongException
+                                              or NotSupportedException or IOException
+                                              or System.Security.SecurityException)
+        {
+            // An unnormalisable path is "cannot see", never a finding — the same discipline
+            // ModuleLoadReport keeps for an unreadable DLL.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Where the simple name <paramref name="simpleName"/> is already held in this process, for the
+    /// refusal message when <c>Assembly.LoadFrom</c> answers <i>Assembly with same name is already
+    /// loaded</i>. That exception names the identity and never the holder, so on its own it tells an
+    /// operator nothing they can act on. Null when nothing of that name is loaded, or when the
+    /// holder has no readable location.
+    /// </summary>
+    private static string? WhereTheNameIsAlreadyHeld(string simpleName)
+    {
+        if (string.IsNullOrEmpty(simpleName))
+            return null;
+        foreach (var candidate in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (candidate.IsDynamic
+                || !string.Equals(candidate.GetName().Name, simpleName, StringComparison.Ordinal))
+                continue;
+            try
+            {
+                return string.IsNullOrEmpty(candidate.Location) ? null : candidate.Location;
+            }
+            catch (NotSupportedException)
+            {
+                return null;
+            }
+        }
+        return null;
+    }
 
     /// <summary>
     /// Probes one generation against <paramref name="surface"/> and loads it. Records a failure
@@ -502,8 +643,31 @@ public record MeshBuilder
         }
         catch (Exception exception)
         {
-            return new LoadAttempt(null, IncompatibleModule.From(location, exception), NeverLoaded: true);
+            // 🚨 The name-is-taken refusal ("Assembly with same name is already loaded") names the
+            // identity and never the holder, so on its own it cannot be acted on. Say WHERE the
+            // name is held — that path is the generation this process is actually running.
+            var refusal = IncompatibleModule.From(location, exception);
+            var holder = exception is FileLoadException
+                ? WhereTheNameIsAlreadyHeld(refusal.Name)
+                : null;
+            return new LoadAttempt(
+                null,
+                holder is null
+                    ? refusal
+                    : refusal with
+                    {
+                        Error = refusal.Error
+                            + $" — that name is already held in this process by '{holder}', "
+                            + "which is the generation running here.",
+                    },
+                NeverLoaded: true);
         }
+
+        // 🚨 LoadFrom does not promise to load the path it was given: an assembly of this identity
+        // already in the default load context is returned instead, silently. Measure it here — the
+        // one place that knows both what was asked for and what arrived — so nothing downstream has
+        // to take the requested path on trust. See SubstitutedLocationOf.
+        var substituted = SubstitutedLocationOf(assembly, location);
 
         try
         {
@@ -517,7 +681,8 @@ public record MeshBuilder
                     moduleAttributes.SelectMany(a => a.DefaultNodeHubConfigurations).ToArray(),
                     moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray()),
                 null,
-                NeverLoaded: false);
+                NeverLoaded: false,
+                LoadedFrom: substituted);
         }
         catch (Exception exception)
         {

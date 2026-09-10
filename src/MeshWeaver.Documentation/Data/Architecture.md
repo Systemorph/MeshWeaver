@@ -277,6 +277,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Module-Owned Siblings Ride](ModuleOwnedSiblingsRide)
 - [The Module Platform Link Gate](ModulePlatformLinkGate)
 - [The Module Publication Gate](ModulePublicationGate) — a bundle used to reach the live registry from inside its own pack leg, before the sibling suites, the portal-host shards, the compile-check and the Tests-area gate had reported; the hand-over moved downstream of the full source verdict, and what it refuses (failed, skipped, cancelled, missing, foreign-lane, substituted)
+- [Module Generation Substitution](ModuleGenerationSubstitution) — `Assembly.LoadFrom` does not promise to load the path it is handed: a byte-identical copy the load context already holds is returned instead, silently, so the loader recorded the generation it ASKED for while the process ran another; the three answers that replace two
 - [Module Set Convergence](ModuleSetConvergence)
 - [Module Versioning](ModuleVersioning)
 - [Modules](Modules)

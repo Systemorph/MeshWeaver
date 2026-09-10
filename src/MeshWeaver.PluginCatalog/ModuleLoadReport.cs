@@ -71,8 +71,18 @@ public static class ModuleLoadReport
 
     /// <summary>
     /// Describe what boot is about to load. Pure with respect to the caller's decision: it reports
-    /// the paths it is GIVEN — the same array that goes to <c>InstallAssemblies</c> — so the report
-    /// and the load can never disagree by construction.
+    /// the paths it is GIVEN — the same array that goes to <c>InstallAssemblies</c>.
+    ///
+    /// <para>🚨 <b>That makes the report and the REQUEST agree by construction; it does NOT make the
+    /// report and the LOAD agree, and reading it as though it did is how MeshWeaver#3911 stayed
+    /// invisible.</b> <c>Assembly.LoadFrom</c> does not promise to load the path it is handed: an
+    /// assembly of that identity already in the default load context is returned instead — same
+    /// instance, its own location, no exception (see
+    /// <c>MeshBuilder.SubstitutedLocationOf</c>). These lines are therefore a statement of intent
+    /// measured off FILES, and the loader is the only place that can compare them with what
+    /// arrived. It does, and records the difference as a <c>FallbackModule</c> carrying
+    /// <c>RunsAlreadyLoadedCopy</c>. Neither half is sufficient alone: this one names what was
+    /// asked for even when nothing loads, that one names what runs.</para>
     /// </summary>
     /// <param name="moduleRoot">The writable module root (<see cref="ModuleRoot.Resolve(string?)"/>).</param>
     /// <param name="resolved">Each effective module and the exact path it resolved to.</param>
