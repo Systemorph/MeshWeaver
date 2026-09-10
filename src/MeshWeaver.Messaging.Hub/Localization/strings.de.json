@@ -1364,6 +1364,7 @@
   "activity.compile.sourceQuery": "Quell-Query: {query}",
   "activity.compile.discoveryMatchedNone": "Die Quellensuche für '{path}' fand 0 Code-Nodes — prüfen Sie, ob die Source-Code-Nodes existieren und die `Sources`-Liste des NodeType auf sie verweist.",
   "activity.compile.discoveryMatched": "Die Quellensuche fand {count} Code-Node(s): {paths}",
+  "activity.compile.declaredQueryMatchedNone": "{count} von {declared} DEKLARIERTEN Quellenabfragen f\u00fcr '{path}' fanden KEINE Nodes: {queries}. Die folgende Kompilierung l\u00e4uft gegen eine Quellenmenge, die WENIGER umfasst als dieser NodeType deklariert \u2014 ein nicht aufl\u00f6sbarer Typ oder eine fehlende Erweiterungsmethode ist weit eher ein fehlender Quell-NODE als ein fehlendes Modul.",
   "activity.compile.assemblyWritten": "Kompilierte Assembly nach {path} geschrieben.",
   "activity.compile.dllMissing": "Die Kompilierung war erfolgreich, aber unter {path} wurde keine DLL gefunden.",
   "activity.compile.assemblyInMemory": "Kompilierte Assembly im Arbeitsspeicher geladen ({path}).",

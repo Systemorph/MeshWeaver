@@ -235,6 +235,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Producer Determinism of the Dependency Record](ProducerDeterminismOfTheDependencyRecord) — the same content must stamp the same record however the producer reached its bytes; the disk-cache hit that shipped a weaker guard, and why the digest is persisted beside the bytes rather than recomputed
 - [Rebake Waves](RebakeWaves) — why a roll rebakes the world anyway, and what one rebake writes
 - [Source-Set Establishment](SourceSetEstablishment) — a resolved source set of ZERO is ambiguous, and only the type's own persisted snapshot tells "owns no Code" from "the discovery pass came back short"; the boot that resolved 91 fewer Code nodes than its neighbours and held a portal out of rotation for the startup probe's full three hours
+- [Missing Declared Sources](MissingDeclaredSources) — emptiness measured on the UNION is invisible for any type that also draws on a shared library; the NodeType whose own Source subtree was gone, reported itself as broken C#, and had the identical doomed compile taken again on every boot for four days
 - [Install-Time Prebuilt Adoption](InstallTimePrebuiltAdoption) — the only lane that serves a package installed AFTER boot, and the four answers its zero must keep apart because a silent non-adoption reads exactly like a successful one
 - [Import Write Ordering](ImportWriteOrdering) — type before instance, and what a foreign type does
 - [Language Services](LanguageServices)

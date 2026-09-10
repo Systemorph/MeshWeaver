@@ -666,6 +666,60 @@ internal static class NodeTypeBatchBake
         ILogger? logger)
     {
         var typePath = typeNode.Path;
+
+        // 🚨 A COMPILE THAT CANNOT CONVERGE IS NOT ATTEMPTED AGAIN (issue #3903).
+        //
+        // This driver decides what to build from a STORE PROBE, not from the record
+        // (NodeTypeBakeStatus.ClassifyDetailed), and its first branch maps CompilationStatus.Error
+        // to BakeState.PreviouslyBroken ⇒ NeedsBake. That is right for a type broken by an image:
+        // a new image is exactly the input that could fix it, so it earns a fresh attempt on every
+        // boot. It is wrong for the one shape where no image can be the answer — a type whose own
+        // declared source query matches NOTHING on this mesh, so the symbols Roslyn cannot resolve
+        // live in nodes that are not here. Measured on memex.meshweaver.cloud: rbuergi/OperationRequest
+        // burned a full Roslyn compile on every pod boot from 2026-09-06, produced the identical
+        // CS0246/CS1061 every time, and nothing anywhere named the empty query.
+        //
+        // 🚨 THE FIRST ATTEMPT ALWAYS RUNS. The condition requires a STANDING Error — a verdict this
+        // deployment has already measured — so the coverage is never used to assert a failure
+        // nobody observed. A type reaching this state for the first time compiles, fails honestly,
+        // records the diagnosis (NodeTypeDefinition.FailedSourceQueries), and only THEN stops
+        // repeating a measurement whose inputs cannot have moved. That is memoisation of a
+        // deterministic function, not a retry cap: the coverage is recomputed from the LIVE source
+        // set on every boot, so restoring the nodes resumes normal baking with nothing to reset.
+        //
+        // 🚨 TWO INDEPENDENT WITNESSES, and the second is what stops the skip LATCHING (#1216's
+        // rule, applied in the direction that matters here). `IsUnconvergableSourceFailure` reads
+        // the record's CurrentSourceVersions, which the per-NodeType sources watcher maintains —
+        // and on a batch-baking pod that watcher may never have run, so the record alone could keep
+        // saying "missing" long after the nodes came back. THIS bake's own freshly-resolved set is
+        // the live witness. Both must agree before a compile is declined; either one saying the
+        // sources are there compiles, which is the safe direction (a needless compile costs a
+        // compile, a latched skip strands a type).
+        //
+        // Nothing is stamped here on purpose. The record already says Error with the same error and
+        // the same finding; re-writing it would move LastCompileStartedAt and make a compile that
+        // never ran look like one that did.
+        var standing = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions, logger);
+        if (standing is not null
+            && NodeTypeCompilationHelpers.IsUnconvergableSourceFailure(standing, typePath)
+            && SourceCoverage.UnmatchedSourceQueries(
+                   standing.Sources, typePath, sources.Select(s => s.Path).ToList())
+               is { Count: > 0 })
+        {
+            var detail = SourceCoverage.Describe(
+                typePath, standing.FailedSourceQueries,
+                standing.Sources is { Count: > 0 }
+                    ? standing.Sources.Count
+                    : CodeQueryResolver.DefaultSources.Count);
+            logger?.LogWarning(
+                "BatchBake: {TypePath} NOT ATTEMPTED — its standing compile failure cannot converge. "
+                + "{Detail} No image can change that, so this bake does not repeat it; restoring the "
+                + "source nodes re-drives the compile automatically.",
+                typePath, detail ?? "(a declared source query matched no nodes)");
+            return Observable.Return(new PreWarmOutcome(
+                typePath, PreWarmStatus.DeclaredSourcesMissing, detail));
+        }
+
         // PER-COMPILE cost, appended to the per-type line that already exists — no new log volume.
         // This is the measurement that answers "is compilation what eats the memory?" directly rather
         // than by elimination: one linked bake of 279 types left the pod at 2.5 GB, so the fleet is
@@ -834,7 +888,29 @@ internal static class NodeTypeBatchBake
                 // …and a type its REPOSITORY HAS RETIRED (held only for its remaining instances,
                 // NodeTypeDefinition.PendingRetirement) is a content verdict before any of that:
                 // its sources were withdrawn on purpose. Same first branch as ClassifyCompileFailure.
+                // …and #3903's sibling of NoSources, one granularity finer: the snapshot is NOT
+                // empty, but a DECLARED source query in it matched nothing — the shape a type that
+                // also draws on a shared library presents when its OWN Source subtree is gone, and
+                // the shape NoSources can never see because it measures the union. Same content-vs-
+                // image reasoning, same second witness (LastCompileSucceededAt: the sources were
+                // LOST, not never present), and measured against the set THIS bake resolved rather
+                // than against a stamp. Ordered after NoSources because a wholly empty set is the
+                // more specific statement.
                 var def = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions);
+                // Both witnesses, exactly as the NoSources branch below takes them: this bake's own
+                // resolved set AND the type's persisted snapshot. A starved or truncated discovery
+                // pass also reports "matched nothing", and this classification does not gate — so a
+                // discovery bug that could reach it alone would quietly file itself as content
+                // drift. An absent persisted snapshot answers neither way and keeps the gating
+                // verdict.
+                var unmatched = def is null
+                    ? null
+                    : SourceCoverage.UnmatchedSourceQueries(
+                        def.Sources, typePath, sources.Select(s => s.Path).ToList());
+                var unmatchedOnRecord = def is null
+                    ? null
+                    : SourceCoverage.UnmatchedSourceQueries(
+                        def.Sources, typePath, def.CurrentSourceVersions?.Keys.ToList());
                 var status = def?.PendingRetirement is { Length: > 0 }
                     ? PreWarmStatus.Retired
                     : def is not null
@@ -842,6 +918,11 @@ internal static class NodeTypeBatchBake
                         && def.CurrentSourceVersions is { Count: 0 }
                         && def.LastCompileSucceededAt is not null
                     ? PreWarmStatus.NoSources
+                    : def is not null
+                        && unmatched is { Count: > 0 }
+                        && unmatchedOnRecord is { Count: > 0 }
+                        && def.LastCompileSucceededAt is not null
+                    ? PreWarmStatus.DeclaredSourcesMissing
                     : PreWarmStatus.CompileError;
                 return new PreWarmOutcome(
                     typePath, status, NodeTypeCompilationHelpers.SummarizeCompileError(result, error))
@@ -954,7 +1035,8 @@ internal static class NodeTypeBatchBake
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
                             def, result, error, activityPath: null,
-                            mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash))
+                            mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
+                            typeNode.Path))
                     // The batch driver has no Pending→Compiling flip to stamp this at, and the
                     // shared field-set deliberately does not touch it (the activation path owns it
                     // there). Written here so a per-type duration is derivable FROM THE MESH on both

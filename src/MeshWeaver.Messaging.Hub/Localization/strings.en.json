@@ -1364,6 +1364,7 @@
   "activity.compile.sourceQuery": "Source query: {query}",
   "activity.compile.discoveryMatchedNone": "Source discovery for '{path}' matched 0 Code nodes — check that the Source Code nodes exist and the NodeType's `Sources` list points at them.",
   "activity.compile.discoveryMatched": "Source discovery matched {count} Code node(s): {paths}",
+  "activity.compile.declaredQueryMatchedNone": "{count} of {declared} DECLARED source quer(ies) for '{path}' matched NO nodes: {queries}. The compile below runs against a source set SHORT of what this NodeType declares \u2014 an unresolved type or extension method is far more likely to be an absent source NODE than an absent module.",
   "activity.compile.assemblyWritten": "Compiled assembly written to {path}.",
   "activity.compile.dllMissing": "Compilation succeeded but DLL not found at {path}.",
   "activity.compile.assemblyInMemory": "Compiled assembly loaded in-memory ({path}).",

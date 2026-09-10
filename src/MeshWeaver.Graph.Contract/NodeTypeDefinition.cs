@@ -860,6 +860,47 @@ public record NodeTypeDefinition
     public string? FailedBuildInputs { get; init; }
 
     /// <summary>
+    /// 🚨 The DECLARED SOURCE QUERIES that matched NOTHING when the standing failure verdict was
+    /// formed — the durable answer to "why does this compile name symbols nobody can find?"
+    /// (issue #3903).
+    ///
+    /// <para><b>The hole it closes.</b> <c>SourceSnapshot</c> already refuses to hand Roslyn a
+    /// source set it could not ESTABLISH, because a short set produces completely genuine-looking
+    /// <c>CS0246</c>/<c>CS1061</c> about code that is fine (#1218). But emptiness was measured on
+    /// the MERGED set — the union of every expanded source and test query — so a type that also
+    /// draws on a shared library keeps a non-empty union even when the query for its OWN sources
+    /// matches nothing. Measured on memex.meshweaver.cloud 2026-09-10:
+    /// <c>rbuergi/OperationRequest</c> had been failing since 2026-09-06 with three unresolved
+    /// symbols that are exactly its own three <c>Source/*</c> nodes — which do not exist in that
+    /// partition — while its snapshot held 41 nodes pulled in by five <c>shared=@Store/…</c>
+    /// entries. Nothing named the empty query, so the reader hunted three symbols through module
+    /// surfaces that never carried them.</para>
+    ///
+    /// <para><b>Three shapes, never two</b> — the <c>NodeDiagnosticsOutcome</c> rule that a status
+    /// meaning "nothing was checked" must not be readable as "checked and clean":</para>
+    /// <list type="bullet">
+    ///   <item><c>null</c> — NOT DETERMINED. No failure verdict stands (a success CLEARS this, like
+    ///     <see cref="FailedBuildInputs"/>), or the coverage could not be computed: no established
+    ///     source snapshot, or not one declared entry the offline evaluator could read. It never
+    ///     means "the declared sources were checked and all matched".</item>
+    ///   <item>EMPTY — determined: every evaluable declared source query matched at least one node,
+    ///     so the failure is about the CODE and the diagnostics mean what they say.</item>
+    ///   <item>NON-EMPTY — these declared entries answered and matched nothing, so the compile ran
+    ///     against a set SHORT of what the type declares.</item>
+    /// </list>
+    ///
+    /// <para><b>What it decides.</b> Nothing on its own — it is the REPORT. The re-drive and the
+    /// bake both recompute the coverage against the LIVE source set rather than trusting this
+    /// stamp, so restoring the missing nodes converges on the next pass without anyone clearing a
+    /// field. Entries are stored AS AUTHORED (the <c>name=</c> prefix included), so a reader can
+    /// find the offending line in <see cref="Sources"/> verbatim.</para>
+    ///
+    /// <para>🚨 Runtime state: never author it into a node file. <c>ShippedNodeTypeStateTest</c>
+    /// bans every member whose name starts <c>Failed</c>, and this is one of them.</para>
+    /// </summary>
+    public System.Collections.Immutable.ImmutableList<string>? FailedSourceQueries { get; init; }
+
+    /// <summary>
     /// The build-inputs token the in-flight compile was dispatched for, stamped by the RELEASE
     /// WATCHER on the commit where it flips <see cref="CompilationStatus"/> to Pending (#2544).
     ///
