@@ -32,11 +32,22 @@ fact is a guess.
 ## Reaching the cluster at all
 
 > 🚨 **Every read on this page is break-glass** (maintainer, 2026-09-08: no direct cluster access;
-> operations and diagnostics go through the control instance's Hosting API). It stays here because
-> the API does not yet answer three of these questions — per-replica image/restarts, a log at time
-> T, and which NodeType assemblies a replica can load — and because a read taken this way must be
-> written up as break-glass, never as the procedure. What exists, what does not:
+> operations and diagnostics go through the control instance's Hosting API). A read taken this way
+> must be written up as break-glass, never as the procedure. What exists, what does not:
 > [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).
+>
+> 🚨 **Two of the three questions this page used to name as unanswerable through the API now have an
+> action** (Systemorph/MeshWeaver.Plugins#1521, live on the control instance and in daily use —
+> measured 2026-09-10: 30 `Logs` runs, 24 of them that day). *Per-replica image / restarts / what
+> each pod's own `/health` says* is `{ "requestedAction": "Sample" }`; *what did the process log at
+> time T* is `{ "requestedAction": "Logs", "query": "…", "sinceMinutes": …, "limit": … }`, which
+> takes the LogQL and lands the lines as `Hosting/LogEntry` nodes with the run's own `logQl`,
+> `entryCount` and `truncated` beside them. **Ask the action first**; the `az aks command invoke`
+> shapes below are the fallback for when the control plane itself cannot act, and the reference for
+> what the action runs on your behalf. Only *"can THIS replica load NodeType X"* still has no direct
+> answer. How to phrase the query, and why the log nodes already sitting on a portal are **not** a
+> feed to search: [Log Entries Are a Query Result, Not a
+> Feed](/Doc/Architecture/LogEntriesAreAQueryResult).
 
 The AKS cluster is **private**. `kubectl` reaches it only through `az aks command invoke`, which
 runs your command in a pod inside the cluster — which is also what makes it the right place to

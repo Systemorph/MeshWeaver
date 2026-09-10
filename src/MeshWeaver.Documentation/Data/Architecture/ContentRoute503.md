@@ -162,8 +162,46 @@ Queue(buffer=0,…) and no Executing(…)   ⇒ Cause A: the reply never arrived
 Queue(buffer>0,…) or Executing(…, Nms)  ⇒ Cause B: the reply arrived and waited.
 ```
 
-Grep the portal for `Reading content collection config from` and read the `Queue(` on the same line.
-`grep -o "Queue(buffer=[0-9]*"` over a window, bucketed, answers it for a whole day at once.
+### What the discriminator costs to obtain
+
+🚨 **`Reading content collection config from …` is not a log statement.** Nothing in this repo calls
+`Log*` with it. It is the MESSAGE of the `HubUnreachableException` that `ReadBudget.Unreachable`
+builds (`ReadBudget.cs`), and it reaches a log only because `BlazorHostingExtensions.ContentFailure`
+(Plugins) does `logger.LogWarning(ex, "Content read timed out for {Path}", path)` — the exception
+rides along as the warning's detail. Three things follow, and each has misled a reader:
+
+- **It is greppable, and on ONE line.** `MessageHub.GetPendingRequestDiagnostics` is a single-line
+  snapshot by contract, so `Reader: … Queue(buffer=…) [Executing(…, Nms)] PendingCallbacks=…` sits
+  on the same physical line as the sentence above. *"Read the `Queue(` on the same line"* is
+  therefore literally true — and `ContentRoute503DiscriminatorGuard` (core,
+  `test/MeshWeaver.Documentation.Test`) fails if a newline ever gets into it.
+- **No level or category filter can select it.** It is a continuation line: the `warn:` header and
+  the `MeshWeaver.Hosting.Blazor…` category are on the PRECEDING line, which the log store keeps as
+  a separate entry.
+- 🚨 **The obvious query returns the 503 without the discriminator.** Filtering for `Content read
+  timed out for` matches the warning's own message line and stops there. Filter for
+  **`Reading content collection config from`** — the line that carries the answer.
+
+**Through the API, not by break-glass.** A `Logs` `Hosting/InstanceAction` on the control instance
+takes the LogQL, so this is one node and no cluster credential:
+
+```json
+{ "namespace": "Ops/Actions", "nodeType": "Hosting/InstanceAction",
+  "content": { "$type": "InstanceActionContent", "deployment": "Deployments/memex-cloud",
+    "requestedAction": "Logs", "query": "Reading content collection config from",
+    "sinceMinutes": 240, "limit": 200, "reason": "Read-only — adjudicate Cause A vs Cause B." } }
+```
+
+Read `logQl`, `entryCount` and `truncated` back off the run; the matched lines land as
+`Hosting/LogEntry` nodes under `Ops/Logs`. 🚨 **Do NOT instead search the `Hosting/LogEntry` nodes
+that are already there** — they are the result of whatever somebody last asked, not a feed, and
+reading them as one produced a wrong conclusion on
+[#3931](https://github.com/Systemorph/MeshWeaver/issues/3931). See
+[Log Entries Are a Query Result, Not a Feed](../LogEntriesAreAQueryResult).
+
+The break-glass form of the same read — `az aks command invoke … curl loki…/query_range`, then
+`grep -o "Queue(buffer=[0-9]*"` bucketed over a window — still answers it for a whole day at once,
+and is the fallback when the control plane itself cannot act.
 
 **Do not apply Cause A's fix to a Cause B occurrence.** Re-asserting a claim that was never lost
 changes nothing, and a single-replica or restarted portal removes the *exposure* to Cause A without
@@ -257,6 +295,7 @@ a dependency, and both are correctly 503. A distinct status would only be warran
 
 ## Related
 
+- [Log Entries Are a Query Result, Not a Feed](../LogEntriesAreAQueryResult) — how to fetch the discriminator through the API, and why the log nodes already on a portal are not a feed.
 - [Bake Seal — NodeOps Saturation](../BakeSealNodeOpsSaturation) — the same hub, measured from the write side, with the open question of *which rule* holds its block.
 - [The Pod-Hub Claim Must Be Re-Asserted](../PodHubClaimReassertion) — Cause A's mechanism and cure.
 - [Action-Block Wedge Prevention](../ActionBlockWedgePrevention) — the invariants a single-threaded hub must satisfy.
