@@ -92,7 +92,7 @@ The bullets above treat *no adopted bundle* as a cost paid in boot time, because
 compiles in the mesh. Measured on 2026-09-10 (memex.systemorph.com, `3.0.0-ci.8238`, core
 `2287decb`, identity `s546f29f9…`) that is not the whole story: a module whose bundle is declined
 can keep serving **types built from source older than the source the instance has installed**,
-while every surface reports the package as installed, current and healthy.
+while the package's own install record reads installed, current and up to date.
 
 `MeshWeaver.AI` had gained `ModelDefinition.ReasoningEffort` (Plugins#1556, 09-09 12:41Z) and
 `ThreadMessage.Timing` (Plugins#1552, 11:59Z). The install record carried main's own file hashes —
