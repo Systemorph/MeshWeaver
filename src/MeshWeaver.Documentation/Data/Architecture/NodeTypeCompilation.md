@@ -1498,15 +1498,32 @@ portable PDB and an XML doc stream, 175 `CreateFromFile` references off
 `TRUSTED_PLATFORM_ASSEMBLIES`, six rotating nested-generic source shapes, 4 threads, and a collectible
 `AssemblyLoadContext` loaded from the emitted bytes and unloaded every 7th emit.
 
-**400,000 emits in 144 s. Zero failures.** (`gc0=80268 gc1=71050 gc2=294`.)
+Run on **both** architectures, because a JIT-codegen hypothesis is architecture-specific and an
+arm64-only null would say nothing about a `linux/x64` runner:
 
-At the measured CI rate — roughly one occurrence per 20,000–40,000 compiles — that is ~10–20 expected
-events, so the null is worth stating: **whatever precedes the fault is not in the emit path.** Roslyn,
-the reference set, collectible-ALC load/unload, GC pressure and concurrent emits, on the exact
-runtime, do not reach it. The residual is the architecture: this host is `linux/arm64`, CI is
-`linux/x64`, and the x64 arm of the same harness under qemu-user emulation did not reach its first
-progress checkpoint, so it is not a usable control. **A repro attempt on this hardware must run x64
-natively (or under Rosetta) to be worth anything.**
+| arch | how | emits | failures | elapsed | GC |
+|---|---|---|---|---|---|
+| `linux/arm64` | native | **400,000** | **0** | 144 s | `gc0=80268 gc1=71050 gc2=294` |
+| `linux/x64` | **Rosetta** translation (a `--vz-rosetta` VM), same image, `arch=X64` confirmed in-process | **400,000** | **0** | 276 s | `gc0=82330 gc1=70033 gc2=701` |
+
+**800,000 emits, zero events**, against ~20–40 expected at the measured CI rate (roughly one
+occurrence per 20,000–40,000 compiles). So the null is worth stating: **whatever precedes the fault is
+not in the emit path.** Roslyn, the reference set, collectible-ALC load/unload, GC pressure and
+concurrent emits — on the exact runtime, on CI's architecture — do not reach it.
+
+🚨 **Two traps for whoever repeats this.** First, `--platform linux/amd64` under colima's default
+`qemu-x86_64` binfmt is **not** a usable arm: `dotnet restore` dies with `Segmentation fault (core
+dumped)` and a 4-thread emit loop never reaches its first progress checkpoint. Rosetta (a separate
+`colima start <profile> --vm-type vz --vz-rosetta` profile, so the existing VM is untouched) runs the
+same image at ~1,450 emits/s and emulates x86-64 TSO, so the JIT emits and executes the same x64 code
+CI does. Second, **build the project on the native arch and run the published IL under the emulated
+one** (`FROM --platform=$BUILDPLATFORM … AS build`): MSBuild does not survive the emulation, the
+output is portable, and nothing about the build platform reaches what is executed.
+
+The residual is now the WORKLOAD, not the architecture: the harness is an emit loop, and the CI host
+is a whole mesh test suite. Note that the CI host runs **Workstation** GC — #1605's crash frame is
+`WKS::gc_heap::find_first_object` — which is what the harness ran too, so that is not the difference
+either.
 
 ##### 🚨 The control no leg has ever been: the COMPILER itself
 
