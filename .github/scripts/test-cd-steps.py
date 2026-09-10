@@ -605,6 +605,28 @@ def run_heal_cases(root, case) -> None:
     case("...and the heal comment is still written, so the delivery record survives",
          "gh issue comment 3176" in joined, f"calls={calls}")
 
+def plugin_module_build_problems(workflow_text: str) -> list[str]:
+    """The platform bake must have one compiler for every module it composes (#3732)."""
+    import yaml
+
+    doc = yaml.safe_load(workflow_text)
+    job = (doc.get("jobs") or {}).get("plugins-modules") or {}
+    raw = (job.get("with") or {}).get("modules")
+    if not raw:
+        return ["plugins-modules has no module catalog"]
+    try:
+        entries = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        return [f"plugins-modules module catalog is not valid JSON: {exc}"]
+    if not entries:
+        return ["plugins-modules module catalog is empty"]
+    return [
+        f"{entry.get('module') or '<unnamed>'} does not use the shared container workspace"
+        for entry in entries
+        if entry.get("build") != "container" or entry.get("accept") != "targets"
+    ]
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -635,6 +657,15 @@ def main() -> int:
         if not ok:
             print(f"        {detail}")
             failures.append(name)
+
+    workflow_text = (root / WORKFLOW).read_text()
+    module_problems = plugin_module_build_problems(workflow_text)
+    case("every plugin module composed by CD reuses one container workspace",
+         not module_problems, "; ".join(module_problems))
+    mutated_workflow = workflow_text.replace('"build": "container"', '"build": "sdk"', 1)
+    mutation_problems = plugin_module_build_problems(mutated_workflow)
+    case("the plugin-module workspace guard fails when one entry leaves that workspace",
+         bool(mutation_problems), "the mutation passed having changed one producer")
 
     base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA}
 

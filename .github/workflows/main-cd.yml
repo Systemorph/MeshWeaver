@@ -2371,7 +2371,10 @@ jobs:
       content-ref: ${{ needs.gate.outputs.plugins_sha }}
       platform-ref: ${{ needs.gate.outputs.sha }}
       # The compose set the bake needs — the same set Plugins' own ci.yml passes as
-      # module-artifacts; the rest of the catalog is content, baked below.
+      # module-artifacts; the rest of the catalog is content, baked below. Every entry MUST use
+      # the container workspace: an SDK entry recompiles its transitive siblings separately, so
+      # the bake can receive byte-distinct copies of one assembly from the same source commit.
+      # The consistency gate then correctly refuses the whole publication (#3732).
       #
       # 🚨 THE SET IS "EVERY MODULE THE CONTENT BINDS", not "the two we started with". The bake
       # lane states the rule in its own input description: *"a repo whose NodeType source binds a
@@ -2393,10 +2396,10 @@ jobs:
       # avoid rebuilding these for the seal, but this repo holds no registry credential
       # (Doc/Architecture/ModuleBuildArchitecture → "What the gate still cannot see").
       modules: >-
-        [{"package": "AI", "module": "MeshWeaver.AI", "project": "src/MeshWeaver.AI/MeshWeaver.AI.csproj"},
-         {"package": "Essentials", "module": "MeshWeaver.Markdown.Collaboration", "project": "src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj"},
-         {"package": "Maps", "module": "MeshWeaver.Maps", "project": "src/MeshWeaver.Maps/MeshWeaver.Maps.csproj"},
-         {"package": "Stripe", "module": "MeshWeaver.Payments.Stripe", "project": "src/MeshWeaver.Payments.Stripe/MeshWeaver.Payments.Stripe.csproj"}]
+        [{"package": "AI", "module": "MeshWeaver.AI", "project": "src/MeshWeaver.AI/MeshWeaver.AI.csproj", "build": "container", "accept": "targets"},
+         {"package": "Essentials", "module": "MeshWeaver.Markdown.Collaboration", "project": "src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj", "build": "container", "accept": "targets"},
+         {"package": "Maps", "module": "MeshWeaver.Maps", "project": "src/MeshWeaver.Maps/MeshWeaver.Maps.csproj", "build": "container", "accept": "targets"},
+         {"package": "Stripe", "module": "MeshWeaver.Payments.Stripe", "project": "src/MeshWeaver.Payments.Stripe/MeshWeaver.Payments.Stripe.csproj", "build": "container", "accept": "targets"}]
       # Registry module PACKAGES are content-versioned and published by Plugins' own lane when a
       # package changes; a platform release changes no package content. The bundles packed here
       # are the bake's inputs (artifacts), nothing more.
