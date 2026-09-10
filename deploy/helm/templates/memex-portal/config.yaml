@@ -914,3 +914,11 @@ data:
   # makes the action report itself UNAVAILABLE rather than silently drop a message — so this
   # key is what turns Forward on, and an untemplated key here would ship the feature inert.
   Email__Inbound__ForwardAddress: "{{ .Values.config.memex_portal.Email__Inbound__ForwardAddress | default "" }}"
+  # ---- What the Executive Assistant may SEND on a person's behalf (MeshWeaver.Plugins, Mail
+  # module). Both default to the safe mode in the module itself — DraftOnly for mail, Off for
+  # Teams posting — and ONLY the literal word "Send" opens either gate (a typo, "true", "1"
+  # stay closed). Rendered here so an overlay can turn one on per environment; before this line
+  # existed the key reached no container and the feature shipped inert (config-key-coverage).
+  # Independent of each other: Teams posting does not widen mail sending, nor the reverse.
+  Email__AgentSend: "{{ .Values.config.memex_portal.Email__AgentSend | default "" }}"
+  Teams__AgentSend: "{{ .Values.config.memex_portal.Teams__AgentSend | default "" }}"
