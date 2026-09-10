@@ -339,6 +339,8 @@ public static class PluginBundleEndpoints
         if (publication.Bundles is null)
             return BeingRepublished(http, identity, source, directory, publication.TornReason!);
         var reading = PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
+        if (reading.PublicationUnavailable)
+            return BeingRepublished(http, identity, source, directory, reading.Refusal!);
         if (reading.Modules is null)
             return Results.Json(
                 new { error = $"{reading.Refusal} — source '{source}', framework identity '{identity}'" },
@@ -368,6 +370,8 @@ public static class PluginBundleEndpoints
         if (HeldGeneration(http) is { } held && held != publication.Generation)
             return GenerationMoved(held, publication.Generation!);
         var reading = PublishedBundleCatalogue.SealedModulesOf(directory, Log(http));
+        if (reading.PublicationUnavailable)
+            return BeingRepublished(http, identity, source, directory, reading.Refusal!);
         if (reading.Modules is null || !reading.Modules.Contains(bundle, StringComparer.OrdinalIgnoreCase))
             return NoSuchBundle();
         var path = Path.Combine(

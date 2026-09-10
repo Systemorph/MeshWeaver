@@ -20,14 +20,21 @@ public class PublicationSealReadTest : IDisposable
         File.WriteAllText(seal, "Store.zip\n");
         Assert.True(File.Exists(seal));
 
-        // Deterministic interleaving: the old reader's existence observation has already happened.
-        // The publisher now removes the seal, or retention removes its parent, before the open.
-        if (removeDirectory)
-            Directory.Delete(Path.Combine(root, "identity"), recursive: true);
-        else
-            File.Delete(seal);
-
-        Assert.Null(PublishedBundleCatalogue.ReadSealLines(seal));
+        // Remove at the filesystem operation, not before entering the reader. Even a reader
+        // that reinstates File.Exists observes a present seal before this operation removes it.
+        var opened = false;
+        var lines = PublishedBundleCatalogue.ReadSealLines(seal, path =>
+        {
+            Assert.True(File.Exists(path));
+            opened = true;
+            if (removeDirectory)
+                Directory.Delete(Path.Combine(root, "identity"), recursive: true);
+            else
+                File.Delete(path);
+            return File.ReadAllLines(path);
+        });
+        Assert.True(opened);
+        Assert.Null(lines);
         Assert.Null(PublishedBundleCatalogue.SealedPublicationOf(directory).Bundles);
         Assert.Null(PublishedBundleCatalogue.SealedBundlesOf(directory));
     }

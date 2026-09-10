@@ -75,7 +75,10 @@ cannot protect a later read: a publisher can remove the seal between those two o
 catalogue's seal readers therefore handle `FileNotFoundException` and `DirectoryNotFoundException`
 at the read and report an absent seal. Other I/O failures still surface. An existing source without
 a seal gets `503` with `Retry-After`; an absent source directory gets `404`. Tests remove the seal
-or its parent after observing it, and exercise all four publication routes over HTTP.
+or its parent at the read operation, after an existence check could have observed it. HTTP tests
+also remove it between the module routes' first and second catalogue reads. A structured
+`ModuleSetReading.PublicationUnavailable` result preserves the transient response on that second
+read, distinct from a sealed publication with no module index. All four routes are exercised.
 
 🚨 **A `404` for a name the index just listed used to be the *only* signal for all of this, and it
 named the wrong thing.** The route re-evaluates the seal on every request, so a `404` on

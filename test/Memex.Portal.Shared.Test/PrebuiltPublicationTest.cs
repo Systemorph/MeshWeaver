@@ -205,7 +205,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
             .Register("owner", "Owner", "owner@test.com", instanceId, instanceId)
             .Select(r => r.RawKey).FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await();
 
-    private async Task<WebApplication> StartHost(string publishedRoot)
+    private async Task<WebApplication> StartHost(string publishedRoot, Action? beforePublicationRead = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -216,6 +216,8 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
         builder.Services.AddSingleton<IMessageHub>(Mesh);
         builder.Services.AddSingleton(new InstanceRegistryAuthenticator(
             Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<InstanceRegistryAuthenticator>>()));
+        if (beforePublicationRead is not null)
+            builder.Services.AddSingleton<ILoggerFactory>(new PublicationReadLoggerFactory(beforePublicationRead));
         var app = builder.Build();
         app.MapPluginBundles();
         await app.StartAsync();
@@ -290,7 +292,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
         }
     }
 
-    [Fact(Timeout = 120_000)]
+    [HubFact]
     public async Task RemovedSealAndRemovedIdentity_HaveDistinctAnswersOnEveryPublicationRoute()
     {
         var root = Path.Combine(Path.GetTempPath(), "mw-prebuilt-removed-" + Guid.NewGuid().ToString("N"));
@@ -312,7 +314,7 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 using var response = await Get(app, route + suffix, key);
                 Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-                Assert.Equal(TimeSpan.FromSeconds(30), response.Headers.RetryAfter?.Delta);
+                Assert.Equal("30", response.Headers.RetryAfter?.ToString());
             }
 
             Directory.Delete(Path.Combine(root, Identity), recursive: true);
@@ -327,6 +329,68 @@ public class PrebuiltPublicationTest(ITestOutputHelper output) : MonolithMeshTes
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData("/modules", false)]
+    [InlineData("/modules/ai.module.nupkg", false)]
+    [InlineData("/modules", true)]
+    [InlineData("/modules/ai.module.nupkg", true)]
+    public async Task PublicationRemovedBetweenTheTwoModuleReads_PreservesItsStatus(
+        string suffix, bool removeDirectory)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-prebuilt-between-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(root, Identity, Source);
+        Directory.CreateDirectory(directory);
+        try
+        {
+            WriteBundle(Path.Combine(directory, "Store.zip"), "Store");
+            var seal = Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            File.WriteAllText(seal, "Store.zip\n");
+            var key = await RegisterInstance(Granted, $"{Source}/*");
+            var reads = 0;
+            // Authentication obtains the first logger; each catalogue read obtains the next.
+            // This existing boundary lets the real HTTP handler finish its first sealed read
+            // before removal at the second catalogue read (third logger), with no production hook.
+            await using var app = await StartHost(root, () =>
+            {
+                if (++reads != 3)
+                    return;
+                Assert.True(File.Exists(seal));
+                if (removeDirectory)
+                    Directory.Delete(Path.Combine(root, Identity), recursive: true);
+                else
+                    File.Delete(seal);
+            });
+            using var response = await Get(
+                app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}" + suffix, key);
+            Assert.Equal(3, reads);
+            Assert.Equal(removeDirectory ? HttpStatusCode.NotFound : HttpStatusCode.ServiceUnavailable,
+                response.StatusCode);
+            if (removeDirectory)
+                Assert.Null(response.Headers.RetryAfter);
+            else
+                Assert.Equal("30", response.Headers.RetryAfter?.ToString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class PublicationReadLoggerFactory(Action beforeRead) : ILoggerFactory
+    {
+        private readonly ILoggerFactory inner = LoggerFactory.Create(_ => { });
+
+        public ILogger CreateLogger(string categoryName)
+        {
+            if (categoryName == typeof(PluginBundleEndpoints).FullName)
+                beforeRead();
+            return inner.CreateLogger(categoryName);
+        }
+
+        public void AddProvider(ILoggerProvider provider) => inner.AddProvider(provider);
+        public void Dispose() => inner.Dispose();
     }
 
     private static async Task<HttpResponseMessage> Get(
