@@ -73,6 +73,29 @@ public interface IWorkspace : IDisposable
         WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration = null);
 
+    /// <summary>
+    /// The SHARED local reduced stream for <paramref name="reference"/> that answers <c>null</c> when
+    /// the referenced state is absent — the READ path's stream.
+    ///
+    /// <para>🚨 Why this exists rather than <c>GetStream(reference, x =&gt; x.ReturnNullWhenNotPresent())</c>:
+    /// a caller-supplied configuration is treated as caller-SPECIFIC and therefore stays uncached, and
+    /// every uncached reduce constructs a <c>SynchronizationStream</c> with its own hosted
+    /// <c>sync/{id}</c> sub-hub (~390 KB) that is registered for disposal on its hub-lifetime parent —
+    /// i.e. one permanent hub per CALL. Null-when-absent is a CONSTANT, not a caller identity, so it
+    /// belongs in the cache key. Measured on memex.meshweaver.cloud 2026-09-10: six
+    /// <c>GetDataRequest</c>s against one node hub took it from 8 to 14 <c>sync/</c> hubs, 1:1
+    /// (Systemorph/MeshWeaver#3432). See <c>Doc/Architecture/ReadPathStreamMinting</c>.</para>
+    ///
+    /// <para>The default implementation forwards to the uncached overload so an implementer that has
+    /// no cache of its own keeps working unchanged.</para>
+    /// </summary>
+    /// <typeparam name="TReduced">The reduced value type produced by the reference.</typeparam>
+    /// <param name="reference">The reference describing the reduced view.</param>
+    /// <returns>The shared reduced synchronization stream, or null if the reference cannot be resolved.</returns>
+    ISynchronizationStream<TReduced>? GetNullableStream<TReduced>(
+        WorkspaceReference<TReduced> reference)
+        => GetStream(reference, x => x.ReturnNullWhenNotPresent());
+
     /// <summary>Subscribes to the collection of a given type owned by a remote hub.</summary>
     /// <typeparam name="TType">The entity type whose remote collection is observed.</typeparam>
     /// <param name="address">The address of the hub that owns the data.</param>
