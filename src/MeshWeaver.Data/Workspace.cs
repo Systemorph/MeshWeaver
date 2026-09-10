@@ -895,26 +895,57 @@ public class Workspace : IWorkspace
     // A caller-supplied `configuration` DOES make the stream caller-specific (client id,
     // subscriber, initialization callback, property bag), so those stay uncached — the same
     // split the remote cache draws by keying on the subscribing identity.
-    private readonly ConcurrentDictionary<WorkspaceReference, Lazy<ISynchronizationStream>> _localStreamCache = new();
+    //
+    // 🚨 WITH ONE EXCEPTION, and it was the whole of the READ path (Systemorph/MeshWeaver#3432).
+    // `ReturnNullWhenNotPresent` is a CONSTANT, not a caller identity: it names how the reduction
+    // answers an absent state and nothing else. The read handlers
+    // (`HandleGetDataRequest` → `GetDataResponseObservable`, `GetDataFromWorkspaceCore`,
+    // `DeleteUnifiedReference`) pass `x => x.ReturnNullWhenNotPresent()` and nothing else, so every
+    // read took the uncached branch above and minted a `sync/` hub that lives until the owning node
+    // hub dies. Measured on memex.meshweaver.cloud 2026-09-10: six `GetDataRequest`s against ONE
+    // node hub took it from 8 to 14 `sync/` hubs — one per read, 1:1 — while the replica gained
+    // ~16 `sync/` hubs a minute (≈985/h, ≈385 MB/h at the ~390 KB a hub retains). So the flag is
+    // part of the KEY (see <see cref="GetNullableStream{TReduced}"/>) and the read path shares one
+    // stream per reference, exactly like every other plain reduce.
+    // See Doc/Architecture/ReadPathStreamMinting.
+    private readonly ConcurrentDictionary<(WorkspaceReference Reference, bool NullReturn), Lazy<ISynchronizationStream>> _localStreamCache = new();
 
     /// <inheritdoc />
     public ISynchronizationStream<TReduced> GetStream<TReduced>(
         WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration
         )
-    {
-        if (configuration is not null)
-            return ReduceLocalStream(reference, configuration);
+        => configuration is not null
+            ? ReduceLocalStream(reference, configuration)
+            : GetCachedStream(reference, nullReturn: false);
 
+    /// <inheritdoc />
+    public ISynchronizationStream<TReduced> GetNullableStream<TReduced>(
+        WorkspaceReference<TReduced> reference)
+        => GetCachedStream(reference, nullReturn: true);
+
+    /// <summary>
+    /// The SHARED reduced stream for (<paramref name="reference"/>, <paramref name="nullReturn"/>) —
+    /// built once and handed to every caller. See the <see cref="_localStreamCache"/> field note for
+    /// why a reduce is neither free nor collectable, and why the null-when-absent flag belongs in the
+    /// key rather than in a caller-specific configuration.
+    /// </summary>
+    private ISynchronizationStream<TReduced> GetCachedStream<TReduced>(
+        WorkspaceReference<TReduced> reference,
+        bool nullReturn)
+    {
+        var key = ((WorkspaceReference)reference, nullReturn);
         while (true)
         {
             // Constructed BEFORE the GetOrAdd so we can tell, by identity, whether the entry we
             // ended up with is the one we just made. That single bit is what bounds the loop
             // below — see the fall-through at the end.
             var mine = new Lazy<ISynchronizationStream>(
-                () => ReduceLocalStream(reference, null),
+                () => ReduceLocalStream(
+                    reference,
+                    nullReturn ? c => c.ReturnNullWhenNotPresent() : null),
                 LazyThreadSafetyMode.ExecutionAndPublication);
-            var lazy = _localStreamCache.GetOrAdd(reference, mine);
+            var lazy = _localStreamCache.GetOrAdd(key, mine);
 
             ISynchronizationStream stream;
             try
@@ -927,7 +958,7 @@ public class Workspace : IWorkspace
                 // failure (e.g. HubDisposingException from a hub that is winding down) would
                 // otherwise poison this reference for the workspace's life. Drop the faulted
                 // entry — only if it is still ours — and let the caller see the original fault.
-                Remove(reference, lazy);
+                Remove(key, lazy);
                 throw;
             }
 
@@ -937,7 +968,7 @@ public class Workspace : IWorkspace
             if (StreamLiveness.IsUsable(stream))
                 return (ISynchronizationStream<TReduced>)stream;
 
-            Remove(reference, lazy);
+            Remove(key, lazy);
 
             // 🚨 A FRESH reduce that is ALREADY unusable means the SOURCE is gone, not that the
             // cache entry went stale — and re-reducing can only mint another corpse. Retrying was
@@ -955,9 +986,11 @@ public class Workspace : IWorkspace
             // next turn install ours. Every turn removes one entry, so this cannot spin.
         }
 
-        void Remove(WorkspaceReference key, Lazy<ISynchronizationStream> entry) =>
-            ((ICollection<KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>>)_localStreamCache)
-                .Remove(new KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>(key, entry));
+        void Remove(
+            (WorkspaceReference Reference, bool NullReturn) entryKey,
+            Lazy<ISynchronizationStream> entry) =>
+            ((ICollection<KeyValuePair<(WorkspaceReference Reference, bool NullReturn), Lazy<ISynchronizationStream>>>)_localStreamCache)
+                .Remove(new KeyValuePair<(WorkspaceReference Reference, bool NullReturn), Lazy<ISynchronizationStream>>(entryKey, entry));
     }
 
     /// <summary>

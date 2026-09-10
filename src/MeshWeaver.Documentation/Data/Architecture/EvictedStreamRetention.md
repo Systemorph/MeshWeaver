@@ -13,6 +13,18 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 if so what holds them.** This page answers it for one named mechanism, and the evidence is a
 controlled in-process experiment rather than a heap dump.
 
+🚨 **MEASURED AND RE-SCOPED, 2026-09-10 — read this before acting on the page below.** A live census
+of a production replica classified all 475 parked streams: **474 are `MeshNodeReference` streams
+holding a lease of 1** (the `leases != 0` branch, which is the correct one — released with their
+mesh-node cache entry), and **exactly 1** is the unleased `LayoutAreaReference` shape §3 predicts is
+"the volume case". The parked count was also FLAT (474/475/475) while the replica's `sync/` hub
+population grew by 120 in eight minutes, so this mechanism is real but is neither the bulk nor the
+growth of [#3432](https://github.com/Systemorph/MeshWeaver/issues/3432). The growth was pinned
+elsewhere, by experiment — see [The Read Path Minted a Hub Per Read](../ReadPathStreamMinting). 🚨 And
+do **not** apply §9's remedy to `ReclaimIfUnheld`'s predicate: the eviction parks a HEALTHY stream
+precisely because an undeclared reader may still be attached, so disposing on "no lease was ever
+declared" cuts live readers off silently.
+
 **The verdict is RETENTION, not a leak.** Nothing is created and forgotten. The streams are parked
 *deliberately*, by code that says so, and then the one routine that could release them structurally
 declines to — for a reason that is correct in general and wrong for the majority of call sites.
