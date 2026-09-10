@@ -96,7 +96,8 @@ memex build project ../MeshWeaver.Plugins/src/MeshWeaver.Import \
 The `.csproj` is evaluated without MSBuild, and every reference comes from the image's `/app`, its
 `.deps.json` and the shared frameworks installed in it. `ProjectReference`s inside the source root
 are built first in dependency order; a `ProjectReference` pointing outside it resolves to the
-assembly the image already carries. See
+assembly the image already carries. Each dependent compiles against the full transitive output
+closure, matching the SDK rather than only exposing its direct project's assembly. See
 [In-Mesh Build and Test](https://github.com/Systemorph/MeshWeaver/blob/main/src/MeshWeaver.Documentation/Data/Architecture/InMeshBuildAndTest.md).
 
 | option | meaning |

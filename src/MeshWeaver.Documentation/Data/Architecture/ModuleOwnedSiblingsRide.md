@@ -120,13 +120,18 @@ bundle that carries it. Both statements are true. **The conclusion drawn from th
 the gap is one word: re-keying makes the bundles **REBUILD**, and says nothing about their BYTES.
 
 **A publication is composed from several INDEPENDENT COMPILATIONS.** On `MeshWeaver.Plugins` there
-are three per push, and a sibling project is compiled once in each of them:
+were three per push, and a sibling project was compiled once in each of them:
 
 | compilation | what it is | which bundles it produced |
 |---|---|---|
 | the **floor** lane's `build-workspace` | one Roslyn workspace inside the pinned image, for the first `module-pack` call (`Essentials`, `AI`, `Maps`, `Stripe`) | the DECLARED `MeshWeaver.Markdown.Collaboration`, and its ride inside `MeshWeaver.AI` |
 | the **rest** lane's `build-workspace` | a second workspace, for the other `module-pack` call's `build: container` entries | its ride inside `Mcp`, `Teams`, `Mail.MicrosoftGraph`, `Observability`, `Notifications.Channels`, and the six `AI.*` providers |
 | the legacy **`sdk`** entries | `dotnet build <project> -p:Version=<that module's version>` per module, on the runner — and `-p:Version` is a GLOBAL property, so every transitively referenced sibling is rebuilt under it | its ride inside `MeshWeaver.Blazor.Chat` |
+
+With the paired MeshWeaver.Plugins change, the publication lane has **one** container workspace for
+the whole catalog. Core CD's four composed modules opt into that workspace explicitly, and
+`Northwind` and `Blazor.Chat` use it instead of rebuilding their shared siblings through the SDK
+path. The three rows above remain the measured failure, not the resulting topology.
 
 Measured on `memex.meshweaver.cloud`, 2026-09-10: **one pod held
 `MeshWeaver.Markdown.Collaboration` in 15 copies and THREE builds**, and the three groups match the
@@ -194,20 +199,24 @@ Two boundaries are deliberate:
   independently; it does not collapse to one identity. Judging it would hold every bundle in the
   fleet for a property that was never claimed.
 
-## What this does not close
+## How the divergence is removed
 
 **The assertions REFUSE the divergence; they do not remove the second compilation.** A repo whose
 publication is composed from more than one compilation now goes RED instead of shipping — which is
-the correct verdict for those bytes — but the way to stay green is a decision nobody has taken yet,
-and there are exactly two:
+the correct verdict for those bytes. There are exactly two structural ways to stay green; the first
+is the implemented choice and the second remains rejected:
 
 1. **One compilation per publication.** Every bundle of one publication is packed from ONE workspace
-   build. Today `MeshWeaver.Plugins` splits `module-pack` into a `floor` call and a `rest` call
-   (deliberately — the floor's four bundles are what the gates compose, Plugins#1438) and still has
-   FOUR legacy `sdk` entries (it had five until `Chat` was converted, below), each rebuilding its
-   siblings under its own `-p:Version`. Merging the two calls, or making the second reuse the
-   first's workspace output for shared siblings, is a lane change; converting the last `sdk` entries
-   is the standing direction anyway (maintainer, 2026-09-01: *"one global one and finish"*).
+   build. The paired `MeshWeaver.Plugins` change passes its whole module catalog through one
+   `module-pack` call;
+   entries that ride in-repo MeshWeaver siblings use that call's container workspace. Three legacy
+   `sdk` entries remain only because their non-MeshWeaver/private closure shapes require it, and the
+   lane guard names that reasoned set explicitly. Core CD follows the same rule for the four bundles
+   it composes during a platform release.
+   The shared compiler supplies each project with the full output closure of its in-repository
+   `ProjectReference` graph, just as the SDK does. Scheduling still follows direct edges, but a
+   dependent's Roslyn reference set is transitive; otherwise a valid chain such as Northwind
+   `Application → Model → Domain` builds its prerequisites and then fails to see `Domain` types.
    🚨 **A COMPILED-VERSION PIN DOES NOT REMOVE A PRODUCER, and this page said it did.** The claim
    here was that carrying core's #3022 pin into MeshWeaver.Plugins — core's own
    `Directory.Build.props` pins the COMPILED version attributes to the commit precisely so
@@ -233,8 +242,9 @@ and there are exactly two:
    reading of this page that promised one cost a session's work before the MVIDs were compared.
    `MeshWeaver.Blazor.Chat`, the one `sdk` entry that reaches `MeshWeaver.Markdown.Collaboration`,
    was therefore moved to `build: container` in MeshWeaver.Plugins' `.github/workflows/ci.yml`
-   (MeshWeaver#3732). That takes this assembly from THREE builds to **TWO**; the remaining two are
-   the `floor` and `rest` `build-workspace` calls, whose merge is the separate remedy above.
+   (MeshWeaver#3732). Merging the former `floor` and `rest` calls then took this assembly from TWO
+   builds to **ONE**. `Northwind`, the only remaining SDK entry that rode an in-repo module sibling
+   (`MeshWeaver.Maps`), moved into the same workspace in that change.
 🚦 **The refusal reaches a satellite only when that satellite MOVES ITS PIN, so the ordering is
 free.** Every node repo consumes these lanes at a full sha (`uses:
 Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@<40-char sha>`), and moving that

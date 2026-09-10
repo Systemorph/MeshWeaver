@@ -433,14 +433,31 @@ public static class ProjectBuild
             sink.Info($"module-libraries shelf: {shelf.PackageCount} package(s) from {shelf.Directory} "
                 + "(an additional library resolves here and RIDES the bundle with its deps.json-derived closure)");
 
+        // The SDK gives a dependent the whole transitive ProjectReference output set, not only
+        // the assemblies on its first edge. Keep the cascade's DIRECT edges as the scheduler — a
+        // direct dependency completing green proves its own dependencies completed green first —
+        // while retaining every finished output for the compiler reference set. Northwind's
+        // Application -> Model -> Domain chain is the production witness: Application names Domain
+        // types, and a direct-only reference set made valid SDK source fail with CS0234/CS0246.
+        var completedProjects = new ConcurrentDictionary<string, ProjectResult>(
+            StringComparer.OrdinalIgnoreCase);
         return Cascade.Run<ProjectResult>(
                 graph.Order,
                 id => graph.DependenciesOf(id),
-                (id, deps) =>
+                (id, _) =>
                 {
+                    var dependencyResults = InTreeClosure(graph, id)
+                        .Skip(1)
+                        .Select(dependency => completedProjects.TryGetValue(dependency, out var result)
+                            ? result
+                            : throw new InvalidOperationException(
+                                $"the dependency cascade started '{id}' before transitive dependency "
+                                + $"'{dependency}' recorded its result"))
+                        .ToArray();
                     var result = Compile(
                         graph.Models[id], graph, container, extraReferences, generators, shelf, options, sink, workRoot,
-                        deps.Where(d => d.Result is not null).Select(d => d.Result!).ToArray());
+                        dependencyResults);
+                    completedProjects[id] = result;
                     return (result, result.IsGreen);
                 },
                 options.MaxParallel,
