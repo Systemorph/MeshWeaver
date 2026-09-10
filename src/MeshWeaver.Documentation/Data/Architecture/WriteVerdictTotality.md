@@ -497,6 +497,34 @@ access-control pipeline and the cache's own write gate (which probes for the CAL
 run unchanged. Measured on this repo: without the fix the caller emits **nothing at all** for the
 full 36 s bound; with it, answered in 0.7 s.
 
+🚨 **And the reverted run reproduces #3674's reported artefact, not merely its symptom.** The
+capture below is from this repository's own test host with the fix backed out — the same
+`[STALE-CALLBACK] … CreateOrUpdateNodeRequest@portal/nodeops-…` line the issue quotes, and the same
+interleaved `ROUTED onTarget=False state=Forwarded` entries that were read there as *"forwarded by
+every hub, handled by none"*:
+
+```text
+[STALE-CALLBACK] client/…: 1 callback(s) pending > 30000ms:
+  …=CreateOrUpdateNodeRequest@portal/nodeops-…(35000ms)
+  AWAITING → POSTED target=portal/nodeops-… → RECEIVED@client/… → ENQUEUED@client/…
+  → RECEIVED@mesh/… → ENQUEUED@mesh/… → ROUTED onTarget=False state=Forwarded@client/…
+  → RECEIVED@portal/nodeops-… → ENQUEUED@portal/nodeops-…
+  → ROUTED onTarget=False state=Forwarded@mesh/…
+  → ROUTED onTarget=True state=Submitted@portal/nodeops-…
+  → HANDLER_ENTER@portal/nodeops-…
+  → UPSERT_READ existing → no-op probe@portal/nodeops-…
+  → HANDLER_EXIT state=Processed@portal/nodeops-…
+  ⇒ a handler was entered and no reply, completion or fault has been recorded since
+```
+
+**Read the two Forwarded lines against the two extra stages this trail carries.** The forwards are
+correct — `@` names the hub that RECORDED the stage, and both of those hubs correctly declined a
+delivery targeted at `portal/nodeops`. What names the defect is what follows on the target itself:
+`ROUTED onTarget=True`, `HANDLER_ENTER`, the leg's own stage, `HANDLER_EXIT state=Processed` — and
+then nothing. A trail that stops at a leg's stage is a leg that answered nobody, and it is
+distinguishable from a pump that never turned only by whether `HANDLER_ENTER` is present. That
+distinction is the reason each leg records a stage at all.
+
 ### The CREATE leg's history, and why closing it did not seal the bakes
 
 🚨 **This gap was real, and it was NOT what failed the CD seals — measured 2026-09-07 on CD 7976.** The
