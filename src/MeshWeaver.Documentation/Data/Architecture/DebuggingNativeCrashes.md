@@ -1157,8 +1157,12 @@ free-space housekeeping.
 #### The walk is synchronised — measured, not asserted
 
 `find_first_object(start, first_object)` walks objects forward from `first_object` looking for the one
-containing `start`. Here `RDI` (`start`) is `0x7f5dd6e05900` — a card-marked address — and `RSI >> 12`
-pins `first_object` at `0x7f5dd6dde818`. Replaying that walk over the core:
+containing `start`. Here `RDI` (`start`) is `0x7f5dd6e05900` — a card-marked address. 🚨 **`first_object`
+itself is only partly recoverable, and saying otherwise would be inventing a derivation**: by the fault
+`RSI` has been overwritten with `first_object >> 12` (`0x5d5d18: shrq $0xc,%rsi`), so it pins the *page*
+`0x7f5dd6dde000` and nothing finer; the byte offset `0x818` is taken from `R13`, whose assignment is
+outside the loop and was not traced. **What validates the start is the walk, not the register.** Replaying
+it from `0x7f5dd6dde818` over the core:
 
 ```
 … 0x7f5dd6e056a0  MT=0x7f61caf24c78  size=48
@@ -1169,11 +1173,14 @@ pins `first_object` at `0x7f5dd6dde818`. Replaying that walk over the core:
   0x7f5dd6e057a0  MT=0x0000000000000000          <- FAULT
 ```
 
-**172 well-formed objects** were walked before it, the predecessor's size lands exactly on the cursor,
-and the cursor's own successor at `+0x20` (`0x7f5dd6e057c0`, MT `0x7f61caf24bb8`, 56 bytes) is a valid
-object — which the cursor's surviving field at `+0x08` also points at. The contiguous zero run is
-**8 bytes**: the header word alone. The walk is neither desynchronised nor past the allocated end;
-one word is gone out of a coherent heap.
+**172 consecutive well-formed objects** were walked before it — every one a valid MethodTable and a
+size that lands on the next header — and the chain arrives **exactly** on the cursor, the predecessor's
+40 bytes ending on it to the byte. A wrong starting offset does not produce that: it desynchronises
+within a few objects and reads garbage headers. So the start is confirmed by its consequence, and the
+cursor sits on a genuine object boundary. The cursor's own successor at `+0x20` (`0x7f5dd6e057c0`,
+MT `0x7f61caf24bb8`, 56 bytes) is a valid object — which the cursor's surviving field at `+0x08` also
+points at. The contiguous zero run is **8 bytes**: the header word alone. The walk is neither
+desynchronised nor past the allocated end; one word is gone out of a coherent heap.
 
 #### The phase: a blocking GC on a MUTATOR, reached through the card scan
 
