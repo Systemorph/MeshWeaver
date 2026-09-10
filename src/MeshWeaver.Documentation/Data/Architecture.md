@@ -106,6 +106,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Update Queue Ownership](UpdateQueueOwnership) — one published queue per path, retained until accepted work settles
 - [Request via Stream Update](RequestViaStreamUpdate)
 - [Data Access Patterns](DataAccessPatterns)
+- [Node Identity and Path Keying](NodeIdentityAndPathKeying) — `(namespace, id)` is the key and `path` is derived, so splitting a path positionally leaves the path identical while re-keying the node into a second row
 - [Workspace References](WorkspaceReferences)
 - [Content Chunk Navigation](ContentChunkNavigation)
 - [Moving Nodes](MovingNodes) — a move relocates the node and everything that belongs to it, or it refuses
