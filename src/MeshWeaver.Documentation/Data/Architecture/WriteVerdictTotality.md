@@ -451,8 +451,10 @@ looks completed and a caller that waits out its whole budget.
 earlier version of this table judged each leg by *"does it survive the owner being disposed under
 it?"* — a real question, pinned by a real test. But the leg that answers "yes" to that can still
 answer NOBODY when its source **completes empty**, which is a different termination reached by a
-different route. The legs are now composed through `DetachedReplyOutcome.Of`, which converts value /
-fault / empty into exactly one emission, so a leg cannot be silent whatever its source does:
+different route. **Every leg now handles all three of Rx's terminations** — the read leg and the
+inner create by their own explicit third arm, the other three by composing through
+`DetachedReplyOutcome.Of`, which converts value / fault / empty into exactly one emission so the
+subscriber cannot fail to answer:
 
 | leg | trail stage | its source's empty completion |
 |---|---|---|
@@ -461,6 +463,13 @@ fault / empty into exactly one emission, so a leg cannot be silent whatever its 
 | NodeType gate — `ApplyUpdateViaStream` | — | refuses, and says the probe produced no answer rather than "not registered" — a verdict and a non-verdict are not the same answer |
 | update — `WriteThroughStream` | `UPSERT_WRITE_THROUGH_STREAM` | posts a refusal naming the unconfirmed write. Disposal is separately covered: `RegisterOwnerDisposingNack` mints `OwnerDisposing`, the writer re-enqueues against the fresh activation, the caller is answered `success=True` (`UpsertAnswersWhenTheOwnerGoesAwayTest`) |
 | create — `DispatchInnerCreate` | `UPSERT_READ absent → create` | posts a refusal (`UPSERT_CREATE_COMPLETED_EMPTY`), and an `InnerCreateVerdictBound` bounds the no-answer case |
+
+🚨 **None of this bounds a source that NEVER terminates.** `DetachedReplyOutcome.Of` is about the
+three terminations Rx *delivers*; the fourth outcome — never emits, never completes, the section
+"The FOURTH outcome" above — reaches no arm at all, and no composition over the source can invent
+one. A liveness bound stays the leg's own responsibility and is separately present where the
+source can starve: `InnerCreateVerdictBound` on the inner create, `NodeOpForwardTimeout` inside the
+no-op probe. Totality and liveness are different properties; this section is about the first.
 
 ### #3674: the no-op probe is the one that was actually silent, and it is a RE-INSTALL
 
