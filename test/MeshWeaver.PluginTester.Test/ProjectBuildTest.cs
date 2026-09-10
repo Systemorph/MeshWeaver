@@ -199,6 +199,46 @@ public class ProjectBuildTest : IDisposable
     }
 
     [Fact]
+    public async Task ATransitiveProjectReferenceIsInScopeForTheDependent()
+    {
+        // The SDK supplies Leaf to App through App -> Middle -> Leaf. Passing only Middle.dll to
+        // Roslyn is not equivalent: valid source that names Leaf's public types then fails CS0234.
+        Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
+        var app = Write("TransitiveApp/TransitiveApp.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <ItemGroup><ProjectReference Include="../TransitiveMiddle/TransitiveMiddle.csproj" /></ItemGroup>
+            </Project>
+            """);
+        Write("TransitiveApp/Uses.cs", "namespace TransitiveApp; public static class Uses { public static int N => TransitiveLeaf.Numbers.Answer; }");
+        Write("TransitiveMiddle/TransitiveMiddle.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <ItemGroup><ProjectReference Include="../TransitiveLeaf/TransitiveLeaf.csproj" /></ItemGroup>
+            </Project>
+            """);
+        Write("TransitiveMiddle/Marker.cs", "namespace TransitiveMiddle; public sealed class Marker;");
+        Write("TransitiveLeaf/TransitiveLeaf.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+        Write("TransitiveLeaf/Numbers.cs", "namespace TransitiveLeaf; public static class Numbers { public const int Answer = 42; }");
+
+        var report = await Build(OptionsFor(app));
+
+        report.FatalError.Should().BeNull();
+        report.ExitCode.Should().Be(0);
+        report.Projects.Should().HaveCount(3);
+        var leaf = report.Projects.Single(p => p.Result?.AssemblyName == "TransitiveLeaf");
+        var middle = report.Projects.Single(p => p.Result?.AssemblyName == "TransitiveMiddle");
+        var appResult = report.Projects.Single(p => p.Result?.AssemblyName == "TransitiveApp");
+        middle.Ready.Should().BeGreaterThanOrEqualTo(leaf.Finished);
+        appResult.Ready.Should().BeGreaterThanOrEqualTo(middle.Finished);
+        Assembly.LoadFrom(appResult.Result!.AssemblyPath!).GetType("TransitiveApp.Uses").Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task ACycleIsRefusedByNameBeforeAnythingIsCompiled()
     {
         Write("Directory.Build.props", "<Project><PropertyGroup /></Project>");
