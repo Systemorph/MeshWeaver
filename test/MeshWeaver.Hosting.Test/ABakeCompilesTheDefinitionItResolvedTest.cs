@@ -45,7 +45,8 @@ namespace MeshWeaver.Hosting.Test;
 /// <see cref="NodeTypeBatchBake.ResolveSources(IMeshService, AccessService, IReadOnlyDictionary{string, NodeTypeDefinition}, IReadOnlyCollection{string}, Microsoft.Extensions.Logging.ILogger)"/>,
 /// the compile through <see cref="NodeTypeBatchBake.BakeOne"/> and the real Roslyn pipeline. Nothing
 /// is mocked. The controls pin both directions: a definition that did not move still compiles from
-/// the batch's own set, and a compile error — whether or not the definition moved — still gates.</para>
+/// the batch's own set, and a compile error — whether or not the definition moved — still gates.
+/// The last three cases pin the review's findings on the fix (#4051).</para>
 /// </summary>
 public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -140,15 +141,15 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
 
     /// <summary>The sweep's batch pass for this one type: discovery from the ENUMERATED definitions, then the compile.</summary>
     private async Task<(IReadOnlyList<MeshNode> Batch, PreWarmOutcome Outcome)> Bake(
-        DynamicTypePreWarmer.DynamicTypes enumerated)
+        DynamicTypePreWarmer.DynamicTypes enumerated, TimeSpan? budget = null)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var sets = await NodeTypeBatchBake
             .ResolveSources(MeshService, access, enumerated.Definitions, [TypePath], null)
             .Should().Within(TestTimeouts.Convergence).Emit("the batched discovery pass must establish the source sets");
-        var batch = sets[TypePath];
+        var batch = sets.TryGetValue(TypePath, out var set) ? set : [];
         var outcome = await NodeTypeBatchBake
-            .BakeOne(Mesh, enumerated.Nodes[TypePath], batch, PerTypeBudget, null)
+            .BakeOne(Mesh, enumerated.Nodes[TypePath], batch, budget ?? PerTypeBudget, null)
             .Should().Within(PerTypeBudget + TimeSpan.FromMinutes(1)).Emit("BakeOne always reaches exactly one outcome");
         Output.WriteLine("batch set: {0}", string.Join(", ", batch.Select(n => n.Path)));
         Output.WriteLine("outcome: {0} — {1}", outcome.Status, outcome.Detail ?? "(no detail)");
@@ -215,5 +216,106 @@ public class ABakeCompilesTheDefinitionItResolvedTest(ITestOutputHelper output) 
 
         outcome.Status.Should().Be(PreWarmStatus.CompileError, outcome.Detail ?? "(no detail)");
         outcome.Detail.Should().Contain("NotDeclaredAnywhere");
+    }
+
+    // ── The review's findings (#4051) ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 🚨 The same queries are NOT the same set. A source edited after the batch resolved it — the
+    /// type's queries untouched — is compiled as it now stands once the type's own source-version
+    /// record has moved: the batch holds the broken edit it saw, the mesh holds the repair.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ASourceEditedUnderUnchangedQueries_IsCompiledAsItNowStands()
+    {
+        await Seed(CallsWhatNothingDeclares, consumerSources: null);
+        await UntilListed(MainPath, "NotDeclaredAnywhere");
+        var enumerated = await Enumerate(d => d.Sources is null, "the sweep enumerates the type");
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var sets = await NodeTypeBatchBake
+            .ResolveSources(MeshService, access, enumerated.Definitions, [TypePath], null)
+            .Should().Within(TestTimeouts.Convergence).Emit("the batch resolves the broken edit");
+        var batch = sets[TypePath];
+
+        // The repair lands under the SAME queries, after the batch took its set.
+        await Mesh.GetWorkspace().GetMeshNodeStream(MainPath)
+            .Update(node => node with { Content = new CodeConfiguration { Language = "csharp", Code = SelfContained } })
+            .Should().Within(TestTimeouts.Convergence).Emit("the repair lands");
+        var repaired = await Observable.Interval(200.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => MeshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MainPath}").AsSystem()).Take(1))
+            .Select(change => change.Items.FirstOrDefault(n =>
+                n.ContentAs<CodeConfiguration>(Mesh.JsonSerializerOptions)?.Code == SelfContained))
+            .Where(n => n is not null)
+            .FirstAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit("the repair is listed");
+        var repairedVersion = NodeTypeDefinition.SourceVersionOf(repaired!);
+
+        // The type's own sources watcher records the repair — its hub activated by reading its stream.
+        using var activation = Mesh.GetWorkspace().GetMeshNodeStream(TypePath).Subscribe(
+            _ => { }, ex => Output.WriteLine("type stream faulted: {0}", ex.Message));
+        await Enumerate(d => d.CurrentSourceVersions is { } record
+                && record.TryGetValue(MainPath, out var v) && v == repairedVersion,
+            "the type's source-version record names the repair before the compile runs");
+
+        batch.Select(n => n.ContentAs<CodeConfiguration>(Mesh.JsonSerializerOptions)?.Code)
+            .Should().Contain(CallsWhatNothingDeclares, "precondition — the batch still holds the broken edit");
+        var outcome = await NodeTypeBatchBake
+            .BakeOne(Mesh, enumerated.Nodes[TypePath], batch, PerTypeBudget, null)
+            .Should().Within(PerTypeBudget + TimeSpan.FromMinutes(1)).Emit("BakeOne always reaches exactly one outcome");
+        Output.WriteLine("outcome: {0} — {1}", outcome.Status, outcome.Detail ?? "(no detail)");
+
+        outcome.Status.Should().Be(PreWarmStatus.Compiled,
+            $"the record says the source moved, so the batch's copy is not the set ({outcome.Detail})");
+    }
+
+    /// <summary>
+    /// 🚨 A moved definition whose CURRENT source set cannot be established is "not evaluated" —
+    /// never a compile of the stale pair and never a gating verdict. Driven by the per-type deadline:
+    /// every discovery query waits out a one-second quiet window, so an 800 ms budget cannot
+    /// establish the set, structurally rather than by timing luck.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AMovedDefinitionWhoseSourcesCannotBeEstablished_IsNotEvaluated()
+    {
+        await Seed(SelfContained, consumerSources: null);
+        var enumerated = await Enumerate(d => d.Sources is null, "the sweep enumerates the type first");
+        await LandTheUpdate(CallsTheSharedFile, [OwnSource, SharedEntry]);
+        await UntilListed(MainPath, "LibAnswers.Answer()");
+        await Enumerate(d => d.Sources?.Contains(SharedEntry) == true, "the moved definition is stored");
+
+        var (_, outcome) = await Bake(enumerated, TimeSpan.FromMilliseconds(800));
+
+        outcome.Status.Should().Be(PreWarmStatus.TimedOut,
+            $"an unestablished input is not a verdict about the code ({outcome.Detail})");
+        outcome.Detail.Should().Contain("not evaluated");
+    }
+
+    /// <summary>
+    /// 🚨 A type its repository pruned during the sweep is <see cref="PreWarmStatus.Removed"/>, and
+    /// the bake does NOT write it back: the stamp's insert-if-absent used to re-create it.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ATypePrunedDuringTheSweep_IsRemoved_AndNotRecreated()
+    {
+        await MeshService.CreateNode(TypeNode($"Consumer{suffix}", null)).Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit("the type exists when the sweep enumerates it");
+        var enumerated = await Enumerate(_ => true, "the sweep enumerates the type");
+
+        await MeshService.DeleteNode(TypePath).Take(1).DefaultIfEmpty()
+            .Should().Within(TestTimeouts.Convergence).Emit("the repository prunes the type");
+        await Observable.Interval(200.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => DynamicTypePreWarmer.TypeNodeExists(Mesh, TypePath, null).Take(1))
+            .Where(exists => !exists)
+            .FirstAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit("the prune is visible to a listing");
+
+        var (_, outcome) = await Bake(enumerated);
+
+        outcome.Status.Should().Be(PreWarmStatus.Removed, outcome.Detail ?? "(no detail)");
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var row = await storage.Read(TypePath, Mesh.JsonSerializerOptions).Take(1).DefaultIfEmpty()
+            .Should().Within(TestTimeouts.Convergence).Emit("the storage read answers");
+        row.Should().BeNull("the bake must not re-create a type its repository pruned");
     }
 }
