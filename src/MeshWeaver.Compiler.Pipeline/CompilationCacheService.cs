@@ -273,7 +273,7 @@ internal interface ICompilationCacheService
     /// locally compiled generation was read back under a second path, got a second collectible
     /// context over identical bytes, and the instance's lifetime lease (which covers every
     /// context of the NodeType) pinned both. NodeTypeRecompileAlcLeakTest (MeshWeaver.Plugins)
-    /// caught it on the first core set carrying #4013's fix: 3 live contexts after 3 recompiles
+    /// caught it on the first core set carrying #4017 (the fix for #4013): 3 live contexts after 3 recompiles
     /// against a bound of 2. A read now REUSES the live context that already serves its build
     /// (same MVID) — never a supersession, so the ping-pong above cannot return through it.</para>
     /// </summary>
