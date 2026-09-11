@@ -30,20 +30,26 @@ namespace MeshWeaver.Graph.Test;
 /// <c>DisposeHostedHubs</c> turn, and the ack vanished — the caller's hub then sat out its whole
 /// quiesce budget for it and the writer reported <c>OwnerUnreachable</c> after 31 s.</para>
 ///
-/// <para><b>Why this test is deterministic where that one is not.</b> That test reaches the state by
-/// racing a released merge turn against the mesh's own phase changes (2 failures in 2000 stressed
-/// local iterations). Here the state is HELD OPEN BY CONSTRUCTION: the recipient's action block is
-/// parked on an accepted turn, so the <c>ShutdownRequest</c> its disposal posts queues behind it and
-/// it stays below <c>DisposeHostedHubs</c>; and the mesh cannot leave <c>DisposeHostedHubs</c> until
-/// that recipient has disposed. Both halves of "mesh past the mark, recipient still alive" are
-/// fences, not timings. The reply is handed to the mesh's <see cref="IRoutingService"/> exactly as
-/// the mesh's routing handler hands it (<c>MeshBuilder</c>: <c>DeliverMessage(delivery.Package(…))</c>).</para>
+/// <para><b>Why these tests are deterministic where that one is not.</b> That test reaches the state
+/// by racing a released merge turn against the mesh's own phase changes (4 failures in 3,600 stressed
+/// local iterations). Here the state is HELD OPEN BY CONSTRUCTION: a mesh-hosted hub's action block
+/// is parked on an accepted turn, so the <c>ShutdownRequest</c> its disposal posts queues behind it,
+/// and the mesh cannot leave <c>DisposeHostedHubs</c> until that hub has disposed. Both halves of
+/// "mesh past the mark, recipient still alive" are fences, not timings. Deliveries are handed to the
+/// mesh's <see cref="IRoutingService"/> exactly as the mesh's routing handler hands them
+/// (<c>MeshBuilder</c>: <c>DeliverMessage(delivery.Package(…))</c>).</para>
 ///
-/// <para><b>Both controls, and why each is falsifiable.</b> The positive one fails on the unfixed
-/// router (the reply is dropped). The negative one — the SAME payload without a correlation id — fails
-/// on a fix that simply stops dropping: teardown must still refuse traffic nobody is waiting for,
-/// which is what keeps the storm class the guard was written for closed. Both are judged once the
-/// mesh is <c>Dead</c>, the instant after which nothing more can arrive — a cause, not a clock.</para>
+/// <para><b>The two recipient kinds the router serves</b> are both covered: a hosted hub, and a
+/// recipient registered with <see cref="IRoutingService.RegisterStream(Address, AsyncDelivery)"/>
+/// that has no hosted hub at all.</para>
+///
+/// <para><b>Both controls, and why each is falsifiable.</b> The positive ones fail on the unfixed
+/// router (the answer is dropped). The negative one — the SAME payload without a correlation id —
+/// fails on a fix that simply stops dropping: teardown must still refuse traffic nobody is waiting
+/// for, which is what keeps the storm class the guard was written for closed. Every route error is
+/// recorded and asserted absent, so a router that THROWS cannot pass a "not delivered" check. All are
+/// judged once the mesh is <c>Dead</c>, the instant after which nothing more can arrive — a cause,
+/// not a clock.</para>
 /// </summary>
 public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -54,9 +60,12 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
     private static readonly Address WaiterAddress = new("reply-teardown-waiter", "1");
     private static readonly Address ResponderAddress = new("reply-teardown-responder", "1");
 
+    private const string MarkerProperty = "reply-teardown-marker";
     private const string RouteProbe = "route-probe";
     private const string AnsweredMarker = "the-answer";
     private const string UncorrelatedMarker = "nobody-waits-for-this";
+
+    private readonly ConcurrentQueue<string> routeErrors = new();
 
     [Fact(Timeout = 120_000)]
     public async Task AReplyTheMeshRoutesInDisposeHostedHubs_ReachesItsLiveRecipient()
@@ -65,25 +74,80 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
         var (waiter, arrived, routing, releaseTurn, turnEntered) = CreateParkableWaiter();
         try
         {
-            await ProveTheRouteIsLive(routing, arrived, ct);
+            await ProveTheRouteIsLive(routing, WaiterAddress, () => arrived.Contains(RouteProbe), ct);
             await ParkTheWaiterAndTearDownTheMesh(waiter!, turnEntered);
 
             // Sent in this order on purpose: the waiter's queue is FIFO, so if the uncorrelated message
             // were delivered it would be processed BEFORE the answer — its absence is then conclusive.
-            Deliver(routing, Response(UncorrelatedMarker, requestId: null));
-            Deliver(routing, Response(AnsweredMarker, requestId: $"reply-teardown-{Guid.NewGuid():N}"));
+            Deliver(routing, Response(UncorrelatedMarker, requestId: null, WaiterAddress));
+            Deliver(routing, Response(AnsweredMarker, requestId: $"reply-teardown-{Guid.NewGuid():N}", WaiterAddress));
 
             Volatile.Write(ref releaseTurn.Value, 1);
             await TheMeshIsDead(ct);
 
-            arrived.Should().Contain(r => r.Error == AnsweredMarker,
+            arrived.Should().Contain(AnsweredMarker,
                 "the reply carried a correlation id and was routed while the mesh was in DisposeHostedHubs "
                 + "and its recipient was alive and below that mark; the router dropped every delivery at that "
                 + "run level — on the assumption that recipients are disposing too — which is #4023: the "
                 + "caller's hub then waits out its quiesce budget for an answer that was already minted");
-            arrived.Should().NotContain(r => r.Error == UncorrelatedMarker,
+            arrived.Should().NotContain(UncorrelatedMarker,
                 "a delivery nobody is waiting for must still be refused during teardown; only answers are "
                 + "carried, so the storm class the teardown guard exists for stays closed");
+            routeErrors.Should().BeEmpty("a refusal is a drop, never a router fault");
+        }
+        finally
+        {
+            Volatile.Write(ref releaseTurn.Value, 1);
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task AReplyToARegisteredStreamRecipient_ReachesItDuringDisposeHostedHubs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (waiter, _, routing, releaseTurn, turnEntered) = CreateParkableWaiter();
+
+        // A recipient registered as a STREAM for a real node path, the framework's own seam — the
+        // node's per-node hub is never activated, so the router can only reach it through the stream.
+        var streamPath = $"{TestPartition}/reply-teardown-stream-{Guid.NewGuid():N}";
+        await NodeFactory.CreateNode(MeshNode.FromPath(streamPath) with
+            {
+                Name = "stream recipient",
+                NodeType = "Markdown",
+                State = MeshNodeState.Active,
+            })
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        var streamAddress = new Address(streamPath);
+        var streamArrived = new ConcurrentQueue<string>();
+        using var registration = routing.RegisterStream(streamAddress, (AsyncDelivery)((d, _) =>
+        {
+            if (d.Properties.TryGetValue(MarkerProperty, out var marker) && marker?.ToString() is { } m)
+                streamArrived.Enqueue(m);
+            return Observable.Return(d.Processed());
+        }));
+        try
+        {
+            await ProveTheRouteIsLive(routing, streamAddress, () => streamArrived.Contains(RouteProbe), ct);
+            await ParkTheWaiterAndTearDownTheMesh(waiter!, turnEntered);
+
+            // 🚨 Precondition, and a control: the recipient really has no hosted hub, so a pass below
+            // can only come from the stream branch, not from the hosted-hub one.
+            Mesh.GetHostedHub(streamAddress, HostedHubCreation.Never).Should().BeNull(
+                "the stream recipient must have no hosted hub, or this fact would be measuring the hosted-hub path");
+
+            Deliver(routing, Response(UncorrelatedMarker, requestId: null, streamAddress));
+            Deliver(routing, Response(AnsweredMarker, requestId: $"reply-teardown-{Guid.NewGuid():N}", streamAddress));
+
+            Volatile.Write(ref releaseTurn.Value, 1);
+            await TheMeshIsDead(ct);
+
+            streamArrived.Should().Contain(AnsweredMarker,
+                "an answer to a recipient registered as a stream — a recipient kind that exists without a "
+                + "hosted hub — must be carried during DisposeHostedHubs just like one to a hosted hub; "
+                + "otherwise the #4023 drop survives for every stream-registered caller");
+            streamArrived.Should().NotContain(UncorrelatedMarker,
+                "a delivery nobody is waiting for must still be refused during teardown");
+            routeErrors.Should().BeEmpty("a refusal is a drop, never a router fault");
         }
         finally
         {
@@ -98,21 +162,22 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
         var (waiter, arrived, routing, releaseTurn, turnEntered) = CreateParkableWaiter();
         try
         {
-            await ProveTheRouteIsLive(routing, arrived, ct);
+            await ProveTheRouteIsLive(routing, WaiterAddress, () => arrived.Contains(RouteProbe), ct);
             await ParkTheWaiterAndTearDownTheMesh(waiter!, turnEntered);
 
             // Nothing is owed: only uncorrelated traffic crosses the router during teardown.
-            Deliver(routing, Response(UncorrelatedMarker, requestId: null));
+            Deliver(routing, Response(UncorrelatedMarker, requestId: null, WaiterAddress));
 
             Volatile.Write(ref releaseTurn.Value, 1);
             await TheMeshIsDead(ct);
 
-            arrived.Should().NotContain(r => r.Error == UncorrelatedMarker,
+            arrived.Should().NotContain(UncorrelatedMarker,
                 "an ordinary teardown with nothing owed must carry nothing: the router refuses traffic nobody "
                 + "is waiting for once the mesh is in DisposeHostedHubs, and a change that delivered it would "
                 + "reopen the teardown storm class");
-            arrived.Should().OnlyContain(r => r.Error == RouteProbe,
+            arrived.Should().OnlyContain(m => m == RouteProbe,
                 "the only delivery this waiter may ever have seen is the pre-teardown route probe");
+            routeErrors.Should().BeEmpty("a refusal is a drop, never a router fault");
         }
         finally
         {
@@ -126,12 +191,12 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
         public int Value;
     }
 
-    private (IMessageHub? Waiter, ConcurrentQueue<PatchDataResponse> Arrived, IRoutingService Routing,
+    private (IMessageHub? Waiter, ConcurrentQueue<string> Arrived, IRoutingService Routing,
         Flag ReleaseTurn, AsyncSubject<Unit> TurnEntered) CreateParkableWaiter()
     {
         // Resolved BEFORE any teardown — a disposal path never resolves from DI.
         var routing = Mesh.ServiceProvider.GetRequiredService<IRoutingService>();
-        var arrived = new ConcurrentQueue<PatchDataResponse>();
+        var arrived = new ConcurrentQueue<string>();
         var releaseTurn = new Flag();
         var turnEntered = new AsyncSubject<Unit>();
 
@@ -149,7 +214,8 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
                 })
                 .WithHandler<PatchDataResponse>((_, d) =>
                 {
-                    arrived.Enqueue(d.Message);
+                    if (d.Properties.TryGetValue(MarkerProperty, out var marker) && marker?.ToString() is { } m)
+                        arrived.Enqueue(m);
                     return d.Processed();
                 }),
             HostedHubCreation.Always);
@@ -163,13 +229,13 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
     /// an address that was never reachable.
     /// </summary>
     private async Task ProveTheRouteIsLive(
-        IRoutingService routing, ConcurrentQueue<PatchDataResponse> arrived, CancellationToken ct)
+        IRoutingService routing, Address recipient, Func<bool> probeArrived, CancellationToken ct)
     {
-        Deliver(routing, Response(RouteProbe, requestId: "probe-nobody-armed"));
+        Deliver(routing, Response(RouteProbe, requestId: "probe-nobody-armed", recipient));
         await Observable.Interval(25.Milliseconds()).StartWith(0L)
-            .Where(_ => arrived.Any(r => r.Error == RouteProbe))
+            .Where(_ => probeArrived())
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        Output.WriteLine("[probe] the mesh router delivers to the waiter while nothing is shutting down");
+        Output.WriteLine($"[probe] the mesh router delivers to {recipient} while nothing is shutting down");
     }
 
     private async Task ParkTheWaiterAndTearDownTheMesh(IMessageHub waiter, AsyncSubject<Unit> turnEntered)
@@ -188,12 +254,12 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
             .Where(_ => Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
                         && waiter.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
-        Output.WriteLine($"[fence] mesh={Mesh.RunLevel} waiter={waiter.RunLevel} — the router is past the mark, the recipient is alive");
+        Output.WriteLine($"[fence] mesh={Mesh.RunLevel} waiter={waiter.RunLevel} — the router is past the mark, the waiter is alive");
     }
 
     /// <summary>
     /// The causal judgment point: once the mesh is Dead every hosted hub has disposed, so every
-    /// delivery that was going to reach the waiter has reached it. The bound is a liveness guard on
+    /// delivery that was going to reach a recipient has reached it. The bound is a liveness guard on
     /// that precondition, not a budget for the answer.
     /// </summary>
     private async Task TheMeshIsDead(CancellationToken ct)
@@ -209,17 +275,18 @@ public class ReplyRoutedDuringMeshTeardownReachesItsWaiterTest(ITestOutputHelper
             + "That is a wedged teardown — a different defect from the one asserted here");
     }
 
-    /// <summary>Hands a delivery to the mesh router exactly as the mesh's routing handler does.</summary>
+    /// <summary>Hands a delivery to the mesh router exactly as the mesh's routing handler does, and
+    /// records any fault so it reaches an assertion instead of only the test output.</summary>
     private void Deliver(IRoutingService routing, IMessageDelivery delivery)
         => routing.DeliverMessage(delivery.Package(Mesh.JsonSerializerOptions))
-            .Subscribe(_ => { }, ex => Output.WriteLine($"[route] delivery errored: {ex.Message}"));
+            .Subscribe(_ => { }, ex => routeErrors.Enqueue($"{ex.GetType().Name}: {ex.Message}"));
 
-    private IMessageDelivery Response(string marker, string? requestId)
+    private IMessageDelivery Response(string marker, string? requestId, Address target)
     {
-        var options = new PostOptions(ResponderAddress).WithTarget(WaiterAddress);
+        var options = new PostOptions(ResponderAddress).WithTarget(target).WithProperty(MarkerProperty, marker);
         if (requestId is not null)
             options = options.WithProperty(PostOptions.RequestId, requestId);
         return new MessageDelivery<PatchDataResponse>(
-            new PatchDataResponse(true, 0L) { Error = marker }, options, Mesh.JsonSerializerOptions);
+            new PatchDataResponse(true, 0L), options, Mesh.JsonSerializerOptions);
     }
 }

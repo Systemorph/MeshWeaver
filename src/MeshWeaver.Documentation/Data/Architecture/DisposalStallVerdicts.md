@@ -506,9 +506,13 @@ whose parent is in `DisposeHostedHubs` has only just been ASKED to dispose, and 
 does is wait for the replies it is owed.
 
 **The fix** (`RouteReplyDuringMeshTeardown`) is scoped exactly as #3303 scoped its seam: at that
-run level a delivery carrying `PostOptions.RequestId` — an answer — is still delivered to its
-recipient if the recipient hub already EXISTS (`HostedHubCreation.Never`; nothing is built during
-teardown). Everything else keeps the historical drop. The recipient's own intake gate still decides —
+run level a delivery carrying `PostOptions.RequestId` — an answer — is still delivered to a recipient
+that ALREADY exists, in the order the live path serves the two recipient kinds: a hosted hub
+(`HostedHubCreation.Never`; nothing is built during teardown), then a recipient registered with the
+router as a stream (portal and session hubs register this way, and can exist with no hosted hub).
+Ordering is the live path's too: while an activation serializer for the address is draining, the
+answer joins its queue (#1145), and the serializer carries it on at this run level instead of
+dropping it. Everything else keeps the historical drop. The recipient's own intake gate still decides —
 a Quiescing hub admits answers by design, a hub past its own `DisposeHostedHubs` refuses them — so
 the change adds no admission rule; it stops pre-empting that gate. There is no undeliverable-reply
 sink on this path: the mesh hands the router a PACKAGED (`RawJson`) delivery the sink cannot type,
@@ -521,16 +525,22 @@ guard; a distributed portal does not take this path.
 
 ### The controls, and the evidence each can fail
 
-`ReplyRoutedDuringMeshTeardownReachesItsWaiterTest` holds the state open by construction — the
-recipient's action block parked on an accepted turn, so it stays below `DisposeHostedHubs` while the
-mesh cannot leave it — and hands deliveries to `IRoutingService` exactly as the mesh's handler does.
-Both facts are judged once the mesh is `Dead`, after which nothing more can arrive.
+`ReplyRoutedDuringMeshTeardownReachesItsWaiterTest` holds the state open by construction — a
+mesh-hosted hub's action block parked on an accepted turn, so it stays below `DisposeHostedHubs`
+while the mesh cannot leave it — and hands deliveries to `IRoutingService` exactly as the mesh's
+handler does. Every fact is judged once the mesh is `Dead`, after which nothing more can arrive, and
+every route error is recorded and asserted absent, so a router that THROWS cannot pass a "not
+delivered" check (a review finding on the first version, which only logged it).
 
-| build | `AReplyTheMeshRoutesInDisposeHostedHubs_ReachesItsLiveRecipient` | `TrafficNobodyWaitsFor_IsStillRefusedWhileTheMeshTearsDown` |
-|---|---|---|
-| unfixed router | **fails** — *"Expected collection to contain … because the reply carried a correlation id and was routed while the mesh was in DisposeHostedHubs and its recipient was alive …"* | passes |
-| the fix | passes | passes |
-| over-broad fix (carry everything) | fails on its uncorrelated check | **fails** — *"Did not expect collection to contain … because an ordinary teardown with nothing owed must carry nothing …"* |
+| build | answer → hosted hub | answer → registered-stream recipient (no hosted hub) | uncorrelated traffic still refused |
+|---|---|---|---|
+| unfixed router | **fails** | **fails** | passes |
+| the fix | passes | passes | passes |
+| over-broad fix (carry everything) | fails on its uncorrelated check | fails on its uncorrelated check | **fails** |
+| no registered-stream hook | passes | **fails** | passes |
+
+The stream fact also asserts its own precondition — the recipient has no hosted hub — so it cannot
+pass by exercising the hosted-hub branch instead.
 
 ### Still open: judging the ordinary route at the owner's `Dead` is a race
 

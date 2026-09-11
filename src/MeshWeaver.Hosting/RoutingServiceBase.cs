@@ -151,12 +151,17 @@ namespace MeshWeaver.Hosting
         ///
         /// <para><b>Scoped exactly as #3303 scoped its seam.</b> Only a delivery carrying
         /// <see cref="PostOptions.RequestId"/> — an ANSWER somebody is waiting for — is carried, and
-        /// only to a hub that ALREADY exists (<see cref="HostedHubCreation.Never"/>: nothing is built
-        /// during teardown). Everything else keeps the historical drop: fire-and-forget traffic and
-        /// new requests have nothing to finish here, and answering them is the storm shape the guard
-        /// exists to avoid. The recipient's own intake gate still decides what it accepts — a
-        /// Quiescing hub admits answers by design, a hub past its own <c>DisposeHostedHubs</c> refuses
-        /// them — so this adds no new admission rule; it stops pre-empting that gate.</para>
+        /// only to a recipient that ALREADY exists: a hosted hub (<see cref="HostedHubCreation.Never"/>:
+        /// nothing is built during teardown) or, failing that, a recipient registered with this router
+        /// as a stream — the two recipient kinds, in the order, the live path serves. Everything else
+        /// keeps the historical drop: fire-and-forget traffic and new requests have nothing to finish
+        /// here, and answering them is the storm shape the guard exists to avoid. The recipient's own
+        /// intake gate still decides what it accepts — a Quiescing hub admits answers by design, a hub
+        /// past its own <c>DisposeHostedHubs</c> refuses them — so this adds no admission rule.</para>
+        ///
+        /// <para><b>Ordering is the live path's.</b> While an activation serializer for the address is
+        /// draining, the answer joins its queue exactly as every live delivery must (#1145), and the
+        /// serializer carries it on at this run level instead of dropping it.</para>
         ///
         /// <para>No undeliverable-reply sink here, deliberately: the mesh's routing handler hands this
         /// router a PACKAGED delivery (<c>RawJson</c>), which the sink cannot type. The case with no
@@ -164,12 +169,44 @@ namespace MeshWeaver.Hosting
         /// </summary>
         private void RouteReplyDuringMeshTeardown(IMessageDelivery delivery)
         {
-            if (delivery.Target is null
-                || !delivery.Properties.TryGetValue(PostOptions.RequestId, out var raw)
-                || raw?.ToString() is not { Length: > 0 } requestId)
+            if (!TryGetReplyCorrelation(delivery, out var requestId))
                 return;
 
-            var address = GetHostAddress(delivery.Target);
+            var address = GetHostAddress(delivery.Target!);
+
+            // The SAME FIFO rule as the live path above (#1145): while an activation serializer for
+            // this address is draining, every delivery joins its queue, or an answer could overtake
+            // deliveries queued ahead of it. The serializer's RouteOne carries it on at this run level
+            // (see there), so joining the queue does not re-open the drop.
+            if (activationSerializers.TryGetValue(address, out var draining)
+                && draining.TryEnqueue(delivery))
+                return;
+
+            DeliverReplyToLiveRecipient(delivery, requestId, address);
+        }
+
+        /// <summary>True when <paramref name="delivery"/> is an ANSWER — it carries the
+        /// <see cref="PostOptions.RequestId"/> of the request a caller is waiting on.</summary>
+        private static bool TryGetReplyCorrelation(IMessageDelivery delivery, out string requestId)
+        {
+            requestId = string.Empty;
+            if (delivery.Target is null
+                || !delivery.Properties.TryGetValue(PostOptions.RequestId, out var raw)
+                || raw?.ToString() is not { Length: > 0 } id)
+                return false;
+            requestId = id;
+            return true;
+        }
+
+        /// <summary>
+        /// Hands an answer to the recipient that is still there to take it, during a mesh teardown:
+        /// a hub that ALREADY exists first (nothing is created), then a recipient registered as a
+        /// stream with this router (<see cref="TryDeliverToRegisteredStream"/>) — the same two
+        /// recipient kinds, in the same order, the live path serves. With neither, the drop stands
+        /// and is named on the request's trail.
+        /// </summary>
+        private void DeliverReplyToLiveRecipient(IMessageDelivery delivery, string requestId, Address address)
+        {
             if (Mesh.GetHostedHub(address, HostedHubCreation.Never) is { } recipient)
             {
                 Mesh.NoteRequestStage(requestId,
@@ -178,9 +215,25 @@ namespace MeshWeaver.Hosting
                 return;
             }
 
+            if (TryDeliverToRegisteredStream(address, delivery))
+            {
+                Mesh.NoteRequestStage(requestId,
+                    $"REPLY_ROUTED_DURING_MESH_TEARDOWN to=stream:{address} meshRunLevel={Mesh.RunLevel}");
+                return;
+            }
+
             Mesh.NoteRequestStage(requestId,
-                $"REPLY_UNROUTABLE_DURING_MESH_TEARDOWN target={delivery.Target} — no live recipient hub");
+                $"REPLY_UNROUTABLE_DURING_MESH_TEARDOWN target={delivery.Target} — no live recipient");
         }
+
+        /// <summary>
+        /// Delivers to a recipient registered with <see cref="RegisterStream"/> for
+        /// <paramref name="address"/>, when there is one — a recipient kind that can exist without a
+        /// hosted hub. Used only by the mesh-teardown answer path; the live path reaches registered
+        /// streams through <see cref="RouteImpl"/>. The base router holds no registrations.
+        /// </summary>
+        /// <returns>True when a registered stream took the delivery.</returns>
+        protected virtual bool TryDeliverToRegisteredStream(Address address, IMessageDelivery delivery) => false;
 
         private void EnqueueForActivation(IMessageDelivery delivery, Address hostAddress)
         {
@@ -279,10 +332,16 @@ namespace MeshWeaver.Hosting
             private IObservable<IMessageDelivery> RouteOne(IMessageDelivery delivery) =>
                 Observable.Defer(() =>
                 {
-                    // Disconnect after dispose: never resolve/deliver/post once the
-                    // mesh is tearing down — the recipients are disposing too.
+                    // Never resolve, activate or post once the mesh is tearing down. The ONE
+                    // exception is an ANSWER to a caller that is still waiting (#4023): it is
+                    // carried to a recipient that already exists — nothing is created — exactly as
+                    // RouteReplyDuringMeshTeardown does for a delivery that did not queue here.
                     if (owner.Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                    {
+                        if (TryGetReplyCorrelation(delivery, out var requestId))
+                            owner.DeliverReplyToLiveRecipient(delivery, requestId, address);
                         return Observable.Empty<IMessageDelivery>();
+                    }
                     return owner.RouteMessage(delivery, address);
                 })
                 .Catch<IMessageDelivery, Exception>(ex =>

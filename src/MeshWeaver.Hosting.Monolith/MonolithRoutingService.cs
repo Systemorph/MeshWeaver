@@ -34,6 +34,21 @@ internal class MonolithRoutingService(
     }
 
 
+    /// <inheritdoc />
+    protected override bool TryDeliverToRegisteredStream(Address address, IMessageDelivery delivery)
+    {
+        if (!streams.TryGetValue(address, out var stream))
+            return false;
+        // The callback is a cold IObservable — the live path returns it for the base to subscribe;
+        // here nothing else will, so subscribe it, and surface a fault rather than swallow it.
+        stream.Invoke(delivery, CancellationToken.None).Subscribe(
+            _ => { },
+            ex => logger.LogWarning(ex,
+                "Teardown delivery of {MessageType} to the stream registered at {Address} faulted",
+                delivery.Message.GetType().Name, address));
+        return true;
+    }
+
     protected override IObservable<IMessageDelivery> RouteImpl(
         IMessageDelivery delivery,
         MeshNode? node,
