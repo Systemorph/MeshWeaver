@@ -226,11 +226,25 @@ not to emit … but it emitted ()"* — while the other two stay green.
 
 ### What is still owed, and where
 
-The **Blazor sender** (`BlazorView.OnClick` / `OnBlur` / the dialog close handlers, plus
-`GoogleMapView` and `AppleMapView`) still calls `Stream.Hub.Post(new ClickedEvent(...))`. Until those
-call sites move to `SubmitUserAction`, the portal registers no callback and the ordering above is
-armed but unused. That half lives in MeshWeaver.Plugins and needs a platform pin carrying this
-commit.
+The **Blazor sender** still calls `Stream.Hub.Post(...)`. Until it moves to `SubmitUserAction` the
+portal registers no callback and the ordering above is armed but unused. Measured in
+MeshWeaver.Plugins on 2026-09-11 — **eight call sites in seven files**, and the list is here so the
+next session does not have to rediscover it:
+
+| file | action |
+|---|---|
+| `MeshWeaver.Blazor/BlazorView.razor.cs` | `ClickedEvent` — the one every control inherits |
+| `MeshWeaver.Blazor/Components/FormComponentBase.cs` | `BlurEvent` |
+| `MeshWeaver.Blazor/Components/DialogView.razor.cs` | `CloseDialogEvent`, twice (OK and the dismiss path) |
+| `MeshWeaver.Blazor.Views/Components/DataGridView.razor.cs` | `ClickedEvent` carrying a `DataGridCellClick` payload |
+| `MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.cs` | `ClickedEvent` |
+| `MeshWeaver.Blazor.AppleMaps/AppleMapView.razor.cs` | `ClickedEvent` |
+| `MeshWeaver.Blazor.OpenStreetMap/OpenStreetMapView.razor.cs` | `ClickedEvent` |
+
+Each already resolves the hub defensively and already stamps the circuit user's `AccessContext`, so
+the move is `hub.Post(evt, o => …)` → `Stream.SubmitUserAction(evt, userContext, ErrorSink.Report)`
+— the refusal sentence going where that view already surfaces errors. That half needs a platform pin
+carrying this commit.
 
 ## What this deliberately does not do
 
