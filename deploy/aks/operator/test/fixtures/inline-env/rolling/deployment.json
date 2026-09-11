@@ -1,0 +1,108 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "memex-portal-deployment",
+    "namespace": "memex",
+    "generation": 43,
+    "resourceVersion": "918273"
+  },
+  "spec": {
+    "replicas": 2,
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "name": "memex-portal",
+            "image": "cr.example.invalid/memex-portal-ai:test",
+            "env": [
+              {
+                "name": "DOTNET_DbgEnableMiniDump",
+                "value": "1"
+              },
+              {
+                "name": "PluginCatalog__RegistryToken",
+                "value": "fake-inline-registry-token-0001"
+              },
+              {
+                "name": "PluginCatalog__RegistryUrl",
+                "value": "https://registry.example.invalid"
+              },
+              {
+                "name": "Features__Ai__Clis__ClaudeCode",
+                "value": "true"
+              }
+            ],
+            "envFrom": [
+              {
+                "configMapRef": {
+                  "name": "memex-portal-config"
+                }
+              },
+              {
+                "secretRef": {
+                  "name": "memex-portal-secrets"
+                }
+              },
+              {
+                "secretRef": {
+                  "name": "memex-portal-keyvault"
+                }
+              },
+              {
+                "secretRef": {
+                  "name": "memex-kv-secrets",
+                  "optional": true
+                }
+              }
+            ]
+          },
+          {
+            "name": "python-gate",
+            "image": "cr.example.invalid/python-gate:test",
+            "env": [
+              {
+                "name": "MESH_GRPC_URL",
+                "value": "http://127.0.0.1:5003"
+              },
+              {
+                "name": "PluginCatalog__RegistryToken",
+                "value": "fake-inline-registry-token-0001"
+              },
+              {
+                "name": "MESH_GATE_ADDRESS",
+                "value": "gate/python"
+              }
+            ]
+          },
+          {
+            "name": "node-gate",
+            "image": "cr.example.invalid/node-gate:test",
+            "env": [
+              {
+                "name": "MESH_GRPC_URL",
+                "value": "http://127.0.0.1:5003"
+              },
+              {
+                "name": "MESH_GATE_ADDRESS",
+                "value": "gate/node"
+              },
+              {
+                "name": "PluginCatalog__RegistryToken",
+                "value": "fake-inline-registry-token-0001"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "status": {
+    "observedGeneration": 43,
+    "replicas": 3,
+    "updatedReplicas": 1,
+    "readyReplicas": 2,
+    "availableReplicas": 1,
+    "unavailableReplicas": 1
+  }
+}

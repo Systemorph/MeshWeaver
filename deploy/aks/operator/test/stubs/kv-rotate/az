@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# A stand-in `az` for hosting-kv-rotate's inline-shadow tests. It records the SUBCOMMAND only —
+# never the argv, which for `keyvault secret set` carries the freshly minted key — and refuses every
+# call. So a test can prove the rotation stopped before the vault write (nothing recorded) or got
+# past the shadow check to it (one `keyvault secret set` recorded), without a vault, a login, or a
+# key ever leaving the process.
+set -uo pipefail
+printf 'az %s %s %s\n' "${1:-}" "${2:-}" "${3:-}" >> "${HOSTING_IE_STATE:?the az stub needs HOSTING_IE_STATE}/az.log"
+echo "az stub: refusing '${1:-} ${2:-} ${3:-}' — there is no vault in a test" >&2
+exit 1
