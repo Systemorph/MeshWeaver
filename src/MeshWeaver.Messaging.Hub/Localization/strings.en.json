@@ -1481,5 +1481,9 @@
   "unifiedData.error.readStreamEnded": "The shared read stream for {0}/{1} ended before it exposed its current state.",
   "unifiedData.error.readBarrierEnded": "The shared read stream for {0}/{1} ended before it reached the committed version.",
   "unifiedData.error.updateFailed": "Update failed.",
-  "unifiedData.error.deleteFailed": "Delete failed."
+  "unifiedData.error.deleteFailed": "Delete failed.",
+  "logIncident.refused.commentTitle": "Incident {0}: updates are not reaching {1}",
+  "logIncident.refused.commentMessage": "The update could not be posted: {0}\n\n{1} occurrence(s) never reached the issue — the incident has fired {2} time(s), {3} of them reported there. A quiet issue thread does NOT mean the incident is quiet.\n\nIncident: {4}",
+  "logIncident.refused.fileTitle": "Incident {0} could not be filed",
+  "logIncident.refused.fileMessage": "The issue could not be opened: {0}\n\nThe incident has fired {1} time(s) and has no ticket.\n\nIncident: {2}"
 }
