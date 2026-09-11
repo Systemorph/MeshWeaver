@@ -428,6 +428,10 @@ internal class MeshNodeCompilationService(
                         ? node.LastModified
                         : maxSourceLastModified;
 
+                    IObservable<CompileAttempt> CompileSnapshot() =>
+                        CompileCore(node, ntDef, selfPath, log, sources)
+                            .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources));
+
                     if (cacheService.IsDiskCacheEnabled)
                     {
                         var cachedDllPath = cacheService.TryGetLatestCachedDllPath(nodeName, effectiveLastModified);
@@ -445,26 +449,37 @@ internal class MeshNodeCompilationService(
                             : GeneratedInputDigestFile.TryRead(cachedDllPath, logger);
                         if (cachedDllPath is not null && cachedInputDigest is not null)
                         {
-                            logger.LogDebug(
-                                "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
-                                node.Path, cachedDllPath, effectiveLastModified);
-                            return Observable.Return(new CompileAttempt(
-                                cachedDllPath,
-                                cachedInputDigest,
-                                AppendInfo(log,
-                                        $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).",
-                                        "activity.compile.cacheHit",
-                                        ("path", cachedDllPath),
-                                        ("lastModified", effectiveLastModified.ToString("O")))
-                                    .FinishByOutcome((int)hub.Version),
-                                sources));
+                            // A source edit can land AFTER the producing snapshot but BEFORE its
+                            // DLL finishes writing. A newer DLL timestamp therefore cannot prove
+                            // that these sources were compiled. Compare the existing producing
+                            // digest with this exact snapshot's generated input before reusing it;
+                            // never stamp today's digest onto unverified earlier bytes.
+                            return RegenerateCapturedInputDigest(node, ntDef, selfPath, sources)
+                                .SelectMany(currentInputDigest =>
+                                {
+                                    if (!string.Equals(cachedInputDigest, currentInputDigest, StringComparison.Ordinal))
+                                        return CompileSnapshot();
+
+                                    logger.LogDebug(
+                                        "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
+                                        node.Path, cachedDllPath, effectiveLastModified);
+                                    return Observable.Return(new CompileAttempt(
+                                        cachedDllPath,
+                                        cachedInputDigest,
+                                        AppendInfo(log,
+                                                $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).",
+                                                "activity.compile.cacheHit",
+                                                ("path", cachedDllPath),
+                                                ("lastModified", effectiveLastModified.ToString("O")))
+                                            .FinishByOutcome((int)hub.Version),
+                                        sources));
+                                });
                         }
                     }
 
                     // Hand the snapshot down as the override — CompileCore then short-circuits
                     // its own SnapshotSources to this authoritative point-in-time set.
-                    return CompileCore(node, ntDef, selfPath, log, sources)
-                        .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources));
+                    return CompileSnapshot();
                 });
         });
     }
@@ -1870,18 +1885,26 @@ internal class MeshNodeCompilationService(
     internal IObservable<string?> RegenerateGeneratedInputDigest(MeshNode node)
     {
         var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
-        if (ntDef is null)
-            return Observable.Return<string?>(null);
+        return ntDef is null
+            ? Observable.Return<string?>(null)
+            : RegenerateCapturedInputDigest(node, ntDef, node.Path, sourcesOverride: null);
+    }
 
+    // The cache check supplies the snapshot already captured by this compile. Re-evaluation
+    // retains its existing discovery path; both callers use the same shaping and digest logic.
+    private IObservable<string?> RegenerateCapturedInputDigest(
+        MeshNode node, NodeTypeDefinition? ntDef, string selfPath,
+        IReadOnlyList<MeshNode>? sourcesOverride)
+    {
         var assemblyName = $"DynamicNode_{cacheService.SanitizeNodeName(node.Path)}";
         return BoundLeg(
-                _ => SnapshotSources(ntDef, node.Path, sourcesOverride: null)
+                _ => SnapshotSources(ntDef, selfPath, sourcesOverride)
                     .Select(matches =>
                         NodeCompileShaping.CollectCompileSources(matches, node.Path, logger).Sources)
                     .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
                     .Select(codeFiles => PrepareGeneratedSource(
                         node, NodeCompileShaping.CombineSources(codeFiles),
-                        ntDef.Configuration, ntDef.ContentCollections))
+                        ntDef?.Configuration, ntDef?.ContentCollections))
                     .SelectMany(prepared => prepared.NuGetReferences.Length == 0
                         ? Observable.Return(
                             GeneratedInputDigestOf(assemblyName, prepared.Source, []))
@@ -1897,8 +1920,8 @@ internal class MeshNodeCompilationService(
             {
                 logger.LogInformation(ex,
                     "Re-evaluation for {NodePath}: the compile input could not be regenerated, so "
-                    + "the content key has no live counterpart — the build is judged by the "
-                    + "metadata-only rule, exactly as before", node.Path);
+                    + "the content key has no live counterpart — no input equality is established",
+                    node.Path);
                 return Observable.Return<string?>(null);
             });
     }
