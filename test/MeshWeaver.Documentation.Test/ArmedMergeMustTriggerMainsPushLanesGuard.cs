@@ -183,6 +183,37 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
     }
 
     /// <summary>
+    /// A queue admission is not represented by <c>autoMergeRequest</c>. Core PR #3950 entered the
+    /// merge queue successfully on 2026-09-11, while the auto-arm read-back saw a null
+    /// <c>autoMergeRequest</c> and warned that nothing had been armed (run 34555063094). The queue
+    /// entry is the positive evidence for that repository shape; ordinary satellites still use
+    /// the auto-merge request.
+    /// </summary>
+    [Fact]
+    public void TheArmReadBackRecognisesOrdinaryAutoMergeAndMergeQueueAdmission()
+    {
+        var path = Path.Combine(WorkflowsDir(), "auto-arm.yml");
+        var armStep = Assert.Single(
+            StepBlocks(File.ReadAllText(path)),
+            block => block.Contains("- name: Arm it", StringComparison.Ordinal));
+
+        Assert.Contains("state merged autoMergeRequest{enabledAt}", armStep, StringComparison.Ordinal);
+        Assert.Contains("autoMergeRequest{enabledAt}", armStep, StringComparison.Ordinal);
+        Assert.Contains("mergeQueueEntry{id}", armStep, StringComparison.Ordinal);
+        Assert.Contains("elif .merged then \"landed\"", armStep, StringComparison.Ordinal);
+        Assert.Contains("elif .state == \"CLOSED\" then \"closed\"", armStep, StringComparison.Ordinal);
+        Assert.Contains("elif .mergeQueueEntry != null then \"queued\"", armStep, StringComparison.Ordinal);
+        Assert.Contains("elif .autoMergeRequest != null then \"armed\"", armStep, StringComparison.Ordinal);
+        Assert.Contains("queued) echo \"queued: #$PR is in the merge queue\"", armStep, StringComparison.Ordinal);
+
+        var failedCommand = armStep.IndexOf("arm_error=\"$out\"", StringComparison.Ordinal);
+        Assert.True(failedCommand >= 0, "A failed arm command is no longer captured for the read-back.");
+        Assert.True(
+            armStep.IndexOf("state=$(arm_state)", failedCommand, StringComparison.Ordinal) > failedCommand,
+            "The failed-command path no longer re-reads state, so a racing successful arm is reported as a failure.");
+    }
+
+    /// <summary>
     /// 🚨 <c>auto-arm.yml</c> tolerates a failed mint, and that tolerance is only defensible
     /// because the assertion it drops was MOVED rather than deleted.
     ///

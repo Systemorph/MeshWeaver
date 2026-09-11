@@ -23,17 +23,20 @@ The short version:
 > re-clone-per-delivery is *also* the retry loop for transient failures, so the new skip has to
 > distinguish a verdict re-running cannot change from one that might.
 
-## 1. What actually fires — a green build is not a merge
+## 1. What actually fires — content CI, not merely something green
 
-`GitHubWebhookProcessor` acts on a `workflow_run` delivery when **both** guards pass: the run's
-`conclusion` is `success` **and** its `head_branch` is the repository's default branch, **and** the
-run's own trigger is in the publish-signal allow-list — `push`, `repository_dispatch`, `schedule`,
-`workflow_dispatch`. (A run triggered *by another workflow* — `event: workflow_run` — is not a
-publish signal and is ignored.) Every accepted delivery rewrites
+`GitHubWebhookProcessor` acts on a `workflow_run` delivery only when the run's conclusion is
+`success`, its `head_branch` is the repository's default branch, its trigger is in the
+publish-signal allow-list (`push`, `repository_dispatch`, `schedule`, `workflow_dispatch`), **and
+its workflow file is the repository's content CI**. The repository-level convention is
+`.github/workflows/ci.yml`; core's established exception is `.github/workflows/dotnet-test.yml`.
+A run triggered *by another workflow* (`event: workflow_run`) is not a publish signal, and neither
+is a green workflow at any other path. Every accepted delivery rewrites
 `Admin/_Build/{owner}.{repo}` ([`BuildCompletion`](/Doc/Architecture/SyncRefContract)) and then fans
 out to every sync source of that repository.
 
-**One merge is not one delivery.** Measured on `Systemorph/MeshWeaver` for the 24 h ending
+**Before #3978, trigger and branch were the whole decision.** One merge was not one delivery.
+Measured on `Systemorph/MeshWeaver` for the 24 h ending
 2026-09-10T17:35Z — 254 green publish-signal runs on `main`:
 
 | Workflow | Trigger | Runs |
@@ -50,29 +53,31 @@ out to every sync source of that repository.
 256 of them in the last 24 h (10.7/h, one every 5.6 minutes). The version series matches the run
 census above, which is what makes the model checkable rather than inferred.
 
-Two consequences follow, and both are load-bearing:
+That old decision had two consequences:
 
 - **Three workflows go green on the same commit**, so a single merge produces roughly three
   deliveries carrying the *same* `head_sha`.
-- **A third of the deliveries are a cron, and it builds nothing.** `Prod synthetic probe`
+- **A third of the deliveries were a cron, and it builds nothing.** `Prod synthetic probe`
   (`.github/workflows/prod-synthetic-probe.yml`) is `cron: "*/15 * * * *"` — it makes HTTP requests
   to the live portals and asserts on the answers. It produces no artefact and touches no tree. But
-  it is a `schedule` run that goes green on the default branch, so it is a publish signal, and its
-  `head_sha` is whatever `main`'s tip happens to be — unchanged between merges.
+  it is a `schedule` run that goes green on the default branch, so the old decision called it a
+  publish signal. Its `head_sha` is whatever `main`'s tip happens to be — unchanged between merges.
 
-For a healthy source both are harmless, and the allow-list says so explicitly
-(`PublishSignalTriggers`):
+For a healthy source those extra deliveries looked harmless, and the old allow-list said so
+explicitly (`PublishSignalTriggers`):
 
 > **Widening this cannot cause churn.** A sync source already sitting on the built sha is skipped by
 > `SkipReason` ("already at this commit"), so a scheduled or dispatched re-verification of an
 > unchanged default branch triggers no import at all.
 
-That invariant is the design. Section 4 is about the sources for which it was **false**, and §7
-about what makes it true again. 🚨 **Note what the fix is not: the trigger list is deliberately
-unchanged.** Dropping `schedule` would take out 87 of these 254 deliveries at a stroke — and it
-would be the same mistake the 2026-09-02 measurement corrected in the other direction, because a
-cron run is the only green verdict some repositories ever produce, and for a *converging* source
-those 87 deliveries already cost nothing. The trigger was never the defect.
+Section 4 shows why that claim was false for the sources where cost mattered. More importantly,
+#3978 showed the correctness failure: `Auto-update green armed PRs` wrote more than twenty build
+completions for a Reinsurance commit whose real content CI was red. A green Chart Gate could do the
+same on core. The fix keys the signal on the workflow path, so probes, deploys and PR updaters can no
+longer authorize an import at all. The trigger list is deliberately unchanged: dropping `schedule`
+or `repository_dispatch` would also remove genuine content-CI verdicts. Section 4 is about the
+accepted deliveries for which the cheapness claim was still false, and §7 is #3945's independent
+fix for that cost.
 
 ## 2. The one gate that makes a delivery free
 
@@ -154,21 +159,21 @@ Now put that beside section 2. **The gate that makes a delivery free and the gua
 un-landed content are reading the same field**, so holding the field for the second reason
 necessarily disarms the first:
 
-> A source whose import does not fully converge pays a **full fetch + parse on every delivery**,
-> for as long as it does not converge — and the rate is the **source repository's CI cadence**, not
-> anything about the source. A cron probe that never changes the tip re-clones the repository just
-> as hard as a merge does.
+> A source whose import does not fully converge pays a **full fetch + parse on every accepted
+> content-CI delivery**, for as long as it does not converge — and the rate is the repository's
+> content-CI cadence, not anything about the source.
 
 🚨 **None of the three clauses may be relaxed** — each is an incident, and the failure mode of
 relaxing one is silent data loss or silently-missing content, not a slow sync. The field stays
 exactly as conservative as it is; §7 adds a *different* field for the *different* question.
 
-So the allow-list's stated invariant — *"a sync source already sitting on the built sha is skipped …
-so a scheduled re-verification triggers no import at all"* — holds for every source that converges
-and **for no source that does not**. On the converging sources the 15-minute probe costs nothing at
-all; on one that cannot converge, the same probe is a full clone of that repository — 87 times in the
-measured 24 h (the cron offers 96; only the green runs are publish signals) — on top of roughly three
-per merge.
+Before these fixes, the allow-list's stated invariant — *"a sync source already sitting on the
+built sha is skipped … so a scheduled re-verification triggers no import at all"* — held for every
+source that converged and **for no source that did not**. The 15-minute core probe was therefore a
+full clone for a non-converging source 87 times in the measured 24 h. After #3978 that probe is not a
+delivery at all: only `.github/workflows/dotnet-test.yml` can create core's build record. For a
+repeated verdict from the actual content CI, §7's separate attempt pointer makes the unchanged
+commit free without weakening any baseline clause.
 
 None of the three freeze conditions resolves by itself:
 
@@ -410,13 +415,13 @@ proved — the proposition `SyncRefContract` exists to guarantee.
 **The conclusion: the trigger event is a proxy for the wrong proposition.**
 `PublishSignalTriggers` answers *"how was this run started"*; what the record needs is *"did this
 repository's own CONTENT CI prove this tree"*. The discriminator for that is already in the payload —
-`workflow_run.name` / `.path` — and every repository has exactly one such workflow (`ci.yml` in each
-satellite, `dotnet-test.yml` in core). Keyed on that, the probe, the PR-updater, `Deployment Smoke`,
-`Arm credential`, `Chart Gate` and `Hosting Operator` all fall out under one rule, no repository
-loses its only signal, and the trigger allow-list can stay as wide as it is. That is a separate
-change with its own risk — a repository that declares the wrong workflow stops syncing silently,
-which is exactly MeshWeaver.Plugins#1194 recreated — and it is filed as #3978, together with the
-correctness finding above.
+`workflow_run.path` — and every repository has exactly one such workflow (`ci.yml` in each
+satellite, `dotnet-test.yml` in core). #3978 keys admission on that stable path, so the probe,
+PR updater, `Deployment Smoke`, `Arm credential`, `Chart Gate` and `Hosting Operator` all fall out
+under one rule, no repository loses its genuine signal, and the trigger allow-list stays as wide as
+it is. The rule fails closed, with a positive guard against silent freeze: core's policy test pins
+its path, and the shared node-repo validation lane fails red if a satellite moves or renames
+`.github/workflows/ci.yml`.
 
 ## See also
 

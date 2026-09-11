@@ -33,30 +33,45 @@ per installed module:  ModuleVersion changed?
 
 ## 🚨 Which green runs count as a publish signal
 
-`workflow_run` fires for far more than a repo's content CI, so the webhook applies **two independent
+`workflow_run` fires for far more than a repo's content CI, so the webhook applies **three independent
 guards** before a delivery becomes a `BuildCompletion` (`GitHubWebhookProcessor.ProcessWorkflowRun`):
 
 1. **The trigger must be on the allow-list** — `push`, `repository_dispatch`, `schedule`,
-   `workflow_dispatch`. Each of those means *a build of the default branch's own tree*.
+   `workflow_dispatch`. This says how the workflow started, not what it checked.
 2. **`head_branch` must BE the repository's default branch.**
+3. **The stable workflow file path must BE the repository's content CI** —
+   `.github/workflows/ci.yml` for every node/content repository, and the platform's established
+   `.github/workflows/dotnet-test.yml` exception.
 
-Both fail closed: an unknown trigger is refused, and a payload whose branch cannot be read records
-nothing.
+An arbitrary repository whose content CI lives elsewhere declares one repository-level override
+under `GitHub:ContentWorkflows:Repositories` — `{ Repository: "owner/repo", Path:
+".github/workflows/content.yml" }`. It is deployment policy, not a field copied into every Space:
+all Spaces targeting one repository must trust the same evidence. Repository identity matching is
+case-insensitive; the Git workflow path is deliberately case-sensitive.
+
+All three fail closed: an unknown trigger, an unreadable branch/path, or a different green workflow
+records nothing. The path is the declaration: display names may change; moving the content CI away
+from the conventional path removes the automatic publish signal. Core pins its path in the policy
+test; every node repository's shared validation lane checks `.github/workflows/ci.yml` from inside
+the content workflow itself. A rename therefore fails that run red rather than silently freezing
+GitSync or falling back to an unrelated green run.
 
 | Trigger | Admitted | Why |
 |---|---|---|
-| `push` | ✅ | The branch moved and its CI ran — the original case. |
-| `repository_dispatch` | ✅ | GitHub only ever runs a dispatched workflow from the **default branch**, and `head_sha` is that branch's tip. This is how a platform release re-verifies every satellite repo: no commit to push, same tree, a genuine green verdict on it. |
-| `schedule` | ✅ | Same — a cron run only ever exists on the default branch. |
+| `push` | ✅ | Eligible when it is the content-CI workflow: the branch moved and its CI ran. |
+| `repository_dispatch` | ✅ | Eligible when it is the content CI. This is how a platform release re-verifies every satellite repo: no commit to push, same tree, a genuine green verdict on it. |
+| `schedule` | ✅ | Eligible when it is the content CI's cron. An unrelated scheduled probe or PR updater is rejected by guard 3. |
 | `workflow_dispatch` | ✅ | May target any ref, so guard 2 does the discriminating. On the default branch it is a manual re-verification of that tree, and the only recovery lever when a merge burst cancelled the push-triggered run. |
 | `pull_request` / `pull_request_target` | ❌ | Green **unmerged** code. Note both can report `head_branch=main`, so guard 1 — not guard 2 — is what rejects them. |
 | `dynamic` | ❌ | GitHub's Copilot reviewer. Completes green on the default branch and is not a build at all. |
 | `merge_group` | ❌ | A merge-queue run's `head_branch` is the temporary `gh-readonly-queue/{base}/pr-{n}-{sha}` ref, so guard 2 already rejects it. Listing it would be unreachable. |
 | anything else | ❌ | Fail closed. An allow-list means the next trigger GitHub invents does not publish by accident. |
 
-**Widening the list cannot cause churn.** A sync source already sitting on the built sha is skipped
-("already at this commit"), so a scheduled or dispatched re-verification of an unchanged default
-branch triggers no import at all.
+🚨 Trigger and branch were once the whole decision. That admitted a successful scheduled PR updater
+that compiled nothing: it wrote more than twenty `BuildCompletion` records for a Reinsurance commit
+whose actual content CI was red. Core had the same risk in the other direction: a green push-triggered
+Chart Gate could authorize a tree whose `MeshWeaver Build and Test` run failed. Workflow identity is
+therefore not an optimization; it is the evidence that makes the record true (#3978).
 
 ### 🚨 The single-value test that dropped real signals (2026-09-02)
 
@@ -69,8 +84,9 @@ behind a merged main — with the webhook armed, every delivery answering 200 OK
 reporting a problem. A dropped publish signal has no symptom except content that quietly stops
 arriving; there is no scheduled poll behind it to paper over the gap, by design.
 
-The decision table above is pinned by `GreenBuildPublishSignalTest`, in both directions — a test that
-only listed the admitted triggers would go green against a gate that admits everything.
+The decision table above is pinned by `GreenBuildPublishSignalTest`, in both directions and across
+all three guards — a test that only listed the admitted triggers would go green against a gate that
+admits everything.
 
 ## 🚨 Two inputs, one decision — and which one your installation has
 
@@ -497,7 +513,7 @@ registered with it. An installation that configures none of this is reached by t
 
 | Symptom | Cause |
 |---|---|
-| Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success` — only completed+successful runs are recorded; or the run's **trigger is not on the allow-list** (`push`, `repository_dispatch`, `schedule`, `workflow_dispatch` record; `pull_request`, `dynamic` and anything unknown do not — see *Which green runs count as a publish signal* above); or the run was **not on the repository's default branch** — a green PR-branch build is unmerged code and is deliberately never recorded (fail-closed: a payload with no readable branch records nothing either). |
+| Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success`; or its **workflow path is not the content-CI convention** (`.github/workflows/ci.yml`, with core at `.github/workflows/dotnet-test.yml`); or the run's **trigger is not on the allow-list** (`push`, `repository_dispatch`, `schedule`, `workflow_dispatch` are eligible; `pull_request`, `dynamic` and anything unknown are not — see *Which green runs count as a publish signal* above); or the run was **not on the repository's default branch**. Every leg fails closed: a payload with no readable workflow path or branch records nothing. |
 | A module never updates, and the log says it "has no module content identity" | The module's `manifest.lock` is missing or unparseable, so there is no `ModuleVersion` to compare and "has it changed" is unanswerable. A missing hash is the **absence of evidence**, not evidence of a change: treating it as changed would re-install the module on every green build of the repo *and* on every pod start, which is acting on the event rather than the content. It is refused, loudly, and the catalog card's manual **Update** stays available. Fix the module's CI to emit the sidecar. |
 | Nothing happens on a green build, **and the log says the delivery "matched NONE of the N sync config(s)"** | No `_GitSync` targets that repository — usually because the repository was **renamed** and the configs still store its old name. The matcher falls back to GitHub's canonical `full_name` (which follows the rename redirect) and repoints the config when it finds one, so this line surviving means the lookup could not be made either: the repository is unreachable with the config creator's credential, or the hook really is installed on a repository this mesh does not sync. The Warning names both sides — the incoming repository and everything it was compared against. |
 | A green build produced nothing, and the log says the fact is **NOT recorded AND the sync did not run** | The `Admin/_Build/{owner}.{repo}` write failed. GitHub was answered 200, so there is no redelivery. The payload is kept at `Admin/_MissedBuild/{owner}.{repo}` (#3374) — read it with `MissedBuildFact.WatchQuery`, and compare it against the current build record to see whether a later green run of the SAME workflow has already superseded it. If a second Warning says the miss could not be recorded either, the log line is the only witness and the fact must be replayed from GitHub. |

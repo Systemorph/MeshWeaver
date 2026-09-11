@@ -15,6 +15,7 @@ using MeshWeaver.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.GitSync;
 
@@ -64,6 +65,7 @@ public sealed class GitHubWebhookProcessor
     private readonly IMeshService meshService;
     private readonly GitHubRepoIdentityResolver? identities;
     private readonly ILogger? logger;
+    private readonly IReadOnlyList<GitHubContentWorkflow> contentWorkflows;
 
     /// <summary>Initializes a new instance of the <see cref="GitHubWebhookProcessor"/> class.</summary>
     /// <param name="hub">The hub this processor issues its reads and writes from.</param>
@@ -74,16 +76,19 @@ public sealed class GitHubWebhookProcessor
     /// the zero-match warning then says.
     /// </param>
     /// <param name="logger">Optional logger.</param>
+    /// <param name="contentWorkflowOptions">Repository-level content-workflow overrides.</param>
     public GitHubWebhookProcessor(
         IMessageHub hub,
         IMeshService meshService,
         GitHubRepoIdentityResolver? identities = null,
-        ILogger<GitHubWebhookProcessor>? logger = null)
+        ILogger<GitHubWebhookProcessor>? logger = null,
+        IOptions<GitHubContentWorkflowOptions>? contentWorkflowOptions = null)
     {
         this.hub = hub;
         this.meshService = meshService;
         this.identities = identities;
         this.logger = logger;
+        contentWorkflows = contentWorkflowOptions?.Value.Repositories.ToArray() ?? [];
     }
 
     /// <summary>
@@ -501,18 +506,21 @@ public sealed class GitHubWebhookProcessor
     // ── workflow_run → build-completion record ───────────────────────────────
 
     /// <summary>
-    /// 🚨 <b>The <c>workflow_run</c> triggers that mean "a completed build of THE DEFAULT BRANCH'S
-    /// OWN TREE" — an ALLOW-LIST, so an event name nobody has considered is REFUSED rather than
-    /// admitted.</b> A deny-list here fails open: the next trigger GitHub invents would publish.
+    /// 🚨 <b>The <c>workflow_run</c> triggers under which the repository's CONTENT CI is eligible to
+    /// publish — an ALLOW-LIST, so an event name nobody has considered is REFUSED rather than
+    /// admitted.</b> This is HOW the workflow started, never evidence of WHAT it checked; the
+    /// independent <see cref="IsRepositoryContentWorkflow"/> guard supplies that identity. A
+    /// deny-list here fails open: the next trigger GitHub invents would publish.
     ///
     /// <para><b>Why each one is admitted.</b>
     /// <list type="bullet">
-    /// <item><c>push</c> — the branch moved and its CI ran. The original case.</item>
+    /// <item><c>push</c> — the branch moved and its content CI ran. The original case.</item>
     /// <item><c>repository_dispatch</c> — GitHub only ever runs a dispatched workflow from the
-    /// DEFAULT branch, and the run's <c>head_sha</c> is that branch's tip. This is how a platform
-    /// release re-verifies every satellite repo: no commit to push, the same tree, a genuine green
-    /// verdict on it.</item>
-    /// <item><c>schedule</c> — same reason: a cron run only ever exists on the default branch.</item>
+    /// DEFAULT branch, and the run's <c>head_sha</c> is that branch's tip. This is how the CONTENT
+    /// CI re-verifies every satellite after a platform release: no commit to push, the same tree, a
+    /// genuine green verdict on it.</item>
+    /// <item><c>schedule</c> — the content CI's scheduled self-check; a cron run only exists on the
+    /// default branch. An unrelated scheduled workflow is rejected by workflow identity.</item>
     /// <item><c>workflow_dispatch</c> — may target ANY ref, so it is admitted here and
     /// DISCRIMINATED by the head_branch check. Aimed at the default branch it is a manual
     /// re-verification of that tree — and the only recovery lever when a merge burst cancelled the
@@ -538,23 +546,19 @@ public sealed class GitHubWebhookProcessor
     /// warning, nothing to grep. (The other half of that incident was a genuinely red push lane,
     /// where this gate behaved correctly and is meant to.)</para>
     ///
-    /// <para><b>Widening this cannot cause churn.</b> A sync source already sitting on the built sha
-    /// is skipped by <see cref="SkipReason"/> ("already at this commit"), so a scheduled or dispatched
-    /// re-verification of an unchanged default branch triggers no import at all.</para>
+    /// <para>🚨 Before #3978 this allow-list and the branch check were the WHOLE decision. A green
+    /// scheduled PR updater therefore published a red repository tree twenty times, and a green
+    /// push-triggered chart check could do the same. The workflow-path guard is deliberately not
+    /// folded into this trigger predicate: HOW and WHAT are independent payload facts and each must
+    /// fail closed.</para>
     ///
-    /// <para>🚨 <b>That claim was FALSE for two years for one class of source, and #3945 is what
-    /// makes it true again — the trigger set is deliberately NOT narrowed.</b> It rests on a source
-    /// being "already at the built sha", and <c>lastSyncCommitSha</c> is held back for every source
-    /// whose import does not converge, so a scheduled re-verification of an unchanged tip was a full
-    /// clone for exactly those sources: on <c>Systemorph/MeshWeaver</c> <c>main</c>, 87 of the 254
-    /// green publish-signal runs in the 24 h to 2026-09-10T17:35Z were <c>Prod synthetic probe</c>
-    /// (<c>cron: */15</c>), which builds nothing and never moves <c>head_sha</c> between merges.
-    /// <b>Dropping <c>schedule</c> would have been the wrong fix</b>: a cron run IS the only green
-    /// verdict some repositories ever produce (the exact shape of the 2026-09-02 measurement that
-    /// widened this list, where dropping <c>repository_dispatch</c> left <c>Underwriting/_GitSync</c>
-    /// 38 h behind with every delivery answering 200 OK), and for a CONVERGING source those 87
-    /// deliveries always were free. The defect was never the trigger; it was that the skip could not
-    /// say "we have already looked at exactly these bytes". <see cref="SkipReason"/>'s last arm can.</para>
+    /// <para><b>An accepted re-verification of unchanged content must not cause churn.</b> A source
+    /// already sitting on the built sha is skipped by <see cref="SkipReason"/>. 🚨 That claim was
+    /// FALSE for two years for a source whose import did not converge, because
+    /// <c>lastSyncCommitSha</c> is deliberately held back there. #3945 supplies the separate
+    /// "already attempted these exact bytes with a final verdict" arm. Dropping <c>schedule</c> or
+    /// <c>repository_dispatch</c> would lose genuine content-CI signals; the trigger set remains
+    /// broad, while #3978 independently proves which workflow may carry the verdict.</para>
     /// </summary>
     private static readonly ImmutableHashSet<string> PublishSignalTriggers =
         ImmutableHashSet.Create(
@@ -567,8 +571,8 @@ public sealed class GitHubWebhookProcessor
         string.Join(", ", PublishSignalTriggers.OrderBy(t => t, StringComparer.Ordinal));
 
     /// <summary>
-    /// Whether a <c>workflow_run</c> trigger means "a build of the default branch's own tree".
-    /// Fail-closed: an empty, missing or unrecognised event name is NOT a publish signal.
+    /// Whether a <c>workflow_run</c> trigger is eligible to carry a content-CI verdict.
+    /// Fail-closed: an empty, missing or unrecognised event name is NOT eligible.
     /// </summary>
     /// <remarks>See <see cref="PublishSignalTriggers"/> for why each admitted trigger is admitted,
     /// and for the 2026-09-02 measurement that replaced the single-value <c>== "push"</c> test.</remarks>
@@ -584,6 +588,56 @@ public sealed class GitHubWebhookProcessor
         => headBranch is { Length: > 0 } && defaultBranch is { Length: > 0 }
            && string.Equals(headBranch, defaultBranch, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>The conventional content-CI path every GitSync repository uses. The node-repo
+    /// scaffold and the shared gate both own this filename, so it is a repository contract rather
+    /// than a display name a maintainer can casually edit.</summary>
+    internal const string StandardContentWorkflowPath = ".github/workflows/ci.yml";
+
+    /// <summary>Core predates the node-repo convention and is the one intentional exception.</summary>
+    internal const string CoreContentWorkflowPath = ".github/workflows/dotnet-test.yml";
+
+    private static readonly RepoIdentity CoreRepository = new("Systemorph", "MeshWeaver");
+
+    /// <summary>
+    /// The one workflow whose green verdict proves a repository's CONTENT. A trigger says why a
+    /// workflow ran; it does not say what that workflow checked. GitHub sends the stable workflow
+    /// file path in every <c>workflow_run</c> payload, so identity is keyed on that path rather than
+    /// on the mutable display name.
+    ///
+    /// <para>Fail-closed by construction: ordinary content/node repositories use
+    /// <c>.github/workflows/ci.yml</c>; <c>Systemorph/MeshWeaver</c> uses its established
+    /// <c>.github/workflows/dotnet-test.yml</c>; and an arbitrary repository with a different path
+    /// declares one repository-level <see cref="GitHubContentWorkflowOptions"/> override. A
+    /// repository with no workflow at its expected path has no automatic publish signal — exactly
+    /// like a repository with no content CI at all. An unrelated green workflow can never stand in
+    /// for it.</para>
+    /// </summary>
+    internal static string ExpectedContentWorkflowPath(
+        RepoIdentity repository,
+        IEnumerable<GitHubContentWorkflow>? overrides = null)
+    {
+        var configured = overrides?.FirstOrDefault(entry =>
+            GitHubRepoIdentityResolver.Parse(entry.Repository)?.Matches(repository) == true
+            && !string.IsNullOrWhiteSpace(entry.Path));
+        if (configured is not null)
+            return configured.Path.Trim();
+        return CoreRepository.Matches(repository)
+            ? CoreContentWorkflowPath
+            : StandardContentWorkflowPath;
+    }
+
+    /// <summary>Whether this run is the repository's declared-by-convention content CI. Paths are
+    /// Git paths and therefore compared case-sensitively; a missing path means nothing was proved.</summary>
+    internal static bool IsRepositoryContentWorkflow(
+        RepoIdentity repository,
+        string? workflowPath,
+        IEnumerable<GitHubContentWorkflow>? overrides = null)
+        => workflowPath is { Length: > 0 }
+           && string.Equals(
+               workflowPath,
+               ExpectedContentWorkflowPath(repository, overrides),
+               StringComparison.Ordinal);
+
     /// <summary>
     /// A verified <c>workflow_run</c> → the repository's <see cref="BuildCompletion"/> node.
     ///
@@ -593,17 +647,19 @@ public sealed class GitHubWebhookProcessor
     /// keeps the two sides decoupled at compile time (the node's content type lives in
     /// MeshWeaver.Graph, which both reference) and means a second consumer costs nothing here.</para>
     ///
-    /// <para><b>Only a completed, successful run is recorded.</b> A failed or cancelled run may still
+    /// <para><b>Only a completed, successful CONTENT-CI run is recorded.</b> A failed or cancelled run may still
     /// have produced artifacts; writing that as a build completion is how a broken build reaches
-    /// consumers. Every green run rewrites the node — including doc-only commits, reverts, and
-    /// re-runs of an unchanged tree — because deciding "did anything change" needs content identity,
-    /// which is the consumer's business, not the webhook's.</para>
+    /// consumers. Every green run of that one workflow rewrites the node — including doc-only
+    /// commits, reverts, and re-runs of an unchanged tree — because deciding "did anything change"
+    /// needs content identity, which is the consumer's business, not the webhook's. Green probes,
+    /// deploys, chart checks and PR updaters prove no content and are ignored.</para>
     ///
-    /// <para><b>Two independent guards decide "is this a publish signal".</b> The run's TRIGGER must
+    /// <para><b>Three independent guards decide "is this a publish signal".</b> The run's TRIGGER must
     /// be one of <see cref="PublishSignalTriggers"/> (an allow-list — unknown events fail closed),
-    /// AND its <c>head_branch</c> must be the repository's default branch
-    /// (<see cref="IsDefaultBranchBuild"/>). Neither subsumes the other: the trigger check states the
-    /// requirement, the branch check discriminates the triggers that can target any ref.</para>
+    /// its <c>head_branch</c> must be the repository's default branch
+    /// (<see cref="IsDefaultBranchBuild"/>), AND the run's stable workflow file path must be that
+    /// repository's content CI (<see cref="IsRepositoryContentWorkflow"/>). None subsumes another:
+    /// trigger is HOW it ran, branch is WHICH tree, and workflow path is WHAT it proved.</para>
     ///
     /// <para>Written under the SYSTEM identity: the webhook request is anonymous (its authorization
     /// is the verified HMAC signature), so an ambient-identity write would be refused on an
@@ -676,6 +732,32 @@ public sealed class GitHubWebhookProcessor
             return Observable.Return(0);
         }
         var (owner, repo) = (target.Owner, target.Repo);
+
+        // 🚨 A trigger is only HOW the workflow started. It says nothing about WHAT the workflow
+        // proved. A scheduled PR updater and a push-triggered chart check both used to pass the two
+        // guards above and overwrite BuildCompletion even while the repository's content CI was
+        // red (#3978). The workflow FILE is the repository-level identity: display names are mutable,
+        // while the fleet's content-CI path is part of the node-repo contract.
+        var workflowPath = GetString(run, "path");
+        if (!IsRepositoryContentWorkflow(target, workflowPath, contentWorkflows))
+        {
+            var expected = ExpectedContentWorkflowPath(target, contentWorkflows);
+            if (string.IsNullOrWhiteSpace(workflowPath))
+            {
+                logger?.LogWarning(
+                    "workflow_run webhook for {Repo}: green '{Workflow}' run carried no workflow path, "
+                    + "so it cannot be verified as the repository content CI at '{Expected}' — no build record.",
+                    repoUrl, GetString(run, "name"), expected);
+            }
+            else
+            {
+                logger?.LogDebug(
+                    "workflow_run webhook for {Repo}: green '{Workflow}' is '{Actual}', not the repository "
+                    + "content CI at '{Expected}' — not a publish signal.",
+                    repoUrl, GetString(run, "name"), workflowPath, expected);
+            }
+            return Observable.Return(0);
+        }
 
         var completion = new BuildCompletion
         {
