@@ -649,11 +649,38 @@ public static class JsonSynchronizationStream
                 )
             );
 
-        reduced.RegisterForDisposal(
-            new AnonymousDisposable(
-                () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner))
-            )
-        );
+        // 🚨 THE RELEASE IS REGISTERED ON THE STREAM'S HUB, NOT ON THE STREAM (#3986) — and the
+        // difference is the whole ordering fix.
+        //
+        // This `UnsubscribeRequest` is what kills the owner-side `sync/{id}` sub-hub, which is the
+        // ONLY place a `ClickedEvent` / `BlurEvent` / `CloseDialogEvent` is handled and the only
+        // place the `ClickAction` closure lives. A user action still crossing to the owner when it
+        // lands is refused: it did not run and never will (#3566 / #3986).
+        //
+        // Registered on the STREAM, it ran from `SynchronizationStream.Dispose()`, which disposes
+        // `streamDisposables` SYNCHRONOUSLY and deliberately BEFORE `Hub.Dispose()` (#1613) — so
+        // the release overtook every accepted-but-unacknowledged action with no phase in between
+        // that could have waited. Registered on the HUB it runs from `DisposeImpl` in the ShutDown
+        // phase, i.e. strictly AFTER **Quiescing**, whose entire job is draining this hub's pending
+        // response callbacks. An action submitted through `stream.SubmitUserAction(...)` holds one
+        // of those callbacks until the owner acknowledges it, so the release now ORDERS BEHIND the
+        // action by construction — through the lifecycle the hub already has, with no timer, no
+        // grace, no retry and no second disposal gate. (See `UserActionSubmission`.)
+        //
+        // The other teardown route — the per-circuit portal hub disposing its hosted `sync/{id}` —
+        // already ran this from the hub's ShutDown phase, because `RegisterForDisposal` hooks
+        // `streamDisposables` onto the hub. So both routes now release at the SAME point.
+        //
+        // 🚨 The fallback is not optional: a stream that has already released its hub (#3321
+        // step 3) has no ShutDown phase left to run in, and an owner never told to unsubscribe
+        // keeps a per-subscriber stream alive until its heartbeat lapses. Registering on the
+        // stream there preserves exactly today's behaviour for that case.
+        var release = new AnonymousDisposable(
+            () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner)));
+        if (reducedHub is not null)
+            reducedHub.RegisterForDisposal(release);
+        else
+            reduced.RegisterForDisposal(release);
 
 
         // Keep the remote owner grain alive while this subscription exists.
