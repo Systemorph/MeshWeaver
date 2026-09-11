@@ -197,8 +197,8 @@ Three further things this key showed, each of which generalises:
   not anyone read it. Retiring the shadow stops the *next* reader; rotating the key at its issuer is
   what closes the disclosure, and it is a separate, deliberate act with its own blast radius.
 
-🚨 **Step 2 rolls the Deployment, so it is subject to whatever else is rolling.** `set env` mutates
-the pod template, which creates a new ReplicaSet and supersedes an in-flight rollout. Read
+🚨 **Step 2 rolls the Deployment, so it is subject to whatever else is rolling.** Removing an entry —
+the remedy's patch or a break-glass `set env` alike — mutates the pod template, which creates a new ReplicaSet and supersedes an in-flight rollout. Read
 `kubectl rollout status` first and hold if a deploy is already in progress — a cleanup that ejects a
 release roll costs more than the shadow it clears. `hosting-inline-env-retire` makes exactly that
 check itself and refuses mid-rollout.
@@ -207,8 +207,9 @@ check itself and refuses mid-rollout.
 
 Under the 2026-09-08 operating directive every operation is a `Hosting/InstanceAction` the control
 instance's operator executes in-cluster, and a cluster command is break-glass
-([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)). **Step 2 is the one act on
-this page that has no such action.** Four sources say so, and they agree — measured 2026-09-10:
+([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)). **Until 2026-09-11, step 2 was
+the one act on this page that had no such action** — and no configuration change could stand in
+for one. Four sources said so, and they agreed — measured 2026-09-10:
 
 - **The chart cannot render it away, because the chart never rendered it.**
   `deploy/helm/templates/memex-portal/deployment.yaml` emits **four unconditional** inline `env:`
