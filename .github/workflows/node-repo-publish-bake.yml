@@ -446,6 +446,8 @@ jobs:
       # Read by dispatch-dependents below: a run that baked NOTHING (already sealed) publishes
       # nothing and therefore wakes nobody.
       published: ${{ steps.publish.outputs.published }}
+      content-sha: ${{ steps.content.outputs.sha }}
+      version: ${{ steps.platform-version.outputs.version }}
       image: ${{ steps.image.outputs.ref }}
       # The portal this bake compiled against — a dependent woken by this publication must bake
       # against the SAME one, so it travels in the dispatch payload (client_payload.platform_image).
@@ -805,6 +807,22 @@ jobs:
           echo "tester_app=$T" >> "$GITHUB_OUTPUT"
           echo "portal_app=$P" >> "$GITHUB_OUTPUT"
           echo "tester /app: $(find "$T" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies; portal /app: $(find "$P" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies ($(wc -l < "$P/meshweaver-surface.manifest" | tr -d ' ') manifest lines)"
+      # The version travels with the image, including a digest-pinned push or a core CD call.
+      # A workflow event's dispatch-only version is neither present nor authoritative in all cases.
+      - name: Read the platform image's own version for the publication record
+        id: platform-version
+        env:
+          PORTAL_REF: ${{ steps.platform.outputs.ref }}
+        run: |
+          set -euo pipefail
+          version=$(docker image inspect "$PORTAL_REF" --format '{{json .Config.Env}}' | jq -er '
+            [.[] | select(startswith("MESHWEAVER_PLATFORM_VERSION=")) | ltrimstr("MESHWEAVER_PLATFORM_VERSION=")]
+            | if length == 1 then .[0] else error("expected one MESHWEAVER_PLATFORM_VERSION") end')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || {
+            echo "::error::the selected portal image has no valid platform release version; no publication can be announced with unknown provenance."
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       # 🚨 ONE BUILD, asserted — never assumed from "the same tag". The bake is keyed to the
       # PORTAL's identity and executed by the TESTER's toolchain; that is honest only when the two
       # images are one build. The tester's own `framework-identity` verb reads the portal's /app as
@@ -1430,11 +1448,13 @@ jobs:
           IMAGE: ${{ needs.publish-bake.outputs.image }}
           PLATFORM_IMAGE: ${{ needs.publish-bake.outputs.platform }}
           IDENTITY: ${{ needs.publish-bake.outputs.identity }}
-          RELEASED_VERSION: ${{ github.event.client_payload.version }}
+          CONTENT_SHA: ${{ needs.publish-bake.outputs.content-sha }}
+          RELEASED_VERSION: ${{ needs.publish-bake.outputs.version }}
           SELF: ${{ inputs.content-repository || github.repository }}
           UPSTREAMS: ${{ inputs.upstream-sources }}
         run: |
           set -euo pipefail
+          RESP="${RESP:-/tmp/resp}"
           missing=()
           [ -n "${URL:-}" ]    || missing+=("webhook-url (input) — the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds (core CD: vars.PLATFORM_WEBHOOK_URL)")
           [ -n "${SECRET:-}" ] || missing+=("webhook-secret (secret) — the shared HMAC, byte-identical to the instance's Hosting:PlatformWebhookSecret (core CD: secrets.PLATFORM_WEBHOOK_SECRET)")
@@ -1444,11 +1464,13 @@ jobs:
             exit 1
           fi
           [ -n "${PLATFORM_IMAGE:-}" ] || { echo "::error::this bake resolved no platform image, so the record cannot name the identity's portal (MeshWeaver#3022)."; exit 1; }
+          [[ "${CONTENT_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "::error::the published content checkout has no valid commit SHA; refusing to announce the workflow commit as its source."; exit 1; }
+          [[ "${RELEASED_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo "::error::the published bake has no valid platform release version from its selected portal image."; exit 1; }
           digest=""; case "$IMAGE" in *@sha256:*) digest="${IMAGE#*@}" ;; esac
           # The record memex registers: which SOURCE sealed a publication for which IDENTITY, from
-          # which commit, against which tester + portal. `version` is the platform tag the identity
-          # was baked for when this run was itself a release-follow — memex carries it into the
-          # event so dependents resolve the same set by name.
+          # the actual content checkout commit, against which tester + portal. `version` is read
+          # from that portal image's config, not from the calling workflow's event. It describes
+          # the build platform, not a plugin's own manifest.lock SemVer.
           # `upstreams` is the caller's `upstream-sources` — the ONE declaration of "this repo depends
           # on those sources" (the same list the seed asserts sealed publications for). memex keeps
           # it on the source's Hosting/Publication record and routes the wave on it: a publication
@@ -1457,22 +1479,22 @@ jobs:
           # platform release). Before this field the wave went to EVERY registry source, the
           # publisher included — the 2026-09-07 self-feeding dispatch storm (Plugins#1484).
           UPSTREAMS_JSON=$(printf '%s' "${UPSTREAMS:-}" | tr ',;' '  ' | tr -s '[:space:]' '\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | awk '!seen[$0]++' | jq -R . | jq -cs .)
-          BODY=$(jq -cn --arg repo "$SELF" --arg s "$SOURCE" --arg sha "$GITHUB_SHA" --arg id "${IDENTITY:-}" \
+          BODY=$(jq -cn --arg repo "$SELF" --arg s "$SOURCE" --arg sha "$CONTENT_SHA" --arg id "${IDENTITY:-}" \
             --arg i "$IMAGE" --arg d "$digest" --arg pi "$PLATFORM_IMAGE" --arg v "${RELEASED_VERSION:-}" \
             --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --argjson up "$UPSTREAMS_JSON" \
             '{event:"bundle-publication", repo:$repo, source:$s, sha:$sha, identity:$id, image:$i, digest:$d, platformImage:$pi, version:$v, run:$run, upstreams:$up}')
           SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
-          code=$(curl -sS -o /tmp/resp -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+          code=$(curl -sS -o "$RESP" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
             -X POST "$URL" -H 'Content-Type: application/json' \
             -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
-          echo "POST $URL -> $code"; cat /tmp/resp || true
+          echo "POST $URL -> $code"; cat "$RESP" || true
           case "$code" in
             2*)
               {
                 echo "### 📣 Publication registered with memex (HTTP $code)"
                 echo "- source: \`$SOURCE\`  identity: \`${IDENTITY:-?}\`  image: \`$IMAGE\`  platform: \`$PLATFORM_IMAGE\`"
                 echo "memex STORED the record. Whether it dispatched meshweaver-upstream-published is read on memex and on the dependents, never here."
-                verdict=$(tr -d '\n' < /tmp/resp | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                verdict=$(tr -d '\n' < "$RESP" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
                 echo "- signature: **${verdict:-(the answer carried no verdict)}** — judged in the next step."
               } >> "$GITHUB_STEP_SUMMARY"
               ;;
