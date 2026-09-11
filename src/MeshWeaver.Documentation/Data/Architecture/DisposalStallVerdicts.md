@@ -424,6 +424,147 @@ for why the precondition was made causal in the first place.
 to what either twin asserts is not done until the Plugins copy carries it (break shape 7; see
 [Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) → "Shape 7's worst form").
 
+## Resolved 2026-09-11 (#4023): the answer was dropped by the mesh's ROUTER, not by the NACK
+
+The sighting above recurred on MeshWeaver.Plugins run 34581527040 (`Portal hosts (shard 2)`), and
+it was reproduced locally: **4 failures in 3,600 iterations** of the test body under CPU contention
+(`DOTNET_PROCESSOR_COUNT=2` plus 18 spinning processes), **0 in 200** without it. Each iteration
+recorded the armed request's fate trail with extra stages, including — the instrument that decided
+it — every stage of the REPLY's own journey mirrored onto its request's trail. The ledger's own
+verdict already said *"a reply WAS posted … chase the response delivery"*; until then nothing
+recorded that delivery.
+
+### The first hypothesis held — and proved nothing about a NACK
+
+The check this page prescribed came back clean: no `Error during shutdown of hub` in the failing
+job (126,780 bytes, ANSI-stripped), and the ShutDown-phase registrant is on every failing trail at
+`runLevel=ShutDown`. But it ran with **`claimed=False`**: the once-only ack gate had already been
+claimed by a **success** ack. The owner had COMMITTED the patch (`PATCH_MERGE_STAMPED v=2 refused=0
+→ PATCH_ECHO_SEEN → PATCH_ACK ok`). In no failing iteration was an `OwnerDisposing` NACK minted, so
+"the owner minted an OwnerDisposing NACK" — the assertion's own premise — was false every time it
+failed. "The registrant ran" is necessary and not sufficient: read `claimed=` before drawing
+anything from it.
+
+### Why #2778's fix "stopped holding": it did not — the test moved off it
+
+- **#2868's direct `Dispatch` never failed.** In every iteration where the registrant claimed the
+  gate it dispatched and the watch was consumed (41 of 200 unstressed, 42 of 400 stressed).
+- **#3291 moved the test onto another path** (`f92305ae1`, 2026-09-04, "no forced teardown"). The
+  parked merge turn now releases on `owner.IsShuttingDown` — which flips at the FIRST instant of
+  `Mesh.Dispose()`, through the `CloseCreation` cascade, while the owner is still `Started`. The
+  queued merge then commits, the live ack claims the gate, and the registrant correctly stands down.
+  Which route the answer took to the armed watch, over 400 stressed iterations:
+
+| iterations | route | since |
+|---|---|---|
+| 347 | live ack; the owner's route-up finds the parent past `DisposeHostedHubs` and hands it to `IUndeliverableReplySink` | 97a0284f5 (#3303) |
+| 42 | the merge did not commit; the ShutDown-phase registrant's direct `Dispatch` | #2868 (#2778) |
+| 10 | live ack; the owner's own post is refused and falls through to the sink | #3196 |
+| **1 — FAIL** | live ack on the **ordinary** route (owner → mesh → caller's `cache/…` hub), parent still below `DisposeHostedHubs` | — |
+
+So the test stopped exercising #2778's seam in about nine iterations of ten, and started exercising
+"does a committed write's ack survive routing through a tree being torn down". That depends on
+three OTHER seams, and the fourth route had a hole.
+
+### The failing trail, and the ordering it shows
+
+Two v3 captures, **identical** in shape (iterations 335 and 927; 335 shown):
+
+```
+PATCH_ACK ok                        @TestData/teardown-nack-node   +50ms
+RESPONSE_POSTED target=cache/…      @TestData/teardown-nack-node   +50ms
+RECEIVED runLevel=Started           @TestData/teardown-nack-node   +50ms   (post accepted; routed up)
+RECEIVED runLevel=Quiescing         @mesh/…                        +50ms   (a reply is exempt at the Quiescing tier)
+QUEUED queue=main depth=4           @mesh/…                        +50ms
+ROUTED onTarget=False state=Forwarded @mesh/…                      +67ms   (after the mesh's own DisposeHostedHubs turn)
+  — never RECEIVED @cache/… —
+DIAG registrant claimed=False runLevel=ShutDown @TestData/teardown-nack-node +125ms
+```
+
+Snapshot at the owner's `Dead`: `mesh RunLevel=DisposeHostedHubs`; `cache/… RunLevel=Quiescing
+Queue(buffer=0,deferred=0) PendingCallbacks=1[…PatchDataRequest@TestData/teardown-nack-node]` — the
+caller's hub alive, its queue empty, waiting for exactly this reply. The watch was **still armed
+5,001 ms later**: the caller's own 2 s response wait expires first, and that branch deliberately
+leaves the watch armed, so the writer does burn the full 31 s `WriteVerdictBound` and reports
+`OwnerUnreachable` for a write that was applied. The remaining teardown is the discriminator: 1,849 ms
+locally and 1,948/1,949 ms in both CI failures (the caller's hub waiting out its 2 s quiesce budget),
+against a passing maximum of 69–107 ms.
+
+In the passing ordinary-route iterations `RECEIVED @cache` is recorded BEFORE the mesh's own
+`ROUTED` stage — the hand-over is inline. Here the mesh reports `Forwarded` and nothing arrives,
+which rules out both of `RouteAlongHostingHierarchy`'s direct branches and leaves the routing HANDLER
+that runs ahead of them: `MeshBuilder` hands every delivery not addressed to the mesh itself to
+`IRoutingService.DeliverMessage`.
+
+### The defect: the third site of "nobody is waiting"
+
+`RoutingServiceBase.RouteInMesh` dropped every delivery once the mesh reached `DisposeHostedHubs` —
+no NACK, no log, and `Forwarded` returned — under the comment *"recipients are likely also
+disposing"*. That is the sentence #2778 removed from the owner's disposal NACK and #3303 removed
+from `HierarchicalRouting`'s route-up refusal. It is false here for the same reason: a hosted hub
+whose parent is in `DisposeHostedHubs` has only just been ASKED to dispose, and what a Quiescing hub
+does is wait for the replies it is owed.
+
+**The fix** (`RouteReplyDuringMeshTeardown`) is scoped exactly as #3303 scoped its seam: at that
+run level a delivery carrying `PostOptions.RequestId` — an answer — is still delivered to a recipient
+that ALREADY exists, in the order the live path serves the two recipient kinds: a hosted hub
+(`HostedHubCreation.Never`; nothing is built during teardown), then a recipient registered with the
+router as a stream (portal and session hubs register this way, and can exist with no hosted hub).
+Ordering is the live path's too: while an activation serializer for the address is draining, the
+answer joins its queue (#1145), and the serializer carries it on at this run level instead of
+dropping it. Everything else keeps the historical drop. The recipient's own intake gate still decides —
+a Quiescing hub admits answers by design, a hub past its own `DisposeHostedHubs` refuses them — so
+the change adds no admission rule; it stops pre-empting that gate. There is no undeliverable-reply
+sink on this path: the mesh hands the router a PACKAGED (`RawJson`) delivery the sink cannot type,
+so the case with no live recipient stays a drop, now named on the request's trail
+(`REPLY_UNROUTABLE_DURING_MESH_TEARDOWN`).
+
+**Where it applies.** `RoutingServiceBase` backs `MonolithRoutingService` — the monolith and every
+CI test mesh. `OrleansRoutingService` implements `IRoutingService` separately and carries no such
+guard; a distributed portal does not take this path.
+
+### The controls, and the evidence each can fail
+
+`ReplyRoutedDuringMeshTeardownReachesItsWaiterTest` holds the state open by construction — a
+mesh-hosted hub's action block parked on an accepted turn, so it stays below `DisposeHostedHubs`
+while the mesh cannot leave it — and hands deliveries to `IRoutingService` exactly as the mesh's
+handler does. Every fact is judged once the mesh is `Dead`, after which nothing more can arrive, and
+every route error is recorded and asserted absent, so a router that THROWS cannot pass a "not
+delivered" check (a review finding on the first version, which only logged it).
+
+| build | answer → hosted hub | answer → registered-stream recipient (no hosted hub) | uncorrelated traffic still refused |
+|---|---|---|---|
+| unfixed router | **fails** | **fails** | passes |
+| the fix | passes | passes | passes |
+| over-broad fix (carry everything) | fails on its uncorrelated check | fails on its uncorrelated check | **fails** |
+| no registered-stream hook | passes | **fails** | passes |
+
+The stream fact also asserts its own precondition — the recipient has no hosted hub — so it cannot
+pass by exercising the hosted-hub branch instead.
+
+### Still open: judging the ordinary route at the owner's `Dead` is a race
+
+One of the four local failures was different (iteration 220 of an earlier run): the reply had reached
+the caller's hub queue and was delivered **12 ms after** the assertion. Judging at the owner's `Dead`
+is exact for the registrant and sink routes, which complete on the owner's own turns, and not for
+the ordinary route, whose last two queues are crossed afterwards — see the correction in
+[Teardown Verdicts Are Causal](/Doc/Architecture/TeardownVerdictsAreCausal). Seen once in 3,600
+stressed iterations and never in CI. Closing it is a change to what BOTH twins assert (break shape
+7), and is not part of this change.
+
+### Hypotheses killed, each by a measurement
+
+- **A drop at the root's "no route while disposing" arm** — zero such stages; `messageHubs` still
+  returns a disposing child while it is registered.
+- **An asynchronous turn holding the caller's hub** — its queue is empty in the snapshot, and every
+  handler it carries is synchronous.
+- **Queue depth on arrival** — an iteration passed with the reply behind the same depth of 3, taken
+  38 ms after queueing.
+- **The owner's commit push holding the caller's hub** — `DataChangedEvent` is handled on the
+  synchronization sub-hub, synchronously.
+- **Thread-pool starvation** — every monolith hub drains on `TaskScheduler.Default`, and the owner
+  went `Started → Dead` in about 80 ms in the very iteration where the reply was lost.
+
 ## The install holds the root: deferring a recycle instead of stranding a write (#3510)
 
 Naming the disposer (the section above) made the next occurrence a read. It did not stop the
