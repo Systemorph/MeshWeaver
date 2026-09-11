@@ -1261,7 +1261,10 @@ internal class MeshNodeCompilationService(
                 .SelectMany(snapshot => BoundLeg(
                     _ => OnThreadPool(() =>
                         CompileResultFromAssembly(
-                            node, assemblyLocation, log, snapshot, attempt.InputDigest)),
+                            node, assemblyLocation, log, snapshot, attempt.InputDigest,
+                            // This IS the publish: the emit that produced assemblyLocation just
+                            // finished, so its context supersedes the older generations (#4013).
+                            publishesTheBuild: true)),
                     _cacheOptions.AssemblyLoadTimeout, "assembly-load", node.Path))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
                 // finished it, but CompileResultFromAssembly's downstream steps
@@ -1602,10 +1605,19 @@ internal class MeshNodeCompilationService(
     /// no <c>CompiledSources</c>, which is why stamping it would be catastrophic and nothing
     /// does). Null simply leaves the record without a content key; the toolchain entry still
     /// governs.</para></param>
+    /// <param name="publishesTheBuild">🚨 True on the POST-EMIT path only — the compile that just
+    /// produced <paramref name="assemblyLocation"/>, i.e. the one moment a new generation of this
+    /// NodeType exists and the older ones are genuinely superseded. False on the
+    /// assembly-HYDRATION shortcut (<see cref="GetConfigurationsFromExistingAssembly"/>), which is
+    /// a READER of bytes an <c>IAssemblyStore</c> handed over. Reads must not re-order generations:
+    /// a hydration scan that superseded a concurrently published rebuild is half of the
+    /// ping-pong #4013 reports (the other half being the rebuild's own scan superseding the
+    /// hydration's). See <c>ICompilationCacheService.PublishLoadContextForPath</c>.</param>
     private NodeCompilationResult? CompileResultFromAssembly(
         MeshNode node, string assemblyLocation, ActivityLog log,
         ImmutableDictionary<string, long> compiledSources,
-        string? generatedInputDigest = null)
+        string? generatedInputDigest = null,
+        bool publishesTheBuild = false)
     {
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -1637,7 +1649,8 @@ internal class MeshNodeCompilationService(
                     nodeName,
                     assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
                         ? null
-                        : assemblyLocation);
+                        : assemblyLocation,
+                    publishesTheBuild);
                 var context = pinned.Context;
                 var assembly = context.LoadNodeAssembly();
                 if (assembly == null)

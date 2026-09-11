@@ -178,14 +178,19 @@ public sealed class AssemblyLoadContextLeakTest : IDisposable
 
     /// <summary>
     /// Load an emitted assembly through the path-keyed context (the live recompile path,
-    /// <c>CompileResultFromAssembly</c> → <c>GetOrCreateLoadContextForPath</c>), USE its type, and
+    /// <c>CompileResultFromAssembly</c> → <c>PublishLoadContextForPath</c>), USE its type, and
     /// return ONLY a weak ref to the context. Locals die with this <see cref="MethodImplOptions.NoInlining"/>
     /// frame so no strong ref survives on the caller's stack.
+    ///
+    /// <para>🚨 The PUBLISH door, because this models a recompile that just emitted these bytes.
+    /// Since #4013 the plain <c>GetOrCreateLoadContextForPath</c> is a READ and supersedes nothing:
+    /// a reader's resolve is no evidence about which build is current, and letting it evict is what
+    /// let two concurrent scans destroy each other's contexts until the pin retry cap rethrew.</para>
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private WeakReference LoadPathAndWeakRef(string nodeName, string dllPath)
     {
-        var context = _service.GetOrCreateLoadContextForPath(nodeName, dllPath);
+        var context = _service.PublishLoadContextForPath(nodeName, dllPath);
         var assembly = context.LoadNodeAssembly();
         assembly.Should().NotBeNull("the emitted assembly must load from its path-keyed context");
         var type = assembly!.GetTypes().FirstOrDefault(t => t.IsClass);
@@ -197,7 +202,7 @@ public sealed class AssemblyLoadContextLeakTest : IDisposable
     /// <summary>
     /// 🚨 The per-recompile reclaim (the memex native-memory leak). A long-lived NodeType hub is
     /// recompiled repeatedly WITHOUT tearing down; each recompile writes a new unique path and loads
-    /// it via <see cref="CompilationCacheService.GetOrCreateLoadContextForPath"/>. Loading the NEW
+    /// it via <see cref="CompilationCacheService.PublishLoadContextForPath"/>. Publishing the NEW
     /// path must evict + collect the SUPERSEDED context for the same NodeType then and there — not
     /// only on hub teardown (<c>UnloadNodeContexts</c>). If RED, every recompile pins another
     /// collectible ALC + its native metadata/JIT for the hub's whole life → unbounded growth to the

@@ -12,6 +12,11 @@
     <!-- KernelScriptReferencesFreshnessTest: the reference set is internal, and the freshness
          invariant (#2616) is only testable from inside. -->
     <InternalsVisibleTo Include="MeshWeaver.Kernel.Test" />
+    <!-- ScriptReferenceMemoIsGenerationBoundedTest: the memo and its entry count are internal,
+         and the bound (#4003 — a recompiled cell-surface NodeType must leave no permanent entry,
+         while the ~350 framework assemblies stay de-duplicated across sessions) can only be
+         asserted from inside. -->
+    <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
   </ItemGroup>
 
   <ItemGroup>
