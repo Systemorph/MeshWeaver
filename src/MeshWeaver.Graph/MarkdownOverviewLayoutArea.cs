@@ -271,6 +271,13 @@ public static class MarkdownOverviewLayoutArea
         // whether THIS document has anything to show. No package ⇒ no section, no cost.
         container = container.WithView(ApprovalsSection(host, nodePath));
 
+        // Signatures section — the same delegation to the e-Signature PACKAGE (DeepSign / Skribble,
+        // MeshWeaver.Plugins#1682): its shared desk renders this document's signature block — signed
+        // requests as signatures, open ones with their Sign button — and decides whether there is
+        // anything to show. Same bounded index probe, same reference-id hand-over. No package ⇒ no
+        // section, no cost.
+        container = container.WithView(SignaturesSection(host, nodePath));
+
         // Standard inline comments section (if comments enabled)
         if (!hideHeader && host.Hub.Configuration.HasComments())
         {
@@ -296,6 +303,25 @@ public static class MarkdownOverviewLayoutArea
             .Exists(host.Hub.ServiceProvider.GetService<IMeshService>(), ApprovalDeskPath)
             .Select(installed => installed
                 ? (UiControl?)Controls.LayoutArea(ApprovalDeskPath, ApprovalsArea, nodePath)
+                    .WithShowProgress(false)
+                : Controls.Stack);
+
+    /// <summary>The e-Signature package's shared desk — the instance that serves every document.</summary>
+    internal const string SignatureDeskPath = "DeepSign/Workspace";
+
+    /// <summary>The desk area rendering one document's signature block.</summary>
+    internal const string SignatureArea = "Signature";
+
+    /// <summary>
+    /// The document's signatures, rendered by the e-Signature package when that package is on the
+    /// mesh — an empty stack otherwise, never an "area not found" card. The document path rides as
+    /// the layout-area REFERENCE, exactly as the approvals section hands it over.
+    /// </summary>
+    private static IObservable<UiControl?> SignaturesSection(LayoutAreaHost host, string nodePath)
+        => PluginSurfaceProbe
+            .Exists(host.Hub.ServiceProvider.GetService<IMeshService>(), SignatureDeskPath)
+            .Select(installed => installed
+                ? (UiControl?)Controls.LayoutArea(SignatureDeskPath, SignatureArea, nodePath)
                     .WithShowProgress(false)
                 : Controls.Stack);
 
