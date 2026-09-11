@@ -221,6 +221,19 @@ AZ
   rm -rf "$ST_TMP/state"
   write_selector 0 '{"runAll": false, "mount": [], "affected": [], "skipped": ["Store","Edu"], "support": []}'
   expect "a diff that reaches no module at all (docs/, e2e/, .claude/)" none "$(run_case push acct/share)"
+  # Per-module deploy: a later run sealed first. Sealing the OLDER tree would move every instance's
+  # sources backwards, so the older run bakes nothing — and a diverged seal is NOT that case: it
+  # still falls through to the rewritten-history full bake above.
+  rm -rf "$ST_TMP/state"; write_selector 0 "$OK_JSON"
+  seal newer/share "$HEAD_SHA" Store.zip Edu.zip
+  expect "a NEWER commit is already sealed (runs finished out of order) — never seal backwards" \
+    none "$(run_case push newer/share "$BASE_SHA")"
+  # The control, one variable apart: the same guard with a sealed commit this run's tree is NOT in
+  # (a diverged line — OTHER forks from BASE, so HEAD is not its ancestor) must not skip; it falls
+  # through to the rewritten-history full bake.
+  rm -rf "$ST_TMP/state"; seal newer/share "$OTHER_SHA" Store.zip Edu.zip
+  expect "…while a sealed commit that does NOT contain this run's tree is still a full bake" \
+    full "$(run_case push newer/share)"
 
   # ── THE POINTER. The flat copy and the generation deliberately record DIFFERENT baselines, so
   # ── the verdict says which one was read: a diverged baseline forces `full`, an ancestor one
@@ -459,6 +472,27 @@ if [ "$prev_sha" = "$HEAD_SHA" ]; then
   echo "::notice title=Nothing to bake::$REASON"
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '### ✅ Already published\n\n%s\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+  fi
+  BASELINE="$prev_sha"
+  emit
+  exit 0
+fi
+
+# ── 4b. never seal BACKWARDS ─────────────────────────────────────────────────────────────────
+# 🚨 Per-module deploy (maintainer, 2026-09-11: "builds are not superseded … however they must be
+# atomic"): a repo on per-module deploy never cancels a push run on `main`, so two of them can reach
+# the bake in either order. When a NEWER commit is already sealed, this run's tree is contained in
+# it, and sealing this one would move every instance's sources BACKWARDS — SealedSyncGate holds a
+# repository's sources at the sealed commit — until the next seal. That is a positive finding with
+# both shas, not an input-shaped skip. (publish-bake-bundles.sh repeats the check at write time: a
+# newer run can seal while this one is still baking.)
+if git -C "$REPO_DIR" cat-file -e "${prev_sha}^{commit}" 2>/dev/null \
+   && git -C "$REPO_DIR" merge-base --is-ancestor "$HEAD_SHA" "$prev_sha" 2>/dev/null; then
+  SCOPE="none"
+  REASON="the sealed publication records $prev_sha, which is NEWER than this run's $HEAD_SHA and already contains it — a later run sealed first. Sealing this tree would move every instance's sources backwards; nothing to rebuild and nothing to publish."
+  echo "::notice title=Nothing to bake::$REASON"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf '### ✅ A newer publication is already sealed\n\n%s\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
   fi
   BASELINE="$prev_sha"
   emit
