@@ -133,8 +133,13 @@ def discover_nodetypes(root: Path):
 # ── scope: the atomic unit the caller asks for ───────────────────────────────────────────────────
 
 def known_packages(root: Path) -> list:
-    """Every top-level folder that is a node repo — the same set `discover_nodetypes` walks."""
-    return sorted(d.name for d in root.iterdir() if d.is_dir() and d.name not in SKIP)
+    """Every PACKAGE: a top-level folder carrying an `index.json` — the node-repo package
+    convention (`node-repo-scope.py`, `affected-modules.py`), NOT every non-SKIP folder
+    `discover_nodetypes` walks. A checkout also carries `clients/`, `tools/`, `devtools/` … and
+    accepting one of those as "known" would let a caller name a non-package, compile zero
+    NodeTypes and read a green verdict (Copilot on MeshWeaver#4052)."""
+    return sorted(d.name for d in root.iterdir()
+                  if d.is_dir() and d.name not in SKIP and (d / "index.json").is_file())
 
 
 def parse_modules(arg: "str | None", known) -> tuple:
@@ -956,6 +961,12 @@ def _self_test() -> int:
                 (fixture / pkg / f"{t}.json").write_text(
                     '{"content": {"$type": "NodeTypeDefinition"}}', encoding="utf-8")
         (fixture / "scripts").mkdir()          # a SKIP dir is never a package
+        # A non-package folder a checkout carries anyway (clients/, tools/, devtools/): it has no
+        # index.json, so it is not a package even though discovery walks it — and naming it must
+        # be refused, or an empty unit reads as a green verdict.
+        (fixture / "clients").mkdir()
+        (fixture / "clients" / "Stray.json").write_text(
+            '{"content": {"$type": "NodeTypeDefinition"}}', encoding="utf-8")
         global ROOT
         saved_root = ROOT
         ROOT = fixture
@@ -982,6 +993,10 @@ def _self_test() -> int:
             sel, err = parse_modules("scripts", pkgs)
             if sel is not None or not err:
                 scope_failures.append("  unknown id: a SKIP dir must not be selectable as a package")
+            sel, err = parse_modules("clients", pkgs)
+            if sel is not None or not err or "clients" not in err:
+                scope_failures.append("  unknown id: a folder with no index.json is not a package, "
+                                      f"even though discovery walks it — got ({sel!r}, {err!r})")
             # an empty list is refused — never 'compile nothing' silently
             for empty in ("", ",", " , "):
                 sel, err = parse_modules(empty, pkgs)
