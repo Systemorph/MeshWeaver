@@ -273,10 +273,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private sealed class SharedMeshProvider(IServiceProvider serviceProvider, string testClassName)
         : IAsyncDisposable
     {
-        // Nullable, and cleared by DisposeAsync BEFORE the unload drain: while this holder keeps the
-        // disposed provider, it roots the mesh and its MeshContentTypeRegistry, and with them the very
-        // collectible contexts the drain waits for (Plugins#1605) - the shared twin of the per-test
-        // path's `ServiceProvider = null!`.
+        // Nullable, and cleared by DisposeAsync BEFORE the unload drain: the shared twin of the per-test
+        // path's `ServiceProvider = null!` (Plugins#1605). The drain waits for contexts this mesh retired,
+        // so the holder must not keep the disposed mesh reachable across it. Like the per-test release it
+        // is not observable when the provider disposes cleanly (TeardownWaitsForCollectibleUnloadsTest:
+        // Autofac clears what it built); it costs nothing.
         private IServiceProvider? serviceProvider = serviceProvider;
 
         /// <summary>The provider every test of the class shares.</summary>
@@ -1723,9 +1724,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // after the reactive "all collected" signal: xUnit does not construct it until this
             // DisposeAsync returns. A faulted unload fails the class like a dirty teardown; a
             // retained context (rooted by something live) is REPORTED, never waited on.
-            // The fixture must not itself hold the mesh it is waiting to see unloaded: the disposed
-            // provider still reaches every singleton, the mesh hub and its content-type registry, whose
-            // discriminator claims hold the collectible types (gcroot inside the drain, #1605).
+            // The fixture must not itself hold the mesh it is waiting to see unloaded. An in-drain gcroot
+            // of a FutuRe teardown (#1605) showed this provider on the chain to the content-type
+            // registry's claims on collectible types. With the provider disposed cleanly that chain does
+            // not reproduce (TeardownWaitsForCollectibleUnloadsTest: Autofac clears the singletons it
+            // built), so this is a release that costs nothing, not a measured fix.
             ServiceProvider = null!;
             var unloadOutcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(collectibleUnloads);
             TestPhaseTrace(testName,

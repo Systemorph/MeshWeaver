@@ -1796,6 +1796,22 @@ The progression, each step measured the same way:
 
 The 12 that remain are reported and named, never waited on.
 
+**Correction, the same day: the last row is two changes, and only one of them is shown to matter.**
+That step shipped the frame yield and the teardown's release of its own service provider together, and the two
+were never measured apart. `TeardownWaitsForCollectibleUnloadsTest` (core `MeshWeaver.Graph.Test`) then tried
+to pin the release on its own, and could not. With the provider disposed cleanly, keeping it roots nothing a
+harness can build:
+- Autofac clears the singletons it built when it is disposed. A container-built holder of a collectible
+  instance was collected with the release reverted, whether it was resolved from the root provider or from
+  the mesh hub.
+- Anything *registered* — a provided instance, a factory's captures — is also held by the fixture's own
+  `Services` collection, so it stays rooted whether the provider is kept or not.
+
+The release stays: the first in-drain `gcroot` put the provider on the chain, and it costs nothing. But the
+126 / 12 row is not evidence for it. What that test does pin, each by revert: deleting the per-test drain turns
+3 of its 4 cases red, deleting the shared-mesh drain turns the shared case red, and swallowing a faulted unload
+turns the fault case red.
+
 **The residual has no managed root, and the cutoff is measured, not guessed.**
 - A second heap dump taken *inside* the drain, with both fixes active, shows **no** non-weak root on either
   still-unloading LoaderAllocator. None is a stack root, a strong or pinned handle, a dependent handle, or a
