@@ -97,15 +97,15 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
-          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+          FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         run: |
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID        OIDC app registration for azure/login. 🚨 LOCKING IS A WRITE: it needs the data action Microsoft.ContainerRegistry/registries/repositories/metadata/write, which is in 'Container Registry Repository Writer' (and Contributor/Owner) and in NEITHER AcrPull NOR AcrPush — measured 2026-09-07, AcrPush is pull/read + push/write and nothing else. If this identity only has the read-only grant the pinned-digest sweep uses, the lock step reds naming the exact 'az role assignment create'")
           [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID        the Systemorph AAD tenant")
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID  the subscription holding meshweaver.azurecr.io")
-          [ -n "$MESHWEAVER_APP_ID" ]     || missing+=("secrets.MESHWEAVER_APP_ID          app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet — it is how the satellites' workflows and the deployment overlays are read")
-          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          [ -n "$FLEET_READER_APP_ID" ]     || missing+=("secrets.FLEET_READER_APP_ID          app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read); its installation IS the fleet whose pins and deployment overlays this job locks — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
+          [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write and is not installed on Memex")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::the pinned-manifest lock job cannot run — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -119,12 +119,17 @@ jobs:
       # So assert the CAPABILITY the job needs — enumerating the installation's repositories —
       # against the real API. That is also the job's fleet list: it is discovered, never committed,
       # so a repository added to the org is protected the day the App reaches it.
+      # 🚨 The READ-ONLY `fleet-reader` App. Discovery makes the App's installation the fleet, so an
+      # App that does not reach a repository does not FAIL here — it silently drops that repository.
+      # Memex's deployment overlays pin the live portals' image tags (AXIS 2), which is why this is
+      # not `meshweaver-cloud`, which Memex is leaving (decided 2026-09-11).
+      # Doc/Architecture/GitHubAppCredentials.
       - name: Mint an installation token for the fleet
         id: fleet-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-contents: read
 
@@ -140,7 +145,7 @@ jobs:
                              --jq '.repositories[].full_name'); then
             echo "::error::the minted installation token could not enumerate its own repositories."
             echo "  /installation/repositories is the endpoint an installation token answers about"
-            echo "  itself, so this is the token, not the network. Confirm the meshweaver-cloud App"
+            echo "  itself, so this is the token, not the network. Confirm the fleet-reader App"
             echo "  is installed on the Systemorph org and holds Contents: Read."
             exit 1
           fi
@@ -148,7 +153,7 @@ jobs:
           if [ "$count" -eq 0 ]; then
             echo "::error::the installation reaches ZERO repositories."
             echo "  Deriving a lock set from an empty fleet protects NOTHING while reporting success."
-            echo "  Add the fleet repositories to the meshweaver-cloud installation."
+            echo "  Add the fleet repositories to the fleet-reader installation."
             exit 1
           fi
           echo "The App reaches $count repository(ies); those are what the job will read."
@@ -169,12 +174,17 @@ jobs:
       # PAT rots exactly as PATs do (chart-drift.yml carried one; HTTP 401 on all nine runs after it
       # was provisioned, so the check never ran once, #1709). This one is minted fresh, expires in an
       # hour, and holds Contents: Read and nothing else.
+      # 🚨 The READ-ONLY `fleet-reader` App. Discovery makes the App's installation the fleet, so an
+      # App that does not reach a repository does not FAIL here — it silently drops that repository.
+      # Memex's deployment overlays pin the live portals' image tags (AXIS 2), which is why this is
+      # not `meshweaver-cloud`, which Memex is leaving (decided 2026-09-11).
+      # Doc/Architecture/GitHubAppCredentials.
       - name: Mint an installation token for the fleet
         id: fleet-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-contents: read
 
