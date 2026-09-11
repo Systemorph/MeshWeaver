@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
@@ -43,6 +44,16 @@ namespace MeshWeaver.PluginCatalog;
 /// refusing: an instance must never hold bytes its own next boot would try to load into a
 /// platform that lacks their types… which for the adopt path is the point of the install, so a
 /// hold there would be a package whose binary half silently never arrives.</para>
+///
+/// <para><b>The shelf never moves its head backwards (#3996).</b> The publish endpoint can receive
+/// the same module from more than one release lane. A slower, older build is still valid warehouse
+/// stock, but arrival order is not version order: on 2026-09-11 Mail 1.7.0 landed first and a core
+/// CD carrying 1.6.1 arrived eleven minutes later, moved the activation head, and a restart silently
+/// un-shipped 1.7.0. Shelf landings therefore compare a known incoming version with the current,
+/// present, loadable head through <see cref="NuGetVersionComparer"/>. An older upload keeps that
+/// head and is retained as its previous generation when it is the best fallback; direct adoption
+/// remains unchanged because <see cref="ModuleUpdateDecision"/> already refuses unattended
+/// downgrades before it downloads a byte.</para>
 ///
 /// <para><b>The generation a landing displaces is KEPT, as the new entry's fallback (#3649).</b>
 /// <see cref="ModuleActivationEntry.PreviousDirectory"/> names it, the GC references it, and boot
@@ -740,6 +751,25 @@ public sealed class ModuleLandingService : IDisposable
             e.Enabled
             && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(e.Directory));
+
+        // 🚨 #3996 — ARRIVAL ORDER IS NOT VERSION ORDER on the registry shelf. Two release
+        // lanes publish the same modules, and core CD is deliberately much slower than Plugins'
+        // own publication. The older lane can therefore arrive LAST. Before this comparison every
+        // accepted upload moved the activation pointer, so Mail 1.7.0 landed at 02:49Z and the
+        // late 1.6.1 upload moved it backwards at 03:00Z; the next restart activated 1.6.1.
+        //
+        // Only a PRESENT, LOADABLE newer head wins. A sidecar whose bytes are gone or whose head
+        // cannot load must be healed by the incoming generation even when its recorded version is
+        // higher. Unknown versions likewise keep the legacy landing behaviour: absence of a
+        // comparable version is not evidence that either side is newer. Direct-adopt landings do
+        // not enter here; ModuleUpdateDecision has already answered SkipOlder on that lane.
+        var preserveNewerShelfHead = holdUnloadable
+            && displaced is { Enabled: true, Version.Length: > 0 }
+            && !string.IsNullOrWhiteSpace(version)
+            && NuGetVersionComparer.Instance.Compare(version, displaced.Version) < 0
+            && ModuleActivationBoot.LandedModuleDllExists(baseDirectory, displaced)
+            && ModulePlatformLink.Check(
+                ModuleActivationBoot.LandedDllPath(baseDirectory, displaced), surface).MayLoad;
         var previous = displaced is null ? null : PreviousToKeep(displaced);
 
         ModuleActivationEntry? PreviousToKeep(ModuleActivationEntry current)
@@ -847,6 +877,35 @@ public sealed class ModuleLandingService : IDisposable
             PreviousVersion = previous?.Version,
             PreviousFrameworkMvid = previous?.FrameworkMvid,
         };
+
+        if (preserveNewerShelfHead)
+        {
+            // The upload is still STOCKED: its content-addressed generation is on disk. Keep the
+            // best older generation as the head's fallback so the GC references useful warehouse
+            // stock rather than reclaiming it as an orphan. A still older late upload must not
+            // displace a newer fallback any more than it may displace the head.
+            var shelfGeneration = OlderShelfGenerationToKeep(displaced!, entry);
+            var retainedHead = displaced! with
+            {
+                PreviousDirectory = shelfGeneration?.Directory,
+                PreviousVersion = shelfGeneration?.Version,
+                PreviousFrameworkMvid = shelfGeneration?.FrameworkMvid,
+            };
+            ModuleActivationSidecar.WriteEntry(baseDirectory, retainedHead);
+            logger?.LogInformation(
+                "Module '{Name}' SHELVED into modules/{Generation}/ ({Count} assemblies, version "
+                + "{Version}) without moving activation: the current loadable head is newer "
+                + "({HeadVersion}, generation {HeadGeneration}). The older upload is warehouse "
+                + "stock only; restart state and the proposed module set are unchanged",
+                name, generation, assemblies.Count, version, displaced!.Version,
+                displaced.Directory);
+            return new ModuleLandingOutcome(Held: held is not null, HoldReason: held)
+            {
+                SelectedAsHead = false,
+                HeadVersion = displaced.Version,
+            };
+        }
+
         // 🚨 THIS MODULE'S OWN FILE, and nothing else (#2090). The landing used to read the whole
         // shared activation index, append to it and rename the result over the live file — a
         // read-modify-write of state every replica shares on the RWX /data volume. Two concurrent
@@ -880,7 +939,40 @@ public sealed class ModuleLandingService : IDisposable
                 + "carries the types it links against, and that same boot then loads it",
                 name, generation, assemblies.Count, held, previous?.Directory ?? "(none)");
 
-        return new ModuleLandingOutcome(Held: held is not null, HoldReason: held);
+        return new ModuleLandingOutcome(Held: held is not null, HoldReason: held)
+        {
+            HeadVersion = version,
+        };
+
+        ModuleActivationEntry? OlderShelfGenerationToKeep(
+            ModuleActivationEntry current, ModuleActivationEntry incoming)
+        {
+            // Re-tagging identical bytes produces the same content address. It is already the
+            // head, not a fallback to itself; retain whatever real fallback the head had.
+            if (string.Equals(current.Directory, incoming.Directory, StringComparison.OrdinalIgnoreCase))
+                return ModuleActivationBoot.PreviousGeneration(current);
+
+            var existing = ModuleActivationBoot.PreviousGeneration(current);
+            if (existing is null || !ModuleActivationBoot.LandedModuleDllExists(baseDirectory, existing))
+                return incoming;
+            if (string.Equals(existing.Directory, incoming.Directory, StringComparison.OrdinalIgnoreCase))
+                return incoming;
+
+            // A fallback's first job is to LOAD. Version ordering alone cannot replace a
+            // working fallback with newer warehouse bytes this platform already measured as
+            // unloadable; conversely, a loadable incoming generation heals an unloadable one.
+            var existingLoads = ModulePlatformLink.Check(
+                ModuleActivationBoot.LandedDllPath(baseDirectory, existing), surface).MayLoad;
+            var incomingLoads = held is null;
+            if (existingLoads != incomingLoads)
+                return incomingLoads ? incoming : existing;
+            if (string.IsNullOrWhiteSpace(incoming.Version))
+                return existing;
+            if (string.IsNullOrWhiteSpace(existing.Version)
+                || NuGetVersionComparer.Instance.Compare(incoming.Version, existing.Version) > 0)
+                return incoming;
+            return existing;
+        }
     }
 
     /// <summary>
@@ -1128,4 +1220,14 @@ public sealed class ModuleLandingService : IDisposable
 /// hold — it is recorded and logged as an advisory, and bytes that link land unheld.</param>
 /// <param name="HoldReason">Why the activation is held, naming the missing type
 /// (<see cref="MeshWeaver.Mesh.ModuleLinkVerdict.Report"/>'s text), or null when not held.</param>
-public sealed record ModuleLandingOutcome(bool Held, string? HoldReason);
+public sealed record ModuleLandingOutcome(bool Held, string? HoldReason)
+{
+    /// <summary>True when this landing became the activation head. False means the bytes were
+    /// accepted as older warehouse stock while a newer, present, loadable head was retained
+    /// (#3996), so this upload neither raises restart-required nor changes the proposed set.</summary>
+    public bool SelectedAsHead { get; init; } = true;
+
+    /// <summary>The version at the activation head after the landing. For ordinary landings this
+    /// is the incoming version; for an older shelf-only upload it names the newer retained head.</summary>
+    public string? HeadVersion { get; init; }
+}

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Api;
@@ -57,41 +58,57 @@ public class ModulePublishShelfTest : IDisposable
     /// <summary>A packed module bundle the route can read, declaring the given floor. A null
     /// <paramref name="frameworkMvid"/> omits the field entirely — the shape a producer on a lane
     /// older than #3211 uploads, and the one the registry refuses since #3240.</summary>
-    private static byte[] Bundle(string? minMeshVersion, string? frameworkMvid = "test-build")
+    private static byte[] Bundle(
+        string? minMeshVersion,
+        string? frameworkMvid = "test-build",
+        string version = "1.0.0",
+        string? generationMarker = null)
     {
+        const string markerPath = "wwwroot/generation.txt";
         var manifestJson = JsonSerializer.Serialize(new
         {
             plugin = "SpeechPkg",
-            version = "1.0.0",
+            version,
             frameworkMvid,
             module = new
             {
                 assemblyName = "MeshWeaver.Speech",
                 assemblies = new[] { "MeshWeaver.Speech.dll" },
                 minMeshVersion,
+                staticAssets = generationMarker is null ? null : new[] { markerPath },
             },
         });
+
+        var entries = new List<NuGetPackageWriter.Entry>
+        {
+            new(
+                NuGetPackageWriter.ModuleEntryPathFor("MeshWeaver.Speech.dll"),
+                // 🚨 REAL assembly bytes since #3538: the landing MEASURES the module's link
+                // requirements against this platform, so a short literal is refused as
+                // unreadable metadata — correctly, and these tests are about the FLOOR.
+                () => new MemoryStream(
+                    File.ReadAllBytes(typeof(BundleReader).Assembly.Location))),
+        };
+        if (generationMarker is not null)
+            entries.Add(new NuGetPackageWriter.Entry(
+                NuGetPackageWriter.ModuleAssetEntryPathFor(markerPath),
+                () => new MemoryStream(Encoding.UTF8.GetBytes(generationMarker))));
 
         var buffer = new MemoryStream();
         NuGetPackageWriter.Write(
             buffer,
-            new PackagingManifest("SpeechPkg", "MeshWeaver.Plugin.SpeechPkg", "1.0.0", "SpeechPkg", null, []),
+            new PackagingManifest("SpeechPkg", "MeshWeaver.Plugin.SpeechPkg", version, "SpeechPkg", null, []),
             "3.0.0",
-            [
-                new NuGetPackageWriter.Entry(
-                    NuGetPackageWriter.ModuleEntryPathFor("MeshWeaver.Speech.dll"),
-                    // 🚨 REAL assembly bytes since #3538: the landing MEASURES the module's link
-                    // requirements against this platform, so a short literal is refused as
-                    // unreadable metadata — correctly, and these tests are about the FLOOR.
-                    () => new MemoryStream(
-                        File.ReadAllBytes(typeof(BundleReader).Assembly.Location))),
-            ],
+            entries,
             manifestJson);
         return buffer.ToArray();
     }
 
     private async Task<HttpResponseMessage> Publish(
-        string? minMeshVersion, string? frameworkMvid = "test-build")
+        string? minMeshVersion,
+        string? frameworkMvid = "test-build",
+        string version = "1.0.0",
+        string? generationMarker = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -112,8 +129,102 @@ public class ModulePublishShelfTest : IDisposable
             HttpMethod.Post,
             PluginBundleEndpoints.RoutePrefix + "/SpeechPkg?packagePath=Plugins/SpeechPkg");
         request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + Token);
-        request.Content = new ByteArrayContent(Bundle(minMeshVersion, frameworkMvid));
+        request.Content = new ByteArrayContent(
+            Bundle(minMeshVersion, frameworkMvid, version, generationMarker));
         return await client.SendAsync(request);
+    }
+
+    /// <summary>
+    /// 🚨 #3996 — an older publisher may STOCK its bytes after a newer publish, but it must
+    /// never move the registry's activation head backwards. Core CD takes 40–50 minutes and used
+    /// to arrive after Plugins' own publication: Mail 1.7.0 landed at 02:49Z, then the older
+    /// core-gated 1.6.1 upload landed at 03:00Z and became the head solely because it arrived last.
+    /// A restart consequently activated 1.6.1 and silently un-shipped the merge.
+    ///
+    /// <para>The two bundles deliberately carry different marker assets so they produce distinct
+    /// content-addressed generations while sharing valid, linkable assembly bytes. The assertion
+    /// is the durable activation record, not the endpoint's status code: both uploads have always
+    /// answered 200.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnOlderPublishAfterANewerOne_DoesNotMoveTheActivationHeadBackwards()
+    {
+        using var newer = await Publish(
+            minMeshVersion: null, version: "1.7.0", generationMarker: "newer");
+        Assert.Equal(HttpStatusCode.OK, newer.StatusCode);
+
+        using var older = await Publish(
+            minMeshVersion: null, version: "1.6.1", generationMarker: "older");
+        Assert.Equal(HttpStatusCode.OK, older.StatusCode);
+        using var result = JsonDocument.Parse(await older.Content.ReadAsStringAsync());
+        Assert.False(result.RootElement.GetProperty("selectedAsHead").GetBoolean());
+        Assert.Equal("1.7.0", result.RootElement.GetProperty("headVersion").GetString());
+        Assert.False(result.RootElement.GetProperty("pendingRestart").GetBoolean());
+
+        var activation = ModuleActivationSidecar.Read(root);
+        var head = Assert.Single(activation.Entries);
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("1.6.1", head.PreviousVersion);
+        Assert.NotEqual(head.Directory, head.PreviousDirectory);
+        Assert.True(ModuleActivationBoot.LandedModuleDllExists(root, head));
+        Assert.True(ModuleActivationBoot.PreviousLandedModuleDllExists(root, head));
+
+        var headMarker = Path.Combine(
+            ModuleLandingService.ModuleDirectoryFor(root, head.Name, head),
+            "wwwroot", "generation.txt");
+        Assert.Equal("newer", File.ReadAllText(headMarker));
+    }
+
+    /// <summary>The shelf retains the newest useful fallback too: a still older late upload may
+    /// not push 1.6.1 out from behind the 1.7.0 head. Otherwise repeated lagging publications
+    /// would preserve the head but quietly walk its fallback backwards.</summary>
+    [Fact]
+    public async Task AStillOlderPublish_DoesNotMoveTheRetainedFallbackBackwards()
+    {
+        using var newest = await Publish(
+            minMeshVersion: null, version: "1.7.0", generationMarker: "newest");
+        using var fallback = await Publish(
+            minMeshVersion: null, version: "1.6.1", generationMarker: "fallback");
+        using var oldest = await Publish(
+            minMeshVersion: null, version: "1.5.0", generationMarker: "oldest");
+        Assert.Equal(HttpStatusCode.OK, newest.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, fallback.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, oldest.StatusCode);
+
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("1.6.1", head.PreviousVersion);
+        var fallbackEntry = ModuleActivationBoot.PreviousGeneration(head);
+        Assert.NotNull(fallbackEntry);
+        var marker = Path.Combine(
+            ModuleLandingService.ModuleDirectoryFor(root, head.Name, fallbackEntry),
+            "wwwroot", "generation.txt");
+        Assert.Equal("fallback", File.ReadAllText(marker));
+    }
+
+    /// <summary>A higher VERSION string is not enough to protect a broken head. If its entry DLL
+    /// is absent, the next valid upload must heal the shelf even when its version is lower; keeping
+    /// the unusable record would turn the anti-rollback rule into a self-sealing outage.</summary>
+    [Fact]
+    public async Task AnOlderPublish_ReplacesANewerHeadWhoseBytesAreMissing()
+    {
+        using var newer = await Publish(
+            minMeshVersion: null, version: "1.7.0", generationMarker: "newer-but-broken");
+        Assert.Equal(HttpStatusCode.OK, newer.StatusCode);
+        var broken = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        File.Delete(ModuleActivationBoot.LandedDllPath(root, broken));
+        Assert.False(ModuleActivationBoot.LandedModuleDllExists(root, broken));
+
+        using var healing = await Publish(
+            minMeshVersion: null, version: "1.6.1", generationMarker: "healing");
+        Assert.Equal(HttpStatusCode.OK, healing.StatusCode);
+        using var result = JsonDocument.Parse(await healing.Content.ReadAsStringAsync());
+        Assert.True(result.RootElement.GetProperty("selectedAsHead").GetBoolean());
+        Assert.Equal("1.6.1", result.RootElement.GetProperty("headVersion").GetString());
+
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal("1.6.1", head.Version);
+        Assert.True(ModuleActivationBoot.LandedModuleDllExists(root, head));
     }
 
     /// <summary>
