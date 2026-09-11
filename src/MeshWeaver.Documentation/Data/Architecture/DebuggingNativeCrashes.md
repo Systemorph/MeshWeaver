@@ -1660,6 +1660,28 @@ crashes that could be read. In this workload that state is also the steady state
 its presence at the crash is necessary for the hypothesis and not by itself sufficient; the repro below
 is what separates the two.
 
+#### The forced overlap, and what it did not reproduce
+
+A crash needs a deterministic repro before a fix, so the overlap was forced first, in two workloads.
+
+- **No MeshWeaver code at all.** Six workers loop: load a fresh collectible context, build six Autofac child scopes over its types (constructor lambdas are LCG), serialise and deserialise through `System.Text.Json` (reflection-emit accessors), dispose, `Unload()` — and start the next iteration **immediately**, while a hammer thread interleaves background gen2, gen0/gen1 and finalizer passes with a 2 MiB gen0 budget. It ran **16,112** overlapped iterations on macOS arm64 (`10.0.11`) and **11,289** on linux-arm64 (`10.0.12`), 180 s each, exit 0. The runtime, Autofac and STJ do not corrupt the heap on this overlap alone, at this scale, on arm64.
+- **The real suite.** `MeshWeaver.FutuRe.Test`, built against core `main`, run 20 times back to back through its native xUnit host with a 4 MiB gen0 budget: **1,180 fixtures, 20 of 20 green**, no signal death, on macOS arm64.
+
+At the measured CI rate — about 1 % of x64 runs, i.e. about one crash per 4,500 fixtures — neither could be expected to crash, so these are not evidence of absence, and they are recorded so the next reader does not re-run them expecting otherwise. What they do settle is that the state is not *sufficient* on arm64 at this scale: whatever writes the zero needs more than a context unloading while the next instance builds.
+
+#### The fix — teardown finishes when the unload has finished
+
+The maintainer's design (2026-09-11): *"we need to wait (reactively, i.e. observable.Subscribe()) until all is really finished disposing"*. "Really finished" for a collectible context is not `Unload()` returning and not `DISPOSE_DONE`: it is the runtime releasing the context after destroying its LoaderAllocator, over later collections, on the finalizer thread.
+
+- **`CollectibleContextUnloads`** (`MeshWeaver.Mesh.Contract`, a mesh-scoped singleton next to `MeshTeardownSignal`) records every context the mesh retires — by its signal, never by reference, so it cannot root what it waits for. `AllCollected` completes when every context retired before the subscription has been collected, **errors** when an unload was abandoned (the drain faulted, or `Unload()` threw — an `Unloading` handler raising), and emits synchronously when nothing is pending.
+- **How "collected" is observed.** `Unload()` calls `GC.SuppressFinalize` on the context, so a finalizer on `NodeAssemblyLoadContext` would never run. `RetireInto` instead gives the context a finalizable sentinel that only the context references; the context stays reachable through the runtime's strong handle until the LoaderAllocator is destroyed, so the sentinel's finalizer runs only after that. It stops the entry counting as pending synchronously and releases subscribers on the thread pool — never on the finalizer thread.
+- **`CompilationCacheService`** retires every context it disposes (`UnloadContext` and `Dispose`), once per context even when one generation is aliased under two keys.
+- **The test bases** (`MonolithMeshTestBase`, `HubTestBase`, and MeshWeaver.Plugins' `MonolithMeshTestBase`) end teardown with `CollectibleUnloadDrain`: drive full collections — an idle test host allocates nothing, so nothing would ever collect — then observe `AllCollected`. xUnit does not construct the next fixture until `DisposeAsync` returns. A faulted unload fails the class (`DISPOSE_UNLOAD_FAULTED`); a context still rooted after collections stop freeing anything is **reported** (`DISPOSE_ALC_RETAINED`, naming it), never waited on; the ordinary case writes `DISPOSE_UNLOADS_COLLECTED` with the round count.
+
+Nothing is cancelled and nothing unloads earlier or later than before — teardown lets the work finish, and simply stops claiming to be finished before it has. In-process recompiles on a live portal (a superseded generation evicted while other hubs keep running) are **not** sequenced by this; that belongs with the retention work of #4017/#4029.
+
+Pinned by `test/MeshWeaver.Compiler.Pipeline.Test/RetiredContextCollectedSignalTest.cs`: a start sequenced on the signal does not run while the context is only `Unload()`-requested, and runs after it is collected; the context **is** collected (so the fix cannot pass by retaining); a faulted unload releases its waiter with the fault; nothing retired means no delay.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is
