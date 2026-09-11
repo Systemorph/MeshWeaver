@@ -108,6 +108,40 @@ public class InstanceKeyRotationRulesTest
             .Should().NotBeNull("a key that is not the instance's cannot revoke it");
     }
 
+    /// <summary>
+    /// An IMMEDIATE adoption supersedes a staged rotation — the staged key is retired even when the
+    /// adopted hash is already current (Copilot review on #4055: the old short-cut returned first and
+    /// left a staged key nobody installed authenticating), and an already-indexed hash is not
+    /// re-indexed.
+    /// </summary>
+    [Fact]
+    public void Adopt_RetiresAStagedKey_EvenWhenTheHashIsAlreadyCurrent()
+    {
+        var old = H("mwi_old");
+        var staged = H("mwi_staged");
+        var fresh = H("mwi_fresh");
+
+        var sameHash = InstanceKeyRotation.Adopt(Instance(old, staged), old, Now);
+        sameHash.Changed.Should().BeTrue("a staged key is still outstanding, so this is not a no-op");
+        sameHash.Retired.Should().Equal([staged]);
+        sameHash.Indexed.Should().BeNull("the current hash is already indexed");
+        InstanceKeyRotation.SlotOf(sameHash.Next, staged).Should().Be(InstanceKeySlot.None);
+        InstanceKeyRotation.SlotOf(sameHash.Next, old).Should().Be(InstanceKeySlot.Current);
+
+        var theStaged = InstanceKeyRotation.Adopt(Instance(old, staged), staged, Now);
+        theStaged.Retired.Should().Equal([old]);
+        theStaged.Indexed.Should().BeNull("the staged hash already has its index entry");
+        theStaged.Next.KeyHash.Should().Be(staged);
+        theStaged.Next.PendingKeyHash.Should().BeEmpty();
+
+        var another = InstanceKeyRotation.Adopt(Instance(old, staged), fresh, Now);
+        another.Retired.Should().Equal([old, staged]);
+        another.Indexed.Should().Be(fresh);
+
+        InstanceKeyRotation.Adopt(Instance(old), old, Now).Changed
+            .Should().BeFalse("already current with nothing staged is the one idempotent repeat");
+    }
+
     [Fact]
     public void AnEmptySlot_NeverMatches_AndOnlyAHashShapeIsAccepted()
     {

@@ -9,8 +9,8 @@ Order: -20260911
 # A registry-key rotation asks the registry first, and retires the old key last
 
 Every portal authenticates to the plugin registry with an instance key. `RotateRegistryKey` replaces
-that key: the operator mints a new one into Key Vault, the portal restarts onto it, and the old one
-stops working.
+that key with a new one, and the old one stops working — in the order set out under *What changed*
+below: the registry is asked first, and the old key is retired last.
 
 ## What went wrong
 

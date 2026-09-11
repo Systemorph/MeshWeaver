@@ -421,6 +421,7 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                                     ?? new PluginGrant { InstanceId = instance.InstanceId })
                                 {
                                     InstancePath = index.InstancePath,
+                                    PresentedKeyHash = hash,
                                 });
                             })
                             // The plan ladder rides on the caller: a plan-scoped grant entry is
@@ -676,6 +677,16 @@ public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGr
     /// resolution (a test's hand-made caller).
     /// </summary>
     public string? InstancePath { get; init; }
+
+    /// <summary>
+    /// The key hash the caller authenticated WITH — the instance's current key, or the key a rotation
+    /// has staged (both authenticate until the rotation commits, MeshWeaver#2802). Anything that binds
+    /// to the caller's key (a sync token's claims) binds to THIS, never to
+    /// <see cref="MeshWeaverInstance.KeyHash"/>: a token minted with the staged key but bound to the
+    /// current one would stop resolving the moment the commit retires it. Null only for a result built
+    /// without a resolution.
+    /// </summary>
+    public string? PresentedKeyHash { get; init; }
 
     /// <summary>
     /// Present when the caller authenticated with a short-lived token rather than its durable key.

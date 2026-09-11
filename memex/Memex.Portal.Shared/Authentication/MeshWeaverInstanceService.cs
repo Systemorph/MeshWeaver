@@ -428,47 +428,13 @@ public sealed class MeshWeaverInstanceService(
                 "keyHash must be the lowercase SHA-256 hex of the raw key (64 hex chars) — the registry "
                 + "stores hashes only, and this one arrived in the wrong shape", nameof(keyHash)));
 
-        var workspace = hub.GetWorkspace();
-        return workspace.GetMeshNodeStream(instancePath)
-            .Where(node => node is not null)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .SelectMany(node =>
-            {
-                var instance = node!.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
-                    ?? throw new InvalidOperationException($"Node {instancePath} is not a MeshWeaverInstance.");
-                if (string.Equals(instance.KeyHash, keyHash, StringComparison.Ordinal))
-                {
-                    logger.LogInformation("Instance {InstanceId} already carries key hash {Prefix}… — nothing to adopt",
-                        instance.InstanceId, InstanceKeys.HashPrefix(keyHash));
-                    return Observable.Return(Unit.Default);
-                }
-                var previousHash = instance.KeyHash;
-                var previousPending = instance.PendingKeyHash;
-                return WriteIndex(keyHash, instancePath, instance.InstanceId)
-                    .SelectMany(_ => workspace.GetMeshNodeStream(instancePath)
-                        .Update(current => current with
-                        {
-                            Content = (current.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
-                                       ?? instance) with
-                            {
-                                KeyHash = keyHash,
-                                KeyIssuedAt = DateTimeOffset.UtcNow,
-                                // An immediate adoption supersedes any staged rotation: leaving its
-                                // hash staged would keep a key nobody installed authenticating.
-                                PendingKeyHash = "",
-                                PendingKeyIssuedAt = null,
-                            },
-                        }))
-                    .SelectMany(_ => DeleteIndex(previousHash))
-                    .SelectMany(_ => DeleteIndex(previousPending))
-                    .Select(_ =>
-                    {
-                        logger.LogInformation("Adopted rotated key for instance {InstanceId} (hash prefix {Prefix}); previous index entry removed",
-                            instance.InstanceId, InstanceKeys.HashPrefix(keyHash));
-                        return Unit.Default;
-                    });
-            });
+        // 🚨 The same transition machinery as stage/commit/revoke (InstanceKeyRotation.Adopt): an
+        // immediate adoption supersedes a staged rotation, so a staged key is retired even when the
+        // adopted hash is ALREADY current — the idempotent short-cut used to return first and leave a
+        // staged key nobody installed authenticating (Copilot review on #4055).
+        return ApplyKeyTransition(instancePath,
+                (instance, now) => InstanceKeyRotation.Adopt(instance, keyHash, now), "Adopted")
+            .Select(_ => Unit.Default);
     }
 
     /// <inheritdoc cref="IInstanceKeyRegistry.AdoptKeyHash"/>

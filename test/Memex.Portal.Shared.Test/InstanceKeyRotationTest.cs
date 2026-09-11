@@ -214,6 +214,75 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
             "revoking an id this registry does not hold fails by name — never a silent no-op on the wrong store");
     }
 
+    /// <summary>
+    /// An immediate adoption supersedes a staged rotation: adopting the hash that is ALREADY current
+    /// still retires the staged key (Copilot review on #4055 — the old short-cut returned first and
+    /// left it authenticating), and adopting the STAGED hash promotes it without re-indexing it.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AnImmediateAdoption_SupersedesAStagedRotation()
+    {
+        var service = Service();
+        await using var app = await StartRegistry(service);
+
+        var first = await Register(service, "adopt-current");
+        var stagedA = InstanceKeys.Generate();
+        (await Stage(app, first.RawKey, InstanceKeys.Hash(stagedA))).Status.Should().Be(HttpStatusCode.OK);
+        await service.AdoptKeyHash(first.Node.Path!, InstanceKeys.Hash(first.RawKey)).Timeout(TimeSpan.FromSeconds(60)).Await();
+        (await Self(app, stagedA)).Status.Should().Be(HttpStatusCode.Unauthorized,
+            "adopting the already-current hash retires the staged key");
+        (await Self(app, first.RawKey)).Status.Should().Be(HttpStatusCode.OK, "…and keeps the current one");
+
+        var second = await Register(service, "adopt-staged");
+        var stagedB = InstanceKeys.Generate();
+        (await Stage(app, second.RawKey, InstanceKeys.Hash(stagedB))).Status.Should().Be(HttpStatusCode.OK);
+        await service.AdoptKeyHash(second.Node.Path!, InstanceKeys.Hash(stagedB)).Timeout(TimeSpan.FromSeconds(60)).Await();
+        (await Self(app, stagedB)).Body.GetProperty("key").GetString().Should().Be(InstanceKeyPayloads.CurrentKey,
+            "adopting the staged hash promotes it (its index entry already existed)");
+        (await Self(app, second.RawKey)).Status.Should().Be(HttpStatusCode.Unauthorized, "…and retires the previous key");
+    }
+
+    /// <summary>
+    /// A sync token exchanged with the STAGED key is bound to that key, so it survives the commit that
+    /// promotes it (Copilot review on #4055: it used to be bound to the CURRENT key's hash and would
+    /// have stopped resolving the moment the commit retired that key).
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ATokenExchangedWithTheStagedKey_SurvivesTheCommit()
+    {
+        var service = Service();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IMessageHub>(Mesh);
+        builder.Services.AddSingleton(service);
+        builder.Services.AddSingleton(Mesh.ServiceProvider.GetRequiredService<InstanceRegistryAuthenticator>());
+        await using var app = builder.Build();
+        app.MapInstanceRegistration();
+        app.MapInstanceTokenExchange();
+        await app.StartAsync();
+
+        var registered = await Register(service, "token-through-commit");
+        var staged = InstanceKeys.Generate();
+        (await Stage(app, registered.RawKey, InstanceKeys.Hash(staged))).Status.Should().Be(HttpStatusCode.OK);
+
+        using var exchange = new HttpRequestMessage(HttpMethod.Post, SyncTokenPayloads.Route)
+        {
+            Content = JsonContent.Create(new SyncTokenPayloads.Request(), options: SyncTokenPayloads.Json),
+        };
+        exchange.Headers.TryAddWithoutValidation("Authorization", InstanceKeys.AuthorizationHeader(staged));
+        using var exchanged = await app.GetTestClient().SendAsync(exchange);
+        exchanged.StatusCode.Should().Be(HttpStatusCode.OK, "the staged key may exchange for a token");
+        var token = (await exchanged.Content.ReadFromJsonAsync<SyncTokenPayloads.Response>(SyncTokenPayloads.Json))!.AccessToken;
+
+        (await Commit(app, staged)).Status.Should().Be(HttpStatusCode.OK);
+
+        var authenticator = Mesh.ServiceProvider.GetRequiredService<InstanceRegistryAuthenticator>();
+        var outcome = await authenticator.AuthenticateOutcome($"{SyncAccessToken.Scheme} {token}")
+            .Timeout(TimeSpan.FromSeconds(30)).Await();
+        outcome.Instance.Should().NotBeNull("a token minted with the staged key still resolves once that key is current");
+        outcome.Instance!.Instance.InstanceId.Should().Be("token-through-commit");
+    }
+
     /// <summary>A short-lived token may read the catalog; it can never re-key or revoke.</summary>
     [Fact(Timeout = 60_000)]
     public async Task ANonInstanceKeyCredential_IsRefusedBeforeAnythingIsResolved()

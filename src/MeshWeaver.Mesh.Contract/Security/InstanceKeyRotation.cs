@@ -163,6 +163,37 @@ public static class InstanceKeyRotation
         };
 
     /// <summary>
+    /// ADOPT <paramref name="newHash"/> IMMEDIATELY as the current key (<see cref="IInstanceKeyRegistry.AdoptKeyHash"/>):
+    /// every other key of the instance — the previous current AND any staged key — stops
+    /// authenticating. An immediate adoption supersedes a staged rotation, so a staged key is retired
+    /// even when <paramref name="newHash"/> is already current; only "already current, nothing
+    /// staged" is an idempotent repeat. A hash that already has an index entry (it is current or
+    /// staged) is not indexed again.
+    /// </summary>
+    public static InstanceKeyTransition Adopt(MeshWeaverInstance instance, string newHash, DateTimeOffset now)
+    {
+        if (!IsKeyHash(newHash))
+            return Refused(instance, "keyHash must be the lowercase SHA-256 hex of the new raw key (64 hex chars) — "
+                + "the registry stores hashes only, and this one arrived in the wrong shape");
+        var isCurrent = string.Equals(instance.KeyHash, newHash, StringComparison.Ordinal);
+        var isStaged = string.Equals(instance.PendingKeyHash, newHash, StringComparison.Ordinal);
+        if (isCurrent && string.IsNullOrEmpty(instance.PendingKeyHash))
+            return NoOp(instance);
+
+        var retired = new[] { instance.KeyHash, instance.PendingKeyHash }
+            .Where(h => !string.IsNullOrEmpty(h) && !string.Equals(h, newHash, StringComparison.Ordinal))
+            .ToImmutableList();
+        var next = instance with
+        {
+            KeyHash = newHash,
+            KeyIssuedAt = isCurrent ? instance.KeyIssuedAt : now,
+            PendingKeyHash = "",
+            PendingKeyIssuedAt = null,
+        };
+        return new InstanceKeyTransition(next, retired, isCurrent || isStaged ? null : newHash, null, Changed: true);
+    }
+
+    /// <summary>
     /// REVOKE every key of the instance — the registry-side admin act for a key whose value nobody
     /// should need to know. The instance record and its grants stay; it authenticates again only once
     /// its owner re-issues a key. Revoking an instance that holds no key is an idempotent repeat.
