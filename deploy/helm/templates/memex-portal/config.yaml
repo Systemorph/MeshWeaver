@@ -280,6 +280,19 @@ data:
   # app-relative path; empty = none. Per-install brand assets ship at
   # _content/Memex.Portal.Shared/brand/{systemorph,prod,local}-180.png (or a mesh asset / absolute URL).
   Portal__AppleTouchIcon: "{{ .Values.config.memex_portal.Portal__AppleTouchIcon | default "" }}"
+  # ---- Public web site (Doc/Architecture/PublicWebPresence) — optional -----
+  # SiteName is the brand in <title> separators and og:site_name ("MeshWeaver"); empty = "Memex".
+  # PublicHost names the ONE host search engines rank the site under (www.meshweaver.cloud):
+  # every canonical, og:url and sitemap entry is built on it whichever host served the request,
+  # and a request on any OTHER host is the app host — noindex, robots Disallow: /, and a stranger's
+  # HTML GET for a public page answers 301 to the public host. Empty = single-host, unchanged.
+  # LandingPath is the node a signed-out visitor sees at "/" (the landing Space); empty = the
+  # portal's own welcome route. The public host must ALSO be an ingress rule to this service —
+  # the chart renders one host (ingress.host); the second is the overlay's (memex-cloud:
+  # Memex.Website/k8s/brand-site.yaml).
+  Portal__SiteName: "{{ .Values.config.memex_portal.Portal__SiteName | default "" }}"
+  Portal__PublicHost: "{{ .Values.config.memex_portal.Portal__PublicHost | default "" }}"
+  Portal__LandingPath: "{{ .Values.config.memex_portal.Portal__LandingPath | default "" }}"
 {{- if (.Values.instancesAdmin).clusterRead }}
   # ---- Platform-admin Instances overview (see .Values.instancesAdmin) -------
   # The SAME flag that grants the cluster-read RBAC also enables the Settings tab, so the
