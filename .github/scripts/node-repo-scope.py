@@ -103,7 +103,18 @@ from pathlib import Path
 # drift over-builds the divergent dir out loud instead of silently, and — since 2026-09-08 —
 # instead of switching the whole narrowing off (which is what equality did, on every pull request
 # three satellites ever opened). A literal it cannot READ is still a refusal.
-NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees"}
+#
+# `devtools/` is the DECLARED home for a script no lane runs — a local dev loop, a triage helper.
+# Before it existed such a script could only live in `scripts/`, which is (correctly) the gates'
+# directory and therefore EVERYTHING: measured on MeshWeaver.Plugins run 34618468550 (#1668), a
+# one-line edit to `scripts/run-node-tests.py` — referenced by no workflow — selected 52 of 52
+# compiled projects and every module suite (~89 runner-minutes of portal-host shards + ~200 of
+# module tests); the same diff without it selected 1 of 52. The name is NEW on purpose: `tools/`
+# exists in MeshWeaver.Plugins and is NOT inert there (`src/Directory.Build.targets` and two test
+# projects read it), and a name no repo has yet lands DORMANT in `check-noop-scope-parity.py`
+# everywhere, so the platform can declare it first without reddening any caller. What a file
+# placed there claims: no compiled project, no module content and no gate reads it.
+NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees", "devtools"}
 
 # 🚨 A repo-ROOT path HAS NO TOP-LEVEL DIRECTORY, so NOOP_DIRS above can never reach it: both
 # no-op branches of the classifier are guarded by `"/" in f`, and a single-segment path takes
@@ -576,7 +587,7 @@ _STUB_PROJECTS = (
 # 🚨 The stub carries a NOOP_DIRS literal because the real selector does and this script now
 # READS it — a fixture without one would make every case take the drift fallback.
 _STUB_SELECTOR = (
-    'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees"}\n'
+    'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees", "devtools"}\n'
     "import json,sys\n"
     "paths=[l for l in open(sys.argv[sys.argv.index('--changed')+1]).read().splitlines() if l]\n"
     "pk=sorted({p.split('/')[0] for p in paths})\n"
@@ -891,7 +902,8 @@ def self_test() -> int:
         selector_path = root / "scripts" / "affected-modules.py"
         # THEIRS is missing `app` — MeshWeaver.SocialMedia's live divergence, measured on run
         # 34122662676, which used to answer `full` on every pull request that repo ever opened.
-        theirs_short = 'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", ".claude", ".worktrees"}\n'
+        theirs_short = ('NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", ".claude", ".worktrees", '
+                        '"devtools"}\n')
         selector_path.write_text(theirs_short + selector_src, encoding="utf-8")
         got = _run(root, "modules", "pull_request", ["docs/guide.md"])
         check("a caller missing one of our NOOP dirs still NARROWS on the ones both agree about",
@@ -904,7 +916,7 @@ def self_test() -> int:
         # THEIRS carries a dir we do not — the other direction, and it must be just as safe.
         selector_path.write_text(
             'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees", '
-            '"vendor"}\n' + selector_src, encoding="utf-8")
+            '"devtools", "vendor"}\n' + selector_src, encoding="utf-8")
         got = _run(root, "modules", "pull_request", ["vendor/lib.js"])
         check("a dir only THEY call inert is still EVERYTHING here (the other direction)",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
@@ -924,6 +936,14 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["WhatsNew/note.md"])
         check("WhatsNew/ is a NOOP dir — a note-only PR builds NOTHING, not everything",
               got["scope"] == "narrowed" and got["count"] == 0,
+              f"scope={got['scope']} count={got['count']}")
+        got = _run(root, "modules", "pull_request", ["devtools/run-node-tests.py"])
+        check("devtools/ is a NOOP dir — a local dev tool builds NOTHING, not everything",
+              got["scope"] == "narrowed" and got["count"] == 0,
+              f"scope={got['scope']} count={got['count']}")
+        got = _run(root, "modules", "pull_request", ["scripts/run-node-tests.py"])
+        check("…while the same script under scripts/ (the gates) is still EVERYTHING",
+              got["scope"] == "full" and got["count"] == 2,
               f"scope={got['scope']} count={got['count']}")
 
         print("the caller's graphs are load-bearing — every failure of theirs is a FULL run:")
