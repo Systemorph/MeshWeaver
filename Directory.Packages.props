@@ -258,12 +258,21 @@
          `CoreDispatcherScheduler` and friends are gone from the REFERENCE assemblies (still in
          `lib`, so this is source-breaking, not binary-breaking) and now live in the separate
          `System.Reactive.Wpf`, `System.Reactive.Windows.Forms`, `System.Reactive.WindowsRuntime`
-         and `System.Reactive.Uwp` packages. The package also ships a new Roslyn analyzer emitting
-         RXNET0001-RXNET0004 at Warning — which `-warnaserror` promotes to errors — but every one
-         fires only on those Windows UI types. This codebase uses none of them — zero hits across
-         both repositories, against a positive control of 1,453 `.cs` files that DO contain
-         `IObservable` (606 here, 847 in MeshWeaver.Plugins), so the sweep is not looking at an
-         empty corpus. That is why a `-warnaserror` build stays clean.
+         and `System.Reactive.Uwp` packages.
+
+         🚨 The package also ships a new Roslyn analyzer (analyzers/dotnet/System.Reactive.Analyzers.dll)
+         emitting RXNET0001-RXNET0004 at Warning, which `-warnaserror` would promote to errors — but
+         it is INERT here, and that is NOT the same as passing. csc never loads it: the assembly
+         appears only in project.assets.json's `libraries` file manifest, never in a `targets` entry,
+         and `dotnet build <proj> -getItem:Analyzer` returns ZERO Rx analyzer entries while still
+         returning the .NET analyzers (so the instrument discriminates). It sits directly under
+         `analyzers/dotnet/` with no language subfolder, which is not where NuGet selects a C#
+         analyzer from. So a clean -warnaserror build is NOT evidence about these four rules. The
+         evidence is a source sweep instead: this repo declares no *-windows* target framework at
+         all and references none of the Windows UI types the rules fire on (0 hits against a
+         positive control of 581 `.cs` files under src/ and test/ that DO contain `IObservable`),
+         and no pre-6.x Rx facade package. If upstream ever fixes the analyzer's path, these rules
+         go live for every consumer at once.
 
          Assembly identity: the public key token is unchanged (94bc3704cddfc263); only
          AssemblyVersion moves, 6.1.0.0 -> 7.0.0.0.
