@@ -149,6 +149,89 @@ There is no retry, grace extension, timer, or second disposal gate. The receipt 
 action part of the lifecycle mechanism the hub already drains. An action whose stream was genuinely
 gone before it arrived is still refused by the path documented above.
 
+### 🚨 Step 4 was only half true, and the half that was missing is the one that loses the click
+
+A pending callback is drained in **Quiescing**, and Quiescing is a phase of the HUB. So the
+acknowledgement orders ahead of the release only if the release is posted from a point that comes
+*after* Quiescing. It was not.
+
+The release is one line — the `UnsubscribeRequest` that destroys the owner-side `sync/{id}` sub-hub,
+registered in `JsonSynchronizationStream.CreateExternalClient`. It was registered on the **stream**:
+
+```csharp
+reduced.RegisterForDisposal(new AnonymousDisposable(
+    () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner))));
+```
+
+and `SynchronizationStream.Dispose()` disposes its registrants **synchronously, and deliberately
+before `Hub.Dispose()`** — that ordering is [#1613's own fix](../StreamLivenessAndTheHubReference)
+and is correct for what it was for (it is what removes the pending `SubscribeRequest` callback
+promptly). Its cost here is that **the whole disposal ordering runs before the hub has a phase in
+which to wait**. So the two teardown routes behaved differently:
+
+| route | what disposes first | did the receipt order ahead? |
+|---|---|---|
+| the per-circuit portal hub disposes its hosted `sync/{id}` | the HUB — `streamDisposables` run from its `DisposeImpl` in ShutDown | yes, Quiescing came first |
+| the STREAM is disposed directly — a workspace eviction, `ReclaimIfUnheld`, `EvictClientSubscriptions`, a consumer's `.Finally(stream.Dispose)` | the STREAM — synchronously, ahead of `Hub.Dispose()` | **no** |
+
+The second route is not an edge: *released read stream* is one of the three ways into
+`RefuseStreamMessage` this page already names, and it is the one where the person is still sitting
+in front of the page.
+
+**The fix is where the line is registered, not what it does.** It now goes on the stream's hub, so it
+runs from `DisposeImpl` in ShutDown — strictly after Quiescing — on **both** routes:
+
+```csharp
+var release = new AnonymousDisposable(
+    () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner)));
+if (reducedHub is not null) reducedHub.RegisterForDisposal(release);
+else                        reduced.RegisterForDisposal(release);   // no hub left to wait in
+```
+
+Nothing new waits, nothing is delayed "to be safe": the release simply sits behind the drain the hub
+already performs.
+
+### The sender is a surface, not a call shape — `stream.SubmitUserAction(...)`
+
+The ordering above is only armed if the sender registered the callback, which `Post` does not do. So
+the acknowledged send is a named surface — `UserActionSubmission.SubmitUserAction`, an
+`ISynchronizationStream` extension — rather than an `Observe` incantation copied into every view
+that raises a click. It carries the acting user's `AccessContext` (a user action must; the sync hub
+has no identity of its own), owns its own subscription, and hands a refusal to the caller as the
+already-localized `error.userActionNotRun` sentence.
+
+That last part is also a behaviour change worth stating: with no callback registered, a refusal's
+`DeliveryFailure` fell through to the mirror's blanket `DeliveryFailure` handler, which answers
+`OnError` — **faulting the whole synchronization stream**, so every view bound to it died over one
+lost click. Matched to the action it belongs to, it stops being a page-level fault and becomes a
+sentence about that action.
+
+### The measurement
+
+`UserActionOutlivesStreamReleaseTest` asserts both directions against real hubs and a real remote
+stream, with the owner-side `sync/{id}` sub-hub's own `DisposalCompleted` as the instrument:
+
+| test | asserts | goes red on |
+|---|---|---|
+| `AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` | the owner's sub-hub does not die while an action is owed, and does die once it is answered | the defect |
+| `AnOrdinaryReleaseIsPrompt` | a release with nothing owed still reaches the owner | "never release the stream", which would satisfy the first test alone |
+| `AnActionOnALiveStreamStillRuns` | the acknowledged path still INVOKES the action | an ordering guarantee that stopped delivering clicks |
+
+The owed-work window is made deterministic rather than raced: the action names a stream id with no
+`sync/{id}` on the owner, so the owner holds it for `SyncStreamOptions.SyncHubRegistrationGrace`
+(400 ms in the test, well inside the hub's 2 s Quiescing budget) and then refuses — the real
+reaped-sync-hub shape. **Falsified by re-registering the release on the stream and rerunning:
+`AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` fails at 200 ms** — *"Expected the observable
+not to emit … but it emitted ()"* — while the other two stay green.
+
+### What is still owed, and where
+
+The **Blazor sender** (`BlazorView.OnClick` / `OnBlur` / the dialog close handlers, plus
+`GoogleMapView` and `AppleMapView`) still calls `Stream.Hub.Post(new ClickedEvent(...))`. Until those
+call sites move to `SubmitUserAction`, the portal registers no callback and the ordering above is
+armed but unused. That half lives in MeshWeaver.Plugins and needs a platform pin carrying this
+commit.
+
 ## What this deliberately does not do
 
 - **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an
