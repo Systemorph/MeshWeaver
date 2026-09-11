@@ -140,10 +140,12 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     ///
     /// <para>🚨 <b>What it governs, and what it must never govern.</b> It selects the pod-hub
     /// claim's TERMINAL and the level of the line that reports one — see
-    /// <see cref="AttachPodHub"/>. It does NOT gate whether the claim is attempted: a routing
-    /// service built on a bare container (several fixtures do exactly that) must still make the
-    /// call, or the gate that stops a SHUTTING-DOWN silo from claiming would be indistinguishable
-    /// from a gate that stopped claiming altogether.</para>
+    /// <see cref="AttachPodHub"/>. It does NOT decide readiness: every host orders the claim on
+    /// <see cref="OrleansStreamingReadiness"/>, and once that signal opens this flag decides whether
+    /// a failed claim can ever converge locally. A routing service built on a bare container
+    /// (several fixtures do exactly that) must therefore still make the call after its test opens
+    /// readiness, or the gate that stops a SHUTTING-DOWN silo from claiming would be
+    /// indistinguishable from a gate that stopped claiming altogether.</para>
     ///
     /// <para>Settable as a test seam, exactly like <see cref="AttachBackoff"/>: instance state,
     /// never static, so a unit test can pin the silo policy without standing up a silo.</para>
@@ -297,8 +299,9 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     private readonly IClusterMembershipFeed? membershipFeed;
 
     /// <summary>
-    /// When a pod-hub claim for <paramref name="addressPath"/> must be (re-)asserted: once
-    /// immediately, and then once per cluster membership change.
+    /// When a pod-hub claim for <paramref name="addressPath"/> must be (re-)asserted: once the
+    /// Orleans lifecycle reaches <see cref="ServiceLifecycleStage.Active"/>, and then once per
+    /// cluster membership change.
     ///
     /// <para>🚨 <b>The membership change is the EVENT that can invalidate the claim, not a poll.</b>
     /// The claim publishes an address→silo mapping into Orleans' own grain directory, and that
@@ -311,18 +314,36 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// re-publishes its client routing table to every silo on every membership change, and for the
     /// same reason.</para>
     ///
-    /// <para>Where there is no feed the sequence is a single immediate emission, i.e. exactly the
-    /// behaviour that existed before: assert once, never re-assert.</para>
+    /// <para>🚨 <b>The readiness ordering is the fix for #3983/#3984.</b> The old immediate
+    /// emission ran while eager <c>mesh/{id}</c> and <c>cache/{id}</c> hubs were being registered,
+    /// before this silo — and sometimes before ANY silo — advertised <c>IPodHubGrain</c>. Orleans
+    /// then failed placement with <c>Known nodes with grain type: none</c>. One logical claim was
+    /// visible twice in production: Orleans.Messaging logged every internal placement attempt
+    /// (#3983), while Polly logged the exhausted call (#3984). This gate removes the invalid call
+    /// rather than classifying or retrying it.</para>
+    ///
+    /// <para><c>ObserveOn</c> is load-bearing. <see cref="OrleansStreamingReadiness.Ready"/>
+    /// is completed on Orleans' lifecycle thread; invoking <c>Attach</c> inline there would make the
+    /// lifecycle wait on a cluster call whose placement depends on that lifecycle finishing. The
+    /// first claim is therefore scheduled away from that thread, just like the sibling stream
+    /// subscription's <c>ConfigureAwait(false)</c> continuation.</para>
+    ///
+    /// <para>Where there is no feed the post-readiness sequence is a single emission: assert once,
+    /// never re-assert.</para>
     /// </summary>
     /// <param name="addressPath">The address being claimed — used only for the trace line.</param>
     /// <returns>The trigger sequence the claim subscribes to.</returns>
     private IObservable<long> ClaimTriggers(string addressPath) =>
-        membershipFeed is null
-            ? Observable.Return(0L)
-            : membershipFeed.Changes
-                .Do(seq => OrleansRouteTrace.Write(
-                    $"OrleansRoutingService.AttachPodHub REASSERT addr={addressPath} membershipChange={seq}"))
-                .StartWith(0L);
+        Observable.Defer(() =>
+            serviceProvider.GetRequiredService<OrleansStreamingReadiness>().Ready
+                .Take(1)
+                .ObserveOn(Scheduler.Default)
+                .SelectMany(_ => membershipFeed is null
+                    ? Observable.Return(0L)
+                    : membershipFeed.Changes
+                        .Do(seq => OrleansRouteTrace.Write(
+                            $"OrleansRoutingService.AttachPodHub REASSERT addr={addressPath} membershipChange={seq}"))
+                        .StartWith(0L)));
 
     /// <summary>
     /// Routes a message delivery to its target. Locally registered streams are invoked
@@ -896,6 +917,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // two transports run side by side for one release, and a hub the grain cannot reach still
         // falls back to the stream. See Doc/Architecture/PodHubDeliveryRollPlan.
         //
+        // The claim is ORDERED on the same Active-stage readiness signal as the stream subscription
+        // below. Eager hubs are registered before the silo advertises its grain types; touching
+        // IPodHubGrain in that window produced #3983/#3984's "Known nodes with grain type: none"
+        // burst. The local route above is already live, so waiting changes no local behaviour.
+        //
         // This is a NO-OP outside a silo: an Orleans CLIENT process cannot host a grain, so Attach
         // never lands locally, the retries give up, and that hub keeps the stream permanently. That
         // is correct rather than degraded — and it is why the fallback is not a temporary scaffold.
@@ -1200,10 +1226,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// Claims <paramref name="address"/> for THIS process, so the rest of the cluster can deliver to
     /// it with a directed grain call instead of a stream publish (#1742).
     ///
-    /// <para>Synchronous to the caller and best-effort by construction: <c>RegisterStream</c>'s local
-    /// route is already live, and a claim that has not landed yet simply leaves this hub on the
-    /// stream — the transport it has always used. So a failure here degrades, it never blocks; the
-    /// returned disposable releases the claim.</para>
+    /// <para>Registration is synchronous to the caller and best-effort by construction:
+    /// <c>RegisterStream</c>'s local route is already live, while the cluster claim begins after
+    /// readiness. A claim that has not landed yet simply leaves this hub on the stream — the
+    /// transport it has always used. So a failure here degrades, it never blocks; the returned
+    /// disposable releases a claim that was actually attempted.</para>
     ///
     /// <para>🚨 <b>The claim's lifetime is DERIVED, never a counter</b> — the #2426 rule, applied
     /// here because a bounded claim was #1742's stated open residual: six attempts over ≈3 s and
@@ -1266,12 +1293,59 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         var budgetWarned = false;
         var recoveryLogged = false;
         var landedOnce = 0;
+        // Claim/dispose handshake. Disposal can race the synchronous interval between selecting a
+        // grain and actually invoking Attach(): it must neither Detach a claim that was never made
+        // nor Detach first and let that already-reserved Attach run afterwards. The STARTING state
+        // hands release ownership to the thread making the Attach call; that thread invokes Attach
+        // first and only then honours a concurrent disposal request.
+        const int WaitingForFirstAttempt = 0;
+        const int StartingAttempt = 1;
+        const int AttachWasInvoked = 2;
+        const int DisposedBeforeAnyAttempt = 3;
+        const int DisposeRequestedWhileStarting = 4;
+        const int DisposedAfterAttempt = 5;
+        var claimState = 0;
         var attach = new SingleAssignmentDisposable();
         // Armed BEFORE the claim is subscribed, so there is no window in which the claim could
         // terminate unobserved. AsyncSubject: it completes once and replays that completion to
         // whoever asks afterwards, so an observer arriving late still sees the terminal.
         var settled = podHubClaimSettled[address] = new AsyncSubject<Unit>();
         inFlight.Add(attach);
+
+        void ReleaseClaim(IPodHubGrain? selectedGrain = null)
+        {
+            // Fire-and-forget: teardown is best-effort, and an activation that outlives its owner is
+            // recovered anyway — Deliver on a silo with no local route steps aside (see PodHubGrain).
+            // Wrapped because this runs during teardown, where the cluster client may already be
+            // gone: releasing a claim that nobody can hear is a no-op, never a throw out of Dispose.
+            try
+            {
+                // 🚨 THE INVARIANT, at the site that violated it. A "goodbye" that has to CREATE the
+                // activation it says goodbye to is not a release — IPodHubGrain is
+                // [PreferLocalPlacement], so once the previous activation has gone this call places a
+                // brand-new one on the very silo that is shutting down, purely to tell it nothing.
+                // There is also nothing to release: every activation in this process is going away
+                // with it. Skipping is the whole correct behaviour, not a degradation.
+                var grain = selectedGrain ?? GrainWhileRunning<IPodHubGrain>(addressPath);
+                if (grain is null)
+                {
+                    logger.LogDebug(
+                        "Pod-hub claim for {Address} not released — the host has begun stopping, so the "
+                        + "activation is going away regardless and announcing it would only create one.",
+                        addressPath);
+                    return;
+                }
+
+                grain.Detach().ToObservable()
+                    .Subscribe(
+                        _ => { },
+                        ex => logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath));
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath);
+            }
+        }
 
         // ONE ROUND of the claim: ask, retry the bounce, and complete when it lands. Composed per
         // subscription so its retry state is genuinely per-round.
@@ -1284,21 +1358,63 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             return Observable
                 .Defer(() =>
                 {
-                    // Inside the Defer on purpose: RetryWhen re-subscribes, so a claim that is still
-                    // bouncing between pods when shutdown begins stops asking instead of spending its
-                    // remaining attempts placing an activation on the silo that is leaving.
-                    var grain = GrainWhileRunning<IPodHubGrain>(addressPath);
-                    if (grain is null)
-                    {
-                        logger.LogDebug(
-                            "Pod-hub claim for {Address} not attempted — the host has begun stopping, and "
-                            + "claiming an address for a process that is going away would only place a new "
-                            + "activation on the silo that is leaving.",
-                            addressPath);
+                    var previousState = Interlocked.CompareExchange(
+                        ref claimState, StartingAttempt, WaitingForFirstAttempt);
+                    if (previousState == AttachWasInvoked)
+                        previousState = Interlocked.CompareExchange(
+                            ref claimState, StartingAttempt, AttachWasInvoked);
+                    if (previousState >= DisposedBeforeAnyAttempt || previousState == StartingAttempt)
                         return Observable.Empty<bool>();
-                    }
 
-                    return grain.Attach().ToObservable();
+                    var hadEarlierAttempt = previousState == AttachWasInvoked;
+
+                    IPodHubGrain? grain = null;
+                    var attachCallEntered = false;
+                    try
+                    {
+                        // Inside the Defer on purpose: RetryWhen re-subscribes, so a claim that is still
+                        // bouncing between pods when shutdown begins stops asking instead of spending its
+                        // remaining attempts placing an activation on the silo that is leaving.
+                        grain = GrainWhileRunning<IPodHubGrain>(addressPath);
+                        if (grain is null)
+                        {
+                            logger.LogDebug(
+                                "Pod-hub claim for {Address} not attempted — the host has begun stopping, and "
+                                + "claiming an address for a process that is going away would only place a new "
+                                + "activation on the silo that is leaving.",
+                                addressPath);
+                            return Observable.Empty<bool>();
+                        }
+
+                        // The call itself is inside the handshake. If disposal changes STARTING to
+                        // DISPOSE_REQUESTED while this synchronous invocation is in progress, the
+                        // finally below becomes the sole release owner and therefore Detach cannot
+                        // overtake Attach.
+                        attachCallEntered = true;
+                        return grain.Attach().ToObservable();
+                    }
+                    finally
+                    {
+                        // Restore the retryable stable state even when GetGrain/Attach throws. A
+                        // failed first call was still INVOKED and must count as a claim for teardown:
+                        // the remote runtime may have accepted it before surfacing the exception.
+                        var stableState = attachCallEntered || hadEarlierAttempt
+                            ? AttachWasInvoked
+                            : WaitingForFirstAttempt;
+                        var stateAfterInvocation = Interlocked.CompareExchange(
+                            ref claimState, stableState, StartingAttempt);
+                        if (stateAfterInvocation == DisposeRequestedWhileStarting)
+                        {
+                            var anyAttempt = attachCallEntered || hadEarlierAttempt;
+                            Interlocked.Exchange(
+                                ref claimState,
+                                anyAttempt ? DisposedAfterAttempt : DisposedBeforeAnyAttempt);
+                            if (attachCallEntered)
+                                ReleaseClaim(grain);
+                            else if (hadEarlierAttempt)
+                                ReleaseClaim();
+                        }
+                    }
                 })
                 // `false` is "landed on a silo that is not the owner". Turning it into an error is what
                 // lets the retry policy below express "bounce off the old activation and try again"
@@ -1400,40 +1516,40 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
         return Disposable.Create(() =>
         {
+            var releaseHere = false;
+            var endedBeforeAnyAttempt = false;
+            while (true)
+            {
+                var state = Volatile.Read(ref claimState);
+                var next = state switch
+                {
+                    WaitingForFirstAttempt => DisposedBeforeAnyAttempt,
+                    StartingAttempt => DisposeRequestedWhileStarting,
+                    AttachWasInvoked => DisposedAfterAttempt,
+                    _ => state
+                };
+                if (next == state || Interlocked.CompareExchange(ref claimState, next, state) == state)
+                {
+                    endedBeforeAnyAttempt = state == WaitingForFirstAttempt;
+                    releaseHere = state == AttachWasInvoked;
+                    break;
+                }
+            }
             inFlight.Remove(attach);
             podHubClaimSettled.TryRemove(address, out _);
             attach.Dispose();
-            // Fire-and-forget: teardown is best-effort, and an activation that outlives its owner is
-            // recovered anyway — Deliver on a silo with no local route steps aside (see PodHubGrain).
-            // Wrapped because this runs during teardown, where the cluster client may already be
-            // gone: releasing a claim that nobody can hear is a no-op, never a throw out of Dispose.
-            try
+            if (endedBeforeAnyAttempt)
             {
-                // 🚨 THE INVARIANT, at the site that violated it. A "goodbye" that has to CREATE the
-                // activation it says goodbye to is not a release — IPodHubGrain is
-                // [PreferLocalPlacement], so once the previous activation has gone this call places a
-                // brand-new one on the very silo that is shutting down, purely to tell it nothing.
-                // There is also nothing to release: every activation in this process is going away
-                // with it. Skipping is the whole correct behaviour, not a degradation.
-                var grain = GrainWhileRunning<IPodHubGrain>(addressPath);
-                if (grain is null)
-                {
-                    logger.LogDebug(
-                        "Pod-hub claim for {Address} not released — the host has begun stopping, so the "
-                        + "activation is going away regardless and announcing it would only create one.",
-                        addressPath);
-                    return;
-                }
-
-                grain.Detach().ToObservable()
-                    .Subscribe(
-                        _ => { },
-                        ex => logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath));
+                logger.LogDebug(
+                    "Pod-hub claim for {Address} not released — its registration ended before Orleans "
+                    + "reached Active, so no claim was ever attempted.",
+                    addressPath);
+                return;
             }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath);
-            }
+            // StartingAttempt handed release ownership to the Attach caller; terminal states have
+            // already been handled. Only a fully-invoked claim is released on this disposing thread.
+            if (releaseHere)
+                ReleaseClaim();
         });
     }
 

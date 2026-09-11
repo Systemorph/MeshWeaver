@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -107,12 +108,17 @@ public class SiloShutdownActivationGateTest : TestBase
     /// that is a brand-new activation on the silo that is leaving.</para>
     /// </summary>
     [Fact]
-    public void HostStopping_TheGoodbyeAnnouncement_NeverAsksOrleansForAnActivation()
+    public async Task HostStopping_TheGoodbyeAnnouncement_NeverAsksOrleansForAnActivation()
     {
         var factory = new RecordingGrainFactory();
         var routing = CreateRouter(factory);
 
         var registration = routing.RegisterStream(SenderAddress, Ignore);
+        var settled = routing.PodHubClaimSettled(SenderAddress)
+                      ?? throw new InvalidOperationException("the claim readiness seam was not registered");
+        await ((ILifecycleObserver)readiness).OnStart(TestContext.Current.CancellationToken);
+        await settled.Should().Within(TimeSpan.FromSeconds(10)).Emit(
+            "precondition: the healthy host must claim the address after Orleans reaches Active");
         factory.Requests.Should().NotBeEmpty("the claim must be made while the host is healthy");
 
         lifetime.StopApplication();
@@ -134,12 +140,17 @@ public class SiloShutdownActivationGateTest : TestBase
     /// no activation stranded on the pod it left.
     /// </summary>
     [Fact]
-    public void HostRunning_TheGoodbyeAnnouncement_StillReachesOrleans()
+    public async Task HostRunning_TheGoodbyeAnnouncement_StillReachesOrleans()
     {
         var factory = new RecordingGrainFactory();
         var routing = CreateRouter(factory);
 
         var registration = routing.RegisterStream(SenderAddress, Ignore);
+        var settled = routing.PodHubClaimSettled(SenderAddress)
+                      ?? throw new InvalidOperationException("the claim readiness seam was not registered");
+        await ((ILifecycleObserver)readiness).OnStart(TestContext.Current.CancellationToken);
+        await settled.Should().Within(TimeSpan.FromSeconds(10)).Emit(
+            "precondition: the healthy host must claim the address after Orleans reaches Active");
         factory.Clear();
 
         registration.Dispose();
@@ -156,7 +167,7 @@ public class SiloShutdownActivationGateTest : TestBase
     /// began spent its remaining attempts doing exactly that.
     /// </summary>
     [Fact]
-    public void HostStopping_ThePodHubClaim_NeverAsksOrleansForAnActivation()
+    public async Task HostStopping_ThePodHubClaim_NeverAsksOrleansForAnActivation()
     {
         var factory = new RecordingGrainFactory();
         var routing = CreateRouter(factory);
@@ -164,10 +175,12 @@ public class SiloShutdownActivationGateTest : TestBase
         lifetime.StopApplication();
 
         using var registration = routing.RegisterStream(SenderAddress, Ignore);
+        await ((ILifecycleObserver)readiness).OnStart(TestContext.Current.CancellationToken);
 
-        factory.Requests.Should().BeEmpty(
-            "claiming an address for a process that is shutting down only places an activation on "
-            + "the silo that is leaving");
+        await factory.RequestStream.Should().NotEmit(
+            within: TimeSpan.FromMilliseconds(300),
+            because: "claiming an address for a process that is shutting down only places an "
+                + "activation on the silo that is leaving");
     }
 
     /// <summary>
@@ -176,17 +189,19 @@ public class SiloShutdownActivationGateTest : TestBase
     /// is what makes a hub reachable by directed grain call at all (#1742).
     /// </summary>
     [Fact]
-    public void HostRunning_ThePodHubClaim_StillReachesOrleans()
+    public async Task HostRunning_ThePodHubClaim_StillReachesOrleans()
     {
         var factory = new RecordingGrainFactory();
         var routing = CreateRouter(factory);
 
         using var registration = routing.RegisterStream(SenderAddress, Ignore);
+        await ((ILifecycleObserver)readiness).OnStart(TestContext.Current.CancellationToken);
 
-        factory.Requests.Should().Contain(
-            r => r.Interface == typeof(IPodHubGrain) && r.Key == SenderAddress.ToString(),
-            "a healthy silo must still claim its addresses — a gate that refuses everything would "
-            + "pass the shutdown assertions above and break the portal");
+        await factory.RequestStream
+            .Where(r => r.Interface == typeof(IPodHubGrain) && r.Key == SenderAddress.ToString())
+            .Should().Within(TimeSpan.FromSeconds(10)).Emit(
+                "a healthy silo must still claim its addresses — a gate that refuses everything "
+                + "would pass the shutdown assertions above and break the portal");
     }
 
     /// <summary>
@@ -242,15 +257,20 @@ public class SiloShutdownActivationGateTest : TestBase
     private sealed class RecordingGrainFactory : IGrainFactory
     {
         private readonly ConcurrentQueue<GrainRequest> requests = new();
+        private readonly ISubject<GrainRequest> requestStream =
+            Subject.Synchronize(new ReplaySubject<GrainRequest>(bufferSize: 1));
 
         public IReadOnlyList<GrainRequest> Requests => requests.ToArray();
+        public IObservable<GrainRequest> RequestStream => requestStream.AsObservable();
 
         public void Clear() => requests.Clear();
 
         public TGrainInterface GetGrain<TGrainInterface>(string primaryKey, string? grainClassNamePrefix = null)
             where TGrainInterface : IGrainWithStringKey
         {
-            requests.Enqueue(new GrainRequest(typeof(TGrainInterface), primaryKey));
+            var request = new GrainRequest(typeof(TGrainInterface), primaryKey);
+            requests.Enqueue(request);
+            requestStream.OnNext(request);
             if (typeof(TGrainInterface) == typeof(IPodHubGrain))
                 return (TGrainInterface)(object)new StubPodHubGrain();
             if (typeof(TGrainInterface) == typeof(IRoutingGrain))

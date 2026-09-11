@@ -62,16 +62,20 @@ public class PodHubClaimReassertionTest
     private static IObservable<IMessageDelivery> Ignore(IMessageDelivery d, CancellationToken _) =>
         Observable.Return(d);
 
-    private static Microsoft.Extensions.DependencyInjection.ServiceProvider Services(
+    private static async Task<Microsoft.Extensions.DependencyInjection.ServiceProvider> Services(
         IClusterMembershipFeed? feed)
     {
+        var readiness = new OrleansStreamingReadiness();
         var services = new ServiceCollection();
-        // Registered but never fired: the stream attach then stays parked on the #1129 readiness
-        // gate, so this test needs no stream provider and touches none.
-        services.AddSingleton(new OrleansStreamingReadiness());
+        services.AddSingleton(readiness);
         if (feed is not null)
             services.AddSingleton(feed);
-        return services.BuildServiceProvider();
+        var provider = services.BuildServiceProvider();
+        // The re-assertion policy begins only after the initial Active-stage readiness event. The
+        // readiness test owns the pre-Active direction; these tests own what membership changes do
+        // to a live claim afterwards.
+        await ((ILifecycleObserver)readiness).OnStart(TestContext.Current.CancellationToken);
+        return provider;
     }
 
     private static OrleansRoutingService Router(
@@ -119,11 +123,12 @@ public class PodHubClaimReassertionTest
     {
         var feed = new TestMembershipFeed();
         var factory = new AcceptingGrainFactory();
-        await using var sp = Services(feed);
+        await using var sp = await Services(feed);
         using var routing = Router(factory, sp, new RecordingLogger());
 
         using var registration = routing.RegisterStream(Hub, Ignore);
-        await WaitForAttaches(factory, 1, "the initial claim must still be made immediately");
+        await WaitForAttaches(factory, 1,
+            "the initial claim must be made as soon as the already-open readiness gate permits it");
 
         feed.PushChange();
         await WaitForAttaches(factory, 2,
@@ -148,7 +153,7 @@ public class PodHubClaimReassertionTest
         var feed = new TestMembershipFeed();
         var factory = new AcceptingGrainFactory();
         var logger = new RecordingLogger();
-        await using var sp = Services(feed);
+        await using var sp = await Services(feed);
         using var routing = Router(factory, sp, logger);
 
         using var registration = routing.RegisterStream(Hub, Ignore);
@@ -182,7 +187,7 @@ public class PodHubClaimReassertionTest
     {
         var feed = new TestMembershipFeed();
         var factory = new AcceptingGrainFactory();
-        await using var sp = Services(feed);
+        await using var sp = await Services(feed);
         using var routing = Router(factory, sp, new RecordingLogger());
 
         var registration = routing.RegisterStream(Hub, Ignore);
@@ -215,11 +220,12 @@ public class PodHubClaimReassertionTest
     public async Task WithNoMembershipFeed_TheClaimIsAssertedExactlyOnce()
     {
         var factory = new AcceptingGrainFactory();
-        await using var sp = Services(feed: null);
+        await using var sp = await Services(feed: null);
         using var routing = Router(factory, sp, new RecordingLogger());
 
         using var registration = routing.RegisterStream(Hub, Ignore);
-        await WaitForAttaches(factory, 1, "the initial claim is made with or without a feed");
+        await WaitForAttaches(factory, 1,
+            "after readiness, the initial claim is made with or without a feed");
 
         await Task.Delay(400);
         factory.AttachCalls.Should().Be(1,
