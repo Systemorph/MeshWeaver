@@ -154,11 +154,13 @@ public abstract record StreamMessage(string StreamId) : IDiagnosticKeyed
 /// +175 ms, the event dropped 5 s after that, <c>InstallPackage</c> never invoked, and the only
 /// record a Warning on the server that reads like routine stream churn.</para>
 ///
-/// <para>Implementing this interface changes nothing about how a message is routed or handled. It
-/// marks the message as one whose loss is REFUSED VISIBLY rather than logged as churn — see
-/// <c>DataExtensions.RefuseStreamMessage</c>.</para>
+/// <para>The action is also an <see cref="IRequest{TResponse}"/> for a
+/// <see cref="UserActionAccepted"/> receipt. A UI sender observes that receipt so its existing hub
+/// quiesce cannot release the synchronization stream until the owner-side action handler has
+/// accepted the action. Fire-and-forget senders remain wire-compatible; an unmatched receipt is
+/// simply processed by the sender hub's ordinary response path.</para>
 /// </summary>
-public interface IUserAction
+public interface IUserAction : IRequest<UserActionAccepted>
 {
     /// <summary>
     /// What the person acted ON — the layout-area key for a click, a blur or a dialog. Named in the
@@ -166,6 +168,13 @@ public interface IUserAction
     /// </summary>
     string ActionArea { get; }
 }
+
+/// <summary>
+/// Receipt posted by the owner-side synchronization hub after a user action has reached its
+/// stream-scoped handler. Observing this response makes an accepted click, blur, or dialog close
+/// part of the sender hub's quiesce drain instead of allowing stream teardown to overtake it.
+/// </summary>
+public sealed record UserActionAccepted;
 
 /// <summary>
 /// Base type for stream messages that carry a versioned JSON change.

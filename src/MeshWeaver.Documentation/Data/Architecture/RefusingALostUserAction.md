@@ -1,7 +1,7 @@
 ---
 Name: Refusing a Lost User Action
 Category: Architecture
-Description: A click whose stream is gone used to be dropped with a warning that reads like routine data-sync churn, while the action it would have run was perfectly capable of outliving the circuit. Why "deliver it anyway" is not implementable as stated, what a visible refusal is instead, and the one line that separates a person's action from a data frame.
+Description: A user action is refused visibly when its stream is already gone, and an accepted action now holds the sender's ordinary quiesce drain until its owner-side handler acknowledges it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11.5 4.5 7 6 5.5 9 8.5 15 2.5l1.5 1.5z"/><path d="M3 13a9 9 0 1 0 9-9"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
 ---
 
@@ -131,12 +131,26 @@ rises.
 which on Blazor Server is the container's and identical for every simultaneous viewer. See
 [Localization](/Doc/Architecture/Localization).
 
-## What this deliberately does not fix
+## The ordering fix that followed
 
-- **The ordering that loses the click in the first place.** The per-circuit portal hub released its
-  stream while an inbound user action it had already accepted was still in flight to the owner. Its
-  disposal lives in the Blazor portal (MeshWeaver.Plugins), not here, so draining accepted user
-  actions before releasing subscriptions is a cross-repo change with its own design.
+The visible refusal closed the silent-failure half, but it did not stop an accepted action losing a
+race with circuit teardown. That second half is issue #3986 and is now an acknowledgement protocol:
+
+1. `IUserAction` is an `IRequest<UserActionAccepted>`.
+2. The Blazor sync hub uses `Observe` to register the response callback **before** it posts the
+   click, blur, or dialog dismissal.
+3. The owner-side `LayoutAreaHost` posts `UserActionAccepted` only after its stream-scoped handler
+   has accepted the action.
+4. A circuit close reaches the sync hub's existing **Quiescing** phase and sees that callback as
+   pending. It therefore keeps the stream subscription alive until the receipt lands, then disposes
+   normally.
+
+There is no retry, grace extension, timer, or second disposal gate. The receipt makes the accepted
+action part of the lifecycle mechanism the hub already drains. An action whose stream was genuinely
+gone before it arrived is still refused by the path documented above.
+
+## What this deliberately does not do
+
 - **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an
   event that is genuinely undeliverable is not made deliverable by polling for a stream that is gone,
   and moving the 5-second grace only moves the cliff.
@@ -149,4 +163,6 @@ which on Blazor Server is the container's and identical for every simultaneous v
   NACKed during teardown, which is the rule this change makes one exception to and states.
 - [Stream Liveness and the Hub Reference](../StreamLivenessAndTheHubReference) — how a stream and its
   sub-hub come apart, which is the state this page starts from.
+- [Hub Disposal Model](../HubDisposalModel) — the Quiescing callback drain that now retains accepted
+  user actions until their owner-side receipt lands.
 - [Localization](../Localization) — the catalog and the explicit-locale rule.
