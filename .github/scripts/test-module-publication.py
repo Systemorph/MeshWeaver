@@ -370,6 +370,16 @@ def main() -> int:  # noqa: C901
     check("the lane publishes its `lane` key so one publication can only reach one call's evidence",
           "lane" in outs)
     check("…and its `selected` set, so a module that never staged is a NAMED refusal", "selected" in outs)
+    # The matrix the call was GIVEN, so the publisher's set-aside check reads the one catalog the pack
+    # call was handed instead of a second copy of it in the caller (Plugins refuses a second
+    # `modules:` list in its ci.yml, #3732 — and a copy drifts).
+    check("…and the matrix it was GIVEN (`declared`), routed through `select`",
+          "declared" in outs and str((outs.get("declared") or {}).get("value", "")).replace(" ", "")
+          == "${{jobs.select.outputs.declared}}", str(outs.get("declared")))
+    select_outs = pack["jobs"]["select"].get("outputs") or {}
+    check("…fed VERBATIM from the `modules` input, never a derived or filtered list",
+          str(select_outs.get("declared", "")).replace(" ", "") == "${{inputs.modules}}",
+          str(select_outs.get("declared")))
 
     steps = {s.get("id") or s.get("name"): s for s in (pack["jobs"]["pack"]["steps"])}
     handover = steps.get("publish")
