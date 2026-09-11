@@ -4,6 +4,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.Messaging;
@@ -145,11 +146,13 @@ public static class PluginBundleEndpoints
         // a package. Absent ⇒ this instance's own lane, which is what every pre-#3768 client asks
         // for, so the answer for them is unchanged.
         group.MapGet("/index.json", (HttpContext http, CancellationToken ct) =>
-            Index(
-                http, RootHub(http),
-                Requested(http, "identity", FrameworkMvid),
-                Requested(http, "arch", ReleaseArchitecture.Live),
-                Caller(http), ct));
+            RefuseMalformedIdentity(http) is { } refused
+                ? Task.FromResult(refused)
+                : Index(
+                    http, RootHub(http),
+                    Requested(http, "identity", FrameworkMvid),
+                    Requested(http, "arch", ReleaseArchitecture.Live),
+                    Caller(http), ct));
 
         // 🚨 `identity`/`arch` are the CONSUMER's lane (#1751), not a filter the caller invents: they
         // say which framework build identity and which architecture the caller can actually run, and
@@ -158,12 +161,14 @@ public static class PluginBundleEndpoints
         // route's behaviour for them is unchanged.
         group.MapGet("/{plugin}/{version}",
             (HttpContext http, string plugin, string version, CancellationToken ct) =>
-                Bundle(
-                    http, RootHub(http), plugin, version,
-                    Requested(http, "identity", FrameworkMvid),
-                    Requested(http, "arch", ReleaseArchitecture.Live),
-                    Caller(http),
-                    ct));
+                RefuseMalformedIdentity(http) is { } refused
+                    ? Task.FromResult(refused)
+                    : Bundle(
+                        http, RootHub(http), plugin, version,
+                        Requested(http, "identity", FrameworkMvid),
+                        Requested(http, "arch", ReleaseArchitecture.Live),
+                        Caller(http),
+                        ct));
 
         MapPrebuilt(group);
         MapPublish(endpoints);
@@ -857,6 +862,31 @@ public static class PluginBundleEndpoints
     /// <summary>One query-string value, or the serving instance's own value when the caller did not
     /// state one. Blank is treated as absent — an empty <c>?identity=</c> is a client bug, and
     /// answering it with "nothing resolves" would look identical to an incompatible lane.</summary>
+    /// <summary>
+    /// 🚨 Refuses a STATED framework identity that is not a bare name, before anything composes a
+    /// path with it — <c>400</c>, the same answer and the same rule the prebuilt routes apply to
+    /// their <c>{identity}</c> segment.
+    ///
+    /// <para>The identity used to be compared as an opaque string and nothing else; since #3768 it
+    /// selects a directory under the mounted publication root, so <c>?identity=../…</c> would reach
+    /// outside the lane it names. <see cref="SealedLaneBundles.IsBareName"/> restates the check at
+    /// the layer that builds the path; this one makes a malformed request an ERROR rather than a
+    /// silent fallback, so a client bug is visible instead of looking like an unbaked lane. A
+    /// caller that states no identity is untouched — that is every consumer older than #3768.</para>
+    /// </summary>
+    private static IResult? RefuseMalformedIdentity(HttpContext http)
+    {
+        var stated = http.Request.Query["identity"].ToString();
+        if (string.IsNullOrWhiteSpace(stated) || SealedLaneBundles.IsBareName(stated))
+            return null;
+        Log(http)?.LogWarning(
+            "Plugin bundles: refused {Path} — the stated framework identity is not a bare name",
+            http.Request.Path);
+        return Results.Json(
+            new { error = "identity must be a bare name" },
+            statusCode: StatusCodes.Status400BadRequest);
+    }
+
     private static string Requested(HttpContext http, string key, string fallback) =>
         http.Request.Query[key].ToString() is { Length: > 0 } value && !string.IsNullOrWhiteSpace(value)
             ? value
@@ -1435,7 +1465,14 @@ public static class PluginBundleEndpoints
                 ledger?.Record(decision);
 
                 if (asked is not null && decision.Serves)
-                    return Assemble(rootHub, asked, identity, architecture, publishedRoot);
+                    // 🚨 The source the ENTITLEMENT decision resolved, not the entry's cached stamp
+                    // — the anchor is the authority on which source carries a package, and the
+                    // sealed-lane lookup must not be able to cross the (source, package) pair this
+                    // caller was granted. Falls back to the cached binding only where the decision
+                    // states none.
+                    return Assemble(
+                        rootHub, asked, identity, architecture, publishedRoot,
+                        decision.Source ?? asked.Source);
 
                 // The refusal is uniform on the wire; the LOG is where it is diagnosable, naming
                 // which instance asked, what the entitlement answer actually was, and whether this
@@ -1484,7 +1521,7 @@ public static class PluginBundleEndpoints
     /// </summary>
     private static IObservable<IResult> Assemble(
         IMessageHub rootHub, BundleEntry package, string identity, string architecture,
-        string? publishedRoot)
+        string? publishedRoot, string? source)
     {
         var meshService = rootHub.ServiceProvider.GetRequiredService<IMeshService>();
         var store = rootHub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
@@ -1510,7 +1547,7 @@ public static class PluginBundleEndpoints
         // ServedModuleBytes records for the module half: fetching the prebuilt route directly needs
         // a whole-source grant, and a whole-source grant bypasses plan tiering).
         if (!servesOwnLane
-            && SealedLaneBundles.Locate(publishedRoot, identity, package.PluginId, logger)
+            && SealedLaneBundles.Locate(publishedRoot, identity, package.PluginId, source, logger)
                 is { } sealedLane)
             return FromSealedLane(
                 rootHub, package, sealedLane, identity, architecture, publishedRoot, logger);
@@ -1626,59 +1663,103 @@ public static class PluginBundleEndpoints
         IMessageHub rootHub, BundleEntry package, SealedLaneBundle sealedLane,
         string identity, string architecture, string? publishedRoot, ILogger? logger)
     {
-        BundleReader.Manifest? manifest;
-        IReadOnlyList<BundleReader.Payload> payloads;
+        // 🚨 The archive is opened, parsed and inflated on the FILESYSTEM pool, never on the
+        // request thread: this is a mounted network share and a bundle is the whole weight of a
+        // package, so several concurrent boot downloads would otherwise hold request threads on a
+        // slow mount. The same discipline PublishedBundleCatalogue.Observe applies to this read.
+        var pool = rootHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                   ?? IoPool.Unbounded;
+
+        return pool.InvokeBlocking(_ => ReadSealed(sealedLane, identity))
+            .SelectMany(read =>
+            {
+                if (read.Refusal is not null)
+                {
+                    // Not a fall-through to the release-record path: that would hand back an
+                    // archive with no assemblies and a manifest claiming the caller's lane, which
+                    // reads as a successful adoption of nothing. A 404 is the one answer the
+                    // consumer already turns into a NAMED miss (NotServed) and a compile.
+                    logger?.LogWarning(
+                        "Plugin bundles: {Plugin} — the bundle sealed for framework {Identity} by "
+                        + "source '{Source}' ({Bundle}) is not servable: {Reason}. Serving nothing "
+                        + "for that lane; the consumer will compile.",
+                        package.PluginId, identity, sealedLane.Source, sealedLane.BundleName,
+                        read.Refusal);
+                    return Observable.Return(NoSuchBundle());
+                }
+
+                var served = read.Assemblies
+                    .Select(payload => new ServedAssembly(
+                        payload.NodePath,
+                        () => new MemoryStream(payload.Assembly, writable: false),
+                        payload.Dependencies,
+                        payload.SourceFingerprint))
+                    .ToArray();
+
+                logger?.LogInformation(
+                    "Plugin bundles: {Plugin} served on framework {Identity}/{Architecture} from "
+                    + "the publication source '{Source}' sealed for that lane ({Bundle}, generation "
+                    + "{Generation}) — {Count} assembly/assemblies",
+                    package.PluginId, identity, architecture, sealedLane.Source,
+                    sealedLane.BundleName, sealedLane.Generation ?? "(unrecorded)", served.Length);
+
+                var recorded = ServedModuleBytes.RecordedFor(
+                    served.Select(a => a.Dependencies), package.Module ?? "");
+                IReadOnlyList<string> sealedMisses = read.Misses ?? [];
+                return ModuleFiles(rootHub, package, recorded, publishedRoot, identity)
+                    .Select(module => BuildResult(
+                        package, served, module, identity, architecture,
+                        module.Divergence is null
+                            ? sealedMisses
+                            : sealedMisses
+                                .Append($"module '{package.Module}': {module.Divergence}")
+                                .ToArray()));
+            });
+    }
+
+    /// <summary>
+    /// Reads one sealed bundle and says whether it may be served for <paramref name="identity"/>.
+    /// The file read; everything else is a decision.
+    ///
+    /// <para>🚨 <b>The archive's OWN framework identity is checked before anything is served</b>,
+    /// through the very function the consumer applies to the same bytes
+    /// (<see cref="PrebuiltAssemblySeeder.DeclineReason(string?, string)"/>, ordinal equality). The
+    /// directory a bundle sits in is a filing convention; the manifest is the producer's claim, and
+    /// only the claim may be believed. Without this a bundle mislabelled into an identity directory
+    /// would be RESTAMPED with the requested identity by <see cref="BuildResult"/> — and the
+    /// consumer's gate, seeing a manifest that agrees with its own live identity, would adopt bytes
+    /// baked for another framework. That is the one outcome this lane exists to prevent, and it is
+    /// why the check reads the claim rather than inferring it from where the file was found.</para>
+    /// </summary>
+    private static SealedRead ReadSealed(SealedLaneBundle sealedLane, string identity)
+    {
         try
         {
-            (manifest, payloads) = BundleReader.ReadFile(sealedLane.Path);
+            var (manifest, assemblies) = BundleReader.ReadFile(sealedLane.Path);
+            if (manifest is null)
+                return new SealedRead([], null, "it carries no manifest");
+            if (PrebuiltAssemblySeeder.DeclineReason(manifest.FrameworkMvid, identity)
+                is { } mismatch)
+                return new SealedRead([], null,
+                    $"the archive's own manifest says it was {mismatch} — the directory it is "
+                    + "filed under is not evidence of what it was built against");
+            if (assemblies.Count == 0)
+                return new SealedRead([], null, "it carries no assemblies");
+            return new SealedRead(assemblies, manifest.Misses, null);
         }
         catch (Exception exception)
             when (exception is IOException or InvalidDataException or JsonException)
         {
-            logger?.LogWarning(exception,
-                "Plugin bundles: {Plugin} — the bundle sealed for framework {Identity} by source "
-                + "'{Source}' ({Bundle}) is unreadable; serving nothing for that lane, the consumer "
-                + "will compile", package.PluginId, identity, sealedLane.Source,
-                sealedLane.BundleName);
-            return Observable.Return(NoSuchBundle());
+            return new SealedRead([], null, $"it is unreadable: {exception.Message}");
         }
-
-        if (manifest is null || payloads.Count == 0)
-        {
-            logger?.LogWarning(
-                "Plugin bundles: {Plugin} — the bundle sealed for framework {Identity} by source "
-                + "'{Source}' ({Bundle}) carries no assemblies; serving nothing for that lane, the "
-                + "consumer will compile", package.PluginId, identity, sealedLane.Source,
-                sealedLane.BundleName);
-            return Observable.Return(NoSuchBundle());
-        }
-
-        var served = payloads
-            .Select(payload => new ServedAssembly(
-                payload.NodePath,
-                () => new MemoryStream(payload.Assembly, writable: false),
-                payload.Dependencies,
-                payload.SourceFingerprint))
-            .ToArray();
-
-        logger?.LogInformation(
-            "Plugin bundles: {Plugin} served on framework {Identity}/{Architecture} from the "
-            + "publication source '{Source}' sealed for that lane ({Bundle}, generation "
-            + "{Generation}) — {Count} assembly/assemblies",
-            package.PluginId, identity, architecture, sealedLane.Source, sealedLane.BundleName,
-            sealedLane.Generation ?? "(unrecorded)", served.Length);
-
-        var recorded = ServedModuleBytes.RecordedFor(
-            served.Select(a => a.Dependencies), package.Module ?? "");
-        IReadOnlyList<string> sealedMisses = manifest.Misses ?? [];
-        return ModuleFiles(rootHub, package, recorded, publishedRoot, identity)
-            .Select(module => BuildResult(
-                package, served, module, identity, architecture,
-                module.Divergence is null
-                    ? sealedMisses
-                    : sealedMisses.Append($"module '{package.Module}': {module.Divergence}")
-                        .ToArray()));
     }
+
+    /// <summary>What a sealed bundle yielded: its assemblies and the per-type misses its producer
+    /// recorded, or the NAMED reason it may not be served.</summary>
+    private sealed record SealedRead(
+        IReadOnlyList<BundleReader.Payload> Assemblies,
+        IReadOnlyList<string>? Misses,
+        string? Refusal);
 
     /// <summary>
     /// The <c>Release</c> nodes from a package's subtree, grouped by the NodeType they belong to.

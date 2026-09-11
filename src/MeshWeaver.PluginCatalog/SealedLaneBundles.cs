@@ -50,7 +50,9 @@ public static class SealedLaneBundles
     /// </summary>
     public static ImmutableHashSet<string> ServableFor(
         string? publishedRoot, string? identity, ILogger? logger = null) =>
-        PublishedBundleCatalogue.SealedBundlesForIdentity(publishedRoot, identity, logger);
+        IsBareName(identity)
+            ? PublishedBundleCatalogue.SealedBundlesForIdentity(publishedRoot, identity, logger)
+            : [];
 
     /// <summary>
     /// The sealed bundle carrying <paramref name="packageId"/>'s NodeType assemblies under
@@ -65,19 +67,21 @@ public static class SealedLaneBundles
     /// tried — one source being replaced must never hide another's sealed bundles.</para>
     /// </summary>
     public static SealedLaneBundle? Locate(
-        string? publishedRoot, string? identity, string packageId, ILogger? logger = null)
+        string? publishedRoot, string? identity, string packageId, string? source,
+        ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(publishedRoot)
-            || string.IsNullOrWhiteSpace(identity)
+            || !IsBareName(identity)
             || string.IsNullOrWhiteSpace(packageId))
             return null;
 
-        var identityDirectory = Path.Combine(publishedRoot, identity);
+        var identityDirectory = Path.Combine(publishedRoot, identity!);
         if (!Directory.Exists(identityDirectory))
             return null;
 
         foreach (var sourceDirectory in Directory
                      .EnumerateDirectories(identityDirectory)
+                     .Where(d => Serves(d, source))
                      .OrderBy(d => d, StringComparer.Ordinal))
         {
             var reading = PublishedBundleCatalogue.SealedPublicationOf(sourceDirectory, logger);
@@ -99,6 +103,43 @@ public static class SealedLaneBundles
 
         return null;
     }
+
+    /// <summary>
+    /// 🚨 Whether this publication source may answer for the package — the (source, package) half of
+    /// the entitlement decision, carried down so the lookup cannot cross it.
+    ///
+    /// <para>The caller passes the AUTHORITATIVE source the entitlement decision resolved
+    /// (<c>EntitlementDecision.Source</c>, the registry's own catalog before the install record's
+    /// cached stamp). Without it this scanned every source directory and returned the first bundle
+    /// whose file name matched, so two sources publishing the same package id would let a caller
+    /// granted one receive the other's bytes under a response restamped with the requested package
+    /// — a grant boundary crossed inside a lookup that looked like a file search. Compared
+    /// case-insensitively because the publication PREFIX is lowercase while a registry source name
+    /// need not be.</para>
+    ///
+    /// <para>A null source means the binding is genuinely unknown (no anchor, no stamped record),
+    /// and only then is every source considered — the same "the absence of an answer is never a
+    /// yes" discipline the entitlement decision itself follows, applied in the direction that costs
+    /// a compile rather than the one that discloses bytes. When a source IS named and no directory
+    /// carries it, the answer is "nothing sealed for you here": the caller falls through to the
+    /// release-record path and compiles, which is what it did before this lookup existed.</para>
+    /// </summary>
+    private static bool Serves(string sourceDirectory, string? source) =>
+        string.IsNullOrWhiteSpace(source)
+        || string.Equals(
+            Path.GetFileName(sourceDirectory), source, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 🚨 One path segment, and nothing that can leave the published root — the identity arrives on
+    /// a QUERY STRING and is composed into a filesystem path here, so this is the boundary. Same
+    /// rule as the prebuilt routes' own <c>IsBareName</c>, restated at the layer that builds the
+    /// path rather than trusted from the layer that read the request: a second entry point added
+    /// later would otherwise inherit the hole rather than the check.
+    /// </summary>
+    public static bool IsBareName(string? segment) =>
+        segment is { Length: > 0 }
+        && segment.IndexOfAny(['/', '\\', ':']) < 0
+        && segment != "." && segment != "..";
 
     /// <summary>A sealed bundle's id as the seal lists it, minus the <c>.zip</c> the bake writes —
     /// the package id (<c>RequiredPackage.BundleName</c>).</summary>

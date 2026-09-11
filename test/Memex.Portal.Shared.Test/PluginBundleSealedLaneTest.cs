@@ -191,6 +191,117 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
         }
     }
 
+    /// <summary>
+    /// 🚨 The stated identity composes a PATH under the mounted publication root, so a request that
+    /// is not a bare name is refused outright rather than resolved. Without this, an identity like
+    /// <c>../..</c> reaches outside the lane it names — a traversal the route did not have while
+    /// the identity was only ever string-compared.
+    /// </summary>
+    [Theory(Timeout = 120_000)]
+    [InlineData("../../etc")]
+    [InlineData("..")]
+    [InlineData("a/b")]
+    [InlineData("c:evil")]
+    public async Task AnIdentityThatIsNotABareNameIsRefused_OnBothRoutes(string identity)
+    {
+        var root = NewRoot();
+        try
+        {
+            SealPublication(root, ConsumerIdentity);
+            await InstallPackage();
+            var key = await RegisterInstance($"{Source}/*");
+            await using var app = await StartHost(root);
+
+            var lane = $"?identity={Uri.EscapeDataString(identity)}"
+                       + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
+
+            using var index = await Get(
+                app, PluginBundleEndpoints.RoutePrefix + "/index.json" + lane, key);
+            Assert.Equal(HttpStatusCode.BadRequest, index.StatusCode);
+
+            using var bundle = await Get(
+                app, $"{PluginBundleEndpoints.RoutePrefix}/{Package}/{Version}{lane}", key);
+            Assert.Equal(HttpStatusCode.BadRequest, bundle.StatusCode);
+        }
+        finally
+        {
+            Delete(root);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 The lookup may not cross the (source, package) pair the entitlement decision resolved.
+    /// Two sources seal a bundle of the SAME package id under the same identity; the one this
+    /// caller is bound to must be the one served, and the other must not become reachable by being
+    /// alphabetically first.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheBundleComesFromTheSourceTheEntitlementResolved_NotWhicheverSortsFirst()
+    {
+        var root = NewRoot();
+        try
+        {
+            // "education" sorts BEFORE "plugins", so a lookup that scanned every source and took
+            // the first match would serve this one.
+            SealPublication(
+                root, ConsumerIdentity, source: "education",
+                nodeTypePath: Package + "/FromTheOtherSource", fingerprint: "fp-other");
+            SealPublication(root, ConsumerIdentity);      // the granted source, "plugins"
+            await InstallPackage();                       // its install record says Source = plugins
+            var key = await RegisterInstance($"{Source}/*");
+            await using var app = await StartHost(root);
+
+            var index = await ReadIndex(app, key, ConsumerIdentity);
+            var url = BundleUrl(index);
+            Assert.NotNull(url);
+
+            using var response = await Get(app, url! + LaneQuery(ConsumerIdentity), key);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            var (_, assemblies) = BundleReader.Read(await response.Content.ReadAsByteArrayAsync());
+            var served = Assert.Single(assemblies);
+            Assert.Equal(NodeTypePath, served.NodePath);
+            Assert.Equal("fp-sealed", served.SourceFingerprint);
+        }
+        finally
+        {
+            Delete(root);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 THE safety property, asserted where this change could have broken it. The directory a
+    /// bundle is filed under is a convention; its manifest is the producer's claim. A bundle whose
+    /// own manifest names a DIFFERENT framework must never be served as the requested lane — if it
+    /// were, the outgoing manifest would be restamped with the requested identity and the
+    /// consumer's gate would see bytes that agree with its live framework and adopt them.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ABundleFiledUnderALaneButBuiltForAnotherIsRefused_NeverRestamped()
+    {
+        var root = NewRoot();
+        try
+        {
+            SealPublication(
+                root, ConsumerIdentity,
+                manifestIdentity: "s99999999999999999999999999999999");   // mislabelled
+            await InstallPackage();
+            var key = await RegisterInstance($"{Source}/*");
+            await using var app = await StartHost(root);
+
+            var index = await ReadIndex(app, key, ConsumerIdentity);
+            var url = BundleUrl(index);
+            Assert.NotNull(url);
+
+            using var response = await Get(app, url! + LaneQuery(ConsumerIdentity), key);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+        finally
+        {
+            Delete(root);
+        }
+    }
+
     // ───────────────────────────── harness ─────────────────────────────
 
     private static string NewRoot() =>
@@ -211,21 +322,26 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
 
     /// <summary>Writes a complete publication — one real bundle plus the seal that lists it, in the
     /// layout <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/</c> the bake produces.</summary>
-    private static void SealPublication(string root, string identity)
+    /// <param name="manifestIdentity">What the BUNDLE's own manifest claims it was built against,
+    /// when that must differ from the directory it is filed under — the mislabelled case.</param>
+    private static void SealPublication(
+        string root, string identity, string source = Source,
+        string nodeTypePath = NodeTypePath, string fingerprint = "fp-sealed",
+        string? manifestIdentity = null)
     {
-        var directory = Path.Combine(root, identity, Source);
+        var directory = Path.Combine(root, identity, source);
         Directory.CreateDirectory(directory);
         var bundle = Path.Combine(directory, $"{Package}.zip");
         using (var file = File.Create(bundle))
             BundleWriter.Write(
-                file, Package, Version, identity,
+                file, Package, Version, manifestIdentity ?? identity,
                 [
                     new BundleWriter.AssemblyEntry(
-                        NodeTypePath,
+                        nodeTypePath,
                         () => new MemoryStream(AssemblyBytes()),
                         Dependencies: new Dictionary<string, string>(StringComparer.Ordinal))
                     {
-                        SourceFingerprint = "fp-sealed",
+                        SourceFingerprint = fingerprint,
                     },
                 ]);
         File.WriteAllText(

@@ -288,6 +288,36 @@ Both directions are pinned by `test/Memex.Portal.Shared.Test/PluginBundleSealedL
 asks the same endpoint with a sealed lane and an unsealed one and asserts the two different answers
 — a change that served everybody would pass only the first.
 
+### Three refusals the lookup carries, and why each is not optional
+
+Reaching the share from the PACKAGE route turns a value that used to be compared into a value that
+selects a directory and a file. Each of the three checks below closes something that the route did
+not previously have, and each has a control that reddens when it is removed.
+
+1. **The identity must be a bare name.** It arrives on a query string and is composed under the
+   published root, so `?identity=../…` would read outside the lane it names. The route answers
+   `400` — the same rule and the same answer the `/prebuilt/{identity}/{source}` segments already
+   applied — and `SealedLaneBundles.IsBareName` restates it at the layer that builds the path, so an
+   entry point added later inherits the check rather than the hole.
+2. **The lookup is scoped to the source the ENTITLEMENT decision resolved.** The grant is a
+   `(source, package)` pair and `PackageOriginAnchor` is the authority on which source carries a
+   package. A lookup that scanned every source directory and took the first matching file name would
+   let a caller granted one source receive another's bytes whenever two sources publish the same
+   package id — a grant boundary crossed inside something shaped like a file search. Only a
+   genuinely unknown binding (no anchor, no stamped record) widens the scan; a named source that
+   matches no directory answers "nothing sealed for you here", and the caller compiles.
+3. **The archive's OWN manifest identity is checked before anything is served**, through
+   `PrebuiltAssemblySeeder.DeclineReason` — the same function the consumer applies to the same
+   bytes. The directory a bundle is filed under is a filing convention; the manifest is the
+   producer's claim, and only the claim may be believed. Without this a mislabelled archive would be
+   restamped with the requested identity on the way out, and the consumer's gate — seeing a manifest
+   that agrees with its own live framework — would adopt bytes baked for another one. That is the
+   single outcome this entire lane exists to prevent.
+
+The read itself runs on the filesystem `IIoPool`, not the request thread: the publication is a
+mounted share and a bundle is the whole weight of a package, so concurrent boot downloads would
+otherwise hold request threads on a slow mount.
+
 ## How many writers, measured
 
 The issue that opened this ([#3461](https://github.com/Systemorph/MeshWeaver/issues/3461)) names two
