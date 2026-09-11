@@ -512,13 +512,20 @@ public sealed class MeshWeaverInstanceService(
     {
         var workspace = hub.GetWorkspace();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return accessService.RunAsSystem(() => workspace.GetMeshNodeStream(instancePath)
-                .Where(node => node is not null)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(10)))
+        // 🚨 A FRESH point read, not the node stream's first frame. The stream replays the last
+        // value it holds, and the frame that arrives first can predate the write the PREVIOUS call
+        // in this rotation just made — measured on CI (#4055): an adoption read an instance whose
+        // staged key was not in its snapshot yet, decided the hash was new, and tried to write an
+        // index entry the stage had already created ("Node already exists"). The same staleness
+        // would make a COMMIT refuse a perfectly good staged key as "not a key of this instance",
+        // which is the worse half. GetMeshNode re-probes rather than replaying.
+        return accessService.RunAsSystem(() => hub.GetMeshNode(instancePath, TimeSpan.FromSeconds(10)).Take(1))
             .SelectMany(node =>
             {
-                var instance = node!.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
+                if (node is null)
+                    throw new InvalidOperationException(
+                        $"no MeshWeaverInstance node at '{instancePath}' — a key transition acts on a registered instance");
+                var instance = node.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
                     ?? throw new InvalidOperationException($"Node {instancePath} is not a MeshWeaverInstance.");
                 var step = transition(instance, DateTimeOffset.UtcNow);
                 if (step.Refusal is { } refusal)
@@ -716,7 +723,24 @@ public sealed class MeshWeaverInstanceService(
         {
             var disposable = accessService.SwitchAccessContext(
                 new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" });
-            return nodeFactory.CreateNode(indexNode).Finally(() => disposable.Dispose());
+            return nodeFactory.CreateNode(indexNode)
+                // 🚨 Writing the SAME entry twice is not a failure — a rotation can legitimately
+                // re-derive an index it already wrote (a re-run, or a read that lagged). But a
+                // DIFFERENT instance behind the same 12-hex prefix is a real collision and must
+                // stay loud: the older key's routing would be silently repointed, and it would stop
+                // authenticating with nothing said (#4055).
+                .Catch((Exception ex) => Observable
+                    .Defer(() => hub.GetMeshNode(indexNode.Path, TimeSpan.FromSeconds(10)).Take(1))
+                    .SelectMany(existing =>
+                    {
+                        var content = existing?.ContentAs<MeshWeaverInstanceIndex>(hub.JsonSerializerOptions);
+                        return content is not null
+                               && InstanceKeys.HashEquals(hash, content.KeyHash)
+                               && string.Equals(content.InstancePath, instancePath, StringComparison.Ordinal)
+                            ? Observable.Return(existing!)
+                            : Observable.Throw<MeshNode>(ex);
+                    }))
+                .Finally(() => disposable.Dispose());
         }));
     }
 }
