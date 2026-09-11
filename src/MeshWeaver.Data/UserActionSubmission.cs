@@ -34,11 +34,13 @@ namespace MeshWeaver.Data;
 /// <para><b>An action that genuinely cannot run is still refused — and now it stops killing the
 /// page.</b> The owner answers <see cref="UserActionAccepted"/> only from its stream-scoped
 /// handler; a stream that is already gone answers a <see cref="DeliveryFailure"/> carrying
-/// <see cref="ErrorType.Rejected"/> and the localized <c>error.userActionNotRun</c> sentence.
-/// Because the callback is registered, that refusal is matched to THIS action instead of falling
-/// through to the mirror's blanket <c>DeliveryFailure</c> handler, which answers <c>OnError</c> and
-/// faults the whole synchronization stream — every view bound to it dying over one lost click. The
-/// <c>onRefused</c> callback is where a UI puts the sentence in front of the person.</para>
+/// <see cref="ErrorType.Rejected"/> and the localized <c>error.userActionNotRun</c> sentence, which
+/// arrives on this submission's error arm — <c>onRefused</c> is where a UI puts it in front of the
+/// person. 🚨 The match also stamps <c>PostOptions.CallbackDispatched</c>, which is what stops the
+/// mirror's blanket <c>DeliveryFailure</c> handler ALSO answering <c>OnError</c> and faulting the
+/// whole synchronization stream — every view bound to it dying over one lost click. Measured: the
+/// stamp alone is not consulted by anything until a handler filters on it, so that filter is part
+/// of this change (<c>SynchronizationStream.ConfigureSynchronizationHub</c>).</para>
 ///
 /// <para>See <c>Doc/Architecture/RefusingALostUserAction</c>.</para>
 /// </summary>

@@ -200,11 +200,43 @@ that raises a click. It carries the acting user's `AccessContext` (a user action
 has no identity of its own), owns its own subscription, and hands a refusal to the caller as the
 already-localized `error.userActionNotRun` sentence.
 
-That last part is also a behaviour change worth stating: with no callback registered, a refusal's
-`DeliveryFailure` fell through to the mirror's blanket `DeliveryFailure` handler, which answers
-`OnError` — **faulting the whole synchronization stream**, so every view bound to it died over one
-lost click. Matched to the action it belongs to, it stops being a page-level fault and becomes a
-sentence about that action.
+### 🚨 And a second thing the refusal was doing, which nobody had measured
+
+A refusal is a `DeliveryFailure` posted back to the **sender**, and the sender of a click is the
+stream's own `sync/{id}` hub — whose `ConfigureSynchronizationHub` carries a blanket
+`DeliveryFailure` handler that answers `OnError` for anything that is not a transient
+`ShuttingDown`. So a bare `Post` of a click that cannot be delivered does not merely lose the click:
+it **faults the whole synchronization stream**, and every view bound to that mirror dies with it.
+Measured on a real fixture — the stream terminated with
+
+```
+DeliveryFailureException: Your last action (“ProbeArea/Button”) did not run — the view it was
+sent from had already closed. Nothing was changed; please try again.
+```
+
+`DroppedUserActionIsRefusedTest` could not see this: it posts from the client HUB, so its refusal
+never reaches a stream's handler.
+
+🚨 **Registering the callback is not on its own enough, and assuming it was cost one wrong claim.**
+`HandleCallbacks` runs FIRST in the rule chain and then the chain keeps running, so a matched
+response reaches the blanket handler as well — the fault still fired. What the match does leave
+behind is the flag the framework already uses for exactly this: `PostOptions.CallbackDispatched`,
+which `PortalErrorSink` has long consulted so a failure the call site's `OnError` handled is not
+*also* popped as a modal. The sync hub's `DeliveryFailure` handler simply never adopted it. It does
+now, as the same one-line filter:
+
+```csharp
+(_, delivery) => !delivery.Properties.ContainsKey(PostOptions.CallbackDispatched)
+```
+
+An **un-awaited** failure — the subscribe protocol, an RLS denial, a `NotFound` — still faults the
+stream exactly as before. Only a failure somebody is already holding is left to them.
+
+The order in which this was found is worth keeping: the "does not fault" half **passed in a filtered
+run and failed in the full suite**, because the test's fault probe was a bare `Subject` and the fault
+landed before the assertion window opened. A replay-backed subject made the observation honest, and
+the honest observation falsified the claim.
+`ARefusedActionSurfacesToTheCallerWithoutFaultingTheView` pins both halves.
 
 ### The measurement
 
@@ -216,6 +248,7 @@ stream, with the owner-side `sync/{id}` sub-hub's own `DisposalCompleted` as the
 | `AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` | the owner's sub-hub does not die while an action is owed, and does die once it is answered | the defect |
 | `AnOrdinaryReleaseIsPrompt` | a release with nothing owed still reaches the owner | "never release the stream", which would satisfy the first test alone |
 | `AnActionOnALiveStreamStillRuns` | the acknowledged path still INVOKES the action | an ordering guarantee that stopped delivering clicks |
+| `ARefusedActionSurfacesToTheCallerWithoutFaultingTheView` | a refusal reaches the caller as the catalog sentence, and the mirror stays live | a refusal that is swallowed, re-worded, or still faults the stream |
 
 The owed-work window is made deterministic rather than raced: the action names a stream id with no
 `sync/{id}` on the owner, so the owner holds it for `SyncStreamOptions.SyncHubRegistrationGrace`

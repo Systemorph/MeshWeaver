@@ -124,6 +124,54 @@ public class UserActionOutlivesStreamReleaseTest(ITestOutputHelper output) : Hub
     }
 
     /// <summary>
+    /// 🚨 The second thing a registered callback fixes, measured rather than reasoned. A refusal is
+    /// a <c>DeliveryFailure</c> posted back to the SENDER, and the sender of a click is the
+    /// stream's own <c>sync/{id}</c> hub — whose <c>ConfigureSynchronizationHub</c> carries a
+    /// blanket <c>DeliveryFailure</c> handler that answers <c>OnError</c> for anything that is not
+    /// a transient <c>ShuttingDown</c>. So a bare <c>Post</c> of a click that cannot be delivered
+    /// FAULTS THE WHOLE MIRROR: every view bound to that stream dies over one lost click. (Probed
+    /// on this fixture: the stream terminated with
+    /// <c>DeliveryFailureException: Your last action (“ProbeArea/Button”) did not run …</c>.)
+    /// <c>DroppedUserActionIsRefusedTest</c> could not see it — it posts from the client HUB, so
+    /// the refusal never reaches a stream's handler.
+    ///
+    /// <para>Matched to the action it belongs to, the refusal becomes a sentence about that action
+    /// instead of a page-level fault.</para>
+    /// </summary>
+    [HubFact]
+    public async Task ARefusedActionSurfacesToTheCallerWithoutFaultingTheView()
+    {
+        var (stream, _) = await SubscribedStreamWithLiveOwnerHandler();
+
+        // 🚨 REPLAY, not a bare Subject. The fault this asserts against travels the same path as
+        // the refusal awaited below, so it can land BEFORE the NotEmit window opens — a bare
+        // Subject drops it and the test passes having observed nothing. That is exactly how this
+        // case passed in a filtered run and failed in the full suite before it was replay-backed.
+        var faults = new ReplaySubject<Exception>(1);
+        using var live = stream.Subscribe(_ => { }, faults.OnNext);
+
+        var refusals = new ReplaySubject<string>(1);
+        stream.SubmitUserAction(
+            new ClickedEvent(ButtonArea, "no-sync-hub-for-this-stream-id"),
+            onRefused: refusals.OnNext);
+
+        var sentence = await refusals.Should().Within(TestTimeouts.Convergence).Emit(
+            "a person whose action could not run must be told so — the refusal is the whole reason "
+            + "IUserAction exists (#3566), and it is worth nothing if the caller never sees it");
+
+        sentence.Should().Be(
+            LocalizationCatalog.Get("error.userActionNotRun", locale: null, ButtonArea),
+            "the sentence is the owner's, resolved from the catalog off the ACTING USER's locale — "
+            + "never re-worded, never a literal, never an ambient culture");
+
+        await faults.Should().NotEmit(
+            OwnerHoldsAnUnroutableAction,
+            "and one refused action must not fault the synchronization stream: a fault travels the "
+            + "same path as the refusal that just arrived, and it would kill every view bound to "
+            + "this mirror over a single lost click");
+    }
+
+    /// <summary>
     /// A client stream whose owner-side <c>sync/{id}</c> sub-hub — the thing a release destroys —
     /// is live and holding the layout area's action handlers.
     /// </summary>
