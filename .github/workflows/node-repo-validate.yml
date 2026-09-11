@@ -120,7 +120,34 @@ jobs:
           gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-abbreviated-shas.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-abbreviated-shas.py" \
             || { echo "::error::could not fetch .github/scripts/check-abbreviated-shas.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-abbreviated-shas.py" | grep -q "check-abbreviated-shas" || { echo "::error::the fetched check-abbreviated-shas.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-workflow-permission-pairing.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-workflow-permission-pairing.py" \
+            || { echo "::error::could not fetch .github/scripts/check-workflow-permission-pairing.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-workflow-permission-pairing.py" | grep -q "check-workflow-permission-pairing" || { echo "::error::the fetched check-workflow-permission-pairing.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+          # 🚨 The pairing guard needs the LANE DEFINITIONS, not just the script: the defect is a
+          # relation between this repo's caller and the lane it is about to call, and neither half
+          # alone shows it. Fetch every shared lane at the same ref into a platform root. A fetch
+          # that fails exits RED — a lane we cannot read would make the check silently vacuous,
+          # which is the failure mode it exists to prevent (AGENTS.md — a gate never tests its own
+          # inputs).
+          mkdir -p "$RUNNER_TEMP/platform/.github/workflows"
+          for lane in node-repo-validate node-repo-compile-check node-repo-gate node-repo-module-pack \
+                      node-repo-module-publish node-repo-publish-bake node-repo-tag-modules \
+                      node-repo-platform-canary node-repo-platform-ref-bump node-repo-supersede; do
+            gh api "repos/Systemorph/MeshWeaver/contents/.github/workflows/${lane}.yml?ref=${SCRIPTS_REF}" --jq .content \
+              | base64 -d > "$RUNNER_TEMP/platform/.github/workflows/${lane}.yml" \
+              || { echo "::error::could not fetch .github/workflows/${lane}.yml at ${SCRIPTS_REF} — the permission-pairing guard cannot read the lane this repo calls, and a guard that cannot read its subject must not pass"; exit 1; }
+          done
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
+      - name: "A caller grants what its lane demands — the gate can fail (self-test)"
+        run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --self-test
+      # 🚨 MeshWeaver#3933 added `id-token: write` to three jobs of the module-pack lane and paired
+      # only core's own caller. Every satellite run became `startup_failure` with ZERO jobs — no
+      # permission error, no check-run, and under classic protection an ABSENT required context
+      # blocks forever. MeshWeaver.Plugins was dark for five hours and could not merge the two-line
+      # fix for the thing that broke it. This is the check that would have caught it, and this is
+      # the only place it CAN be caught: the caller lives here, the lane lives there.
+      - name: "This repo's callers grant every permission their platform lanes demand"
+        run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --root . --platform-root "$RUNNER_TEMP/platform"
       - name: "Every job is capped at 45 minutes — the gate can fail (self-test)"
         run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --self-test
       - name: "Every job in this repo's workflows is capped at 45 minutes"

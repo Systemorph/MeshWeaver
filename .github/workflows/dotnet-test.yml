@@ -1976,6 +1976,10 @@ jobs:
       run: python3 .github/scripts/check-workflow-timeouts.py --self-test
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    - name: "A caller grants what its lane demands — the gate can fail (self-test)"
+      run: python3 .github/scripts/check-workflow-permission-pairing.py --self-test
+    - name: "Core's own callers grant every permission their lanes demand"
+      run: python3 .github/scripts/check-workflow-permission-pairing.py --root .
 
     # 🚨 `yaml.safe_load` accepts a DUPLICATE MAPPING KEY silently and keeps the LAST one — and
     # every guard in this fleet, the one directly above included, reads workflows through it. So a

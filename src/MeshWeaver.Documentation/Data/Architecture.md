@@ -349,6 +349,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [In-Mesh Build and Test](InMeshBuildAndTest)
 - [Orleans Test Routing Pattern](OrleansTestRoutingPattern)
 - [Reading CI Signals](ReadingCiSignals)
+- [Workflow Permission Pairing](WorkflowPermissionPairing) — a job-level `permissions:` in a shared lane is a requirement on every caller; an unpaired one is `startup_failure` with zero jobs
 
 ### Deployment & ops
 
