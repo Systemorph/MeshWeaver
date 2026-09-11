@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -42,12 +43,28 @@ public class PluginPublicationProvenanceTest
     }
 
     [Theory]
+    [InlineData("3.0.0")]
+    [InlineData("3.0.0-rc9.ci.7824")]
+    [InlineData("3.0.0-edge.7977")]
+    [InlineData("3.0.0-rc1.edge.5")]
+    public void EveryShapeThePipelineMintsIsAnnounced(string version)
+    {
+        using var run = Publish(ContentSha, version, "Systemorph/MeshWeaver");
+        Assert.True(run.Exit == 0, run.Output);
+        using var json = JsonDocument.Parse(File.ReadAllText(run.File("body")));
+        Assert.Equal(version, json.RootElement.GetProperty("version").GetString());
+    }
+
+    [Theory]
     [InlineData("", Version)]
     [InlineData("main", Version)]
     [InlineData(WorkflowSha + "0", Version)]
     [InlineData(ContentSha + "\n", Version)]
     [InlineData(ContentSha, "")]
     [InlineData(ContentSha, "latest")]
+    [InlineData(ContentSha, "3.0.0-alpha")]
+    [InlineData(ContentSha, "3.0.0-preview.1")]
+    [InlineData(ContentSha, "3.0.0-rc9")]
     [InlineData(ContentSha, "3.0.0-ci.8329\ninjected=value")]
     [InlineData(ContentSha, "3.0.0/other")]
     public void InvalidProducerOutputsCannotPost(string sha, string version)
@@ -59,29 +76,34 @@ public class PluginPublicationProvenanceTest
     }
 
     [Theory]
-    [InlineData("[\"OTHER=value\",\"MESHWEAVER_PLATFORM_VERSION=3.0.0-ci.8329\"]", true)]
-    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0\"]", true)]
-    [InlineData("[]", false)]
-    [InlineData("null", false)]
-    [InlineData("not-json", false)]
-    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=\"]", false)]
-    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=latest\"]", false)]
-    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0\",\"MESHWEAVER_PLATFORM_VERSION=3.0.1\"]", false)]
-    public void ReleaseVersionComesFromTheSelectedPortalConfig(string config, bool valid)
+    [InlineData("[\"OTHER=value\",\"MESHWEAVER_PLATFORM_VERSION=3.0.0-ci.8329\"]", "3.0.0-ci.8329")]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0\"]", "3.0.0")]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0-rc9.ci.7824\"]", "3.0.0-rc9.ci.7824")]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0-edge.7977\"]", "3.0.0-edge.7977")]
+    [InlineData("[]", null)]
+    [InlineData("null", null)]
+    [InlineData("not-json", null)]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=\"]", null)]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=latest\"]", null)]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0-alpha\"]", null)]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0-preview.1\"]", null)]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0-rc9\"]", null)]
+    [InlineData("[\"MESHWEAVER_PLATFORM_VERSION=3.0.0\",\"MESHWEAVER_PLATFORM_VERSION=3.0.1\"]", null)]
+    public void ReleaseVersionComesFromTheSelectedPortalConfig(string config, string? expected)
     {
-        using var run = new ShellRun();
-        run.Environment["PORTAL_REF"] = "registry.invalid/portal@sha256:portal";
-        run.Environment["IMAGE_CONFIG"] = config;
+        using var run = new ShellRun(ImmutableDictionary<string, string>.Empty
+            .Add("PORTAL_REF", "registry.invalid/portal@sha256:portal")
+            .Add("IMAGE_CONFIG", config));
         run.Execute(Step("publish-bake", "id", "platform-version"), """
             docker() {
               printf '%s\n' "$*" >> "$FIXTURE/docker-requests"
               printf '%s' "$IMAGE_CONFIG"
             }
             """);
-        if (valid)
+        if (expected is not null)
         {
             Assert.True(run.Exit == 0, run.Output);
-            Assert.Contains("version=3.0.0", File.ReadAllText(run.File("outputs")));
+            Assert.Equal($"version={expected}\n", File.ReadAllText(run.File("outputs")));
         }
         else
         {
@@ -95,8 +117,8 @@ public class PluginPublicationProvenanceTest
     [Fact]
     public void AnUnreadableSelectedImageCannotInventAReleaseVersion()
     {
-        using var run = new ShellRun();
-        run.Environment["PORTAL_REF"] = "registry.invalid/portal@sha256:portal";
+        using var run = new ShellRun(ImmutableDictionary<string, string>.Empty
+            .Add("PORTAL_REF", "registry.invalid/portal@sha256:portal"));
         run.Execute(Step("publish-bake", "id", "platform-version"), "docker() { return 9; }");
         Assert.True(run.Exit != 0, run.Output);
         Assert.False(File.Exists(run.File("outputs")));
@@ -118,21 +140,21 @@ public class PluginPublicationProvenanceTest
 
     private static ShellRun Publish(string sha, string version, string workflowRepository)
     {
-        var run = new ShellRun();
-        run.Environment["URL"] = "https://inbox.invalid/api/hooks/Hosting/PlatformBuilds";
-        run.Environment["SECRET"] = "synthetic-not-a-credential";
-        run.Environment["SOURCE"] = "plugins";
-        run.Environment["SELF"] = "Systemorph/MeshWeaver.Plugins";
-        run.Environment["GITHUB_REPOSITORY"] = workflowRepository;
-        run.Environment["GITHUB_SHA"] = WorkflowSha;
-        run.Environment["GITHUB_RUN_ID"] = "123";
-        run.Environment["GITHUB_SERVER_URL"] = "https://github.com";
-        run.Environment["CONTENT_SHA"] = sha;
-        run.Environment["RELEASED_VERSION"] = version;
-        run.Environment["IMAGE"] = "registry.invalid/tester@sha256:tester";
-        run.Environment["PLATFORM_IMAGE"] = "registry.invalid/portal@sha256:portal";
-        run.Environment["IDENTITY"] = "sfixture";
-        run.Environment["UPSTREAMS"] = "CRM,education;crm";
+        var run = new ShellRun(ImmutableDictionary<string, string>.Empty
+            .Add("URL", "https://inbox.invalid/api/hooks/Hosting/PlatformBuilds")
+            .Add("SECRET", "synthetic-not-a-credential")
+            .Add("SOURCE", "plugins")
+            .Add("SELF", "Systemorph/MeshWeaver.Plugins")
+            .Add("GITHUB_REPOSITORY", workflowRepository)
+            .Add("GITHUB_SHA", WorkflowSha)
+            .Add("GITHUB_RUN_ID", "123")
+            .Add("GITHUB_SERVER_URL", "https://github.com")
+            .Add("CONTENT_SHA", sha)
+            .Add("RELEASED_VERSION", version)
+            .Add("IMAGE", "registry.invalid/tester@sha256:tester")
+            .Add("PLATFORM_IMAGE", "registry.invalid/portal@sha256:portal")
+            .Add("IDENTITY", "sfixture")
+            .Add("UPSTREAMS", "CRM,education;crm"));
         run.Execute(Step("register-publication", "name", "Sign and POST the publication record"), """
             curl() {
               printf 'POST\n' >> "$FIXTURE/requests"
@@ -169,18 +191,19 @@ public class PluginPublicationProvenanceTest
     private sealed class ShellRun : IDisposable
     {
         private readonly string directory = Path.Combine(Path.GetTempPath(), "mw-publication-" + Guid.NewGuid().ToString("N"));
-        public Dictionary<string, string> Environment { get; } = new();
+        private readonly ImmutableDictionary<string, string> environment;
         public int Exit { get; private set; }
         public string Output { get; private set; } = "";
         public string File(string name) => Path.Combine(directory, name);
 
-        public ShellRun()
+        public ShellRun(ImmutableDictionary<string, string> stepEnvironment)
         {
             Directory.CreateDirectory(directory);
-            Environment["FIXTURE"] = directory;
-            Environment["RESP"] = File("response");
-            Environment["GITHUB_OUTPUT"] = File("outputs");
-            Environment["GITHUB_STEP_SUMMARY"] = File("summary");
+            environment = stepEnvironment
+                .SetItem("FIXTURE", directory)
+                .SetItem("RESP", File("response"))
+                .SetItem("GITHUB_OUTPUT", File("outputs"))
+                .SetItem("GITHUB_STEP_SUMMARY", File("summary"));
         }
 
         public void Execute(string script, string transport)
@@ -194,7 +217,7 @@ public class PluginPublicationProvenanceTest
                 WorkingDirectory = directory,
             };
             start.ArgumentList.Add(File("step.sh"));
-            foreach (var (key, value) in Environment)
+            foreach (var (key, value) in environment)
                 start.Environment[key] = value;
             using var process = Process.Start(start) ?? throw new InvalidOperationException("bash did not start");
             var stdout = process.StandardOutput.ReadToEnd();

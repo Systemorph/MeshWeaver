@@ -809,6 +809,11 @@ jobs:
           echo "tester /app: $(find "$T" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies; portal /app: $(find "$P" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies ($(wc -l < "$P/meshweaver-surface.manifest" | tr -d ' ') manifest lines)"
       # The version travels with the image, including a digest-pinned push or a core CD call.
       # A workflow event's dispatch-only version is neither present nor authoritative in all cases.
+      # Accepted: exactly the shapes the pipeline mints into MESHWEAVER_PLATFORM_VERSION — clean X.Y.Z,
+      # X.Y.Z-ci.N, X.Y.Z-edge.N (edge-images.yml), and the retired rc line's X.Y.Z-<label>.ci.N /
+      # .edge.N. PlatformReleaseOrder.BuildOrdinal reads the same set. A label no build mints
+      # (3.0.0-alpha, 3.0.0-preview.1, a bare 3.0.0-rc9) carries no build ordinal, so a receiver would
+      # order it as a promotion; it is refused here and again before the POST (same pattern).
       - name: Read the platform image's own version for the publication record
         id: platform-version
         env:
@@ -818,7 +823,7 @@ jobs:
           version=$(docker image inspect "$PORTAL_REF" --format '{{json .Config.Env}}' | jq -er '
             [.[] | select(startswith("MESHWEAVER_PLATFORM_VERSION=")) | ltrimstr("MESHWEAVER_PLATFORM_VERSION=")]
             | if length == 1 then .[0] else error("expected one MESHWEAVER_PLATFORM_VERSION") end')
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || {
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-([0-9A-Za-z]+\.)?(ci|edge)\.[0-9]+)?$ ]] || {
             echo "::error::the selected portal image has no valid platform release version; no publication can be announced with unknown provenance."
             exit 1
           }
@@ -1469,7 +1474,7 @@ jobs:
           fi
           [ -n "${PLATFORM_IMAGE:-}" ] || { echo "::error::this bake resolved no platform image, so the record cannot name the identity's portal (MeshWeaver#3022)."; exit 1; }
           [[ "${CONTENT_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "::error::the published content checkout has no valid commit SHA; refusing to announce the workflow commit as its source."; exit 1; }
-          [[ "${RELEASED_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo "::error::the published bake has no valid platform release version from its selected portal image."; exit 1; }
+          [[ "${RELEASED_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-([0-9A-Za-z]+\.)?(ci|edge)\.[0-9]+)?$ ]] || { echo "::error::the published bake has no valid platform release version from its selected portal image (got '${RELEASED_VERSION:-}'; expected X.Y.Z, X.Y.Z-ci.N, X.Y.Z-edge.N or a retired X.Y.Z-<label>.ci.N)."; exit 1; }
           digest=""; case "$IMAGE" in *@sha256:*) digest="${IMAGE#*@}" ;; esac
           # The record memex registers: which SOURCE sealed a publication for which IDENTITY, from
           # the actual content checkout commit, against which tester + portal. `version` is read

@@ -37,7 +37,12 @@ remain its `manifest.lock` fields at the announced content commit.
 | `run` | The workflow repository and run URL, retained separately from content provenance |
 | `upstreams` | The caller's existing normalized dependency declaration |
 
-The version read refuses a missing, duplicated or malformed image configuration value. The
+The version read refuses a missing, duplicated or malformed image configuration value.
+"Malformed" means any shape the pipeline does not mint: accepted are exactly clean `X.Y.Z`,
+`X.Y.Z-ci.N`, `X.Y.Z-edge.N` and the retired rc line's `X.Y.Z-<label>.ci.N` / `.edge.N` — the
+set `PlatformReleaseOrder.BuildOrdinal` reads. A label no build mints (`3.0.0-alpha`,
+`3.0.0-preview.1`, a bare `3.0.0-rc9`) carries no build ordinal, so a receiver would order it as
+a promotion; both the producer step and the POST refuse it with the same pattern. The
 final POST independently refuses an absent/malformed 40-digit hexadecimal content SHA or
 platform version. It retains the existing URL, HMAC secret, signed payload, HTTP failure
 handling and signature-verdict check. It introduces no credential, alternate callback, direct

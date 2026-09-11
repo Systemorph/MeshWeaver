@@ -297,6 +297,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Platform-Shipped Witness](PlatformShippedWitness)
 - [The Plugin Build Contract](PluginBuildContract)
 - [Plugin Bundles in the Registry](PluginBundlesInTheRegistry)
+- [Plugin Publication Provenance](PluginPublicationProvenance) — the signed publication callback names the CONTENT commit that was built and the platform version read from the selected portal image, never the calling workflow's commit or event; core CD building Plugins used to announce a core sha as a Plugins commit
 - [Plugin Update on Green Build](PluginUpdateOnGreenBuild)
 
 ### Reliability & wedges
