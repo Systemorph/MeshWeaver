@@ -28,13 +28,34 @@ Measured 2026-09-10, and it cost two sessions an hour on the same morning:
 | `memex` | `memex.meshweaver.cloud` | the public portal and the **plugin registry** |
 
 The instance *named* `memex` is `memex.systemorph.com`, so the server named after it is the *other*
-one. Both portals hold nodes at `Deployments/<name>`, and they are **two independently created
-nodes, not a replica and its lag**: on 2026-09-10 the control instance's `Deployments/memex-cloud`
-was version 60, `createdDate` 2026-08-10, `lastModifiedBy` `system-security`, written 64 s after the
-config-repo merge; `memex.meshweaver.cloud`'s was version 9, `createdDate` 2026-08-30,
-`lastModifiedBy` a person, and 40 versions behind. Reading the second one and concluding "the
-GitSync is frozen" is the trap — it is not a sync target at all. Three facts settle which is which
-without guessing: the `Deployments/memex` record's own `host` and `purpose`, and every other
+one. Both portals hold nodes at `Deployments/<name>`, and **only the control instance's copy is
+authoritative**: on 2026-09-10 the control instance's `Deployments/memex-cloud` was version 60,
+`createdDate` 2026-08-10, `lastModifiedBy` `system-security`, written 64 s after the config-repo
+merge; `memex.meshweaver.cloud`'s was version 9, `createdDate` 2026-08-30, and 40 versions behind.
+
+That second copy is **not unsynced** — an earlier revision of this page called it "not a sync
+target at all", and that was wrong. `memex.meshweaver.cloud` carries its own `Deployments/_GitSync`,
+a `GitHubSyncConfig` for the SAME folder (`Systemorph/Memex`, `mesh/Deployments`, `twoWay: true`,
+created 2026-08-30). Measured 2026-09-11:
+
+| Field | Reading |
+|---|---|
+| `lastSyncOutcome` | `Imported` |
+| `lastSyncCommitSha` · `lastSyncedAt` | one commit · 2026-09-09 |
+| `lastAttemptedCommitSha` · `lastSyncAttemptAt` | a DIFFERENT commit · 2026-09-11 |
+| `lastAttemptWasFinal` | `true` |
+
+`Imported` beside a `lastSyncCommitSha` that does not move is **not by itself a stalled sync**.
+`GitHubSyncService.MayAdvanceBaseline` deliberately holds that baseline whenever an import preserved
+server-newer nodes or failed any, and **`lastAttemptWasFinal` is the discriminator**: `true` means
+the verdict at `lastAttemptedCommitSha` is settled — a preserved node or a content-verdict refusal,
+which re-attempting the same commit cannot change — while `false` means a transient failure the next
+delivery retries. Here it is `true`: a SETTLED divergence. Either this portal's two-way import kept
+its own server-newer `Deployments/*` nodes over the repository's, or it refused some of the
+repository's content; the sync's activity log says which. So the copy is synced AND disagrees with
+the record, by design — which is exactly why it is not the record. It is scheduled for retirement
+with the GitHub App split; until then read `Deployments/*` on the control instance only. Three facts settle which portal is which without guessing: the `Deployments/memex`
+record's own `host` and `purpose`, and every other
 instance's `Hosting__ReportTo`, which points at `https://memex.systemorph.com`.
 
 **So confirm the portal before drawing any conclusion from a read of it** — `/api/version`, or the
