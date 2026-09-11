@@ -352,9 +352,12 @@ A refusal is information, not a transient: nothing retries it and nothing swallo
 itself cannot be written, that is logged at Error — which the watcher tickets like any other red
 line — and the marker is cleared, so the next refusal tries again.
 
-The bell's text is platform-owned and lives in the catalog (`logIncident.refused.*`), resolved in
-the writer's language. The platform addressee is a group, not a viewer, so like every other
-platform-bell notification the row is stored in the platform default language (English).
+The bell's text is platform-owned and lives in the catalog (`logIncident.refused.*`, English and
+German). A notification row stores its title and message **verbatim**, and the platform addressee
+is a group of operators rather than one viewer — so the writer resolves the keys **explicitly in the
+platform default language (English)**, never in whatever locale the writing context happens to
+carry, which would store one operator's language for all of them. The German message is phrased
+count-neutrally, because the counts are runtime values that can be `1`.
 
 #### Is `occurrencesAtLastComment` lagging `occurrences` enough on its own?
 
