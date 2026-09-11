@@ -158,10 +158,23 @@ Before any non-trivial source change, an agent operating under the [/code skill]
 
 1. Read current source (`Get` if not already in context).
 2. Call `LspCheckNode({nodeTypePath, sourcePath, proposedCode})`.
-   - `{ok: true, diagnostics: []}` → safe; persist via `Patch`.
-   - `{ok: false, diagnostics: [errors...]}` → fix in head, re-call.
 3. Once clean, issue `Patch` / `Update`.
 4. `Compile` + `GetDiagnostics` for the real emit.
+
+🚨 **Step 2 has THREE answers, not two, and the third is not about your code.** Reading it as
+one of the other two is how #3888 hurt: an answer that never compiled anything used to be spelled
+exactly like a clean one, and the loop above said what to do with two shapes only.
+
+| Answer | What happened | What to do |
+|---|---|---|
+| `{ok: true, status: "Compiled", diagnostics: []}` | it compiled, and it is clean | persist via `Patch` |
+| `{ok: false, status: "Compiled", diagnostics: […]}` | it compiled, and **your source** is wrong | fix in head, re-call |
+| `{ok: false, status: "Absent" \| "NotCompilable" \| "Unavailable", error: "…"}` | **nothing was compiled** — the path did not resolve, the node has nothing to compile, or its owner never answered | fix the PATH or the ACCESS, then ask again — never edit the source in response, and never proceed |
+
+`status` is present on every answer, the clean one included: a success shape that omitted it would
+leave `{ok: true, diagnostics: []}` indistinguishable from a silent answer to anything keying on the
+field, which is the defect in miniature. The same three shapes come back from
+`LspDiagnosticsForNode` and `GetDiagnostics`, through the same renderer.
 
 This loop replaces the old blind `Patch → Compile → Recycle → fix` cycle that previously dominated CI failures.
 
