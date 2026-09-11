@@ -1505,8 +1505,9 @@ Every crash is `Portal hosts (shard 1)`:
 #### Cause or victim
 
 **`MeshWeaver.FutuRe.Test` is the sampler, not the cause.** Nine of the sixteen faulting threads run no
-application code at all, the faulting instruction is always inside the runtime, no assembly in the
-process can contain `unsafe` code, and a second suite (`GitSync.Test`) and a third
+application code at all, the faulting instruction is always inside the runtime, no assembly either
+repository builds can contain `unsafe` code (`AllowUnsafeBlocks` is set nowhere in either — framework and
+third-party assemblies can and do contain it, which is where any managed writer would have to live), and a second suite (`GitSync.Test`) and a third
 (`Hosting.Orleans.Test`) have taken the same fault. What the suite contributes is the densest workload
 in the fleet for the two things the fingerprint needs — **garbage collections** (`gc0=493 gc1=184
 gc2=29` in ~40 s in #15) and **LCG `DynamicMethod` emit** (System.Text.Json's reflection-emit member
