@@ -348,6 +348,67 @@ The primary rule still stands: **optional / maybe-absent nodes are read via a qu
 
 A failure that is *not* a genuine missing node — a transient reactivation miss, a request timeout, a lost database connection, or anything else the classifier does not recognise — is recorded in the **transient breaker** instead. Its first `TransientGraceFailures` (3) faults open no window at all (the just-idle-page case keeps its instant re-probe); beyond the grace, re-probes back off 1 s doubling to a 60 s cap. Every fault lands in exactly one of the two breakers — there is no un-broker'd bucket where a fault can repeat unbounded.
 
+### An invalidation is authoritative over a miss that was already in flight
+
+The breaker's failure state is **invalidated by the change feed**: a published change for a path — a
+post-commit write, or the `Updated` broadcast `MeshOperations.RecycleCore` publishes — reaches
+`OnMeshChange` → `ResetFailureState`, which drops the negative entry and evicts a faulted read entry.
+That much always worked. What did not was the **ordering** (#3954):
+
+1. A read — or a queued write — at `P` probes the owner, which answers `NotFound`.
+2. `CreateNode(P)` commits and publishes `Created`; the reset drops a negative entry that is *not
+   there yet*, so it clears nothing.
+3. The `NotFound` from step 1 lands and records a negative **for a path that now exists**.
+4. Reads fast-fail `Not found` and writes are suppressed — the breaker gates both — until the
+   backoff elapses or *another* change event for `P` arrives.
+
+Step 4 is why the production symptom read as *"only `recycle` fixes it"*: a recycle publishes exactly
+such an event. On memex at 05:40Z the `create` succeeded and `search` returned the new row while `get`
+kept answering `Not found`, produced from cache without ever reaching the owner.
+
+The fix is the mechanism `PathResolutionService` already uses for the identical fill-after-invalidate
+race (`_pendingFills` / `ClaimStillHeld`) — **not** a shorter window, a sweeper, a timer or a retry.
+The invalidation already happened at the right time; it simply was not authoritative.
+
+**A probe claims the path before it opens its owner round-trip.** `BeginNegativeProbe` is called by
+`CreateEntry` (reads) and by the update queue's dispatch (writes). `_negativeClaims` holds **one
+current claim per path**: a new probe *replaces* the previous claim and invalidates it, carrying the
+old `FailCount` forward as `PriorFailCount` so a natural re-probe keeps the established exponential
+backoff instead of restarting at the 2 s base.
+
+**A negative entry belongs to a generation.** `NegativeEntry` carries the `Claim` it was recorded
+under, and every consumer — `GetStreamRaw`'s fast-fail, `UpdateRaw`'s write-side fast-fail and
+`IsStormWindowOpen` — checks `IsCurrentNegative` and evicts an entry whose claim is no longer current.
+So even an entry that is briefly published by a losing probe can never fast-fail a caller.
+
+**Admission is a compare-and-swap loop.** `TryRecordNegative` validates the claim, builds the entry,
+validates again, publishes pair-exact (`TryAdd` / `TryUpdate` against the exact expected pair), and
+re-validates once more — retracting pair-exact if an invalidation landed in between. That closes both
+interleavings: an invalidation that runs before the write is caught by the checks, and one that runs
+between the check and the write swept an empty slot, so the retraction is what stops the entry
+outliving it. The symmetric rule holds for clearing: `TryRemoveNegativeGeneration` removes only the
+entry belonging to the generation just invalidated, so a path-wide clear can never erase a *newer*
+probe's genuine miss or its grown backoff.
+
+**Claims are not a second permanent path cache.** A successful or transient probe completes its claim;
+a pending probe torn down before any terminal releases it; only a genuine miss retains one, and then
+just for the lifetime of the negative entry it recorded. Cardinality is therefore in-flight probes
+plus `_negative`, never one per path ever read. Disposal invalidates and clears the registry with the
+rest of the breaker state.
+
+**Consequently `recycle` is no longer load-bearing for this symptom.** It still does what it always
+did — publish an `Updated` for the path, which resets the failure state, and that remains the cure for
+a genuinely failed era (the 2026-07-19 compile-error wedge). It is now a redundant second cure rather
+than the only escape from a window the create should already have closed.
+
+Pinned from both sides: `NegativeCacheInvalidationRaceTest` (MeshWeaver.Hosting.Test) holds one probe
+open across the invalidation with a substituted gated owner and covers the CAS interleavings and claim
+lifetime; `StaleNegativeAfterARealCreateTest` (MeshWeaver.Graph.Test) drives the same race through the
+ordinary pipeline — a real `CreateNode`, the real change-feed broadcast, several probes in flight —
+and asserts the user-visible half: `get` answers the node and a follow-up write lands, with no recycle.
+Both carry the positive controls, because an admission path that refused *every* verdict would pass a
+one-directional test while deleting the storm protection this section exists to describe.
+
 ### A faulted entry is never served twice
 
 Both breakers *suppress* while their window is open. When no window is open, the opposite must hold: the read has to actually re-probe. `GetStreamRaw`'s third guard enforces that — an entry whose hydration terminated with an error is evicted before the read resolves, so `SharedView` opens a fresh upstream.
