@@ -135,6 +135,14 @@ are `Portal hosts (shard 1)` only, `main` included, and the affected suites are
 `MeshWeaver.FutuRe.Test` **and `MeshWeaver.GitSync.Test`**. Full table:
 DebuggingNativeCrashes.md.
 
+🚨 **A newer runtime is not the fix (2026-09-11).** dotnet/runtime#131708 — the `release/10.0`
+backport of the GC hole behind dotnet/runtime#131267, whose frame is sightings #10/#11 — ships in
+`10.0.12`, and the family crashed on `10.0.12` twice (#15, #16, build-id `79945f51…` read out of the
+crashed process). With every run's runtime read from its own log: `10.0.11` **8/444 = 1.80 %**,
+`10.0.12` **2/275 = 0.73 %** — rate ratio 0.40, exact 95 % CI 0.04–2.02, so even a *reduction* is not
+established; that takes ≈2,030 runs per arm (≈2026-09-24). And the deployed portals do not run
+`10.0.12` at all: both images are framework-dependent on the Aug-12 `memex-portal-ai-base`.
+
 🚨 **One more non-ours case, specific to test hosts:** `exit=139` in a process where **ClrMD** runs
 anywhere means suspect the DAC first. `DataTarget.Dispose` dlcloses `libmscordaccore.so` without
 deleting a process-global `pthread_key` whose destructor points into DAC code — any thread exiting

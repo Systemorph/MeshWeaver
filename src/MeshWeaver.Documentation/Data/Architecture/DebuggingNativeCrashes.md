@@ -1390,7 +1390,63 @@ dedicated BGC thread. The honest reading:
   *written through* corrupts whatever now occupies the old address) is **not decidable from a core
   dump**, and is exactly what the rate measurement below is for.
 
-<!--MEASUREMENT-->
+#### The measurement — the crash rate before and after `10.0.12`, every run's runtime read from its own log
+
+**Method.** `Plugin Catalog CI` runs created 2026-09-06T00:00Z → 2026-09-11T12:50Z: 1,223 runs over 792
+head commits. For every commit, the check runs named `Portal hosts (shard 0…3)` with `filter=all`, so
+re-run attempts are included — 3,168 queries, none truncated, none failed.
+
+- **Denominator**: a run in which at least one portal-hosts shard reached `success`, `failure` or
+  `timed_out` — the definition the 09-06 → 09-08 measurement used — **719 runs**.
+- **Numerator**: a run in which any portal-hosts job's annotations carry `THE TEST HOST WAS KILLED BY SIG…`.
+  Annotations were read for all 181 failed portal-hosts jobs, none missing.
+- **Runtime**: read per run from the head of a portal-hosts job's own log (`dotnet-install: Installed
+  version is 10.0.N`, or `… version '10.0.N' is already installed`) — the crashed job for a crashed run,
+  otherwise shard 1. **All 719 were read**, zero failed reads, each naming exactly one `10.0.x` runtime.
+
+| runtime, read from the run | runs | crashed | rate | 95 % CI (Clopper–Pearson) |
+|---|---|---|---|---|
+| `10.0.11` — shards started 2026-09-06 03:23Z … 09-08 20:36Z | 444 | 8 | **1.80 %** | 0.78 – 3.52 % |
+| `10.0.12` — shards started 2026-09-08 20:44Z … 09-11 12:01Z | 275 | 2 | **0.73 %** | 0.09 – 2.60 % |
+
+The switch is sharp — the last `10.0.11` job started 20:36:38Z and the first `10.0.12` job 20:44:19Z on
+2026-09-08 — and it is **1 h 27 m before** GitHub's `v10.0.12` release object (22:11Z). That is why a run's
+runtime has to be read from the run: a cut at the release date would have mislabelled every run in
+between.
+
+Every crash is `Portal hosts (shard 1)`:
+
+| shard started | run | branch | suite | runtime | recorded as |
+|---|---|---|---|---|---|
+| 09-06 05:04Z | `34013024540` | `fix/3094-skill-autocomplete-completes` | GitSync | `10.0.11` | occurrence (sighting #10's scope note) |
+| 09-06 17:18Z | `34047985756` | **`main`** | FutuRe | `10.0.11` | occurrence |
+| 09-06 20:15Z | `34057413159` | `fix/edu-union-wait-measures-behaviour` | FutuRe | `10.0.11` | occurrence |
+| 09-07 00:29Z | `34069990582` | **`main`** | GitSync | `10.0.11` | #11 |
+| 09-08 09:31Z | `34210183539` | `fix/1390-teardown-resolve-guard` | FutuRe | `10.0.11` | #12 |
+| 09-08 11:53Z | `34222981863` | **`main`** | FutuRe | `10.0.11` | #14 |
+| 09-08 12:35Z | `34222933802` | **`main`** (dispatch) | FutuRe | `10.0.11` | #13 |
+| 09-08 18:51Z | `34265504322` | `chore/pin-8131` | FutuRe | `10.0.11` | occurrence — **previously unrecorded** |
+| 09-10 12:31Z | `34476948303` | `fix/1598-1599-local-gate-loop` | FutuRe | **`10.0.12`** | #15 |
+| 09-11 12:01Z | `34594554211` | **`main`** (dispatch) | FutuRe | **`10.0.12`** | #16 |
+
+**What this establishes, and what it does not:**
+
+- **`10.0.12` does not eliminate the crash, and that is ESTABLISHED by counter-example, not by
+  statistics.** Two runs crashed on the fixed runtime and both dumps were read (#15, #16), on build-id
+  `79945f51…`. No N can turn that into a zero any more.
+- **Whether it REDUCED the rate is NOT established.** The rate ratio is 0.40, exact 95 % CI
+  **0.04 – 2.02**, and the conditional exact test (given the ten crashes, is the post-fix share small?)
+  gives **p = 0.20**, one-sided. That is consistent with a reduction and consistent with no change.
+- **What N would settle it.** A *zero* would have needed ≥ 165 post-fix runs at the measured 1.80 %
+  prior (≥ 149 at 2 %, ≥ 255 at 1.17 %, ≥ 404 at 0.74 %) — moot now. Detecting a **halving**
+  (1.80 % → 0.90 %) with 80 % power at one-sided α = 0.05 needs **≈ 2,030 verdict runs per arm**; at the
+  measured cadence of ~134 verdict runs a day the post-fix arm gets there around **2026-09-24**. A smaller
+  effect needs proportionally more. Nothing shorter can tell "the fix helped" from "the fix did nothing".
+- **For the next reader:** re-take this measurement at ≈ 2,030 post-fix runs. The sweep's shape is
+  per-commit check runs by name, annotations of failed jobs only, and a ranged read of each run's log head
+  for the runtime — about 4,000 REST calls for five days; **per-run `jobs` listings cost ~4.5 pages each
+  and do not fit the hourly quota**. File the upstream report against `10.0.12` with #15/#16:
+  dotnet/runtime#131267 is closed, and its fix is now shown not to cover this family.
 
 #### The sixteen sightings, grouped
 
