@@ -659,7 +659,14 @@ public static class PluginBundleEndpoints
                         statusCode: StatusCodes.Status409Conflict);
                 }
 
-                if (outcome.Held)
+                if (!outcome.SelectedAsHead)
+                    logger?.LogInformation(
+                        "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
+                        + "{Version}) as older warehouse stock; activation stays on newer head "
+                        + "{HeadVersion}, so no restart or module-set change is required",
+                        accepted.Module, plugin, accepted.Files.Count,
+                        accepted.Version ?? "(unversioned)", outcome.HeadVersion ?? "(unversioned)");
+                else if (outcome.Held)
                     logger?.LogInformation(
                         "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
                         + "{Version}) — HELD from local activation ({Reason}); it serves from this "
@@ -711,8 +718,10 @@ public static class PluginBundleEndpoints
                 BroadcastPublished(http, plugin, accepted, logger);
 
                 // held/holdReason let the publisher tell "shelved, will serve" apart from
-                // "activated here"; pendingRestart is honest for the held case — a restart of
-                // THIS instance would not load a held module, so nothing is pending on one.
+                // "activated here". selectedAsHead/headVersion make the #3996 third outcome
+                // explicit: an older upload is valid warehouse stock but does not move activation
+                // backwards. pendingRestart is honest for BOTH non-activation cases — a restart
+                // neither loads a held module nor changes anything for an older shelf-only one.
                 return Results.Json(new
                 {
                     plugin,
@@ -721,7 +730,9 @@ public static class PluginBundleEndpoints
                     files = accepted.Files.Count,
                     held = outcome.Held,
                     holdReason = outcome.HoldReason,
-                    pendingRestart = !outcome.Held,
+                    selectedAsHead = outcome.SelectedAsHead,
+                    headVersion = outcome.HeadVersion,
+                    pendingRestart = outcome.SelectedAsHead && !outcome.Held,
                 });
             })
             .AllowAnonymous();
@@ -965,7 +976,7 @@ public static class PluginBundleEndpoints
                         // instance can actually serve its bytes, so a consumer never downloads for
                         // a module section that will not be there. Additive: an older client's
                         // BundleRef simply ignores it.
-                        module = modules.TryGetValue(p.PluginId, out var servable)
+                        module = modules.TryGetValue(BundleVersionKey(p.PluginId, p.Version), out var servable)
                             ? servable.Name : null,
                         // The module's declared platform FLOOR — the consumer's gate (a semver
                         // floor, never MVID equality; the index-level frameworkMvid above stays
@@ -1043,8 +1054,10 @@ public static class PluginBundleEndpoints
                 .SelectMany(snapshot => WithAnchoredPackages(rootHub, local, snapshot)
                     .Select(entries => (Entries: entries, Anchor: snapshot))));
 
-    /// <summary>Contributor (2): the modules published onto this instance that no install record
-    /// already covers.</summary>
+    /// <summary>Contributor (2): the modules published onto this instance. Both the activation
+    /// head and its retained fallback are advertised when they carry distinct versions; the
+    /// versioned download route resolves the matching generation. An install record still wins an
+    /// identical package/version entry.</summary>
     private static IObservable<IReadOnlyList<BundleEntry>> WithPublishedModules(
         IMessageHub rootHub, IReadOnlyList<BundleEntry> records)
     {
@@ -1053,23 +1066,62 @@ public static class PluginBundleEndpoints
             return Observable.Return(records);
         return landing.GetActivation().Take(1).Select(activation =>
         {
-            var recorded = records.Select(r => r.PluginId)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var published = activation.Entries
                 .Where(e => e.Enabled
                     && !string.IsNullOrWhiteSpace(e.Version)
-                    && e.PackagePath?.Split('/') is { Length: 2 } segments
-                    && !recorded.Contains(segments[1]))
-                .Select(e =>
+                    && e.PackagePath?.Split('/') is { Length: 2 })
+                .SelectMany(e => PublishedVersions(e));
+
+            // Head before fallback, and newer before older for every package. PluginBundleClient
+            // selects the first entry of a package for the ordinary update path; listing an older
+            // retained generation first would reintroduce #3996 at the index boundary. A local
+            // install record wins an identical package/version because `OrderBy` is stable and the
+            // records enter the sequence first. When an identical install record exists, keep its
+            // entitlement/package metadata but join it to the published generation pointer.
+            var ordered = records.Concat(published)
+                .OrderBy(p => p.PluginId, StringComparer.OrdinalIgnoreCase)
+                .ThenByDescending(p => p.Version, NuGetVersionComparer.Instance);
+            var unique = new List<BundleEntry>();
+            foreach (var candidate in ordered)
+            {
+                var match = unique.FindIndex(current =>
+                    string.Equals(current.PluginId, candidate.PluginId,
+                        StringComparison.OrdinalIgnoreCase)
+                    && NuGetVersionComparer.Instance.Compare(
+                        current.Version, candidate.Version) == 0);
+                if (match < 0)
+                    unique.Add(candidate);
+                else if (candidate.ShelfVersion is not null
+                         && unique[match].ShelfVersion is null)
+                    unique[match] = unique[match] with
+                    {
+                        Module = candidate.Module ?? unique[match].Module,
+                        ShelfVersion = candidate.ShelfVersion,
+                    };
+            }
+            return (IReadOnlyList<BundleEntry>)unique;
+
+            static IEnumerable<BundleEntry> PublishedVersions(ModuleActivationEntry head)
+            {
+                yield return ToBundle(head, head.MinMeshVersion);
+                var previous = ModuleActivationBoot.PreviousGeneration(head);
+                if (previous is { Version.Length: > 0 })
+                    // The activation record predates a previous-floor field. Null is the honest
+                    // answer; copying the head's floor would state a claim the older bytes did not.
+                    yield return ToBundle(previous, minMeshVersion: null);
+
+                static BundleEntry ToBundle(
+                    ModuleActivationEntry entry, string? minMeshVersion)
                 {
-                    var segments = e.PackagePath!.Split('/');
+                    var segments = entry.PackagePath!.Split('/');
                     return new BundleEntry(
-                        segments[1], e.Version!, segments[1],
-                        Module: e.Name,
-                        MinMeshVersion: e.MinMeshVersion,
-                        Source: segments[0]);
-                });
-            return (IReadOnlyList<BundleEntry>)records.Concat(published).ToArray();
+                        segments[1], entry.Version!, segments[1],
+                        Module: entry.Name,
+                        MinMeshVersion: minMeshVersion,
+                        Source: segments[0],
+                        ShelfVersion: entry.Version);
+                }
+            }
         });
     }
 
@@ -1243,12 +1295,13 @@ public static class PluginBundleEndpoints
 
     /// <summary>
     /// Which of the installed packages' declared modules this instance can serve right now:
-    /// plugin id → module assembly name, for exactly the entries whose bytes exist under
+    /// (plugin id, version) → module assembly name, for exactly the entries whose bytes exist under
     /// <c>modules/&lt;name&gt;/</c> and were not uninstalled (<see cref="ModuleBundleSource"/>).
     /// A HELD landing — floor above THIS instance's platform, the registry-shelf state (2026-08-22) —
     /// is listed too, deliberately: the index surfaces its <c>minMeshVersion</c> and each
-    /// consumer's own gate decides loadability THERE, before a byte travels. One
-    /// activation-sidecar read for the whole index.
+    /// consumer's own gate decides loadability THERE, before a byte travels. Both retained
+    /// generations can be listed under their own versions; one activation-sidecar read resolves
+    /// the whole index.
     ///
     /// <para>🚨 Each entry also carries the framework identity the SHELF recorded for those module
     /// bytes (Plugins#931). It is the producer's value, written when the owning repo's CI published
@@ -1271,19 +1324,22 @@ public static class PluginBundleEndpoints
 
         return landing.GetActivation().Take(1)
             .Select(activation => (IReadOnlyDictionary<string, ServableModule>)declaring
-                .Where(p => ModuleBundleSource.Collect(
-                        landing.BaseDirectory, p.Module!, activation)
+                .Where(p => ModuleBundleSource.CollectVersion(
+                        landing.BaseDirectory, p.Module!, activation, p.ShelfVersion)
                     .DeclineReason is null)
                 .ToDictionary(
-                    p => p.PluginId,
+                    p => BundleVersionKey(p.PluginId, p.Version),
                     p => new ServableModule(
                         p.Module!,
-                        activation.Entries
-                            .FirstOrDefault(e => string.Equals(
-                                e.Name, p.Module, StringComparison.OrdinalIgnoreCase))
+                        ModuleBundleSource.ResolveEntry(activation, p.Module!, p.ShelfVersion)
                             ?.FrameworkMvid),
                     StringComparer.OrdinalIgnoreCase));
     }
+
+    /// <summary>A stable dictionary key for a package VERSION. The separator cannot occur in a
+    /// package id or NuGet version, so case-insensitive package identity cannot conflate releases.</summary>
+    private static string BundleVersionKey(string pluginId, string version) =>
+        pluginId + "\u001f" + version;
 
     /// <summary>One servable module on the index: its assembly name and the framework identity the
     /// shelf recorded for its bytes (null = the producer stated none).</summary>
@@ -1567,8 +1623,8 @@ public static class PluginBundleEndpoints
         return landing.GetActivation().Take(1)
             .Select(activation =>
             {
-                var (files, assets, decline) = ModuleBundleSource.Collect(
-                    landing.BaseDirectory, package.Module!, activation);
+                var (files, assets, decline) = ModuleBundleSource.CollectVersion(
+                    landing.BaseDirectory, package.Module!, activation, package.ShelfVersion);
                 if (decline is not null)
                     logger?.LogInformation(
                         "Plugin bundles: {Plugin} declares module '{Module}' but it is not served: {Reason}",
@@ -1779,7 +1835,12 @@ public static class PluginBundleEndpoints
     /// <param name="Tier">The plan the package declares (<see cref="PackageManifest.Tier"/>), or
     /// null for a baseline package — the cached observation; <see cref="Decide"/> prefers the
     /// anchor's, exactly as it does for <paramref name="Source"/>.</param>
+    /// <param name="ShelfVersion">The retained published generation this entry resolves, or null
+    /// for an installed/anchored entry that follows the ordinary activation head or image module.
+    /// Kept separate from <paramref name="Version"/> because an install record's package version
+    /// is not evidence that a sidecar generation with that version exists.</param>
     private sealed record BundleEntry(
         string PackageId, string Version, string PluginId, string? Module = null,
-        string? MinMeshVersion = null, string? Source = null, string? Tier = null);
+        string? MinMeshVersion = null, string? Source = null, string? Tier = null,
+        string? ShelfVersion = null);
 }
