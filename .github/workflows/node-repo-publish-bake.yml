@@ -1349,6 +1349,10 @@ jobs:
           # it was written for. Same expression as the checkout's `repository:` on purpose: one
           # answer to "whose content is this", used by both.
           BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+          # Read-only: publish-bake-bundles.sh orders the sealed commit against this bake's through
+          # the compare API and refuses to seal BACKWARDS (per-module deploy). A token that cannot
+          # read the content repository just makes the comparison unavailable, and the script says so.
+          GH_TOKEN: ${{ github.token }}
           # flat (the default) or generation — see the `publication-layout` input. At `flat` the
           # script behaves byte-identically to before this input existed.
           BAKE_PUBLICATION_LAYOUT: ${{ inputs.publication-layout }}
