@@ -373,6 +373,24 @@ def assert_fleet_row(root: str, repo: str, roster_path: str, platform_repo: str)
     roster does not know and (b) a satellite LOWERS a grant the roster still records — both of them
     "the roster overstates", both caught here, in a job that DOES run (a roster mismatch is not a
     permission escalation, so the graph is accepted and the red is visible).
+
+    🚨 THE THIRD DIRECTION IS NEITHER OF THOSE, AND STRICT EQUALITY MADE IT UNLANDABLE. A row the
+    roster HAS and the repository does NOT is the roster overstating nothing: core checks a caller
+    that is not there yet, which is stricter than reality, never looser. But a satellite gains a
+    caller by the same inverted ordering as `Pairs-with:` — the core half lands first, because the
+    roster is how core's own pull request sees the fleet — and every satellite asserts this row
+    against core's `main` (`scripts-ref: main`). Demanding equality in that direction therefore
+    reddens EVERY pull request in that repository for the whole gap between the two merges, on a
+    caller that is arriving. Measured while wiring MeshWeaver#3878's publication job into
+    MeshWeaver.Plugins: 16 open pull requests, and `validate / Validate node repos` is a required
+    context there, so the window is a repository-wide block, not a warning.
+
+    So a row may declare itself `pending: <reason>`, and that excuses ABSENCE ONLY. The moment the
+    repository has the caller it is compared key for key like every other row, so a pending marker
+    can never launder a lowered grant or an unrecorded caller. An absent row WITHOUT the marker
+    stays RED — a caller deleted and its row forgotten is the roster describing a repository that
+    does not exist — and a marker with an empty reason is RED for the same reason `asserted-by:`
+    must say something.
     """
     roster = _load_roster(roster_path)
     entry = roster["repos"].get(repo)
@@ -385,11 +403,47 @@ def assert_fleet_row(root: str, repo: str, roster_path: str, platform_repo: str)
                 f"a change to a lane it calls is checked against NOTHING in that repo's own pull "
                 f"request — which is how MeshWeaver#3933 reached 28 zero-job runs.\n" + recipe]
     want = sorted((entry.get("callers") or []), key=lambda r: (str(r.get("workflow")), str(r.get("job"))))
-    if [_row_key(r) for r in want] == [_row_key(r) for r in actual]:
-        return []
-    out = [f"fleet roster: {repo}'s recorded callers no longer match this repository.\n"
-           f"      recorded: {[_row_key(r) for r in want]}\n"
-           f"      actual:   {[_row_key(r) for r in actual]}\n" + recipe]
+    recorded_keys = {_row_key(r) for r in want}
+    present_keys = {_row_key(r) for r in actual}
+    out: list[str] = []
+
+    # (a) + (b) — the two directions in which the roster OVERSTATES. Every caller this repository
+    # really has must be recorded WITH EXACTLY ITS GRANT; a lowered grant changes the key, so it
+    # arrives here as an unrecorded caller rather than slipping through as a match.
+    for row in actual:
+        if _row_key(row) not in recorded_keys:
+            out.append(
+                f"fleet roster: {repo} calls `{row['lane']}` from {row['workflow']}#{row['job']} "
+                f"granting {row['grants']}, and the roster records no such caller — it was either "
+                f"ADDED here without a row or LOWERED away from the grant recorded. Both make core's "
+                f"fleet check answer a confident green on a broken fleet.\n"
+                f"      recorded: {sorted(recorded_keys)}\n"
+                f"      actual:   {sorted(present_keys)}\n" + recipe)
+
+    # (c) — a row this repository does not have. Safe for core, so it is a refusal only when nothing
+    # DECLARED it, and the declaration has to say something.
+    for row in want:
+        label = f"{row.get('workflow')}#{row.get('job')} -> {row.get('lane')}"
+        if _row_key(row) in present_keys:
+            if "pending" in row:
+                print(f"  note: {label} is still marked `pending:` in the roster and this repository "
+                      f"now HAS it — the marker is spent; remove it from {platform_repo}.")
+            continue
+        pending = row.get("pending")
+        if pending is None:
+            out.append(
+                f"fleet roster: the roster records {repo} calling {label}, which this repository does "
+                f"not have. A row whose caller was DELETED describes a repository that no longer "
+                f"exists; a row whose caller has not LANDED yet must say so with "
+                f"`pending: <reason naming the pull request that lands it>`.\n" + recipe)
+        elif not str(pending).strip():
+            out.append(
+                f"fleet roster: {repo}'s row for {label} is marked `pending:` with no reason. An "
+                f"exemption that says nothing is indistinguishable from one nobody meant — name the "
+                f"pull request that lands the caller.")
+        else:
+            print(f"  note: {label} is recorded as PENDING and is not in this repository yet — "
+                  f"{str(pending).strip()}")
     return out
 
 
