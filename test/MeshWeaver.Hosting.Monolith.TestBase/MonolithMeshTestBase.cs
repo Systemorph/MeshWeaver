@@ -273,8 +273,15 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     private sealed class SharedMeshProvider(IServiceProvider serviceProvider, string testClassName)
         : IAsyncDisposable
     {
+        // Nullable, and cleared by DisposeAsync BEFORE the unload drain: while this holder keeps the
+        // disposed provider, it roots the mesh and its MeshContentTypeRegistry, and with them the very
+        // collectible contexts the drain waits for (Plugins#1605) - the shared twin of the per-test
+        // path's `ServiceProvider = null!`.
+        private IServiceProvider? serviceProvider = serviceProvider;
+
         /// <summary>The provider every test of the class shares.</summary>
-        public IServiceProvider ServiceProvider { get; } = serviceProvider;
+        public IServiceProvider ServiceProvider =>
+            serviceProvider ?? throw new ObjectDisposedException(nameof(SharedMeshProvider), testClassName);
 
         /// <summary>
         /// Disposes the shared provider, then — like the per-test path (Plugins#1605) — waits until
@@ -284,13 +291,20 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         /// </summary>
         public async ValueTask DisposeAsync()
         {
-            var unloads = ServiceProvider.GetService<CollectibleContextUnloads>();
-            try { (ServiceProvider as IDisposable)?.Dispose(); }
+            var provider = serviceProvider;
+            if (provider is null)
+                return;
+            var unloads = provider.GetService<CollectibleContextUnloads>();
+            try { (provider as IDisposable)?.Dispose(); }
             catch (Exception ex)
             {
                 Fixture.TestTraceLog.AppendPhase(
                     testClassName, "DISPOSE_SHARED_SP_ERROR", 0, $"{ex.GetType().Name}: {ex.Message}");
             }
+            // Release the disposed provider before waiting on the contexts it roots: neither this
+            // holder's field nor this frame's local may keep the mesh reachable across the drain.
+            serviceProvider = null;
+            provider = null;
             var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
             Fixture.TestTraceLog.AppendPhase(testClassName,
                 outcome.Fault is not null ? "DISPOSE_SHARED_UNLOAD_FAULTED"
