@@ -296,6 +296,11 @@ node, its version bumps. The mismatch against the snapshot marks the NodeType
 dirty and triggers a recompile automatically — you never invalidate a cache by
 hand.
 
+A disk-cache candidate must also match the generated input for the captured source/test and
+configuration snapshot. Its DLL completion time alone cannot cover an edit made while an earlier
+compile was running. See [Compile Cache Input Freshness](../CompileCacheInputFreshness) for the
+executed stale-byte/current-stamp regression and the unchanged-input cache control.
+
 ### Source and test queries — and naming them
 
 Which Code nodes feed a compile is declared on `NodeTypeDefinition.Sources` /
