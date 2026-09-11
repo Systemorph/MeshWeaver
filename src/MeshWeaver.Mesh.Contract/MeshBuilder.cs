@@ -1039,6 +1039,15 @@ public record MeshBuilder
             // on the owner hub, and a hub-level registration would give each side its own instance.
             // Collapses the two durable-write routes a cross-hub patch used to take (#1249).
             .AddSingleton<Services.PostCommitFlushRegistry>()
+            // Which package roots an install is writing under RIGHT NOW (#3510). Registered at the
+            // ROOT for the same reason as the three registries above: the holder is
+            // PackageInstaller, running on the mesh hub's own chain, while the readers are
+            // recyclers living on per-node hubs — NodeTypeRebindWatcher arms on every instance hub
+            // at activation, and HubRecycleExtensions runs on whatever surviving hub its caller
+            // holds. A hub-level registration would give each of them its own instance, i.e. a
+            // lease nobody else can see, which is the same defect as a guard that checks a registry
+            // no writer ever opened a scope on.
+            .AddSingleton<Services.PackageRootInstallLeases>()
             // Controlled I/O pools — mesh-scoped governor over the shared
             // ThreadPool for genuinely-async / sync-blocking leaves (file system,
             // blob, …). Resolved by leaf adapters via IoPoolRegistry; dies with
