@@ -1,34 +1,59 @@
 #!/usr/bin/env bash
-# hosting-kv-rotate --vault <name> --prefix <prefix> --namespace <ns> --synced-secret <k8s secret> [--key <config key>]
+# hosting-kv-rotate --vault <name> --namespace <ns> --synced-secret <k8s secret>
+#                   --registry-url <https://registry> --instance-id <id>
+#                   [--object <vault object>] [--prefix <prefix>] [--key <config key>]
 #                   [--deployment memex-portal-deployment]
 #
-# Rotate this instance's plugin-registry key: mint a fresh `mwi_` key, put it in Key Vault, and
-# report ONLY ITS HASH back to the mesh. The registry adopts the hash (the control plane reacts to
-# the `::hosting:: key_hash=` line below); the restart that follows in the plan puts the new value
-# into the pods. The raw key exists in exactly two places, ever: this process's memory and the vault.
+# Rotate this instance's plugin-registry key — the FIRST half of a two-phase rotation
+# (MeshWeaver#2802). The second half is `hosting-registry-key commit`, which the plan runs AFTER
+# the portal has restarted onto the new key.
 #
-# 🚨 IT NEVER PRINTS THE KEY. Not on success, not on failure, not in a `set -x` (deliberately not
-# enabled), not in a `::hosting::` fact. The 2026-08-30 exposure this verb exists to repair came
-# from a CHECK that selected `.value` while asking "is this stored in the clear?" — the audit was
-# the leak. Every read below compares hashes and names.
+#   1. refuse under an inline shadow of the key                              (nothing minted)
+#   2. ask the REGISTRY whether it accepts the key the instance presents
+#      today, as the instance the record names                               (nothing minted)
+#   3. mint a fresh `mwi_` key and STAGE ITS HASH at the registry — from
+#      here the registry accepts BOTH the old key and the new one
+#   4. prove the new key authenticates                                       (nothing stored yet)
+#   5. store it in Key Vault and wait for the synced Secret to carry it
 #
-# 🚨 IT DOES OVERWRITE — the one operator script that does. `hosting-kv-ensure` refuses to touch
-# an existing secret because the master key seals stored credentials; a registry key seals
-# nothing and is meant to be replaced. That is why this is a separate verb with its own name, and
-# why `kv-ensure` must never grow a --force.
+# 🚨 WHY THE REGISTRY IS ASKED FIRST, AND BY THIS SCRIPT. The first design minted and stored the key
+# here and let the control plane adopt its hash afterwards, on whatever IInstanceKeyRegistry the
+# control instance's hub resolved — which is not the registry: every portal registers one, and the
+# instances live only in memex.meshweaver.cloud's store. So the adoption failed AFTER Key Vault held
+# a key nothing accepted, the Job carried on regardless, and the CSI driver synced the new value into
+# the Secret: the next pod restart presented a key the registry never adopted. A delayed 401 storm
+# behind a quiet failure. Now the registry is the first thing asked and the vault the last thing
+# written, and every failure in between leaves an instance whose pods authenticate whichever key
+# they present — the registry retires the old key only when `commit` presents the new one back.
+#
+# 🚨 IT NEVER PRINTS A KEY. Not on success, not on failure, not in a `set -x` (deliberately not
+# enabled), not in a `::hosting::` fact. It reads two (the key the Secret carries, and — only when a
+# rotation is already in flight — the one the vault holds) and mints a third; each lives in a shell
+# variable, reaches the registry on curl's STDIN (hosting::registry_call), is compared by HASH, and is
+# unset. The 2026-08-30 exposure this verb exists to repair came from a CHECK that selected `.value`
+# while asking "is this stored in the clear?" — the audit was the leak.
+#
+# 🚨 IT DOES OVERWRITE — the one operator script that does. `hosting-kv-ensure` refuses to touch an
+# existing secret because the master key seals stored credentials; a registry key seals nothing and
+# is meant to be replaced. That is why this is a separate verb, and why `kv-ensure` must never grow
+# a --force.
 # shellcheck source=_common.sh
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-kv-rotate"
-vault="" prefix="" namespace="" synced="" key="PluginCatalog__RegistryToken" deployment="memex-portal-deployment"
+vault="" prefix="" object="" namespace="" synced="" key="PluginCatalog__RegistryToken"
+deployment="memex-portal-deployment" registry="" instance=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --vault)         vault="${2:-}";     shift 2 ;;
-    --prefix)        prefix="${2:-}";    shift 2 ;;
-    --namespace)     namespace="${2:-}"; shift 2 ;;
-    --synced-secret) synced="${2:-}";    shift 2 ;;
-    --key)           key="${2:-}";       shift 2 ;;
+    --vault)         vault="${2:-}";      shift 2 ;;
+    --prefix)        prefix="${2:-}";     shift 2 ;;
+    --object)        object="${2:-}";     shift 2 ;;
+    --namespace)     namespace="${2:-}";  shift 2 ;;
+    --synced-secret) synced="${2:-}";     shift 2 ;;
+    --key)           key="${2:-}";        shift 2 ;;
     --deployment)    deployment="${2:-}"; shift 2 ;;
+    --registry-url)  registry="${2:-}";   shift 2 ;;
+    --instance-id)   instance="${2:-}";   shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -39,18 +64,31 @@ hosting::safe_name vault "$vault"
 hosting::safe_name namespace "$namespace"
 hosting::safe_name synced-secret "$synced"
 [ -z "$prefix" ] || hosting::safe_name prefix "$prefix"
+[ -z "$object" ] || hosting::safe_name object "$object"
 hosting::safe_name key "$key"
 hosting::safe_name deployment "$deployment"
+# 🚨 Required, not defaulted: a rotation that does not know WHICH registry holds the instance is the
+# defect this revision exists to remove. An older plan that does not pass it stops here, before
+# anything is read, minted or stored.
+hosting::need_flag registry-url "$registry"
+hosting::need_flag instance-id "$instance"
+hosting::safe_url registry-url "$registry"
+hosting::safe_name instance-id "$instance"
 
-# 🚨 REFUSE UNDER AN INLINE SHADOW — before anything is minted (MeshWeaver#3201, Plugins#1593).
-# An inline `env:` entry outranks every envFrom. With one for the key on the pod spec, this
-# rotation would land the new key in the vault AND in the synced Secret — the wait below goes
-# green — while the restarted pods keep presenting the OLD one; and the registry deletes the old
-# key's index entry the moment it adopts the new hash (MeshWeaverInstanceService.AdoptKeyHash →
-# DeleteIndex), so every read that presents it answers 401. A 401 storm behind a green rotation.
-# The Hosting plan refuses the same thing from the RECORD; this is the in-cluster half, because a
-# record is a snapshot and the Deployment is the fact. Names only — a value is never read out.
-# A dry run narrates the check and needs no cluster, like every other step of a rehearsal here.
+# The vault object: the one the record's Key Vault class maps this key FROM, as the plan passes it.
+# Without --object, the fleet's naming rule: <prefix><Section>-<Key>, every `__` becoming `-`
+# (HelmValues.VaultSecretName). 🚨 The rule is only a fallback: memex maps its token from the
+# un-prefixed object `PluginCatalog-RegistryToken`, and writing the rule's name there would store a
+# key in an object nothing reads.
+object="${object:-${prefix}${key//__/-}}"
+self="${registry}/api/instances/self"
+
+# 🚨 REFUSE UNDER AN INLINE SHADOW — before anything is read or minted (MeshWeaver#3201, Plugins#1593).
+# An inline `env:` entry outranks every envFrom. With one for the key on the pod spec, the new key
+# would land in the vault AND the synced Secret while the restarted pods keep presenting the OLD
+# one — and `commit` would then retire the key the pods present. The Hosting plan refuses the same
+# thing from the RECORD; this is the in-cluster half, because a record is a snapshot and the
+# Deployment is the fact. Names only — a value is never read out.
 if hosting::dry; then
   hosting::log "(dry run) would refuse if any container of deployment/${deployment} in ${namespace} sets ${key} inline"
 else
@@ -60,54 +98,139 @@ else
     | jq -r --arg k "$key" '[.spec.template.spec.containers[] | select(any(.env[]?; .name == $k)) | .name] | join(", ")')" \
     || hosting::die "could not read deployment/${deployment} in ${namespace} — the rotation restarts it, and whether it sets ${key} inline decides whether the new key is ever read"
   [ -z "$shadowing" ] \
-    || hosting::die "${key} is set INLINE on ${shadowing} of deployment/${deployment} — an inline env: entry outranks every envFrom, so the new key would land in the vault and the synced Secret while the pods keep presenting the OLD one, which the registry stops accepting the moment it adopts the new hash: a 401 storm behind a green rotation. Retire the entry first (Reconcile — its RetireInlineEnv remedy), drop it from the record, then rotate. Nothing was minted."
+    || hosting::die "${key} is set INLINE on ${shadowing} of deployment/${deployment} — an inline env: entry outranks every envFrom, so the new key would land in the vault and the synced Secret while the pods keep presenting the OLD one, which the registry stops accepting once the rotation commits: a 401 storm behind a green rotation. Retire the entry first (Reconcile — its RetireInlineEnv remedy), drop it from the record, then rotate. Nothing was minted."
 fi
 
-# The vault object name follows the SecretProviderClass convention: <prefix><Section>-<Key>, every
-# `__` becoming `-` (HelmValues.VaultSecretName). For PluginCatalog__RegistryToken that is
-# <prefix>PluginCatalog-RegistryToken — the exact name hosting-kv-ensure lists as REQUIRED.
-object="${prefix}${key//__/-}"
-
-hosting::step "Mint a new instance key"
-# 32 random bytes, URL-safe base64, no padding, `mwi_` prefix — InstanceKeys.Generate, exactly.
-raw="mwi_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
-hash="$(printf '%s' "$raw" | sha256sum | cut -c1-64)"
-hosting::log "new key hash ${hash:0:12}… (the key itself is not shown, here or anywhere)"
-
-hosting::step "Store the new key in Key Vault"
 if hosting::dry; then
-  hosting::log "(dry run) would set ${object} in vault ${vault}"
-else
-  az keyvault secret set --vault-name "$vault" --name "$object" --value "$raw" --output none \
-    || { unset raw; hosting::die "could not set ${object} in vault ${vault}"; }
+  hosting::log "(dry run) would ask ${self} whether it accepts the key ${synced}/${key} carries, as instance '${instance}'"
+  hosting::step "Mint a new instance key"
+  raw="mwi_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+  hash="$(printf '%s' "$raw" | hosting::sha256)"
+  unset raw
+  hosting::log "new key hash ${hash:0:12}… (the key itself is not shown, here or anywhere)"
+  hosting::log "(dry run) would stage that hash at ${registry}, prove the new key authenticates, then set ${object} in vault ${vault}"
+  hosting::say key_hash "$hash"
+  hosting::log "(dry run) would wait for ${synced}/${key} in ${namespace} to hash to ${hash:0:12}…"
+  exit 0
 fi
-unset raw
-hosting::log "stored  ${object} in vault ${vault}"
 
-# 🚨 The fact the mesh reacts to. The control plane adopts this hash on the registry BEFORE the
-# restart below lands the new value in the pods, so the pods never come up against a registry
-# that still expects the old key. A hash is not a secret: the registry stores it in the clear.
-hosting::say key_hash "$hash"
+# ── 2. does the REGISTRY hold this instance, and accept the key it presents? ────────────────────
+hosting::step "Confirm the registry accepts this instance's key"
+# shellcheck disable=SC2034  # read BY NAME in hosting::registry_call, so the key is never an argument
+current="$(hosting::secret_value "$namespace" "$synced" "$key")" \
+  || hosting::die "the synced Secret ${synced} in ${namespace} carries no ${key} — the instance presents no key from it, so there is nothing the registry could vouch for and nothing to prove possession with. Register the instance or re-issue its key at the registry first. Nothing was minted."
+hosting::registry_call current GET "$self"
+case "$REGISTRY_STATUS" in
+  200) ;;
+  401|403)
+    unset current
+    hosting::die "the registry at ${registry} does not accept the key ${synced}/${key} carries (HTTP ${REGISTRY_STATUS}) — it holds no instance that key belongs to, so it could not adopt a new one either. This is the answer a portal that is NOT the registry gives. Nothing was minted; Key Vault is unchanged." ;;
+  404)
+    unset current
+    hosting::die "${registry} has no key-rotation surface (HTTP 404 on /api/instances/self) — the registry runs a build older than MeshWeaver#2802, which cannot stage a key. Roll the registry first. Nothing was minted; Key Vault is unchanged." ;;
+  503)
+    unset current
+    hosting::die "the registry at ${registry} could not resolve the key right now (HTTP 503) — nothing was established either way. Retry the rotation. Nothing was minted." ;;
+  *)
+    unset current
+    hosting::die "the registry at ${registry} answered HTTP ${REGISTRY_STATUS} to /api/instances/self — refusing to rotate against an answer that is not a verdict. Nothing was minted." ;;
+esac
+seen="$(hosting::registry_field instanceId)"
+slot="$(hosting::registry_field key)"
+staged="$(hosting::registry_field staged)"
+if [ "$seen" != "$instance" ]; then
+  unset current
+  hosting::die "the key ${synced}/${key} carries belongs to instance '${seen:-?}' at ${registry}, not '${instance}' — the record and the registry disagree about which instance this is. Refusing to re-key the wrong one. Nothing was minted."
+fi
+hosting::log "registry  ${registry} accepts the ${slot:-?} key of '${seen}' (a rotation in flight: ${staged:-false})"
+hosting::say registry_instance "$seen"
+
+# ── a rotation already in flight: RESUME it rather than start a second one ─────────────────────
+# The registry holds two slots, current and staged. A key staged by an earlier run is either held by
+# nobody (that run died before the vault write) — then staging a new one may replace it — or it is
+# IN KEY VAULT (that run died after the write) — then replacing it would retire a key the Secret is
+# about to carry and a restart would present, and the rotation must instead be FINISHED: nothing is
+# minted, the Secret is waited for, and the plan's restart and commit complete it.
+if [ "$slot" = "staged" ] || [ "$staged" = "true" ]; then
+  vaulted="$(az keyvault secret show --vault-name "$vault" --name "$object" --query value -o tsv 2>/dev/null)" || vaulted=""
+  if [ -z "$vaulted" ]; then
+    unset current
+    hosting::die "a rotation is already in flight at ${registry} (a key is staged) and ${object} in vault ${vault} could not be read to tell whether it holds that key. Replacing it could retire the key a restart is about to present, so refusing. Nothing was minted; nothing was changed."
+  fi
+  hosting::registry_call vaulted GET "$self"
+  vault_slot="$(hosting::registry_field key)"
+  vault_seen="$(hosting::registry_field instanceId)"
+  if [ "$REGISTRY_STATUS" = "200" ] && [ "$vault_slot" = "staged" ] && [ "$vault_seen" = "$instance" ]; then
+    hash="$(printf '%s' "$vaulted" | hosting::sha256)"
+    unset vaulted current
+    hosting::log "Key Vault already holds the key an earlier rotation staged (hash ${hash:0:12}…) — RESUMING it: nothing is minted"
+    hosting::say key_resumed 1
+    hosting::say key_hash "$hash"
+  else
+    unset vaulted
+    if [ "$slot" = "staged" ]; then
+      unset current
+      hosting::die "${synced}/${key} carries the STAGED key of an uncommitted rotation, but ${object} in vault ${vault} does not — the Secret and the vault disagree about which key is next. Refusing to guess; nothing was minted and nothing was changed."
+    fi
+    hosting::log "the key staged by an earlier rotation is in neither the vault nor the Secret — nobody holds it, so a new stage replaces it"
+  fi
+fi
+
+if [ -z "${hash:-}" ]; then
+  # ── 3. mint, and STAGE the hash ────────────────────────────────────────────────────────────────
+  hosting::step "Mint a new instance key"
+  # 32 random bytes, URL-safe base64, no padding, `mwi_` prefix — InstanceKeys.Generate, exactly.
+  raw="mwi_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+  hash="$(printf '%s' "$raw" | hosting::sha256)"
+  hosting::log "new key hash ${hash:0:12}… (the key itself is not shown, here or anywhere)"
+
+  hosting::step "Stage the new key at the registry"
+  hosting::registry_call current POST "${registry}/api/instances/self/key/stage" "{\"keyHash\":\"${hash}\"}"
+  unset current
+  if [ "$REGISTRY_STATUS" != "200" ]; then
+    unset raw
+    hosting::die "the registry at ${registry} refused to stage the new key (HTTP ${REGISTRY_STATUS}: $(hosting::registry_field error)). Nothing was stored: Key Vault is unchanged, and the registry still accepts the key the pods present."
+  fi
+  hosting::log "staged    ${hash:0:12}… at ${registry} — it now accepts the previous key AND the new one"
+
+  # ── 4. PROVE it, before it is stored anywhere ──────────────────────────────────────────────────
+  hosting::step "Prove the new key authenticates"
+  hosting::registry_call raw GET "$self"
+  proof_slot="$(hosting::registry_field key)"
+  proof_seen="$(hosting::registry_field instanceId)"
+  if [ "$REGISTRY_STATUS" != "200" ] || [ "$proof_slot" != "staged" ] || [ "$proof_seen" != "$instance" ]; then
+    unset raw
+    hosting::die "the registry does not accept the new key as the staged key of '${instance}' (HTTP ${REGISTRY_STATUS}, slot '${proof_slot:-none}', instance '${proof_seen:-none}'). Nothing was stored: Key Vault is unchanged, and the key the pods present still authenticates."
+  fi
+  hosting::log "proven    the new key authenticates as the staged key of '${instance}'"
+  # 🚨 The fact the mesh records. A hash is not a secret: the registry stores it in the clear.
+  hosting::say key_hash "$hash"
+  hosting::say key_staged 1
+
+  # ── 5. only now: the vault ─────────────────────────────────────────────────────────────────────
+  hosting::step "Store the new key in Key Vault"
+  if ! az keyvault secret set --vault-name "$vault" --name "$object" --value "$raw" --output none; then
+    unset raw
+    hosting::die "could not set ${object} in vault ${vault}. Key Vault is unchanged; the registry accepts the previous key (which the pods present) and the staged one (which nobody holds now), so nothing is locked out. Re-run the rotation."
+  fi
+  unset raw
+  hosting::log "stored    ${object} in vault ${vault}"
+fi
 
 hosting::step "Wait for the synced Secret to carry the new key"
 # The Key Vault CSI driver re-syncs on its rotation interval; a restart that reads the OLD synced
-# Secret would put the OLD key into the new pods (DeploymentAKS → "KeyVault CSI env timing").
-# Compared by HASH of the decoded value — the value itself is never printed.
-if hosting::dry; then
-  hosting::log "(dry run) would wait for ${synced}/${key} in ${namespace} to hash to ${hash:0:12}…"
-else
-  attempts="${HOSTING_KV_SYNC_ATTEMPTS:-40}"
-  synced_hash=""
-  for i in $(seq 1 "$attempts"); do
-    synced_hash="$(kubectl -n "$namespace" get secret "$synced" -o "jsonpath={.data.${key}}" 2>/dev/null \
-      | base64 -d 2>/dev/null | sha256sum | cut -c1-64)"
-    if [ "$synced_hash" = "$hash" ]; then
-      hosting::log "synced Secret ${synced} carries the new key (attempt ${i})"
-      break
-    fi
-    sleep 15
-  done
-  [ "$synced_hash" = "$hash" ] \
-    || hosting::die "synced Secret ${synced} in ${namespace} did not pick up ${object} within $((attempts * 15))s — the pods would restart onto the OLD key. The SecretProviderClass must list ${object} and the driver's rotation must be enabled."
-fi
+# Secret would put the OLD key into the new pods (DeploymentAKS → "KeyVault CSI env timing"), and
+# `commit` would then refuse — safely, but for nothing. Compared by HASH of the decoded value.
+attempts="${HOSTING_KV_SYNC_ATTEMPTS:-40}" interval="${HOSTING_KV_SYNC_INTERVAL:-15}"
+synced_hash=""
+for i in $(seq 1 "$attempts"); do
+  synced_hash="$(hosting::secret_value "$namespace" "$synced" "$key" | hosting::sha256)"
+  if [ "$synced_hash" = "$hash" ]; then
+    hosting::log "synced Secret ${synced} carries the new key (attempt ${i})"
+    break
+  fi
+  [ "$i" -lt "$attempts" ] && sleep "$interval"
+done
+[ "$synced_hash" = "$hash" ] \
+  || hosting::die "synced Secret ${synced} in ${namespace} did not pick up ${object} within $((attempts * interval))s. Key Vault now holds the NEW key; the registry accepts BOTH the previous key and the new one, so a pod that restarts onto either still authenticates; the previous key has NOT been retired and the pods were NOT restarted. The SecretProviderClass must list ${object} and the driver's rotation must be enabled — then re-run RotateRegistryKey, which resumes this rotation instead of minting another."
 hosting::say kv_rotated 1

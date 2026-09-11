@@ -66,7 +66,10 @@ one credential under **two** names because two code paths look for two names —
 `PluginCatalog__RegistryToken` (the legacy single-registry key) and
 `PluginCatalog__Registries__0__Token` (the per-registry key of the named registry) — both from the
 one vault object `PluginCatalog-RegistryToken`. Nothing about that is ambiguous: both land, both are
-read, and rotating the object rotates both.
+read, and rotating the object rotates both. A rotation writes THAT object — the one the declaring
+class names — never the one the prefix rule would derive: memex's prefix is `memexsystemorph-`, and
+`memexsystemorph-PluginCatalog-RegistryToken` is an object nothing reads
+([Registry-key rotation](../RegistryKeyRotation)).
 
 The same rule was silently losing a key on `memex-cloud`, where one object
 (`memexcloud-AzureAIS-ApiKey`) has served both `AzureAIS__ApiKey` and `AzureFoundry__ApiKey` since
