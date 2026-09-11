@@ -1207,8 +1207,9 @@ public static class StaticRepoImporter
                     // replaced its nodes. Include the root so a root-only rollback is covered too.
                     // Older manifests omit the root and safely buy one incremental full pass.
                     var sourceTokens = nodes.Append(root)
+                        .Where(n => !string.IsNullOrEmpty(n.Path))
                         .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
-                        .ToDictionary(g => g.Key,
+                        .ToImmutableDictionary(g => g.Key,
                             g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), hub.JsonSerializerOptions),
                             StringComparer.OrdinalIgnoreCase);
                     if (currentManifest.Count != sourceTokens.Count

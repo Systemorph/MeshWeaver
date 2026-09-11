@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -161,6 +162,77 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
         await AssertUnchangedRepeat(space);
     }
 
+    [Fact(Timeout = 240_000)]
+    public async Task VersionOnlySourceRevision_DoesNotRewriteIdenticalContentOrTheOwnerClock()
+    {
+        var partition = "VersionReturn" + Guid.NewGuid().ToString("N")[..8];
+        var firstSource = new StaticSource(partition, Versioned: true,
+            ImmutableList.Create(new MeshNode("Page", partition)
+            {
+                NodeType = "Markdown", Name = "Unchanged source", Version = 42,
+                Content = new MarkdownContent { Content = "Identical authored content" },
+            }));
+        var first = await StaticRepoImporter.ImportSource(Mesh, firstSource)
+            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+        first.Outcome.Should().Be("Imported");
+        var path = $"{partition}/Page";
+        var before = await Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null)
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        var nextSource = firstSource with
+        {
+            Nodes = firstSource.Nodes.SetItem(0, firstSource.Nodes[0] with { Version = 43 }),
+        };
+        var next = await StaticRepoImporter.ImportSource(Mesh, nextSource)
+            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+        next.Fingerprint.Should().NotBe(first.Fingerprint,
+            "Versioned sources use their revision in the import fingerprint");
+        next.Outcome.Should().Be("Imported");
+        next.WrittenPaths.Should().BeEmpty(
+            "source revision alone is not an authored content change or an owner-clock assignment");
+
+        foreach (var source in ImmutableList.Create(firstSource, nextSource))
+        {
+            var repeat = await StaticRepoImporter.ImportSource(Mesh, source)
+                .Should().Within(TestTimeouts.Convergence * 2).Emit();
+            repeat.Outcome.Should().Be("Skipped");
+            var after = await Mesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null)
+                .Should().Within(TestTimeouts.Convergence).Emit();
+            after.Version.Should().Be(before.Version,
+                "the owner clocks writes; imported source revisions must not create a write of identical content");
+            after.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)!.Content
+                .Should().Be("Identical authored content");
+        }
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task EmptyPathIgnoredByTheFingerprint_DoesNotInvalidateTheCurrentManifest()
+    {
+        var partition = "EmptyPathReturn" + Guid.NewGuid().ToString("N")[..8];
+        var source = new StaticSource(partition, Versioned: false,
+            ImmutableList.Create(new MeshNode("Page", partition)
+            {
+                NodeType = "Markdown", Name = "Valid source",
+                Content = new MarkdownContent { Content = "Preserved source" },
+            }));
+        var first = await StaticRepoImporter.ImportSource(Mesh, source)
+            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+        first.Outcome.Should().Be("Imported");
+
+        var repeat = await StaticRepoImporter.ImportSource(Mesh,
+                source with { Nodes = source.Nodes.Add(new MeshNode(string.Empty)) })
+            .Should().Within(TestTimeouts.Convergence * 2).Emit();
+        repeat.Fingerprint.Should().Be(first.Fingerprint,
+            "the fingerprint and manifest writer both omit empty source paths");
+        repeat.Outcome.Should().Be("Skipped");
+        (await Body($"{partition}/Page")).Should().Be("Preserved source");
+    }
+
+    private sealed record StaticSource(string Partition, bool Versioned, ImmutableList<MeshNode> Nodes)
+        : IStaticRepoSource
+    {
+        public IReadOnlyList<MeshNode> EnumerateSourceNodes() => Nodes;
+    }
+
     private async Task<string> Prepare(bool twoWay = false)
     {
         var space = "Return" + Guid.NewGuid().ToString("N")[..8];
@@ -238,13 +310,11 @@ public class ReturningSourceConvergesTest(ITestOutputHelper output) : MonolithMe
                     new RepoFile("index.json", $$"""{"nodeType":"Space","name":"Root revision {{(commitish == RevisionB ? "B" : "A")}}"}"""),
                     new RepoFile("Existing.md", "# Existing\n\nUnchanged source"),
                 }));
-            var files = new List<RepoFile>
-            {
-                new("Existing.md", $"# Existing\n\nrevision {(commitish == RevisionB ? "B" : "A")}"),
-                new("Authored.md", "# Authored\n\nRepository copy"),
-            };
+            var files = ImmutableList.Create(
+                new RepoFile("Existing.md", $"# Existing\n\nrevision {(commitish == RevisionB ? "B" : "A")}"),
+                new RepoFile("Authored.md", "# Authored\n\nRepository copy"));
             if (commitish == RevisionB)
-                files.Add(new RepoFile("Added.md", "# Added\n\nOnly in B"));
+                files = files.Add(new RepoFile("Added.md", "# Added\n\nOnly in B"));
             return Observable.Return(new RepoSnapshot(commitish, files));
         }
 
