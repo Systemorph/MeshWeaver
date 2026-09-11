@@ -260,6 +260,97 @@ public class GreenBuildPublishSignalTest
                 new RepoIdentity("Systemorph", "MeshWeaver")));
     }
 
+    // ── the declaration, and its THIRD state ─────────────────────────────────
+
+    /// <summary>
+    /// 🚨 <b>"This deployment declared <c>ci.yml</c>" and "nobody declared anything and
+    /// <c>ci.yml</c> was presumed" must not be the same answer.</b>
+    ///
+    /// <para>That collapse is the exact shape #3978 removed one level up — the trigger was a proxy
+    /// for a proposition it could not express — and returning a bare path would rebuild it here.
+    /// The two have OPPOSITE failure modes: a refusal under a declaration is routine, while a
+    /// refusal under a presumption may be a repository whose content CI is somewhere else entirely
+    /// and whose every Space is therefore frozen. The webhook reports them differently, which it can
+    /// only do if the resolver keeps them apart.</para>
+    /// </summary>
+    [Fact]
+    public void TheContentCiDeclarationSaysWhereItCameFrom_SoPresumedNeverReadsAsDeclared()
+    {
+        var convention = GitHubWebhookProcessor.ContentWorkflowFor(
+            new RepoIdentity("someone", "a-repo-nobody-declared"));
+        Assert.Equal(ContentWorkflow, convention.Path);
+        Assert.Equal(GitHubWebhookProcessor.ContentWorkflowSource.Convention, convention.Source);
+
+        var platform = GitHubWebhookProcessor.ContentWorkflowFor(
+            new RepoIdentity("Systemorph", "MeshWeaver"));
+        Assert.Equal(".github/workflows/dotnet-test.yml", platform.Path);
+        Assert.Equal(GitHubWebhookProcessor.ContentWorkflowSource.Platform, platform.Source);
+
+        var configured = GitHubWebhookProcessor.ContentWorkflowFor(
+            new RepoIdentity("customer", "knowledge"),
+            [new GitHubContentWorkflow
+            {
+                Repository = "customer/knowledge", Path = ".github/workflows/content.yml",
+            }]);
+        Assert.Equal(".github/workflows/content.yml", configured.Path);
+        Assert.Equal(GitHubWebhookProcessor.ContentWorkflowSource.Configured, configured.Source);
+    }
+
+    /// <summary>
+    /// 🚨 <b><c>Systemorph/Memex</c> has no <c>ci.yml</c>, and two portals sync it.</b>
+    ///
+    /// <para>Measured 2026-09-11, with the denominator, over the REST workflow listing of every
+    /// repository holding an <c>Admin/_Build/{owner}.{repo}</c> record — the same nine on
+    /// memex.meshweaver.cloud and on memex.systemorph.com, both listings <c>truncated:false</c>.
+    /// Eight of the nine satisfy the convention or core's exception. The ninth is
+    /// <c>Systemorph/Memex</c>, whose six workflows are <c>build.yml</c> (<i>Memex Build</i>),
+    /// <c>config-key-coverage.yml</c>, <c>deploy-drift.yml</c>, <c>helm-release.yml</c>,
+    /// <c>image-pins.yml</c> and <c>smoke.yml</c> — no <c>ci.yml</c> among them.</para>
+    ///
+    /// <para>On the convention alone, every Memex delivery would be refused and
+    /// <c>Deployments/_GitSync</c> would freeze on BOTH portals with every delivery answering 200 OK:
+    /// MeshWeaver.Plugins#1194 recreated by the very change meant to prevent it. So the platform
+    /// DECLARES it, the same way it declares core's — a declaration ships with the platform, while a
+    /// configuration override waits for every portal's settings to be edited.</para>
+    /// </summary>
+    [Fact]
+    public void MemexContentCiIsDeclaredByThePlatform_BecauseItHasNoCiYml()
+    {
+        var memex = GitHubWebhookProcessor.ContentWorkflowFor(new RepoIdentity("Systemorph", "Memex"));
+        Assert.Equal(".github/workflows/build.yml", memex.Path);
+        Assert.Equal(GitHubWebhookProcessor.ContentWorkflowSource.Platform, memex.Source);
+
+        Assert.True(GitHubWebhookProcessor.IsRepositoryContentWorkflow(
+                new RepoIdentity("Systemorph", "Memex"), ".github/workflows/build.yml"),
+            "Memex Build is the run that proves the mesh/Deployments tree two portals sync");
+        Assert.False(GitHubWebhookProcessor.IsRepositoryContentWorkflow(
+                new RepoIdentity("Systemorph", "Memex"), ".github/workflows/smoke.yml"),
+            "Deployment Smoke probes a RUNNING deployment over the public internet — it asserts a "
+            + "live service, not a commit, and must never publish a tree");
+        Assert.False(GitHubWebhookProcessor.IsRepositoryContentWorkflow(
+                new RepoIdentity("Systemorph", "Memex"), ContentWorkflow),
+            "a declaration REPLACES the convention; leaving both admissible would let any repository "
+            + "publish from whichever of the two it happened to have");
+    }
+
+    /// <summary>
+    /// A deployment's override outranks the platform's own declaration — otherwise a fleet
+    /// repository that moves its content CI could not be corrected without shipping a platform
+    /// release, which is the freeze this whole mechanism exists to avoid.
+    /// </summary>
+    [Fact]
+    public void AConfiguredOverrideOutranksThePlatformDeclaration()
+    {
+        var overridden = GitHubWebhookProcessor.ContentWorkflowFor(
+            new RepoIdentity("Systemorph", "Memex"),
+            [new GitHubContentWorkflow
+            {
+                Repository = "Systemorph/Memex", Path = ".github/workflows/content-ci.yml",
+            }]);
+        Assert.Equal(".github/workflows/content-ci.yml", overridden.Path);
+        Assert.Equal(GitHubWebhookProcessor.ContentWorkflowSource.Configured, overridden.Source);
+    }
+
     // ── the composition is the processor's, not this file's ──────────────────
 
     /// <summary>
@@ -282,6 +373,13 @@ public class GreenBuildPublishSignalTest
         // The conclusion gate is the fourth leg of the same decision and is asserted end-to-end by the
         // mesh suite; pinned here too because losing it would publish RED builds, silently.
         Assert.Contains("\"success\"", body, StringComparison.Ordinal);
+        // 🚨 …and the refusal must still REPORT. A fail-closed gate whose refusal is invisible is
+        // the MeshWeaver.Plugins#1194 shape, and dropping this call would leave every assertion in
+        // this file green while a synced repository froze silently (#3978, design question 2).
+        Assert.Contains("ReportRefusedWorkflow(", body, StringComparison.Ordinal);
+        // The record must carry the path it was ADMITTED on: that is what lets a later refusal tell
+        // "never seen this repository's content CI" from "some other workflow finished green".
+        Assert.Contains("WorkflowPath = workflowPath", body, StringComparison.Ordinal);
     }
 
     /// <summary>The braces-balanced body of the method whose signature line is given.</summary>

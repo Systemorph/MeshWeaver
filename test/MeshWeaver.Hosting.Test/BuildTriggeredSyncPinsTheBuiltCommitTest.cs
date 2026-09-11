@@ -195,15 +195,123 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
         await noFetch;
     }
 
+    /// <summary>
+    /// 🚨 <b>The POSITIVE control for #3978, and it needs all THREE trigger kinds to be one.</b>
+    ///
+    /// <para>Keying the publish signal on the repository's content CI is only safe while every way
+    /// that CI can START still publishes. Narrowing the admitted triggers is the mistake this fleet
+    /// has ALREADY made, in the opposite direction: on 2026-09-02 the test was <c>event == "push"</c>
+    /// alone, <c>MeshWeaver.Reinsurance</c>'s three green <c>repository_dispatch</c> runs at
+    /// <c>636ebd5</c> were all discarded, and <c>Underwriting/_GitSync</c> sat <b>38 hours</b> behind
+    /// a merged main with every delivery answering 200 OK and nothing reporting a fault
+    /// (MeshWeaver.Plugins#1194). A content-CI run reaches this webhook as <c>push</c> when the
+    /// branch moves, as <c>repository_dispatch</c> when a platform release re-verifies the satellite
+    /// with no commit to push, and as <c>schedule</c> on its own cron — so all three are asserted,
+    /// separately, at their own shas.</para>
+    ///
+    /// <para><b>And it carries its own negative control, in the same mesh.</b> The fourth delivery
+    /// is a green <c>schedule</c> run of the PR-updater — the live #3978 shape — which must record
+    /// nothing and fetch nothing. An absence assertion goes vacuous the moment the setup around it
+    /// stops working, so the three deliveries that DID import are what stop
+    /// <c>NotEmit</c> from passing on a mesh where no import could have happened at all.</para>
+    /// </summary>
+    // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a
+    // constant, and the inner waits below already carry the adaptive bound.
+    [Fact(Timeout = 120_000)]
+    public async Task AGreenContentCiRun_Publishes_UnderEveryAdmittedTriggerKind()
+    {
+        var space = "GbTrig" + Guid.NewGuid().ToString("N")[..8];
+        await NodeFactory.CreateNode(new MeshNode(space)
+        {
+            NodeType = "Space",
+            Name = "Every admitted trigger",
+            State = MeshNodeState.Active,
+            Content = new Space(),
+        }).Timeout(TestTimeouts.Convergence).Await();
+
+        var configNode = await Sync
+            .SaveConfig(space, RepoUrl, "main", null,
+                createBranchIfMissing: false, createRepoIfMissing: false)
+            .Timeout(TestTimeouts.Convergence).Await();
+        var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
+        await Credentials
+            .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        // One distinct sha per trigger kind, so no delivery can be satisfied by another's import and
+        // #3945's "already attempted these exact bytes" skip cannot mask a dropped signal.
+        var shas = new (string Trigger, string Sha, string Why)[]
+        {
+            ("push", "1111111111111111111111111111111111111111",
+                "the branch moved and its content CI ran — the original case"),
+            ("repository_dispatch", "2222222222222222222222222222222222222222",
+                "a platform release re-verifies the satellite with no commit to push — the exact "
+                + "signal MeshWeaver.Plugins#1194 discarded for 38 hours"),
+            ("schedule", "3333333333333333333333333333333333333333",
+                "the content CI's own cron run, which only ever exists on the default branch"),
+        };
+
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        foreach (var (trigger, sha, why) in shas)
+        {
+            // Arm the observation BEFORE the delivery: the fetch happens on a background activity.
+            var fetched = repoClient.FetchedRefs.Where(r => r == sha)
+                .Should().Within(TestTimeouts.Convergence * 2)
+                .Emit($"a green content-CI run started by '{trigger}' is a publish signal — {why}");
+
+            // The webhook request is ANONYMOUS; drop every ambient identity so the processor's own
+            // System impersonation is what carries the lookups and the write.
+            accessService.ClearHostIdentity();
+            accessService.SetHostIdentity(null);
+            accessService.SetContext(null);
+            int triggered;
+            try
+            {
+                triggered = await Webhooks
+                    .Process("workflow_run", GreenBuildPayload(sha, trigger: trigger))
+                    .Timeout(TestTimeouts.Convergence).Await();
+            }
+            finally
+            {
+                accessService.SetHostIdentity(
+                    new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
+            }
+
+            triggered.Should().Be(1,
+                $"the one sync source of this repository must be selected by a green content-CI run "
+                + $"started by '{trigger}' — {why}");
+            (await fetched).Should().Be(sha,
+                $"the '{trigger}' delivery must import the tree ITS run proved");
+            Output.WriteLine($"{trigger} @ {sha[..8]} → triggered={triggered}, fetched={sha[..8]}");
+        }
+
+        // ── the negative half, on a mesh the three deliveries above have proven can import ──
+        const string UpdaterSha = "4444444444444444444444444444444444444444";
+        var neverFetched = repoClient.FetchedRefs.Where(r => r == UpdaterSha)
+            .Should().NotEmit(within: TestTimeouts.Quick);
+
+        var refused = await Webhooks
+            .Process("workflow_run", GreenBuildPayload(
+                UpdaterSha, ".github/workflows/auto-update-green-prs.yml", trigger: "schedule"))
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        refused.Should().Be(0,
+            "a green scheduled PR updater checks out nothing and builds nothing; the SAME trigger "
+            + "that just published a real content-CI run must not publish this one — the trigger "
+            + "says how a workflow started, never what it proved (#3978)");
+        await neverFetched;
+    }
+
     private static JsonElement GreenBuildPayload(
         string headSha,
-        string workflowPath = ".github/workflows/ci.yml") => JsonDocument.Parse($$"""
+        string workflowPath = ".github/workflows/ci.yml",
+        string trigger = "push") => JsonDocument.Parse($$"""
         {
           "action": "completed",
           "repository": { "full_name": "{{RepoFullName}}", "default_branch": "main" },
           "workflow_run": {
             "conclusion": "success", "head_branch": "main", "head_sha": "{{headSha}}",
-            "id": 34061098155, "run_number": 2026, "name": "Content CI", "event": "push",
+            "id": 34061098155, "run_number": 2026, "name": "Content CI", "event": "{{trigger}}",
             "path": "{{workflowPath}}",
             "updated_at": "2026-09-06T22:38:18Z"
           }

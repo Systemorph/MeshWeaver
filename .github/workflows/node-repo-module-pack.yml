@@ -1983,6 +1983,12 @@ jobs:
               # the image in hand it MEASURES what that host ships instead of reading the repo's
               # declared src/platform-shipped.txt (MeshWeaver#3732).
               own="$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src" ${PLATFORM_APP:+"$PLATFORM_APP"})"
+              # WHICH WITNESS ANSWERED, stated once. 🚨 NOT `${PLATFORM_APP:+measured off $PLATFORM_APP}${PLATFORM_APP:-declared by …}`:
+              # `:-` yields the VALUE when the variable is set, so the measured branch printed the path TWICE
+              # ("measured off /tmp/app/tmp/app") — and that is the branch that matters, because it is the one
+              # that says the answer came from the image rather than from a hand-maintained list.
+              witness="declared by src/platform-shipped.txt"
+              [ -z "${PLATFORM_APP:-}" ] || witness="measured off $PLATFORM_APP"
               while IFS= read -r name; do
                 { [ -n "$name" ] && [ "$name" != "$MODULE" ]; } || continue
                 dir="$ws/$name"
@@ -2000,7 +2006,7 @@ jobs:
                   printf '%s\n%s\n' --with "$name.dll" >> "$packargs"
                   echo "closure: $name.dll RIDES — module-owned (its source is in this repo's src/, so it is nowhere in the image's /app)"
                 else
-                  echo "closure: $name.dll does NOT ride — the platform ships it (${PLATFORM_APP:+measured off $PLATFORM_APP}${PLATFORM_APP:-declared by src/platform-shipped.txt}); bundling it would land a same-identity duplicate beside the host's own copy"
+                  echo "closure: $name.dll does NOT ride — the platform ships it ($witness); bundling it would land a same-identity duplicate beside the host's own copy"
                 fi
               done < "$closure_file"
               # The PRIVATE CLOSURE rides: module-libs.txt is the builder-written provenance —

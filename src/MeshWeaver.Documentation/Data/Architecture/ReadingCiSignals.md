@@ -468,6 +468,39 @@ this reason (MeshWeaver#3228), with the embedded shellcheck/pyflakes integration
 gate is about structure only; `check-workflow-timeouts.py` and `check-workflow-shell.py` both stay
 green on the defect, which is the measurement that says the new check is not redundant.
 
+### 🚨 A red with ZERO STEPS in ~2 s is an org BUDGET refusal wearing a workflow-defect costume
+
+The shape above has a twin that is not a defect at all, and the two are easy to confuse because both
+produce a red that names nothing. **When the organisation's GitHub Actions spending limit is
+reached, GitHub refuses to START jobs**, and the refusal is dressed as a failure:
+
+| Tell | What you see |
+|---|---|
+| Duration | jobs fail in **~2 seconds** |
+| Steps | the job has **zero steps** — not a failed step, none at all |
+| Matrix | matrix job names appear **unexpanded** (the literal `${{ matrix.… }}`, because nothing evaluated them) |
+| Logs | `GET /actions/jobs/<id>/logs` answers **`BlobNotFound`** — there is no log, because nothing ran |
+| Scope | **several repos at once, in one window**, while a repo whose runs started before the window keeps going green |
+
+**The only place the real reason appears is the job's ANNOTATION**, and nothing in the run's own JSON
+says it:
+
+```bash
+gh api "repos/Systemorph/<repo>/check-runs/<check-run-id>/annotations" \
+  --jq '.[] | "\(.annotation_level): \(.message)"'
+# failure: The job was not started because an Actions budget is preventing further use.
+```
+
+Measured 2026-09-11 across three repos inside one 18-minute window, with core unaffected.
+
+🚨 **Re-running IS the correct action here, once the window has passed** — and that is the one place
+on this page where that is true. Everywhere else a re-run without a code change hides a race
+(AGENTS.md → "NEVER re-run a test unless code under test has changed"). This is not a flake and not a
+race: it is a **refused gate**, a job that never executed, so there is no observation to preserve and
+nothing was measured that a re-run could paper over. The distinction is the same one this whole page
+turns on — *"it did not run"* and *"it ran and failed"* are different claims — so **read the
+annotation before you re-run**, and if it names no budget, treat the red as real.
+
 ### A verdict about an unpinned checkout is a function of wall-clock time
 
 The cross-repo gates check core out with **no `ref:`**. Two people therefore measured the same
