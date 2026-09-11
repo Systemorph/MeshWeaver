@@ -116,6 +116,27 @@ public class RetiredContextCollectedSignalTest
         started.Should().BeTrue("the next start after a completed unload is not delayed");
     }
 
+    [Fact]
+    public async Task ATypeSerializedThroughSystemTextJson_IsCollectedAtTeardown_NotWhenStjsTimerFires()
+    {
+        // The measured holder (gcroot of a FutuRe teardown, Plugins#1605): STJ's static member-accessor
+        // cache keeps a DynamicMethod whose scope holds the collectible type, for ~1 s after last use.
+        JsonMemberAccessorCacheEviction.IsAvailable.Should().BeTrue(
+            "System.Text.Json must still publish its MetadataUpdateHandler.ClearCache hook — without it "
+            + "the eviction silently stops and every serialised NodeType outlives its teardown again");
+
+        var unloads = new CollectibleContextUnloads();
+        using var cache = NewCache(unloads);
+        var weakContext = LoadSerializeAndRetire(cache, "Json1605");
+
+        var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
+
+        outcome.Collected.Should().BeTrue(
+            "a context whose types went through System.Text.Json must be collectable the moment its "
+            + $"unload is requested — not when STJ's 1 s eviction timer happens to fire ({outcome})");
+        weakContext.IsAlive.Should().BeFalse("and it must actually be gone before the next start");
+    }
+
     private static CompilationCacheService NewCache(CollectibleContextUnloads unloads) =>
         new(Options.Create(new CompilationCacheOptions { EnableDiskCache = false }),
             NullLogger<CompilationCacheService>.Instance, unloads);
@@ -128,6 +149,21 @@ public class RetiredContextCollectedSignalTest
         var assembly = cache.LoadAssemblyFromBytes(nodeName, Compile(), pdbBytes: null);
         var widget = Activator.CreateInstance(assembly.GetType("Dyn1605.Widget")!);
         widget!.GetType().GetProperty("Value")!.GetValue(widget).Should().Be(42);
+        var weak = new WeakReference(cache.GetOrCreateLoadContext(nodeName));
+        cache.UnloadContext(nodeName);
+        return weak;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference LoadSerializeAndRetire(CompilationCacheService cache, string nodeName)
+    {
+        var assembly = cache.LoadAssemblyFromBytes(nodeName, Compile(), pdbBytes: null);
+        var type = assembly.GetType("Dyn1605.Widget")!;
+        var widget = Activator.CreateInstance(type)!;
+        var json = System.Text.Json.JsonSerializer.Serialize(widget, type, new System.Text.Json.JsonSerializerOptions());
+        json.Should().Contain("42");
+        System.Text.Json.JsonSerializer.Deserialize(json, type, new System.Text.Json.JsonSerializerOptions())
+            .Should().NotBeNull();
         var weak = new WeakReference(cache.GetOrCreateLoadContext(nodeName));
         cache.UnloadContext(nodeName);
         return weak;

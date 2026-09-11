@@ -647,6 +647,11 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // Autofac does this automatically for BeginLoadContextLifetimeScope; we manage the context
         // by hand, so we mirror it. Static handler ⇒ no self-reference that would defeat collection.
         Unloading += ReflectionCacheEviction.EvictFor;
+        // …and System.Text.Json's process-static member-accessor cache, the one strong root of the
+        // contexts a FutuRe teardown could not collect (Plugins#1605, gcroot): without this, a context
+        // whose types were serialised is freed whenever STJ's 1 s eviction timer fires — while the NEXT
+        // mesh is already starting. See JsonMemberAccessorCacheEviction.
+        Unloading += JsonMemberAccessorCacheEviction.EvictFor;
     }
 
     /// <summary>
