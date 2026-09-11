@@ -711,6 +711,21 @@ download loop:**
 | any | **unknown** | **Skip**, and the reason SAYS the identity could not be checked. Landing could never turn "the registry states nothing" into evidence — it would state nothing next time too — so answering Land there re-downloads every module on every reconcile, forever, against any registry that predates the field. |
 | known | known, equal | **Skip** — the genuine no-op, with the framework named. |
 
+#### Publication arrival order is not version order
+
+The registry can receive one module from both the module repository's publication and a slower core
+CD that baked an earlier repository commit. Both uploads are valid warehouse stock, but the one that
+arrives last is not necessarily the newest. On 2026-09-11 `MeshWeaver.Mail.MicrosoftGraph` 1.7.0
+landed at 02:49Z; core CD then delivered 1.6.1 at 03:00Z, the old last-writer rule moved the head to
+1.6.1, and the next restart silently un-shipped the release (#3996).
+
+`ShelveModule` therefore applies the same no-unattended-rollback rule as the consumer decision: a
+known older version may land its content-addressed generation, but it does not replace a newer head
+whose bytes are present and link on this platform. The best older generation remains available as
+the fallback. A higher version string does not make a broken head immortal: if its entry assembly is
+missing or its bytes do not link, the valid incoming generation still replaces it. Unknown versions
+retain the legacy behaviour because an absent version is no evidence of an ordering.
+
 The remaining blind spot (a registry that states no identity) is closed **where it is created**, not
 by churning consumers: a bundle that cannot say what it was built against must not be publishable.
 That is #3211, and it matters more than it sounds — measured on MeshWeaver.Plugins run 33773265959

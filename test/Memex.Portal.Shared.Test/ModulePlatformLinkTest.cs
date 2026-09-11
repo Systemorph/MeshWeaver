@@ -155,6 +155,41 @@ public class ModulePlatformLinkTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 #3996 — an older shelf-only upload is retained only when it is a useful fallback.
+    /// A numerically newer fallback that this platform cannot load must not displace the working
+    /// one: fallback ordering is loadability first, version second, just like activation itself.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderUnloadablePublish_DoesNotReplaceTheWorkingFallback()
+    {
+        const string name = "MeshWeaver.Test.OrderedShelf";
+        var oldLoadable = ModuleBuiltAgainstThisPlatform(name);
+        var newestLoadable = ModuleBuiltAgainstThisPlatform(name);
+        var middleUnloadable = ModuleBuiltAgainstAFuturePlatform(name);
+
+        await landing.ShelveModule(
+                name, [(name + ".dll", oldLoadable)], version: "1.5.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        await landing.ShelveModule(
+                name, [(name + ".dll", newestLoadable)], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", middleUnloadable)], version: "1.6.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.False(outcome.SelectedAsHead);
+        Assert.True(outcome.Held);
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("1.5.0", head.PreviousVersion);
+        var fallback = ModuleActivationBoot.PreviousGeneration(head);
+        Assert.NotNull(fallback);
+        Assert.True(ModulePlatformLink.Check(
+            ModuleActivationBoot.LandedDllPath(root, fallback),
+            ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory)).MayLoad);
+    }
+
+    /// <summary>
     /// 🚨 <b>The third state, and it fails CLOSED.</b> Bytes that are not a readable managed
     /// assembly answer <see cref="ModuleLinkState.Indeterminate"/> — "I could not determine
     /// whether this loads" — and that is NEVER folded into "it loads". A gate whose unknown reads
