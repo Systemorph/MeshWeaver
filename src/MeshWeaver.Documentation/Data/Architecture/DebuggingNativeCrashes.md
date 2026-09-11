@@ -1796,6 +1796,20 @@ The progression, each step measured the same way:
 
 The 12 that remain are reported and named, never waited on.
 
+**The residual has no managed root, and the cutoff is measured, not guessed.**
+- A second heap dump taken *inside* the drain, with both fixes active, shows **no** non-weak root on either
+  still-unloading LoaderAllocator. None is a stack root, a strong or pinned handle, a dependent handle, or a
+  finalizer-queue root.
+- Letting the drain run **20** no-progress rounds instead of 3 then collected **88** teardowns: 32 with nothing
+  to wait for, 56 in 2 rounds. It left **4** retained after 20 rounds. **No teardown was collected at any round
+  from 3 to 20.**
+- So three rounds is right: raising the number frees nothing.
+
+What holds the last 4–9 % is outside the managed heap. The most likely candidates are a native
+LoaderAllocator-to-LoaderAllocator reference between NodeType contexts (one context's types used by another's)
+or a runtime-internal reference, and `gcroot` cannot see either. It is left to the retention work of
+#4017/#4029, and the teardown reports each such case by name.
+
 **For the retention work (#4017/#4029).** On a long-lived portal, `MeshContentTypeRegistry`'s discriminator
 claims hold `RuntimeType`s of superseded NodeType generations for as long as the mesh lives. In a test that
 registry dies with its mesh, so the fix above is enough; on a portal it is a retention candidate of exactly
