@@ -105,37 +105,56 @@ and how to reconcile it in the same session. Do not re-derive that list here —
    `Restart`; `scale --replicas=0` → `Suspend`; `helm upgrade` → `HelmRelease deploy` (today) /
    the record pin + `Roll`; "make the cluster match the record" → `Reconcile`; "what is drifting?"
    → `Audit`; `patch pvc … storage` → `volumes[].size` on the record + `Reconcile` (the operator's
-   `hosting-pv-resize`, which never shrinks and reads the capacity back). Use the action. The
-   kubectl line is what the operator runs for you.
+   `hosting-pv-resize`, which never shrinks and reads the capacity back); `set env deploy/<name> <KEY>-` → `retiredBy` on the record's
+   `inlineEnv` entry + `Reconcile` (the operator's `hosting-inline-env-retire`). Use the action.
+   The kubectl line is what the operator runs for you.
 2. **Is it a read the API does not answer yet?** (the three above) Take it read-only, name it as
    break-glass in what you write down, and file the gap against the Hosting package rather than
    leaving the recipe as the procedure.
 3. **Is it a measurement in a war story?** Leave it — it is the reason the rule on the page exists.
    Do not run it to "check"; ask the API question the page's rule now points at.
 
-### The one WRITE with no action kind: retiring an inline `env:` entry
+### Retiring an inline `env:` entry — `Reconcile`, driven by the record's `retiredBy`
 
-Rule 1 has exactly one known miss, and it is a write rather than a read. **No repository change and
-no `InstanceAction` can remove an inline `env:` entry from a Deployment** — a break-glass
-`kubectl set env deploy/<name> <KEY>-` still can, and is the whole point: it is the one routine act
-with no lane back into the API. The chart never rendered one (it emits four unconditional
-portal entries — the `DOTNET_Dbg*` crash-dump set — plus `AZURE_CLIENT_ID` when
+Until 2026-09-11 this was the one routine WRITE with no action kind. No repository change and no
+`InstanceAction` could remove an inline `env:` entry from a Deployment; only a break-glass
+`kubectl set env deploy/<name> <KEY>-` could. The chart never rendered one (it emits four
+unconditional portal entries — the `DOTNET_Dbg*` crash-dump set — plus `AZURE_CLIENT_ID` when
 `selfUpdate.azureClientId` is set, and two per gate sidecar; every name is fixed and no values key
-extends the list), the record's `inlineEnv` is
-declarative by contract — *dropping an entry does not delete one* — and `Reconcile`'s only
-configuration remedy, `ReapplyRecord`, is a `helm upgrade`, whose three-way merge removes only what
-helm previously owned. `Audit` detects the drift precisely, under `envLiveOnly` and
-`plainSecretEntries`, so the finding is reported and no remedy can act on it.
+extends the list), the record's `inlineEnv` is declarative by contract — *dropping an entry does not
+delete one* — and `ReapplyRecord` is a `helm upgrade`, whose three-way merge removes only what helm
+previously owned. `Audit` detected the drift precisely, under `envLiveOnly` and
+`plainSecretEntries`, and no remedy could act on it.
 
-The record already carries the intent: `InlineEnvOverride.RetiredBy` names what retires an entry,
-and no code reads it. **The gap is a `RetireInlineEnv` remedy** (filed as
-[MeshWeaver.Plugins#1593](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1593)) that removes the keys a record marks
-retired, ordered after `ReapplyRecord` so the key has a declared home before the shadow goes — the
-two-step in
-[DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Retiring a shadow takes two steps"*,
-with the equality precondition that page states. Until it exists, `kubectl set env deploy/<name>
-<KEY>-` is break-glass and the live worked example (MeshWeaver#3201, a plugin-registry credential in
-plaintext on two portals' pod specs) stays open on the instrument, not on the analysis.
+**The lane is now `Reconcile`** ([MeshWeaver.Plugins#1593](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1593)). Its `RetireInlineEnv` remedy reads the one statement the
+record could always make and nothing read — `inlineEnv[].retiredBy` — and removes exactly the
+entries that carry it:
+
+1. **Mark the entry retired on the record**: `retiredBy` names the issue that ends it, `shadows`
+   names the `envFrom` source it falls through to, and a credential also needs
+   `agreesWithShadowed: true`. The plan REFUSES, naming the entry, a sole source (`shadows` blank —
+   removal would blank the key), a credential whose equality is not recorded `true`, and any entry
+   the record says disagrees with its shadow. One refused entry refuses the whole `Reconcile`.
+2. **File a `Reconcile`.** The retirement runs after `ReapplyRecord` — so the key's declared home is
+   on the pod first — and before any roll. The operator's `hosting-inline-env-retire` refuses while
+   a rollout is in progress; walks the portal container's `envFrom` in order and requires the LAST
+   source carrying the key to be the one the record names; re-measures in-cluster that the inline
+   value and that source are **EQUAL** (lengths and a verdict, never a value); and only then removes
+   the key from **every** container that carries it, the gate sidecars included, in one patch
+   guarded on the Deployment's `resourceVersion`. The run waits for the rollout and ends in the
+   re-audit and **Verify one generation**, like every `Reconcile`.
+3. **Drop the entry from the record** once the closing audit no longer lists it. Until then the
+   record still describes a shadow, and `RotateRegistryKey` refuses while the record lists an inline
+   entry for any key the registry key lands as; `hosting-kv-rotate` refuses the same thing
+   in-cluster, before it mints.
+
+🚨 **It works only once the control instance has BOTH halves**: an operator image that carries
+`hosting-inline-env-retire` (the operator image is control-instance configuration, moved by a
+`helm-release deploy`, not by any record) and the Hosting module version that plans the remedy
+(1.17). On an older operator image the step fails by name (`command not found`) after the re-apply
+and nothing is removed. And it retires a shadow; it does **not** remediate a disclosure — a
+credential that sat in plaintext in a Deployment spec still needs rotating at its issuer, which is a
+separate act (MeshWeaver#3201 is the worked example).
 
 ## Related rules decided the same day
 

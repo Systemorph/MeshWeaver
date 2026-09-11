@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # hosting-kv-rotate --vault <name> --prefix <prefix> --namespace <ns> --synced-secret <k8s secret> [--key <config key>]
+#                   [--deployment memex-portal-deployment]
 #
 # Rotate this instance's plugin-registry key: mint a fresh `mwi_` key, put it in Key Vault, and
 # report ONLY ITS HASH back to the mesh. The registry adopts the hash (the control plane reacts to
@@ -19,7 +20,7 @@
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-kv-rotate"
-vault="" prefix="" namespace="" synced="" key="PluginCatalog__RegistryToken"
+vault="" prefix="" namespace="" synced="" key="PluginCatalog__RegistryToken" deployment="memex-portal-deployment"
 while [ $# -gt 0 ]; do
   case "$1" in
     --vault)         vault="${2:-}";     shift 2 ;;
@@ -27,6 +28,7 @@ while [ $# -gt 0 ]; do
     --namespace)     namespace="${2:-}"; shift 2 ;;
     --synced-secret) synced="${2:-}";    shift 2 ;;
     --key)           key="${2:-}";       shift 2 ;;
+    --deployment)    deployment="${2:-}"; shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -37,6 +39,29 @@ hosting::safe_name vault "$vault"
 hosting::safe_name namespace "$namespace"
 hosting::safe_name synced-secret "$synced"
 [ -z "$prefix" ] || hosting::safe_name prefix "$prefix"
+hosting::safe_name key "$key"
+hosting::safe_name deployment "$deployment"
+
+# 🚨 REFUSE UNDER AN INLINE SHADOW — before anything is minted (MeshWeaver#3201, Plugins#1593).
+# An inline `env:` entry outranks every envFrom. With one for the key on the pod spec, this
+# rotation would land the new key in the vault AND in the synced Secret — the wait below goes
+# green — while the restarted pods keep presenting the OLD one; and the registry deletes the old
+# key's index entry the moment it adopts the new hash (MeshWeaverInstanceService.AdoptKeyHash →
+# DeleteIndex), so every read that presents it answers 401. A 401 storm behind a green rotation.
+# The Hosting plan refuses the same thing from the RECORD; this is the in-cluster half, because a
+# record is a snapshot and the Deployment is the fact. Names only — a value is never read out.
+# A dry run narrates the check and needs no cluster, like every other step of a rehearsal here.
+if hosting::dry; then
+  hosting::log "(dry run) would refuse if any container of deployment/${deployment} in ${namespace} sets ${key} inline"
+else
+  command -v jq >/dev/null 2>&1 \
+    || hosting::die "jq is not installed in this image — the inline-shadow check reads the Deployment as JSON"
+  shadowing="$(hosting::read kubectl -n "$namespace" get deployment "$deployment" -o json 2>/dev/null \
+    | jq -r --arg k "$key" '[.spec.template.spec.containers[] | select(any(.env[]?; .name == $k)) | .name] | join(", ")')" \
+    || hosting::die "could not read deployment/${deployment} in ${namespace} — the rotation restarts it, and whether it sets ${key} inline decides whether the new key is ever read"
+  [ -z "$shadowing" ] \
+    || hosting::die "${key} is set INLINE on ${shadowing} of deployment/${deployment} — an inline env: entry outranks every envFrom, so the new key would land in the vault and the synced Secret while the pods keep presenting the OLD one, which the registry stops accepting the moment it adopts the new hash: a 401 storm behind a green rotation. Retire the entry first (Reconcile — its RetireInlineEnv remedy), drop it from the record, then rotate. Nothing was minted."
+fi
 
 # The vault object name follows the SecretProviderClass convention: <prefix><Section>-<Key>, every
 # `__` becoming `-` (HelmValues.VaultSecretName). For PluginCatalog__RegistryToken that is
