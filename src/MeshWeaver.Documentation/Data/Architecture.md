@@ -436,6 +436,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Licensing
 
 - **Start here:** [Dependency Licensing](DependencyLicensing) — Apache-2.0/MIT compatible only; the CI gate that enforces it
+- [Dependency Major Upgrades](DependencyMajorUpgrades) — the four things a green `-warnaserror` build cannot see at a major boundary (in-mesh source, authored content, the satellites that import this repo's package list, and behaviour behind an unchanged signature), the differential method that replaces them, and the ledger of boundaries actually crossed
 
 ## Getting started
 
