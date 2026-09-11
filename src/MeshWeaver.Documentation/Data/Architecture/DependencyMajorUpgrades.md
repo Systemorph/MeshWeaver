@@ -59,6 +59,15 @@ curl -sS -w "HTTP=%{http_code} BYTES=%{size_download}\n" -o new.nuspec \
   https://api.nuget.org/v3-flatcontainer/<id>/<new>/<id>.nuspec
 ```
 
+🚨 **The `Dependency licences` gate is a second opinion, not the first — and its count is a
+DENOMINATOR you have to read.** `check-licenses.py` resolves licences from the **restored** dependency
+graph in the local NuGet cache, so the "N shipping packages checked" it prints is however much *this
+worktree happened to restore*. Run it after a full solution restore and it reports 257 here; run it
+in a worktree that restored three projects and it reports a fraction of that and still says
+"passed". Quote the number with the claim, and treat a small one as a partial sweep rather than a
+clean one. It is also no substitute for reading the two nuspecs yourself: the gate answers "is every
+restored package's licence acceptable", never "did THIS package's licence change at THIS boundary".
+
 ### 3. Diff the real public API, don't read the release notes alone
 
 Release notes are a summary written by someone who was not thinking about this codebase — and they
