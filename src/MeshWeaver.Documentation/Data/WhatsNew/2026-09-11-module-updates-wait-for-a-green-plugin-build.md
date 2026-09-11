@@ -14,15 +14,16 @@ while the rest of the same build was still running: the other modules' tests, th
 tests, the compile check of every node type and the tests shipped inside the content. When one of
 those failed later, the update had already been offered to every portal.
 
-The platform now provides a separate publication step that runs only after every validation job of
-the build has passed. The build prepares each module and sets it aside, and if anything failed, was
+The platform now provides a separate publication step that runs only after every validation job
+that covers the module code has passed. The build prepares each module and sets it aside, and if anything failed, was
 skipped or was cancelled, the registry is left untouched and your portal keeps the version it has.
 The plugin catalog's own build switches to this step in a paired change, and the rule takes effect
 for its modules from that point on.
 
-One consequence is visible: while the plugin catalog's build is red, none of its modules publishes
-a new version, so an update can arrive later than before. What does arrive has passed the whole
-build.
+One consequence is visible: while one of those validation jobs is red, none of the catalog's modules
+publishes a new version, so an update can arrive later than before. What does arrive has passed
+every one of them. Checks that cover no module code, such as the mobile and web clients, are not
+part of that verdict.
 
 **Not covered yet.** Modules published by other repositories (the social-media modules, for
 example) still reach the registry straight after their own tests, and the platform's own sealed

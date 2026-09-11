@@ -177,11 +177,12 @@ staged successfully. How each non-positive verdict is refused:
 | missing | a validation job absent from `needs:` is caught statically on the pull request (`check-callers`, below) and at run time (`caller-gate`); a name in `required-jobs` that is not in `needs:` is refused by the verdict step as "NOT among this job's needs" |
 | unknown | a needs entry with no readable `result` is refused by the verdict step — it never resolves to "passed" |
 
-The consequence has to be said out loud: **while Plugins `main` is red, no module version reaches
-the registry** — including the release-follow republish that stops portals reading
-`FrameworkDeclined` after a platform release (#2088). That is the point of the change (a red main
-must be invisible to portals, #3842), and it means a red `main` now delays module adoption rather
-than serving unvalidated bytes.
+The consequence has to be said out loud: **while any job in `publish-modules`' verdict is red on
+Plugins `main`, no module version reaches the registry** — including the release-follow republish
+that stops portals reading `FrameworkDeclined` after a platform release (#2088). That is the point of
+the change (a red main must be invisible to portals, #3842), and it means such a red now delays
+module adoption rather than serving unvalidated bytes. A red in a job declared unrelated does NOT
+stop the hand-over — see "What this does NOT solve".
 
 ## Checked before merge: `check-callers`
 
