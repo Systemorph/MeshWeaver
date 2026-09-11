@@ -176,6 +176,36 @@ internal static class NodeTypeBatchBake
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IReadOnlyCollection<string> pendingTypePaths,
         ILogger? logger)
+        => ResolveSources(
+            meshService, accessService, definitions, pendingTypePaths, logger, discovery: null);
+
+    /// <summary>
+    /// As <see cref="ResolveSources(IMeshService, AccessService, IReadOnlyDictionary{string, NodeTypeDefinition}, IReadOnlyCollection{string}, ILogger)"/>,
+    /// additionally PUBLISHING each pass's chunk timing into <paramref name="discovery"/> so
+    /// <c>/health</c> can carry #3704's discriminator instead of leaving it in a log line nobody is
+    /// authorised to read.
+    ///
+    /// <para>🚨 A separate OVERLOAD, deliberately not an extra (even optional) parameter on the
+    /// existing one: adding a parameter REPLACES a method's signature, so every assembly already
+    /// compiled against the 5-argument form calls a method this build no longer has. That is a
+    /// binary break for module bundles built on a previous platform, and the repo's
+    /// <c>Public surface (binary compatibility)</c> gate refuses it — the same trap
+    /// <c>ContentDegradation</c>'s <c>Discriminator</c> property documents.</para>
+    /// </summary>
+    /// <param name="meshService">The mesh service the discovery queries run against.</param>
+    /// <param name="accessService">Access service, for the system-scoped impersonation.</param>
+    /// <param name="definitions">Every type's definition, keyed by type path.</param>
+    /// <param name="pendingTypePaths">The types this batch is discovering sources for.</param>
+    /// <param name="logger">Logger, or <c>null</c>.</param>
+    /// <param name="discovery">Where each pass's timing is published, or <c>null</c> to publish none.</param>
+    /// <returns>Per-type source lists keyed by type path; missing key = no sources resolved.</returns>
+    public static IObservable<ImmutableDictionary<string, IReadOnlyList<MeshNode>>> ResolveSources(
+        IMeshService meshService,
+        AccessService? accessService,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyCollection<string> pendingTypePaths,
+        ILogger? logger,
+        SourceDiscoveryRegistry? discovery)
     {
         // Expand every pending type's Source + Test queries — the SAME union the compiler's own
         // snapshot consumes (NodeSources / SnapshotSources), so the batch compiles the same set.
@@ -233,7 +263,7 @@ internal static class NodeTypeBatchBake
                 {
                     var globalFetch = needsGlobalFetch
                         ? GlobalCodeQueries
-                            .Select(q => RunQuery(meshService, q, logger))
+                            .Select(q => RunQuery(meshService, q, logger, discovery))
                             .Concat()
                             .Aggregate(
                                 ImmutableDictionary<string, MeshNode>.Empty
@@ -247,7 +277,8 @@ internal static class NodeTypeBatchBake
                     var exoticFetch = exoticQueries.Count == 0
                         ? Observable.Return(ImmutableDictionary<string, ImmutableDictionary<string, MeshNode>>.Empty)
                         : exoticQueries
-                            .Select(q => RunQuery(meshService, q, logger).Select(nodes => (Query: q, Nodes: nodes)))
+                            .Select(q => RunQuery(meshService, q, logger, discovery)
+                                .Select(nodes => (Query: q, Nodes: nodes)))
                             .Concat()
                             .ToList()
                             .Select(results => results.ToImmutableDictionary(
@@ -360,7 +391,8 @@ internal static class NodeTypeBatchBake
     /// regression). So a full page is a discovery FAILURE, never a result.</para>
     /// </summary>
     private static IObservable<ImmutableDictionary<string, MeshNode>> RunQuery(
-        IMeshService meshService, string query, ILogger? logger)
+        IMeshService meshService, string query, ILogger? logger,
+        SourceDiscoveryRegistry? discovery)
     {
         // Last `limit:` wins in QueryParser, so appending overrides an author-supplied one. That is
         // intended: a `limit:` inside a NodeType's source query truncates the set the compiler is
@@ -394,7 +426,7 @@ internal static class NodeTypeBatchBake
                     NodeCompileShaping.ApplyQueryChange)
                 .Throttle(QueryQuietWindow)
                 .Take(1)
-                .Do(nodes => chunks.Report(logger, bounded, nodes.Count, QueryQuietWindow))
+                .Do(nodes => chunks.Report(logger, bounded, nodes.Count, QueryQuietWindow, discovery))
                 .SelectMany(nodes => nodes.Count < SourceDiscoveryLimit
                     ? Observable.Return(nodes)
                     : Observable.Throw<ImmutableDictionary<string, MeshNode>>(
@@ -489,14 +521,25 @@ internal static class NodeTypeBatchBake
         }
 
         /// <summary>Prints the measurement, and says which way it points.</summary>
-        internal void Report(ILogger? logger, string query, int settled, TimeSpan window)
+        internal void Report(
+            ILogger? logger, string query, int settled, TimeSpan window,
+            SourceDiscoveryRegistry? discovery = null)
         {
-            if (logger is null)
-                return;
             var largestGapMs = Ms(largestGapTicks);
             var elapsedMs = Ms(clock() - startedTicks);
             var windowMs = window.TotalMilliseconds;
             var share = windowMs > 0 ? largestGapMs / windowMs * 100 : 0;
+
+            // 🚨 PUBLISHED BEFORE the logger short-circuit, and deliberately not behind it (#3704).
+            // The measurement's whole problem was that it existed only in a log, on a fleet where
+            // log access is break-glass; making the publication depend on a logger being present
+            // would rebuild that dependency one layer down.
+            discovery?.Record(new SourceDiscoveryPass(
+                query, settled, chunks, items, elapsedMs, largestGapMs, windowMs,
+                DateTimeOffset.UtcNow));
+
+            if (logger is null)
+                return;
             var shape = counts.Count < chunks
                 ? string.Join(",", counts) + $",… ({chunks - counts.Count} more)"
                 : string.Join(",", counts);
@@ -511,8 +554,9 @@ internal static class NodeTypeBatchBake
 
             // 🚨 The line that makes the next short read self-explaining. The threshold picks the
             // LEVEL only — every number above is printed unconditionally, so a reader never depends
-            // on where it sits.
-            if (share >= 50)
+            // on where it sits. It lives on SourceDiscoveryRegistry so the LOG line and the /health
+            // verdict can never drift apart and disagree about the same pass.
+            if (share >= SourceDiscoveryRegistry.GapShareWarnPercent)
                 logger.LogWarning(
                     "BatchBake: source discovery query '{Query}' had an inter-chunk gap of {GapMs}ms "
                     + "against a {WindowMs}ms completion window ({Share}%). A gap WIDER than that "

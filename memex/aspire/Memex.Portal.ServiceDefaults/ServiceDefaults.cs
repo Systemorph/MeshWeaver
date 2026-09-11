@@ -221,7 +221,26 @@ public static class ServiceDefaults
             // every write on it failed far from the cause. Degraded below DataVolume:MinimumFreeBytes
             // (1 GiB) on the volume of any configured store root — no probe tag, pulling the pod
             // frees nothing — naming the path, used and total.
-            .AddCheck(DataVolumeFreeSpace.HealthCheckName, new DataVolumeHealthCheck(builder.Configuration));
+            .AddCheck(DataVolumeFreeSpace.HealthCheckName, new DataVolumeHealthCheck(builder.Configuration))
+            // 🚨 The two bake verdicts that existed ONLY in a boot log (#3703, #3704). Both carry
+            // ProbeEndpoints.CensusTag and NO probe tag: a census publishes a NUMBER, so it prints
+            // on ProbeEndpoints.Health whatever its status, and can never restart a pod or take one
+            // out of rotation. Registered UNCONDITIONALLY, deliberately — nodetype_bake is behind
+            // `if (gateBake)` in the image host, which is right for a READINESS gate and would be
+            // exactly wrong here: an instrument that is absent precisely where pre-warming is off
+            // answers nothing about the deployments that most need it.
+            //
+            // #3703: which of this replica's NodeTypes the share already holds, and how many were
+            // classified from a record this process had itself just written — Degraded when there
+            // is no report at all, because a missing measurement may not read as a clean one.
+            .AddCheck<BakeReportHealthCheck>(
+                NodeTypeBakeReportRegistry.HealthCheckName, tags: [ProbeEndpoints.CensusTag])
+            // #3704: the batched source discovery's chunk count and largest inter-chunk gap against
+            // the completion window — the discriminator between "the completion rule ended the fold
+            // early" and "the providers returned less". Healthy when no pass ran (the normal state
+            // of a warm replica) and it still PRINTS, which is the whole point of the census tag.
+            .AddCheck<SourceDiscoveryHealthCheck>(
+                SourceDiscoveryRegistry.HealthCheckName, tags: [ProbeEndpoints.CensusTag]);
 
         return builder;
     }
@@ -231,6 +250,16 @@ public static class ServiceDefaults
     /// so nothing that reads the first word changes — then one line per check that is not
     /// Healthy, naming it and its description. Before this the endpoint answered the bare word
     /// <c>Degraded</c>, and finding WHICH check meant reading pod logs.
+    ///
+    /// <para>🚨 <b>…plus every check tagged <see cref="ProbeEndpoints.CensusTag"/>, Healthy or
+    /// not</b> (#3703, #3704). "Print only what is wrong" is right for a VERDICT and wrong for a
+    /// CENSUS, where the READING is the publication: a census check that answered
+    /// Healthy-and-silent would be byte-identical on the wire to one that was never registered, so
+    /// "I measured nothing" and "I measured, and it was clean" could not be told apart. That is
+    /// precisely the ambiguity that left both issues unanswerable while their numbers sat in a
+    /// boot log. The tag is opt-in and additive: no existing entry's behaviour changes, and the
+    /// aggregate status word is untouched — a clean census stays Healthy and does not paint the
+    /// replica Degraded.</para>
     /// </summary>
     internal static Task WriteHealthWithDetail(HttpContext context, HealthReport report)
     {
@@ -238,7 +267,7 @@ public static class ServiceDefaults
         var lines = new List<string> { report.Status.ToString() };
         foreach (var (name, entry) in report.Entries)
         {
-            if (entry.Status == HealthStatus.Healthy)
+            if (entry.Status == HealthStatus.Healthy && !entry.Tags.Contains(ProbeEndpoints.CensusTag))
                 continue;
             lines.Add($"{name}: {entry.Status}" + (string.IsNullOrEmpty(entry.Description) ? "" : $" — {entry.Description}"));
         }
