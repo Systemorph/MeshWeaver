@@ -11,6 +11,11 @@
 # 🚨 It reads the bearer the way curl does — from the `-K -` config on STDIN — and logs only the SLOT
 # the key matched, never the key: a stub that wrote keys to disk would be the leak the scripts it
 # tests exist to prevent. Every key in the fixtures is an obviously fake placeholder anyway.
+#
+# 🚨 PURE BASH (plus sed and sha256sum), deliberately: the suite also runs INSIDE the operator image
+# (hosting-operator.yml → "Operator image builds"), an Azure Linux base that ships no awk. The first
+# version of this stub used awk for every lookup, so in the image every lookup came back empty and
+# every key read as unknown — the suite went red there while passing on a developer's machine.
 set -uo pipefail
 state="${HOSTING_REG_STATE:?the registry stub needs HOSTING_REG_STATE}"
 method="GET" out="" body="" url=""
@@ -31,21 +36,42 @@ mode="$(cat "$state/mode" 2>/dev/null || echo normal)"
 keys="$state/keys"
 touch "$keys"
 
-line="$(awk -v h="$presented" '$1 == h { print; exit }' "$keys")"
-inst="$(printf '%s' "$line" | awk '{ print $2 }')"
-slot="$(printf '%s' "$line" | awk '{ print $3 }')"
+inst="" slot=""
+while read -r h i s; do
+  if [ "$h" = "$presented" ]; then inst="$i"; slot="$s"; break; fi
+done < "$keys"
 printf '%s %s %s\n' "$method" "$path" "${slot:-none}" >> "$state/log"
 
 answer() { printf '%s' "$2" > "${out:-/dev/null}"; printf '%s' "$1"; exit 0; }
-has_staged() { awk -v i="$inst" '$2 == i && $3 == "staged" { found = 1 } END { exit !found }' "$keys"; }
+has_staged() {
+  local h i s
+  while read -r h i s; do
+    if [ "$i" = "$inst" ] && [ "$s" = "staged" ]; then return 0; fi
+  done < "$keys"
+  return 1
+}
 state_json() { printf '{"instanceId":"%s","key":"%s","staged":%s}' "$inst" "$1" "$(has_staged && echo true || echo false)"; }
-rewrite() { awk "$@" "$keys" > "$keys.new"; mv "$keys.new" "$keys"; }
+# rewrite <predicate>: the key file becomes whatever the predicate prints for each line.
+rewrite() {
+  local h i s tmp
+  tmp="$(mktemp)"
+  while read -r h i s; do
+    [ -n "$h" ] && "$1" "$h" "$i" "$s"
+  done < "$keys" > "$tmp"
+  mv "$tmp" "$keys"
+}
+keep_all_but_staged_of_inst() { if [ "$2" = "$inst" ] && [ "$3" = "staged" ]; then return 0; fi; printf '%s %s %s\n' "$1" "$2" "$3"; }
+promote_presented() {
+  if [ "$2" = "$inst" ] && [ "$3" = "current" ]; then return 0; fi
+  if [ "$1" = "$presented" ]; then printf '%s %s current\n' "$1" "$2"; else printf '%s %s %s\n' "$1" "$2" "$3"; fi
+}
+drop_presented() { if [ "$1" = "$presented" ]; then return 0; fi; printf '%s %s %s\n' "$1" "$2" "$3"; }
 
 case "$mode" in
   old)    answer 404 '{"error":"no such route"}' ;;
   absent) answer 401 '{"error":"This registry does not accept the presented instance key"}' ;;
 esac
-[ -n "$line" ] || answer 401 '{"error":"This registry does not accept the presented instance key"}'
+[ -n "$slot" ] || answer 401 '{"error":"This registry does not accept the presented instance key"}'
 
 case "$method $path" in
   "GET /api/instances/self")
@@ -54,18 +80,18 @@ case "$method $path" in
     [ "$slot" = "current" ] || answer 409 '{"error":"the presented key is the STAGED key"}'
     new="$(printf '%s' "$body" | sed -n 's/.*"keyHash":"\([0-9a-f]\{64\}\)".*/\1/p')"
     [ -n "$new" ] || answer 400 '{"error":"keyHash must be 64 lowercase hex"}'
-    rewrite -v i="$inst" '!($2 == i && $3 == "staged")'
+    rewrite keep_all_but_staged_of_inst
     printf '%s %s staged\n' "$new" "$inst" >> "$keys"
     answer 200 "$(state_json current)" ;;
   "POST /api/instances/self/key/commit")
     if [ "$slot" = "staged" ]; then
-      rewrite -v i="$inst" -v h="$presented" '$2 == i && $3 == "current" { next } $1 == h { print $1, $2, "current"; next } { print }'
+      rewrite promote_presented
       answer 200 "$(state_json current)"
     fi
     has_staged && answer 409 '{"error":"the presented key is the CURRENT key while a new key is staged"}'
     answer 200 "$(state_json current)" ;;
   "POST /api/instances/self/key/revoke")
-    rewrite -v h="$presented" '$1 != h'
+    rewrite drop_presented
     answer 200 "$(printf '{"instanceId":"%s","key":"revoked","staged":%s}' "$inst" "$(has_staged && echo true || echo false)")" ;;
   *)
     answer 404 '{"error":"no such route"}' ;;
