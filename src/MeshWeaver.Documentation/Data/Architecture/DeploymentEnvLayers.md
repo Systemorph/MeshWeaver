@@ -128,8 +128,11 @@ leaves the pod exactly where it was:
 
 1. **give the key a declared home** — a `keyVaultSecrets` mapping, so the vault-synced Secret
    carries it. This changes nothing observable: the inline entry still outranks every `envFrom`.
-2. **remove the inline entry** — `kubectl -n <ns> set env deployment/<name> <KEY>-`. This is the
-   step that changes which value the pod reads, and it rolls the Deployment.
+2. **remove the inline entry** — mark the record's `inlineEnv` entry `retiredBy` and run
+   `Reconcile`; its `RetireInlineEnv` remedy removes the key from every container (see *"Step 2 is
+   a `Reconcile`"* below). This is the step that changes which value the pod reads, and it rolls
+   the Deployment. Until 2026-09-11 it was a break-glass
+   `kubectl -n <ns> set env deployment/<name> <KEY>-`.
 
 The trap is doing step 2 first, or doing step 2 without measuring what the pod falls through *to*.
 `PluginCatalog__RegistryToken` is the worked example (MeshWeaver#3201). Its inline entry stood over
@@ -170,6 +173,12 @@ A=$(inline <ns>); B=$(sec <ns> <synced-secret> <KEY>)
 `DIFFER` means step 1 is not done — promote the **in-use** value into the vault first, never the
 other one, and never mint a replacement as part of a cleanup.
 
+The remedy runs this same comparison itself, in-cluster, immediately before it writes, and refuses
+on `DIFFER` — so a recorded `agreesWithShadowed: true` that has gone stale cannot switch a portal
+onto another credential; it produces a refusal. What no `InstanceAction` offers yet is a
+read-only equality measurement, so *recording* `agreesWithShadowed` for a new credential entry
+still takes the break-glass read above.
+
 Three further things this key showed, each of which generalises:
 
 - **Precedence within `envFrom` decides which copy is the fall-through.** On `memex` the order is
@@ -188,17 +197,19 @@ Three further things this key showed, each of which generalises:
   not anyone read it. Retiring the shadow stops the *next* reader; rotating the key at its issuer is
   what closes the disclosure, and it is a separate, deliberate act with its own blast radius.
 
-🚨 **Step 2 rolls the Deployment, so it is subject to whatever else is rolling.** `set env` mutates
-the pod template, which creates a new ReplicaSet and supersedes an in-flight rollout. Read
+🚨 **Step 2 rolls the Deployment, so it is subject to whatever else is rolling.** Removing an entry —
+the remedy's patch or a break-glass `set env` alike — mutates the pod template, which creates a new ReplicaSet and supersedes an in-flight rollout. Read
 `kubectl rollout status` first and hold if a deploy is already in progress — a cleanup that ejects a
-release roll costs more than the shadow it clears.
+release roll costs more than the shadow it clears. `hosting-inline-env-retire` makes exactly that
+check itself and refuses mid-rollout.
 
-### 🚨 Step 2 has NO API action — the audit finds it, and no remedy can act on it
+### Step 2 is a `Reconcile` — and why it needed a remedy of its own
 
 Under the 2026-09-08 operating directive every operation is a `Hosting/InstanceAction` the control
 instance's operator executes in-cluster, and a cluster command is break-glass
-([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)). **Step 2 is the one act on
-this page that has no such action.** Four sources say so, and they agree — measured 2026-09-10:
+([OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)). **Until 2026-09-11, step 2 was
+the one act on this page that had no such action** — and no configuration change could stand in
+for one. Four sources said so, and they agreed — measured 2026-09-10:
 
 - **The chart cannot render it away, because the chart never rendered it.**
   `deploy/helm/templates/memex-portal/deployment.yaml` emits **four unconditional** inline `env:`
@@ -224,19 +235,24 @@ this page that has no such action.** Four sources say so, and they agree — mea
   asserts the finding by its literal name,
   `env:memex-portal:PluginCatalog__RegistryToken`.
 
-**So the audit names the drift and nothing can repair it.** `kubectl -n <ns> set env
-deployment/<name> <KEY>-` remains the only instrument. Read that under rule 2 of
-OperatingFromThePortal: an audit finding with no remedy is **a gap to file against the Hosting
-package**, not a recipe to promote back into a procedure — filed as
-[MeshWeaver.Plugins#1593](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1593). The remedy the record's shape already
-anticipates is the one that does not exist — `InlineEnvOverride.RetiredBy` names what retires an
-entry, and no code reads it.
+**So until 2026-09-11 the audit named the drift and nothing could repair it**, and
+`kubectl -n <ns> set env deployment/<name> <KEY>-` was the only instrument. Under rule 2 of
+OperatingFromThePortal an audit finding with no remedy is **a gap to file against the Hosting
+package**, not a recipe to promote back into a procedure — filed as [MeshWeaver.Plugins#1593](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1593), and closed by the
+remedy the record's shape had anticipated all along: `Reconcile` now carries
+`RepairRemedy.RetireInlineEnv`, which reads `InlineEnvOverride.RetiredBy` and removes exactly the
+entries it names. The procedure — mark the entry retired, file a `Reconcile`, drop the entry once
+the audit is clean — is in [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal) →
+*"Retiring an inline `env:` entry"*. It needs an operator image carrying
+`hosting-inline-env-retire` and the Hosting module version that plans it; until both are on the
+control instance, the break-glass line is still the only one that works.
 
 **Why this matters more than one duplicated variable.** MeshWeaver#3201 has outlived three merged
 PRs. Every deferral until 2026-09-08 was about *rollout timing* — a fleet freeze, then the newly
 armed readiness gate (#3404, #3395), then the bake-gate stall (#3663). All three closed by
 2026-09-08. What is left is not a schedule and not a risk: the last step's instrument is the one the
-operating model withdrew, and the entry's `retiredBy` therefore has no lane to travel.
+operating model withdrew, and the entry's `retiredBy` had no lane to travel — until the remedy above
+gave it one.
 
 ## What else the record gained
 
