@@ -29,6 +29,13 @@ public class SeoPageBodyTest
     }
 
     [Fact]
+    public void AnEmptyMirror_FallsThroughToTheContent_LikeANullOne()
+    {
+        var node = Node(new MarkdownContent { Content = "# Title", PrerenderedHtml = "<h1>Title</h1>" }) with { PreRenderedHtml = "" };
+        Assert.Equal("<h1>Title</h1>", new SeoPageData(node, null, null).Body);
+    }
+
+    [Fact]
     public void TypedMarkdown_WithoutTheMirror_ServesItsOwnPrerenderedHtml()
     {
         // The exact shape the partitioned Postgres cross-schema read returns for a documentation

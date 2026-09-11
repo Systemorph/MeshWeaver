@@ -83,7 +83,7 @@ public sealed record SeoPageData(MeshNode Node, string? Description, string? Ima
     /// node the <see cref="AnonymousGate"/> admitted, like every other member here — a gated
     /// chapter is refused before this is computed.</para>
     /// </summary>
-    public string? Body => PreRenderedHtml ?? SeoResolver.RenderBody(Node);
+    public string? Body => PreRenderedHtml is { Length: > 0 } mirrored ? mirrored : SeoResolver.RenderBody(Node);
 }
 
 /// <summary>
@@ -102,8 +102,9 @@ public static class SeoResolver
     /// plugin) whose cover renders at <c>/Mcp</c>, so it resolves like any node page; MCP
     /// protocol traffic never reaches the page render path this resolver serves (the endpoint
     /// route and <c>NonfileRouteConstraint</c> keep it off).</summary>
-    private static readonly string[] NonNodePrefixes =
-        ["login", "api", "_blazor", "_framework", "_content", "dev", "static", "webhooks"];
+    private static readonly ImmutableHashSet<string> NonNodePrefixes = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase,
+        "login", "api", "_blazor", "_framework", "_content", "dev", "static", "webhooks");
 
     /// <summary>Whether the request path can be a node page worth resolving.</summary>
     public static bool IsCandidatePath(string? path)
@@ -112,7 +113,7 @@ public static class SeoResolver
         if (trimmed.Length == 0)
             return false;
         var first = trimmed.Split('/')[0];
-        return !NonNodePrefixes.Any(p => string.Equals(p, first, StringComparison.OrdinalIgnoreCase));
+        return !NonNodePrefixes.Contains(first);
     }
 
     /// <summary>
@@ -390,14 +391,14 @@ public static class SeoResolver
                 when je.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Object:
                 return value.EnumerateObject()
                     .Where(p => p.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(p.Value.GetString()))
-                    .ToDictionary(p => p.Name, p => p.Value.GetString()!, StringComparer.OrdinalIgnoreCase);
+                    .ToImmutableDictionary(p => p.Name, p => p.Value.GetString()!, StringComparer.OrdinalIgnoreCase);
             case JsonElement or null:
                 return ImmutableDictionary<string, string>.Empty;
             default:
                 return TypedMember(node.Content, property) switch
                 {
-                    IReadOnlyDictionary<string, string> typed => typed,
-                    IDictionary<string, string> typed => new Dictionary<string, string>(typed, StringComparer.OrdinalIgnoreCase),
+                    IEnumerable<KeyValuePair<string, string>> typed =>
+                        typed.ToImmutableDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase),
                     _ => ImmutableDictionary<string, string>.Empty,
                 };
         }

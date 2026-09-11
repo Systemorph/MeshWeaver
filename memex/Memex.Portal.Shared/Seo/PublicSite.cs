@@ -1,8 +1,10 @@
+using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Seo;
 
@@ -88,13 +90,22 @@ public static class PublicSite
     /// a link shared from inside the app keeps working for its author and lands a stranger on the
     /// address search engines know.</para>
     ///
-    /// <para><paramref name="isPublicPage"/> decides publicness; the default asks the mesh through
-    /// <see cref="SeoResolver.ResolveAsync"/> — the same gate the head is built from — and a test
-    /// hands in its own decision so the routing rule is pinned without a mesh. Register AFTER
-    /// authentication (it reads <c>User.Identity</c>) and before the page endpoints.</para>
+    /// <para><paramref name="isPublicPage"/> decides publicness, reactively; the default asks the
+    /// mesh through <see cref="SeoResolver.Resolve"/> — the same gate the head is built from — and
+    /// a test hands in its own decision so the routing rule is pinned without a mesh. The ONE
+    /// <c>Task</c> bridge is here, at the ASP.NET middleware boundary, through
+    /// <see cref="ReactiveCompletion.ObserveCompletion{T}(IObservable{T}, Action{Exception}, System.Threading.CancellationToken)"/>
+    /// (never <c>.ToTask()</c>). Register AFTER authentication (it reads <c>User.Identity</c>) and
+    /// before the page endpoints.</para>
+    ///
+    /// <para>The decision is the boolean projection of the gate on purpose: "not public" and "the
+    /// gate could not decide" both mean NO redirect here, and no redirect is the fail-closed
+    /// action — the request continues into the app's own handling, which evaluates the tri-state
+    /// gate itself and answers the visitor (sign-in, or unavailable). A 301 that named a page on
+    /// the public host on an undetermined verdict would be the assertion this avoids.</para>
     /// </summary>
     public static IApplicationBuilder UsePublicHostRedirect(
-        this IApplicationBuilder app, Func<HttpContext, string, Task<bool>>? isPublicPage = null)
+        this IApplicationBuilder app, Func<HttpContext, string, IObservable<bool>>? isPublicPage = null)
     {
         var decide = isPublicPage ?? DefaultIsPublicPage;
         return app.Use(async (http, next) =>
@@ -118,7 +129,14 @@ public static class PublicSite
                 return;
             }
 
-            if (!await decide(http, nodePath))
+            var logger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(PublicSite));
+            var isPublic = await decide(http, nodePath)
+                .FirstAsync()
+                .Catch<bool, Exception>(_ => Observable.Return(false))
+                .ObserveCompletion(
+                    ex => logger?.LogWarning(ex, "Public-host decision for '{Path}' faulted after the response had settled", nodePath),
+                    http.RequestAborted);
+            if (!isPublic)
             {
                 await next(http);
                 return;
@@ -148,6 +166,7 @@ public static class PublicSite
                 await next(http);
                 return;
             }
+            var method = http.Request.Method;
             http.Request.Method = HttpMethods.Get;
             var body = http.Response.Body;
             http.Response.Body = Stream.Null;
@@ -157,6 +176,9 @@ public static class PublicSite
             }
             finally
             {
+                // Restore both: middleware that resumes after `next` (logging, tracing) must see
+                // the request as the HEAD it was.
+                http.Request.Method = method;
                 http.Response.Body = body;
             }
         });
@@ -172,13 +194,12 @@ public static class PublicSite
     // The production decision: the same anonymous-gated resolution the crawler head is built
     // from. A page the gate refuses — or a mesh that does not answer — is "not public", and the
     // request continues to the app's own handling (sign-in redirect), never to a redirect that
-    // would name a page on the public host.
-    private static async Task<bool> DefaultIsPublicPage(HttpContext http, string nodePath)
+    // would name a page on the public host. Cold, reactive; bridged once by the caller.
+    private static IObservable<bool> DefaultIsPublicPage(HttpContext http, string nodePath)
     {
         var hub = http.RequestServices.GetService<IMessageHub>();
-        if (hub is null)
-            return false;
-        var data = await SeoResolver.ResolveAsync(hub, nodePath);
-        return data is not null && data.Remainder is null;
+        return hub is null
+            ? Observable.Return(false)
+            : SeoResolver.Resolve(hub, nodePath).Select(data => data is not null && data.Remainder is null);
     }
 }

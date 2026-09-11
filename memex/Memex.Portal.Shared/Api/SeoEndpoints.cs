@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Xml.Linq;
 using Memex.Portal.Shared.Seo;
@@ -70,7 +71,7 @@ public static class SeoEndpoints
     }
 
     /// <summary>Node types whose top-level mains are sitemap candidates (the partition roots).</summary>
-    private static readonly string[] CandidateNodeTypes = ["Store/Plugin", "Store/Catalog", "Space"];
+    private static readonly ImmutableArray<string> CandidateNodeTypes = ["Store/Plugin", "Store/Catalog", "Space"];
 
     /// <summary>
     /// 🚨 WHAT COUNTS AS A PAGE below a public root — the node types whose instances are documents
@@ -80,7 +81,7 @@ public static class SeoEndpoints
     /// pages that are. Anonymous readability is decided separately, per node, by the gate — this
     /// list only says which readable nodes are worth a search engine's visit.
     /// </summary>
-    internal static readonly string[] PageNodeTypes =
+    internal static readonly ImmutableArray<string> PageNodeTypes =
         ["Markdown", "Space", "Store/Plugin", "Store/Catalog", "Edu/Module", "Edu/Page"];
 
     /// <summary>
@@ -88,11 +89,8 @@ public static class SeoEndpoints
     /// never to a page. Underscore segments (<c>_Thread</c>, <c>_Access</c>, <c>_GitSync</c>, …) are
     /// the satellite convention itself.
     /// </summary>
-    private static readonly string[] SatelliteSegments = ["Source", "Test", "Release"];
-
-    /// <summary>Descendants read per public root; a partition with more pages than this is a
-    /// sitemap-index job, not a bigger number.</summary>
-    private const int DescendantLimit = 2000;
+    private static readonly ImmutableHashSet<string> SatelliteSegments =
+        ImmutableHashSet.Create(StringComparer.Ordinal, "Source", "Test", "Release");
 
     /// <summary>Concurrent per-node gate checks while enumerating one root's pages.</summary>
     private const int GateConcurrency = 8;
@@ -105,7 +103,7 @@ public static class SeoEndpoints
         => path.Split('/').All(segment =>
             segment.Length > 0
             && segment[0] != '_'
-            && !SatelliteSegments.Contains(segment, StringComparer.Ordinal));
+            && !SatelliteSegments.Contains(segment));
 
     public static IEndpointRouteBuilder MapSeo(this IEndpointRouteBuilder app)
     {
@@ -431,9 +429,13 @@ public static class SeoEndpoints
                 _ => Observable.Return<IReadOnlyList<(MeshNode, string)>>([self]));
     }
 
+    // `limit:all` — this is an ENUMERATION, so every match comes back (MeshQueryRequest.NoLimit);
+    // a stated cap would silently truncate the one list that claims to be complete. The sitemap
+    // protocol's own bound is 50,000 URLs per file; that is a sitemap-index job for the day a
+    // deployment publishes that many pages, not a reason to clip the query.
     private static MeshQueryRequest DescendantsOf(MeshNode root, string types)
         => MeshQueryRequest.FromQuery(
-            $"namespace:\"{root.Path}\" scope:descendants is:main nodeType:{types} limit:{DescendantLimit}");
+            $"namespace:\"{root.Path}\" scope:descendants is:main nodeType:{types} limit:all");
 
     private static string Render(string baseUrl, IReadOnlyList<(MeshNode Node, string Url)> pages)
     {

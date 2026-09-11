@@ -14,7 +14,7 @@ on Google".
 
 ## What was measured on 2026-09-11
 
-The three brand hosts had already collapsed into one: `systemorph.com`, `www.systemorph.com`,
+The brand hosts had already collapsed into one: `systemorph.com`, `www.systemorph.com`,
 `meshweaver.cloud` and `portal.meshweaver.cloud` all answered `301` to `www.meshweaver.cloud`, a
 static one-page nginx site with no meta description, no Open Graph card, no `robots.txt` and no
 sitemap. It was the only MeshWeaver page Google showed. Google also still listed the old WordPress
@@ -118,10 +118,13 @@ whose node type is a **page** — `Markdown`, `Space`, `Store/Plugin`, `Store/Ca
 `Edu/Page` — skipping any path with a satellite segment (`_Thread`, `_Access`, `_GitSync`, `Source`,
 `Test`, `Release`), and asks the gate about each. A reinsurance plugin's partition carries hundreds
 of amount types, cashflows, source files and release markers; none of them is a page, and listing
-them would bury the twenty that are. The listing runs as System (a stale negative here costs a URL,
-never a leak, because every candidate still passes the gate), the gate checks run eight at a time,
-and the same enumeration feeds **Administration → Published to the web**, so the list a person
-reads and the list a crawler gets cannot drift.
+them would bury the twenty that are. The listing runs as System and unbounded (`limit:all` — a
+stated cap would silently clip the one list that claims to be complete; a stale negative here costs
+a URL, never a leak, because every candidate still passes the gate), the gate checks run eight at a
+time, and the same enumeration feeds **Administration → Published to the web**, so the list a
+person reads and the list a crawler gets cannot drift. The sitemap protocol bounds one file at
+50,000 URLs; a deployment that publishes that many pages needs a sitemap index, which is a
+follow-up, not a reason to cap the query.
 
 ### The rest of the crawl surface
 

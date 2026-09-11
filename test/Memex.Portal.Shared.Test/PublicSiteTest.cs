@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reactive.Linq;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Seo;
 using Microsoft.AspNetCore.Builder;
@@ -87,7 +88,7 @@ public class PublicSiteTest
         app.UseHeadAsGet();
         app.UseRouting();
         app.UsePublicHostRedirect((_, nodePath) =>
-            Task.FromResult(nodePath is "PublicSpace" or "PublicSpace/Guide" or "Landing"));
+            Observable.Return(nodePath is "PublicSpace" or "PublicSpace/Guide" or "Landing"));
         app.MapSeo();
         app.MapGet("/{**path}", (string? path) => Results.Text($"page:{path}", "text/html"));
         app.Start();
