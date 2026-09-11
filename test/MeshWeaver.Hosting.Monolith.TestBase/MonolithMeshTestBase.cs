@@ -1709,6 +1709,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             // after the reactive "all collected" signal: xUnit does not construct it until this
             // DisposeAsync returns. A faulted unload fails the class like a dirty teardown; a
             // retained context (rooted by something live) is REPORTED, never waited on.
+            // The fixture must not itself hold the mesh it is waiting to see unloaded: the disposed
+            // provider still reaches every singleton, the mesh hub and its content-type registry, whose
+            // discriminator claims hold the collectible types (gcroot inside the drain, #1605).
+            ServiceProvider = null!;
             var unloadOutcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(collectibleUnloads);
             TestPhaseTrace(testName,
                 unloadOutcome.Fault is not null ? "DISPOSE_UNLOAD_FAULTED"
