@@ -111,10 +111,11 @@ run whose `secrets.ACR_USERNAME` is empty, and why a reader comparing the two co
 workflow is broken. When a name has to be duplicated, check which namespace reads it.
 
 **No CI credential can read the Dependabot store.** The `permissions:` block has no `secrets` or
-`dependabot-secrets` key, so `GITHUB_TOKEN` cannot list either store; and the only GitHub App
-installed on the org (`meshweaver-cloud`, app id 4220566) holds `contents` / `metadata` /
-`pull_requests` only. A workflow that diffs the two stores therefore cannot exist today without a
-new credential.
+`dependabot-secrets` key, so `GITHUB_TOKEN` cannot list either store; and neither GitHub App the
+fleet mints from holds a `secrets` permission — `meshweaver-cloud` (app id 4220566) has `contents` /
+`metadata` / `pull_requests`, the read-only `fleet-reader` the same three at read (see
+[GitHub App Credentials](../GitHubAppCredentials)). A workflow that diffs the two stores therefore
+cannot exist today without a new credential.
 
 That matters less than it sounds, because **a name diff is the weaker instrument anyway**: no API
 returns a value, so a secret present with an EMPTY value is indistinguishable from a healthy one by

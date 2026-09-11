@@ -73,8 +73,10 @@ Scoring that run by the preflight list would have called it *no gap*.
 **`check-pr-secret-preflight.py` enforces the half that can be enforced**: every `secrets.NAME` a
 pull-request-reachable job consumes must be asserted by a preflight (`[ -n "${NAME:-}" ]`), so a
 store gap is named in the first cheap job. It is STATIC — no credential, because none exists:
-`GITHUB_TOKEN` has no `secrets`/`dependabot-secrets` permission key and the org's only App
-(`meshweaver-cloud`) holds contents/metadata/pull_requests. It runs in core's `dotnet-test.yml` and
+`GITHUB_TOKEN` has no `secrets`/`dependabot-secrets` permission key and neither org App holds one
+(`meshweaver-cloud`: contents/metadata/pull_requests; `fleet-reader`: the same, read-only). Which App
+mints which token: [GitHubAppCredentials.md](../../../src/MeshWeaver.Documentation/Data/Architecture/GitHubAppCredentials.md).
+It runs in core's `dotnet-test.yml` and
 reaches every satellite through `node-repo-validate.yml` at the caller's `platform-ref`. Exemptions
 are one reasoned line in `.github/pr-secret-preflight-allow.txt` (a stale entry fails); `secrets:
 inherit` is refused, because the guard cannot prove completeness through it. For the store diff

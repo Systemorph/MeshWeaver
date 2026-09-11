@@ -35,8 +35,9 @@ Two independent reasons, both measured 2026-09-06:
    assertion (`[ -n "${X:-}" ]`) tests the thing that actually matters — emptiness, in whichever
    store this event resolves against — and a name diff is strictly weaker.
 2. **No CI credential can read the Dependabot store.** `GITHUB_TOKEN` has no `secrets` or
-   `dependabot-secrets` key in the `permissions:` block, and the only GitHub App installed on the
-   Systemorph org (`meshweaver-cloud`, app_id 4220566) holds contents/metadata/pull_requests only.
+   `dependabot-secrets` key in the `permissions:` block, and neither GitHub App the fleet mints from
+   holds a `secrets` permission (`meshweaver-cloud`, app_id 4220566: contents/metadata/pull_requests;
+   the read-only `fleet-reader`: the same three at read).
 
 `--check-stores` below performs the name diff anyway, for an operator running it locally with their
 own admin credential. It never reads a value, and it fails loudly rather than skipping when the

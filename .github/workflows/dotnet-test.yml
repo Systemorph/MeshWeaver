@@ -2369,12 +2369,12 @@ jobs:
 
     - name: Assert the cross-repo read credential, or fail naming what to provision
       env:
-        MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
-        MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+        FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
       run: |
         missing=()
-        [ -n "$MESHWEAVER_APP_ID" ] || missing+=("secrets.MESHWEAVER_APP_ID            app id of the org's meshweaver-cloud GitHub App, which is installed on every repo in the fleet")
-        [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY   that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+        [ -n "$FLEET_READER_APP_ID" ] || missing+=("secrets.FLEET_READER_APP_ID            app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), installed on every repo in .github/shared-rules.json — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
+        [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY   that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write and is not installed on Memex")
         if [ ${#missing[@]} -gt 0 ]; then
           echo "::error::The shared-rule gate cannot read the fleet — provision the following, then re-run:"
           for m in "${missing[@]}"; do echo "  • $m"; done
@@ -2385,12 +2385,16 @@ jobs:
     # Cross-repo reads are a GitHub App installation token minted per run, never a stored PAT:
     # a PAT has no owner, no expiry anyone watches, and fails indistinguishably from a scope
     # problem (#1709). Scoped to contents:read on exactly the repos in the register.
+    # 🚨 The READ-ONLY `fleet-reader` App, never `meshweaver-cloud`: that one holds write and is NOT
+    # installed on Memex, so its mint would fail on the repository list below — and because this
+    # job is a `needs:` of the required check, every PR and merge-queue group would go red and main
+    # would freeze. Doc/Architecture/GitHubAppCredentials.
     - name: Mint an installation token for the fleet
       id: fleet-token
       uses: actions/create-github-app-token@v3
       with:
-        app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-        private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        app-id: ${{ secrets.FLEET_READER_APP_ID }}
+        private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         owner: Systemorph
         repositories: >-
           MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex
@@ -2502,12 +2506,12 @@ jobs:
 
     - name: Assert the cross-repo read credential, or fail naming what to provision
       env:
-        MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
-        MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+        FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
       run: |
         missing=()
-        [ -n "$MESHWEAVER_APP_ID" ] || missing+=("secrets.MESHWEAVER_APP_ID            app id of the org's meshweaver-cloud GitHub App, which is installed on every repo in the fleet")
-        [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY   that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+        [ -n "$FLEET_READER_APP_ID" ] || missing+=("secrets.FLEET_READER_APP_ID            app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), installed on every repo in .github/shared-rules.json — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
+        [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY   that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write and is not installed on Memex")
         if [ ${#missing[@]} -gt 0 ]; then
           echo "::error::The cross-repo pair gate cannot resolve a declared counterpart — provision the following, then re-run:"
           for m in "${missing[@]}"; do echo "  • $m"; done
@@ -2517,13 +2521,15 @@ jobs:
 
     # Same posture as `shared-rules`: an App installation token minted per run, never a stored PAT.
     # `pull-requests: read` is the ONE extra capability this gate needs over that one, and it is
-    # read-only on the sibling repos in the register — it cannot write anything anywhere.
+    # read-only on the sibling repos in the register — it cannot write anything anywhere. Same App
+    # as `shared-rules` (the read-only `fleet-reader`), which is why that App carries
+    # Pull requests: read as well as Contents: read.
     - name: Mint an installation token for the fleet
       id: fleet-token
       uses: actions/create-github-app-token@v3
       with:
-        app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-        private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        app-id: ${{ secrets.FLEET_READER_APP_ID }}
+        private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         owner: Systemorph
         repositories: >-
           MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex

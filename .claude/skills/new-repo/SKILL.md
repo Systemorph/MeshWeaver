@@ -565,6 +565,13 @@ credential itself ([registry-credentials-we-issue](../../../AGENTS.md)).
 dependabot-triggered run reads the Dependabot store, and preflight fails red on the Actions-only
 pair (the same shape MeshWeaver#2249 documents).
 
+**Install the read-only `fleet-reader` App on the new repo too.** Core's cross-repo READS — the
+`shared-rules` gate, `cross-repo-pair`, and the pinned-digest sweep and lock — mint from it, and the
+sweep and lock DISCOVER their fleet from its installation: a repo it does not reach is not red, it
+is simply absent, and its pinned images stop being locked against the nightly purge. Listing the
+repo in core's `.github/shared-rules.json` without the install turns every core PR red instead.
+[GitHubAppCredentials.md](../../../src/MeshWeaver.Documentation/Data/Architecture/GitHubAppCredentials.md).
+
 **The rest of the repo, from the CLI, in the order that worked:**
 
 ```bash
