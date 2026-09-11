@@ -193,7 +193,9 @@ public class PackageFamiliesMoveTogetherGuard
     [Fact]
     public void ANamedFamilySplitIsDetected()
     {
-        var (name, ids, why) = NamedFamilies.Single(f => f.Name == "Rx.NET");
+        // The family's own declared reason travels with the offence, so the red names the defect
+        // rather than just the versions.
+        var (name, _, why) = NamedFamilies.Single(f => f.Name == "Rx.NET");
 
         // The exact pairing that was live in this repository until 2026-09-11.
         var split = new List<(string Id, string Version)>
@@ -218,7 +220,7 @@ public class PackageFamiliesMoveTogetherGuard
         // Deliberately NOT asserted here: that the LIVE pins agree. That is
         // EveryPinnedFamilyAgreesOnOneBaseVersion's job, and duplicating it would make one real
         // split report as two failures — noise that obscures which check actually found it.
-        _ = ids;
+        // (Verified: re-splitting the live pin reds exactly one check, not two.)
     }
 
     /// <summary>The pre-release trim is the whole reason a legitimate preview-only member passes.</summary>

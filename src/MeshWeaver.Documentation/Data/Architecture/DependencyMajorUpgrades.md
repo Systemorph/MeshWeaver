@@ -137,7 +137,7 @@ Measured 2026-09-11.
 | Surface we rely on | `System.Reactive.Linq.Observable` is byte-identical at **656 members**; every `Subject`/`ReplaySubject`/`BehaviorSubject`/`AsyncSubject`, every `System.Reactive.Disposables` type and every scheduler are member-identical. |
 | Upstream's own verdict | `EnablePackageValidation` against a **6.1.0** baseline; **none** of its 57 suppressions is a behavioural or core-API break — all are `ref`-vs-`lib` UI omissions and TFM shape. |
 | In-mesh sweep | **28 of 620** in-mesh artefacts reference Rx (27 of 90 `.cs` node sources, 1 of 530 node `.json` — `AnalyticsCatalog.json`). Since the public removal set is empty, there is nothing for any of them to have used. |
-| Suites | 4,777 tests, **0 failures**: Messaging.Hub 409 · Graph 1536 · Compiler.Pipeline 841 · Hosting 608 · Data 508 · Layout 484 · Documentation 391. |
+| Suites | 4,780 tests, **0 failures**: Graph 1536 · Compiler.Pipeline 841 · Hosting 608 · Data 508 · Layout 484 · Messaging.Hub 409 · Documentation 394. |
 
 **The defect this bump actually fixed was not a version being old.** `Microsoft.Reactive.Testing` was
 already pinned at **7.0.0** while `System.Reactive` read **6.1.0**. The testing package depends on
