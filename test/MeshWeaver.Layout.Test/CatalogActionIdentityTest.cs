@@ -87,10 +87,12 @@ public class CatalogActionIdentityTest : HubTestBase
     [InlineData(false, "insert")]
     [InlineData(false, "rename")]
     [InlineData(false, "description")]
+    [InlineData(false, "slash")]
     [InlineData(true, "same")]
     [InlineData(true, "insert")]
     [InlineData(true, "rename")]
     [InlineData(true, "description")]
+    [InlineData(true, "slash")]
     public async Task RetainedInstallOrUpdateClick_MustKeepItsPackage(bool update, string change)
     {
         var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -99,9 +101,9 @@ public class CatalogActionIdentityTest : HubTestBase
             .Should().Within(TestTimeouts.Convergence).Emit();
         var host = await owner.Should().Within(TestTimeouts.Convergence).Emit();
         using var fetched = new ReplaySubject<string>();
-        var first = Package("package-a", "Package A");
-        var intended = Package("package-b", "Package B");
-        var last = Package("package-c", "Package C");
+        var first = Package(change == "slash" ? "Plugins-Store" : "package-a", "Package A");
+        var intended = Package(change == "slash" ? "Plugins/Store" : "package-b", "Package B");
+        var last = Package(change == "slash" ? "Plugins" : "package-c", "Package C");
         var source = new RecordingSource(fetched);
         IReadOnlyList<MeshNode> installed = update
             ? [new MeshNode(intended.Id, PackageInstaller.InstalledPartition)
@@ -125,12 +127,14 @@ public class CatalogActionIdentityTest : HubTestBase
             Assert.Equal([last.Id, intended.Id], CatalogLayoutAreas.InCategory([revised, last], "Fixtures").Select(p => p.Id));
         }
         host.UpdateArea(Area, Project(host, source,
-            change == "insert" ? [first, revised, last] : [revised, last], installed));
+            change is "insert" or "slash" ? [first, revised, last] : [revised, last], installed));
         var current = await ReadOwner(host, () => FindAction(host, revised.Name!))
             .Should().Within(TestTimeouts.Convergence).Emit();
         Output.WriteLine("Retained {0} ({1}); current intended {2}; change={3}",
             retained.Action, retained.Label, current.Action, change);
         Assert.Equal(retained.Action, current.Action);
+        if (change == "slash")
+            Assert.Equal(3, retained.Action.Split('/').Length); // Area / encoded card / install.
 
         // The actual owner dispatch resolves the retained event.Area against its CURRENT controls.
         // No action delegate is invoked directly by this test.
