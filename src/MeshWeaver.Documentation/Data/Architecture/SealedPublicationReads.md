@@ -557,5 +557,40 @@ the pin is removed:
   adoption path where an incumbent predates stamping and the check reports — with numbers — that it
   proved nothing.
 
+### In production — and why a retrospective log sweep cannot settle it
+
+The harnesses above prove the three answers in a TestServer. They cannot prove a deployed portal
+stopped throwing, and #3876 stayed open on exactly that bar after its four readers and two route
+opens were fixed. What the portal can and cannot answer, measured 2026-09-11:
+
+- **The durable counter is the incident node, not the log.** `Admin/_LogIncident/<fingerprint>` on
+  the **control instance** (memex.systemorph.com — the same path on memex.meshweaver.cloud answers
+  `Not found`) carries `occurrences`, `firstSeen`, `lastSeen` and the pod names, and it outlives
+  Loki's retention. For `af1ee515fdf60bd1` it read **7 occurrences, last 2026-09-10T02:35:29Z**.
+- 🚨 **The ISSUE is not that counter, and can silently stop tracking it.** The node also carries
+  `occurrencesAtLastComment` plus, when the automation cannot post, `status: "Failed"` and the
+  reason — here `"Resource not accessible by integration"`, stuck at **5** while the count had
+  reached 7. Two recurrences after the issue was filed were never folded into it, so **a quiet
+  issue thread is not a quiet incident**. Read the node, never the thread.
+- **What discriminates a pre-fix occurrence from a live one is the pod's ReplicaSet hash**, not the
+  timestamp. All 7 fall on `77cfc55bfc` and `bf77c847`, while the fixes merged 2026-09-10 00:47Z
+  (#3877), 12:07Z (#3885) and 18:57Z (#3957) — the last occurrence is 1 h 48 m after the first of
+  those and still on the *previous day's* ReplicaSet, so it ran an image predating it. Confirm what
+  a replica carries by FILE/SYMBOL against the commit `/api/version` reports, never by merge
+  ancestry (a queue-merged commit fails `is-ancestor`).
+- 🚨 **`Logs`' `sinceMinutes` is a REQUEST, not a coverage guarantee, and the run never reports the
+  window it actually covered.** `{ "requestedAction": "Logs", "query": "_complete",
+  "sinceMinutes": 2880 }` against `memex-cloud` returned `entryCount: 0` carrying its `logQl` — an
+  answer by the rule in [Operating From The Portal](../OperatingFromThePortal), and still worth
+  nothing here: the positive control, the same query for a string that *does* occur, landed **21
+  lines spanning only 05:29Z–06:24Z**. The zero evidences under an hour rather than the two days
+  asked for, and the known occurrences are simply outside what Loki still holds. **Date the oldest
+  line a positive control returns before reading any `Logs` zero as absence** — against a window a
+  ~90 s republish can hide in, a retrospective sweep cannot settle this at all.
+
+So the verification that remains is a **live** one — a satellite gate reading the route through a
+real mid-replace window, or through a pruned identity, which is permanent and never self-heals —
+and the instrument that records it either way is the incident node's own counter.
+
 Related: [CI Content Bake](../CiContentBake) · [Plugin Build Contract](../PluginBuildContract) ·
 [Bake Identity Mismatch](../BakeIdentityMismatch) · [Module Build Architecture](../ModuleBuildArchitecture)
