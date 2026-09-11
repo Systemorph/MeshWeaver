@@ -135,12 +135,13 @@ jobs:
           fi
           echo "App credential present."
 
-      # 🚨 `gh pr merge --auto` is the `enablePullRequestAutoMerge` GraphQL mutation, so the token
-      # needs `Pull requests: write`; the merge it later performs needs `Contents: write`. Both are
-      # requested explicitly, so an installation that is missing either fails HERE — loudly, on a
-      # step whose name says what it wanted — rather than degrading to a token that arms fine and
-      # then merges in a way that starts no CI. There is deliberately no fallback: falling back to
-      # `secrets.GITHUB_TOKEN` is precisely the outage this file's header documents.
+      # 🚨 `gh pr merge --auto` either enables ordinary auto-merge or enqueues the PR, depending on
+      # the repository. Both mutations need `Pull requests: write`; the merge they later perform
+      # needs `Contents: write`. Both are requested explicitly, so an installation that is missing
+      # either fails HERE — loudly, on a step whose name says what it wanted — rather than degrading
+      # to a token that arms fine and then merges in a way that starts no CI. There is deliberately
+      # no fallback: falling back to `secrets.GITHUB_TOKEN` is precisely the outage this file's
+      # header documents.
       # 🚨 `continue-on-error` — the ONE in this file, and the reason is that arming is an
       # ACTION, not a GATE. AGENTS.md forbids this on a step that fetches a gate's input, because
       # a verification that silently does not run is indistinguishable from one that passed. That
@@ -210,39 +211,60 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # Already armed is the common case on `synchronize` and is NOT a failure.
-          if gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null' | grep -qx true; then
-            echo "already armed — nothing to do"; exit 0
-          fi
-          # A merged/closed PR races us on `synchronize`; treat it as done, not as an error.
-          state=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
-          if [ "$state" != "OPEN" ]; then echo "PR is $state — nothing to arm"; exit 0; fi
+          owner="${REPO%%/*}"
+          repository="${REPO#*/}"
+          # `autoMergeRequest` is populated on ordinary repositories, but it is NULL after a
+          # merge-queue repository accepts the PR. The queue has its own `mergeQueueEntry` field.
+          # Read both in one bounded GraphQL lookup so the read-back cannot report a successful
+          # queue admission as an unarmed PR (#3950, run 34555063094).
+          arm_state() {
+            gh api graphql \
+              -f query='query($owner:String!,$repository:String!,$pr:Int!){repository(owner:$owner,name:$repository){pullRequest(number:$pr){state merged autoMergeRequest{enabledAt} mergeQueueEntry{id}}}}' \
+              -f owner="$owner" -f repository="$repository" -F pr="$PR" \
+              --jq '.data.repository.pullRequest | if . == null then "missing" elif .merged then "landed" elif .state == "CLOSED" then "closed" elif .mergeQueueEntry != null then "queued" elif .autoMergeRequest != null then "armed" else "open" end'
+          }
+          # Already armed/queued is the common case on `synchronize` and is NOT a failure. A
+          # merged/closed PR can also race this run; treat it as done, not as an error.
+          state=$(arm_state)
+          case "$state" in
+            armed) echo "already armed — nothing to do"; exit 0 ;;
+            queued) echo "already queued — nothing to do"; exit 0 ;;
+            landed) echo "PR already landed — nothing to do"; exit 0 ;;
+            closed) echo "::warning::pull request #$PR was closed without merging before it could be armed"; exit 0 ;;
+            missing) echo "::warning::pull request #$PR disappeared before it could be armed"; exit 0 ;;
+          esac
           # Two repo shapes, one file. A merge QUEUE owns the merge strategy (core's is
           # SQUASH), so `--merge` is redundant there and some gh versions REJECT the
           # combination outright; on a repo with no queue, gh refuses to arm at all unless a
           # method is named. So name the method, then fall back to letting the queue decide.
+          arm_error=""
           if out=$(gh pr merge "$PR" --repo "$REPO" --merge --auto 2>&1); then
             echo "arm requested (--merge): ${out:-ok}"
           elif out=$(gh pr merge "$PR" --repo "$REPO" --auto 2>&1); then
             echo "arm requested (strategy left to the merge queue): ${out:-ok}"
           else
-            # 🚨 Failing to arm must be VISIBLE. It is not fatal to the PR — a human can still
-            # merge it — but a silent failure here recreates exactly the state this exists to
-            # fix: a green PR that never lands, with nothing saying why.
-            echo "::warning::could not arm auto-merge on #$PR — $out"
-            exit 0
+            # Do not warn yet: another run or a human may have queued, armed or merged the PR
+            # between our first read and this command. The authoritative read-back below decides.
+            arm_error="$out"
           fi
-          # Read it back. An exit code of 0 is the command's opinion; this is the evidence.
-          if gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null' | grep -qx true; then
-            echo "armed: #$PR will merge when the required contexts pass"
-          elif [ "$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)" != "OPEN" ]; then
-            # 🚨 Arming a PR with nothing left to wait for MERGES IT ON THE SPOT, so there is no
-            # auto-merge request to read back. That is the lane working, not failing. Measured
-            # on MeshWeaver.Crm#43: "arm requested (--merge): ok" followed by an immediate merge,
-            # which the first draft of this read-back reported as 'is Allow auto-merge enabled?'
-            # — a warning blaming a setting that was never off. The whole design leans on this
-            # warning meaning something, so it must never cry wolf.
-            echo "landed: #$PR had nothing left to wait for and merged immediately"
-          else
-            echo "::warning::auto-merge still not set on #$PR after a clean arm — is 'Allow auto-merge' enabled on $REPO?"
-          fi
+          # Read it back. An exit code of 0 is the command's opinion; this is the evidence. There
+          # are THREE successful states: ordinary auto-merge armed, merge-queue entry present, or
+          # the PR already landed because nothing remained to wait for.
+          state=$(arm_state)
+          case "$state" in
+            armed) echo "armed: #$PR will merge when the required contexts pass" ;;
+            queued) echo "queued: #$PR is in the merge queue" ;;
+            landed) echo "landed: #$PR had nothing left to wait for and merged immediately" ;;
+            closed) echo "::warning::pull request #$PR was closed without merging during the arm attempt" ;;
+            open)
+              # 🚨 Failing to arm must be VISIBLE. It is not fatal to the PR — a human can still
+              # merge it — but a silent failure here recreates exactly the state this exists to
+              # fix: a green PR that never lands, with nothing saying why.
+              if [ -n "$arm_error" ]; then
+                echo "::warning::could not arm auto-merge on #$PR — $arm_error"
+              else
+                echo "::warning::auto-merge still not set on #$PR after a clean arm — is 'Allow auto-merge' enabled on $REPO?"
+              fi
+              ;;
+            missing) echo "::warning::pull request #$PR disappeared after the arm command" ;;
+          esac
