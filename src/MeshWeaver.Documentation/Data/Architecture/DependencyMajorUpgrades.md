@@ -42,10 +42,24 @@ Never adopt a target version asserted by an earlier session, an issue, or a memo
 and **gate the read on HTTP status AND byte count** — a failed request's empty body greps to zero
 and reads exactly like "no such version".
 
+🚨 **PRINTING the status and the byte count is not GATING on them.** Plain `curl -sS -o file -w …`
+exits **0** on an HTTP 404, writes the error body into the output file, and prints a tidy
+`HTTP=404 BYTES=14` that a hurried reader skims as evidence. That is this repository's own
+"a verification step that cannot fail is not a verification step" rule, violated in the one place it
+is being taught. Make the command *refuse*:
+
 ```bash
-curl -sS -o idx.json -w "HTTP=%{http_code} BYTES=%{size_download}\n" \
-  https://api.nuget.org/v3-flatcontainer/<package-id-lowercased>/index.json
+curl -sS --fail-with-body -o idx.json \
+     -w "HTTP=%{http_code} BYTES=%{size_download}\n" \
+     "https://api.nuget.org/v3-flatcontainer/<package-id-lowercased>/index.json" \
+  || { echo "registry read FAILED — premise unmeasured, do not proceed"; exit 1; }
+[ -s idx.json ] || { echo "registry read returned an EMPTY body — do not proceed"; exit 1; }
 ```
+
+`--fail-with-body` turns a 4xx/5xx into a non-zero exit while still keeping the body to look at, and
+the `-s` test refuses a zero-byte success. Measured while writing this page: a guessed path for Rx's
+suppression file answered **HTTP 404, 14 bytes**, and a `grep -c` over that file scores **0** — which,
+unguarded, reads as "zero suppressions, all clear".
 
 ### 2. Read the licence at the NEW major, not at the old one
 
@@ -55,9 +69,15 @@ Compare the `<license>` element of both nuspecs; a change is a **stop-and-report
 make alone.
 
 ```bash
-curl -sS -w "HTTP=%{http_code} BYTES=%{size_download}\n" -o new.nuspec \
-  https://api.nuget.org/v3-flatcontainer/<id>/<new>/<id>.nuspec
+curl -sS --fail-with-body -o new.nuspec \
+     -w "HTTP=%{http_code} BYTES=%{size_download}\n" \
+     "https://api.nuget.org/v3-flatcontainer/<id>/<new>/<id>.nuspec" \
+  || { echo "nuspec read FAILED — licence unread, do not proceed"; exit 1; }
+[ -s new.nuspec ] || { echo "empty nuspec — do not proceed"; exit 1; }
 ```
+
+🚨 The same trap as step 1, and worse here: an unguarded `grep '<license'` over a 404 body finds
+nothing, and "no licence element" is easy to misread as "no licence change".
 
 🚨 **The `Dependency licences` gate is a second opinion, not the first — and its count is a
 DENOMINATOR you have to read.** `check-licenses.py` resolves licences from the **restored** dependency
@@ -79,8 +99,26 @@ So download both `.nupkg`s, extract the assembly for the TFM we actually resolve
 public surface of each with `MetadataLoadContext`. Sort, normalise away the assembly-qualified
 version stamps (they otherwise dominate the diff), and `comm` the two lists.
 
-What matters is the **removal** set — additions cannot break a consumer. Then check that set against
-what this repository and the satellites actually call.
+The **removal** set matters first: check it against what this repository and the satellites actually
+call.
+
+🚨 **But "additions cannot break a consumer" is FALSE, and believing it is how a major audit misses
+an entire break class.** Additions cannot break a **caller**. They routinely break an
+**implementer**: a member added to an interface with no default implementation, or an `abstract`
+member added to an abstract class, breaks every outside type that implements it — `CS0535` at the
+dependent's next pin move, long after this repository went green. This page's own YamlDotNet entry is
+an instance: 18.0.0 added `HasParseMethod` and `Parse` to `ITypeInspector` with no default
+implementation, and that is the single declared breaking change of that major. It missed us only
+because neither repository implements the interface.
+
+So the addition set is **not** dismissible — partition it. Additions to *static* types, to sealed
+types, and new overloads are caller-only and safe to skim. Additions of abstract or
+default-less members to a type an outside assembly may implement are **removals in disguise**, and
+get the same treatment: enumerate them, then search both repositories for implementers. (Core
+carries the mirror-image obligation on its own surface — the
+`Interface additions (implementers declared)` gate — for exactly this reason.) One more caller-side
+trap that an addition can cause here: a new overload can make a dependent's `<see cref>` ambiguous,
+`CS0419` under `-warnaserror`.
 
 🚨 **Filter on accessor visibility, or the tool will invent removals.** `Type.GetMembers` with
 `BindingFlags.NonPublic` returns non-public properties too, and a naive dump lists them. Doing
@@ -170,6 +208,7 @@ Measured 2026-09-11.
 | Registry | `https://api.nuget.org/v3-flatcontainer/system.reactive/index.json` → HTTP **200**, **974 B**. Newest stable **7.0.0**; no 7.0.1 exists. |
 | Licence | **MIT at both ends**, unchanged. Assembly identity holds too: public key token `94bc3704cddfc263` unchanged, only `AssemblyVersion` moves 6.1.0.0 → 7.0.0.0. |
 | API removals | **ZERO** public or protected members, once non-public entries are excluded (step 3) — on *both* asset pairs this repo actually resolves, read straight off `project.assets.json`: compile `lib/net6.0` → `ref/net8.0` (0 removals) and runtime `lib/net6.0` → `lib/net8.0` (0 removals, 16 additions). The 16 are `ObservableEx.CombineLatest`/`Zip` overloads for 9–16 sources, on a type nothing here references. The probe excluded **138** non-public-accessor properties on each side — the exact population that manufactures phantom removals. |
+| API additions (the implementer half of step 3) | **Nothing implementer-obliging.** All 16 additions are methods on ONE type, `System.Reactive.Linq.ObservableEx`, which is static (69 methods, no constructor) — so they are caller-only overloads. **Zero** public types were added, and no member was added to any interface or abstract class, so there is no `CS0535` shape for a satellite to meet at its next pin move. |
 | Surface we rely on | `System.Reactive.Linq.Observable` is byte-identical at **656 members**; every `Subject`/`ReplaySubject`/`BehaviorSubject`/`AsyncSubject`, every `System.Reactive.Disposables` type and every scheduler are member-identical. |
 | Upstream's own verdict | `ApiCompatSuppressions.xml` at tag `rxnet-v7.0.0` (HTTP 200, 22,564 B) carries **57** entries: 51 `CP0001` (40 naming Windows-UI/WinRT types, 11 `AsyncInfoObservable`/`IEventPatternSource`), 5 `CP0008` and 1 `CP0002`. 🚨 The six non-`CP0001` ones DO name core types (`ThreadPoolScheduler`, `NotificationKind`), so "all are UI omissions" would be wrong — but every one of them is a **cross-TFM** comparison against `netstandard2.0` or `uap10.0.18362`, and **none involves the `net8.0` pair this repo resolves**. Both types, and the `CP0002` member, are present in `ref/net8.0` and `lib/net8.0` alike. |
 | In-mesh sweep | **31 of 638** in-mesh artefacts reference Rx — 30 of 93 `.cs` node sources, and 1 of 545 node `.json` (`samples/Graph/Data/Northwind/AnalyticsCatalog.json`, Rx inside escaped source). None compiles in CI. Since the removal set on the resolved assets is empty, there is nothing for any of them to have used. |
