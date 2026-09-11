@@ -179,13 +179,14 @@ Every consumer of a sealed publication obeys the same four rules.
 *guaranteed red* on every overlapping publish — a satellite's pin-move PR going red for a defect
 that is not in it. Detecting the move and continuing on the half already fetched is worse still.
 
-### The three consumers
+### The four consumers
 
 | consumer | reads | lives in |
 |---|---|---|
 | `node-repo-gate.yml`, the upstream seed | the bundle index + each bundle | this repo, pinned by each satellite's `uses:` |
 | `.github/scripts/compose-sealed-modules.sh` | the module-set index + each module | this repo, fetched at each satellite's `platform-ref` |
 | `memex build plugin` (`BuildPluginCommand`) | both | `src/MeshWeaver.Cli` |
+| the REGISTRY, on behalf of a consumer one lane ahead of it | one package's bundle, for the CALLER's identity | `memex/Memex.Portal.Shared/Api/PluginBundleEndpoints.cs` |
 
 The `registry_get` backoff is **duplicated on purpose** between the workflow and the script: the
 workflow is pinned by the caller's `uses:` while the script is fetched at `platform-ref`, so a
@@ -205,6 +206,87 @@ dependency record mismatch — built against mvid:…, live is mvid:…
 — which is invisible in CI and surfaces only when a portal boots and renders nothing. That is the
 failure `assert-bake-consumption.sh` exists to catch, and it is why the module lane is pinned even
 though its window is the same size as the bundle lane's.
+
+### The fourth consumer: a portal one image ahead of its registry
+
+The first three read the share directly, over a credential of their own. The fourth reads it
+**server-side, inside the registry**, on behalf of a portal that has none — and it exists because a
+sealed publication is the only thing a registry can hand a consumer whose framework build identity
+is not its own.
+
+**Why a registry cannot answer an off-lane caller from its mesh.** Since #1751 the bundle route
+resolves an off-lane caller's assemblies through each NodeType's `Release` node, which records, per
+`(identity, architecture)`, which assembly-store version holds bytes *proven* built for that lane.
+That rule is right and it stays. What it cannot do is FIND bytes:
+
+- a `ReleaseArtifact` is minted in exactly ONE place — a compile, in this mesh, stamping the
+  compiling process's own `FrameworkVersion` and `ReleaseArchitecture.Live`
+  (`NodeTypeBuildState.TryCreateReleaseNode`). There is no append path and no route by which a
+  portal records an artifact for an identity it does not run;
+- adoption mints none at all: `PrebuiltAssemblySeeder.Seed` writes `LastCompiledVersion` and never a
+  release, which is precisely why the own-lane branch reads `LastCompiledVersion` rather than a
+  release;
+- so the only artifacts that exist for a lane the registry no longer runs were written by a compile
+  **in a pod that has since been replaced** — and an in-portal compile writes
+  `collection: "local"`, which `FileSystemAssemblyStore` defines as *"the bytes live in the local
+  filesystem cache only; cross-silo readers must recompile"*.
+
+Measured on the fleet registry on 2026-09-11: `Store/Plugin` did hold a release naming the
+consumer's identity — `s3e3c8023…`, written 01:11Z — and its artifact was
+`collection: "local", contentPath: "Store_Plugin/v13725-s3e3c802-…dll"`. Resolvable, and
+unreachable. **Off-lane serving out of the mesh is empty by construction, not by accident.**
+
+**What the registry does have** is the publication the producing repo's bake sealed for that
+identity, on the share it already mounts and already serves at
+`…/prebuilt/{identity}/{source}/{bundle}`. `SealedLaneBundles` (in `MeshWeaver.PluginCatalog`) is the
+lookup that lets the PACKAGE route reach it, so the decision stays inside the per-package grant —
+the same reasoning `ServedModuleBytes` records for the module half (#3244): a consumer
+fetching the prebuilt route itself would need a whole-source grant, and a whole-source grant
+deliberately bypasses plan tiering.
+
+### The stamp the index puts on that answer
+
+The index's top-level `frameworkMvid` says **which lane the bundles listed under it resolve for**. It
+used to say something narrower and, since #1751, untrue: *this portal's own bake*. Because
+`PluginBundleClient.Adopt` compares that value ONCE and declines the whole index before requesting
+any package, the download route's lane-awareness and the module half's sealed read were both
+unreachable for exactly the consumer they exist for.
+
+Measured on the fleet's own portals, twice, with a different identity pair each time:
+
+| when | consumer | registry | `bundle_adoption` |
+|---|---|---|---|
+| 2026-09-09 | memex.systemorph.com `s414bfb2…` | memex.meshweaver.cloud `s72c27af…` | 25 attempts, **0 adopted**, 25 `FrameworkDeclined` |
+| 2026-09-11 | memex.systemorph.com `s3e3c802…` | memex.meshweaver.cloud `s01d65c9…` | 25 attempts, **0 adopted**, 25 `FrameworkDeclined` |
+
+Both readings are the whole population of that process's attempts, not a truncation: the ledger's
+capacity is 500 and the payload names ten then counts the rest. The second was taken on portals
+already running #3946, which fixed a *different* decline (a dependency record's module entry) — so
+that fix does not touch this one, and the count did not move.
+
+On 2026-09-11 the registry's share held **561** identity directories, and
+`s3e3c80238a740a8cb895a72b0bfb9cd6` — the consumer's own live identity — was among them with
+`plugins` sealed at 00:33Z. **The bytes were on the registry's own disk while every consumer
+adoption was declined.**
+
+So the rule is now:
+
+1. a caller that states no lane gets this portal's identity, byte for byte as before — which is
+   every already-deployed consumer;
+2. a caller that states its lane and for which this registry **holds a sealed publication** is told
+   THAT lane, and each package is served out of that publication;
+3. a caller that states a lane this registry holds nothing for is told **this portal's own
+   identity** — so it declines and compiles, exactly as before.
+
+🚨 **Rule 3 is not a leftover, it is the point.** Claiming the caller's lane with nothing sealed for
+it would turn one cheap, named `FrameworkDeclined` into N downloads that each resolve nothing — a
+bake gap wearing a serving offer's colours. And nothing in any of this relaxes the adoption gate:
+the archive states the identity it was sealed for, and `PrebuiltAssemblySeeder.DeclineReason`
+(ordinal equality) still decides, first for the archive and then per assembly as it seeds.
+
+Both directions are pinned by `test/Memex.Portal.Shared.Test/PluginBundleSealedLaneTest.cs`, which
+asks the same endpoint with a sealed lane and an unsealed one and asserts the two different answers
+— a change that served everybody would pass only the first.
 
 ## How many writers, measured
 

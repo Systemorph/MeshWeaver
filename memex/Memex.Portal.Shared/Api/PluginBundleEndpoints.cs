@@ -138,8 +138,18 @@ public static class PluginBundleEndpoints
         // IMessageHub makes an UNAUTHENTICATED request depend on the mesh being resolvable — it
         // throws (500) instead of the 401 the filter would have returned. The rejection path must
         // not need anything but the header.
+        // 🚨 `identity`/`arch` are the CONSUMER's lane here for exactly the reason they are on the
+        // bundle route below (#1751) — and until #3768 the index did NOT read them, which made that
+        // route's lane-awareness unreachable: the index announced the registry's OWN bake, and
+        // `PluginBundleClient.Adopt` declines the whole index on a mismatch before it ever asks for
+        // a package. Absent ⇒ this instance's own lane, which is what every pre-#3768 client asks
+        // for, so the answer for them is unchanged.
         group.MapGet("/index.json", (HttpContext http, CancellationToken ct) =>
-            Index(http, RootHub(http), Caller(http), ct));
+            Index(
+                http, RootHub(http),
+                Requested(http, "identity", FrameworkMvid),
+                Requested(http, "arch", ReleaseArchitecture.Live),
+                Caller(http), ct));
 
         // 🚨 `identity`/`arch` are the CONSUMER's lane (#1751), not a filter the caller invents: they
         // say which framework build identity and which architecture the caller can actually run, and
@@ -895,10 +905,23 @@ public static class PluginBundleEndpoints
     /// <summary>
     /// What this instance can serve, and the framework identity it serves it for.
     ///
-    /// <para>The framework MVID is at the TOP, not per-bundle: every assembly here was produced by
-    /// this portal's own bake, so they all share it. A consumer compares it once and skips the whole
-    /// fetch when it does not match — downloading bundles it is then obliged to decline is pure
-    /// waste, and the decline itself is silent (see <see cref="PrebuiltAssemblySeeder"/>).</para>
+    /// <para>The framework MVID is at the TOP, not per-bundle: every bundle listed here is resolved
+    /// for ONE lane, so a consumer compares it once and skips the whole fetch when it does not
+    /// match — downloading bundles it is then obliged to decline is pure waste, and the decline
+    /// itself is silent (see <see cref="PrebuiltAssemblySeeder"/>).</para>
+    ///
+    /// <para>🚨 <b>That lane is the one the CALLER asked for, not this portal's own bake</b>
+    /// (#3768). It used to be <see cref="FrameworkMvid"/> unconditionally, on the premise that
+    /// "every assembly here was produced by this portal's own bake" — a premise #1751 retired when
+    /// the bundle route learned to resolve another lane, and #3244 retired again for the module
+    /// half. The consequence was measured on 2026-09-09 and again on 2026-09-11: a consumer one
+    /// image ahead of its registry declined the whole index — 25 attempts, 0 adopted, 25
+    /// <c>FrameworkDeclined</c> — while the publication sealed for its identity sat on the very
+    /// share this registry mounts. The stamp now names the lane the answer is FOR, which is the
+    /// same value each served bundle's own manifest carries, and it is claimed only when this
+    /// registry HOLDS a sealed publication for it: with none, the caller is told this portal's own
+    /// identity and declines exactly as before, because a bake that does not exist here is a bake
+    /// gap and must not read as a serving offer.</para>
     ///
     /// <para>Absolute URLs are built from the REQUEST rather than configuration: an instance reached
     /// through an ingress, a port-forward or a custom domain must advertise the host the caller
@@ -917,10 +940,21 @@ public static class PluginBundleEndpoints
     /// download route records every decision it makes — one per actual fetch.</para>
     /// </summary>
     private static Task<IResult> Index(
-        HttpContext http, IMessageHub rootHub, AuthenticatedInstance? caller, CancellationToken ct)
+        HttpContext http, IMessageHub rootHub, string identity, string architecture,
+        AuthenticatedInstance? caller, CancellationToken ct)
     {
         var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}";
         var ledger = Ledger(http);
+        // The lane this answer is FOR. On this instance's own lane it is FrameworkMvid and every
+        // bundle resolves from LastCompiledVersion, exactly as before. Off it, the claim is only
+        // made when a sealed publication for that identity is on the share this registry mounts —
+        // the one durable cross-lane source it has (SealedLaneBundles).
+        var servesOwnLane =
+            string.Equals(identity, FrameworkMvid, StringComparison.Ordinal)
+            && ReleaseArchitecture.Matches(ReleaseArchitecture.Live, architecture);
+        var servedLane = servesOwnLane
+            ? new ServedLane(FrameworkMvid, ReleaseArchitecture.Live)
+            : ServableLane(http, identity, architecture, caller);
         // Resolved NOW, while the request scope is alive: a late fault arrives after
         // HttpContext.RequestServices has been disposed, so resolving inside the lambda would throw
         // exactly when the report is needed.
@@ -948,14 +982,14 @@ public static class PluginBundleEndpoints
             .SelectMany(packages => ServableModules(rootHub, packages)
                 .SelectMany(modules => artifacts.Select(pushed => Results.Json(new
                 {
-                    frameworkMvid = FrameworkMvid,
+                    frameworkMvid = servedLane.Identity,
                     // The architecture that identity belongs to (#1751). The identity already FOLDS
                     // the architecture in — the amd64 and arm64 variants of one image resolve
                     // different identities — but it is opaque, so a consumer on the other variant
                     // sees only "not adoptable" with no way to tell an incompatible framework from
                     // the wrong lane. Stating the architecture makes that miss diagnosable. Additive:
                     // a pre-#1751 client ignores it, and its BundleIndex simply reads null.
-                    architecture = ReleaseArchitecture.Live,
+                    architecture = servedLane.Architecture,
                     bundles = packages.Select(p => new
                     {
                         plugin = p.PluginId,
@@ -994,6 +1028,60 @@ public static class PluginBundleEndpoints
                 ex => lateFaultLogger?.LogWarning(ex,
                     "Plugin bundles: the index faulted after the response had already been sent"),
                 ct)!;
+    }
+
+    /// <summary>The lane an index answer is for: the framework build identity its bundles resolve
+    /// against, and the architecture that identity belongs to.</summary>
+    private readonly record struct ServedLane(string Identity, string Architecture);
+
+    /// <summary>
+    /// 🚨 The OFF-LANE half of the index's stamp (#3768): the caller's lane when this registry
+    /// holds a sealed publication for it, this instance's own lane when it does not.
+    ///
+    /// <para><b>Why holding a publication is the right evidence, and the only cheap one.</b> Off
+    /// this instance's lane the bundle route serves from
+    /// <see cref="SealedLaneBundles"/> — the publication the producing repo's bake sealed for that
+    /// identity, on the share this registry already mounts and already serves at
+    /// <c>…/prebuilt/{identity}/{source}/{bundle}</c>. Its presence is one directory enumeration
+    /// and one seal read per source, and it answers exactly the question the stamp asks. The
+    /// alternative — resolving every package's <c>Release</c> artifacts — is a subtree query per
+    /// package on an endpoint every consumer polls, AND it cannot find bytes anyway: an artifact
+    /// for a lane this portal does not run was minted by a compile in a pod that has been replaced,
+    /// and its assembly is <c>collection: "local"</c> to that pod.</para>
+    ///
+    /// <para>🚨 <b>Claiming the caller's lane with nothing sealed for it would be worse than the
+    /// decline it replaces</b>: the consumer would fetch every package, each resolving no
+    /// assemblies, and a cheap named <c>FrameworkDeclined</c> would become N empty downloads. A
+    /// bake gap must keep reading as a bake gap.</para>
+    /// </summary>
+    private static ServedLane ServableLane(
+        HttpContext http, string identity, string architecture, AuthenticatedInstance? caller)
+    {
+        var logger = Log(http);
+        var publishedRoot = http.RequestServices.GetService<IConfiguration>()
+            ?[PublishedBundleCatalogue.PublishedRootConfigKey];
+        var sealedBundles = SealedLaneBundles.ServableFor(publishedRoot, identity, logger);
+        if (sealedBundles.IsEmpty)
+        {
+            // Named, because this is the state that makes a consumer compile everything on every
+            // boot and it is otherwise visible only from the consumer's own health payload.
+            logger?.LogInformation(
+                "Plugin bundles: {Instance} asks on framework {Identity}/{Architecture}; this "
+                + "registry bakes {OwnIdentity}/{OwnArchitecture} and holds no sealed publication "
+                + "for the caller's lane, so the index states its own — every package will be "
+                + "declined there and COMPILED. Publishing a bake for the caller's identity is "
+                + "what closes it.",
+                caller?.Instance.InstanceId ?? "an unauthenticated caller", identity, architecture,
+                FrameworkMvid, ReleaseArchitecture.Live);
+            return new ServedLane(FrameworkMvid, ReleaseArchitecture.Live);
+        }
+
+        logger?.LogInformation(
+            "Plugin bundles: serving {Instance} on framework {Identity}/{Architecture} from the "
+            + "{Count} bundle(s) sealed for that lane (this registry bakes {OwnIdentity})",
+            caller?.Instance.InstanceId ?? "an unauthenticated caller", identity, architecture,
+            sealedBundles.Count, FrameworkMvid);
+        return new ServedLane(identity, architecture);
     }
 
     /// <summary>
@@ -1407,6 +1495,26 @@ public static class PluginBundleEndpoints
             string.Equals(identity, FrameworkMvid, StringComparison.Ordinal)
             && ReleaseArchitecture.Matches(ReleaseArchitecture.Live, architecture);
 
+        // 🚨 OFF THIS INSTANCE'S LANE, the publication SEALED for the caller's identity is the
+        // answer — not a reconstruction from this mesh's Release records (#3768). Those records are
+        // right about WHICH build proves a lane and stay the rule below; what they cannot do off
+        // this lane is FIND bytes. A ReleaseArtifact is minted in exactly one place — a compile, in
+        // this mesh, stamping the compiling process's own identity — and an in-portal compile
+        // writes `collection: "local"`, the pod's own cache. So every artifact recorded for a lane
+        // this portal no longer runs points at a pod that has been replaced. Measured on the fleet
+        // registry 2026-09-11: `Store/Plugin` did hold an artifact for the consumer's identity, and
+        // it was `local`. The sealed publication is the same bytes the consumer's own boot seeder
+        // reads off the share and the same bytes this registry already serves at
+        // `…/prebuilt/{identity}/{source}/{bundle}` — reachable here under the PER-PACKAGE grant
+        // the caller already passed, which is why the decision is taken server-side (the reasoning
+        // ServedModuleBytes records for the module half: fetching the prebuilt route directly needs
+        // a whole-source grant, and a whole-source grant bypasses plan tiering).
+        if (!servesOwnLane
+            && SealedLaneBundles.Locate(publishedRoot, identity, package.PluginId, logger)
+                is { } sealedLane)
+            return FromSealedLane(
+                rootHub, package, sealedLane, identity, architecture, publishedRoot, logger);
+
         return meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{package.PluginId} scope:subtree"))
@@ -1433,13 +1541,14 @@ public static class PluginBundleEndpoints
                         .TryGetAssemblyPath(x.Node.Path, x.Version!.Value)
                         .Take(1)
                         .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
-                        .Select(path => (x.Node.Path, Path: path,
-                            Dependencies: (IReadOnlyDictionary<string, string>?)x.Definition!.CompiledDependencies)))
+                        .Select(path => new ServedAssembly(
+                            x.Node.Path,
+                            path is null ? null : () => File.OpenRead(path),
+                            x.Definition!.CompiledDependencies)))
                     .ToArray();
 
                 var assemblies = lookups.Length == 0
-                    ? Observable.Return(
-                        Array.Empty<(string NodePath, string? Path, IReadOnlyDictionary<string, string>? Dependencies)>())
+                    ? Observable.Return(Array.Empty<ServedAssembly>())
                     : lookups.CombineLatest().Select(x => x.ToArray());
 
                 if (misses.Count > 0)
@@ -1461,7 +1570,7 @@ public static class PluginBundleEndpoints
                     // located contributes no bytes, so its record must not vote on which module
                     // rides beside bytes that are not there.
                     var recorded = ServedModuleBytes.RecordedFor(
-                        found.Where(a => a.Path is not null).Select(a => a.Dependencies),
+                        found.Where(a => a.Open is not null).Select(a => a.Dependencies),
                         package.Module ?? "");
                     return ModuleFiles(rootHub, package, recorded, publishedRoot, identity)
                         .Select(module =>
@@ -1480,6 +1589,96 @@ public static class PluginBundleEndpoints
     /// <summary>How many per-type misses the warning names before it truncates — enough to diagnose,
     /// bounded so a wholesale lane mismatch cannot write a log line per type.</summary>
     private const int MissesReported = 10;
+
+    /// <summary>
+    /// One assembly this bundle will carry: the NodeType it implements, how to open its bytes
+    /// (null = it could not be located and it contributes nothing), the dependency record the
+    /// producer wrote beside it, and the producer's source fingerprint when one is recorded.
+    /// </summary>
+    /// <remarks>A <see cref="Func{TResult}"/> rather than a path so the two producers can be the
+    /// same shape: this instance's assembly store hands back a file, a sealed publication hands
+    /// back bytes already inflated from its archive.</remarks>
+    private sealed record ServedAssembly(
+        string NodePath,
+        Func<Stream>? Open,
+        IReadOnlyDictionary<string, string>? Dependencies,
+        string? SourceFingerprint = null);
+
+    /// <summary>
+    /// The bundle for a caller on ANOTHER lane, taken from the publication this registry holds
+    /// SEALED for that caller's framework identity (#3768) — the NodeType counterpart of the
+    /// module half's sealed read (#3244).
+    ///
+    /// <para>The assemblies come out of the sealed archive verbatim, with the dependency records
+    /// and source fingerprints its producer wrote; the MODULE section is composed exactly as on
+    /// every other serve, so an off-lane consumer keeps landing modules as it does today. Nothing
+    /// here decides adoption: the archive this writes states <paramref name="identity"/>, the
+    /// consumer re-checks it with the unchanged <c>PrebuiltAssemblySeeder.DeclineReason</c>, and
+    /// then again per assembly as it seeds.</para>
+    ///
+    /// <para>An unreadable or empty sealed bundle answers <see cref="NoSuchBundle"/> rather than
+    /// falling through to the Release-record path: falling through would hand back an archive with
+    /// no assemblies and a manifest claiming the caller's lane, which reads as a successful
+    /// adoption of nothing. A 404 is the one answer the consumer already turns into a NAMED miss
+    /// (<c>NotServed</c>) and a compile.</para>
+    /// </summary>
+    private static IObservable<IResult> FromSealedLane(
+        IMessageHub rootHub, BundleEntry package, SealedLaneBundle sealedLane,
+        string identity, string architecture, string? publishedRoot, ILogger? logger)
+    {
+        BundleReader.Manifest? manifest;
+        IReadOnlyList<BundleReader.Payload> payloads;
+        try
+        {
+            (manifest, payloads) = BundleReader.ReadFile(sealedLane.Path);
+        }
+        catch (Exception exception)
+            when (exception is IOException or InvalidDataException or JsonException)
+        {
+            logger?.LogWarning(exception,
+                "Plugin bundles: {Plugin} — the bundle sealed for framework {Identity} by source "
+                + "'{Source}' ({Bundle}) is unreadable; serving nothing for that lane, the consumer "
+                + "will compile", package.PluginId, identity, sealedLane.Source,
+                sealedLane.BundleName);
+            return Observable.Return(NoSuchBundle());
+        }
+
+        if (manifest is null || payloads.Count == 0)
+        {
+            logger?.LogWarning(
+                "Plugin bundles: {Plugin} — the bundle sealed for framework {Identity} by source "
+                + "'{Source}' ({Bundle}) carries no assemblies; serving nothing for that lane, the "
+                + "consumer will compile", package.PluginId, identity, sealedLane.Source,
+                sealedLane.BundleName);
+            return Observable.Return(NoSuchBundle());
+        }
+
+        var served = payloads
+            .Select(payload => new ServedAssembly(
+                payload.NodePath,
+                () => new MemoryStream(payload.Assembly, writable: false),
+                payload.Dependencies,
+                payload.SourceFingerprint))
+            .ToArray();
+
+        logger?.LogInformation(
+            "Plugin bundles: {Plugin} served on framework {Identity}/{Architecture} from the "
+            + "publication source '{Source}' sealed for that lane ({Bundle}, generation "
+            + "{Generation}) — {Count} assembly/assemblies",
+            package.PluginId, identity, architecture, sealedLane.Source, sealedLane.BundleName,
+            sealedLane.Generation ?? "(unrecorded)", served.Length);
+
+        var recorded = ServedModuleBytes.RecordedFor(
+            served.Select(a => a.Dependencies), package.Module ?? "");
+        IReadOnlyList<string> sealedMisses = manifest.Misses ?? [];
+        return ModuleFiles(rootHub, package, recorded, publishedRoot, identity)
+            .Select(module => BuildResult(
+                package, served, module, identity, architecture,
+                module.Divergence is null
+                    ? sealedMisses
+                    : sealedMisses.Append($"module '{package.Module}': {module.Divergence}")
+                        .ToArray()));
+    }
 
     /// <summary>
     /// The <c>Release</c> nodes from a package's subtree, grouped by the NodeType they belong to.
@@ -1617,7 +1816,7 @@ public static class PluginBundleEndpoints
     /// </summary>
     private static IResult BuildResult(
         BundleEntry package,
-        IReadOnlyList<(string NodePath, string? Path, IReadOnlyDictionary<string, string>? Dependencies)> assemblies,
+        IReadOnlyList<ServedAssembly> assemblies,
         ServedModule module,
         string identity,
         string architecture,
@@ -1628,17 +1827,31 @@ public static class PluginBundleEndpoints
         var entries = new List<NuGetPackageWriter.Entry>();
         var assemblyRecords = new List<object>();
 
-        foreach (var (nodePath, path, dependencies) in assemblies.Where(a => a.Path is not null))
+        foreach (var served in assemblies.Where(a => a.Open is not null))
         {
             // EntryPathFor states the naming rule (and why it is not slash-replaced) once, shared
             // with the reader. The manifest still carries the mapping — the consumer must read the
             // node path the producer wrote, never recover it from a file name.
-            var local = path!;
+            var nodePath = served.NodePath;
+            var dependencies = served.Dependencies;
             entries.Add(new NuGetPackageWriter.Entry(
-                NuGetPackageWriter.EntryPathFor(nodePath), () => File.OpenRead(local)));
+                NuGetPackageWriter.EntryPathFor(nodePath), served.Open!));
             // The per-type dependency record (#1707 slice 2) rides the manifest so the consumer
             // validates module/toolchain bindings before adopting and stamps them on adopt.
-            assemblyRecords.Add(new { nodePath, assembly = $"{nodePath}.dll", dependencies });
+            //
+            // 🚨 The producer's SOURCE FINGERPRINT rides it too, but ONLY when these bytes came
+            // with one — a sealed publication's manifest carries it, this instance's own store does
+            // not record one per assembly. It is what lets the consuming hub refuse an adoption
+            // whose source disagrees with the source that mesh holds (#2813); passing a value this
+            // route invented would be worse than passing none, and passing none is exactly what
+            // every own-lane serve did before and still does.
+            assemblyRecords.Add(served.SourceFingerprint is null
+                ? new { nodePath, assembly = $"{nodePath}.dll", dependencies }
+                : (object)new
+                {
+                    nodePath, assembly = $"{nodePath}.dll", dependencies,
+                    sourceFingerprint = served.SourceFingerprint,
+                });
         }
 
         // The module closure, under its own folder (#1664): these bytes land beside the consumer's

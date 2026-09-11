@@ -156,7 +156,20 @@ public sealed class PluginBundleClient
     public IObservable<BundleIndex> FetchIndex() =>
         _httpPool.Invoke(async ct =>
         {
-            using var request = Request(HttpMethod.Get, $"{_registryUrl}{RoutePrefix}/index.json");
+            // 🚨 The index is asked IN THIS INSTANCE'S LANE, exactly as the download route has been
+            // asked since #1751 — and until #3768 it was not, which is what made the download
+            // route's lane-awareness unreachable. The registry answered with its OWN bake identity,
+            // <see cref="Adopt"/> compared that once and declined the whole index, and no package
+            // was ever requested. Measured twice on the fleet's own portals (2026-09-09 and
+            // 2026-09-11, a different identity pair each time): 25 attempts, 0 adopted, 25
+            // FrameworkDeclined, while the publication sealed for the consumer's identity sat on
+            // the share the registry mounts. A registry that holds nothing for this lane still
+            // answers with its own identity, so the decline — and its cost argument — is unchanged
+            // in exactly the case it is right.
+            var url = $"{_registryUrl}{RoutePrefix}/index.json"
+                      + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
+                      + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
+            using var request = Request(HttpMethod.Get, url);
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
