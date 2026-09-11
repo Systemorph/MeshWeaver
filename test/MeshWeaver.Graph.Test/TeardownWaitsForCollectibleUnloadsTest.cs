@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
@@ -54,7 +55,7 @@ public class TeardownWaitsForCollectibleUnloadsTest(ITestOutputHelper output)
     [Fact]
     public async Task PerTestTeardown_ReturnsOnlyAfterTheContextItRetired_IsCollected()
     {
-        var fixture = new Teardown1605CollectedFixture(output);
+        await using var fixture = new Teardown1605CollectedFixture(output);
         await fixture.InitializeAsync();
         var unloads = fixture.Unloads;
         var weakContext = LoadIntoHolderAndRetire(unloads, fixture.Holder, "TeardownCollected1605");
@@ -85,36 +86,45 @@ public class TeardownWaitsForCollectibleUnloadsTest(ITestOutputHelper output)
     [Fact]
     public async Task PerTestTeardown_ReportsARetainedContext_AndReturnsInsteadOfWaitingOnIt()
     {
-        var fixture = new Teardown1605RetainedFixture(output);
+        await using var fixture = new Teardown1605RetainedFixture(output);
         await fixture.InitializeAsync();
         var unloads = fixture.Unloads;
         // Rooted by THIS test, not by the fixture: something live the teardown cannot release.
         var root = new CollectibleInstanceHolder();
         var weakContext = LoadIntoHolderAndRetire(unloads, root, "TeardownRetained1605");
-        var offset = TraceLength();
+        CollectibleUnloadOutcome released;
+        try
+        {
+            var offset = TraceLength();
 
-        await fixture.DisposeAsync();
+            await fixture.DisposeAsync();
 
-        DisposePhases(offset, nameof(Teardown1605RetainedFixture)).Should().Contain(
-            "DISPOSE_ALC_RETAINED",
-            "a context something live still roots can never unload, so teardown must REPORT it and "
-            + "return — waiting on it would hang the suite, and calling it collected would hide it");
-        weakContext.IsAlive.Should().BeTrue("the test itself still roots it — that is what makes it retained");
-        unloads.PendingContextNames.Should().Contain(
-            name => name.EndsWith("TeardownRetained1605", StringComparison.Ordinal),
-            "a retained context stays tracked, so the next drain still sees it");
+            DisposePhases(offset, nameof(Teardown1605RetainedFixture)).Should().Contain(
+                "DISPOSE_ALC_RETAINED",
+                "a context something live still roots can never unload, so teardown must REPORT it and "
+                + "return — waiting on it would hang the suite, and calling it collected would hide it");
+            weakContext.IsAlive.Should().BeTrue("the test itself still roots it — that is what makes it retained");
+            unloads.PendingContextNames.Should().Contain(
+                name => name.EndsWith("TeardownRetained1605", StringComparison.Ordinal),
+                "a retained context stays tracked, so the next drain still sees it");
+        }
+        finally
+        {
+            // Released and drained on EVERY path, so a failing assertion above never leaves this
+            // synthetic context loaded for the rest of the host; that failure still propagates.
+            root.Instance = null;
+            released = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
+        }
 
         // Released, the same drain collects it — and this test leaves nothing loaded behind.
-        root.Instance = null;
-        var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
-        outcome.Collected.Should().BeTrue($"with its last root gone the context must unload ({outcome})");
+        released.Collected.Should().BeTrue($"with its last root gone the context must unload ({released})");
         weakContext.IsAlive.Should().BeFalse("and it must actually be gone");
     }
 
     [Fact]
     public async Task PerTestTeardown_FailsWhenAnUnloadFaulted_InsteadOfHangingOnIt()
     {
-        var fixture = new Teardown1605FaultedFixture(output);
+        await using var fixture = new Teardown1605FaultedFixture(output);
         await fixture.InitializeAsync();
         LoadHookAndRetire(fixture.Unloads, "TeardownFault1605");
         var offset = TraceLength();
@@ -136,7 +146,9 @@ public class TeardownWaitsForCollectibleUnloadsTest(ITestOutputHelper output)
     {
         // The scope the runner opens around a collection, opened here so this test owns the moment
         // the collection's shared mesh is torn down. It is Current for this method only.
-        var scope = TestCollectionScope.Begin("Plugins#1605 shared-mesh teardown");
+        // `await using` disposes it on every failure path; the explicit disposal below is the one
+        // under test, and TestCollectionScope.DisposeAsync is a no-op the second time.
+        await using var scope = TestCollectionScope.Begin("Plugins#1605 shared-mesh teardown");
         var weakContext = await RunOneSharedCaseAsync(output);
         var offset = TraceLength();
 
@@ -158,9 +170,17 @@ public class TeardownWaitsForCollectibleUnloadsTest(ITestOutputHelper output)
     private static async Task<WeakReference> RunOneSharedCaseAsync(ITestOutputHelper output)
     {
         var fixture = new Teardown1605SharedFixture(output);
-        await fixture.InitializeAsync();
-        var weakContext = LoadIntoHolderAndRetire(fixture.Unloads, fixture.Holder, "TeardownShared1605");
-        await fixture.DisposeAsync();
+        WeakReference weakContext;
+        try
+        {
+            await fixture.InitializeAsync();
+            weakContext = LoadIntoHolderAndRetire(fixture.Unloads, fixture.Holder, "TeardownShared1605");
+        }
+        finally
+        {
+            // On every path, exactly once: the per-test half of a shared class's teardown.
+            await fixture.DisposeAsync();
+        }
         // xUnit drops a test instance once its teardown returns; so does this.
         fixture = null!;
         return weakContext;
@@ -255,6 +275,18 @@ public class TeardownWaitsForCollectibleUnloadsTest(ITestOutputHelper output)
         // mesh's own container, which the teardown disposes.
         public CollectibleInstanceHolder Holder =>
             ServiceProvider.GetRequiredService<CollectibleInstanceHolder>();
+
+        private int disposed;
+
+        // Exactly once. Each test calls it explicitly (that call is the subject) and `await using`
+        // calls it again on every path, so a setup step or assertion that fails first never leaves a
+        // live mesh — or its provider and contexts — behind in the host.
+        public override async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) != 0)
+                return;
+            await base.DisposeAsync();
+        }
     }
 
     // One type per case: the teardown traces under the fixture's type name, so each case reads only

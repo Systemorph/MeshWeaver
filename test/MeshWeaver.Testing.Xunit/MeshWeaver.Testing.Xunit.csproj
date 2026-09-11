@@ -12,11 +12,12 @@
     <PackageReference Include="xunit.v3.extensibility.core" />
   </ItemGroup>
   <ItemGroup>
-    <!-- TestCollectionScope.Begin is internal on purpose: only the assembly runner may open a
-         scope. The runner's own tests need to construct one without a framework. -->
+    <!-- TestCollectionScope.Begin is internal on purpose: only the assembly runner opens a scope in
+         normal use. Two test assemblies need to OWN a scope's lifetime and so may open one too:
+         the runner's own tests, which construct one without a framework, and (Plugins#1605)
+         MeshWeaver.Graph.Test's TeardownWaitsForCollectibleUnloadsTest, which drives a shared-mesh
+         fixture through a collection teardown it controls. Nothing else may open one. -->
     <InternalsVisibleTo Include="MeshWeaver.Testing.Xunit.Test" />
-    <!-- Plugins#1605: TeardownWaitsForCollectibleUnloadsTest drives a SHARED-mesh fixture through a
-         collection teardown it owns, so it opens its own scope exactly as the runner does. -->
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
   </ItemGroup>
 </Project>
