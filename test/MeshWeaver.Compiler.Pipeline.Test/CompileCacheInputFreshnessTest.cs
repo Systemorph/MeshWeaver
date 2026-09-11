@@ -156,4 +156,50 @@ public class CompileCacheInputFreshnessTest(ITestOutputHelper output) : Monolith
         second.CompiledDependencies![CompiledDependencies.ContentKey]
             .Should().NotBe(first.CompiledDependencies![CompiledDependencies.ContentKey]);
     }
+
+    [Theory(Timeout = 300_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADefinitionWithNullConfiguration_CanMatchButAnUnresolvedDefinitionCannot(
+        bool definitionBecomesUnresolved)
+    {
+        var capturedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        // The first call has an explicit definition. The second can resolve neither a definition
+        // in Content nor this deliberately absent owning type. Keep every other generated input
+        // unchanged so the old null-as-empty path would certify exactly the first artifact.
+        var before = TypeNode(capturedAt) with
+        {
+            NodeType = "type/AbsentDefinition" + Guid.NewGuid().ToString("N"),
+            Content = new NodeTypeDefinition(),
+        };
+        var sources = Sources(capturedAt, 42, "original-case");
+        var first = Assert.IsAssignableFrom<NodeCompilationResult>(await Compiler
+            .CompileAndGetConfigurations(before, sources).Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit());
+        Transcript(first).Should().Contain("Compiled assembly written to");
+        EmittedBehavior(first).Should().Be("42|original-case");
+
+        var next = definitionBecomesUnresolved ? before with { Content = null } : before;
+        var second = Assert.IsAssignableFrom<NodeCompilationResult>(await Compiler
+            .CompileAndGetConfigurations(next, sources).Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit());
+        Output.WriteLine("Second compiler transcript: {0}", Transcript(second));
+        EmittedBehavior(second).Should().Be("42|original-case");
+        if (definitionBecomesUnresolved)
+        {
+            Transcript(second).Should().Contain("NULL — the read stalled or the node is absent");
+            Transcript(second).Should().NotContain("Cache hit",
+                "an unestablished definition cannot certify equality with the producing input");
+            second.AssemblyLocation.Should().NotBe(first.AssemblyLocation);
+        }
+        else
+        {
+            Transcript(second).Should().Contain("Cache hit",
+                "a present definition with a legitimately null Configuration is conclusive");
+            second.AssemblyLocation.Should().Be(first.AssemblyLocation);
+            second.CompiledDependencies![CompiledDependencies.ContentKey]
+                .Should().Be(first.CompiledDependencies![CompiledDependencies.ContentKey]);
+        }
+    }
+
 }

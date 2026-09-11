@@ -218,11 +218,11 @@ internal class MeshNodeCompilationService(
     /// millisecond, the five <c>@@</c> targets of <c>FutuRe/LocalAnalysis/Source/ExternalDependencies</c>
     /// in file order).</para>
     ///
-    /// <para>The scope must be established at SUBSCRIBE time, not at composition time — hence
-    /// <c>Observable.Using</c>, whose resource factory runs inside the subscribe call that posts
-    /// the <c>GetDataRequest</c>. Wrapping each read individually (rather than the whole chain)
-    /// is deliberate: a chained read — the include fallback below — is subscribed from the FIRST
-    /// read's emission, i.e. on another thread again, so an outer scope would not cover it.</para>
+    /// <para>The scope must be established at SUBSCRIBE time and closed on that same flow.
+    /// <c>RunAsSystem</c> covers the cold read and restores the caller on return and on every
+    /// downstream notification. <c>Observable.Using</c> can dispose on the response thread and
+    /// leave the subscriber elevated. Wrapping each read individually is deliberate: the include
+    /// fallback starts from the FIRST read's emission, so it needs its own system scope.</para>
     ///
     /// <para>This is the explicit infrastructure opt-in AGENTS.md sanctions
     /// (<c>ImpersonateAsSystem</c>), NOT the "silently stamp hub-self as principal" fallback that
@@ -233,9 +233,8 @@ internal class MeshNodeCompilationService(
         string path, ReadTimeoutBehavior onTimeout)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Using(
-            () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-            _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), onTimeout));
+        return accessService.RunAsSystem(
+            () => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), onTimeout));
     }
 
     /// <summary>
@@ -1896,6 +1895,11 @@ internal class MeshNodeCompilationService(
         MeshNode node, NodeTypeDefinition? ntDef, string selfPath,
         IReadOnlyList<MeshNode>? sourcesOverride)
     {
+        // An absent/unresolved definition is not an empty configuration. The cache cannot
+        // establish input equality until the definition itself is known; compile as before.
+        if (ntDef is null)
+            return Observable.Return<string?>(null);
+
         var assemblyName = $"DynamicNode_{cacheService.SanitizeNodeName(node.Path)}";
         return BoundLeg(
                 _ => SnapshotSources(ntDef, selfPath, sourcesOverride)
@@ -1904,7 +1908,7 @@ internal class MeshNodeCompilationService(
                     .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
                     .Select(codeFiles => PrepareGeneratedSource(
                         node, NodeCompileShaping.CombineSources(codeFiles),
-                        ntDef?.Configuration, ntDef?.ContentCollections))
+                        ntDef.Configuration, ntDef.ContentCollections))
                     .SelectMany(prepared => prepared.NuGetReferences.Length == 0
                         ? Observable.Return(
                             GeneratedInputDigestOf(assemblyName, prepared.Source, []))

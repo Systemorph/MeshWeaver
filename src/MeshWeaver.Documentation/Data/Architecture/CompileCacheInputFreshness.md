@@ -48,6 +48,16 @@ when stamping the dependency record; the regenerated candidate digest is evidenc
 comparison, never a replacement producer claim. See
 [Producer Determinism of the Dependency Record](../ProducerDeterminismOfTheDependencyRecord).
 
+An unresolved NodeType definition is also inconclusive. It cannot be substituted with an empty
+configuration to establish cache equality. A present definition whose `Configuration` is null
+remains a valid input, so unchanged types with no configuration still take warm cache hits. This
+cache guard leaves the inherited fresh-compilation behavior for an unresolved definition unchanged.
+
+The include reader uses the existing `RunAsSystem` boundary for each cold read, including the
+fallback read started by an earlier response. It restores the subscribing flow and downstream
+callbacks to their caller identity. A long-lived `Observable.Using` impersonation scope would
+instead be disposed by the response flow and can leave the subscriber elevated.
+
 The existing re-evaluation entry point keeps its signature, discovery path and inconclusive
 result semantics. Neither `CompilationCacheService`'s load-context lifecycle nor the registry's
 late hand-over machinery changes here.
@@ -97,11 +107,28 @@ explicit local `en-US` setting is a reproducible test environment, **not a claim
 actual culture was observed**. Both the default-culture failure receipt and the explicit-culture
 success receipt are retained.
 
+### Review boundary regressions
+
+PR review identified two additional boundaries in the shared regeneration path. Four cases ran
+against the unchanged PR head `96c157e3`: the present-definition/null-configuration warm-cache
+control passed, while the missing-definition case and both real mesh source-read cases failed.
+The missing definition still produced a cache hit. The direct reader and the include fallback
+both left the subscribing caller holding `system-security` after `Subscribe` returned.
+
+The amended cases require a present null configuration to keep reusing the original artifact,
+but an unresolved definition to fall through to the existing fresh compiler. The real mesh read
+cases also assert the returned node and caller identity inside the result callback, so restoring
+an identity by preventing the read from working cannot pass. They invoke the existing private
+reader boundary through reflection without exposing a new production API. The amended focused
+selection passed **54/54** after a strict Release build with zero warnings or errors. The
+amended full compiler suite passed **849/849** with explicit `en-US`, zero errors, skips or unrun
+tests. The earlier default-culture failure and pre-review receipts above remain historical evidence.
+
 Reproduce with the normal SDK fixture:
 
 ```bash
 dotnet build test/MeshWeaver.Compiler.Pipeline.Test/MeshWeaver.Compiler.Pipeline.Test.csproj -c Release -warnaserror
-dotnet test test/MeshWeaver.Compiler.Pipeline.Test/MeshWeaver.Compiler.Pipeline.Test.csproj -c Release --no-build --no-restore --filter 'FullyQualifiedName~CompileCacheInputFreshnessTest|FullyQualifiedName~CacheHitStampsTheSameRecordTest|FullyQualifiedName~ContentKeyReevaluationTest|FullyQualifiedName~GeneratedInputIdentityTest' --logger trx
+dotnet test test/MeshWeaver.Compiler.Pipeline.Test/MeshWeaver.Compiler.Pipeline.Test.csproj -c Release --no-build --no-restore --filter 'FullyQualifiedName~CompileCacheInputFreshnessTest|FullyQualifiedName~CompileSourceReadIdentityTest|FullyQualifiedName~CacheHitStampsTheSameRecordTest|FullyQualifiedName~ContentKeyReevaluationTest|FullyQualifiedName~GeneratedInputIdentityTest' --logger trx
 cd test/MeshWeaver.Compiler.Pipeline.Test/bin/Release/net10.0
 dotnet MeshWeaver.Compiler.Pipeline.Test.dll -culture en-US -trx compiler-suite-en-US.trx -showLiveOutput -longRunning 60
 ```
