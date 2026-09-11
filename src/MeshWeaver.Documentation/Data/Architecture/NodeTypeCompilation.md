@@ -2054,6 +2054,25 @@ suggestion and a point read agree by construction. **There is no caller-run read
 denied from deleted any more, and there should not be one** — a control that works by publishing
 someone else's document titles is a disclosure wearing an instrument's colours.
 
+🚨 **And do not read a WRITE tool's permission refusal as an existence proof.** `compile` answers
+*"Compile requires Compile permission on the target NodeType — it schedules a Roslyn build and
+records an activity under the node. Ask someone with editor access to the node (or a platform
+admin) to do it."*, which reads exactly like *"the node is there, you may just not build it"*. It is
+not. Measured on memex.systemorph.com, 2026-09-11, three calls, one answer:
+
+| call | answer |
+|---|---|
+| `compile @BinaryClickerV2/BinaryToggle` | `Compile requires Compile permission on the target NodeType …` |
+| `compile @BinaryClickerV2/NoSuchNodeType_zzz9999` *(negative control)* | **byte-identical** |
+| `compile @ThisPartitionDoesNotExist_zzz9999/NoSuchType` *(negative control)* | **byte-identical** |
+
+The authorization runs before the node is resolved, so the refusal is emitted for a path that could
+never exist. `recycle` is the same, measured the same way and the same day: *"Recycle requires
+Update permission on the target node …"* for `@BinaryClickerV2/BinaryToggle` **and** for
+`@ThisPartitionDoesNotExist_zzz9999/NoSuchType`. **Run the invented-path control before quoting any
+refusal as evidence about a real node** — the same discipline the `Not found` string already
+demands, on the tools that look like they answer differently.
+
 What is left is one read you can run and one answer that comes from the system:
 
 1. `get @Admin/Partition/<Namespace>` — the partition record survives its data. `Active` means the
@@ -2110,6 +2129,28 @@ the name finds nothing and reads as "no such instrument". Two ways its silence m
 So before trusting a green `nodetype_bake`, confirm the check is REGISTERED **and** ARMED — the
 payload must name a positive count of types it actually enumerated. A verdict with no denominator is
 the skip-trapdoor this whole page argues against, wearing a health check's colours.
+
+🚨 **Third way its silence means nothing: the check exists in `main` and not in the RUNNING IMAGE.**
+`/health` is served by the image the pod booted, never by the branch you are reading, and the gap
+between the two is routinely a day's worth of merges. Measured 2026-09-11 on
+**memex.systemorph.com**, a portal whose `/health` was *already* `Degraded` — so plainly reachable
+and reporting — and which published exactly five checks: `content-types`,
+`pending_module_activation`, `required_modules`, `bundle_adoption` and the roll-up. **No
+`bake-report`, no `source-discovery`, no `nodetype_bake`.**
+
+| | |
+|---|---|
+| running image (`/api/version`) | `3.0.0+45306a33e`, built **2026-09-10T23:37:03Z** |
+| `bake-report` / `source-discovery` first appear in | `5cf38a690` *feat(#3703,#3704): publish the two bake verdicts on /health*, **2026-09-11T08:09Z** |
+| `git ls-tree 45306a33e -- src/MeshWeaver.Hosting/NodeTypeBakeReportRegistry.cs` | *(empty — file absent at that commit)* |
+| positive control, same command, same commit, `AGENTS.md` + `DynamicTypePreWarmer.cs` | both listed |
+| distance | **58 commits** behind `main` |
+
+The instrument had landed in core nine hours after that image was built. Nothing was
+misconfigured and nothing was refusing — the code simply was not in the binary. **So check the
+running commit before concluding a check is unarmed, and run the `ls-tree` with a control**: an
+empty `ls-tree` exits 0 whether the path is absent or the commit is wrong, which is the same
+shape of false negative as everything else on this page.
 
 ### The obligation on framework changes
 
