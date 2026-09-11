@@ -203,6 +203,15 @@ The lane now reads `github.event.repository.default_branch` off the event — **
 single-copy design exists to end — compares it with `github.event.pull_request.base.ref`, and arms
 only on a match.
 
+🚨 **One self-clearing window, named so it is not misread as the fix failing.** The lane runs on
+`pull_request_target`, and that event runs the workflow file **as it exists on the pull request's
+BASE branch** — not on `main`. So a stacked pull request opened onto a feature branch that was cut
+*before* this fix landed still runs the old, unguarded copy and is still armed immediately. Nothing
+in core can reach that: the branch carries its own copy by the event's definition. It clears as soon
+as the branch is cut from, or catches up with, a `main` that has the fix. If you see a stacked pull
+request merge instantly in the days after this lands, check the age of its base branch before
+concluding the guard is broken.
+
 🚨 **The decision is announced, and the JOB is never what skips.** Moving the base test onto the
 job's `if:` is the tidy-looking version of this fix and deletes the message with it: a skipped job
 renders like a passed one and carries no warning, no summary and no comment, so "the lane declined"
