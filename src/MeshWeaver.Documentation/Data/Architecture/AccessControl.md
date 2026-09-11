@@ -856,7 +856,8 @@ every evaluation:
 
 `PartitionAccessPolicy { Api = false }` is therefore meaningful in its own right: **"readable in a
 browser, not reachable through the API."** The public grant is ORed in *after* the cap so the page
-stays readable; the capability it confers is *not*, so the API surface closes.
+stays readable; the capability it confers is *not*, so the API surface closes. An inherited public
+grant is still subject to a deeper `Read = false` policy, as described below.
 
 ## 🚨 Why the mint-time role snapshot existed — and why trusting it was the bug
 
@@ -1199,6 +1200,52 @@ The predicate above used to carry a third term — `public_read_node_type OR …
 - **The shape was unsafe regardless of the type list.** Being an unconditional `OR` in front of the node fold, it short-circuited the longest-prefix resolution — i.e. it overrode DENY rows, which is precisely where store/course paywall gating lives. And `PermissionEvaluator` has no node-type-keyed term, so the SQL and evaluator paths would have diverged.
 
 **Declare public read with a mechanism both read paths honour instead:** a `PartitionAccessPolicy` `_Policy` node with `PublicRead = true` (issue #603 — projected as allow-`Read` rows for `Public`/`Anonymous` that *participate in* the prefix fold, so a deeper deny still wins), or a [`NodeTypeGate`](#type-declared-subtree-gates-nodetypegate) (issue #701) for a type that opens a short, explicitly listed set of surfaces on its own subtree.
+
+### Public policy grants and deeper read caps
+
+`PublicRead` follows scope order. At each scope, the evaluator first applies that policy's cap to
+the inherited public grant, then adds the scope's own public grant. This preserves the PostgreSQL
+projection's existing order: policy caps are projected first, public grants replace them at the
+same prefix, and a more specific prefix wins when reading a descendant.
+
+| Policies on the path | Read decision for a viewer without a role |
+|---|---|
+| Parent `PublicRead = true`; ordinary child | Allow |
+| Parent `PublicRead = true`; child `Read = false` | Deny at the child and below |
+| Same scope `PublicRead = true` and `Read = false` | Allow |
+| Parent public; child read cap; grandchild `PublicRead = true` | Allow at the grandchild and below |
+| `Read = true` alone | No grant |
+
+`BreaksInheritance` resets inherited roles and their caps; it does not make a child's explicit
+read cap ineffective against a public ancestor. Role denies continue to remove roles, while
+`PublicRead` remains a separate grant. This rule does not change the additive `NodeTypeGate`
+contract or the separate `Api` capability cap.
+
+**Regression evidence (2026-09-11).** On core baseline
+`3e731d947244b51b19f4c78b1114fc4273a9a840`, `PublicReadPolicyScopeTest` executed 14 cases against a
+real monolith mesh without the fixture's default Public Admin grant. Four failed: anonymous and
+signed-in reads through a deeper read cap, each with and without `BreaksInheritance`. The other ten
+controls passed. The correction caps the accumulated public grant at each scope before applying
+that scope's own `PublicRead`. Fixtures use invented subjects and scopes; no production records are
+part of the test. After the correction, all 14 cases and the seven existing
+`ApiTokenCapabilityFreshnessTest` cases passed (21 total). Both baseline and corrected builds used
+`dotnet build test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj -c Release -p:CIRun=true -warnaserror`
+and finished with zero warnings and errors. The corrected test selection was
+`FullyQualifiedName~PublicReadPolicyScopeTest|FullyQualifiedName~ApiTokenCapabilityFreshnessTest`.
+Two existing `RoutedApiTokenClampTest` cases also passed. Against the same corrected core, the
+Plugins `MeshWeaver.Security.Test` project at `8ee8a192` built with the same strict flags and passed
+33 existing cases selected by `PartitionAccessPolicyTests`, `StaticNamespacePolicyTests`,
+`NodeTypeGateTests`, `AnonymousGateTests` and `UserPublicReadTest`. These include a signed-in,
+unentitled viewer denied course content, public course surfaces and the entitled control.
+
+The baseline evaluator SHA-256 was
+`472c97c6d7419145178cff0e693bde17cad2e9d17d35ecbfb96bf222e1af3219`; this document's baseline SHA-256
+was `f67ad347c579f8bd483906fe7bcb4276d4fdd5f258491758154ab376ed35ad9b`. The SQL comparison used
+`MeshWeaver.Plugins` commit `39bd2e7ae0c2e1574ce44b26f3ef0b9938d98c04`,
+`PostgreSqlSchemaInitializer.cs` SHA-256
+`49515b4db3ffb27a5f6313577d239781447d10eb14087c1852a7b6d4162df026`. Its bulk and per-user
+projection both apply same-prefix public grants after policy denies. These are source receipts;
+the core regression does not execute PostgreSQL.
 
 ## AI tool call identity
 

@@ -695,10 +695,12 @@ internal static class PermissionEvaluator
                 roleIds = roleIds.Union(roles);
             if (policy is not null)
             {
-                permissionCap &= policy.GetPermissionCap();
-                // Public-read override: a policy with PublicRead grants Read to every
-                // user at this scope and below. Accumulated here, ORed in AFTER the
-                // per-user (roles ∩ cap) below — so it has precedence and needs no role.
+                var scopeCap = policy.GetPermissionCap();
+                permissionCap &= scopeCap;
+                // A deeper cap suppresses an inherited public grant, matching the SQL
+                // longest-prefix fold. Apply this scope's grant afterwards: PublicRead
+                // still overrides Read=false at the SAME scope and needs no role.
+                publicGrant &= scopeCap;
                 if (policy.PublicRead)
                     publicGrant |= Permission.Read;
             }
