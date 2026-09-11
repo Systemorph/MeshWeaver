@@ -78,7 +78,7 @@ repos:
         job: publish-modules
         lane: node-repo-module-publish.yml
         grants: {contents: read}
-        pending: lands with Systemorph/MeshWeaver.Plugins#PLUGINS_PR, which switches modules-floor to publish-mode staged and adds this caller (MeshWeaver#3878). Once it has merged the marker is spent and this row is compared key for key.
+        pending: lands with Systemorph/MeshWeaver.Plugins branch fix/3878-staged-module-publication, which switches modules-floor to publish-mode staged and adds this caller (MeshWeaver#3878). Once it has merged the marker is spent and this row is compared key for key.
       - workflow: ci.yml
         job: supersede
         lane: node-repo-supersede.yml
