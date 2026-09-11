@@ -1280,7 +1280,11 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
     if [ -n "$published_sha" ] && [ "$published_sha" != "unknown" ]; then
       order=""
       if [ -n "${GH_TOKEN:-}" ] && [ -n "${BAKE_CONTENT_REPOSITORY:-}" ]; then
-        order=$(gh api "repos/$BAKE_CONTENT_REPOSITORY/compare/$SOURCE_SHA...$published_sha" --jq .status 2>/dev/null || echo "")
+        # The refusal's own words go to the log: an unorderable pair must say WHY it was unorderable.
+        if ! order=$(gh api "repos/$BAKE_CONTENT_REPOSITORY/compare/$SOURCE_SHA...$published_sha" --jq .status 2>"$SENTINEL_LOCAL_DIR/compare.err"); then
+          echo "::warning::the compare API refused to order $SOURCE_SHA against $published_sha: $(tail -c 400 "$SENTINEL_LOCAL_DIR/compare.err" | tr '\n' ' ')"
+          order=""
+        fi
       fi
       if [ "$order" = "ahead" ]; then
         echo "::notice::$ACCOUNT/$SHARE: the sealed publication under $LIVE is from $published_sha, which is NEWER than this bake's $SOURCE_SHA and contains it — a later run sealed first. Not sealing backwards; skipping."
