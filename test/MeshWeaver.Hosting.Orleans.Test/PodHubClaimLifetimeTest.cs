@@ -58,16 +58,21 @@ public class PodHubClaimLifetimeTest
     private static IObservable<IMessageDelivery> Ignore(IMessageDelivery d, CancellationToken _) =>
         Observable.Return(d);
 
-    private static Microsoft.Extensions.DependencyInjection.ServiceProvider Services(
+    private static async Task<Microsoft.Extensions.DependencyInjection.ServiceProvider> Services(
         IHostApplicationLifetime? lifetime = null)
     {
+        var readiness = new OrleansStreamingReadiness();
         var services = new ServiceCollection();
-        // Registered but never fired: the stream attach then stays parked on the #1129 readiness
-        // gate, so this test needs no stream provider and touches none.
-        services.AddSingleton(new OrleansStreamingReadiness());
+        services.AddSingleton(readiness);
         if (lifetime is not null)
             services.AddSingleton(lifetime);
-        return services.BuildServiceProvider();
+        var provider = services.BuildServiceProvider();
+        // These tests exercise the claim's post-startup lifetime policy. Open the same Active-stage
+        // gate production opens first; the dedicated readiness test pins that nothing is touched
+        // before it. The absent stream provider is reported by the sibling attach path and is not
+        // the subject here.
+        await ((ILifecycleObserver)readiness).OnStart(TestContext.Current.CancellationToken);
+        return provider;
     }
 
     private static OrleansRoutingService Router(
@@ -123,7 +128,7 @@ public class PodHubClaimLifetimeTest
     {
         var factory = new RefusingGrainFactory();
         var logger = new RecordingLogger();
-        await using var sp = Services();
+        await using var sp = await Services();
         using var routing = Router(factory, sp, logger, canHostGrains: true);
 
         using var registration = routing.RegisterStream(Hub, Ignore);
@@ -161,7 +166,7 @@ public class PodHubClaimLifetimeTest
     {
         var factory = new RefusingGrainFactory();
         var logger = new RecordingLogger();
-        await using var sp = Services();
+        await using var sp = await Services();
         using var routing = Router(factory, sp, logger, canHostGrains: false);
 
         using var registration = routing.RegisterStream(Hub, Ignore);
@@ -188,7 +193,7 @@ public class PodHubClaimLifetimeTest
     public async Task DisposingTheRegistration_EndsTheClaim()
     {
         var factory = new RefusingGrainFactory();
-        await using var sp = Services();
+        await using var sp = await Services();
         using var routing = Router(factory, sp, new RecordingLogger(), canHostGrains: true);
 
         var registration = routing.RegisterStream(Hub, Ignore);
@@ -219,7 +224,7 @@ public class PodHubClaimLifetimeTest
         // fires ApplicationStopping regardless, and that token is the signal under test.
         var lifetime = new HostBuilder().Build().Services.GetRequiredService<IHostApplicationLifetime>();
         var factory = new RefusingGrainFactory();
-        await using var sp = Services(lifetime);
+        await using var sp = await Services(lifetime);
         using var routing = Router(factory, sp, new RecordingLogger(), canHostGrains: true);
 
         using var registration = routing.RegisterStream(Hub, Ignore);
