@@ -197,6 +197,31 @@ bridge has been seen to die with `SIGABRT` after ~70 s, print **no results at al
 And a red after a major bump is a real behavioural change until proven otherwise — that is the entire
 point of the exercise, so it is investigated, never re-run.
 
+**Investigated means EXONERATED BY MEASUREMENT, not argued away.** Two discriminators do almost all
+the work, and both give a positive answer rather than an absence:
+
+- 🚨 **Ask whether the failing suite was ALREADY running the new version.** Where the bump closes a
+  split family (below), some test projects resolved the new major long before the pin moved — so the
+  runtime under those suites did not change at all, and only the *compile* surface did. Read it off
+  the binary, not off the props file: hash the library beside that suite's test assembly against the
+  downloaded `.nupkg` asset. On the Rx crossing this settled the question outright — the suite that
+  went red was one of the eight already resolving 7.0.0, so the bump could not have changed what it
+  ran.
+- 🚨 **A/B the property the red is actually about, on one machine.** Build the failing suite at the
+  merge base and at your branch and measure the thing that failed — peak RSS, elapsed time, the
+  assertion's own quantity. "It passes locally" is not that measurement; a guard can be deliberately
+  CI-only.
+
+That last point is the trap worth naming: **a test-infrastructure guard can be armed only on CI, so
+a green local run is not a control at all.** `MonolithMeshTestBase` carries a memory watchdog that
+`FailFast`s the host when process RSS crosses 6 GiB, and it does so **only** when `CI` or
+`GITHUB_ACTIONS` is set — on a dev machine it logs the breach and keeps going, by design. The
+resulting CI signal is `exit=134 SIGNAL SIGABRT` plus a synthetic `<Project>.HOST_CRASHED` trx
+entry, which reads exactly like a native crash and invites a hunt for a disposal or scheduler bug
+that is not there. The `FailFast` message names the real cause (a cumulative Autofac
+`Reflection.Emit` factory leak from non-shared test classes), and the threshold is fixed, so a shard
+sitting near it crosses on run-to-run noise. Read the message before believing the signal shape.
+
 ## Ledger
 
 ### System.Reactive 6.1.0 → 7.0.0 — a packaging release, and a SPLIT FAMILY it closed
@@ -213,6 +238,7 @@ Measured 2026-09-11.
 | Upstream's own verdict | `ApiCompatSuppressions.xml` at tag `rxnet-v7.0.0` (HTTP 200, 22,564 B) carries **57** entries: 51 `CP0001` (40 naming Windows-UI/WinRT types, 11 `AsyncInfoObservable`/`IEventPatternSource`), 5 `CP0008` and 1 `CP0002`. 🚨 The six non-`CP0001` ones DO name core types (`ThreadPoolScheduler`, `NotificationKind`), so "all are UI omissions" would be wrong — but every one of them is a **cross-TFM** comparison against `netstandard2.0` or `uap10.0.18362`, and **none involves the `net8.0` pair this repo resolves**. Both types, and the `CP0002` member, are present in `ref/net8.0` and `lib/net8.0` alike. |
 | In-mesh sweep | **31 of 638** in-mesh artefacts reference Rx — 30 of 93 `.cs` node sources, and 1 of 545 node `.json` (`samples/Graph/Data/Northwind/AnalyticsCatalog.json`, Rx inside escaped source). None compiles in CI. Since the removal set on the resolved assets is empty, there is nothing for any of them to have used. |
 | Suites | **15 suites, 6,909 tests, 0 errors, 0 failures** (2 skipped), run as the test executables: Graph 1545 · Memex.Portal.Shared 1291 · Compiler.Pipeline 841 · Hosting 619 · Data 508 · Layout 484 · Messaging.Hub 409 · Documentation 397 · PluginTester 362 · Hosting.Orleans 256 · ContainerImages 112 · ContentCollections 28 · Testing.Xunit 23 · Cli 19 · Deployment.Contract 15. |
+| The one CI red, and how it was cleared | Shard 2 aborted `MeshWeaver.Compiler.Pipeline.Test` with `exit=134 SIGNAL SIGABRT` and a synthetic `HOST_CRASHED` trx entry — the **CI-only** `MonolithMeshTestBase` memory watchdog `FailFast`ing at **6,256 MiB observed / 6,144 MiB threshold**, 1.8% over, naming the Autofac `Reflection.Emit` leak as the cause. Exonerated by two positive measurements, not by re-running: (a) that suite references `Microsoft.Reactive.Testing`, so it **already resolved Rx 7.0.0 on the merge base** — proven by hashing the `System.Reactive.dll` beside the control build, `e8070137…`, identical to the 7.0.0 `lib/net8.0` asset — meaning the bump changes nothing it *runs*; (b) an A/B of peak RSS on one machine: merge base **1,843 MiB**, this branch **1,616 MiB**, i.e. *lower*. |
 
 **The defect this bump actually fixed was not a version being old.** `Microsoft.Reactive.Testing` was
 already pinned at **7.0.0** while `System.Reactive` read **6.1.0**. The testing package depends on
