@@ -711,6 +711,24 @@ download loop:**
 | any | **unknown** | **Skip**, and the reason SAYS the identity could not be checked. Landing could never turn "the registry states nothing" into evidence — it would state nothing next time too — so answering Land there re-downloads every module on every reconcile, forever, against any registry that predates the field. |
 | known | known, equal | **Skip** — the genuine no-op, with the framework named. |
 
+#### Publication arrival order is not version order
+
+The registry can receive one module from both the module repository's publication and a slower core
+CD that baked an earlier repository commit. Both uploads are valid warehouse stock, but the one that
+arrives last is not necessarily the newest. On 2026-09-11 `MeshWeaver.Mail.MicrosoftGraph` 1.7.0
+landed at 02:49Z; core CD then delivered 1.6.1 at 03:00Z, the old last-writer rule moved the head to
+1.6.1, and the next restart silently un-shipped the release (#3996).
+
+`ShelveModule` therefore applies the consumer's no-unattended-rollback rule to the publish route: a
+known older version lands its content-addressed generation but never displaces a newer head whose
+bytes are present — whether or not that head links on the registry's own platform, because the shelf
+warehouses modules for newer platforms. The older upload competes for the head's single fallback
+slot instead, and the index lists head and retained fallback at their own versions, each download
+resolving its own generation. A head whose entry assembly is missing is healed by the next valid
+upload, and unknown versions keep the legacy behaviour. The full rule, the fallback choice, what a
+deliberate rollback now means, and the unresolved cross-replica case (#4026) are in
+[Module Adoption Policy](../ModuleAdoptionPolicy).
+
 The remaining blind spot (a registry that states no identity) is closed **where it is created**, not
 by churning consumers: a bundle that cannot say what it was built against must not be publishable.
 That is #3211, and it matters more than it sounds — measured on MeshWeaver.Plugins run 33773265959
