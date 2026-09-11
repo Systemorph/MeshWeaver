@@ -63,13 +63,19 @@ name: node-repo module publish
 #       required-jobs: preflight validate repo-gates compile-check test-repos tests-ratchet portal-hosts-gate modules-floor
 #       lane:     ${{ needs.modules-floor.outputs.lane }}
 #       selected: ${{ needs.modules-floor.outputs.selected }}
-#       modules:  ${{ ... the same JSON the modules-floor call was given ... }}
+#       modules:  ${{ needs.modules-floor.outputs.declared }}   # the pack call's own catalog, never a copy
 #       platform-ref: ${{ needs.platform-ref.outputs.sha }}
 #     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
 #
 # One call per pack call: the lane, the selection and the declared matrix all belong to ONE call
 # of the pack workflow (Plugins runs two — floor and rest), and mixing them would be exactly the
 # run-wide-artifact confusion the lane key exists to prevent (Plugins#1077).
+#
+# 🚨 THE WIRING IS CHECKED BEFORE MERGE, not only here. This lane runs its caller-graph check when it
+# is invoked, which is on trunk — after the merge that broke it. `node-repo-validate.yml` runs
+# `module-publication.py check-callers` on every pull request of every satellite: the same graph
+# check, plus what one call cannot see — every `publish-mode: staged` pack call has exactly one
+# publisher on its `lane`/`selected`/`declared` outputs, running on exactly the events it stages on.
 #
 # WHAT IS NOT IN SCOPE HERE, and must not be described as solved by it (#3878): atomic visibility
 # if the publication ITSELF fails or is cancelled part-way, every publisher's source provenance,

@@ -74,7 +74,7 @@ name: node-repo module pack
 #       required-jobs: <the same list, by name>
 #       lane:     ${{ needs.module-pack.outputs.lane }}
 #       selected: ${{ needs.module-pack.outputs.selected }}
-#       modules:  <the same JSON matrix this call was given>
+#       modules:  ${{ needs.module-pack.outputs.declared }}   # this call's own catalog, never a copy
 #       platform-ref: <the same pin>
 #     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
 #
@@ -599,6 +599,14 @@ on:
           the receipts against. The publication lane requires a staged record for every one of
           them, so "its leg never staged" cannot read like "there was nothing to stage".
         value: ${{ jobs.select.outputs.selected }}
+      declared:
+        description: >
+          The module matrix this call was GIVEN (the `modules` input), verbatim. A caller wiring
+          `node-repo-module-publish.yml` passes it as that lane's `modules`, so the publisher sets
+          aside any staged record outside this call's catalog without the caller keeping a SECOND
+          copy of the catalog — a copy drifts, and MeshWeaver.Plugins refuses a second `modules:`
+          list in its ci.yml outright (#3732). MeshWeaver#3878.
+        value: ${{ jobs.select.outputs.declared }}
 
 jobs:
   # ─────────────────────── WHICH BUNDLES THIS DIFF CAN REACH ───────────────────────
@@ -624,6 +632,9 @@ jobs:
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
       lane: ${{ steps.lane.outputs.id }}
+      # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
+      # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
+      declared: ${{ inputs.modules }}
     steps:
       # ───────────── THIS CALL'S ARTIFACT NAMESPACE — derived, never assumed ─────────────
       # 🚨 ARTIFACTS ARE RUN-WIDE. A repo may invoke this reusable workflow more than once in one

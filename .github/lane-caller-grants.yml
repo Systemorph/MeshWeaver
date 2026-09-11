@@ -38,6 +38,14 @@
 # TO REGENERATE A ROW, in a checkout of that repository:
 #     python3 check-workflow-permission-pairing.py --root . --emit-fleet-row Systemorph/<repo>
 #
+# 🚨 A CALLER THAT IS ARRIVING IS RECORDED HERE FIRST, AS `pending: <reason>` (MeshWeaver#3878).
+# Every satellite asserts its row against THIS file at core's `main`, so a new caller cannot land in
+# either order under strict equality: the row first reds the satellite (a recorded caller it does not
+# have), the caller first reds it too (a caller the roster does not know). `pending:` excuses ABSENCE
+# only — once the caller is present it is compared key for key, so the marker can never hide a
+# lowered grant — and core's `--fleet` checks a pending row's grant like any other, which is the
+# point of landing the row first. An empty reason is RED in both modes.
+#
 # Measured 2026-09-11 against each repository's LIVE default branch via the contents API. (A local
 # checkout is NOT a valid source here: every satellite clone on this machine was days stale and
 # reported pinned `uses:` refs and narrower grants than the live tree actually carries.)
@@ -64,6 +72,13 @@ repos:
         job: publish-bake
         lane: node-repo-publish-bake.yml
         grants: {contents: read, id-token: write}
+      # The module registry hand-over, moved out of `modules-floor`'s matrix legs to after the whole
+      # validation verdict (MeshWeaver#3878). The lane's one job demands `contents: read`.
+      - workflow: ci.yml
+        job: publish-modules
+        lane: node-repo-module-publish.yml
+        grants: {contents: read}
+        pending: lands with Systemorph/MeshWeaver.Plugins#PLUGINS_PR, which switches modules-floor to publish-mode staged and adds this caller (MeshWeaver#3878). Once it has merged the marker is spent and this row is compared key for key.
       - workflow: ci.yml
         job: supersede
         lane: node-repo-supersede.yml
