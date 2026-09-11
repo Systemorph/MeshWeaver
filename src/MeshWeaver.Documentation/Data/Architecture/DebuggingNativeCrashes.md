@@ -1290,10 +1290,59 @@ ran no tests"; the two arms' totals are printed in the `Observed:` line but neve
 neither the exit code nor a signal is looked at anywhere. Tracked as
 [MeshWeaver.Plugins#1620](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1620).
 
-### 2026-09-11: the runtime question — the upstream GC-hole fix ships in `10.0.12`, and sighting #15 crashed ON `10.0.12`
+### 2026-09-11: sighting #16 — the same fingerprint again on `10.0.12`, back in `background_sweep+0xa61` on a BGC thread
+
+`MeshWeaver.Futu-51566.dmp` (MeshWeaver.Plugins run
+[`34594554211`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34594554211), job
+`103254492283`, `Portal hosts (shard 1)`, on **`main`** — a `repository_dispatch`). It was read because it
+is the second dump taken on the runtime that carries dotnet/runtime#131708 (see the next entry), so the
+one question worth a download was whether the fingerprint survives the fix twice. It does. Read the same
+way as #15 — `struct.unpack` over the ELF core, the `rbp` chain unwound by hand, RVAs resolved against the
+`.debug` for the build-id read out of the crashed process's own `libcoreclr` mapping.
+
+| | **#16** `MeshWeaver.Futu-51566.dmp` (pid 51566) |
+|---|---|
+| `[FATAL ERROR]` | 2026-09-11 12:18:22Z (last trace record 12:17:22.480Z; a 1.16 GB core) |
+| `si_signo` / `si_code` / `si_addr` | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** |
+| `TRAPNO` / `ERR` / `CR2` | 14 / `0x4` / `0x0` |
+| **runtime / build-id** | **`10.0.12` / `79945f51fb2612f13b7667a10a8fd29122664791`** — read from the ELF note of the libcoreclr mapped *in the crashed process*, equal to the stock `10.0.12` binary's. The job installed `10.0.12`; the runner held `10.0.8`, `10.0.11` and `10.0.12` (`_runtimes.txt`) and roll-forward took the highest |
+| faulting RVA | `0x5cb441` |
+| frame | `WKS::gc_heap::background_sweep()+0xa61` — the **same function and offset** as #2/#3 (`10.0.10`) and #8/#12/#13 (`10.0.11`) |
+| instruction | `8b 08` = `mov (%rax),%ecx` with **`RAX = 0`** — the read of `MT->m_dwFlags` |
+| thread | tid **51580**, a dedicated **background-GC** thread, no managed frame |
+| the word at the source | `[R15]` (the cursor, `0x7fa33ca0b6d0`) reads **8 zero bytes**; `+0x08` and `+0x10` hold heap pointers (`0x7fa33ca0b730`, `0x7fa33ca0b6b8`) — live-shaped, not a free-list item's length |
+| `Unwind: exception type` | **zero** occurrences in the whole core |
+
+```
+background_sweep()+0xa61  ← gc1()+0xf6  ← bgc_thread_function()+0xdc
+  ← CreateSuspendableThread::$_0::__invoke+0x74  ← CPalThread::ThreadEntry+0x201  ← libc
+```
+
+**The trace log is complete and clean.** The file has **no** `FAULT-BUDGET` line at all. For pid 51566:
+45 `CTOR` / 45 `INIT_START`, 45 `TEST_START` / **44** `TEST_END` — it died inside
+`FutuReAnalysisTest.Group_Diagnostic_DataFlow`, 3 ms after that fixture's `INIT_MEM`; 44 `DISPOSE_DONE`,
+**all 44** `teardown clean`; zero `DISPOSE_QUIESCE_LEAK`, `DISPOSE_DIRTY_TEARDOWN` or `leakedIoLeaves>0`;
+`alc=1` at **all 89** memory checkpoints; `gc0=834 gc1=300 gc2=53` at the last one. Its eight `[FAULT]`
+records are the `Could not lease the NodeType assembly context` / `Failed-verdict re-drive: own-stream
+subscription faulted` warnings the #13/#14 entry already explains, at 12:17:04 and 12:17:19 — inside
+teardowns that then completed clean, 18 s and 3 s before the death. The trx carries 58 results: 57
+`Passed` plus `MeshWeaver.FutuRe.Test.HOST_CRASHED` `Failed`.
+
+**Controls run on this read**: the `ucontext` is unique (exactly one `gregs[]` block with `TRAPNO=14`, `RIP`
+inside libcoreclr's mapping and `CR2 == si_addr`), `0x1e8` above tid 51580's recorded in-handler `RSP` —
+the same offset as #15; the `0x1000` trap of sighting #10 was checked — the stock `10.0.12` binary's bytes
+at **file offset** `0x5ca441` (`8b 08 85 c9 78 09 31 c9 …`) are byte-identical to the core's bytes at
+`RIP`, and the bytes at `0x5cb441` read *as* a file offset are different; the `.debug` used is the one for
+that build-id.
+
+**What it adds is nothing new about the fault — which is the point.** On the runtime that carries the
+upstream GC-hole fix, the family has now reproduced twice, and the second time on its most common frame,
+on a thread that runs no application code. The dump expires with its artifact on 2026-09-18.
+
+### 2026-09-11: the runtime question — the upstream GC-hole fix ships in `10.0.12`, and sightings #15 and #16 crashed ON `10.0.12`
 
 This entry records no new dump. It answers the question every reader of sightings #10/#11 eventually
-asks — *is this a known CoreCLR bug that a newer runtime fixes?* — and it records the fifteen sightings
+asks — *is this a known CoreCLR bug that a newer runtime fixes?* — and it records the sixteen sightings
 grouped in one table, so the next reader does not have to re-derive them from the sections above.
 Tracked on [MeshWeaver.Plugins#1605](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1605).
 
@@ -1325,23 +1374,25 @@ The early-out is `#ifndef TARGET_X86`, so it applies to the `linux-x64` runners.
 2026-09-08T22:11Z; no later `v10.0.x` tag exists, and the two `release/10.0` pull requests already
 milestoned `10.0.13` (#133073, debugger sequence map; #133161, JIT visit budget) are not GC fixes.
 
-**And the confirmation stops there, because sighting #15 is a counter-example.** #15 ran on `10.0.12` —
+**And the confirmation stops there, because sightings #15 and #16 are counter-examples.** #15 ran on `10.0.12` —
 its job installed `dotnet-install: Installed version is 10.0.12` (SDK `10.0.401`), and the libcoreclr
 mapped *inside the crashed process* has build-id `79945f51…`, the stock `10.0.12` binary. So the fix was
-present at the moment of the fault. The honest reading:
+present at the moment of the fault — and #16 (the entry above) is a second, on the same build-id, on a
+dedicated BGC thread. The honest reading:
 
 - The upstream GC hole **fits sightings #10 and #11 precisely**. Their `R15` is the `byte[]` returned by
   `Call_RetOBJECTREF`, and #10 found that "array" to be a recycled run of pointers in anonymous memory —
   the victim-side read of a stale reference, which is exactly what the hole produces.
-- It **does not account for #15**: a published, *referenced* heap object lost its type slot on a
-  runtime that carries the fix, and it was found by a mutator's blocking GC, not by a stale native read.
+- It **does not account for #15 or #16**: on a runtime that carries the fix, a published, *referenced*
+  heap object lost its type slot (#15, found by a mutator's blocking GC) and another header read zero under
+  the background sweep (#16) — neither is a stale native read.
 - Whether the thirteen `gc_heap` sightings are downstream damage of the same hole (a stale reference
   *written through* corrupts whatever now occupies the old address) is **not decidable from a core
   dump**, and is exactly what the rate measurement below is for.
 
 <!--MEASUREMENT-->
 
-#### The fifteen sightings, grouped
+#### The sixteen sightings, grouped
 
 | # | date | suite | runtime | faulting frame | thread | `si_addr` |
 |---|---|---|---|---|---|---|
@@ -1358,20 +1409,21 @@ present at the moment of the fault. The honest reading:
 | 13 | 09-08 | FutuRe | `10.0.11` | `background_sweep+0xa61` | BGC | `0x0` |
 | 14 | 09-08 | FutuRe | `10.0.11` | `revisit_written_page+0x1aa` | BGC | `0x0` |
 | 15 | 09-10 | FutuRe | **`10.0.12`** | `find_first_object+0x132` | mutator, blocking GC | `0x0` |
+| 16 | 09-11 | FutuRe | **`10.0.12`** | `background_sweep+0xa61` | BGC | `0x0` |
 
-- **15 of 15 share the fingerprint**: `SEGV_MAPERR`, `TRAPNO=14`/`ERR=0x4`, `RIP` in file-backed
+- **16 of 16 share the fingerprint**: `SEGV_MAPERR`, `TRAPNO=14`/`ERR=0x4`, `RIP` in file-backed
   `libcoreclr`, and a MethodTable word that reads **exactly zero** (`si_addr` is only the field offset —
-  `0x0` for `m_dwFlags` in 13, `0x4` for `m_BaseSize` in 2).
-- **No frame is shared by a majority.** By frame: `background_sweep` **6**, `plan_phase` **3**,
+  `0x0` for `m_dwFlags` in 14, `0x4` for `m_BaseSize` in 2).
+- **No frame is shared by a majority.** By frame: `background_sweep` **7**, `plan_phase` **3**,
   `find_first_object` **2**, `GetCodeInfo` **2**, `background_mark_simple1` **1**,
   `revisit_written_page` **1** — six functions, and the frame *revisits* rather than progresses.
-- **By thread**: a dedicated background-GC thread with no managed frame in **8** (#1–#3, #8, #9, #12–#14);
+- **By thread**: a dedicated background-GC thread with no managed frame in **9** (#1–#3, #8, #9, #12–#14, #16);
   a mutator in **3** (#10, #11 in the JIT; #15 in a blocking GC); unrecorded in 4 (#4–#7).
-- **By runtime**: `10.0.10` ×3, `10.0.11` ×11, `10.0.12` ×1 — three distinct libcoreclr builds.
-- **By suite**: `MeshWeaver.FutuRe.Test` 13, `MeshWeaver.GitSync.Test` 1, unrecorded 1 (plus the
+- **By runtime**: `10.0.10` ×3, `10.0.11` ×11, `10.0.12` ×2 — three distinct libcoreclr builds.
+- **By suite**: `MeshWeaver.FutuRe.Test` 14, `MeshWeaver.GitSync.Test` 1, unrecorded 1 (plus the
   undissected 2026-08-24 `MeshWeaver.Hosting.Orleans.Test` crash at `GetCodeInfo+0x1f7`).
 
-#### What the fifteen have already eliminated — do not re-open these
+#### What the sixteen have already eliminated — do not re-open these
 
 1. **Use-after-unload of a collectible ALC** — falsified three ways (`RIP` in file-backed runtime code;
    a freed `LoaderAllocator` yields a non-null *unmapped* pointer, never a zero word at a mapped
@@ -1392,11 +1444,11 @@ present at the moment of the fault. The honest reading:
 11. **The `MeshNodeStreamCache` query straggler** — real and fixed (#13/#14 entry), but a *managed*
     `ObjectDisposedException` (exit 1), not a header write (exit 139).
 12. **"A single bad runtime build"** — three builds.
-13. **`10.0.12`'s hijack GC-hole fix as the whole answer** — #15 crashed on it (this entry).
+13. **`10.0.12`'s hijack GC-hole fix as the whole answer** — #15 and #16 crashed on it (this entry).
 
 #### Cause or victim
 
-**`MeshWeaver.FutuRe.Test` is the sampler, not the cause.** Eight of the fifteen faulting threads run no
+**`MeshWeaver.FutuRe.Test` is the sampler, not the cause.** Nine of the sixteen faulting threads run no
 application code at all, the faulting instruction is always inside the runtime, no assembly in the
 process can contain `unsafe` code, and a second suite (`GitSync.Test`) and a third
 (`Hosting.Orleans.Test`) have taken the same fault. What the suite contributes is the densest workload
@@ -1435,7 +1487,7 @@ and `v10.0.12` on 2026-09-08T22:11Z, so the portals run **`10.0.11` by timing** 
 that run's log has aged out (`HTTP 410`) and no portal endpoint reports its runtime — and **cannot**
 run `10.0.12`. So production does not yet carry dotnet/runtime#131708. Rolling it there is
 `gh workflow run base-image-acr.yml --ref main` followed by the next `main-cd` roll: an operator
-decision, not taken in this entry. What `10.0.12` is worth is what the measurement below says.
+decision, not taken in this entry. What `10.0.12` is worth is what the measurement above says.
 
 ## Reading the result honestly
 
