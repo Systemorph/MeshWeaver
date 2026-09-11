@@ -13,6 +13,14 @@ read a branch tip.**
 That is the whole rule. Everything below is why it has to be a rule rather than a habit, and what
 enforces it.
 
+"A build" means the repository's **content CI**, not any workflow that happened to finish green at
+the same commit. The webhook verifies the stable workflow file path:
+`.github/workflows/ci.yml` for content/node repositories, and core's established
+`.github/workflows/dotnet-test.yml` exception. Trigger, branch and workflow identity are independent
+guards. This matters in both directions: a scheduled PR updater once authorized a red Reinsurance
+tree more than twenty times, while a green core Chart Gate could have masked a red build-and-test
+run (#3978).
+
 ## The two refs, and why they are not the same ref
 
 A GitSync'd Space is configured with a repository and a **branch**

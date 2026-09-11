@@ -175,13 +175,36 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
         await repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick);
     }
 
-    private static JsonElement GreenBuildPayload(string headSha) => JsonDocument.Parse($$"""
+    /// <summary>
+    /// A green workflow that did not compile the repository's content is not a weaker build signal;
+    /// it is no build signal at all. This is the live #3978 shape: the scheduled PR updater wrote
+    /// twenty build completions for a commit whose real content CI was red.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task GreenUnrelatedWorkflow_DoesNotRecordOrTriggerAnImport()
+    {
+        var noFetch = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick);
+
+        var triggered = await Webhooks.Process(
+                "workflow_run",
+                GreenBuildPayload(BuiltSha, ".github/workflows/auto-update-green-prs.yml"))
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        triggered.Should().Be(0,
+            "a workflow's trigger says how it started, not that it compiled this repository's content");
+        await noFetch;
+    }
+
+    private static JsonElement GreenBuildPayload(
+        string headSha,
+        string workflowPath = ".github/workflows/ci.yml") => JsonDocument.Parse($$"""
         {
           "action": "completed",
           "repository": { "full_name": "{{RepoFullName}}", "default_branch": "main" },
           "workflow_run": {
             "conclusion": "success", "head_branch": "main", "head_sha": "{{headSha}}",
             "id": 34061098155, "run_number": 2026, "name": "Content CI", "event": "push",
+            "path": "{{workflowPath}}",
             "updated_at": "2026-09-06T22:38:18Z"
           }
         }
