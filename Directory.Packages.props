@@ -4,10 +4,21 @@
     <NoWarn>$(NoWarn);NU1608</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Used DIRECTLY by MeshWeaver.AI (skill/agent front matter) and MeshWeaver.Hosting
-         (MarkdownFileParser). It used to arrive only TRANSITIVELY via EPS.Extensions.YamlMarkdown,
-         so removing that unused package broke the build - an accidental dependency, now explicit. -->
-    <PackageVersion Include="YamlDotNet" Version="16.3.0" />
+    <!-- Used DIRECTLY by MeshWeaver.Hosting (MarkdownFileParser). It used to arrive only
+         TRANSITIVELY via EPS.Extensions.YamlMarkdown, so removing that unused package broke the
+         build - an accidental dependency, now explicit.
+
+         🚨 THIS ENTRY IS ALSO MeshWeaver.Plugins' VERSION SOURCE, and nothing here can see that.
+         Plugins has no `Directory.Packages.props` of its own; its `src/Directory.Packages.props`
+         IMPORTS this file at `MW_PLATFORM_REF`, and `src/MeshWeaver.AI` (skill/agent front matter)
+         plus `src/MeshWeaver.Publish` (slide front matter) carry VERSIONLESS references. So this
+         line decides what the AI engine's front-matter parser is built from - a satellite the
+         `Satellite package pins` gate does not watch, because that gate fires on a pin being
+         REMOVED, not bumped. The satellite reads the change only when its pin moves.
+
+         16.3.0 -> 18.1.0 crosses two majors; the adaptation and the two behavioural changes that
+         came with them are recorded in Doc/Architecture/DependencyMajorUpgrades. -->
+    <PackageVersion Include="YamlDotNet" Version="18.1.0" />
     <PackageVersion Include="AspNet.Security.OAuth.Apple" Version="10.0.0" />
     <!-- 🚨 THE ASPIRE FAMILY IS HELD AT 13.4.6 ON PURPOSE — do not let a dependency sweep move it.
          Every Aspire.Hosting version depends on JsonPatch.Net; only the VERSION differs, and the
@@ -235,7 +246,53 @@
          Postgres. Same version as the test tree pins. -->
     <PackageVersion Include="Testcontainers" Version="4.14.0" />
     <PackageVersion Include="SSH.NET" Version="2026.0.0" /> <!-- High GHSA-q939-rpr3-3284; transitive via Testcontainers, direct-ref override in test/Directory.Build.props -->
-    <PackageVersion Include="System.Reactive" Version="6.1.0" />
+    <!-- 🚨 THESE TWO ARE ONE FAMILY AND MUST MOVE TOGETHER — they were SPLIT, and the split was
+         invisible because both halves were green.
+
+         `Microsoft.Reactive.Testing` 7.0.0 depends on `System.Reactive >= 7.0.0`, and with
+         CentralPackageTransitivePinningEnabled unset the highest wins. So while this line read
+         6.1.0, every `src/` project resolved System.Reactive 6.1.0 while the eight test projects
+         that reference the testing package resolved 7.0.0 — measured, not inferred. The suite that
+         gates the platform was exercising a DIFFERENT Rx major from the one the portals shipped,
+         which is the one skew a test suite must never have. Moving this line to 7.0.0 closes it.
+
+         Rx 7 is a PACKAGING release, not a semantic one. A MetadataLoadContext diff of the shipped
+         assemblies removes ZERO public API and adds 16 `ObservableEx.CombineLatest`/`Zip` overloads
+         for 9..16 sources on a type nothing here references. `System.Reactive.Linq.Observable` is
+         byte-identical at 656 members, as are every Subject, every Disposable and every scheduler.
+         Upstream enables package validation with a 6.1.0 baseline, and not one of its 57
+         suppressions is a behavioural or core-API break — they are all `ref`-vs-`lib` UI omissions.
+         The single compile-surface change is a nullability annotation: `OfType<T>(this
+         IObservable<object>)` became `IObservable<object?>`, which widens what is accepted.
+
+         What DID move is the Windows UI surface: `DispatcherScheduler`, `ControlScheduler`,
+         `CoreDispatcherScheduler` and friends are gone from the REFERENCE assemblies (still in
+         `lib`, so this is source-breaking, not binary-breaking) and now live in the separate
+         `System.Reactive.Wpf`, `System.Reactive.Windows.Forms`, `System.Reactive.WindowsRuntime`
+         and `System.Reactive.Uwp` packages.
+
+         🚨 The package also ships a new Roslyn analyzer (analyzers/dotnet/System.Reactive.Analyzers.dll)
+         emitting RXNET0001-RXNET0004 at Warning, which `-warnaserror` would promote to errors — but
+         it is INERT here, and that is NOT the same as passing. csc never loads it: the assembly
+         appears only in project.assets.json's `libraries` file manifest, never in a `targets` entry,
+         and `dotnet build <proj> -getItem:Analyzer` returns ZERO Rx analyzer entries while still
+         returning the .NET analyzers (so the instrument discriminates). It sits directly under
+         `analyzers/dotnet/` with no language subfolder, which is not where NuGet selects a C#
+         analyzer from. So a clean -warnaserror build is NOT evidence about these four rules. The
+         evidence is a source sweep instead: this repo declares no *-windows* target framework at
+         all and references none of the Windows UI types the rules fire on (0 hits against a
+         positive control of 581 `.cs` files under src/ and test/ that DO contain `IObservable`),
+         and no pre-6.x Rx facade package. If upstream ever fixes the analyzer's path, these rules
+         go live for every consumer at once.
+
+         Assembly identity: the public key token is unchanged (94bc3704cddfc263); only
+         AssemblyVersion moves, 6.1.0.0 -> 7.0.0.0.
+
+         🚨 This entry is also MeshWeaver.Plugins' version source (it has no
+         Directory.Packages.props of its own): MeshWeaver.Blazor, Blazor.Views, InstanceSync and
+         LogWatcher all reference System.Reactive versionless. Details and the crossing ledger:
+         Doc/Architecture/DependencyMajorUpgrades. -->
+    <PackageVersion Include="System.Reactive" Version="7.0.0" />
     <PackageVersion Include="Microsoft.Reactive.Testing" Version="7.0.0" />
     <PackageVersion Include="Roslynator.Analyzers" Version="4.15.0" />
     <PackageVersion Include="Roslynator.Formatting.Analyzers" Version="4.15.0" />

@@ -115,8 +115,9 @@ the status quo.
 vault copy are **EQUAL** — `Systemorph/Memex#180` promoted each instance's *in-use* token verbatim
 rather than picking a winner, so removing the inline entry is now a no-op in value terms. What
 remains is the plaintext inline entry itself, on both pod specs, still outranking every `envFrom`.
-Nothing in a repository can remove it — see
-[DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Step 2 has NO API action"*.
+Nothing in a repository can remove it; since 2026-09-11 a `Reconcile` can, from the record's
+`retiredBy` — see [DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Step 2 is a
+`Reconcile`"*.
 
 ### A credential shadow can be two PRINCIPALS, not two values
 
@@ -210,7 +211,8 @@ today**. Agreeing is not safe: it means the next change to the chart will silent
 effect. Disagreeing means somebody is already reading a setting no pod uses.
 
 > Fixing a `SHADOWS` or `COLLIDES` takes **both** steps, in order: put the intended value in the
-> chart, *then* delete the inline entry (`kubectl set env deploy/… KEY-`). Either step alone leaves
+> chart, *then* delete the inline entry (mark it `retiredBy` on the record and run `Reconcile`; the
+> break-glass form is `kubectl set env deploy/… KEY-`). Either step alone leaves
 > the pod on the inline value — so a plan that reads "add these to the chart and the drift clears"
 > leaves the cluster exactly where it was.
 
@@ -396,9 +398,8 @@ a Key Vault entry at all"* stopped being true on 2026-09-06 for `memex` and by 2
 `memex-cloud`: `Systemorph/Memex#180` declared a chart-owned `keyVaultSecrets` class on both, and
 re-measured 2026-09-08T01:03Z the inline value and the vault copy are **EQUAL** on each portal. The
 table stays as it was measured; read this line with it. The remaining act — delete the inline entry
-— has no repository half and no `Hosting/InstanceAction` kind; what remains possible is the
-break-glass `kubectl set env deploy/<name> <KEY>-`
-([DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Step 2 has NO API action"*).
+— has no repository half; since 2026-09-11 it is a `Reconcile` over the record's `retiredBy`
+([DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Step 2 is a `Reconcile`"*).
 
 Zero `COLLIDES` and zero `CHART-ONLY` — as on 2026-09-03, which is the only other run since #3168
 introduced those two classes, so "consecutive" is a two-run claim and nothing more. The `EMAIL__*`

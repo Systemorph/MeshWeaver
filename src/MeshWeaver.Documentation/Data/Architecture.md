@@ -223,6 +223,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Apps Home](AppsHome)
 - [Content Favicon Rasterization](ContentFaviconRasterization)
 - [Controls That Cannot Fail](ControlsThatCannotFail)
+- [Catalog Action Identity](CatalogActionIdentity) — a retained click keeps its package when the catalog refreshes
 - [Link Previews](LinkPreviews)
 - [Local-First Client & Bootstrap](LocalFirstClient)
 - [PDF Export — one browser, two fidelities](PixelFaithfulExport)
@@ -234,6 +235,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Retiring a NodeType](RetiringANodeType) — the prune keeps the definition and deletes its sources
 - [Dangling NodeTypes](DanglingNodeTypes) — a node whose type resolves to nothing, and the two write paths that allowed it
 - [Node Type Compilation](NodeTypeCompilation)
+- [Compile Cache Input Freshness](CompileCacheInputFreshness) — verify the captured input before reusing a DLL that finished after a source edit
 - [Execute-Time Interlock](ExecuteTimeInterlock) — a build proven stale is never armed
 - [Emit Reference Capture](EmitReferenceCapture) — bounded, opt-in CI evidence for runtime compiler failures
 - [Graph / Compiler Layering](GraphCompilerLayering) — the four assemblies, the cycle, and the full-MVID size rule
@@ -436,6 +438,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Licensing
 
 - **Start here:** [Dependency Licensing](DependencyLicensing) — Apache-2.0/MIT compatible only; the CI gate that enforces it
+- [Dependency Major Upgrades](DependencyMajorUpgrades) — the five things a green `-warnaserror` build cannot see at a major boundary (in-mesh source, authored content, the satellites that import this repo's package list, behaviour behind an unchanged signature, and rules an analyzer would have enforced had the build actually loaded it), the differential method that replaces them, and the ledger of boundaries actually crossed
 
 ## Getting started
 

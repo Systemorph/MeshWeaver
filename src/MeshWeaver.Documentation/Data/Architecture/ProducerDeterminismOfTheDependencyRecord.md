@@ -67,6 +67,13 @@ real difference — which is what it is for.
 
 ## The fix: persist the digest, do not recompute it
 
+**Current cache contract:** the producing digest remains persisted and is never replaced by a
+newly computed claim. Cache reuse also compares it with the generated input for the captured
+candidate snapshot; a mismatch compiles normally. The distinction between **comparing** a candidate
+digest and **stamping** it onto earlier bytes is essential. See
+[Compile Cache Input Freshness](../CompileCacheInputFreshness) for the later source-edit regression.
+The timestamp-only rules discussed below describe the original producer-determinism investigation.
+
 The stage-1 digest is written into the emit's **staging directory** as `{nodeName}.inputdigest`,
 beside `{nodeName}.dll` and `{nodeName}.pdb`, before the directory rename that publishes the
 artifact under the cache's discovery glob. A cache hit reads it back and stamps the record with it.
@@ -83,7 +90,7 @@ Three properties follow from where it is written:
   type, for artifacts published by a build predating the sidecar — and the framework-timestamp check
   beside it usually invalidates those anyway.
 
-### Why not recompute the digest at the hit site?
+### Why not replace the producing digest at the hit site?
 
 It is available: `GeneratedInputDigestOf(assemblyName, source, nugetAssemblyPaths)` is a pure
 function of values the pipeline already has there, and `RegenerateGeneratedInputDigest` exists to
@@ -94,20 +101,24 @@ for the sidecar read, and both produce the identical `g…` digest. So cost is n
 **The argument is that a recomputed digest answers a different question.** The digest folds
 `EmitPipeline.OptionsFingerprint`, `GeneratedInputIdentity.CompilerIdentity` and the file identities
 of the **generator assemblies on disk** — properties of the process doing the computing, not of the
-bytes. Recomputing it describes *"what a compile RIGHT HERE would be fed"* and stamps that onto bytes
-some earlier process emitted.
+bytes. Recomputing it describes *"what a compile RIGHT HERE would be fed"*. Stamping that value
+onto an earlier artifact without establishing equality would misdescribe those bytes.
 
-That difference is reachable. The cache's validity rules are source-mtime and framework-mtime; they
-do not see a `#r "nuget:"` resolving to a different generator version, and they do not see a process
-restart on the same image. In either case a recomputed key would claim an equality that was never
-established — and because a matching content key DEMOTES the toolchain entry, it would license an
-adoption across precisely the change the toolchain entry exists to catch. Reading the producing
-compile's own digest off the disk cannot say anything the producing compile did not.
+That difference was reachable under the original source-mtime and framework-mtime cache predicate:
+it did not compare the generator or process compiler identities represented by the input digest.
+Replacing the producing key with a recomputed one could therefore claim equality that had never
+been established. Because a matching content key DEMOTES the toolchain entry, that would license
+adoption across precisely the change the toolchain entry exists to catch.
 
-Cost, meanwhile, is *not* uniformly small for the recompute option: on a real mesh the same
-regeneration performs source discovery (measured ~0.25 s per query on memex, four queries per type)
-and, for any type declaring `#r "nuget:"`, a NuGet restore — network IO, on every cache hit, per
-type at boot.
+The current cache path instead regenerates the candidate input and **compares** its digest with the
+persisted producing digest. Only equality permits reuse; a different generator/compiler identity,
+changed source or configuration, or an inconclusive comparison follows normal compilation. The
+successful hit still stamps the producing digest read from disk.
+
+Cost is not uniformly small: the original independent regeneration measured source discovery at
+~0.25 s per query on memex, four queries per type, plus NuGet resolution for types declaring
+`#r "nuget:"`. The cache comparison now reuses its already captured Source/Test snapshot, avoiding
+another discovery of those nodes; include and NuGet resolution retain their existing behavior.
 
 ## Where the code lives
 

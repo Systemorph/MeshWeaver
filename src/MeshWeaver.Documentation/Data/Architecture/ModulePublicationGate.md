@@ -135,6 +135,86 @@ publication. Two things run in core CI instead, self-test first:
   leaves the request log EMPTY even though the module packed and staged successfully. "The registry
   was left untouched" is read off the log, never off an exit code.
 
+## The caller that adopted it: MeshWeaver.Plugins
+
+`modules-floor` passes `publish-mode: staged`; everything it builds, uploads, marks and tests stays
+exactly where it was, because `compile-check` and the Tests-area gate consume those artifacts. The
+POST moved into a new job, `publish-modules`, which calls this lane:
+
+| input | value | why |
+|---|---|---|
+| `if:` | `modules-floor`'s `publish:` condition, verbatim — push to `main`, `repository_dispatch`, `schedule` | a run that stages and does not publish hands the registry nothing while every tick is green |
+| `needs:` / `required-jobs` | `platform-ref preflight validate validate-name-shim repo-gates compile-check test-repos tests-ratchet portal-hosts-gate modules-floor gates-executed` | the gate set `publish-bake` already honours, plus the jobs this call reads outputs from, the legacy-name shim of `validate` and the skip detector — one verdict for both publishers of the run |
+| `unrelated-jobs` | `supersede`, `test-drift`, `rn-app`, `e2e-static`, `memex-template`, `tag-modules`, `publish-bake`, each with its reason | none of them validates bytes that reach a module bundle |
+| `lane` / `selected` / `modules` | `needs.modules-floor.outputs.lane` / `.selected` / `.declared` | one pack call, one publication; `declared` is the matrix that call was given |
+| `permissions` | `contents: read` | exactly what the lane's one job demands |
+| `publish-token` | `secrets.REGISTRY_PUBLISH_TOKEN` | the SAME secret `modules-floor` used to hold — no new credential, scope or permission |
+
+`declared` is a new output of `node-repo-module-pack.yml`: the `modules` input, verbatim. Without it
+the publisher would need a second copy of the 37-entry catalog in the caller, which drifts — and
+Plugins' `check-modules-published.py` refuses a second `modules:` list in its `ci.yml` outright
+(#3732).
+
+The token's `pr-secret-preflight-allow.txt` entry, which exempted it on `modules-floor`, is deleted
+in the same change: `publish-modules`' `if:` is provably false on a pull request, so no
+pull-request-reachable job references the token any more and the checker refuses a stale entry.
+
+## Both directions, on the real caller
+
+**Green validation publishes.** Every job in `needs:` succeeds, so GitHub runs `publish-modules`;
+the verdict, the caller-graph check and the staged-evidence check pass; the exact staged bytes are
+POSTed to `/api/plugins/bundles/<package>?version=…&packagePath=Plugins/<package>`; the ledger
+records `Published` only after the 2xx (Plugins runs with the ledger off).
+
+**A later sibling failure leaves the registry untouched**, even though every module packed and
+staged successfully. How each non-positive verdict is refused:
+
+| verdict | what stops the hand-over |
+|---|---|
+| `failure` | GitHub's default rule skips `publish-modules`, so the lane never runs; if a caller ever re-opened the `if:`, the lane's `verdict` step refuses by name |
+| `cancelled` | the same default rule; the verdict step refuses `cancelled` too |
+| `skipped` | the same default rule, which does NOT treat a skipped need as satisfied the way branch protection treats a skipped context; the verdict step refuses `skipped` by name |
+| missing | a validation job absent from `needs:` is caught statically on the pull request (`check-callers`, below) and at run time (`caller-gate`); a name in `required-jobs` that is not in `needs:` is refused by the verdict step as "NOT among this job's needs" |
+| unknown | a needs entry with no readable `result` is refused by the verdict step — it never resolves to "passed" |
+
+The consequence has to be said out loud: **while any job in `publish-modules`' verdict is red on
+Plugins `main`, no module version reaches the registry** — including the release-follow republish
+that stops portals reading `FrameworkDeclined` after a platform release (#2088). That is the point of
+the change (a red main must be invisible to portals, #3842), and it means such a red now delays
+module adoption rather than serving unvalidated bytes. A red in a job declared unrelated does NOT
+stop the hand-over — see "What this does NOT solve".
+
+## Checked before merge: `check-callers`
+
+The lane's `caller-gate` step only runs when the lane is invoked, which is on trunk — so the first
+judgement of a broken publisher would be the post-merge run on `main`, refusing, with `main` red.
+`node-repo-validate.yml` therefore fetches `module-publication.py` and runs
+`check-callers --root .` on every pull request of every satellite. It runs the same caller-graph
+check over every publisher in the repository's workflows, and adds the wiring one call cannot see:
+
+| refused | why |
+|---|---|
+| a `publish-mode: staged` pack call with no publisher | the staged bytes reach nobody and the repository silently stops publishing |
+| two publishers on one pack call | the same validated bytes would be POSTed twice |
+| a publisher whose `if:` differs from the pack call's `publish:` | stage-without-publish is silent; publish-without-stage refuses |
+| `lane`, `selected` or `modules` not read from the SAME pack call's outputs, or that call not a direct need | a sibling call's evidence could answer the publication, or the output does not resolve |
+| a publisher wired to a `direct` pack call | that call POSTs in-leg and stages nothing |
+| `required-jobs` / `unrelated-jobs` passed as an expression, or `required-jobs` empty | the static half could not read what the lane will enforce |
+| an `unrelated-jobs` entry with no reason (also refused at run time by `caller-gate`) | an exemption that says nothing is how a gate is dropped from the verdict unnoticed |
+| a `publish-mode` that is not the literal `staged` or `direct` | an expression resolves only at run time, so a staged call with no publisher could not be told from an in-leg one |
+
+A `direct` pack call that publishes is **named, not refused** — refusing it would red every
+repository that has not adopted this lane yet. A repository that calls neither lane prints so.
+
+## Landing order across the two repositories
+
+A new caller of a platform lane has to appear in core's fleet roster
+(`.github/lane-caller-grants.yml`, see [Workflow Permission Pairing](/Doc/Architecture/WorkflowPermissionPairing)),
+and every satellite asserts its roster row against core's `main`. Under strict equality that is
+unlandable in either order, so the Plugins row landed first marked `pending:`, which excuses
+absence only. The order is: core (the `declared` output, `check-callers` in the validate lane, the
+pending row), then the Plugins caller, then a core follow-up that removes the spent marker.
+
 ## What this does NOT solve
 
 Stated because #3878 says it must not be described as solved by moving one step:
@@ -144,6 +224,13 @@ Stated because #3878 says it must not be described as solved by moving one step:
 * **every publisher's source provenance**, and **last-green source selection** — MeshWeaver#3842
   and the generation work in #3461;
 * **core's own `plugins-bake`**, which publishes a NodeType and module set through a separate path.
+* **MeshWeaver.SocialMedia still publishes in-leg.** Its `module` job calls the pack lane with
+  `publish:` set and no `publish-mode`, so each bundle still reaches the registry right after its
+  own suite. `check-callers` names it on every SocialMedia pull request; adopting the lane there is
+  a separate change.
+* **The jobs Plugins declares unrelated do not gate the hand-over.** A red `rn-app`, `e2e-static`,
+  `test-drift` or `memex-template` still publishes, exactly as it still bakes — they are not part of
+  either publisher's verdict.
 
 Related: [The Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) for the other family of
 "green here, red there" couplings, and [Reading CI Signals](/Doc/Architecture/ReadingCiSignals) for

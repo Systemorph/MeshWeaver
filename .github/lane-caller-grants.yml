@@ -1,0 +1,280 @@
+# lane-caller-grants.yml — what every repository in the fleet grants the lanes it calls.
+#
+# 🚨 WHY A COMMITTED ROSTER EXISTS AT ALL, AND WHY IT IS NOT A CACHE.
+#
+# A `workflow_call` workflow's `permissions:` block — job-level or workflow-level — is not a grant.
+# It is a HARD REQUIREMENT on every caller, because a called workflow can only ever NARROW what its
+# caller handed it. A caller that does not grant what the lane demands does not get a permission
+# error: the run graph is rejected before a job is scheduled. `startup_failure`, ZERO jobs, no
+# check-run published at all — and under classic branch protection an ABSENT required context blocks
+# forever rather than failing visibly.
+#
+# MeshWeaver#3933 did exactly that on 2026-09-10 and MeshWeaver.Plugins was dark for five hours,
+# unable to merge even the two-line fix for the thing that broke it (28 zero-job runs,
+# 18:59:37Z → 22:56:49Z).
+#
+# THE REASON THIS FILE, AND NOT A LIVE LOOKUP:
+#
+#   1. The callers that break live in repositories core's own pull request CANNOT READ. `dotnet-test`
+#      has no checkout of them, and a fork PR has no credential for them. A gate that needs a secret
+#      to run is a gate that skips on forks — AGENTS.md forbids exactly that.
+#   2. The pairing check that DOES run in the satellites is hosted in `node-repo-validate.yml`, which
+#      every satellite calls from THE SAME `ci.yml` that calls the other lanes. A `startup_failure`
+#      rejects the whole file's graph, so on a recurrence the guard's own job is never scheduled. It
+#      cannot report the outage it is standing in.
+#   3. Measured 2026-09-11: five of the six satellites call the lanes at `@main`, so a core merge
+#      reaches them within seconds. There is no pin between core's `main` and the fleet breaking.
+#
+# So the roster is how core's own pull request SEES the fleet. It is the same inverted-ordering
+# device as `Pairs-with:` and `Implementers:` — the core half lands first, so the coupling has to be
+# declared rather than discovered.
+#
+# 🚨 A ROSTER THAT IS NOT RE-MEASURED IS A MEMORY, NOT A MEASUREMENT. Every row carries
+# `asserted-by:`, naming the run that re-derives it. `node-repo-validate` means that repository's own
+# CI runs `--assert-fleet-row` on every pull request and fails closed when its real callers stop
+# matching this file. A row asserted by `none — <reason>` is PRINTED with the verdict as NOT
+# RE-MEASURED; it is never silently folded into a green.
+#
+# TO REGENERATE A ROW, in a checkout of that repository:
+#     python3 check-workflow-permission-pairing.py --root . --emit-fleet-row Systemorph/<repo>
+#
+# 🚨 A CALLER THAT IS ARRIVING IS RECORDED HERE FIRST, AS `pending: <reason>` (MeshWeaver#3878).
+# Every satellite asserts its row against THIS file at core's `main`, so a new caller cannot land in
+# either order under strict equality: the row first reds the satellite (a recorded caller it does not
+# have), the caller first reds it too (a caller the roster does not know). `pending:` excuses ABSENCE
+# only — once the caller is present it is compared key for key, so the marker can never hide a
+# lowered grant — and core's `--fleet` checks a pending row's grant like any other, which is the
+# point of landing the row first. An empty reason is RED in both modes.
+#
+# Measured 2026-09-11 against each repository's LIVE default branch via the contents API. (A local
+# checkout is NOT a valid source here: every satellite clone on this machine was days stale and
+# reported pinned `uses:` refs and narrower grants than the live tree actually carries.)
+
+repos:
+
+  # ── MeshWeaver.Plugins ────────────────────────────────────────────────────────────────────────
+  # 🚨 THE REPOSITORY #3933 TOOK DOWN, and `modules-floor` is still the exact caller that broke:
+  # it grants `{contents: read, actions: read}` and NOTHING else, so any `id-token: write` a future
+  # commit puts on a `node-repo-module-pack.yml` job reproduces the outage verbatim. That pair is
+  # what the `--self-test` real-tree control injects and requires this check to name.
+  Systemorph/MeshWeaver.Plugins:
+    asserted-by: node-repo-validate
+    callers:
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}
+      - workflow: ci.yml
+        job: modules-floor
+        lane: node-repo-module-pack.yml
+        grants: {contents: read, actions: read}
+      - workflow: ci.yml
+        job: publish-bake
+        lane: node-repo-publish-bake.yml
+        grants: {contents: read, id-token: write}
+      # The module registry hand-over, moved out of `modules-floor`'s matrix legs to after the whole
+      # validation verdict (MeshWeaver#3878). The lane's one job demands `contents: read`.
+      - workflow: ci.yml
+        job: publish-modules
+        lane: node-repo-module-publish.yml
+        grants: {contents: read}
+        pending: on main since Systemorph/MeshWeaver.Plugins#1663 and REMOVED again by Systemorph/MeshWeaver.Plugins#1676 (per-module deploy — ModuleBuildArchitecture → Per-module deploy, so modules publish on their own verdict, not the whole run's). Compared key for key while main still has it; the marker excuses the absence once #1676 merges — delete this row then.
+      - workflow: ci.yml
+        job: supersede
+        lane: node-repo-supersede.yml
+        grants: {actions: write, contents: read}
+        pending: REMOVED by Systemorph/MeshWeaver.Plugins#1676 — per-module deploy never cancels a main run, so Plugins no longer calls the supersede lane (ModuleBuildArchitecture → Per-module deploy). Compared key for key while main still has it; the marker excuses the absence once #1676 merges — delete this row then.
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: validate
+        lane: node-repo-validate.yml
+        grants: {contents: read}
+
+  # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
+  # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core
+  # merge reaches it only when its pin moves. That makes its pin-bump pull request the place a new
+  # demand would surface — later than the others, not never.
+  Systemorph/MeshWeaver.Education:
+    asserted-by: node-repo-validate
+    callers:
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}
+      - workflow: ci.yml
+        job: publish-bake
+        lane: node-repo-publish-bake.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: supersede
+        lane: node-repo-supersede.yml
+        grants: {actions: write, contents: read}
+      - workflow: ci.yml
+        job: tag-modules
+        lane: node-repo-tag-modules.yml
+        grants: {contents: write}
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write}
+      # `inherit` means the caller writes no `permissions:` block at all and takes the repository
+      # default. It is satisfied only up to DEFAULT_FLOOR (contents/packages/metadata read) — never
+      # `id-token`, which always needs an explicit grant.
+      - workflow: ci.yml
+        job: validate
+        lane: node-repo-validate.yml
+        grants: inherit
+
+  # ── MeshWeaver.Reinsurance ────────────────────────────────────────────────────────────────────
+  Systemorph/MeshWeaver.Reinsurance:
+    asserted-by: node-repo-validate
+    callers:
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}
+      - workflow: ci.yml
+        job: compile-check
+        lane: node-repo-compile-check.yml
+        grants: inherit
+      - workflow: ci.yml
+        job: publish-bake
+        lane: node-repo-publish-bake.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: supersede
+        lane: node-repo-supersede.yml
+        grants: {actions: write, contents: read}
+      - workflow: ci.yml
+        job: tag-modules
+        lane: node-repo-tag-modules.yml
+        grants: {contents: write}
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: validate
+        lane: node-repo-validate.yml
+        grants: inherit
+
+  # ── MeshWeaver.SocialMedia ────────────────────────────────────────────────────────────────────
+  # Its `module` caller ALREADY grants `id-token: write`, which is why #3933 did not break this repo
+  # the way it broke Plugins. Two repos calling the same lane with different grants is precisely the
+  # state that makes "we updated the caller" an unsafe thing to believe.
+  Systemorph/MeshWeaver.SocialMedia:
+    asserted-by: node-repo-validate
+    callers:
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}
+      - workflow: ci.yml
+        job: compile-check
+        lane: node-repo-compile-check.yml
+        grants: inherit
+      - workflow: ci.yml
+        job: module
+        lane: node-repo-module-pack.yml
+        grants: {contents: read, actions: read, id-token: write}
+      - workflow: ci.yml
+        job: publish-bake
+        lane: node-repo-publish-bake.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: supersede
+        lane: node-repo-supersede.yml
+        grants: {actions: write, contents: read}
+      - workflow: ci.yml
+        job: tag-modules
+        lane: node-repo-tag-modules.yml
+        grants: {contents: write}
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: validate
+        lane: node-repo-validate.yml
+        grants: inherit
+
+  # ── MeshWeaver.Manufacturing ──────────────────────────────────────────────────────────────────
+  Systemorph/MeshWeaver.Manufacturing:
+    asserted-by: node-repo-validate
+    callers:
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}
+      - workflow: ci.yml
+        job: compile-check
+        lane: node-repo-compile-check.yml
+        grants: inherit
+      - workflow: ci.yml
+        job: publish-bake
+        lane: node-repo-publish-bake.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: supersede
+        lane: node-repo-supersede.yml
+        grants: {actions: write, contents: read}
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: validate
+        lane: node-repo-validate.yml
+        grants: {contents: read}
+
+  # ── MeshWeaver.Crm ────────────────────────────────────────────────────────────────────────────
+  Systemorph/MeshWeaver.Crm:
+    asserted-by: node-repo-validate
+    callers:
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}
+      - workflow: ci.yml
+        job: compile-check
+        lane: node-repo-compile-check.yml
+        grants: inherit
+      - workflow: ci.yml
+        job: publish-bake
+        lane: node-repo-publish-bake.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: supersede
+        lane: node-repo-supersede.yml
+        grants: {actions: write, contents: read}
+      - workflow: ci.yml
+        job: tag-modules
+        lane: node-repo-tag-modules.yml
+        grants: {contents: write}
+      - workflow: ci.yml
+        job: test-repos
+        lane: node-repo-gate.yml
+        grants: {contents: read, id-token: write}
+      - workflow: ci.yml
+        job: validate
+        lane: node-repo-validate.yml
+        grants: inherit
+
+  # ── Systemorph/Memex (the private deployment-config repository) ───────────────────────────────
+  # 🚨 THE ONE ROW NOTHING RE-MEASURES, AND IT SAYS SO. Memex calls exactly one platform lane —
+  # `auto-arm.yml`, whose demand is WORKFLOW-level — and it does NOT call `node-repo-validate.yml`,
+  # so no run anywhere executes `--assert-fleet-row Systemorph/Memex`. This row is therefore a
+  # snapshot that can go stale silently, which is why `asserted-by: none` prints it under
+  # "NOT COVERED" on every fleet run instead of letting it pass for a measurement. Closing this
+  # needs a step in Memex's own CI; it is a change in a different repository, tracked separately.
+  Systemorph/Memex:
+    asserted-by: none — Memex calls only auto-arm.yml and has no node-repo-validate caller to run
+      --assert-fleet-row, so this row is a 2026-09-11 snapshot rather than a re-measured fact.
+    callers:
+      - workflow: auto-arm.yml
+        job: arm
+        lane: auto-arm.yml
+        grants: {contents: write, pull-requests: write}

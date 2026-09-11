@@ -150,6 +150,9 @@ public class HubTestBase : TestBase
         if (Mesh is null)
             return;
         var disposalId = Guid.NewGuid().ToString("N")[..8];
+        // Plugins#1605 — waited on LAST (see the finally): the next test's mesh must not be built
+        // while this one's collectible contexts are still unloading.
+        CollectibleContextUnloads? collectibleUnloads = null;
 
         Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Mesh.Address);
 
@@ -168,6 +171,7 @@ public class HubTestBase : TestBase
             var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
             var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
             var teardownSignal = Mesh.ServiceProvider.GetService<MeshTeardownSignal>();
+            collectibleUnloads = Mesh.ServiceProvider.GetService<CollectibleContextUnloads>();
 
             if (!Mesh.IsDisposing)
             {
@@ -218,6 +222,11 @@ public class HubTestBase : TestBase
         {
             await base.DisposeAsync();
             Mesh = null!;
+            var unloadOutcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(collectibleUnloads);
+            Logger.LogInformation("[{DisposalId}] Collectible contexts: {Outcome}", disposalId, unloadOutcome);
+            if (unloadOutcome.Fault is not null)
+                throw new InvalidOperationException(
+                    $"Teardown: a collectible context's unload was abandoned — {unloadOutcome}", unloadOutcome.Fault);
         }
     }
 

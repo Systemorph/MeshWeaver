@@ -1,3 +1,4 @@
+using MeshWeaver.Fixture;
 ﻿using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Concurrency;
@@ -270,20 +271,45 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// a failure traced rather than thrown, so a teardown fault cannot red a suite that passed.
     /// </summary>
     private sealed class SharedMeshProvider(IServiceProvider serviceProvider, string testClassName)
-        : IDisposable
+        : IAsyncDisposable
     {
-        /// <summary>The provider every test of the class shares.</summary>
-        public IServiceProvider ServiceProvider { get; } = serviceProvider;
+        // Nullable, and cleared by DisposeAsync BEFORE the unload drain: while this holder keeps the
+        // disposed provider, it roots the mesh and its MeshContentTypeRegistry, and with them the very
+        // collectible contexts the drain waits for (Plugins#1605) - the shared twin of the per-test
+        // path's `ServiceProvider = null!`.
+        private IServiceProvider? serviceProvider = serviceProvider;
 
-        /// <inheritdoc/>
-        public void Dispose()
+        /// <summary>The provider every test of the class shares.</summary>
+        public IServiceProvider ServiceProvider =>
+            serviceProvider ?? throw new ObjectDisposedException(nameof(SharedMeshProvider), testClassName);
+
+        /// <summary>
+        /// Disposes the shared provider, then — like the per-test path (Plugins#1605) — waits until
+        /// every collectible context its mesh retired has REALLY unloaded, so a collection that starts
+        /// next never builds a mesh over this one's unloading contexts. The tracker is resolved BEFORE
+        /// the provider is disposed (resolving afterwards races the scope's own teardown).
+        /// </summary>
+        public async ValueTask DisposeAsync()
         {
-            try { (ServiceProvider as IDisposable)?.Dispose(); }
+            var provider = serviceProvider;
+            if (provider is null)
+                return;
+            var unloads = provider.GetService<CollectibleContextUnloads>();
+            try { (provider as IDisposable)?.Dispose(); }
             catch (Exception ex)
             {
                 Fixture.TestTraceLog.AppendPhase(
                     testClassName, "DISPOSE_SHARED_SP_ERROR", 0, $"{ex.GetType().Name}: {ex.Message}");
             }
+            // Release the disposed provider before waiting on the contexts it roots: neither this
+            // holder's field nor this frame's local may keep the mesh reachable across the drain.
+            serviceProvider = null;
+            provider = null;
+            var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
+            Fixture.TestTraceLog.AppendPhase(testClassName,
+                outcome.Fault is not null ? "DISPOSE_SHARED_UNLOAD_FAULTED"
+                : outcome.Retained ? "DISPOSE_SHARED_ALC_RETAINED"
+                : "DISPOSE_SHARED_UNLOADS_COLLECTED", 0, outcome.ToString());
         }
     }
 
@@ -1463,6 +1489,10 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         // more deterministic (no race against the Mesh's own dispose).
         await DisposeTestClientsAsync(testName, sw);
 
+        // Plugins#1605 — the mesh's record of the collectible contexts it retires. Resolved here,
+        // while the scope is alive; waited on LAST, after the scope (and with it the compilation
+        // cache, which retires every context it still holds) has been disposed.
+        CollectibleContextUnloads? collectibleUnloads = null;
         try
         {
             // Stop the hosted services InitializeAsync started — in reverse order, BEFORE
@@ -1529,6 +1559,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             var ioPools = Mesh.ServiceProvider.GetService<IoPoolRegistry>();
             var asyncDisposeQueue = Mesh.ServiceProvider.GetService<AsyncDisposeQueue>();
             var teardownSignal = Mesh.ServiceProvider.GetService<MeshTeardownSignal>();
+            collectibleUnloads = Mesh.ServiceProvider.GetService<CollectibleContextUnloads>();
             Mesh.Dispose();
             TestPhaseTrace(testName, "DISPOSE_INVOKED", sw.ElapsedMilliseconds);
 
@@ -1684,6 +1715,28 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                         $"{ex.GetType().Name}: {ex.Message}");
                 }
             }
+
+            // 🚨 Plugins#1605 — teardown is not finished until the collectible contexts it retired
+            // have REALLY unloaded. Unload() only requests it; DISPOSE_DONE above is written while
+            // they are still being torn down, and every readable FutuRe crash dump shows the next
+            // mesh being built or run over 3–7 such contexts. So the next test's mesh is sequenced
+            // after the reactive "all collected" signal: xUnit does not construct it until this
+            // DisposeAsync returns. A faulted unload fails the class like a dirty teardown; a
+            // retained context (rooted by something live) is REPORTED, never waited on.
+            // The fixture must not itself hold the mesh it is waiting to see unloaded: the disposed
+            // provider still reaches every singleton, the mesh hub and its content-type registry, whose
+            // discriminator claims hold the collectible types (gcroot inside the drain, #1605).
+            ServiceProvider = null!;
+            var unloadOutcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(collectibleUnloads);
+            TestPhaseTrace(testName,
+                unloadOutcome.Fault is not null ? "DISPOSE_UNLOAD_FAULTED"
+                : unloadOutcome.Retained ? "DISPOSE_ALC_RETAINED"
+                : "DISPOSE_UNLOADS_COLLECTED",
+                sw.ElapsedMilliseconds, unloadOutcome.ToString());
+            if (unloadOutcome.Fault is not null && disposeException is null)
+                disposeException = new InvalidOperationException(
+                    $"{testName} teardown: a collectible context's unload was abandoned — {unloadOutcome}",
+                    unloadOutcome.Fault);
 
             // Force a full GC + finalizers + a second collection so any short-lived
             // garbage is gone and the MEM line shows what actually survived this

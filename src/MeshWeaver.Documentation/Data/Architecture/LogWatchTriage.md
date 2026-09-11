@@ -122,6 +122,48 @@ the fault is, *what* it is, and *which* one it is:
   pods are recorded on the incident instead — and so a defect every tenant hits opens one ticket
   rather than one per tenant.
 
+🚨 **Which means `namespace` on an incident is FIRST-SEEN, while `pods[]`, `occurrences`, `lastSeen`
+and `samples[]` keep folding — across DEPLOYMENTS.** The auto-filed issue prints that stale
+`namespace` in its evidence table as though it described every occurrence, and it is the first thing
+a reader uses to pick which portal to go and look at. Measured on the control instance,
+2026-09-11 — `Admin/_LogIncident/c0b1424c7beb28e0`, `content.namespace: "memex"`, `occurrences: 62`:
+
+| pod, from that incident's `pods[]` | actually in namespace | established by |
+|---|---|---|
+| `memex-portal-deployment-7f74766b8d-rltnt` | **`memex`** | `Ops/Logs/memex-1789108640040221110-766b8d-rltnt` — `deployment: memex`, selector `{namespace="memex"}` |
+| `memex-portal-deployment-6d7497cb58-jc296` | **`memex-cloud`** | `Ops/Logs/memex-cloud-1789104559148633219-97cb58-jc296` — `deployment: memex-cloud`, selector `{namespace="memex-cloud"}` |
+
+Both portals, one incident, one namespace label. And because the normaliser masks the varying node
+path (`Failed to compile assembly for node '{value}'`), that incident's ten most recent `samples[]`
+name `MeshWeaver/samples/Graph/Data/Type/article`, `…/Northwind/Product` and `Hosting/InstanceAction`
+— **not** the `BinaryClickerV2/BinaryToggle` the issue it opened ([#3883](https://github.com/Systemorph/MeshWeaver/issues/3883))
+is titled after and whose last recorded occurrence is still 2026-09-10 02:30:43Z.
+
+> **So `occurrences` counts the FINGERPRINT, not the defect named in the title, and `lastSeen` is
+> the last time ANY member of the group fired on ANY portal.** A rising counter on an auto-filed
+> issue is not evidence that its headline defect is still live; read `samples[]` — the unmasked node
+> paths are in there — and resolve each `pods[]` entry to a deployment before naming a portal.
+
+Re-measured 2026-09-11T09:1xZ, same incident, and the spread had widened rather than settled:
+`occurrences: 62`, **26** entries in `pods[]`, `firstSeen` 2026-09-10T02:26:49Z,
+`lastSeen` 2026-09-11T05:22:40Z. All **ten** retained `samples[]` are one of three node paths —
+`MeshWeaver/samples/Graph/Data/Type/article` (CS0246 `Article`, *Matched Code nodes (0)*),
+`MeshWeaver/samples/Graph/Data/Northwind/Product` (CS0246 `Supplier`/`Category`) and
+`Hosting/InstanceAction` (CS0103 `ObserverExpiryTests` ×1307) — and **none** is the
+`BinaryClickerV2/BinaryToggle` the issue is titled after. Note the three carry *different* Roslyn
+error codes from the CS1929 the normaliser recorded: the masked template keeps `CS1{n} Error … does
+not contain a definition for …`, yet CS0246 and CS0103 lines fold into it anyway, so the fingerprint
+is broader than its own `normalizedMessage` reads.
+
+🚨 **And the issue's evidence table does not track the incident, because the sync is erroring.** That
+incident carries `occurrencesAtLastComment: 2` beside `error: "Resource not accessible by
+integration"` — the GitHub write has been failing since the issue was filed, so #3883 still prints
+*Occurrences 2 / Last seen 2026-09-10 02:30:43Z*. Here that staleness is a mercy: those two really
+were the only `BinaryClickerV2/BinaryToggle` compiles in the record. Had the sync worked, the issue
+would now claim 62 occurrences across 26 pods and two portals for a node that has not been seen
+since. **A stuck syncer and an accurate counter are indistinguishable from the issue page** — check
+`error` and `occurrencesAtLastComment` on the incident before quoting either number.
+
 ### The two cases this has to get right
 
 Both are measured, both from `memex-cloud` on 2026-08-17 (#1787), and
@@ -264,6 +306,97 @@ and asking again is honoured. **Something has to do the asking**, though, and th
 - `Filing` **with** an `IssueNumber` is not in-flight at all: the write-back lands the link, so that
   state is a completed file whose status simply settled, and the issue-link rule keeps it quiet.
 
+### A refused update is loud — once
+
+Every leg that talks to GitHub can be refused, and a refusal used to live in exactly one place: the
+incident's own `Status: Failed` / `Error` fields, which nobody opens unless they already suspect
+something. The issue thread shows nothing — no error, no gap marker — so **a thread that went quiet
+because the commenter was refused reads exactly like a fault that stopped firing.** It fails toward
+"fine".
+
+Measured on `memex.systemorph.com` on 2026-09-11
+([#4022](https://github.com/Systemorph/MeshWeaver/issues/4022)): `Admin/_LogIncident/af1ee515fdf60bd1`
+stood at `occurrences: 7`, `occurrencesAtLastComment: 5`, `status: Failed`,
+`error: "Resource not accessible by integration"` against issue #3876 — two occurrences that never
+reached the ticket. It was not one incident. The App (`meshweaver-cloud`, installation `144517285`)
+had **opened 261 issues and commented on none of them** (its 39 comments are all on pull requests),
+because its permission set, read from the App itself, is `contents:write, emails:write,
+metadata:read, pull_requests:write` — no `issues` at all, at either the App or the installation.
+Every recurrence comment since the watcher's first live run on 2026-08-10 was refused, and the only
+record was a field on each node.
+
+A refused `File` or `Comment` therefore rings the **platform bell** — `Admin/_Notification`, whose
+read scope is exactly `hub.IsGlobalAdmin()` — as a `System` notification whose row opens the
+incident:
+
+| Leg | Bell title (English) | The message names |
+|---|---|---|
+| `Comment` | `Incident {fingerprint}: updates are not reaching {owner/repo}#{n}` | the refusal, how many occurrences never reached the issue, the total, and the incident path |
+| `File` | `Incident {fingerprint} could not be filed` | the refusal, the occurrence count, and the incident path |
+
+The same moment logs one Warning, `[IssueRefused] Incident {path}: {leg} to {issue} was refused —
+{reason}`, naming both sides — the precedent is `ConfigsTargeting`'s zero-match Warning
+([Sync Ref Contract](../SyncRefContract)): "I could not do the thing you think I did" is said out
+loud, once, where it can be found.
+
+**Once per refusal, not once per recurrence.** A ticketed incident requests a `Comment` on every
+report, and after filing `LastCommentedAt` is `null`, so the comment rate limit never engages while
+the post keeps failing — a refused incident retries on **every** report. A bell per attempt would
+turn one missing permission into one notification per occurrence. So `RefusalAnnouncedAt` is
+stamped once the bell has been written, and a post that lands clears it: one refusal episode, one
+bell, and the next refusal after a landed post rings again. The marker cannot be `Error` — the
+claim clears `Error` before every attempt, so a marker keyed on it would announce the same refusal
+every time.
+
+**Bell first, marker second — and the bell row has an identity.** The two writes are not one
+transaction, so their order decides what a crash between them costs. Marker first leaves a marker
+with no bell: every later refusal reads "already announced" and the episode stays silent for good.
+So the bell is written first, under a deterministic identity — the fingerprint, the leg, and the
+`occurrencesAtLastComment` the episode started from, which nothing moves until a post lands — and
+upserted; the marker is written second. A crash between them costs one re-announcement into the
+SAME row, refreshed and unread: never a silent episode, never a duplicate.
+
+A refusal is information, not a transient: nothing retries it and nothing swallows it. If the bell
+itself cannot be written, that is logged at Error — which the watcher tickets like any other red
+line — and the marker stays unset, so the next refusal announces again, into the same row.
+
+The bell's text is platform-owned and lives in the catalog (`logIncident.refused.*`, English and
+German). A notification row stores its title and message **verbatim**, and the platform addressee
+is a group of operators rather than one viewer — so the writer resolves the keys **explicitly in the
+platform default language (English)**, never in whatever locale the writing context happens to
+carry, which would store one operator's language for all of them. The German message is phrased
+count-neutrally, because the counts are runtime values that can be `1`.
+
+#### Is `occurrencesAtLastComment` lagging `occurrences` enough on its own?
+
+It is stored, it is truthful, and the bell quotes it — but as a detector it cannot stand alone:
+
+- **Lag is normal.** `CommentInterval` (6 h) means a healthy, continuously firing incident lags for
+  up to six hours by design. Lag alone cannot tell "rate-limited, will post" from "refused, never
+  will".
+- **The lag's age is not stored.** After filing, `LastCommentedAt` is `null`, so "how long has it
+  lagged" has no timestamp to read.
+- **It cannot see the `File` leg.** An incident that was never filed has no issue to lag behind.
+- **Suppressed incidents lag by design** — occurrences keep counting and tickets stop.
+- **It is passive.** Like `Error`, it answers only someone who already thought to ask.
+
+So the lag stays what it is good for — an audit query and the number in the bell — and the
+announcement is the bell.
+
+#### Granting the App what the commenter needs
+
+An App's permissions are not writable through any API, and a new permission takes effect only when
+the installation accepts it. This is an **organization-owner** action:
+
+1. `github.com/organizations/Systemorph/settings/apps/meshweaver-cloud/permissions` →
+   **Repository permissions** → **Issues: Read and write** → **Save changes**.
+2. `github.com/organizations/Systemorph/settings/installations/144517285` → **Review request** →
+   **Accept new permissions**. Until the installation accepts, its tokens still carry no `issues`.
+3. Verify from GitHub, never from the absence of an error: an App-JWT `GET /app/installations`
+   lists `"issues": "write"` on installation `144517285`; then the next recurrence comment lands,
+   the bot's first comment appears on the issue, and that incident's `occurrencesAtLastComment`
+   advances. Never print the key or a token while doing it — permission names only.
+
 ### The one state nothing requests: `Triaging`
 
 `Triaging` is entered by the control plane and is supposed to be left by the **agent**, which writes
@@ -318,6 +451,13 @@ override is logged and recorded on the ticket rather than silently ignored.
 Issues are opened as the **GitHub App** — the same machine identity the plugin registry uses — never
 a user's OAuth token, because a red log at 03:00 must not depend on whose credential happens to be
 stored.
+
+🚨 **Opening an issue is not the same grant as updating one.** A recurrence comment, and the reopen
+that precedes it on a closed issue, need the App's **Issues: Read and write** repository permission.
+Without it GitHub answers every one with `Resource not accessible by integration` — while the issue
+itself still opens, so the pipeline looks healthy from the one place anyone checks. What that looked
+like in production, and how a refusal is now surfaced, is under "A refused update is loud — once"
+below.
 
 ## Configuration
 

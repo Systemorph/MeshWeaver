@@ -1976,10 +1976,25 @@ jobs:
       run: python3 .github/scripts/check-workflow-timeouts.py --self-test
     - name: "Every job is capped at 45 minutes"
       run: python3 .github/scripts/check-workflow-timeouts.py --root .
+    # 🚨 THE SELF-TEST TAKES --root AND --fleet ON PURPOSE. Without them only the unit cases run,
+    # and those pass against hand-written dicts while the real tree is broken — which is exactly
+    # what happened: #3989's self-test asserted "the 2026-09-10 outage shape is caught" and was
+    # green, while injecting that literal shape into node-repo-module-pack.yml changed nothing.
+    # With them, the controls MUTATE THE REAL LANE FILES in both directions, so a fixture can no
+    # longer be right while the tree is wrong.
     - name: "A caller grants what its lane demands — the gate can fail (self-test)"
-      run: python3 .github/scripts/check-workflow-permission-pairing.py --self-test
+      run: python3 .github/scripts/check-workflow-permission-pairing.py --self-test --root . --fleet .github/lane-caller-grants.yml
     - name: "Core's own callers grant every permission their lanes demand"
       run: python3 .github/scripts/check-workflow-permission-pairing.py --root .
+    # 🚨 THIS IS THE STEP THAT PREVENTS RATHER THAN REPORTS, and the step above cannot do its job.
+    # Core has exactly TWO caller→lane edges of its own (both in main-cd.yml), and #3933 updated
+    # core's own caller in the same commit that broke the fleet — so the line above was green for
+    # the commit that caused a five-hour outage, and would be green for a recurrence. The callers
+    # that break live in repositories this checkout cannot read, so their committed grants are
+    # recorded in .github/lane-caller-grants.yml and checked here. Reading a file needs no
+    # credential, so this runs on forks and on Dependabot exactly as it runs on main.
+    - name: "Every lane this repo publishes is paired in every repository that calls it"
+      run: python3 .github/scripts/check-workflow-permission-pairing.py --root . --fleet .github/lane-caller-grants.yml
 
     # 🚨 `yaml.safe_load` accepts a DUPLICATE MAPPING KEY silently and keeps the LAST one — and
     # every guard in this fleet, the one directly above included, reads workflows through it. So a

@@ -7,7 +7,9 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.Compiler;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Persistence;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -216,8 +218,67 @@ internal interface ICompilationCacheService
     /// Gets or creates an AssemblyLoadContext keyed by the exact DLL path.
     /// Used for release-per-compile: each unique compiled DLL lives in its own
     /// ALC so V1 and V2 assemblies coexist without overwriting each other.
+    ///
+    /// <para>🚨 <b>A READ. It never supersedes another generation</b> — see
+    /// <see cref="PublishLoadContextForPath"/> for why that distinction is load-bearing (#4013).
+    /// Resolving an assembly PATH is what a hub activation, a cell-surface session and an
+    /// assembly-hydration scan all do, and none of them is evidence about which build is
+    /// current.</para>
+    /// <para>🚨 <b>But it IS evidence about which build it wants.</b> A path this cache has not
+    /// seen whose bytes a live context of the NodeType already serves (same MVID — the assembly
+    /// store's copy of a build this process published) answers THAT context, aliased under the
+    /// new path. One generation, one collectible context, however many places its bytes
+    /// live.</para>
     /// </summary>
     NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath);
+
+    /// <summary>
+    /// <see cref="GetOrCreateLoadContextForPath"/> for the ONE caller that is publishing a build:
+    /// the post-emit scan of a compile that just produced <paramref name="dllPath"/>. As well as
+    /// resolving the context it EVICTS every other context for this NodeType, which is what bounds
+    /// <c>_loadContexts</c> to the current generation instead of one entry per recompile — the
+    /// native-memory accumulation described on <c>EvictSupersededContexts</c>.
+    ///
+    /// <para>🚨 <b>Why only here (#4013).</b> The eviction used to ride on <i>every</i> newly
+    /// created path-keyed context, taking "somebody asked for a path I had not seen" as proof that
+    /// that path is the current build. For a reader it is not: a hydration scan of a package's
+    /// SHIPPED assembly, or a kernel session resolving a cell-surface pack, would then supersede
+    /// the generation a concurrent rebuild had just published. Worse, the recovery loop in
+    /// <see cref="CompilationCacheService.PinForScan(string,string?,bool)"/> re-resolves on a
+    /// refused pin — so two scans of two generations of ONE NodeType each destroyed the context
+    /// the other had just resolved, ping-ponging until the 3-attempt cap turned it into an
+    /// <see cref="ObjectDisposedException"/> that <c>CompileResultFromAssembly</c> records as a
+    /// compile error and the watcher PARKS. That is the merge-queue dequeue reported in #4013
+    /// (<c>PluginGateRunnerTest.SelfTypedRootWithStaleCompileStamp</c>: the rebuild publishes while
+    /// the shipped stale stamp is being read — exactly two generations, exactly two scans).
+    /// Reads no longer re-order generations; a publish still does, so it fires where a new
+    /// generation is actually born.</para>
+    ///
+    /// <para>🚨 <b>What the narrowed trigger costs, stated rather than claimed away.</b> The
+    /// UNBOUNDED key space — one never-reused <c>{nodeName}_{ticks}_{guid}/</c> directory per emit
+    /// (<c>EmitToDiskWithRetry</c>) — is still evicted, because every emit publishes. What is no
+    /// longer evicted at the moment it appears is a generation this process only HYDRATED: an
+    /// <c>IAssemblyStore</c> path is keyed <c>v{version}-{frameworkTag}-{hash}.dll</c>
+    /// (first-write-wins per version), so a silo that reads a version another silo compiled now
+    /// keeps the previous version's context until the NodeType hub disposes
+    /// (<see cref="UnloadNodeContexts"/>, which <c>Modules:AutoRecycleOnStaleBuild</c> drives on a
+    /// stale build). That residue is bounded by the number of VERSIONS a hub outlives, not by
+    /// recompiles, and it is the deliberate price of the correctness clause: a read that
+    /// superseded would re-create the CURRENT generation's context under its own path, putting two
+    /// live ALCs behind one file — the two-generations split #3911 describes, manufactured by the
+    /// reclaim itself.</para>
+    ///
+    /// <para>🚨 <b>The cost the paragraph above MISSED, and how it is now closed.</b> "Hydrated"
+    /// is not only a foreign silo's build: THIS silo's own publish is copied into the store by
+    /// <c>UploadToStoreIfNeeded</c>, and instance activation resolves that store copy — so every
+    /// locally compiled generation was read back under a second path, got a second collectible
+    /// context over identical bytes, and the instance's lifetime lease (which covers every
+    /// context of the NodeType) pinned both. NodeTypeRecompileAlcLeakTest (MeshWeaver.Plugins)
+    /// caught it on the first core set carrying #4017 (the fix for #4013): 3 live contexts after 3 recompiles
+    /// against a bound of 2. A read now REUSES the live context that already serves its build
+    /// (same MVID) — never a supersession, so the ping-pong above cannot return through it.</para>
+    /// </summary>
+    NodeAssemblyLoadContext PublishLoadContextForPath(string nodeName, string dllPath);
 
     /// <summary>
     /// Resolves a LIVE context for a scan and returns it already pinned — the atomic form of
@@ -234,12 +295,20 @@ internal interface ICompilationCacheService
     /// good, because a hub resolves its configuration exactly once, at activation).</para>
     /// <para>Only this service can close that window: it owns the dictionary, so it is the only
     /// component that can re-resolve. The loop terminates because the evictor removes the key
-    /// BEFORE disposing, so the next resolve constructs a fresh context.</para>
+    /// BEFORE disposing, so the next resolve constructs a fresh context — and, since #4013,
+    /// because neither the retry nor any reader EVICTS while doing so. The old loop could not
+    /// terminate under two concurrent scans of two generations: each re-resolve created a context
+    /// that evicted the peer's, so both kept being refused until the attempt cap rethrew. See
+    /// <see cref="PublishLoadContextForPath"/>.</para>
     /// </summary>
-    PinnedScanContext PinForScan(string nodeName, string? dllPath);
+    /// <param name="publishesTheBuild">True for the ONE caller that just emitted
+    /// <paramref name="dllPath"/> (the post-emit scan) — its first resolve supersedes the older
+    /// generations of this NodeType. Every other scan is a READ and leaves the set alone; a RETRY
+    /// never supersedes, whoever asked.</param>
+    PinnedScanContext PinForScan(string nodeName, string? dllPath, bool publishesTheBuild = false);
 
     /// <summary>
-    /// <see cref="PinForScan(string, string?)"/> for a release-keyed context.
+    /// <see cref="PinForScan(string, string?, bool)"/> for a release-keyed context.
     /// </summary>
     PinnedScanContext PinForScanOfRelease(NodeTypeRelease release, string releaseFolder);
 
@@ -346,6 +415,36 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     /// Gets whether this context has been disposed/unloaded.
     /// </summary>
     public bool IsDisposed => _disposed;
+
+    /// <summary>
+    /// Whether this context has left service: disposed, unloading, or holding a DEFERRED unload
+    /// (<see cref="Dispose"/> was called while a lease was held). A retired context still runs
+    /// the hubs that lease it, but it must never be handed to a NEW caller as "the" context for
+    /// its build — see <c>CompilationCacheService.FindLiveContextOfSameBuild</c>.
+    /// </summary>
+    public bool IsRetired
+    {
+        get
+        {
+            lock (_loadLock)
+                return _disposed || _unloading || _unloadRequested;
+        }
+    }
+
+    /// <summary>
+    /// The MVID of the build this context serves — the IDENTITY of a generation, where a path is
+    /// only one of the places its bytes live (the compile's emit directory, the assembly store's
+    /// <c>v{version}-{tag}-{hash}.dll</c> copy, a hydrated blob). Read from the loaded assembly
+    /// when there is one (no IO), otherwise from the file's metadata via
+    /// <see cref="ServedBuildIdentity.OfFile"/> (a header read — nothing is loaded). Null for an
+    /// in-memory context or an unreadable file, which the caller treats as "no evidence".
+    /// </summary>
+    public string? BuildMvid
+        => LoadedAssembly is { } loaded
+            ? loaded.ManifestModule.ModuleVersionId.ToString("N")
+            : _buildMvidFromFile.Value;
+
+    private readonly Lazy<string?> _buildMvidFromFile;
 
     /// <summary>
     /// Pins the context for the duration of a SCAN of its loaded assembly (GetTypes + attribute
@@ -500,12 +599,45 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         public void Dispose() { }
     }
 
+    // 🚨 Plugins#1605 — the point at which this context has REALLY unloaded. Unload() only starts
+    // an unload (and calls GC.SuppressFinalize on the context, so a finalizer here would never run);
+    // the runtime keeps the context alive through a strong handle until it destroys the
+    // LoaderAllocator. So the signal is a separate sentinel referenced ONLY by this field: it
+    // becomes unreachable in the same collection as the context — which the runtime allows only
+    // after phase two of the unload — and its finalizer reports the retirement collected. Set once,
+    // at retirement: a context aliased under two cache keys is ONE generation and must be tracked
+    // once, or its second retirement would never complete.
+    private CollectibleContextUnloads.Retirement? _retirement;
+    private RetirementSentinel? _retirementSentinel;
+
+    /// <summary>
+    /// Records this context on <paramref name="unloads"/> as asked to unload, so the mesh can wait
+    /// until it has really been collected (<see cref="CollectibleContextUnloads.AllCollected"/>).
+    /// Call BEFORE <see cref="Dispose"/>; a second call is a no-op.
+    /// </summary>
+    internal void RetireInto(CollectibleContextUnloads unloads)
+    {
+        lock (_loadLock)
+        {
+            if (_retirement is not null)
+                return;
+            _retirement = unloads.Retire(Name ?? _nodeName);
+            _retirementSentinel = new RetirementSentinel(_retirement);
+        }
+    }
+
+    private sealed class RetirementSentinel(CollectibleContextUnloads.Retirement retirement)
+    {
+        ~RetirementSentinel() => retirement.Collected();
+    }
+
     public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null)
         : base(name: $"DynamicNode_{nodeName}", isCollectible: true)
     {
         _nodeName = nodeName;
         _dllPath = dllPath;
         _logger = logger;
+        _buildMvidFromFile = new Lazy<string?>(() => ServedBuildIdentity.OfFile(dllPath));
 
         // Purge Autofac's process-static reflection cache of this context's assemblies the instant
         // it starts unloading — while the metadata the predicate walks is still valid. A cached
@@ -515,6 +647,11 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // Autofac does this automatically for BeginLoadContextLifetimeScope; we manage the context
         // by hand, so we mirror it. Static handler ⇒ no self-reference that would defeat collection.
         Unloading += ReflectionCacheEviction.EvictFor;
+        // …and System.Text.Json's process-static member-accessor cache, the one strong root of the
+        // contexts a FutuRe teardown could not collect (Plugins#1605, gcroot): without this, a context
+        // whose types were serialised is freed whenever STJ's 1 s eviction timer fires — while the NEXT
+        // mesh is already starting. See JsonMemberAccessorCacheEviction.
+        Unloading += JsonMemberAccessorCacheEviction.EvictFor;
     }
 
     /// <summary>
@@ -757,6 +894,12 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
                     "Drain signal for AssemblyLoadContext {ContextName} faulted — KEEPING its load "
                     + "context rather than unloading an assembly a scan may still be reading",
                     Name);
+                // Kept means this unload will never finish: say so to whoever waits for it. This arm
+                // also receives an Unload() that threw inside CompleteUnload (the drain subscription
+                // reaches the completed subject through Rx's SubscribeSafe); CompleteUnload has
+                // already reported that exact exception, and the first fault is the one signalled.
+                _retirement?.Faulted(new InvalidOperationException(
+                    $"AssemblyLoadContext {Name} was KEPT loaded: its unload faulted", ex));
                 return Observable.Empty<Unit>();
             })
             .Subscribe(_ => CompleteUnload());
@@ -776,7 +919,22 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         _loadedAssembly = null;
 
         // Initiate unload outside the lock — the context is collected once all references release.
-        Unload();
+        // An Unload() that throws (an Unloading handler, raised first, faulting) leaves the context
+        // LOADED. This runs as the OnNext of the drain subscription — synchronously inside Dispose
+        // when the drain was already quiet, but on the thread of the LAST scan's pin release when it
+        // was not — so a rethrow would escape into that scan's Dispose (Copilot review, #4042). It is
+        // handled here instead: logged at Error, and reported to whoever waits for the unload, which
+        // fails the teardown that expected it (DISPOSE_UNLOAD_FAULTED).
+        try
+        {
+            Unload();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex,
+                "Unload() of AssemblyLoadContext {ContextName} threw — the context stays LOADED", Name);
+            _retirement?.Faulted(ex);
+        }
 
             // Diagnostic probe (opt-in, off by default): drive a collection right after the unload so a
             // use-after-unload dangling native pointer trips at THIS unload — naming the culprit node
@@ -822,9 +980,18 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 /// </summary>
 internal class CompilationCacheService(
     IOptions<CompilationCacheOptions> options,
-    ILogger<CompilationCacheService> logger)
+    ILogger<CompilationCacheService> logger,
+    CollectibleContextUnloads? unloads = null)
     : ICompilationCacheService, IDisposable
 {
+    /// <summary>Records <paramref name="context"/> as retired on the mesh's tracker (if any) so the
+    /// mesh can wait until it has REALLY been collected — Plugins#1605.</summary>
+    private void Retire(NodeAssemblyLoadContext context)
+    {
+        if (unloads is not null)
+            context.RetireInto(unloads);
+    }
+
     private readonly CompilationCacheOptions _options = options.Value ?? new CompilationCacheOptions();
     private readonly ConcurrentDictionary<string, NodeAssemblyLoadContext> _loadContexts = new();
     private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _probingDirs = new();
@@ -1174,8 +1341,45 @@ internal class CompilationCacheService(
 
     /// <inheritdoc />
     public NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath)
+        => ResolveLoadContextForPath(nodeName, dllPath, supersedeOlderBuilds: false);
+
+    /// <inheritdoc />
+    public NodeAssemblyLoadContext PublishLoadContextForPath(string nodeName, string dllPath)
+        => ResolveLoadContextForPath(nodeName, dllPath, supersedeOlderBuilds: true);
+
+    private NodeAssemblyLoadContext ResolveLoadContextForPath(
+        string nodeName, string dllPath, bool supersedeOlderBuilds)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // 🚨 A READ of a path this process has not seen may still be a build it HAS: the same
+        // bytes at another address. The ordinary case is the one every locally compiled type
+        // hits — the post-emit scan PUBLISHES from the compile's {nodeName}_{ticks}_{guid}/
+        // directory, UploadToStoreIfNeeded copies those bytes into the assembly store as
+        // v{version}-{tag}-{hash}.dll, and every instance activation then resolves the STORE path.
+        // Two paths, one generation. Until #4013 the read's own supersession hid this (it evicted
+        // the publish's context); once reads stopped superseding, each generation got a SECOND
+        // collectible context over identical bytes, the instance hub's lifetime lease
+        // (LeaseNodeContexts — every context of the NodeType) pinned both, and a live instance
+        // held two contexts of a generation it had long stopped being current for — measured by
+        // NodeTypeRecompileAlcLeakTest (MeshWeaver.Plugins): 2 contexts at activation, 3 after
+        // each of 3 recompiles, where the bound is the current build plus the one generation the
+        // instance runs. So a read answers the live context that already serves its build, and
+        // aliases its key to it. That is a REUSE, never a supersession — nothing is evicted, so
+        // the #4013 ping-pong (two scans destroying each other's contexts) cannot come back
+        // through here. Publishes are untouched: they create their own context and supersede.
+        if (!supersedeOlderBuilds
+            && !_loadContexts.ContainsKey(dllPath)
+            && FindLiveContextOfSameBuild(nodeName, dllPath) is { } sameBuild)
+        {
+            var aliased = _loadContexts.GetOrAdd(dllPath, sameBuild);
+            // A publish can retire the context between the search and the alias — its evictor
+            // enumerated before our key existed. Never hand a retired context to a new caller:
+            // drop OUR alias (only if it is still ours) and resolve normally below.
+            if (!aliased.IsRetired)
+                return aliased;
+            _loadContexts.TryRemove(new KeyValuePair<string, NodeAssemblyLoadContext>(dllPath, aliased));
+        }
 
         var created = false;
         var ctx = _loadContexts.GetOrAdd(dllPath, path =>
@@ -1188,20 +1392,53 @@ internal class CompilationCacheService(
             return c;
         });
 
-        // A genuinely NEW path-keyed context means a fresh compile/release just superseded any
-        // prior assembly for this NodeType. Each recompile writes to a unique
-        // {nodeName}_{timestamp}_{guid} directory (see EmitToDiskWithRetry), so the OLD entries —
-        // same NodeName, different key — are never reused. Left in place they pin their collectible
-        // NodeAssemblyLoadContext (and its native metadata/JIT images) for the ENTIRE life of the
-        // (long-lived) NodeType hub, unloaded only on hub teardown (UnloadNodeContexts). That
-        // per-recompile accumulation is the native-memory leak that drove memex to the server-GC
-        // hard limit (~21 GB at the 28 Gi cap) and its GC-thrash crashes. Evict them now — but only
-        // when WE added the current context (created), so a re-request of an already-cached path can
-        // never evict the live assembly. See EvictSupersededContexts for why this is safe mid-recompile.
-        if (created)
-            EvictSupersededContexts(nodeName, keepKey: dllPath);
+        // A PUBLISHED build supersedes every prior assembly for this NodeType. Each recompile
+        // writes to a unique {nodeName}_{timestamp}_{guid} directory (see EmitToDiskWithRetry), so
+        // the OLD entries — same NodeName, different key — are never reused. Left in place they pin
+        // their collectible NodeAssemblyLoadContext (and its native metadata/JIT images) for the
+        // ENTIRE life of the (long-lived) NodeType hub, unloaded only on hub teardown
+        // (UnloadNodeContexts). That per-recompile accumulation is the native-memory leak that drove
+        // memex to the server-GC hard limit (~21 GB at the 28 Gi cap) and its GC-thrash crashes.
+        // Evict them now — but only when WE added the current context (created), so a re-request of
+        // an already-cached path can never evict the live assembly. See EvictSupersededContexts for
+        // why this is safe mid-recompile.
+        //
+        // 🚨 supersedeOlderBuilds is FALSE for every reader (#4013). "A path I had not seen yet" is
+        // not evidence that the path is the current build — a hydration scan of a package's shipped
+        // assembly and a kernel session resolving a cell-surface pack both create one, and letting
+        // either supersede the generation a concurrent rebuild had just published is what let two
+        // scans of one NodeType destroy each other's contexts until PinForScan's attempt cap
+        // rethrew. The UNBOUNDED half of the key space is unaffected — every emit publishes, and
+        // the per-emit {nodeName}_{ticks}_{guid} directory is the set that grows without bound. A
+        // generation this process merely HYDRATED from the assembly store is now reclaimed on hub
+        // disposal instead of on the next reader's resolve; see PublishLoadContextForPath for why
+        // that trade is the right way round.
+        if (created && supersedeOlderBuilds)
+            EvictSupersededContexts(nodeName, keep: ctx);
 
         return ctx;
+    }
+
+    /// <summary>
+    /// The live (not retired) context of <paramref name="nodeName"/> that already serves the build
+    /// at <paramref name="dllPath"/> — same MVID, different path — or null. Null whenever the
+    /// identity cannot be read on either side: absence of evidence resolves a fresh context,
+    /// exactly as before, and never aliases two builds together.
+    /// </summary>
+    private NodeAssemblyLoadContext? FindLiveContextOfSameBuild(string nodeName, string dllPath)
+    {
+        var mvid = ServedBuildIdentity.OfFile(dllPath);
+        if (mvid is null)
+            return null;
+        foreach (var context in _loadContexts.Values)
+        {
+            if (!string.Equals(context.NodeName, nodeName, StringComparison.Ordinal)
+                || context.IsRetired)
+                continue;
+            if (string.Equals(context.BuildMvid, mvid, StringComparison.OrdinalIgnoreCase))
+                return context;
+        }
+        return null;
     }
 
     /// <summary>
@@ -1212,30 +1449,35 @@ internal class CompilationCacheService(
     private const int ScanPinReResolveAttempts = 3;
 
     /// <inheritdoc />
-    public PinnedScanContext PinForScan(string nodeName, string? dllPath)
+    public PinnedScanContext PinForScan(string nodeName, string? dllPath, bool publishesTheBuild = false)
         => PinResolved(
             cacheKey: string.IsNullOrEmpty(dllPath) ? nodeName : dllPath!,
-            resolve: () => string.IsNullOrEmpty(dllPath)
+            // 🚨 `attempt` is the parameter, not a captured flag: ONLY the first resolve of a
+            // PUBLISHING scan may supersede. A retry is a recovery, and a recovery that destroys
+            // its peers' freshly created contexts is what turned a one-shot supersession into the
+            // ping-pong of #4013.
+            resolve: attempt => string.IsNullOrEmpty(dllPath)
                 ? GetOrCreateLoadContext(nodeName)
-                : GetOrCreateLoadContextForPath(nodeName, dllPath!));
+                : ResolveLoadContextForPath(
+                    nodeName, dllPath!, supersedeOlderBuilds: publishesTheBuild && attempt == 1));
 
     /// <inheritdoc />
     public PinnedScanContext PinForScanOfRelease(NodeTypeRelease release, string releaseFolder)
         => PinResolved(
             // Same key GetOrCreateLoadContextForRelease adds under.
             cacheKey: release.Path,
-            resolve: () => GetOrCreateLoadContextForRelease(release, releaseFolder));
+            resolve: _ => GetOrCreateLoadContextForRelease(release, releaseFolder));
 
     /// <summary>
     /// Resolve → Pin as ONE operation, re-resolving when the context we resolved is already
     /// unloading. See <see cref="ICompilationCacheService.PinForScan"/> for why two steps is a
     /// race and why losing it is not survivable downstream.
     /// </summary>
-    private PinnedScanContext PinResolved(string cacheKey, Func<NodeAssemblyLoadContext> resolve)
+    private PinnedScanContext PinResolved(string cacheKey, Func<int, NodeAssemblyLoadContext> resolve)
     {
         for (var attempt = 1; ; attempt++)
         {
-            var context = resolve();
+            var context = resolve(attempt);
             try
             {
                 return new PinnedScanContext(context, context.Pin());
@@ -1257,8 +1499,8 @@ internal class CompilationCacheService(
     }
 
     /// <summary>
-    /// Unloads every load context for <paramref name="nodeName"/> whose dictionary key is not
-    /// <paramref name="keepKey"/> — the assemblies a just-loaded recompile/release superseded —
+    /// Unloads every load context for <paramref name="nodeName"/> other than
+    /// <paramref name="keep"/> — the assemblies a just-loaded recompile/release superseded —
     /// bounding <see cref="_loadContexts"/> to the current context per NodeType instead of one per
     /// recompile.
     /// </summary>
@@ -1271,16 +1513,20 @@ internal class CompilationCacheService(
     /// context's <c>Unloading</c> handler (<c>ReflectionCacheEviction.EvictFor</c>) purges Autofac's
     /// shared reflection cache so the freed context is neither rooted nor left as a dangling key.
     /// Mirrors the match in <see cref="UnloadNodeContexts"/>/<see cref="InvalidateCache"/> (both key
-    /// on <see cref="NodeAssemblyLoadContext.NodeName"/>), just triggered per recompile rather than
-    /// only on hub teardown.
+    /// on <see cref="NodeAssemblyLoadContext.NodeName"/>), just triggered per PUBLISHED build
+    /// rather than only on hub teardown — see <see cref="PublishLoadContextForPath"/> for why the
+    /// trigger is a publish and not merely "a path-keyed context was created" (#4013).
     /// </remarks>
-    private void EvictSupersededContexts(string nodeName, string keepKey)
+    private void EvictSupersededContexts(string nodeName, NodeAssemblyLoadContext keep)
     {
         if (_disposed)
             return;
 
+        // By CONTEXT, not by key: a read may have aliased another path to the context being kept
+        // (ResolveLoadContextForPath — the store copy of the build this publish just loaded), and
+        // evicting that key would dispose the very generation being published.
         var stale = _loadContexts
-            .Where(kvp => !string.Equals(kvp.Key, keepKey, StringComparison.Ordinal)
+            .Where(kvp => !ReferenceEquals(kvp.Value, keep)
                        && string.Equals(kvp.Value.NodeName, nodeName, StringComparison.Ordinal))
             .Select(kvp => kvp.Key)
             .ToList();
@@ -1314,6 +1560,7 @@ internal class CompilationCacheService(
         if (_loadContexts.TryRemove(nodeName, out var context))
         {
             logger.LogDebug("Unloading AssemblyLoadContext for {NodeName}", nodeName);
+            Retire(context);
             context.Dispose();
         }
     }
@@ -1355,7 +1602,11 @@ internal class CompilationCacheService(
         var leases = _loadContexts
             .Where(kvp => string.Equals(kvp.Key, nodeName, StringComparison.Ordinal)
                        || string.Equals(kvp.Value.NodeName, nodeName, StringComparison.Ordinal))
-            .Select(kvp => kvp.Value.Lease())
+            // Once per CONTEXT: a context aliased under two paths (see ResolveLoadContextForPath)
+            // is one generation and takes one lease.
+            .Select(kvp => kvp.Value)
+            .Distinct()
+            .Select(context => context.Lease())
             .ToArray();
 
         if (leases.Length == 0)
@@ -1455,6 +1706,7 @@ internal class CompilationCacheService(
             {
                 try
                 {
+                    Retire(context);
                     context.Dispose();
                 }
                 catch (Exception ex)

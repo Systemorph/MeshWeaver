@@ -142,6 +142,12 @@ jobs:
           gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-workflow-permission-pairing.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-workflow-permission-pairing.py" \
             || { echo "::error::could not fetch .github/scripts/check-workflow-permission-pairing.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-workflow-permission-pairing.py" | grep -q "check-workflow-permission-pairing" || { echo "::error::the fetched check-workflow-permission-pairing.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+          # MeshWeaver#3878: the module publication gate. Its caller-graph check used to run only INSIDE
+          # the publication lane — on trunk, after the merge that broke it — so it is fetched here too
+          # and run against this repository's callers on every pull request (step further down).
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/module-publication.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/module-publication.py" \
+            || { echo "::error::could not fetch .github/scripts/module-publication.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/module-publication.py" | grep -q "module-publication" || { echo "::error::the fetched module-publication.py at ${SCRIPTS_REF} does not look like the publication gate"; exit 1; }
           # 🚨 The pairing guard needs the LANE DEFINITIONS, not just the script: the defect is a
           # relation between this repo's caller and the lane it is about to call, and neither half
           # alone shows it. Fetch every shared lane at the same ref into a platform root. A fetch
@@ -149,24 +155,73 @@ jobs:
           # which is the failure mode it exists to prevent (AGENTS.md — a gate never tests its own
           # inputs).
           mkdir -p "$RUNNER_TEMP/platform/.github/workflows"
+          # 🚨 `auto-arm` is in this list because its demand is WORKFLOW-level and every repository in
+          # the fleet calls it. It was absent while the guard resolved a cross-repo `uses:` by
+          # BASENAME inside the calling repo — which found each satellite's own two-line `auto-arm.yml`
+          # CALLER wrapper and compared it against itself, reporting a pair that was never checked.
+          # With that fixed the lane must actually be fetched, or the caller is silently uncovered.
           for lane in node-repo-validate node-repo-compile-check node-repo-gate node-repo-module-pack \
                       node-repo-module-publish node-repo-publish-bake node-repo-tag-modules \
-                      node-repo-platform-canary node-repo-platform-ref-bump node-repo-supersede; do
+                      node-repo-platform-canary node-repo-platform-ref-bump node-repo-supersede \
+                      auto-arm; do
             gh api "repos/Systemorph/MeshWeaver/contents/.github/workflows/${lane}.yml?ref=${SCRIPTS_REF}" --jq .content \
               | base64 -d > "$RUNNER_TEMP/platform/.github/workflows/${lane}.yml" \
               || { echo "::error::could not fetch .github/workflows/${lane}.yml at ${SCRIPTS_REF} — the permission-pairing guard cannot read the lane this repo calls, and a guard that cannot read its subject must not pass"; exit 1; }
           done
+          # 🚨 THE FLEET ROSTER. Core's own pull request checks a lane change against the committed
+          # grants of every repository it cannot read (.github/lane-caller-grants.yml), because the
+          # pairing check below is hosted in THIS lane — which every satellite calls from the same
+          # ci.yml that calls the other lanes — and a `startup_failure` rejects that whole file's
+          # graph. On a recurrence this job is never scheduled, so it cannot report the outage it is
+          # standing in. That makes the roster the load-bearing half, and a roster nobody
+          # re-measures is a memory: this lane asserts THIS repository's row still matches reality.
+          # The fetch fails RED like every other one here — never "skipped".
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/lane-caller-grants.yml?ref=${SCRIPTS_REF}" --jq .content \
+            | base64 -d > "$RUNNER_TEMP/lane-caller-grants.yml" \
+            || { echo "::error::could not fetch .github/lane-caller-grants.yml at ${SCRIPTS_REF} — the fleet roster this repo's row is asserted against is unreadable, and a guard that cannot read its subject must not pass"; exit 1; }
+          grep -q "^repos:" "$RUNNER_TEMP/lane-caller-grants.yml" || { echo "::error::the fetched lane-caller-grants.yml at ${SCRIPTS_REF} has no \`repos:\` mapping"; exit 1; }
           python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --disable-pip-version-check 'PyYAML==6.0.2'
+      # 🚨 --root AND --fleet are passed on purpose: without them only the unit cases run, and those
+      # pass against hand-written dicts while the real tree is broken. With them the controls mutate
+      # THIS repo's real callers and the real lane files, in both directions.
       - name: "A caller grants what its lane demands — the gate can fail (self-test)"
-        run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --self-test
+        run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --self-test --root . --platform-root "$RUNNER_TEMP/platform" --fleet "$RUNNER_TEMP/lane-caller-grants.yml"
       # 🚨 MeshWeaver#3933 added `id-token: write` to three jobs of the module-pack lane and paired
       # only core's own caller. Every satellite run became `startup_failure` with ZERO jobs — no
       # permission error, no check-run, and under classic protection an ABSENT required context
       # blocks forever. MeshWeaver.Plugins was dark for five hours and could not merge the two-line
-      # fix for the thing that broke it. This is the check that would have caught it, and this is
-      # the only place it CAN be caught: the caller lives here, the lane lives there.
+      # fix for the thing that broke it.
+      #
+      # 🚨 THIS STEP WOULD NOT HAVE CAUGHT THAT, and this comment used to claim it would ("the only
+      # place it CAN be caught"). Measured wrong in MeshWeaver#4011: the check lives in a job the
+      # caller's own ci.yml declares, and a `startup_failure` rejects that whole FILE's graph — so
+      # on a recurrence this job is never scheduled and cannot report the outage it is standing in.
+      # Five of six satellites call at `@main`, so no pin stands in between either. What prevents a
+      # recurrence is core's `--fleet` run against .github/lane-caller-grants.yml, before the lane
+      # change merges. This step covers the OTHER direction: a change made on THIS side of the pair.
       - name: "This repo's callers grant every permission their platform lanes demand"
         run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --root . --platform-root "$RUNNER_TEMP/platform"
+      # 🚨 THE ANTI-STALENESS HALF. The platform's fleet roster is what core's own pull request
+      # checks a lane change against, and it can only be trusted while every row is re-derived from
+      # the repository it describes. Both drift directions make the fleet check answer a confident
+      # green on a broken fleet — this repo ADDS a caller the roster does not know, or LOWERS a
+      # grant the roster still records — and both are caught here, in a job that DOES run (a roster
+      # mismatch is not a permission escalation, so the run graph is accepted and the red is
+      # visible). Re-measure with `--emit-fleet-row` and land the printed block in core.
+      - name: "This repo's callers still match the platform's fleet roster"
+        run: python3 "$RUNNER_TEMP/check-workflow-permission-pairing.py" --root . --fleet "$RUNNER_TEMP/lane-caller-grants.yml" --assert-fleet-row "${{ github.repository }}"
+      # 🚨 MeshWeaver#3878: A MODULE REGISTRY HAND-OVER WAITS FOR THE WHOLE VALIDATION VERDICT, and the
+      # wiring that makes it wait is checked HERE, before merge. `node-repo-module-publish.yml` runs
+      # the same caller-graph check itself, but only on trunk — the first run of a broken publisher
+      # would be the post-merge run on `main`, refusing, with nothing published and main red. This
+      # step runs it against every publisher in this repo's workflows on the pull request, and adds
+      # the wiring the lane cannot see from inside one call: every `publish-mode: staged` pack call
+      # has exactly one publisher on its `lane`, `selected` and `declared` outputs, and that publisher
+      # runs on exactly the events the pack call stages on. A repo that calls neither lane prints so.
+      - name: "The module publication gate can refuse (self-test)"
+        run: python3 "$RUNNER_TEMP/module-publication.py" --self-test
+      - name: "A module registry hand-over waits for this repo's whole validation verdict"
+        run: python3 "$RUNNER_TEMP/module-publication.py" check-callers --root .
       - name: "Every job is capped at 45 minutes — the gate can fail (self-test)"
         run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --self-test
       - name: "Every job in this repo's workflows is capped at 45 minutes"

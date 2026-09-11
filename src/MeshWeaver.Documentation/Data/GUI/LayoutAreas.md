@@ -87,6 +87,70 @@ public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingCont
 }
 ```
 
+## Reading the Hosting Node's Own Content
+
+This is the single most-reached-for thing in a NodeType's layout area — *"give me my node's content,
+typed"* — and the name authors reach for does not exist.
+
+🚨 **`LayoutAreaHost` has no `GetData<T>()`.** Its whole data surface is `GetDataStream<T>(string id)`
+/ `UpdateData(string id, …)`, and those address the **layout area's own `/data/{id}` scratch space** —
+form values, a filter, a selection — *not* the mesh node the hub is hosting. The two are unrelated
+stores that happen to have similar-looking names.
+
+What makes it cost an afternoon is the diagnostic. `host.GetData<MyContent>()` still **binds**, to
+the unrelated extension `WorkspaceOperations.GetData<T>(this EntityStore store)`
+(`src/MeshWeaver.Data/WorkspaceOperations.cs`), so the compiler does not say *"no such method"* — it
+says:
+
+```
+CS1929: 'LayoutAreaHost' does not contain a definition for 'GetData' and the best extension method
+        overload 'WorkspaceOperations.GetData<MyContent>(EntityStore)' requires a receiver of type
+        'MeshWeaver.Data.EntityStore'
+```
+
+which reads as *"you passed the wrong receiver"* and sends the reader hunting for an `EntityStore` to
+pass. There isn't one to find; the method was never the right one.
+
+**The read is the node stream, and the no-argument overload means "this hub's own node":**
+
+```csharp
+public static IObservable<UiControl?> Detail(LayoutAreaHost host, RenderingContext _)
+    => host.Workspace.GetMeshNodeStream()                       // no argument = the hosting node
+        .Select(node => node.ContentAs<MyContent>(host.Hub.JsonSerializerOptions))
+        .Select(content => (UiControl?)Controls.Stack
+            .WithView(Controls.H2(content?.Name ?? ""))
+            .WithView(Controls.Markdown(content?.Description ?? "")));
+```
+
+`host.Workspace.GetMeshNodeStream()` is the shipped idiom — `ExportLayoutArea`,
+`MarkdownOverviewLayoutArea`, `MeshNodeLayoutAreas` and `UserActivityLayoutAreas` all open with it —
+and `GetMeshNodeStream(path)` reads any *other* node through the same process-wide
+`IMeshNodeStreamCache`.
+
+Three rules travel with it:
+
+- 🚨 **Never cast the content.** `node.Content is MyContent` is a trap-door that yields a **silent
+  null** for the three cases that actually occur in a live mesh — untyped JSON from an unresolvable
+  `$type`, the as-written `JsonObject` before materialization, and a same-named type from another
+  collectible assembly (every NodeType recompile mints one). The view renders empty with no
+  exception and nothing to grep. Use `ContentAs<T>(hub.JsonSerializerOptions)`. The shipped
+  `SocialMediaProfileLayoutAreas` sample predates this and hand-digs a `JsonElement` through a
+  `GetProp` helper — that helper *is* the symptom, not a pattern to copy.
+- 🚨 **Never `.Take(1)`** on the stream feeding the returned view — it freezes the binding at the
+  first emission and the area stops tracking the node.
+- **Writing back** is `GetMeshNodeStream(path).Update(current => current with { … })`, the only
+  mutation API — and it returns a **cold** observable, so the write does not happen until you
+  `.Subscribe(_ => { }, ex => logger.LogWarning(ex, …))`. Do it from a synchronous click handler
+  (see the 🚨 note under [Edit View with Save and Cancel](#edit-view-with-save-and-cancel) below);
+  never `async ctx =>`.
+
+Any literal a viewer reads — the empty-state text the `??` fallbacks elide above — goes through
+`host.Localize("key")` with the key in **both** `strings.en.json` and `strings.de.json`; see
+[Cross-Renderer Authoring](../CrossRendererAuthoring).
+
+See [Data Binding](../DataBinding), [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess)
+and [Requesting Work via stream.Update()](/Doc/Architecture/RequestViaStreamUpdate).
+
 ## Navigating Between Areas
 
 Use `LayoutAreaReference` and `ToHref()` to build navigation links between areas on the same hub or across node boundaries:

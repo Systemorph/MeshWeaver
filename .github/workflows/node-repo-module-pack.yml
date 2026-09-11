@@ -74,7 +74,7 @@ name: node-repo module pack
 #       required-jobs: <the same list, by name>
 #       lane:     ${{ needs.module-pack.outputs.lane }}
 #       selected: ${{ needs.module-pack.outputs.selected }}
-#       modules:  <the same JSON matrix this call was given>
+#       modules:  ${{ needs.module-pack.outputs.declared }}   # this call's own catalog, never a copy
 #       platform-ref: <the same pin>
 #     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
 #
@@ -296,6 +296,20 @@ on:
           MUST publish or the rebuild it just did is discarded and every portal stays on
           FrameworkDeclined (#2088). See the caller contract at the top of this file.
         type: boolean
+        default: false
+      publish-newest-only:
+        description: >-
+          Per-module deploy (MeshWeaver.Plugins, 2026-09-11) — for a caller that NEVER cancels its
+          trunk runs. Two such runs can build the same module and finish in either order, and the
+          registry keeps whatever arrives LAST. With this on, right before the hand-over each leg
+          fetches the trunk tip and asks the same scope script the selection uses whether a newer
+          commit reaches its module's dependency network; if one does, the leg stands down (receipt
+          `publication: superseded`, naming the tip) and that commit's own run publishes a tree
+          containing this one — a module never goes backwards and never waits for an unrelated one.
+          `direct` mode only; refuses a `content-repository` (it reads THIS repository's trunk). Off
+          by default: a caller whose trunk runs supersede each other gets its ordering from that.
+        type: boolean
+        required: false
         default: false
       publish-mode:
         description: >
@@ -599,6 +613,14 @@ on:
           the receipts against. The publication lane requires a staged record for every one of
           them, so "its leg never staged" cannot read like "there was nothing to stage".
         value: ${{ jobs.select.outputs.selected }}
+      declared:
+        description: >
+          The module matrix this call was GIVEN (the `modules` input), verbatim. A caller wiring
+          `node-repo-module-publish.yml` passes it as that lane's `modules`, so the publisher sets
+          aside any staged record outside this call's catalog without the caller keeping a SECOND
+          copy of the catalog — a copy drifts, and MeshWeaver.Plugins refuses a second `modules:`
+          list in its ci.yml outright (#3732). MeshWeaver#3878.
+        value: ${{ jobs.select.outputs.declared }}
 
 jobs:
   # ─────────────────────── WHICH BUNDLES THIS DIFF CAN REACH ───────────────────────
@@ -624,6 +646,9 @@ jobs:
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
       lane: ${{ steps.lane.outputs.id }}
+      # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
+      # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
+      declared: ${{ inputs.modules }}
     steps:
       # ───────────── THIS CALL'S ARTIFACT NAMESPACE — derived, never assumed ─────────────
       # 🚨 ARTIFACTS ARE RUN-WIDE. A repo may invoke this reusable workflow more than once in one
@@ -2532,6 +2557,54 @@ jobs:
           retention-days: 14
           compression-level: 9
 
+      # ═══════ NEWEST WINS, PER MODULE (`publish-newest-only`, per-module deploy 2026-09-11) ═══════
+      # A caller that never cancels its trunk runs can have two of them build this module at once,
+      # finishing in either order — and the registry keeps whatever arrives LAST. So right before the
+      # hand-over the leg fetches the trunk tip and asks the SAME scope script the selection uses
+      # whether any newer commit reaches this module's dependency network. If one does, this leg does
+      # not publish: that commit's own run (never cancelled) builds the module from a tree containing
+      # this one. Every uncertainty in the scope script answers FULL — "reached" — which stands this
+      # leg down; that is safe because the newer run takes the same fallback and builds the module.
+      # A trunk that cannot be read is RED: "cannot tell" must never publish as "nothing newer".
+      - name: A newer trunk commit reaches this module? (publish-newest-only)
+        id: newer
+        if: ${{ inputs.publish && inputs.publish-newest-only && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' }}
+        env:
+          CONTENT_REPOSITORY: ${{ inputs.content-repository }}
+          TRUNK: ${{ github.event.repository.default_branch }}
+          ENTRY: ${{ toJSON(matrix.entry) }}
+          MODULE: ${{ matrix.entry.module }}
+        run: |
+          set -euo pipefail
+          [ -z "$CONTENT_REPOSITORY" ] || { echo "::error::publish-newest-only reads THIS repository's trunk, but content-repository is '$CONTENT_REPOSITORY' — a lane packing another repository's content cannot say whether a newer commit of it exists. Turn one of the two off."; exit 1; }
+          [ -n "$TRUNK" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
+          git fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
+          mine=$(git rev-parse HEAD)
+          tip=$(git rev-parse "refs/remotes/origin/$TRUNK")
+          newer=false
+          if [ "$tip" = "$mine" ]; then
+            echo "this run's commit $mine IS the trunk tip — nothing newer; publishing $MODULE"
+          else
+            # Two trees, no history needed: both commits are present in this shallow clone.
+            changed=$(git diff --no-renames --name-only "$mine" "$tip" | paste -sd, -)
+            if [ -z "$changed" ]; then
+              echo "the trunk moved to $tip, but its tree equals this run's — nothing newer reaches $MODULE; publishing"
+            else
+              jq -n --argjson e "$ENTRY" '[$e]' > "$RUNNER_TEMP/newer-entry.json"
+              GITHUB_OUTPUT="$RUNNER_TEMP/newer-scope.out" GITHUB_STEP_SUMMARY=/dev/null \
+                python3 meshweaver/.github/scripts/node-repo-scope.py --for modules --root . \
+                  --modules "@$RUNNER_TEMP/newer-entry.json" --event pull_request \
+                  --changed-list "$changed" > "$RUNNER_TEMP/newer-scope.json"
+              if [ "$(jq -r '.count' "$RUNNER_TEMP/newer-scope.json")" != "0" ]; then
+                newer=true
+                echo "::notice title=Stood down for a newer commit::$MODULE is NOT published from $mine — trunk tip $tip reaches its dependency network ($(jq -r '.reason' "$RUNNER_TEMP/newer-scope.json")), and that commit's own run publishes it."
+              else
+                echo "the trunk moved to $tip, but nothing it changed reaches $MODULE's dependency network — publishing"
+              fi
+            fi
+          fi
+          { echo "newer=$newer"; echo "tip=$tip"; } >> "$GITHUB_OUTPUT"
+
       # 🚨 The hand-over. Without it a module that has LEFT the platform repo is packed, versioned,
       # inspected — and reaches nobody, because a registry serves only bytes it holds. A missing
       # token here FAILS the job rather than skipping quietly: "published nothing" and "published
@@ -2550,7 +2623,7 @@ jobs:
       # produce quietly.
       - name: Hand the bundle to the registry
         id: publish
-        if: ${{ inputs.publish && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' }}
+        if: ${{ inputs.publish && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' && steps.newer.outputs.newer != 'true' }}
         env:
           TOKEN: ${{ secrets.publish-token }}
           REGISTRY: ${{ inputs.registry-url }}
@@ -2765,14 +2838,16 @@ jobs:
           # `publish-mode: staged` nothing reached the registry from here, and a receipt saying
           # otherwise would make the lane's own report ("N published to the registry") a claim
           # about something that has not happened yet.
-          PUBLISHED: ${{ inputs.publish && inputs.publish-mode == 'direct' }}
+          PUBLISHED: ${{ inputs.publish && inputs.publish-mode == 'direct' && steps.newer.outputs.newer != 'true' }}
           # 🚨 WHICH ARM OWNED THIS LEG'S HAND-OVER, written down rather than inferred from an
           # `if:` nobody can read after the fact — the same discipline as `TESTS` below. `direct`:
           # this leg POSTed the bundle itself. `staged`: it staged the bytes for the caller's
           # publication lane, which hands over after the full source verdict (MeshWeaver#3878).
           # `none`: this call does not publish at all. Two mutually exclusive conditions can BOTH
           # be false; this is what makes that impossible to do quietly.
-          PUBLICATION: ${{ !inputs.publish && 'none' || inputs.publish-mode }}
+          PUBLICATION: ${{ !inputs.publish && 'none' || (steps.newer.outputs.newer == 'true' && 'superseded' || inputs.publish-mode) }}
+          # publish-newest-only: the trunk tip whose own run publishes this module instead.
+          SUPERSEDED_BY: ${{ steps.newer.outputs.newer == 'true' && steps.newer.outputs.tip || '' }}
           # 🚨 WHICH LANE OWNS THIS MODULE'S SUITE, written down rather than inferred from an `if:`
           # nobody can read after the fact. `none` — the selection says this entry owes no test run
           # (a floor-only entry, or a ledger record that already carries a verdict); `inline` — the
@@ -2817,8 +2892,8 @@ jobs:
                 --arg v "$VERSION" --arg c "$COMPILER" --arg t "$TESTS" \
                 --argjson pub "$PUBLISHED" --arg pm "$PUBLICATION" \
                 --arg lk "$LEDGER_KEY" --arg ld "$LEDGER_DECISION" \
-                --arg fid "$IDENTITY" \
-             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, publication:$pm, frameworkIdentity:$fid, ledger:{key:$lk, decision:$ld}}' \
+                --arg fid "$IDENTITY" --arg sb "${SUPERSEDED_BY:-}" \
+             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, publication:$pm, frameworkIdentity:$fid, ledger:{key:$lk, decision:$ld}} + (if $sb == "" then {} else {supersededBy:$sb} end)' \
              > "$RUNNER_TEMP/receipts/$MODULE.json"
           cat "$RUNNER_TEMP/receipts/$MODULE.json"
       - name: Upload the receipt

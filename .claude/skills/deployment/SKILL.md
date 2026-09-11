@@ -13,7 +13,9 @@ allowed-tools:
 
 🚨 **The cluster is not the surface — the control instance is** (maintainer, 2026-09-08: *"all the
 operations through the memex api"*, *"no direct access of aks"*). On AKS, an instance is a
-`Deployments/<name>` record on memex.meshweaver.cloud and every operation is a
+`Deployments/<name>` record on the CONTROL INSTANCE, memex.systemorph.com (MCP server `systemorph`;
+the server named `memex` is memex.meshweaver.cloud, whose `Deployments/*` copy is a lagging second
+sync, not the record) and every operation is a
 `Hosting/InstanceAction` node — `Roll` (the record's image pin, or an explicit `imageTag`, then WAIT
 for the rollout), `Restart`, `Suspend`/`Reactivate`, `Audit`, `Reconcile`, `HelmRelease` — run by
 the in-cluster operator and reported on the same node. Every `az aks command invoke` / `kubectl`

@@ -486,6 +486,203 @@ case "$_pv_out" in *"DRY-RUN would run"*"patch pvc"*) ok "…and narrates the pa
   *) bad "a dry run narrates the patch" "said: ${_pv_out}" ;; esac
 
 echo
+echo "── hosting-inline-env-retire: a retired shadow leaves, onto the same value only ──"
+# The stub answers the Deployment, Secret and ConfigMap reads from a per-scenario fixture (falling
+# back to fixtures/inline-env/base) and RECORDS the patch, so the decisions — refuse mid-rollout,
+# refuse a sole source, refuse a shadow the pod would not read, refuse DIFFER, remove from EVERY
+# container in one guarded patch, read it back — are asserted without a cluster. Every fixture value
+# is an obviously fake placeholder, and the no-leak arms prove none of them is ever printed, patched
+# or passed in an argv. What is NOT proven here: that the API server honours a JSON-patch `test` op
+# on resourceVersion — that is Kubernetes' contract, and the first real run is what shows it.
+#
+# 🚨 EVERY invocation below — the argument refusals included — runs with the stub FIRST on PATH. A
+# laptop running this suite may carry a real kubectl with a live context, and a guard that failed to
+# stop would otherwise read (or patch) whatever cluster that context names.
+IE_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/inline-env" && pwd)"
+IE_FIXTURES="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/inline-env" && pwd)"
+IE_TOKEN="PluginCatalog__RegistryToken=memex-portal-keyvault"
+_ie_args_state="$(mktemp -d)"
+IE_ENV=(env "PATH=$IE_STUBS:$PATH" "HOSTING_IE_FIXTURE=$IE_FIXTURES/base" "HOSTING_IE_BASE=$IE_FIXTURES/base" "HOSTING_IE_STATE=$_ie_args_state")
+ie() {  # ie <scenario> "<KEY=source> [KEY=source…]" [env…] — sets $_ie_out $_ie_rc $_ie_log $_ie_patch
+  local scenario="$1" pairs="$2" pair
+  shift 2
+  local retire=()
+  for pair in $pairs; do retire+=(--retire "$pair"); done
+  _ie_state="$(mktemp -d)"
+  _ie_out="$(env "$@" PATH="$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$scenario" HOSTING_IE_BASE="$IE_FIXTURES/base" \
+    HOSTING_IE_STATE="$_ie_state" hosting-inline-env-retire --namespace memex "${retire[@]}" 2>&1)"; _ie_rc=$?
+  _ie_log="$(cat "$_ie_state/log" 2>/dev/null || true)"
+  _ie_patch="$(cat "$_ie_state/patch" 2>/dev/null || true)"
+  rm -rf "$_ie_state"
+}
+ie_no_patch() {  # the run wrote nothing to the Deployment
+  case "$_ie_log" in *" patch deployment "*) bad "$1" "kubectl saw a patch: ${_ie_log}" ;; *) ok "$1" ;; esac
+}
+ie_no_value() {  # no fixture value in the output, the patch or any argv kubectl saw
+  case "${_ie_out}${_ie_patch}${_ie_log}" in
+    *fake-inline-registry-token*|*fake-chart-secret-token*|*fake-rotated-registry-token*|*registry.example.invalid*)
+      bad "$1" "a value appeared — out: ${_ie_out} patch: ${_ie_patch}" ;;
+    *) ok "$1" ;;
+  esac
+}
+
+refuses "inline-env-retire needs --namespace"     "missing required flag --namespace" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --retire "$IE_TOKEN"
+refuses "inline-env-retire needs a --retire"      "missing required flag --retire" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex
+refuses "inline-env-retire rejects unknown flags" "unknown argument" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire "$IE_TOKEN" --nope 1
+refuses "inline-env-retire needs KEY=<source>"    "is not KEY=<shadowed source>" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire PluginCatalog__RegistryToken
+refuses "inline-env-retire refuses a blank shadow — that entry is the sole source" "SOLE source" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire PluginCatalog__RegistryToken=
+refuses "inline-env-retire refuses a key named twice" "named twice" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire "$IE_TOKEN" --retire "$IE_TOKEN"
+refuses_hard "inline-env-retire key with a metacharacter"    "is not a plain environment-variable name" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire 'K;kubectl delete deploy --all=s'
+refuses_hard "inline-env-retire shadow with a metacharacter" "is not a plain name" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire 'PluginCatalog__RegistryToken=s;rm -rf /'
+refuses_hard "inline-env-retire namespace with a metacharacter" "is not a plain name" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace 'memex; kubectl delete ns memex' --retire "$IE_TOKEN"
+case "$(cat "$_ie_args_state/log" 2>/dev/null)" in
+  "") ok "…and no argument refusal ever reached kubectl" ;;
+  *)  bad "no argument refusal reaches kubectl" "kubectl saw: $(cat "$_ie_args_state/log")" ;;
+esac
+rm -rf "$_ie_args_state"
+
+ie base "$IE_TOKEN"
+[ "$_ie_rc" -eq 0 ] && ok "a retired credential EQUAL to the source it shadows is removed" \
+  || bad "a retired credential EQUAL to the source it shadows is removed" "exited ${_ie_rc}: ${_ie_out}"
+case "$_ie_out" in *"PluginCatalog__RegistryToken  EQUAL (len 31)"*"falls through to secret/memex-portal-keyvault"*)
+    ok "…reporting the verdict and a LENGTH, and naming the source it falls through to" ;;
+  *) bad "the EQUAL verdict is reported with its length" "said: ${_ie_out}" ;; esac
+ie_no_value "…and no value is printed, patched or passed in an argv"
+_ie_all=1
+for _p in 0/env/1 1/env/1 2/env/2; do
+  case "$_ie_patch" in *"{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/${_p}\"}"*) ;; *) _ie_all=0 ;; esac
+done
+[ "$_ie_all" = 1 ] && ok "…from EVERY container that carries it — the portal and both gate sidecars" \
+  || bad "the key is removed from every container that carries it" "patch: ${_ie_patch}"
+[ "$(printf '%s\n' "$_ie_log" | grep -c ' patch deployment ')" = "1" ] && ok "…in ONE patch (one new ReplicaSet, one rollout)" \
+  || bad "the removal is one patch" "kubectl saw: ${_ie_log}"
+case "$_ie_patch" in '[{"op":"test","path":"/metadata/resourceVersion","value":"918273"}'*)
+    ok "…guarded FIRST on the resourceVersion that was measured" ;;
+  *) bad "the patch is guarded on the measured resourceVersion" "patch: ${_ie_patch}" ;; esac
+case "$_ie_patch" in *'{"op":"test","path":"/spec/template/spec/containers/0/env/1/name","value":"PluginCatalog__RegistryToken"},{"op":"remove","path":"/spec/template/spec/containers/0/env/1"}'*)
+    ok "…and each removal on the entry's NAME, immediately before it" ;;
+  *) bad "each removal is guarded on the entry's name" "patch: ${_ie_patch}" ;; esac
+case "$_ie_patch" in *RegistryUrl*|*ClaudeCode*|*DOTNET_*|*MESH_*) bad "only the retired key is touched" "patch: ${_ie_patch}" ;;
+  *) ok "…and nothing but the retired key is touched" ;; esac
+case "$_ie_out" in *"::hosting:: inline_env_retired=1"*) ok "…and the count it reports comes after the read-back" ;;
+  *) bad "the retired count is reported" "said: ${_ie_out}" ;; esac
+
+# 🚨 The refusals — every one BEFORE any write.
+ie differ "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "a shadow that DIFFERS is refused — removing the entry would change the value the portal reads" \
+  || bad "a DIFFER is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"DIFFER (inline 31 bytes, secret/memex-portal-keyvault 39 bytes)"*) ok "…reporting both lengths and the verdict, never a value" ;;
+  *) bad "the DIFFER refusal reports lengths" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+ie_no_value "…and prints no value either"
+
+ie base "PluginCatalog__RegistryToken=memex-portal-secrets"
+[ "$_ie_rc" -ne 0 ] && ok "a record naming a shadow the pod would NOT fall through to is refused" \
+  || bad "a wrong recorded shadow is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"would fall through to secret/memex-portal-keyvault"*) ok "…naming the source that actually wins (the LAST envFrom that carries the key)" ;;
+  *) bad "the wrong-shadow refusal names the winner" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie base "Features__Ai__Clis__ClaudeCode=memex-portal-config"
+[ "$_ie_rc" -ne 0 ] && ok "a SOLE-source entry is refused — removing it would blank the key" \
+  || bad "a sole source is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"SOLE source"*) ok "…saying so" ;; *) bad "the sole-source refusal says so" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie base "PluginCatalog__RegistryUrl=memex-portal-config"
+[ "$_ie_rc" -ne 0 ] && ok "a key the ConfigMap renders EMPTY is refused as DIFFER, not blanked (#3201's RegistryUrl)" \
+  || bad "an empty-rendered key is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"DIFFER (inline 32 bytes, configmap/memex-portal-config 0 bytes)"*) ok "…naming both lengths" ;;
+  *) bad "the empty-rendered refusal names both lengths" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie base "$IE_TOKEN Features__Ai__Clis__ClaudeCode=memex-portal-config"
+[ "$_ie_rc" -ne 0 ] && ok "one refused key refuses the whole run" || bad "one refused key refuses the run" "exited 0: ${_ie_out}"
+ie_no_patch "…so nothing is retired halfway — not even the key that measured EQUAL"
+
+ie rolling "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "a Deployment mid-rollout is refused — the patch would supersede the rollout in flight" \
+  || bad "a mid-rollout Deployment is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"a rollout is in progress"*"1 updated"*) ok "…naming what is not settled" ;;
+  *) bad "the rollout refusal names what is unsettled" "said: ${_ie_out}" ;; esac
+case "$_ie_log" in *"get secret"*) bad "…before any Secret is read" "kubectl saw: ${_ie_log}" ;; *) ok "…before any Secret is read" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie valuefrom "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "a valueFrom reference is refused — it names its own source and is not a shadow" \
+  || bad "a valueFrom entry is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"valueFrom"*) ok "…saying so" ;; *) bad "the valueFrom refusal says so" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie stuck "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "a patch the API accepted but that did not take is a FAILED step, not a pass" \
+  || bad "an ineffective patch fails" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"still carries"*) ok "…naming what is still there (read back)" ;;
+  *) bad "the read-back failure names what is left" "said: ${_ie_out}" ;; esac
+
+ie absent "$IE_TOKEN"
+[ "$_ie_rc" -eq 0 ] && ok "a key no container carries any more is a successful no-op (idempotent plan step)" \
+  || bad "an already-retired key is a no-op" "exited ${_ie_rc}: ${_ie_out}"
+ie_no_patch "…that writes nothing, so it rolls nothing"
+case "$_ie_out" in *"::hosting:: inline_env_retired=0"*"::hosting:: inline_env_absent=1"*) ok "…and says so" ;;
+  *) bad "the no-op says so" "said: ${_ie_out}" ;; esac
+
+# A dry run measures for real, narrates the patch and writes nothing.
+ie base "$IE_TOKEN" HOSTING_DRY_RUN=true
+[ "$_ie_rc" -eq 0 ] && ok "a dry run succeeds" || bad "a dry run succeeds" "exited ${_ie_rc}: ${_ie_out}"
+ie_no_patch "a dry run writes nothing"
+case "$_ie_out" in *"DRY-RUN would run"*"patch deployment"*) ok "…narrates the patch it would write" ;;
+  *) bad "a dry run narrates the patch" "said: ${_ie_out}" ;; esac
+case "$_ie_out" in *"::hosting:: inline_env_retire=dry-run"*) ok "…and never claims a retirement" ;;
+  *) bad "a dry run never claims a retirement" "said: ${_ie_out}" ;; esac
+ie_no_value "…still printing no value"
+
+echo
+echo "── hosting-kv-rotate refuses under an inline shadow ──────────────"
+# MeshWeaver#3201 / Plugins#1593: an inline `env:` entry outranks every envFrom, so a rotation that
+# lands the new key in the vault and the synced Secret leaves the pods presenting the OLD one — and
+# the registry deletes the old key's index entry the moment it adopts the new hash
+# (MeshWeaverInstanceService.AdoptKeyHash → DeleteIndex). A 401 storm behind a green rotation. The
+# rotation therefore measures the Deployment first, and refuses BEFORE anything is minted. Both a
+# kubectl and an az stub lead PATH: the control case really does reach the vault write, and the az
+# stub refuses it without recording the argv that carries the minted key.
+KVR_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-rotate" && pwd)"
+kvr() {  # kvr <inline-env scenario> — sets $_kvr_out $_kvr_rc $_kvr_az
+  _kvr_state="$(mktemp -d)"
+  _kvr_out="$(env PATH="$KVR_STUBS:$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$1" HOSTING_IE_BASE="$IE_FIXTURES/base" \
+    HOSTING_IE_STATE="$_kvr_state" HOSTING_KV_SYNC_ATTEMPTS=1 \
+    hosting-kv-rotate --vault V --prefix memex- --namespace memex --synced-secret memex-portal-keyvault 2>&1)"; _kvr_rc=$?
+  _kvr_az="$(cat "$_kvr_state/az.log" 2>/dev/null || true)"
+  rm -rf "$_kvr_state"
+}
+kvr base
+[ "$_kvr_rc" -ne 0 ] && ok "a rotation with the key set INLINE on the Deployment is refused" \
+  || bad "an inline shadow refuses the rotation" "exited 0: ${_kvr_out}"
+case "$_kvr_out" in *"PluginCatalog__RegistryToken is set INLINE on memex-portal, python-gate, node-gate"*"RetireInlineEnv"*)
+    ok "…naming every container that carries it and the prior step (RetireInlineEnv)" ;;
+  *) bad "the shadow refusal names the containers and the prior step" "said: ${_kvr_out}" ;; esac
+case "$_kvr_out" in *"::hosting::"*) bad "…before anything is reported" "said: ${_kvr_out}" ;;
+  *) ok "…before anything is reported — no key_hash line, so the registry adopts nothing" ;; esac
+[ -z "$_kvr_az" ] && ok "…and before anything is minted or stored (no az call at all)" \
+  || bad "nothing is stored under a refusal" "az saw: ${_kvr_az}"
+kvr absent
+case "$_kvr_out" in *"set INLINE"*) bad "CONTROL: the same Deployment WITHOUT the inline entry passes the shadow check" "said: ${_kvr_out}" ;;
+  *) ok "CONTROL: the same Deployment WITHOUT the inline entry passes the shadow check" ;; esac
+case "$_kvr_az" in "az keyvault secret"*) ok "…and reaches the vault write (the az stub refuses it, so nothing is stored)" ;;
+  *) bad "the control reaches the vault write" "az saw: '${_kvr_az}', said: ${_kvr_out}" ;; esac
+case "$_kvr_out" in *mwi_*) bad "…without ever printing the minted key" "said: ${_kvr_out}" ;;
+  *) ok "…without ever printing the minted key" ;; esac
+
+echo
 echo "── hosting-audit: what lives only on the cluster ─────────────────"
 # The stubs are NOT mocks of helm/kubectl — they answer the audit's read-only calls from fixture
 # files so the DETECTION can be asserted without a cluster. What a fixture cannot prove (that a

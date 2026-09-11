@@ -32,6 +32,12 @@ its whole validation set, and it is deliberately built so that "the validation d
                 literal, and must account for every other job in the workflow — covered, or
                 declared unrelated with a reason. This is the half `verdict` cannot see: a
                 dependency dropped from `needs:` AND from `required-jobs` is invisible at runtime.
+  check-callers The same caller-graph check, run BEFORE MERGE over every workflow in a repository
+                (node-repo-validate.yml runs it on every satellite pull request), plus the wiring
+                one call cannot see: every `publish-mode: staged` pack call has exactly one
+                publisher reading its `lane`/`selected`/`declared` outputs, and that publisher runs
+                on exactly the events the pack call stages on. A staged pack call nobody publishes
+                would hand the registry NOTHING, silently — the FrameworkDeclined outage of #2088.
   publish       The staged evidence is matched against the selection before ONE byte is POSTed:
                 exactly one publication record per selected module, stamped with THIS call's lane,
                 naming the bytes by sha256 and the framework identity read back off those bytes.
@@ -44,6 +50,7 @@ USAGE
   module-publication.py check-caller --workflow .github/workflows/ci.yml \\
         --uses node-repo-module-publish.yml --required "validate compile-check" \\
         --unrelated "auto-arm: arms auto-merge, validates nothing"
+  module-publication.py check-callers --root .
   module-publication.py publish --staged DIR --lane L --declared @modules.json \\
         --selected "MeshWeaver.AI" --registry https://memex.meshweaver.cloud --source Plugins
   module-publication.py --self-test
@@ -260,6 +267,12 @@ def check_caller(workflow: Path, uses_suffix: str, required_raw: str, unrelated_
 
     graph = _job_graph(jobs)
     problems: list[str] = []
+    for name, reason in sorted(unrelated.items()):
+        if not reason:
+            problems.append(
+                f"`unrelated-jobs` exempts `{name}` with NO reason. An exemption is what excuses a job "
+                "that could still fail after the hand-over from the verdict, and one that says nothing "
+                "is indistinguishable from one nobody meant — say why it validates no source.")
     for pub in publishers:
         job = jobs[pub] or {}
         anc = _ancestors(graph, pub)
@@ -305,6 +318,177 @@ def check_caller(workflow: Path, uses_suffix: str, required_raw: str, unrelated_
                 f"{k} ({v or 'NO REASON GIVEN'})" for k, v in sorted(unrelated.items())))
     for p in problems:
         print(f"::error title=Publication gate::{p}", file=sys.stderr)
+    return 1 if problems else 0
+
+
+# ══════════════════════════════════ check-callers ══════════════════════════════════
+PACK_LANE = "node-repo-module-pack.yml"
+PUBLISH_LANE = "node-repo-module-publish.yml"
+#: The only values the pack lane accepts (its `select` job refuses anything else at run time).
+PUBLISH_MODES = ("direct", "staged")
+
+
+def _norm_condition(value) -> str:
+    """A job `if:` or a pack call's `publish:` in comparable form.
+
+    `${{ }}` is decoration on both (a job `if:` is an expression either way), a folded scalar adds
+    line breaks, and an absent `if:` means "always" — so all three are normalised away before the
+    two are compared. Nothing is EVALUATED: two different spellings of one condition read as a
+    mismatch, which is the safe direction for a check whose failure mode is silence.
+    """
+    if value is None or value is True:
+        return "true"
+    if value is False:
+        return "false"
+    text = str(value).strip()
+    m = re.fullmatch(r"\$\{\{(.*)\}\}", text, re.S)
+    if m:
+        text = m.group(1)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _needs_output(value, output: str) -> str | None:
+    """The job X in `${{ needs.X.outputs.<output> }}`, or None for any other shape."""
+    m = re.fullmatch(r"\$\{\{\s*needs\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}",
+                     str(value or "").strip())
+    return m.group(1) if m and m.group(2) == output else None
+
+
+def _publish_mode(with_: dict) -> str:
+    """The pack call's `publish-mode` EXACTLY as the lane will compare it — never stripped.
+
+    The lane tests `inputs.publish-mode == 'staged'` and `case "$MODE" in direct|staged)`, both
+    exact. Normalising here (`' staged '` -> `staged`) would let this check pass a value the lane
+    reads as neither arm, so the two would disagree about what the call does.
+    """
+    raw = with_.get("publish-mode", "direct")
+    return raw if isinstance(raw, str) else str(raw)
+
+
+def _calls(jobs: dict, lane: str) -> dict[str, dict]:
+    return {jid: job for jid, job in jobs.items()
+            if isinstance(job, dict) and isinstance(job.get("uses"), str)
+            and job["uses"].split("@")[0].rstrip("/").endswith("/" + lane)}
+
+
+def check_callers(root: Path) -> int:
+    """Every module publication in `root` is wired to wait for its whole validation verdict.
+
+    🚨 WHY THIS RUNS BEFORE MERGE. `node-repo-module-publish.yml` runs `check-caller` itself, but
+    only when it is invoked — on trunk. A publisher broken on a pull request is first judged by the
+    post-merge run on `main`, which refuses (fail-closed: the registry is untouched) and reds main.
+    And one call cannot see the other half at all: a pack call switched to `staged` whose publisher
+    was never added, or runs on fewer events, hands the registry NOTHING and reports green.
+    """
+    try:
+        import yaml
+    except ImportError:
+        die("module-publication.py check-callers needs PyYAML (pip install pyyaml)")
+    wf_dir = root / ".github" / "workflows"
+    if not wf_dir.is_dir():
+        die(f"`{wf_dir}` does not exist — this check read no workflow at all, and a check that read "
+            "nothing must never pass.")
+    files = sorted(list(wf_dir.glob("*.yml")) + list(wf_dir.glob("*.yaml")))
+    problems: list[str] = []
+    n_pack = n_pub = 0
+    for wf in files:
+        try:
+            doc = yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"`{wf.name}` does not parse as YAML ({exc}) — its publications, if any, "
+                            "could not be checked.")
+            continue
+        jobs = doc.get("jobs") if isinstance(doc, dict) else None
+        if not isinstance(jobs, dict):
+            continue
+        packs, pubs = _calls(jobs, PACK_LANE), _calls(jobs, PUBLISH_LANE)
+        n_pack += len(packs)
+        n_pub += len(pubs)
+
+        for pid, pj in sorted(pubs.items()):
+            w = pj.get("with") or {}
+            required, unrelated = w.get("required-jobs"), w.get("unrelated-jobs") or ""
+            for key, val in (("required-jobs", required), ("unrelated-jobs", unrelated)):
+                if "${{" in str(val or ""):
+                    problems.append(f"{wf.name}: `{pid}` passes `{key}` as an expression. It must be a "
+                                    "literal, so the static half of this gate reads the same list the "
+                                    "lane will enforce.")
+            if not names(str(required or "")):
+                problems.append(f"{wf.name}: `{pid}` declares no `required-jobs` — the lane refuses an "
+                                "empty list at run time, so this publisher would never publish.")
+            print(f"== {wf.name}#{pid}: the caller-graph check the publication lane runs on trunk")
+            if check_caller(wf, PUBLISH_LANE, str(required or ""), str(unrelated)) != 0:
+                problems.append(f"{wf.name}: `{pid}` fails the caller-graph check above — on trunk "
+                                "the publication lane would refuse the same way, after the merge.")
+
+            src = _needs_output(w.get("lane"), "lane")
+            if src is None:
+                problems.append(f"{wf.name}: `{pid}` must pass `lane` as the lane output of the pack "
+                                f"call it publishes (needs.<call>.outputs.lane) — got {w.get('lane')!r}. "
+                                "Artifacts are run-wide; without the lane key a sibling call's bundles "
+                                "could answer this publication.")
+                continue
+            if src not in packs:
+                problems.append(f"{wf.name}: `{pid}` reads its lane from `{src}`, which is not a "
+                                f"{PACK_LANE} call in this workflow.")
+                continue
+            for key, output in (("selected", "selected"), ("modules", "declared")):
+                if _needs_output(w.get(key), output) != src:
+                    problems.append(f"{wf.name}: `{pid}` must pass `{key}` as "
+                                    f"needs.{src}.outputs.{output} — the SAME call whose lane it "
+                                    f"publishes — got {w.get(key)!r}.")
+            need = pj.get("needs") or []
+            need = [need] if isinstance(need, str) else need
+            if src not in need:
+                problems.append(f"{wf.name}: `{pid}` reads needs.{src}.outputs but `{src}` is not in "
+                                "its own `needs:` — that context resolves only for a job named there.")
+            pw = packs[src].get("with") or {}
+            mode = _publish_mode(pw)
+            if mode in PUBLISH_MODES and mode != "staged":
+                problems.append(f"{wf.name}: `{pid}` publishes `{src}`, whose publish-mode is "
+                                f"`{mode}`, not `staged` — that call POSTs in-leg itself and stages "
+                                "nothing, so this lane would refuse on an empty staged set.")
+            stage_on, publish_on = _norm_condition(pw.get("publish", False)), _norm_condition(pj.get("if"))
+            if stage_on != publish_on:
+                problems.append(
+                    f"{wf.name}: `{src}` stages on `{stage_on}` but `{pid}` runs on `{publish_on}`. A "
+                    "run that stages and does not publish hands the registry NOTHING while every tick "
+                    "is green (every portal then reads FrameworkDeclined, #2088); a run that publishes "
+                    "without staging refuses. Give the publisher exactly the pack call's condition.")
+
+        for kid, kj in sorted(packs.items()):
+            kw = kj.get("with") or {}
+            mode = _publish_mode(kw)
+            if mode not in PUBLISH_MODES:
+                problems.append(
+                    f"{wf.name}: `{kid}` passes `publish-mode: {mode!r}` — it must be the literal "
+                    "`staged` or `direct`. An expression resolves only at run time, so this check "
+                    "could not tell whether the call stages (and needs a publisher) or POSTs in-leg; "
+                    "a staged call nobody publishes would then pass here and hand the registry nothing.")
+                continue
+            wired = sorted(pid for pid, pj in pubs.items()
+                           if _needs_output((pj.get("with") or {}).get("lane"), "lane") == kid)
+            if mode == "staged" and not wired:
+                problems.append(
+                    f"{wf.name}: `{kid}` stages its bundles (publish-mode: staged) and NO "
+                    f"{PUBLISH_LANE} job reads its lane — the staged bytes reach nobody, and this "
+                    "repository silently stops publishing modules.")
+            elif mode == "staged" and len(wired) > 1:
+                problems.append(f"{wf.name}: `{kid}` is published by {len(wired)} jobs ({', '.join(wired)}) "
+                                "— the same bytes would be POSTed twice from one validated call.")
+            elif mode != "staged" and _norm_condition(kw.get("publish", False)) != "false":
+                print(f"  NOTE: {wf.name}#{kid} publishes IN-LEG (publish-mode: {mode}): each module "
+                      "reaches the registry right after its own suite, before this run's other gates "
+                      f"report (MeshWeaver#3878). Not refused here; adopt publish-mode: staged and a "
+                      f"{PUBLISH_LANE} job.")
+
+    print(f"module-publication check-callers: {n_pack} {PACK_LANE} call(s) and {n_pub} {PUBLISH_LANE} "
+          f"call(s) across {len(files)} workflow file(s) under {wf_dir}")
+    if not n_pack and not n_pub:
+        print("  this repository calls neither lane — nothing here hands module bundles to a registry, "
+              "so there is no hand-over to order.")
+    for p in problems:
+        print(f"::error title=Publication wiring::{p}", file=sys.stderr)
     return 1 if problems else 0
 
 
@@ -520,6 +704,11 @@ def self_test() -> int:  # noqa: C901 — a table of cases reads better than a d
     import tempfile
 
     failures: list[str] = []
+    # 🚨 The cases below drive `verdict`/`publish` into their REFUSED arms on purpose, and both write
+    # a table to $GITHUB_STEP_SUMMARY. Left set, the job summary of every run that proves this gate
+    # (the publication lane itself, node-repo-validate) opens with "REFUSED — nothing was handed to
+    # the registry" for a publication that never existed.
+    os.environ.pop("GITHUB_STEP_SUMMARY", None)
 
     def check(label: str, ok: bool, detail: str = ""):
         print(("  ok   " if ok else "  FAIL ") + label + (f" — {detail}" if detail and not ok else ""))
@@ -640,8 +829,103 @@ jobs:
         check("…and passes once it is DECLARED unrelated with a reason", rc == 0, out)
 
         rc, out = caller(good_caller.replace(
+            "  summary:\n    needs: [publish]\n", "  summary:\n"), unrelated="summary:")
+        check("MUTATION: an unrelated-jobs entry with NO reason is caught", rc == 1 and "NO reason" in out, out)
+
+        rc, out = caller(good_caller.replace(
             "node-repo-module-publish.yml@abc", "node-repo-tag-modules.yml@abc"))
         check("a workflow with NO publishing job refuses (empty denominator)", rc == 1, out)
+
+    print("== check-callers (the pre-merge half, over a whole repository)")
+    wired = """
+name: ci
+on: { push: { branches: [main] }, pull_request: {} }
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps: [{ run: echo }]
+  modules:
+    needs: [validate]
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-pack.yml@main
+    with:
+      publish: >-
+        ${{ github.event_name == 'push'
+        || github.event_name == 'schedule' }}
+      publish-mode: staged
+  gate:
+    needs: [modules]
+    runs-on: ubuntu-latest
+    steps: [{ run: echo }]
+  publish-modules:
+    if: >
+      github.event_name == 'push' ||
+      github.event_name == 'schedule'
+    needs: [validate, modules, gate]
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@main
+    with:
+      verdicts: ${{ toJSON(needs) }}
+      required-jobs: validate modules gate
+      lane: ${{ needs.modules.outputs.lane }}
+      selected: ${{ needs.modules.outputs.selected }}
+      modules: ${{ needs.modules.outputs.declared }}
+      platform-ref: abc
+"""
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td)
+        (repo / ".github" / "workflows").mkdir(parents=True)
+
+        def callers(text: str) -> tuple[int, str]:
+            (repo / ".github" / "workflows" / "ci.yml").write_text(text, encoding="utf-8")
+            return run(check_callers, repo)
+
+        rc, out = callers(wired)
+        check("a staged pack call with one publisher on the same events passes", rc == 0, out)
+        rc, out = callers(wired.split("  publish-modules:")[0])
+        check("MUTATION: a staged pack call whose publisher was never added is caught",
+              rc == 1 and "reach nobody" in out, out)
+        rc, out = callers(wired.replace("      github.event_name == 'push' ||\n", ""))
+        check("MUTATION: a publisher running on FEWER events than the pack call stages on is caught",
+              rc == 1 and "stages on" in out, out)
+        rc, out = callers(wired.replace("needs: [validate, modules, gate]", "needs: [validate, modules]"))
+        check("MUTATION: a required dependency dropped from the publisher's `needs:` is caught pre-merge",
+              rc == 1 and "gate" in out, out)
+        rc, out = callers(wired.replace("    if: >\n", "    if: ${{ !cancelled() }} && >\n", 1)
+                          .replace("    if: ${{ !cancelled() }} && >\n      github.event_name == 'push' ||\n"
+                                   "      github.event_name == 'schedule'\n",
+                                   "    if: ${{ !cancelled() }}\n"))
+        check("MUTATION: a status function on the publisher's `if:` is caught pre-merge",
+              rc == 1 and "status function" in out, out)
+        rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: direct"))
+        check("a publisher wired to a pack call that still POSTs in-leg is caught",
+              rc == 1 and "not `staged`" in out, out)
+        rc, out = callers(wired.replace("${{ needs.modules.outputs.declared }}", "'[]'"))
+        check("a publisher whose `modules` is not the pack call's own `declared` output is caught",
+              rc == 1 and "declared" in out, out)
+        rc, out = callers(wired.replace("${{ needs.modules.outputs.lane }}", "catalog"))
+        check("a publisher whose `lane` is a literal rather than the call's lane output is caught",
+              rc == 1 and "lane output" in out, out)
+        rc, out = callers(wired.replace("required-jobs: validate modules gate",
+                                        "required-jobs: ${{ vars.REQUIRED }}"))
+        check("a `required-jobs` passed as an expression is caught (the static half could not read it)",
+              rc == 1 and "expression" in out, out)
+        rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: ${{ vars.PUBLISH_MODE }}"))
+        check("a `publish-mode` passed as an expression is caught (staged or direct cannot be read)",
+              rc == 1 and "must be the literal" in out, out)
+        rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: ' staged '"))
+        check("a padded `publish-mode` is caught — the lane compares it exactly, so it is neither arm",
+              rc == 1 and "must be the literal" in out, out)
+        rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: stagd"))
+        check("an unknown literal `publish-mode` is caught", rc == 1 and "must be the literal" in out, out)
+        rc, out = callers(wired.replace("required-jobs: validate modules gate",
+                                        "required-jobs: validate modules\n      unrelated-jobs: 'gate:'"))
+        check("MUTATION pre-merge: a gate exempted with an EMPTY reason is caught", rc == 1 and "NO reason" in out, out)
+        direct = wired.split("  publish-modules:")[0].replace("publish-mode: staged", "publish-mode: direct")
+        rc, out = callers(direct)
+        check("an in-leg (direct) publisher is NOT refused, but is NAMED", rc == 0 and "IN-LEG" in out, out)
+        rc, out = callers("on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps: [{ run: echo }]\n")
+        check("a repository calling neither lane passes and SAYS so", rc == 0 and "neither lane" in out, out)
+        rc, out = run(check_callers, repo / "missing")
+        check("a root with no workflow directory refuses — it read nothing", rc == 1, out)
 
     print("== publish")
     with tempfile.TemporaryDirectory() as td:
@@ -735,7 +1019,8 @@ jobs:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", nargs="?", choices=("verdict", "check-caller", "publish"))
+    p.add_argument("command", nargs="?", choices=("verdict", "check-caller", "check-callers", "publish"))
+    p.add_argument("--root", default="")
     p.add_argument("--verdicts", default="")
     p.add_argument("--required", default="")
     p.add_argument("--unrelated", default="")
@@ -762,6 +1047,10 @@ def main() -> int:
         if not a.workflow:
             p.error("check-caller needs --workflow")
         return check_caller(Path(a.workflow), a.uses, a.required, a.unrelated)
+    if a.command == "check-callers":
+        if not a.root:
+            p.error("check-callers needs --root")
+        return check_callers(Path(a.root))
     if a.command == "publish":
         for needed in ("staged", "registry", "source"):
             if not getattr(a, needed):

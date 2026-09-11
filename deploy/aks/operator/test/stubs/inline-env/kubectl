@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for test/run-tests.sh — answers hosting-inline-env-retire's read/patch shapes
+# (and hosting-kv-rotate's inline-shadow read) from a fixture directory and records every
+# invocation in $HOSTING_IE_STATE/log. Not a mock of kubectl: what is asserted is the command's
+# DECISIONS — refuse mid-rollout, refuse a sole source or a DIFFER, patch once, read it back — not
+# what kubectl does. Every value in the fixtures is an obviously fake placeholder.
+#
+#   kubectl -n <ns> get deployment <name> -o json → deployment.json; after a patch,
+#                                                   deployment.after.json (the API's answer)
+#   kubectl -n <ns> get secret <name> -o json     → secret_<name>.json, else NotFound, exit 1
+#   kubectl -n <ns> get configmap <name> -o json  → configmap_<name>.json, else NotFound, exit 1
+#   kubectl -n <ns> patch deployment <name> --type json -p <patch>
+#                                                 → the patch lands in $HOSTING_IE_STATE/patch
+#
+# Each file is read from $HOSTING_IE_FIXTURE, falling back to $HOSTING_IE_BASE — so a scenario
+# carries only the file(s) that make it different.
+set -uo pipefail
+fixture="${HOSTING_IE_FIXTURE:?the inline-env kubectl stub needs HOSTING_IE_FIXTURE}"
+base="${HOSTING_IE_BASE:-$fixture}"
+state="${HOSTING_IE_STATE:?the inline-env kubectl stub needs HOSTING_IE_STATE}"
+printf 'kubectl %s\n' "$*" >> "$state/log"
+
+pick() {
+  if [ -f "$fixture/$1" ]; then cat "$fixture/$1"
+  elif [ -f "$base/$1" ]; then cat "$base/$1"
+  else return 1
+  fi
+}
+
+[ "${1:-}" = "-n" ] && shift 2
+verb="${1:-}" kind="${2:-}" name="${3:-}"
+case "$verb $kind" in
+  "get deployment")
+    if [ -f "$state/patched" ] && pick deployment.after.json; then exit 0; fi
+    pick deployment.json \
+      || { echo "Error from server (NotFound): deployments.apps \"${name}\" not found" >&2; exit 1; } ;;
+  "get secret")
+    pick "secret_${name}.json" \
+      || { echo "Error from server (NotFound): secrets \"${name}\" not found" >&2; exit 1; } ;;
+  "get configmap")
+    pick "configmap_${name}.json" \
+      || { echo "Error from server (NotFound): configmaps \"${name}\" not found" >&2; exit 1; } ;;
+  "patch deployment")
+    shift 3
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -p) printf '%s\n' "${2:-}" > "$state/patch"; shift 2 ;;
+        *)  shift ;;
+      esac
+    done
+    touch "$state/patched"
+    echo "deployment.apps/${name} patched" ;;
+  *) echo "kubectl stub (inline-env): unexpected invocation: $*" >&2; exit 1 ;;
+esac

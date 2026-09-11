@@ -151,6 +151,19 @@ Three things get strictly better:
    be answered either way; deriving it (`LateResponseWatchBound - 10.Seconds()`) keeps that true
    without a second literal, per [Bounds must be ordered](../BoundsMustBeOrdered).
 
+> 🚨 **Correction (#4023, 2026-09-11): `Dead` is the instant the owner has had its chance to
+> ANSWER — not the instant the answer has ARRIVED.** Of the routes an answer takes to the armed
+> watch, two complete on the owner's own turns: the ShutDown-phase registrant's direct `Dispatch`,
+> and the undeliverable-reply sink that routing offers a reply to when the parent is past
+> `DisposeHostedHubs`. For those, the reading above is exact. The third does not: since #3291 the
+> parked merge usually COMMITS during teardown, and a success ack posted while the parent is still
+> below `DisposeHostedHubs` travels the ordinary route — owner → mesh → the caller's hub — whose last
+> two queues are crossed after the owner reaches `Dead`. Measured once in 3,600 stressed iterations
+> (the reply sat in the caller's hub queue at `Dead` and was delivered 12 ms after the assertion).
+> The other failures on that route were a real defect — the mesh's router dropped the reply — and
+> are fixed; see [Reading a Disposal Stall Verdict](/Doc/Architecture/DisposalStallVerdicts) →
+> "Resolved 2026-09-11". A twin that judges at the owner's `Dead` can still report the residual race.
+
 ### What makes `Dead` safe to read: the run level is monotone, and that is enforced
 
 The shape above rests on one property that is easy to assume and was not, until #3647, actually
