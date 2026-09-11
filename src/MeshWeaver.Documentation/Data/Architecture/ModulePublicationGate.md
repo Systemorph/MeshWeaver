@@ -199,6 +199,8 @@ check over every publisher in the repository's workflows, and adds the wiring on
 | `lane`, `selected` or `modules` not read from the SAME pack call's outputs, or that call not a direct need | a sibling call's evidence could answer the publication, or the output does not resolve |
 | a publisher wired to a `direct` pack call | that call POSTs in-leg and stages nothing |
 | `required-jobs` / `unrelated-jobs` passed as an expression, or `required-jobs` empty | the static half could not read what the lane will enforce |
+| an `unrelated-jobs` entry with no reason (also refused at run time by `caller-gate`) | an exemption that says nothing is how a gate is dropped from the verdict unnoticed |
+| a `publish-mode` that is not the literal `staged` or `direct` | an expression resolves only at run time, so a staged call with no publisher could not be told from an in-leg one |
 
 A `direct` pack call that publishes is **named, not refused** — refusing it would red every
 repository that has not adopted this lane yet. A repository that calls neither lane prints so.
