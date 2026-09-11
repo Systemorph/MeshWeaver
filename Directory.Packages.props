@@ -4,10 +4,21 @@
     <NoWarn>$(NoWarn);NU1608</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Used DIRECTLY by MeshWeaver.AI (skill/agent front matter) and MeshWeaver.Hosting
-         (MarkdownFileParser). It used to arrive only TRANSITIVELY via EPS.Extensions.YamlMarkdown,
-         so removing that unused package broke the build - an accidental dependency, now explicit. -->
-    <PackageVersion Include="YamlDotNet" Version="16.3.0" />
+    <!-- Used DIRECTLY by MeshWeaver.Hosting (MarkdownFileParser). It used to arrive only
+         TRANSITIVELY via EPS.Extensions.YamlMarkdown, so removing that unused package broke the
+         build - an accidental dependency, now explicit.
+
+         🚨 THIS ENTRY IS ALSO MeshWeaver.Plugins' VERSION SOURCE, and nothing here can see that.
+         Plugins has no `Directory.Packages.props` of its own; its `src/Directory.Packages.props`
+         IMPORTS this file at `MW_PLATFORM_REF`, and `src/MeshWeaver.AI` (skill/agent front matter)
+         plus `src/MeshWeaver.Publish` (slide front matter) carry VERSIONLESS references. So this
+         line decides what the AI engine's front-matter parser is built from - a satellite the
+         `Satellite package pins` gate does not watch, because that gate fires on a pin being
+         REMOVED, not bumped. The satellite reads the change only when its pin moves.
+
+         16.3.0 -> 18.1.0 crosses two majors; the adaptation and the two behavioural changes that
+         came with them are recorded in Doc/Architecture/DependencyMajorUpgrades. -->
+    <PackageVersion Include="YamlDotNet" Version="18.1.0" />
     <PackageVersion Include="AspNet.Security.OAuth.Apple" Version="10.0.0" />
     <!-- 🚨 THE ASPIRE FAMILY IS HELD AT 13.4.6 ON PURPOSE — do not let a dependency sweep move it.
          Every Aspire.Hosting version depends on JsonPatch.Net; only the VERSION differs, and the

@@ -203,8 +203,44 @@ before drawing any conclusion from a read — see
 4. **Loki's retention** (31 d on this cluster, checked not assumed) — which is the only thing that
    decides whether a *new* `Logs` action can still answer about an old event.
 
-A `Logs` run that lands **zero** entries **with** a `logQl` is a real answer. A `Hosting/LogEntry`
-population that does not mention your subject is not.
+5. 🚨 **A same-text positive control** — the four facts above are all self-reported by the run, and
+   a run can satisfy every one of them and still be wrong.
+
+### 🚨 A `Logs` zero is not automatically a real answer — measured 2026-09-11
+
+This page used to end *"a `Logs` run that lands zero entries with a `logQl` is a real answer"*. That
+is too strong, and the counter-example is cheap to reproduce. All five runs below are on the control
+instance, within four minutes of each other, `truncated: false` throughout:
+
+| run | LogQL | `sinceMinutes` | `entryCount` |
+|---|---|---|---|
+| 07:42:03Z | `{namespace="memex"} \|~ "(?i)Failed to compile assembly for node"` | 2880 | **0** |
+| 08:10:13Z | `{namespace="memex-cloud"} \|~ "(?i)Failed to compile assembly for node"` | 2880 | **0** |
+| 08:12:05Z | `{namespace="memex-cloud"} \|~ "(?i)ObserverExpiryTests"` | 2880 | **0** |
+| 08:11:25Z | `{namespace="memex"} \|~ "(?i)Health check content-types"` | 60 | 2 |
+| 08:11:29Z | `{namespace="memex"} \|~ "(?i)Health check content-types"` | 2880 | 14 |
+
+The last pair is the window control: 2 lines at an hour, 14 at 48 — **`sinceMinutes` is honoured and
+is not silently capped**, so the three zeros were asked over a window that really does reach back.
+And the lines they asked for exist: `Admin/_LogIncident/c0b1424c7beb28e0` holds LogWatch `samples[]`
+captured from `memex-cloud` pod `memex-portal-deployment-6d7497cb58-jc296` at **05:20:34Z** and
+**05:22:40Z** the same morning — under three hours before the queries — each one beginning
+`fail: MeshWeaver.Graph.Configuration.MeshNodeCompilationService[0]` and carrying both
+`Failed to compile assembly for node 'Hosting/InstanceAction'.` and
+`The name 'ObserverExpiryTests' does not exist in the current context` as physical lines. The
+watcher reads **the same Loki** ([Red-Log Watching & Ticketing](../LogWatchTriage) — *"the watcher
+keeps reading Loki"*), so this is not two backends disagreeing.
+
+**What that leaves undetermined is the CAUSE** — Loki not holding these records (an ingest gap for
+this record shape), or a retention on these namespaces far shorter than the 31 d recorded above.
+Not established here; worth establishing before the next person trusts a zero.
+
+**What it settles is the reading rule.** Where a zero is about to decide something — "the defect
+stopped", "the node is gone", "this portal never logs that" — pair it with a run that asks for text
+you KNOW was emitted in the same namespace and window, and report both. Without that control a
+`Logs` zero means *"Loki, as this action reaches it, returned nothing"*, which is a strictly weaker
+statement than *"the portal did not log it"*. A `Hosting/LogEntry` population that does not mention
+your subject was never evidence at all.
 
 ## Related
 

@@ -37,12 +37,36 @@ namespace MeshWeaver.Kernel.Hub;
 /// shares the underlying <c>AssemblyMetadata</c> across compilations that use the
 /// same reference instance, so the per-session metadata cost drops to ~zero.</para>
 ///
-/// <para><b>NoStaticState.md compliance:</b> <see cref="Materialized"/> is a
-/// process-global MEMO — pure-by-key (absolute file path → immutable reference over
-/// immutable on-disk bytes), bounded by the set of assemblies on disk, and holding
-/// NO <see cref="Type"/>s and NO AssemblyLoadContexts — it can pin neither meshes
-/// nor collectible NodeType contexts. Allowlisted in <c>NoStaticCollectionsTest</c>
-/// next to the other MEMO entries.</para>
+/// <para><b>NoStaticState.md compliance — and the half of it that was WRONG until #4003:</b>
+/// <see cref="Materialized"/> is a process-global MEMO — pure-by-key (absolute file path →
+/// immutable reference over immutable on-disk bytes) and holding NO <see cref="Type"/>s and NO
+/// AssemblyLoadContexts. The object-graph half of the old claim held: no mesh and no collectible
+/// <c>NodeAssemblyLoadContext</c> is rooted by an entry. The BYTES half did not. The old text said
+/// the memo was <i>"bounded by the set of assemblies on disk"</i>, which is only a bound if that
+/// set is bounded — and for NodeType assemblies it is not. Every recompile emits to a brand-new
+/// <c>{nodeName}_{ticks}_{guid}/</c> directory (<c>EmitPipeline.EmitToDiskWithRetry</c>) that is
+/// never reused, and <c>KernelExecutor.EnsureCellSurfaceReferences</c> feeds exactly those paths
+/// in. <see cref="MetadataReference.CreateFromFile"/> memory-maps the PE, so a memoized entry kept
+/// that generation's native metadata mapped for the life of the PROCESS — surviving the ALC's
+/// <c>Unload()</c> and surviving the file's deletion, and therefore outliving the eviction
+/// <c>CompilationCacheService.EvictSupersededContexts</c> performs to reclaim precisely this
+/// memory ("the native-memory leak that drove memex to the server-GC hard limit").</para>
+///
+/// <para><b>The bound is now ENFORCED, not assumed</b> (see
+/// <see cref="IsPerGeneration(Assembly)"/> / <see cref="IsPerGenerationPath"/>): a file that
+/// belongs to a COLLECTIBLE load context is materialized as an ordinary, UNMEMOIZED reference and
+/// the caller's own lifetime owns it — for the cell-surface seam that is the kernel SESSION, which
+/// already holds the matching <c>CellSurfaceAssembly.Lease</c> and drops both when the session
+/// dies. So the memo's key space is the set of assemblies at STABLE paths (the framework set, the
+/// module set, NuGet's global packages folder), which is what "bounded by the set of assemblies on
+/// disk" always meant to say. <see cref="IsMemoized"/> makes that bound assertable.</para>
+///
+/// <para>The field is allowlisted in <c>NoStaticCollectionsTest</c>, which travels with the
+/// emigrated mesh suites in MeshWeaver.Plugins (two copies there — <c>MeshWeaver.PathResolution.Test</c>
+/// and <c>Memex.Hosts.Test</c>). Its entry reads, in both, exactly <c>"MEMO: assembly path -&gt;
+/// shared PE reference"</c> — still true word for word, so no allowlist edit is owed. The FALSE
+/// claim was never in the allowlist: it was the prose here and in <c>Doc/Architecture/NoStaticState</c>,
+/// and the enforcement above is what makes that prose true rather than merely re-worded.</para>
 /// </summary>
 internal static class KernelScriptReferences
 {
@@ -53,6 +77,15 @@ internal static class KernelScriptReferences
     /// </summary>
     private static readonly ConcurrentDictionary<string, PortableExecutableReference> Materialized =
         new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether <paramref name="path"/> holds a PERMANENT entry in the memo — the instrument the
+    /// bound is asserted through (#4003), and deliberately a PER-PATH question rather than an entry
+    /// COUNT: the count moves with whatever else the process is loading, so a test written against
+    /// it would be measuring the shard's load order. A per-generation NodeType assembly must answer
+    /// false; an assembly at a stable path must answer true.
+    /// </summary>
+    internal static bool IsMemoized(string path) => Materialized.ContainsKey(path);
 
     // 🚨 Task, not a bare value — see GetReferencesAsync. The materialization below is
     // synchronous, uncancellable (no CancellationToken overload exists for
@@ -151,20 +184,64 @@ internal static class KernelScriptReferences
         if (asm.IsDynamic) return null;
         var location = asm.Location;
         if (string.IsNullOrEmpty(location)) return null;
-        return TryGetOrCreate(location);
+        // The caller already HOLDS the assembly, so classify from it directly and spare the
+        // memo-miss scan below — this is the warm-up path (~350 assemblies on a cold process).
+        return TryGetOrCreate(location, IsPerGeneration(asm));
     }
 
-    private static PortableExecutableReference? TryGetOrCreate(string location)
+    /// <summary>
+    /// 🚨 <b>A PER-GENERATION build: loaded into a COLLECTIBLE
+    /// <see cref="AssemblyLoadContext"/>.</b> Every NodeType recompile mints a fresh collectible
+    /// context over a brand-new, never-reused release directory, so "the same" assembly name has
+    /// as many files as it has had recompiles. Such a file must never enter
+    /// <see cref="Materialized"/>: the entry would outlive the context's <c>Unload()</c> AND the
+    /// file's deletion, pinning that generation's memory-mapped metadata for the life of the
+    /// process (#4003). A reference for one belongs to whoever asked — the kernel session, which
+    /// already holds the generation's <c>CellSurfaceAssembly.Lease</c> — and dies with it.
+    /// </summary>
+    private static bool IsPerGeneration(Assembly assembly)
+        => AssemblyLoadContext.GetLoadContext(assembly)?.IsCollectible == true;
+
+    /// <summary>
+    /// The same question asked of a PATH, for the entry points that have no <see cref="Assembly"/>
+    /// in hand (<see cref="GetOrCreateFromFile"/> — the cell-surface seam and the
+    /// <c>#r "nuget: …"</c> restore — and <see cref="Share"/>). A per-generation file is by
+    /// construction one somebody LOADED, so the live assembly list answers it without a heuristic
+    /// about directory names; a stable file (framework, module, package) matches nothing
+    /// collectible and is memoized as before. Only ever reached on a memo MISS.
+    /// </summary>
+    private static bool IsPerGenerationPath(string location)
+    {
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (asm.IsDynamic) continue;
+            if (!string.Equals(asm.Location, location, StringComparison.OrdinalIgnoreCase)) continue;
+            if (IsPerGeneration(asm)) return true;
+        }
+        return false;
+    }
+
+    /// <param name="location">Absolute path of the PE to materialize.</param>
+    /// <param name="perGeneration">Known classification, when the caller holds the assembly;
+    /// <c>null</c> to have the memo-miss path work it out from the live assembly list.</param>
+    private static PortableExecutableReference? TryGetOrCreate(string location, bool? perGeneration = null)
     {
         if (Materialized.TryGetValue(location, out var existing))
             return existing;
         try
         {
             if (!File.Exists(location)) return null;
+            var reference = MetadataReference.CreateFromFile(location);
+            // 🚨 THE MEMO'S BOUND, ENFORCED (#4003). A per-generation file is handed back
+            // unmemoized: the caller's lifetime owns the mmap, so the metadata is reclaimed when
+            // the session that asked for it dies, instead of accumulating one block per recompile
+            // for the life of the process.
+            if (perGeneration ?? IsPerGenerationPath(location))
+                return reference;
             // GetOrAdd with a freshly created value: a concurrent racer's loser copy
             // is dropped and collected — at most a transient double-materialization,
             // never a leak.
-            return Materialized.GetOrAdd(location, MetadataReference.CreateFromFile(location));
+            return Materialized.GetOrAdd(location, reference);
         }
         catch
         {
@@ -256,6 +333,19 @@ internal static class KernelScriptReferences
     /// this code), fall back to a file next to the referencing assembly. Returns
     /// null when neither matches — only then may the caller consult Roslyn's own
     /// (eagerly materializing) resolver.
+    ///
+    /// <para>🚨 <b>Collectible assemblies are skipped, for the reason written at
+    /// <see cref="MaterializeCurrentAssemblies"/> (#4003).</b> This scan matches on SIMPLE NAME
+    /// only, and superseded generations of a recompiled NodeType linger in
+    /// <c>GetAssemblies()</c> until they are collected — so without the guard the generation
+    /// returned is whichever the enumeration reaches first: arbitrary, possibly stale, and
+    /// impossible to tell apart from the current one at the call site. An arbitrary generation is
+    /// never a right answer here (it is the CS0433-between-two-generations shape, and #3911's
+    /// "two collectible builds of one NodeType in one pod" read from the other side), so answering
+    /// <c>null</c> — which sends the caller to the sibling probe and then to Roslyn's own
+    /// resolver — is strictly better than answering confidently wrong. The cell-surface set a
+    /// session legitimately sees is declared per session and added to <c>scriptOptions</c>
+    /// explicitly, so it never needs resolving through this path.</para>
     /// </summary>
     public static PortableExecutableReference? TryResolveByIdentity(
         AssemblyIdentity identity,
@@ -264,6 +354,7 @@ internal static class KernelScriptReferences
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
             if (asm.IsDynamic) continue;
+            if (IsPerGeneration(asm)) continue;
             var name = asm.GetName();
             if (!string.Equals(name.Name, identity.Name, StringComparison.OrdinalIgnoreCase))
                 continue;

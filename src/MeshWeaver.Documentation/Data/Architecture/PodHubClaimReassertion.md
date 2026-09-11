@@ -160,6 +160,77 @@ fast membership churns, so a scale event cannot become a claim storm.
 Where no feed is registered — an Orleans client, the Monolith, a bare mesh in a test — membership
 cannot change under the process, so the claim is asserted once, exactly as before.
 
+## Two windows in which the trigger was dropped anyway (#3931)
+
+Re-asserting on the right event is necessary and was not sufficient. The trigger could be lost in two
+places *after* the design above was in, and in both the outcome is indistinguishable from never having
+had re-assertion at all: no claim, no retry, no log line, and nothing left to re-make the mapping
+until the next membership change — the #2938 state this page exists to remove.
+
+> 🚨 **Both are DROPS, not delays.** The grain-side attach count never moves, so "the claim was made
+> and its result went unobserved" is excluded by the instrument itself: the count is published from
+> inside `IPodHubGrain.Attach`.
+
+### Window one — `StartWith` subscribed the feed only after the first claim round had run
+
+`ClaimTriggers` composed the initial assertion as `Changes.StartWith(0L)`. **`StartWith` is a
+`Concat`**: the source is subscribed only once the prefix has been fully *processed*, and processing
+that prefix runs the entire first claim round — `Attach` included — on the subscribing thread.
+`IClusterMembershipFeed.Changes` is hot and deliberately does not replay, so a change arriving in
+that window was dropped **where it was published**: `Subject.OnNext` with no observer is a no-op.
+
+The window is the first claim of a hub's life — i.e. the pod's boot, which is exactly when membership
+moves. #3983 measured 34 placement failures in 65 s across two pods, all inside it.
+
+Measured on System.Reactive 6.1.0 (the pinned version) with the real shape
+(`…ObserveOn(Scheduler.Default).SelectMany(_ => triggers).Select(round).Switch()`) and a round that
+parks inside its subscribe, so the window is observable rather than inferred:
+
+```
+StartWith: ROUND-0-enter -> PUSH-enter -> PUSH-leave -> RELEASE -> ROUND-0-leave -> SUBSCRIBE-feed
+Merge    : SUBSCRIBE-feed -> ROUND-0-enter -> PUSH-enter -> RELEASE -> ROUND-0-leave -> ROUND-42-enter
+```
+
+Under `StartWith` the push completes with the feed still unsubscribed and no round for it ever runs.
+The fix is `Changes.Merge(Observable.Return(InitialClaim))`: `Merge` subscribes its sources
+left-to-right, so the **durable** source is listening before the one-shot initial trigger can start
+any work, and the merge gate then serialises the two — a change arriving mid-round queues behind it
+instead of racing it.
+
+### Window two — the claim/dispose handshake answered a transient condition terminally
+
+The handshake protecting `Attach`/`Detach` ordering was a single token. A round that found the token
+at "someone is already starting an attempt" answered `Observable.Empty` — a **terminal** answer to a
+**transient** condition. A retry round re-subscribes on its backoff timer's thread while a membership
+round arrives on the feed's, so the overlap is ordinary, and it is most likely exactly during churn,
+because churn is what makes a claim bounce in the first place.
+
+It is worse than a dropped trigger: `Switch` has already cancelled the round it overlapped, so the
+membership change **destroyed an in-flight claim and made none of its own**.
+
+The handshake is now a **ledger, not a mutex**. One interlocked word carries "disposal has been
+requested" in bit 0 and the number of rounds currently inside their synchronous attach window in the
+rest. The only reason a round may refuse to claim is disposal; whoever observes "disposed **and** the
+window is empty" owns the release — `Dispose` when it finds the window empty, otherwise the last
+round out — so `Detach` can never overtake an `Attach` that is still being invoked, and concurrent
+rounds are ordinary rather than an error.
+
+### What pins it
+
+`PodHubClaimReassertionTest` carries both directions, and both are deterministic rather than
+probabilistic: the test grain PARKS inside a nominated `Attach` call, so the contention is created
+rather than waited for.
+
+| Test | Direction |
+|---|---|
+| `AMembershipChangeDuringTheInitialClaim_IsStillAsserted` | window one |
+| `AMembershipChangeDuringARetryingClaim_IsStillAsserted` | window two |
+| `AContendedMembershipChange_IsAssertedExactlyOnce` | the opposite failure — one change is one claim |
+
+The third is not decoration. A "fix" that merely re-triggered the round would satisfy both positive
+pins and reintroduce the claim storm `Switch` exists to bound: every attempt makes the owning silo
+log a line, which is the log-storm shape #2426/#2546 exist to remove.
+
 ## The diagnosability that was missing
 
 For twelve hours the production line read:

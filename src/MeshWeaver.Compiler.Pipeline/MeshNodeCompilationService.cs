@@ -218,11 +218,11 @@ internal class MeshNodeCompilationService(
     /// millisecond, the five <c>@@</c> targets of <c>FutuRe/LocalAnalysis/Source/ExternalDependencies</c>
     /// in file order).</para>
     ///
-    /// <para>The scope must be established at SUBSCRIBE time, not at composition time — hence
-    /// <c>Observable.Using</c>, whose resource factory runs inside the subscribe call that posts
-    /// the <c>GetDataRequest</c>. Wrapping each read individually (rather than the whole chain)
-    /// is deliberate: a chained read — the include fallback below — is subscribed from the FIRST
-    /// read's emission, i.e. on another thread again, so an outer scope would not cover it.</para>
+    /// <para>The scope must be established at SUBSCRIBE time and closed on that same flow.
+    /// <c>RunAsSystem</c> covers the cold read and restores the caller on return and on every
+    /// downstream notification. <c>Observable.Using</c> can dispose on the response thread and
+    /// leave the subscriber elevated. Wrapping each read individually is deliberate: the include
+    /// fallback starts from the FIRST read's emission, so it needs its own system scope.</para>
     ///
     /// <para>This is the explicit infrastructure opt-in AGENTS.md sanctions
     /// (<c>ImpersonateAsSystem</c>), NOT the "silently stamp hub-self as principal" fallback that
@@ -233,9 +233,8 @@ internal class MeshNodeCompilationService(
         string path, ReadTimeoutBehavior onTimeout)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Using(
-            () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-            _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), onTimeout));
+        return accessService.RunAsSystem(
+            () => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), onTimeout));
     }
 
     /// <summary>
@@ -428,6 +427,10 @@ internal class MeshNodeCompilationService(
                         ? node.LastModified
                         : maxSourceLastModified;
 
+                    IObservable<CompileAttempt> CompileSnapshot() =>
+                        CompileCore(node, ntDef, selfPath, log, sources)
+                            .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources));
+
                     if (cacheService.IsDiskCacheEnabled)
                     {
                         var cachedDllPath = cacheService.TryGetLatestCachedDllPath(nodeName, effectiveLastModified);
@@ -445,26 +448,37 @@ internal class MeshNodeCompilationService(
                             : GeneratedInputDigestFile.TryRead(cachedDllPath, logger);
                         if (cachedDllPath is not null && cachedInputDigest is not null)
                         {
-                            logger.LogDebug(
-                                "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
-                                node.Path, cachedDllPath, effectiveLastModified);
-                            return Observable.Return(new CompileAttempt(
-                                cachedDllPath,
-                                cachedInputDigest,
-                                AppendInfo(log,
-                                        $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).",
-                                        "activity.compile.cacheHit",
-                                        ("path", cachedDllPath),
-                                        ("lastModified", effectiveLastModified.ToString("O")))
-                                    .FinishByOutcome((int)hub.Version),
-                                sources));
+                            // A source edit can land AFTER the producing snapshot but BEFORE its
+                            // DLL finishes writing. A newer DLL timestamp therefore cannot prove
+                            // that these sources were compiled. Compare the existing producing
+                            // digest with this exact snapshot's generated input before reusing it;
+                            // never stamp today's digest onto unverified earlier bytes.
+                            return RegenerateCapturedInputDigest(node, ntDef, selfPath, sources)
+                                .SelectMany(currentInputDigest =>
+                                {
+                                    if (!string.Equals(cachedInputDigest, currentInputDigest, StringComparison.Ordinal))
+                                        return CompileSnapshot();
+
+                                    logger.LogDebug(
+                                        "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
+                                        node.Path, cachedDllPath, effectiveLastModified);
+                                    return Observable.Return(new CompileAttempt(
+                                        cachedDllPath,
+                                        cachedInputDigest,
+                                        AppendInfo(log,
+                                                $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).",
+                                                "activity.compile.cacheHit",
+                                                ("path", cachedDllPath),
+                                                ("lastModified", effectiveLastModified.ToString("O")))
+                                            .FinishByOutcome((int)hub.Version),
+                                        sources));
+                                });
                         }
                     }
 
                     // Hand the snapshot down as the override — CompileCore then short-circuits
                     // its own SnapshotSources to this authoritative point-in-time set.
-                    return CompileCore(node, ntDef, selfPath, log, sources)
-                        .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources));
+                    return CompileSnapshot();
                 });
         });
     }
@@ -1261,7 +1275,10 @@ internal class MeshNodeCompilationService(
                 .SelectMany(snapshot => BoundLeg(
                     _ => OnThreadPool(() =>
                         CompileResultFromAssembly(
-                            node, assemblyLocation, log, snapshot, attempt.InputDigest)),
+                            node, assemblyLocation, log, snapshot, attempt.InputDigest,
+                            // This IS the publish: the emit that produced assemblyLocation just
+                            // finished, so its context supersedes the older generations (#4013).
+                            publishesTheBuild: true)),
                     _cacheOptions.AssemblyLoadTimeout, "assembly-load", node.Path))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
                 // finished it, but CompileResultFromAssembly's downstream steps
@@ -1602,10 +1619,19 @@ internal class MeshNodeCompilationService(
     /// no <c>CompiledSources</c>, which is why stamping it would be catastrophic and nothing
     /// does). Null simply leaves the record without a content key; the toolchain entry still
     /// governs.</para></param>
+    /// <param name="publishesTheBuild">🚨 True on the POST-EMIT path only — the compile that just
+    /// produced <paramref name="assemblyLocation"/>, i.e. the one moment a new generation of this
+    /// NodeType exists and the older ones are genuinely superseded. False on the
+    /// assembly-HYDRATION shortcut (<see cref="GetConfigurationsFromExistingAssembly"/>), which is
+    /// a READER of bytes an <c>IAssemblyStore</c> handed over. Reads must not re-order generations:
+    /// a hydration scan that superseded a concurrently published rebuild is half of the
+    /// ping-pong #4013 reports (the other half being the rebuild's own scan superseding the
+    /// hydration's). See <c>ICompilationCacheService.PublishLoadContextForPath</c>.</param>
     private NodeCompilationResult? CompileResultFromAssembly(
         MeshNode node, string assemblyLocation, ActivityLog log,
         ImmutableDictionary<string, long> compiledSources,
-        string? generatedInputDigest = null)
+        string? generatedInputDigest = null,
+        bool publishesTheBuild = false)
     {
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -1637,7 +1663,8 @@ internal class MeshNodeCompilationService(
                     nodeName,
                     assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
                         ? null
-                        : assemblyLocation);
+                        : assemblyLocation,
+                    publishesTheBuild);
                 var context = pinned.Context;
                 var assembly = context.LoadNodeAssembly();
                 if (assembly == null)
@@ -1870,12 +1897,25 @@ internal class MeshNodeCompilationService(
     internal IObservable<string?> RegenerateGeneratedInputDigest(MeshNode node)
     {
         var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
+        return ntDef is null
+            ? Observable.Return<string?>(null)
+            : RegenerateCapturedInputDigest(node, ntDef, node.Path, sourcesOverride: null);
+    }
+
+    // The cache check supplies the snapshot already captured by this compile. Re-evaluation
+    // retains its existing discovery path; both callers use the same shaping and digest logic.
+    private IObservable<string?> RegenerateCapturedInputDigest(
+        MeshNode node, NodeTypeDefinition? ntDef, string selfPath,
+        IReadOnlyList<MeshNode>? sourcesOverride)
+    {
+        // An absent/unresolved definition is not an empty configuration. The cache cannot
+        // establish input equality until the definition itself is known; compile as before.
         if (ntDef is null)
             return Observable.Return<string?>(null);
 
         var assemblyName = $"DynamicNode_{cacheService.SanitizeNodeName(node.Path)}";
         return BoundLeg(
-                _ => SnapshotSources(ntDef, node.Path, sourcesOverride: null)
+                _ => SnapshotSources(ntDef, selfPath, sourcesOverride)
                     .Select(matches =>
                         NodeCompileShaping.CollectCompileSources(matches, node.Path, logger).Sources)
                     .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
@@ -1897,8 +1937,8 @@ internal class MeshNodeCompilationService(
             {
                 logger.LogInformation(ex,
                     "Re-evaluation for {NodePath}: the compile input could not be regenerated, so "
-                    + "the content key has no live counterpart — the build is judged by the "
-                    + "metadata-only rule, exactly as before", node.Path);
+                    + "the content key has no live counterpart — no input equality is established",
+                    node.Path);
                 return Observable.Return<string?>(null);
             });
     }

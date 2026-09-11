@@ -328,6 +328,31 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// first claim is therefore scheduled away from that thread, just like the sibling stream
     /// subscription's <c>ConfigureAwait(false)</c> continuation.</para>
     ///
+    /// <para>🚨 <b><c>Merge</c>, never <c>StartWith</c> — the ordering IS the correctness (#3931).</b>
+    /// <c>StartWith</c> is a <c>Concat</c>: the feed is subscribed only once the prefix has been
+    /// fully PROCESSED, and processing the prefix runs the entire initial claim round synchronously
+    /// on the subscribing thread, <c>grain.Attach()</c> included.
+    /// <see cref="IClusterMembershipFeed.Changes"/> is hot and deliberately does not replay, so
+    /// every membership change that lands in that window was delivered to every OTHER subscriber
+    /// and DISCARDED here — silently, and permanently, because the feed is the only thing that can
+    /// ever re-assert. The window is the first claim of a hub's life, i.e. the pod's boot, which is
+    /// exactly when membership moves (#3983 measured 34 placement failures in 65 s across two pods,
+    /// all inside it). <c>Merge</c> subscribes the DURABLE source first and then adds the one-shot
+    /// initial trigger, so no change can arrive before anyone is listening; it also serialises the
+    /// two, so a change arriving mid-round queues behind it rather than racing it.</para>
+    ///
+    /// <para><b>Measured on System.Reactive 6.1.0 — the pinned version — with this exact shape</b>
+    /// (<c>…ObserveOn(Scheduler.Default).SelectMany(_ =&gt; triggers).Select(round).Switch()</c>) and a
+    /// round that parks inside its subscribe, so the window is observable rather than inferred:</para>
+    /// <code>
+    /// StartWith: ROUND-0-enter -&gt; PUSH-enter -&gt; PUSH-leave -&gt; RELEASE -&gt; ROUND-0-leave -&gt; SUBSCRIBE-feed
+    /// Merge    : SUBSCRIBE-feed -&gt; ROUND-0-enter -&gt; PUSH-enter -&gt; RELEASE -&gt; ROUND-0-leave -&gt; ROUND-42-enter
+    /// </code>
+    /// <para>Under <c>StartWith</c> the push completes with the feed still unsubscribed and no round
+    /// for it ever runs — the change is dropped where it is published. Under <c>Merge</c> the feed is
+    /// subscribed first, the push waits at the merge gate for the round in progress, and its round
+    /// then runs. <c>PodHubClaimReassertionTest</c> pins both directions.</para>
+    ///
     /// <para>Where there is no feed the post-readiness sequence is a single emission: assert once,
     /// never re-assert.</para>
     /// </summary>
@@ -339,11 +364,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 .Take(1)
                 .ObserveOn(Scheduler.Default)
                 .SelectMany(_ => membershipFeed is null
-                    ? Observable.Return(0L)
+                    ? Observable.Return(InitialClaim)
                     : membershipFeed.Changes
                         .Do(seq => OrleansRouteTrace.Write(
                             $"OrleansRoutingService.AttachPodHub REASSERT addr={addressPath} membershipChange={seq}"))
-                        .StartWith(0L)));
+                        .Merge(Observable.Return(InitialClaim))));
+
+    /// <summary>
+    /// The sequence number the INITIAL claim trigger carries. Membership changes carry the feed's
+    /// own 1-based sequence, so zero is unambiguously "this is the first assertion, not a change".
+    /// </summary>
+    private const long InitialClaim = 0L;
 
     /// <summary>
     /// Routes a message delivery to its target. Locally registered streams are invoked
@@ -1295,16 +1326,28 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         var landedOnce = 0;
         // Claim/dispose handshake. Disposal can race the synchronous interval between selecting a
         // grain and actually invoking Attach(): it must neither Detach a claim that was never made
-        // nor Detach first and let that already-reserved Attach run afterwards. The STARTING state
-        // hands release ownership to the thread making the Attach call; that thread invokes Attach
-        // first and only then honours a concurrent disposal request.
-        const int WaitingForFirstAttempt = 0;
-        const int StartingAttempt = 1;
-        const int AttachWasInvoked = 2;
-        const int DisposedBeforeAnyAttempt = 3;
-        const int DisposeRequestedWhileStarting = 4;
-        const int DisposedAfterAttempt = 5;
-        var claimState = 0;
+        // nor Detach first and let that already-reserved Attach run afterwards.
+        //
+        // 🚨 It is a LEDGER, not a mutex (#3931). It used to be a single token whose "someone is
+        // already starting an attempt" value was answered with Observable.Empty — a TERMINAL answer
+        // to a TRANSIENT condition, and the round it discarded was the one carrying the newest
+        // membership information. A round started by a retry timer runs on the timer's thread while
+        // a round started by a membership change runs on the feed's, so the overlap is ordinary and
+        // the claim simply went missing: no attach, no retry, no log, and nothing to re-trigger it
+        // until the NEXT membership change. Disposal is the only reason to refuse a round.
+        //
+        // claimActivity packs both facts a release decision needs into one interlocked word: bit 0
+        // is "disposal has been requested", the rest is how many rounds are currently inside their
+        // synchronous attach window. The release is owned by whoever observes "disposed AND the
+        // window is empty" — Dispose itself when no round is in flight, otherwise the last round
+        // out — so Detach can never overtake an Attach that is still being invoked.
+        const int DisposeRequested = 1;
+        const int OneRoundInTheAttachWindow = 2;
+        var claimActivity = 0;
+        // Set immediately BEFORE an Attach invocation is entered, never after: a call that throws
+        // may still have landed on the remote runtime, so it counts as a claim needing release.
+        var claimAttempted = 0;
+        var claimReleased = 0;
         var attach = new SingleAssignmentDisposable();
         // Armed BEFORE the claim is subscribed, so there is no window in which the claim could
         // terminate unobserved. AsyncSubject: it completes once and replays that completion to
@@ -1347,6 +1390,49 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             }
         }
 
+        // The disposal half of the ledger, run by whichever thread observes "disposed AND no round
+        // is inside its attach window" — Dispose when it finds the window empty, otherwise the last
+        // round out of it. Exactly one of them wins, and by the time either runs every Attach that
+        // was ever invoked has returned, so a Detach can never overtake one.
+        void ReleaseClaimOnDisposal(IPodHubGrain? selectedGrain = null)
+        {
+            if (Volatile.Read(ref claimAttempted) == 0)
+            {
+                logger.LogDebug(
+                    "Pod-hub claim for {Address} not released — its registration ended before Orleans "
+                    + "reached Active, so no claim was ever attempted.",
+                    addressPath);
+                return;
+            }
+
+            if (Interlocked.Exchange(ref claimReleased, 1) == 0)
+                ReleaseClaim(selectedGrain);
+        }
+
+        // Enter a round's synchronous attach window, refusing ONLY once disposal has been requested.
+        // A round that finds another round already in the window is NOT refused: it carries a
+        // membership change that one predates, and discarding it is what left claims stranded.
+        bool TryEnterAttachWindow()
+        {
+            while (true)
+            {
+                var activity = Volatile.Read(ref claimActivity);
+                if ((activity & DisposeRequested) != 0)
+                    return false;
+                if (Interlocked.CompareExchange(
+                        ref claimActivity, activity + OneRoundInTheAttachWindow, activity) == activity)
+                    return true;
+            }
+        }
+
+        void LeaveAttachWindow(IPodHubGrain? selectedGrain)
+        {
+            // Interlocked.Add returns the NEW value, so "only the DisposeRequested bit is left"
+            // reads as "disposal was requested and I am the last round out of the window".
+            if (Interlocked.Add(ref claimActivity, -OneRoundInTheAttachWindow) == DisposeRequested)
+                ReleaseClaimOnDisposal(selectedGrain);
+        }
+
         // ONE ROUND of the claim: ask, retry the bounce, and complete when it lands. Composed per
         // subscription so its retry state is genuinely per-round.
         IObservable<bool> ClaimOnce()
@@ -1358,15 +1444,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             return Observable
                 .Defer(() =>
                 {
-                    var previousState = Interlocked.CompareExchange(
-                        ref claimState, StartingAttempt, WaitingForFirstAttempt);
-                    if (previousState == AttachWasInvoked)
-                        previousState = Interlocked.CompareExchange(
-                            ref claimState, StartingAttempt, AttachWasInvoked);
-                    if (previousState >= DisposedBeforeAnyAttempt || previousState == StartingAttempt)
+                    // 🚨 The ONLY reason a round may refuse to claim is that the registration is
+                    // being disposed. "Another round is mid-attach" is transient and is precisely
+                    // the case that must still claim — see the claimActivity remarks (#3931).
+                    if (!TryEnterAttachWindow())
                         return Observable.Empty<bool>();
-
-                    var hadEarlierAttempt = previousState == AttachWasInvoked;
 
                     IPodHubGrain? grain = null;
                     var attachCallEntered = false;
@@ -1386,34 +1468,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                             return Observable.Empty<bool>();
                         }
 
-                        // The call itself is inside the handshake. If disposal changes STARTING to
-                        // DISPOSE_REQUESTED while this synchronous invocation is in progress, the
-                        // finally below becomes the sole release owner and therefore Detach cannot
-                        // overtake Attach.
+                        // The call itself is inside the window, and claimAttempted is written BEFORE
+                        // it: a disposal racing this invocation cannot release until the window is
+                        // left, so Detach can never overtake Attach, and an Attach that throws still
+                        // counts as a claim because the remote runtime may have accepted it.
                         attachCallEntered = true;
+                        Volatile.Write(ref claimAttempted, 1);
                         return grain.Attach().ToObservable();
                     }
                     finally
                     {
-                        // Restore the retryable stable state even when GetGrain/Attach throws. A
-                        // failed first call was still INVOKED and must count as a claim for teardown:
-                        // the remote runtime may have accepted it before surfacing the exception.
-                        var stableState = attachCallEntered || hadEarlierAttempt
-                            ? AttachWasInvoked
-                            : WaitingForFirstAttempt;
-                        var stateAfterInvocation = Interlocked.CompareExchange(
-                            ref claimState, stableState, StartingAttempt);
-                        if (stateAfterInvocation == DisposeRequestedWhileStarting)
-                        {
-                            var anyAttempt = attachCallEntered || hadEarlierAttempt;
-                            Interlocked.Exchange(
-                                ref claimState,
-                                anyAttempt ? DisposedAfterAttempt : DisposedBeforeAnyAttempt);
-                            if (attachCallEntered)
-                                ReleaseClaim(grain);
-                            else if (hadEarlierAttempt)
-                                ReleaseClaim();
-                        }
+                        LeaveAttachWindow(attachCallEntered ? grain : null);
                     }
                 })
                 // `false` is "landed on a silo that is not the owner". Turning it into an error is what
@@ -1516,40 +1581,25 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
         return Disposable.Create(() =>
         {
-            var releaseHere = false;
-            var endedBeforeAnyAttempt = false;
+            int activityBeforeDisposal;
             while (true)
             {
-                var state = Volatile.Read(ref claimState);
-                var next = state switch
-                {
-                    WaitingForFirstAttempt => DisposedBeforeAnyAttempt,
-                    StartingAttempt => DisposeRequestedWhileStarting,
-                    AttachWasInvoked => DisposedAfterAttempt,
-                    _ => state
-                };
-                if (next == state || Interlocked.CompareExchange(ref claimState, next, state) == state)
-                {
-                    endedBeforeAnyAttempt = state == WaitingForFirstAttempt;
-                    releaseHere = state == AttachWasInvoked;
+                activityBeforeDisposal = Volatile.Read(ref claimActivity);
+                if (Interlocked.CompareExchange(
+                        ref claimActivity,
+                        activityBeforeDisposal | DisposeRequested,
+                        activityBeforeDisposal) == activityBeforeDisposal)
                     break;
-                }
             }
             inFlight.Remove(attach);
             podHubClaimSettled.TryRemove(address, out _);
             attach.Dispose();
-            if (endedBeforeAnyAttempt)
-            {
-                logger.LogDebug(
-                    "Pod-hub claim for {Address} not released — its registration ended before Orleans "
-                    + "reached Active, so no claim was ever attempted.",
-                    addressPath);
+            // A round inside its attach window owns the release: it has not returned from Attach()
+            // yet, and the CAS above guarantees it will see the DisposeRequested bit on its way out.
+            // Every round entering after this point is refused, so the ownership is unambiguous.
+            if (activityBeforeDisposal >= OneRoundInTheAttachWindow)
                 return;
-            }
-            // StartingAttempt handed release ownership to the Attach caller; terminal states have
-            // already been handled. Only a fully-invoked claim is released on this disposing thread.
-            if (releaseHere)
-                ReleaseClaim();
+            ReleaseClaimOnDisposal();
         });
     }
 

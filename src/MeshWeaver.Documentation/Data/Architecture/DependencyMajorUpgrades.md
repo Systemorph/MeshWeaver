@@ -339,3 +339,38 @@ this repo's list, and three test projects reference `Microsoft.Reactive.Testing`
 move to Rx 7 when the satellite's `MW_PLATFORM_REF` next moves. Blazor Server is not a Windows-UI
 framework in the analyzer's sense, so RXNET0001–0004 do not fire there either — verified by the same
 sweep.
+
+### YamlDotNet 16.3.0 → 18.1.0 — two majors, zero adaptation
+
+Measured 2026-09-11.
+
+| Step | Result |
+|---|---|
+| Registry | `…/v3-flatcontainer/yamldotnet/index.json` → HTTP **200**, 5,860 B. Newest stable **18.1.0**; 270 versions listed. |
+| Licence | **MIT at both ends** — `<license type="expression">MIT</license>` in the 16.3.0 and 18.1.0 nuspecs alike. No change. |
+| API removals | **6 public members** across both majors: `Accepts(Type)` on the five built-in date/time converters (refactored onto the new `ScalarConverterBase<T>`, so still present by inheritance), and `YamlDotNet.Core.Tokens.Scalar.IsKey`. `IYamlTypeConverter` is **byte-identical** between the two. |
+| Our usage | Six symbols total — `DeserializerBuilder`, `SerializerBuilder`, `IDeserializer`, `ISerializer`, `DefaultValuesHandling`, `YamlException` — all present in both. **Zero** custom `ITypeInspector`, `IYamlTypeConverter`, `INodeDeserializer` or `TypeInspectorSkeleton` implementations in either repository. |
+| Corpus | **1,817 front matters** across core and MeshWeaver.Plugins parsed and re-serialised by both versions: **0 differing lines**. 1,799 parsed OK with identical value hashes and identical re-emit hashes; the same 18 files raised the same `SemanticErrorException` on both. |
+| Suites | `MeshWeaver.Documentation.Test` 390 passed / 0 failed; `MeshWeaver.Hosting.Test` full suite green. |
+
+**The two declared breaking changes both miss us, and it is worth recording why** — each would have
+been invisible in a build:
+
+- **18.0.0 added two members (`HasParseMethod`, `Parse`) to `ITypeInspector`** with no default
+  implementation. That breaks *implementers*, not callers. Neither repository implements the
+  interface, so nothing had to change — but a satellite that grew a custom type inspector would
+  break at its next pin move, not here.
+- **18.1.0 introduced a default maximum YAML nesting depth of 130.** Node front matter is a flat map
+  of scalars plus the occasional string list — depth 2 to 3 — so the ceiling is two orders of
+  magnitude away. It is a real behaviour change with a real (if distant) failure mode: a document
+  deeper than 130 now throws where it previously parsed. `DeserializerBuilder.WithMaximumRecursion(n)`
+  is the lever if that day ever comes.
+
+One adjacent change was checked and does not reach us: **17.1.0** gave `MergingParser` a default cap
+of 100k events. Neither repository constructs a `MergingParser`.
+
+**What this bump changes for MeshWeaver.Plugins.** `src/MeshWeaver.AI` (skill and agent front
+matter) and `src/MeshWeaver.Publish` (slide front matter) carry versionless `YamlDotNet` references
+resolved from core's list, so both move to 18.1.0 when the satellite's `MW_PLATFORM_REF` next moves.
+Both were included in the 1,817-file corpus run above, and neither implements an extension point
+that 18.0.0 broke.

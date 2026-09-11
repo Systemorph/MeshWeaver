@@ -257,27 +257,102 @@ reaped-sync-hub shape. **Falsified by re-registering the release on the stream a
 `AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` fails at 200 ms** — *"Expected the observable
 not to emit … but it emitted ()"* — while the other two stay green.
 
-### What is still owed, and where
+### The sender half — where it was, and what moving it actually took
 
-The **Blazor sender** still calls `Stream.Hub.Post(...)`. Until it moves to `SubmitUserAction` the
-portal registers no callback and the ordering above is armed but unused. Measured in
-MeshWeaver.Plugins on 2026-09-11 — **eight call sites in seven files**, and the list is here so the
-next session does not have to rediscover it:
+The **Blazor senders** live in MeshWeaver.Plugins, and until they moved the ordering above was armed
+but unused: a bare `Post` registers no callback, so Quiescing had nothing to drain and the release
+went straight through.
 
-| file | action |
+🚨 **The list below was re-derived against Plugins `main` rather than taken on trust, and the
+denominator is what a reader needs.** The instrument is not `Stream.Hub.Post` — that literal appears
+**nowhere** in the repo except inside one comment. The honest denominator is *every construction of
+a type implementing `IUserAction`* (`ClickedEvent`, `BlurEvent`, `CloseDialogEvent` — and those three
+are the whole set, so the sweep is closed):
+
+```
+grep -rn "new ClickedEvent\|new BlurEvent\|new CloseDialogEvent" \
+     --include='*.cs' --include='*.razor' --include='*.json' .
+```
+
+🚨 **State the denominator with the count, or the count is a claim about nothing.** Measured on
+Plugins `main` 2026-09-11 (merge `05fde510`): **19 constructions repo-wide**, of which **8 in 7
+production view files** — the number the first pass guessed, reached the second time by a search that
+could have contradicted it. The remaining **11** are in `.Test` projects
+(`Markdown.Collaboration.Test` ×4, `Persistence.Test` ×3, `Graph.Views.Test` ×2, `AI.Test` ×1,
+`Todo.Test` ×1): they post from a test or CLIENT hub rather than from a view, so they are not senders
+and are correctly left alone. **Zero outside `src/`** — no in-mesh `Source/*.cs` and no NodeType JSON
+constructs a user action, which is what closes the half of the sweep `dotnet build` cannot see.
+(An earlier revision of this page said *six* test hits. It was counting `.cs` under `src/` with a
+narrower pattern; the number is 11.)
+
+| file | action | how it posted before |
+|---|---|---|
+| `MeshWeaver.Blazor/BlazorView.razor.cs` | `ClickedEvent` — the one every control inherits | `Stream.HubOrNull()` + `AccessContext` |
+| `MeshWeaver.Blazor/Components/FormComponentBase.cs` | `BlurEvent` | `Stream.HubOrNull()`, no context |
+| `MeshWeaver.Blazor/Components/DialogView.razor.cs` | `CloseDialogEvent`, twice (OK and the dismiss path) | `Stream.HubOrNull()`, no context |
+| `MeshWeaver.Blazor.Views/Components/DataGridView.razor.cs` | `ClickedEvent` carrying a `DataGridCellClick` payload | the PORTAL hub, `Stream!`, no context |
+| `MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.cs` | `ClickedEvent` | the PORTAL hub, `Stream!`, no context |
+| `MeshWeaver.Blazor.AppleMaps/AppleMapView.razor.cs` | `ClickedEvent` | the PORTAL hub, `Stream!`, no context |
+| `MeshWeaver.Blazor.OpenStreetMap/OpenStreetMapView.razor.cs` | `ClickedEvent` | the PORTAL hub, `Stream!`, no context |
+
+🚨 **"Each already resolves the hub defensively and already stamps the circuit user's
+`AccessContext`" was wrong, and the last column is why it matters.** Exactly ONE of the eight
+stamped an identity. Four posted from the **portal** hub rather than the stream's, where an ambient
+context happens to be present during an inbound Blazor activity — so moving them to
+`stream.SubmitUserAction` moves the sender to a hub that has no identity of its own, and passing the
+acting user explicitly is not a nicety there but the thing that stops `PostPipeline` failing closed.
+Three of those four are `[JSInvokable]` callbacks, i.e. DEFERRED: `CircuitAccessHandler` has already
+nulled the ambient context by the time the browser calls back, so the live AsyncLocals answer
+nothing and the durable `ICircuitContextAccessor.UserContext` is what has to answer.
+
+The move is therefore `hub.Post(evt, o => …)` → `Stream.SubmitUserAction(evt, ActingUser,
+SurfaceRefusal)`, against two new members on `BlazorView` that every one of the eight shares:
+
+- **`ActingUser`** — `AccessService.Context ?? AccessService.CircuitContext ?? ResolveCircuitUser()`.
+  The live AsyncLocals first (what an inbound activity set), the durable circuit user as the fallback
+  every deferred call site needs.
+- **`SurfaceRefusal(string)`** — reports the already-localized sentence to the circuit's
+  `PortalErrorSink`, verbatim, and logs it. Not `SurfaceError`: that takes an exception, re-words it
+  with a context prefix, and suppresses itself once the view is disposed — and a refusal arriving
+  after the view is gone is precisely the case a person still on the page needs to see. (It is also
+  not `ErrorSink.Report`: `ErrorSink` is `PortalLayoutBase`'s injected field; a leaf view resolves
+  the sink lazily through `Services`, because non-portal hosts such as the MAUI client never register
+  one.)
+
+The `HubOrNull()` guards came OUT rather than being kept: `SubmitUserAction` answers the
+hub-released case (#3321 step 3) itself, with the same catalog sentence, which turns the silent
+`return` those guards performed into the refusal this whole page is about.
+
+🚨 **There was no platform pin to move.** MeshWeaver.Plugins has carried none since #3842 — its
+`platform-ref` job resolves the newest SEALED core set at run time (`scripts/resolve-platform.py`),
+and the repo variable `MW_PLATFORM_REF` is an incident FREEZE, not a pin. The sender half's real
+gate is therefore a core RELEASE: it cannot compile until a sealed set carries this commit.
+
+### The Plugins-side controls
+
+Core's `UserActionOutlivesStreamReleaseTest` owns the ORDERING proof, measured against the
+owner-side sub-hub's `DisposalCompleted`. What Plugins owes is the SENDER's properties, and
+`UserActionSubmissionFromViewsTest` pins them by driving the real `BlazorView.OnClick` — through the
+real Blazor renderer, over a real remote stream whose owner is a real layout area host:
+
+| test | asserts | falsified by |
+|---|---|---|
+| `AClickWhoseStreamWasReleasedTellsThePersonInsteadOfVanishing` | the refusal reaches the circuit's sink as the catalog sentence for the ACTING USER's locale, and the action still did not run | restoring `hub.Post` — the sink emits nothing at all |
+| `AnOwnerRefusalReachesThePersonAndLeavesTheMirrorLive` | an owner NACK becomes a sentence, and the stream does not fault | restoring `hub.Post` — the sink is silent AND the stream terminates with `DeliveryFailureException` |
+| `AnOrdinaryClickStillRunsTheActionAndSurfacesNothing` | POSITIVE: the click still runs, and nothing is put in front of the person | removing the submission — the action never fires |
+| `AReleaseWithNothingOwedStillReachesTheOwnerPromptly` | POSITIVE: the owner-side `sync/{id}` still dies on release | removing the release registration — it never dies |
+
+Each falsification was built and run, and each reddened on its OWN assertion. The tallies are the
+part worth keeping, because they are what separates a control from a duplicate:
+
+| mutant | result |
 |---|---|
-| `MeshWeaver.Blazor/BlazorView.razor.cs` | `ClickedEvent` — the one every control inherits |
-| `MeshWeaver.Blazor/Components/FormComponentBase.cs` | `BlurEvent` |
-| `MeshWeaver.Blazor/Components/DialogView.razor.cs` | `CloseDialogEvent`, twice (OK and the dismiss path) |
-| `MeshWeaver.Blazor.Views/Components/DataGridView.razor.cs` | `ClickedEvent` carrying a `DataGridCellClick` payload |
-| `MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.cs` | `ClickedEvent` |
-| `MeshWeaver.Blazor.AppleMaps/AppleMapView.razor.cs` | `ClickedEvent` |
-| `MeshWeaver.Blazor.OpenStreetMap/OpenStreetMapView.razor.cs` | `ClickedEvent` |
+| restore `hub.Post` + the silent `return` (THE DEFECT) | `Failed: 3, Passed: 2` — both locales of the refusal theory and the mirror test red with *"Expected the observable to emit a value within 36s … The observable emitted nothing at all"*; **both positive controls green** |
+| refuse everything, submit nothing | `Failed: 1, Passed: 2` — the refusal theory **passes in both locales** while `AnOrdinaryClickStillRunsTheActionAndSurfacesNothing` reds. This is the lazy "fix" only the positive control can see |
+| drop the release registration ("never release") | `Failed: 1, Passed: 1` — `AReleaseWithNothingOwedStillReachesTheOwnerPromptly` reds, `AnOrdinaryClick…` stays green |
 
-Each already resolves the hub defensively and already stamps the circuit user's `AccessContext`, so
-the move is `hub.Post(evt, o => …)` → `Stream.SubmitUserAction(evt, userContext, ErrorSink.Report)`
-— the refusal sentence going where that view already surfaces errors. That half needs a platform pin
-carrying this commit.
+The middle row is the reason (b) exists at all: a submission path that refused every click satisfies
+every defect-direction assertion on this page.
 
 ## What this deliberately does not do
 
