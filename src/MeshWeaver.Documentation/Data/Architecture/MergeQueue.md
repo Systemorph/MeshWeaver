@@ -187,8 +187,16 @@ required set, and a condition that is met the instant GitHub first reads it.
 `auto-arm.yml` armed it and GitHub merged it at 21:03:23Z — **61 seconds after it was opened, before
 its own CI had started a single job**. Nothing failed and nothing was bypassed; the stack collapsed
 unreviewed, exactly as configured. `auto-arm.yml` is the fleet's only copy of the arm lane and every
-satellite reaches it through `workflow_call`, so the hole was open in all eight repositories at once
-and closing it in core closed it everywhere without a satellite-side change.
+satellite reaches it through `workflow_call`, so the hole was open in every repository at once.
+
+🚨 **But "the satellites get it for free" is true only where the caller pins `@main`, and one does
+not.** Measured 2026-09-11 over the contents API (never a local clone — satellite checkouts here run
+days stale): all seven callers exist, and six pin `auto-arm.yml@main` — MeshWeaver.Plugins,
+.Reinsurance, .SocialMedia, .Education, .Crm, .Manufacturing — so a core fix lands there on merge.
+**`Systemorph/Memex` pins a SHA** (`@c7fef7a2`, 971 commits behind core's `main` when measured), so
+it picks up nothing until that line moves. The lesson generalises past this fix: before claiming a
+reusable-lane change reaches the fleet, read every caller's `uses:` ref — a fleet-wide fix and a
+six-of-seven fix are indistinguishable from core, and the odd one out is silent, not red.
 
 The lane now reads `github.event.repository.default_branch` off the event — **never a literal
 `main`**, which would be a copy of a fact every repo happens to share today and the exact drift the
