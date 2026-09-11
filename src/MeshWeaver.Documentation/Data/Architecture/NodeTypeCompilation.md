@@ -1956,7 +1956,7 @@ Flat, not per-recompile — so not the unbounded curve the assertion's message d
 doubled pin on every generation a live instance runs, in every monolith and on every replica that
 compiles. The assertion (`≤ 2`: the current build plus the one generation the instance runs) was
 right; the core change was wrong. Across the 42 shard-3 runs from 05:10Z to 11:32Z on 2026-09-11 it
-failed **6 of 6** on core sets 8345/8350/8352 (all carrying #4013's fix, `b128b804d`) and **0 of 36**
+failed **6 of 6** on core sets 8345/8350/8352 (all carrying #4017, `b128b804d`) and **0 of 36**
 on sets 8323–8340; the same Plugins commit `401fcadb` passed at 09:56Z on 8340 and failed at 10:09Z
 on 8345.
 
