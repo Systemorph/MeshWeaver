@@ -62,8 +62,7 @@ public class ModulePublishShelfTest : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        try { (registry as IDisposable)?.Dispose(); }
-        catch { /* the host is the test's, never an assertion */ }
+        (registry as IDisposable)?.Dispose();
         try { Directory.Delete(root, recursive: true); }
         catch { /* temp cleanup is the OS's problem, never a test failure */ }
     }
@@ -176,12 +175,75 @@ public class ModulePublishShelfTest : IDisposable
     /// <summary>The marker body the SERVE side hands a consumer — the same
     /// <see cref="ModuleBundleSource.Collect"/> the index and the download route resolve through,
     /// so the claim is about what this registry actually serves, not about a record.</summary>
-    private string ServedMarker(ModuleActivationList activation)
+    private string ServedMarker(ModuleActivationList activation, string? version = null)
     {
-        var (_, assets, decline) = ModuleBundleSource.Collect(root, Module, activation);
+        var (_, assets, decline) = ModuleBundleSource.CollectVersion(root, Module, activation, version);
         Assert.Null(decline);
         var asset = Assert.Single(assets, a => a.RelativePath == MarkerAsset);
         return File.ReadAllText(asset.FullPath);
+    }
+
+    /// <summary>
+    /// The fallback slot keeps the BETTER older generation too: a still OLDER late upload must not
+    /// push 1.6.1 out from behind the 1.7.0 head — otherwise repeated lagging publications would keep
+    /// the head and quietly walk its fallback backwards. The losing upload is not retained, and the
+    /// response has to say so: calling it "shelved" would be a claim the modules GC falsifies five
+    /// minutes later.
+    /// </summary>
+    [Fact]
+    public async Task AStillOlderPublish_DoesNotMoveTheRetainedFallbackBackwards()
+    {
+        using (var newest = await Publish(minMeshVersion: null, version: "1.7.0"))
+            Assert.Equal(HttpStatusCode.OK, newest.StatusCode);
+        using (var fallback = await Publish(minMeshVersion: null, version: "1.6.1"))
+            Assert.True((await Body(fallback)).GetProperty("retainedAsFallback").GetBoolean(),
+                "the first older upload behind a head takes the empty fallback slot");
+
+        using var oldest = await Publish(minMeshVersion: null, version: "1.5.0");
+
+        Assert.Equal(HttpStatusCode.OK, oldest.StatusCode);
+        var body = await Body(oldest);
+        Assert.True(body.GetProperty("shelfOnly").GetBoolean());
+        Assert.False(body.GetProperty("retainedAsFallback").GetBoolean(),
+            "1.6.1 is the better fallback, so 1.5.0 is not kept");
+        Assert.Contains("NOT retained", body.GetProperty("shelfOnlyReason").GetString()!,
+            StringComparison.Ordinal);
+
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("1.7.0", MarkerIn(head));
+        Assert.Equal("1.6.1", head.PreviousVersion);
+        Assert.Equal("1.6.1", MarkerIn(ModuleActivationBoot.PreviousGeneration(head)!));
+    }
+
+    /// <summary>
+    /// A higher VERSION string does not protect a head whose bytes are GONE. Only a landed
+    /// generation is protected: a record naming a directory without its entry DLL is not a version
+    /// this registry holds, and refusing the one valid upload that could heal it would turn the
+    /// anti-rollback rule into a self-sealing outage.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderPublish_ReplacesANewerHeadWhoseBytesAreMissing()
+    {
+        using (var newer = await Publish(minMeshVersion: null, version: "1.7.0"))
+            Assert.Equal(HttpStatusCode.OK, newer.StatusCode);
+        var broken = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        File.Delete(ModuleActivationBoot.LandedDllPath(root, broken));
+        Assert.False(ModuleActivationBoot.LandedModuleDllExists(root, broken));
+
+        using var healing = await Publish(minMeshVersion: null, version: "1.6.1");
+
+        Assert.Equal(HttpStatusCode.OK, healing.StatusCode);
+        var body = await Body(healing);
+        Assert.False(body.GetProperty("shelfOnly").GetBoolean(),
+            "a head whose entry DLL is gone is no version this registry holds — the valid upload heals it");
+        Assert.Equal("1.6.1", body.GetProperty("headVersion").GetString());
+
+        var list = ModuleActivationSidecar.Read(root);
+        var head = Assert.Single(list.Entries);
+        Assert.Equal("1.6.1", head.Version);
+        Assert.Equal("1.6.1", MarkerIn(head));
+        Assert.Equal("1.6.1", ServedMarker(list));
     }
 
     /// <summary>
@@ -351,6 +413,9 @@ public class ModulePublishShelfTest : IDisposable
         Assert.False(body.GetProperty("pendingRestart").GetBoolean(),
             "the head did not move, so a restart would load exactly what is already running — "
             + "'restart required' would be a prompt no restart can clear");
+        Assert.Equal("1.7.0", body.GetProperty("headVersion").GetString());
+        Assert.True(body.GetProperty("retainedAsFallback").GetBoolean(),
+            "the fallback slot was empty, so the older upload takes it");
 
         var list = ModuleActivationSidecar.Read(root);
         var entry = Assert.Single(list.Entries);
@@ -368,6 +433,10 @@ public class ModulePublishShelfTest : IDisposable
         Assert.True(ModuleActivationBoot.LandedModuleDllExists(root, previous!),
             "a shelf-only upload that cannot be resolved is not shelved, it is lost");
         Assert.Equal("1.6.1", MarkerIn(previous!));
+        // …and a consumer asking for 1.6.1 BY VERSION is served 1.6.1's bytes, while the
+        // unversioned read (and 1.7.0) still serve the head.
+        Assert.Equal("1.6.1", ServedMarker(list, "1.6.1"));
+        Assert.Equal("1.7.0", ServedMarker(list, "1.7.0"));
 
         // 🚨 Reachable means SURVIVES THE SWEEP. The modules GC reclaims every generation directory
         // no entry and no module set references, and the grace window is the only thing that would
@@ -407,6 +476,8 @@ public class ModulePublishShelfTest : IDisposable
             "a newer version MUST take the head — a rule that never moved it would pass the "
             + "older-arrives-last control and ship a registry that can never be updated again");
         Assert.Equal(JsonValueKind.Null, body.GetProperty("shelfOnlyReason").ValueKind);
+        Assert.Equal("1.7.0", body.GetProperty("headVersion").GetString());
+        Assert.False(body.GetProperty("retainedAsFallback").GetBoolean());
         Assert.True(body.GetProperty("pendingRestart").GetBoolean(),
             "the head moved, so this instance genuinely loads something else at its next restart");
 

@@ -155,6 +155,81 @@ public class ModulePlatformLinkTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 #3996 — an older shelf-only upload is retained only when it is a useful fallback.
+    /// A numerically newer fallback that this platform cannot load must not displace the working
+    /// one: fallback ordering is loadability first, version second, just like activation itself.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderUnloadablePublish_DoesNotReplaceTheWorkingFallback()
+    {
+        const string name = "MeshWeaver.Test.OrderedShelf";
+        var oldLoadable = ModuleBuiltAgainstThisPlatform(name);
+        var newestLoadable = ModuleBuiltAgainstThisPlatform(name);
+        var middleUnloadable = ModuleBuiltAgainstAFuturePlatform(name);
+
+        await landing.ShelveModule(
+                name, [(name + ".dll", oldLoadable)], version: "1.5.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        await landing.ShelveModule(
+                name, [(name + ".dll", newestLoadable)], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", middleUnloadable)], version: "1.6.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.True(outcome.ShelfOnly);
+        Assert.True(outcome.Held);
+        Assert.False(outcome.RetainedAsFallback,
+            "a working fallback is never displaced by bytes this platform measured as unloadable");
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("1.5.0", head.PreviousVersion);
+        var fallback = ModuleActivationBoot.PreviousGeneration(head);
+        Assert.NotNull(fallback);
+        Assert.True(ModulePlatformLink.Check(
+            ModuleActivationBoot.LandedDllPath(root, fallback),
+            ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory)).MayLoad);
+    }
+
+    /// <summary>
+    /// 🚨 #3996 — a NEWER head this registry cannot load ITSELF is still the head. The shelf carries
+    /// modules for platforms newer than the registry serving them, and boot runs the fallback when
+    /// the head does not link here (#3649, rule R1), so an older upload that DOES link here takes the
+    /// FALLBACK slot, never the head. Were loadability-here a condition on the head, 1.6.1 would
+    /// become the head, and the first restart after this registry's own platform caught up would load
+    /// 1.6.1 over 1.7.0 — #3996 by another road; with a loadable fallback already recorded, the newer
+    /// generation would not even be kept.
+    /// </summary>
+    [Fact]
+    public async Task ANewerHeadThatDoesNotLinkHere_StaysTheHead_AndTheOlderLoadablePublishBecomesItsFallback()
+    {
+        const string name = "MeshWeaver.Test.WarehousedHead";
+        var first = await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstAFuturePlatform(name))], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        Assert.True(first.Held,
+            "precondition: the 1.7.0 head does NOT link on this platform — without it this proves nothing");
+
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "1.6.1")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.False(outcome.Held, "precondition: 1.6.1 links here");
+        Assert.True(outcome.ShelfOnly,
+            "a newer head that does not link HERE is still the newest landed generation on this shelf");
+        Assert.Equal("1.7.0", outcome.HeadVersion);
+        Assert.True(outcome.RetainedAsFallback);
+        Assert.True(outcome.RestartRequired,
+            "the fallback moved while the head does not load here, so boot runs 1.6.1 at the next restart");
+
+        var list = ModuleActivationSidecar.Read(root);
+        var head = Assert.Single(list.Entries);
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("1.6.1", head.PreviousVersion);
+        Assert.True(list.PendingRestart);
+    }
+
+    /// <summary>
     /// 🚨 <b>The third state, and it fails CLOSED.</b> Bytes that are not a readable managed
     /// assembly answer <see cref="ModuleLinkState.Indeterminate"/> — "I could not determine
     /// whether this loads" — and that is NEVER folded into "it loads". A gate whose unknown reads
