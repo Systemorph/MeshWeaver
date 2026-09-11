@@ -593,26 +593,78 @@ public sealed class GitHubWebhookProcessor
     /// than a display name a maintainer can casually edit.</summary>
     internal const string StandardContentWorkflowPath = ".github/workflows/ci.yml";
 
-    /// <summary>Core predates the node-repo convention and is the one intentional exception.</summary>
+    /// <summary>Core predates the node-repo convention and is one of the platform exceptions.</summary>
     internal const string CoreContentWorkflowPath = ".github/workflows/dotnet-test.yml";
 
-    private static readonly RepoIdentity CoreRepository = new("Systemorph", "MeshWeaver");
+    /// <summary><c>Systemorph/Memex</c> — the deployment-configuration repository whose
+    /// <c>mesh/Deployments</c> tree two portals sync — predates the convention exactly as core does,
+    /// and its content CI is <c>Memex Build</c>.</summary>
+    internal const string MemexContentWorkflowPath = ".github/workflows/build.yml";
 
     /// <summary>
-    /// The one workflow whose green verdict proves a repository's CONTENT. A trigger says why a
-    /// workflow ran; it does not say what that workflow checked. GitHub sends the stable workflow
-    /// file path in every <c>workflow_run</c> payload, so identity is keyed on that path rather than
-    /// on the mutable display name.
+    /// 🚨 <b>The platform's OWN repositories whose content CI predates the node-repo convention.</b>
+    /// These are DECLARATIONS, not special cases: the fleet ships the platform, so the fact "this
+    /// repository's content CI is at P" travels with the platform rather than waiting for every
+    /// portal's configuration to be edited. An override under
+    /// <see cref="GitHubContentWorkflowOptions"/> still wins, for a repository the platform does not
+    /// know about.
     ///
-    /// <para>Fail-closed by construction: ordinary content/node repositories use
-    /// <c>.github/workflows/ci.yml</c>; <c>Systemorph/MeshWeaver</c> uses its established
-    /// <c>.github/workflows/dotnet-test.yml</c>; and an arbitrary repository with a different path
-    /// declares one repository-level <see cref="GitHubContentWorkflowOptions"/> override. A
-    /// repository with no workflow at its expected path has no automatic publish signal — exactly
-    /// like a repository with no content CI at all. An unrelated green workflow can never stand in
-    /// for it.</para>
+    /// <para><b>Measured 2026-09-11, with the denominator.</b> Nine repositories hold an
+    /// <c>Admin/_Build/{owner}.{repo}</c> record — the same nine on memex.meshweaver.cloud and on
+    /// memex.systemorph.com, both listings <c>truncated:false</c>. Eight satisfy the convention or
+    /// core's exception. The ninth, <c>Systemorph/Memex</c>, has NO <c>.github/workflows/ci.yml</c>
+    /// at all (its workflows are <c>build.yml</c>, <c>config-key-coverage.yml</c>,
+    /// <c>deploy-drift.yml</c>, <c>helm-release.yml</c>, <c>image-pins.yml</c>, <c>smoke.yml</c>) —
+    /// so on the convention alone every one of its deliveries would be refused and
+    /// <c>Deployments/_GitSync</c> would freeze on BOTH portals, silently, which is precisely the
+    /// MeshWeaver.Plugins#1194 shape #3978 exists to avoid recreating.</para>
     /// </summary>
-    internal static string ExpectedContentWorkflowPath(
+    private static readonly ImmutableArray<(RepoIdentity Repository, string Path)> PlatformContentWorkflows =
+    [
+        (new RepoIdentity("Systemorph", "MeshWeaver"), CoreContentWorkflowPath),
+        (new RepoIdentity("Systemorph", "Memex"), MemexContentWorkflowPath),
+    ];
+
+    /// <summary>Where a repository's content-CI path came from — the third state made nameable.</summary>
+    internal enum ContentWorkflowSource
+    {
+        /// <summary>A deployment declared it under <c>GitHub:ContentWorkflows:Repositories</c>.</summary>
+        Configured,
+
+        /// <summary>The platform declares it for one of its own repositories
+        /// (<see cref="PlatformContentWorkflows"/>).</summary>
+        Platform,
+
+        /// <summary>Nobody declared anything: the node-repo CONVENTION is being presumed. Correct for
+        /// every repository whose CI calls the shared <c>node-repo-validate</c> lane, because that
+        /// lane's <c>check-content-ci-path.py</c> reds if the file moves — and a PRESUMPTION for
+        /// anything else, which is why a refusal under this source is reported differently.</summary>
+        Convention,
+    }
+
+    /// <summary>One repository's content-CI path and where that path came from.</summary>
+    internal sealed record ContentWorkflowDeclaration(string Path, ContentWorkflowSource Source);
+
+    /// <summary>
+    /// The one workflow whose green verdict proves a repository's CONTENT, <b>and where that claim
+    /// comes from</b>. A trigger says why a workflow ran; it does not say what that workflow
+    /// checked. GitHub sends the stable workflow file path in every <c>workflow_run</c> payload, so
+    /// identity is keyed on that path rather than on the mutable display name.
+    ///
+    /// <para>🚨 <b>Returning the SOURCE, not just the path, is the point.</b> A bare path collapses
+    /// "this deployment declared <c>ci.yml</c>" into "nobody declared anything and <c>ci.yml</c> was
+    /// presumed" — the same two-answers-in-one shape as the trigger proxy #3978 removed, one level
+    /// down. They must stay apart because they have OPPOSITE failure modes: a refusal under a
+    /// declaration is routine (some other workflow finished green), while a refusal under a
+    /// presumption may be a repository whose content CI is somewhere else entirely and whose every
+    /// Space is therefore frozen. <see cref="ReportRefusedWorkflow"/> is what acts on the
+    /// difference.</para>
+    ///
+    /// <para>Fail-closed by construction: a repository with no workflow at its expected path has no
+    /// automatic publish signal — exactly like a repository with no content CI at all. An unrelated
+    /// green workflow can never stand in for it.</para>
+    /// </summary>
+    internal static ContentWorkflowDeclaration ContentWorkflowFor(
         RepoIdentity repository,
         IEnumerable<GitHubContentWorkflow>? overrides = null)
     {
@@ -620,11 +672,19 @@ public sealed class GitHubWebhookProcessor
             GitHubRepoIdentityResolver.Parse(entry.Repository)?.Matches(repository) == true
             && !string.IsNullOrWhiteSpace(entry.Path));
         if (configured is not null)
-            return configured.Path.Trim();
-        return CoreRepository.Matches(repository)
-            ? CoreContentWorkflowPath
-            : StandardContentWorkflowPath;
+            return new ContentWorkflowDeclaration(configured.Path.Trim(), ContentWorkflowSource.Configured);
+        foreach (var (declared, path) in PlatformContentWorkflows)
+            if (declared.Matches(repository))
+                return new ContentWorkflowDeclaration(path, ContentWorkflowSource.Platform);
+        return new ContentWorkflowDeclaration(
+            StandardContentWorkflowPath, ContentWorkflowSource.Convention);
     }
+
+    /// <summary>The path <see cref="ContentWorkflowFor"/> resolves, without its source.</summary>
+    internal static string ExpectedContentWorkflowPath(
+        RepoIdentity repository,
+        IEnumerable<GitHubContentWorkflow>? overrides = null)
+        => ContentWorkflowFor(repository, overrides).Path;
 
     /// <summary>Whether this run is the repository's declared-by-convention content CI. Paths are
     /// Git paths and therefore compared case-sensitively; a missing path means nothing was proved.</summary>
@@ -739,24 +799,22 @@ public sealed class GitHubWebhookProcessor
         // red (#3978). The workflow FILE is the repository-level identity: display names are mutable,
         // while the fleet's content-CI path is part of the node-repo contract.
         var workflowPath = GetString(run, "path");
+        var declaration = ContentWorkflowFor(target, contentWorkflows);
         if (!IsRepositoryContentWorkflow(target, workflowPath, contentWorkflows))
         {
-            var expected = ExpectedContentWorkflowPath(target, contentWorkflows);
             if (string.IsNullOrWhiteSpace(workflowPath))
             {
+                // "The payload did not say WHAT ran" is its own answer and always deserves a human:
+                // it is not a refusal on the evidence, it is the absence of evidence.
                 logger?.LogWarning(
                     "workflow_run webhook for {Repo}: green '{Workflow}' run carried no workflow path, "
                     + "so it cannot be verified as the repository content CI at '{Expected}' — no build record.",
-                    repoUrl, GetString(run, "name"), expected);
+                    repoUrl, GetString(run, "name"), declaration.Path);
+                return Observable.Return(0);
             }
-            else
-            {
-                logger?.LogDebug(
-                    "workflow_run webhook for {Repo}: green '{Workflow}' is '{Actual}', not the repository "
-                    + "content CI at '{Expected}' — not a publish signal.",
-                    repoUrl, GetString(run, "name"), workflowPath, expected);
-            }
-            return Observable.Return(0);
+            return ReportRefusedWorkflow(
+                    target, repoUrl, GetString(run, "name"), workflowPath, declaration)
+                .Select(_ => 0);
         }
 
         var completion = new BuildCompletion
@@ -765,6 +823,10 @@ public sealed class GitHubWebhookProcessor
             Branch = GetString(run, "head_branch") ?? "",
             HeadSha = headSha,
             WorkflowName = GetString(run, "name"),
+            // The path the run was ADMITTED on, not the name it happens to display. This is what
+            // lets a later refusal tell "this repository's content CI has never been seen" from
+            // "some other workflow finished green" — see ReportRefusedWorkflow.
+            WorkflowPath = workflowPath,
             RunId = GetLong(run, "id"),
             RunNumber = GetLong(run, "run_number"),
             CompletedAtUtc = GetDate(run, "updated_at"),
@@ -900,6 +962,167 @@ public sealed class GitHubWebhookProcessor
                     path, completion.RepositoryUrl, completion.HeadSha);
                 return Observable.Return(System.Reactive.Unit.Default);
             });
+    }
+
+    /// <summary>
+    /// 🚨 <b>The positive signal for the one failure mode this gate can cause: a SILENT freeze.</b>
+    ///
+    /// <para>#3978 made the repository's own content CI the publish signal, which is correct and
+    /// which has exactly one way to go wrong — the platform expects a path the repository does not
+    /// use. Then every delivery is refused, GitHub is answered 200, every Space that syncs the
+    /// repository stops advancing, and nothing says so. That is MeshWeaver.Plugins#1194 verbatim,
+    /// whose ENTIRE cost was that 38 h of deliveries all reported success while nothing arrived. A
+    /// gate whose failure is indistinguishable from its success is not a gate.</para>
+    ///
+    /// <para><b>The report is CONDITIONED, because an unconditional one would be noise and noise is
+    /// how a real line gets missed.</b> Refusing a green run is the NORMAL case: core refuses ~200 a
+    /// day (Chart Gate, Hosting Operator, the synthetic probe), and the <c>*/10</c> PR-updater cron
+    /// alone is 144 a day in three satellites. Two facts narrow it to the shape that is actually an
+    /// outage:</para>
+    /// <list type="number">
+    ///   <item><b>Does anything sync this repository?</b> No sync config ⇒ no Space can be frozen,
+    ///   so the refusal cost nothing. Matched on the STORED url only — no canonical resolution, and
+    ///   deliberately not <see cref="ConfigsTargeting"/>, whose zero-match Warning would then fire
+    ///   on every refused run of every repository this mesh does not sync.</item>
+    ///   <item><b>Has the expected content CI EVER been accepted for it?</b> Read off
+    ///   <see cref="BuildCompletion.WorkflowPath"/> — the path the last accepted run was admitted
+    ///   on. If it equals what is expected today, the content CI exists and is arriving, and this
+    ///   refusal is some other workflow finishing green. If it does not — or there is no record at
+    ///   all — the mesh has never once identified this repository's content CI.</item>
+    /// </list>
+    ///
+    /// <para>So the Warning fires exactly when a repository the mesh SYNCS has had a publishable
+    /// green run refused while no run has ever been accepted at the expected path, and it SELF-
+    /// CLEARS the moment one is: the repository's next genuine content-CI build writes the path and
+    /// every later refusal drops back to Debug. It is the same read the gate itself makes, so the
+    /// two cannot disagree.</para>
+    ///
+    /// <para><b>The residual, stated rather than implied.</b> A repository that has already
+    /// published, and THEN moves its content CI, keeps a record whose path still equals the expected
+    /// one, so this stays quiet. That case is covered a layer up instead: the shared
+    /// <c>node-repo-validate</c> lane runs <c>check-content-ci-path.py</c> against every satellite's
+    /// tree, so moving the file reds that repository's own CI, and
+    /// <c>CoreContentCiRemainsAtThePublishSignalPath</c> does the same for core. Neither covers a
+    /// repository that calls neither — which is why <see cref="PlatformContentWorkflows"/> declares
+    /// those rather than leaving them to the convention.</para>
+    ///
+    /// <para>Reactive end-to-end and never faulting: this runs on a delivery that has already
+    /// decided its outcome, so a failure to REPORT must not change that outcome (and must not turn
+    /// a 200 into the redelivery storm a non-2xx would cause).</para>
+    /// </summary>
+    /// <param name="target">The repository the refused run belongs to.</param>
+    /// <param name="repoUrl">Its url, as the log lines name it.</param>
+    /// <param name="workflowName">The refused run's display name — copy for the log line only.</param>
+    /// <param name="actualPath">The refused run's stable workflow path.</param>
+    /// <param name="declaration">The path expected for this repository, and where that came from.</param>
+    /// <returns>Always one <c>Unit</c>; the refusal itself is the caller's answer.</returns>
+    private IObservable<System.Reactive.Unit> ReportRefusedWorkflow(
+        RepoIdentity target,
+        string repoUrl,
+        string? workflowName,
+        string actualPath,
+        ContentWorkflowDeclaration declaration)
+        => SpacesSyncingByStoredUrl(target)
+            .SelectMany(spaces => spaces.Count == 0
+                ? Observable.Return(System.Reactive.Unit.Default).Do(_ => logger?.LogDebug(
+                    "workflow_run webhook for {Repo}: green '{Workflow}' is '{Actual}', not the "
+                    + "repository content CI at '{Expected}' — not a publish signal. No sync "
+                    + "config targets this repository, so nothing was withheld.",
+                    repoUrl, workflowName, actualPath, declaration.Path))
+                : ContentCiHasEverBeenAccepted(target, declaration.Path).Select(seen =>
+                {
+                    if (seen)
+                        logger?.LogDebug(
+                            "workflow_run webhook for {Repo}: green '{Workflow}' is '{Actual}', not "
+                            + "the repository content CI at '{Expected}' — not a publish signal. "
+                            + "That content CI has published before, so this is a routine refusal.",
+                            repoUrl, workflowName, actualPath, declaration.Path);
+                    else
+                        logger?.LogWarning(
+                            "workflow_run webhook for {Repo}: I COULD NOT DETERMINE THIS "
+                            + "REPOSITORY'S CONTENT CI. A green '{Workflow}' ('{Actual}') on the "
+                            + "default branch was refused because the content CI is expected at "
+                            + "'{Expected}' ({Source}), and NO run has ever been accepted at that "
+                            + "path. {SpaceCount} Space(s) sync this repository ({Spaces}) and every "
+                            + "one of them is FROZEN until a green run arrives from '{Expected}' — "
+                            + "GitHub is answered 200, so nothing else will report this. Either the "
+                            + "repository's content CI is elsewhere, in which case declare it under "
+                            + "'{Section}:Repositories' as {{ Repository: '{Repo}', Path: '<its "
+                            + "path>' }}, or it has no content CI, in which case it has no automatic "
+                            + "publish signal.",
+                            repoUrl, workflowName, actualPath, declaration.Path, declaration.Source,
+                            spaces.Count, string.Join(", ", spaces), declaration.Path,
+                            GitHubContentWorkflowOptions.ConfigSection, repoUrl);
+                    return System.Reactive.Unit.Default;
+                }))
+            .Catch((Exception ex) =>
+            {
+                // The refusal already stands; failing to CLASSIFY it must not change the delivery's
+                // outcome. Said at Warning rather than swallowed, because the thing that just failed
+                // is the freeze detector itself.
+                logger?.LogWarning(ex,
+                    "workflow_run webhook for {Repo}: green '{Workflow}' ('{Actual}') was refused as "
+                    + "not the content CI at '{Expected}', but whether that refusal freezes a synced "
+                    + "Space could not be determined.",
+                    repoUrl, workflowName, actualPath, declaration.Path);
+                return Observable.Return(System.Reactive.Unit.Default);
+            });
+
+    /// <summary>
+    /// The distinct Space paths whose sync config names <paramref name="incoming"/> by its STORED
+    /// url — no canonical resolution and, deliberately, no zero-match report.
+    ///
+    /// <para>This is the cheap half of <see cref="ConfigsTargeting"/> and it is used only to decide
+    /// whether a REFUSAL cost anything. Using the full matcher here would fire its zero-match
+    /// Warning on every refused run of every repository the mesh does not sync — hundreds a day —
+    /// and burying that Warning is exactly the outcome it exists to prevent. The cost of the
+    /// narrower match is that a repository whose configs still store an OLD name reads as unsynced
+    /// and is reported at Debug; its first accepted delivery repoints those urls, after which the
+    /// stored match succeeds.</para>
+    /// </summary>
+    private IObservable<IReadOnlyList<string>> SpacesSyncingByStoredUrl(RepoIdentity incoming)
+        => QueryConfigNodesAsSystem().Select(c => (IReadOnlyList<string>)c.Items
+            .Select(node => GitHubRepoIdentityResolver.Parse(
+                node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)?.RepositoryUrl) is { } id
+                && incoming.Matches(id)
+                    ? node.Path.Split('/', 2)[0]
+                    : null)
+            .Where(s => s is { Length: > 0 })
+            .Select(s => s!)
+            .Distinct(StringComparer.Ordinal)
+            .ToImmutableArray());
+
+    /// <summary>
+    /// Whether a run at <paramref name="expectedPath"/> has ever been ACCEPTED for this repository —
+    /// read off the build record's own <see cref="BuildCompletion.WorkflowPath"/>.
+    ///
+    /// <para>🚨 A <c>scope:children</c> LISTING of <c>Admin/_Build</c>, never a point read of
+    /// <c>Admin/_Build/{owner}.{repo}</c>. The whole question here is about a repository that may
+    /// have NO record, and a point read of an absent node makes its owner answer a routing NotFound
+    /// that terminates the stream and opens the storm-breaker on that path — which would then
+    /// fast-fail the WRITES the next genuine build needs. The listing answers existence and content
+    /// in one query, which is what the CQRS rule asks for.</para>
+    ///
+    /// <para>The listing is path-scoped because the Admin partition is invisible to an unscoped
+    /// query — <see cref="BuildCompletion.WatchQuery"/> carries that reasoning and its measurement,
+    /// and is reused here rather than restated.</para>
+    /// </summary>
+    private IObservable<bool> ContentCiHasEverBeenAccepted(RepoIdentity target, string expectedPath)
+    {
+        var recordPath = BuildCompletion.PathFor(target.Owner, target.Repo);
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // RunAsSystem, never Observable.Using(ImpersonateAsSystem): store and restore of the
+        // identity must land on the same thread (AGENTS.md; #1790). The webhook request is
+        // anonymous, so there is no ambient identity that could read the Admin partition.
+        return accessService.RunAsSystem(() => meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(BuildCompletion.WatchQuery).Complete())
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .Take(1))
+            .Select(c => c.Items
+                .Where(n => string.Equals(n.Path, recordPath, StringComparison.Ordinal))
+                .Select(n => n.ContentAs<BuildCompletion>(hub.JsonSerializerOptions, logger))
+                .Any(b => b is not null
+                          && string.Equals(b.WorkflowPath, expectedPath, StringComparison.Ordinal)));
     }
 
     /// <summary>The distinct Space paths whose GitHub sync config targets <paramref name="repo"/>.</summary>
