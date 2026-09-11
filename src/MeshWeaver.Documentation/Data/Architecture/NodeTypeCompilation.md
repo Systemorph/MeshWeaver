@@ -1820,6 +1820,137 @@ pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is th
 `Hosting/InstanceAction` (the rolling restart grace-drains each pod and the Deployment replaces
 it), and read #2194.
 
+### 🚨 A THIRD root holds a generation, and neither eviction reaches it — the kernel's reference memo
+
+`CompilationCacheService` evicts superseded `NodeAssemblyLoadContext`s, and
+`Modules:AutoRecycleOnStaleBuild` converges the instances that root them. Both act on the ALC.
+Neither touches the **native metadata mapping** a Roslyn `PortableExecutableReference` owns — and
+`KernelScriptReferences.Materialized`, the process-global memo that makes ~350 script references
+cost one materialization instead of one per kernel session (#2480 / #2578), was keyed by absolute
+path with no eviction and no bound.
+
+For framework assemblies that is exactly right: their paths are stable, so the key space is the
+assembly set. For NodeType assemblies it is not a bound at all. `EmitPipeline.EmitToDiskWithRetry`
+publishes every recompile into a brand-new `{nodeName}_{ticks}_{guid}/` directory that is never
+reused, and the cell-surface seam (`KernelExecutor.EnsureCellSurfaceReferences`, #1649) feeds
+exactly those paths in through `GetOrCreateFromFile`. `MetadataReference.CreateFromFile`
+memory-maps the PE, and the entry survives **both** the ALC's `Unload()` **and** the file's
+deletion — so one recompile of a `cellSurface: true` NodeType that any session had referenced left
+one more mapping alive for the life of the process, in the same class of memory the eviction above
+exists to reclaim.
+
+The class doc's own NoStaticState compliance claim was half right and half wrong, and the half that
+was wrong is the one the allowlist rested on. *"Holds no `Type`s and no AssemblyLoadContexts — it
+can pin neither meshes nor collectible NodeType contexts"* is true of the **object graph**: no
+managed reference into the collectible context is retained, which is why nothing here ever showed
+up as a pinned ALC. *"Bounded by the set of assemblies on disk"* is true only if that set is
+bounded, and for per-recompile release directories it is not. **The fix makes the claim true rather
+than restating it**: a file that belongs to a COLLECTIBLE load context is materialized as an
+ordinary, UNMEMOIZED reference whose lifetime is the caller's — for the cell-surface seam that is
+the kernel SESSION, which already holds the generation's `CellSurfaceAssembly.Lease` and drops both
+when the session dies. The memo keeps exactly the sharing it was written for, over stable paths
+only, and `KernelScriptReferences.IsMemoized(path)` makes the bound assertable from a test — per
+PATH rather than as an entry count, because the count moves with whatever else the shard loaded.
+
+The same file carried a second generation-ambiguity: `TryResolveByIdentity` matched the live
+AppDomain on **simple name only**, without the `IsCollectible` filter its sibling at
+`MaterializeCurrentAssemblies` carries for a documented reason. Superseded generations linger in
+`GetAssemblies()` until they are collected, so which one a script compilation got was whichever the
+enumeration reached first — arbitrary, possibly stale, and indistinguishable from the current one
+at the call site (the `CS0433`-between-two-generations shape). It now declines collectible
+assemblies and answers `null`, which sends the caller to the sibling probe and then to Roslyn's own
+resolver. A cell-surface set a session legitimately sees is declared per session and added to its
+`ScriptOptions` explicitly, so it never needed this path.
+
+### 🚨 A READ must never re-order generations — only a PUBLISH supersedes
+
+`EvictSupersededContexts` is what bounds `_loadContexts` to the current generation per NodeType, and
+its trigger used to be *"a path-keyed context was newly created"*. That is a proxy for *"a recompile
+published"*, and it is wrong for every **reader**: an assembly-hydration scan of a package's SHIPPED
+build (`GetConfigurationsFromExistingAssembly`) and a kernel session resolving a cell-surface pack
+(`CellSurfaceAssemblyProvider`) both create a path-keyed context, and neither is evidence about
+which build is current. Under the old trigger either would supersede the generation a concurrent
+rebuild had just published.
+
+That alone would be a correctness wart. What made it an outage-shaped defect is that `PinForScan`
+**re-resolves** when a pin is refused — the recovery loop that exists so a transient supersession
+cannot park a NodeType (#1151). The re-resolve created a context, and creating a context evicted the
+peers. So two scans of two generations of ONE NodeType each destroyed the context the other had just
+created:
+
+| step | scan A (`pathA`) | scan B (`pathB`) |
+|---|---|---|
+| 1 | resolves → creates ctxA, evicts ctxB | |
+| 2 | | resolves → creates ctxB, evicts ctxA |
+| 3 | `Pin()` refused → re-resolves, evicts ctxB again | |
+| 4 | | `Pin()` refused → re-resolves, evicts ctxA again |
+| … | | |
+| n | attempt 3 → `ObjectDisposedException` escapes | |
+
+`CompileResultFromAssembly` catches that throw, records `CompilationStatus.Error`, and the watcher
+**PARKS** the NodeType — a millisecond-wide race turned into `compile:Failed` for a package whose
+source is fine. Measured as #4013: `PluginGateRunnerTest.SelfTypedRootWithStaleCompileStamp` (the
+rebuild publishes while the shipped stale stamp is read — exactly two generations, exactly two
+scans) failed **1 of 362** in a merge-queue group build whose PR run was 7 049 tests / 0 failed on
+the same commit, dequeuing a documentation-only PR.
+
+The fix names the trigger honestly. `ICompilationCacheService` now has two doors:
+`GetOrCreateLoadContextForPath` is a READ and supersedes nothing, and `PublishLoadContextForPath`
+supersedes — reached only through `PinForScan(..., publishesTheBuild: true)` from the post-emit scan,
+the one moment a new generation actually exists. A **retry never supersedes**, whoever asked: a
+recovery that destroys its peers is what turned one supersession into a ping-pong. The eviction now
+fires where a generation is born rather than wherever somebody happened to ask for an unfamiliar
+path.
+
+🚨 **What the narrowed trigger costs — stated, not claimed away.** The key space that grows
+*without bound* is the per-emit `{nodeName}_{ticks}_{guid}/` directory set, and every emit
+publishes, so that half is evicted exactly as before. What is no longer evicted the moment it
+appears is a generation a process only **hydrated**: an `IAssemblyStore` path is keyed
+`v{version}-{frameworkTag}-{hash}.dll` and is first-write-wins per version, so a silo reading a
+version another silo compiled keeps the previous version's context until the NodeType hub disposes
+(`UnloadNodeContexts`, which `Modules:AutoRecycleOnStaleBuild` drives on a stale build). That
+residue is bounded by the number of VERSIONS one hub outlives, not by recompiles — and it is the
+deliberate price of the correctness clause. A read that superseded would evict the CURRENT
+generation's context and then re-create one under the same path, putting **two live ALCs behind one
+file**: the two-generations split the section below is about, manufactured by the reclaim itself.
+
+🚨 **What was NOT changed, deliberately.** The issue's suggested shape was *"treat an unloading
+context as a cache miss in `Pin()`"*. `PinForScan` already does exactly that — twice — and the
+residue was the exhaustion, not the refusal. Making `Pin()` itself succeed on an unloading context
+would be the wrong repair in the other direction: `Pin()`'s two-state test and `IsClosedToLoads()`'s
+three-state test answer **different questions** (*may I START a scan?* vs *may I LOAD inside a scan
+I already hold?*), and both are right. With a pin outstanding, `Dispose` is provably still waiting,
+which is why a LOAD is safe; with none, the drain may already be over, so a new scan would be the
+`TypeLoadException '…format is invalid'` tear the pin exists to prevent. The refusal is the
+contract; the recovery was the defect.
+
+### 🚨 Reading a node's content ACROSS two generations already works — #3911's headline, re-measured
+
+The 2026-09-10 control-instance incident (#3911) reported two collectible builds of
+`Hosting/InstanceAction` in one pod and attributed the dead control plane to
+`node.ContentAs<InstanceActionContent>(…)` returning `null` across them —
+*"`null → Observable.Empty → silence`"*. **That link does not survive measurement.**
+`ObjectAsExtensions.As<T>` recovers a same-SHORT-NAMED foreign type by a JSON round-trip, and it
+does so on the collectible path too, in both directions — asserted against two genuinely
+collectible generations in `TwoCollectibleGenerationsContentReadTest`, which is the case
+`ContentAsForeignAssemblyContentTest` (two static types in one non-collectible assembly) does not
+reach. The collectible branch is the one worth checking, because `PolymorphicTypeInfoResolver`
+deliberately refuses to auto-register a collectible type and formats the discriminator without
+registering it; the round-trip survives that.
+
+So the cross-generation READ was never the silence, and a change aimed at `ContentAs` would have
+moved nothing. The part of #3911 that HAS been answered is the recompile LOOP that produced two
+generations in the first place: a process running a module generation other than the one its
+activation record names ([Module Generation Substitution](../ModuleGenerationSubstitution) —
+`Assembly.LoadFrom` silently returns an already-loaded byte-identical copy from another path, which
+is why `compiledDependencies` disagreed with the runtime and the stale-build kick fired after every
+activation restart).
+
+**#3911 is therefore not closed by either page.** Its third ask — *the NodeType compiler must
+reference the LOADED module generation, not the image's `/app` copy* — is still open, and that page
+is explicit that it does not assert the MVID/generation pairing #3911 reported. What the two pages
+together do settle is which hypotheses are dead: not the read, and not `ContentAs`.
+
 ### 🚨 A LEAVING pod never touches shared NodeType state — the adoption sweep observes host shutdown
 
 The NodeType node is **one record for the whole deployment**. Every generation of pods reads its

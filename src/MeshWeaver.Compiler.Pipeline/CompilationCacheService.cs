@@ -216,8 +216,52 @@ internal interface ICompilationCacheService
     /// Gets or creates an AssemblyLoadContext keyed by the exact DLL path.
     /// Used for release-per-compile: each unique compiled DLL lives in its own
     /// ALC so V1 and V2 assemblies coexist without overwriting each other.
+    ///
+    /// <para>🚨 <b>A READ. It never supersedes another generation</b> — see
+    /// <see cref="PublishLoadContextForPath"/> for why that distinction is load-bearing (#4013).
+    /// Resolving an assembly PATH is what a hub activation, a cell-surface session and an
+    /// assembly-hydration scan all do, and none of them is evidence about which build is
+    /// current.</para>
     /// </summary>
     NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath);
+
+    /// <summary>
+    /// <see cref="GetOrCreateLoadContextForPath"/> for the ONE caller that is publishing a build:
+    /// the post-emit scan of a compile that just produced <paramref name="dllPath"/>. As well as
+    /// resolving the context it EVICTS every other context for this NodeType, which is what bounds
+    /// <c>_loadContexts</c> to the current generation instead of one entry per recompile — the
+    /// native-memory accumulation described on <c>EvictSupersededContexts</c>.
+    ///
+    /// <para>🚨 <b>Why only here (#4013).</b> The eviction used to ride on <i>every</i> newly
+    /// created path-keyed context, taking "somebody asked for a path I had not seen" as proof that
+    /// that path is the current build. For a reader it is not: a hydration scan of a package's
+    /// SHIPPED assembly, or a kernel session resolving a cell-surface pack, would then supersede
+    /// the generation a concurrent rebuild had just published. Worse, the recovery loop in
+    /// <see cref="CompilationCacheService.PinForScan(string,string?,bool)"/> re-resolves on a
+    /// refused pin — so two scans of two generations of ONE NodeType each destroyed the context
+    /// the other had just resolved, ping-ponging until the 3-attempt cap turned it into an
+    /// <see cref="ObjectDisposedException"/> that <c>CompileResultFromAssembly</c> records as a
+    /// compile error and the watcher PARKS. That is the merge-queue dequeue reported in #4013
+    /// (<c>PluginGateRunnerTest.SelfTypedRootWithStaleCompileStamp</c>: the rebuild publishes while
+    /// the shipped stale stamp is being read — exactly two generations, exactly two scans).
+    /// Reads no longer re-order generations; a publish still does, so it fires where a new
+    /// generation is actually born.</para>
+    ///
+    /// <para>🚨 <b>What the narrowed trigger costs, stated rather than claimed away.</b> The
+    /// UNBOUNDED key space — one never-reused <c>{nodeName}_{ticks}_{guid}/</c> directory per emit
+    /// (<c>EmitToDiskWithRetry</c>) — is still evicted, because every emit publishes. What is no
+    /// longer evicted at the moment it appears is a generation this process only HYDRATED: an
+    /// <c>IAssemblyStore</c> path is keyed <c>v{version}-{frameworkTag}-{hash}.dll</c>
+    /// (first-write-wins per version), so a silo that reads a version another silo compiled now
+    /// keeps the previous version's context until the NodeType hub disposes
+    /// (<see cref="UnloadNodeContexts"/>, which <c>Modules:AutoRecycleOnStaleBuild</c> drives on a
+    /// stale build). That residue is bounded by the number of VERSIONS a hub outlives, not by
+    /// recompiles, and it is the deliberate price of the correctness clause: a read that
+    /// superseded would re-create the CURRENT generation's context under its own path, putting two
+    /// live ALCs behind one file — the two-generations split #3911 describes, manufactured by the
+    /// reclaim itself.</para>
+    /// </summary>
+    NodeAssemblyLoadContext PublishLoadContextForPath(string nodeName, string dllPath);
 
     /// <summary>
     /// Resolves a LIVE context for a scan and returns it already pinned — the atomic form of
@@ -234,12 +278,20 @@ internal interface ICompilationCacheService
     /// good, because a hub resolves its configuration exactly once, at activation).</para>
     /// <para>Only this service can close that window: it owns the dictionary, so it is the only
     /// component that can re-resolve. The loop terminates because the evictor removes the key
-    /// BEFORE disposing, so the next resolve constructs a fresh context.</para>
+    /// BEFORE disposing, so the next resolve constructs a fresh context — and, since #4013,
+    /// because neither the retry nor any reader EVICTS while doing so. The old loop could not
+    /// terminate under two concurrent scans of two generations: each re-resolve created a context
+    /// that evicted the peer's, so both kept being refused until the attempt cap rethrew. See
+    /// <see cref="PublishLoadContextForPath"/>.</para>
     /// </summary>
-    PinnedScanContext PinForScan(string nodeName, string? dllPath);
+    /// <param name="publishesTheBuild">True for the ONE caller that just emitted
+    /// <paramref name="dllPath"/> (the post-emit scan) — its first resolve supersedes the older
+    /// generations of this NodeType. Every other scan is a READ and leaves the set alone; a RETRY
+    /// never supersedes, whoever asked.</param>
+    PinnedScanContext PinForScan(string nodeName, string? dllPath, bool publishesTheBuild = false);
 
     /// <summary>
-    /// <see cref="PinForScan(string, string?)"/> for a release-keyed context.
+    /// <see cref="PinForScan(string, string?, bool)"/> for a release-keyed context.
     /// </summary>
     PinnedScanContext PinForScanOfRelease(NodeTypeRelease release, string releaseFolder);
 
@@ -1174,6 +1226,14 @@ internal class CompilationCacheService(
 
     /// <inheritdoc />
     public NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath)
+        => ResolveLoadContextForPath(nodeName, dllPath, supersedeOlderBuilds: false);
+
+    /// <inheritdoc />
+    public NodeAssemblyLoadContext PublishLoadContextForPath(string nodeName, string dllPath)
+        => ResolveLoadContextForPath(nodeName, dllPath, supersedeOlderBuilds: true);
+
+    private NodeAssemblyLoadContext ResolveLoadContextForPath(
+        string nodeName, string dllPath, bool supersedeOlderBuilds)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -1188,17 +1248,28 @@ internal class CompilationCacheService(
             return c;
         });
 
-        // A genuinely NEW path-keyed context means a fresh compile/release just superseded any
-        // prior assembly for this NodeType. Each recompile writes to a unique
-        // {nodeName}_{timestamp}_{guid} directory (see EmitToDiskWithRetry), so the OLD entries —
-        // same NodeName, different key — are never reused. Left in place they pin their collectible
-        // NodeAssemblyLoadContext (and its native metadata/JIT images) for the ENTIRE life of the
-        // (long-lived) NodeType hub, unloaded only on hub teardown (UnloadNodeContexts). That
-        // per-recompile accumulation is the native-memory leak that drove memex to the server-GC
-        // hard limit (~21 GB at the 28 Gi cap) and its GC-thrash crashes. Evict them now — but only
-        // when WE added the current context (created), so a re-request of an already-cached path can
-        // never evict the live assembly. See EvictSupersededContexts for why this is safe mid-recompile.
-        if (created)
+        // A PUBLISHED build supersedes every prior assembly for this NodeType. Each recompile
+        // writes to a unique {nodeName}_{timestamp}_{guid} directory (see EmitToDiskWithRetry), so
+        // the OLD entries — same NodeName, different key — are never reused. Left in place they pin
+        // their collectible NodeAssemblyLoadContext (and its native metadata/JIT images) for the
+        // ENTIRE life of the (long-lived) NodeType hub, unloaded only on hub teardown
+        // (UnloadNodeContexts). That per-recompile accumulation is the native-memory leak that drove
+        // memex to the server-GC hard limit (~21 GB at the 28 Gi cap) and its GC-thrash crashes.
+        // Evict them now — but only when WE added the current context (created), so a re-request of
+        // an already-cached path can never evict the live assembly. See EvictSupersededContexts for
+        // why this is safe mid-recompile.
+        //
+        // 🚨 supersedeOlderBuilds is FALSE for every reader (#4013). "A path I had not seen yet" is
+        // not evidence that the path is the current build — a hydration scan of a package's shipped
+        // assembly and a kernel session resolving a cell-surface pack both create one, and letting
+        // either supersede the generation a concurrent rebuild had just published is what let two
+        // scans of one NodeType destroy each other's contexts until PinForScan's attempt cap
+        // rethrew. The UNBOUNDED half of the key space is unaffected — every emit publishes, and
+        // the per-emit {nodeName}_{ticks}_{guid} directory is the set that grows without bound. A
+        // generation this process merely HYDRATED from the assembly store is now reclaimed on hub
+        // disposal instead of on the next reader's resolve; see PublishLoadContextForPath for why
+        // that trade is the right way round.
+        if (created && supersedeOlderBuilds)
             EvictSupersededContexts(nodeName, keepKey: dllPath);
 
         return ctx;
@@ -1212,30 +1283,35 @@ internal class CompilationCacheService(
     private const int ScanPinReResolveAttempts = 3;
 
     /// <inheritdoc />
-    public PinnedScanContext PinForScan(string nodeName, string? dllPath)
+    public PinnedScanContext PinForScan(string nodeName, string? dllPath, bool publishesTheBuild = false)
         => PinResolved(
             cacheKey: string.IsNullOrEmpty(dllPath) ? nodeName : dllPath!,
-            resolve: () => string.IsNullOrEmpty(dllPath)
+            // 🚨 `attempt` is the parameter, not a captured flag: ONLY the first resolve of a
+            // PUBLISHING scan may supersede. A retry is a recovery, and a recovery that destroys
+            // its peers' freshly created contexts is what turned a one-shot supersession into the
+            // ping-pong of #4013.
+            resolve: attempt => string.IsNullOrEmpty(dllPath)
                 ? GetOrCreateLoadContext(nodeName)
-                : GetOrCreateLoadContextForPath(nodeName, dllPath!));
+                : ResolveLoadContextForPath(
+                    nodeName, dllPath!, supersedeOlderBuilds: publishesTheBuild && attempt == 1));
 
     /// <inheritdoc />
     public PinnedScanContext PinForScanOfRelease(NodeTypeRelease release, string releaseFolder)
         => PinResolved(
             // Same key GetOrCreateLoadContextForRelease adds under.
             cacheKey: release.Path,
-            resolve: () => GetOrCreateLoadContextForRelease(release, releaseFolder));
+            resolve: _ => GetOrCreateLoadContextForRelease(release, releaseFolder));
 
     /// <summary>
     /// Resolve → Pin as ONE operation, re-resolving when the context we resolved is already
     /// unloading. See <see cref="ICompilationCacheService.PinForScan"/> for why two steps is a
     /// race and why losing it is not survivable downstream.
     /// </summary>
-    private PinnedScanContext PinResolved(string cacheKey, Func<NodeAssemblyLoadContext> resolve)
+    private PinnedScanContext PinResolved(string cacheKey, Func<int, NodeAssemblyLoadContext> resolve)
     {
         for (var attempt = 1; ; attempt++)
         {
-            var context = resolve();
+            var context = resolve(attempt);
             try
             {
                 return new PinnedScanContext(context, context.Pin());
@@ -1271,8 +1347,9 @@ internal class CompilationCacheService(
     /// context's <c>Unloading</c> handler (<c>ReflectionCacheEviction.EvictFor</c>) purges Autofac's
     /// shared reflection cache so the freed context is neither rooted nor left as a dangling key.
     /// Mirrors the match in <see cref="UnloadNodeContexts"/>/<see cref="InvalidateCache"/> (both key
-    /// on <see cref="NodeAssemblyLoadContext.NodeName"/>), just triggered per recompile rather than
-    /// only on hub teardown.
+    /// on <see cref="NodeAssemblyLoadContext.NodeName"/>), just triggered per PUBLISHED build
+    /// rather than only on hub teardown — see <see cref="PublishLoadContextForPath"/> for why the
+    /// trigger is a publish and not merely "a path-keyed context was created" (#4013).
     /// </remarks>
     private void EvictSupersededContexts(string nodeName, string keepKey)
     {
