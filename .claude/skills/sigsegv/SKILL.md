@@ -108,10 +108,24 @@ Both are SIGSEGV. They are different bugs and the dump distinguishes them in one
 field the faulting code happened to read. Sighting #10 faults at `si_addr = 0x4` and is the same bug.
 Match on *"a MethodTable word that is exactly zero"*, never on the literal address.
 
-The second one is the FutuRe family — **fifteen sightings, and the collectible-ALC hypothesis has been
-falsified three separate ways** (RIP is in file-backed runtime code; a freed `LoaderAllocator` yields
-a non-null *unmapped* pointer, never `0x0`; a free-list item has no ALC at all). Do not keep paying
-that hypothesis forward, and **do not "fix" it by disabling concurrent GC** — that was tried
+The second one is the FutuRe family. 🚨 **Corrected 2026-09-11: the "collectible-ALC hypothesis
+falsified three ways" line that stood here was unsound.** Its three arguments (RIP in file-backed
+runtime code; a freed `LoaderAllocator` yields a non-null *unmapped* pointer; a free-list item has no
+ALC) exclude only a freed collectible *MethodTable* being dereferenced — the zeroed word is the header
+of an ordinary default-context object — and its `alc=1` support counts `AssemblyLoadContext.All`, which
+drops a context the moment `Unload()` is called. Read for the MANAGED state (ClrMD, not native SOS),
+every retained FutuRe dump (#12–#16) held **3–7 `NodeAssemblyLoadContext`s mid-unload** while the next
+instance was built or run, and the zeroed object is the **garbage of a disposed hub** (Autofac child
+registry, STJ polymorphic metadata, `TypeRegistry`) — see DebuggingNativeCrashes.md, *"the MANAGED view
+of sightings #11–#16"*. The GitSync pair (#10/#11, `GetCodeInfo`) is a different branch: no collectible
+context at all, an interior stale reference. 🚨 **When an unload does not finish, gcroot the
+`LoaderAllocator`, never the context** (the runtime's own strong handle always holds an unloading context).
+Measured 2026-09-11: the one strong holder of FutuRe's unfinished unloads was **System.Text.Json's static
+`ReflectionEmitCachingMemberAccessor` cache** (a `DynamicMethod` accessor's scope holds the collectible
+type; 1 s sliding expiry on a 200 ms timer), so contexts were freed when STJ's timer fired — during the
+next mesh. Evicted now on `Unloading` (`JsonMemberAccessorCacheEviction`), like Autofac's. Handle type
+`(10)` in gcroot output is `HNDTYPE_WEAK_INTERIOR_POINTER` — weak, not a root. And **do not "fix" it by
+disabling concurrent GC** — that was tried
 (#1274), changed nothing measurable, and was removed. Read the instruction + registers, not the
 function name: the frame moved across `background_sweep` → `plan_phase` → `find_first_object` →
 `background_mark_simple1` (2026-09-03) while the fault did not. 🚨 **And sighting #10 (2026-09-06)
@@ -123,11 +137,13 @@ dereferences it. 🚨 **And the frame REVISITS — it is not a progression.** Si
 inside the JIT, the other is back in `background_sweep()+0xa61` with `si_addr = 0x0` on a dedicated
 BGC thread — same runtime binary, 33 hours apart, `[R15]` reading zero in both. So do not read #10's
 move out of `gc_heap` as the family migrating toward the LCG/serialization workload; that was a
-sample of one. 🚨 **Nor is it a property of one runtime build, and the zeroed block can be a LIVE
-object somebody POINTS AT.** Sighting #15 (2026-09-10) ran on **`10.0.12`**, libcoreclr build-id
-`79945f51…` — a different binary from #4–#14's `10.0.11` / `989b56df…` — so "wait for the next patch"
-is not a plan; and a whole-core scan for its cursor found the address in a field of a live,
-well-formed 96-byte heap object, not only on a free list.
+sample of one. 🚨 **Nor is it a property of one runtime build.** Sighting #15 (2026-09-10) ran on
+**`10.0.12`**, libcoreclr build-id `79945f51…` — a different binary from #4–#14's `10.0.11` /
+`989b56df…` — so "wait for the next patch" is not a plan. (Its "live, referenced" block was later shown
+to be garbage: the 96-byte referrer is itself reachable from no GC root.) 🚨 **Read a dump for who was
+ACTIVE, not only for the faulting frame:** the evidence of an overlap is on the other threads and in
+the ALC census (`AssemblyLoadContext._state` through the GC handles), never in the GC thread that
+trips over the result.
 Measured base rate on Plugins CI: **0.74 %** over 1,197 runs (2026-08-29 → 09-03,
 denominator = non-cancelled runs) and **1.17 %** over 343 runs (2026-09-06 → 09-08, denominator =
 runs whose portal-host shard reached a verdict) — **different denominators, so not a trend**; both

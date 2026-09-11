@@ -1007,7 +1007,11 @@ Two facts about the fixture that matter for reading the rest: `FutuReAnalysisTes
 `ShareMeshAcrossTests => true`, but no `DISPOSE_SHARED_SKIP` was ever written — the cluster kill-switch
 had sharing off, so **every `[Fact]` built and disposed its own mesh** (30 full teardowns in 47 s in #13).
 And `alc=1` at every checkpoint — each `INIT_MEM`/`DISPOSE_MEM` line is written after a forced full
-GC — means **no collectible `AssemblyLoadContext` survived any teardown** in either process. It does
+GC — means **no collectible `AssemblyLoadContext` survived any teardown** in either process.
+🚨 *Corrected 2026-09-11 (see the entry “the MANAGED view of sightings #11–#16”): both halves of that sentence are wrong.
+The count is `AssemblyLoadContext.All`, which drops a context the moment `Unload()` is called, and CI
+never sets the `MESHWEAVER_TEST_FORCE_GC` that gates the forced collection — #13 died holding 4
+contexts mid-unload and #14 held 7.* It does
 NOT mean none existed: `asm` moves 127 → 129 → 127 → 128 → 130 → 131 → 128 → 130 → 129 … → 133 across
 #13's checkpoints, so contexts (the per-node `DynamicNode_*` / `node-config-script:*` ones) were being
 created inside tests and fully reclaimed by the next checkpoint. Unloads therefore DO happen in this
@@ -1102,7 +1106,7 @@ Plugins #1507 (`fix/1390-teardown-resolve-guard`, merged 13:13Z) converts 22 Rx 
 (shard 1)` passing on the 13:13 push run `34230683846` is one green sample at a low-single-digit-percent
 rate — the reading the base-rate section above already warns against — not the fix working.
 
-### 2026-09-10: sighting #15 — a NEW RUNTIME BUILD (`10.0.12`), and the corrupt block is a LIVE, REFERENCED object
+### 2026-09-10: sighting #15 — a NEW RUNTIME BUILD (`10.0.12`), and the corrupt block is a LIVE, REFERENCED object *(corrected 2026-09-11: it is garbage — reachable from no root)*
 
 `MeshWeaver.Futu-51647.dmp` (MeshWeaver.Plugins run
 [`34476948303`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34476948303), job
@@ -1138,6 +1142,11 @@ builds apart.
 binary whose build-id (`79945f51…`) differs — verified as mapped *inside the crashed process*, not
 merely as shipped. So "wait for the next runtime patch" is not a plan, and any upstream report should
 be written against three patch releases rather than one.
+
+🚨 *Corrected 2026-09-11 — the paragraph below does not hold. The 96-byte referrer is an Autofac
+`ServiceRegistrationInfo`, and a BFS from every GC root (374,060 objects) never reaches it: referrer and
+cursor are both the garbage of a disposed hub's registry. "Well-formed" was read as "live". See the
+entry “the MANAGED view of sightings #11–#16”.*
 
 **2. The corrupt block is a live object that something POINTS AT.** The 2026-08-17 entry established
 the free-list shape by finding that *no managed object points at the cursor*. Run the same scan here
@@ -1226,6 +1235,8 @@ The last five records are `CTOR 12:45:24.607`, `INIT_START .607`, `INIT_BASE_DON
 fixture 18, not tearing down fixture 17**, which had completed cleanly 18 ms earlier. Read the bottom
 of the stack, not the top: this is construction, exactly as in sightings #1 and #3, and no teardown
 guard could have been in the path. `alc=1` throughout — no collectible context survived any teardown.
+🚨 *Corrected 2026-09-11: `alc` cannot see a context that is unloading; this process died with **5**
+`NodeAssemblyLoadContext`s mid-unload and none alive, 12 ms after the previous teardown.*
 
 The truncation machinery did its job: the trx carries **18** results — 17 `Passed` plus
 `MeshWeaver.FutuRe.Test.HOST_CRASHED` `Failed` — so the `Passed! … Passed: 17` console line is
@@ -1481,18 +1492,29 @@ Every crash is `Portal hosts (shard 1)`:
 
 #### What the sixteen have already eliminated — do not re-open these
 
-1. **Use-after-unload of a collectible ALC** — falsified three ways (`RIP` in file-backed runtime code;
-   a freed `LoaderAllocator` yields a non-null *unmapped* pointer, never a zero word at a mapped
-   address; a free-list item has no ALC), and `alc=1` at every checkpoint of #11–#15.
-2. **A teardown-ordering race** — every `DISPOSE_DONE` in every complete record reads
-   `teardown clean`, zero `DISPOSE_QUIESCE_LEAK` / `DISPOSE_DIRTY_TEARDOWN`; and the phase at death
-   varies (construction in #1, #3, #15; inside a test in #11–#13; inside a teardown in #2, #14).
+1. ⚠️ **Unsound as written (2026-09-11).** *Use-after-unload of a collectible ALC* — falsified three
+   ways (`RIP` in file-backed runtime code; a freed `LoaderAllocator` yields a non-null *unmapped*
+   pointer, never a zero word at a mapped address; a free-list item has no ALC), and `alc=1` at every
+   checkpoint of #11–#15. The three arguments exclude only *a freed collectible MethodTable being
+   dereferenced* — the zeroed word is a default-context object's header, so they are silent on an
+   unload IN PROGRESS — and `alc=1` cannot see a context that is unloading: every readable FutuRe dump
+   held 3–7 of them. See the entry “the MANAGED view of sightings #11–#16”.
+2. ⚠️ **Unsound as written (2026-09-11).** *A teardown-ordering race* — every `DISPOSE_DONE` in every
+   complete record reads `teardown clean`, zero `DISPOSE_QUIESCE_LEAK` / `DISPOSE_DIRTY_TEARDOWN`; and
+   the phase at death varies (construction in #1, #3, #15; inside a test in #11–#13; inside a teardown
+   in #2, #14). A clean `DISPOSE_DONE` proves every teardown FINISHED; it says nothing about whether
+   one instance's unload OVERLAPPED the next instance's start, because `DISPOSE_DONE` is written when
+   `Unload()` has been requested, before any context is freed. A clean log is exactly what the overlap
+   looks like.
 3. **Concurrent GC as the mechanism** — #1274 disabled it; the rate did not move (4.2 % → 3.8 %) and
    `plan_phase` runs in blocking GCs; removed again.
 4. **An unhandled managed exception routed through `createdump`** — no `Unwind: exception type` in any.
 5. **The ClrMD DAC `pthread_key` teardown** — no `libmscordaccore.so` mapped (#15).
 6. **MeshWeaver code writing the heap** — zero `AllowUnsafeBlocks` in either repository; every mapped
-   native module is the runtime's or the OS's.
+   native module is the runtime's or the OS's. *(2026-09-11: `AllowUnsafeBlocks` alone does not prove
+   it — `Unsafe.*`, `MemoryMarshal`, `GCHandle` and `Marshal.Write*` need no unsafe block. A direct grep
+   of both `src/` trees finds none of them writing; the one `MemoryMarshal.AsBytes` is a read-only
+   hash input. The conclusion stands on that grep.)*
 7. **Disk pressure** — #15 wrote a complete 849 MiB core and nine suites ran after it.
 8. **Re-entrant hub construction** — 1,350 per green run; on non-faulting threads in #8.
 9. **The quiescing-leak family (#981)** — never co-occurs with the signal death.
@@ -1545,6 +1567,183 @@ that run's log has aged out (`HTTP 410`) and no portal endpoint reports its runt
 run `10.0.12`. So production does not yet carry dotnet/runtime#131708. Rolling it there is
 `gh workflow run base-image-acr.yml --ref main` followed by the next `main-cd` roll: an operator
 decision, not taken in this entry. What `10.0.12` is worth is what the measurement above says.
+
+### 2026-09-11: the MANAGED view of sightings #11–#16 — the zeroed header is in a DISPOSED hub's garbage, and collectible contexts were mid-unload at every FutuRe crash
+
+Every entry above read these dumps for the faulting **native** frame. This one reads them for what the
+fault registers cannot say: **what the zeroed object was, who could still reach it, what every managed
+thread was doing, and which collectible contexts existed at the moment of death.** The maintainer's
+reading (2026-09-11) was *"not due to dotnet but due to disposal being in progress while new instance
+starting"*; this read tests that against six dumps, and it corrects three claims made on this page.
+
+**How it was read — no native SOS.** `dotnet-dump analyze` (SOS 10.0.745401) under an amd64 container on
+an arm64 host segfaults in `dumpobj`, in `clrstack -all` at the first native frame, and ClrMD's own heap
+walk AVs on the zeroed header. What worked, all read-only against the `.dmp`:
+
+- `setthread N` + `clrstack` **one process per thread**, so an analyzer crash costs one thread, not all later
+  ones; `lno`/`gcwhere` (ClrMD-backed) for the neighbourhood.
+- a ~250-line ClrMD 3.1 probe (`DataTarget.LoadDump`; `CreateRuntime(dac, ignoreMismatch: true)` for the
+  `10.0.11` dumps, whose DAC version the core does not carry): `FindPreviousObjectOnSegment` for
+  neighbours; a byte scan of every committed heap segment for the cursor value; a **BFS from
+  `heap.EnumerateRoots()`** over `EnumerateReferenceAddresses(carefully: true)` — never building a
+  `ClrObject` for an MT-zero child — for reachability; `runtime.EnumerateHandles()` for the ALC census,
+  reading each `AssemblyLoadContext._state` (`0` Alive, `1` Unloading).
+- the native stacks of the non-managed threads (finalizer, tiered-compilation worker) by scanning each
+  `NT_PRSTATUS` thread's stack for `libcoreclr` return addresses, symbolized against the build-id `.debug`.
+
+The fault cursor of each dump comes from the kernel `ucontext` exactly as in the entries above.
+
+#### What the six dumps show
+
+| # | suite / runtime | frame | cursor | the zeroed object and its neighbourhood | reachable? | collectible contexts at death |
+|---|---|---|---|---|---|---|
+| 11 | GitSync / `10.0.11` | `GetCodeInfo` | `R15 0x7f111956ffe8` | an **interior** address — element 0 of a `ConcurrentDictionary<(string, Type), object>`'s `Int32[]` lock-count array, next to Autofac `ServiceRegistrationInfo` / `ExternalComponentRegistration` objects | — | **none** (`Default` only) |
+| 12 | FutuRe / `10.0.11` | `background_sweep` | `R15 0x7f1c8a0c5c10` | STJ polymorphic metadata: `JsonPolymorphismOptions`, `PolymorphicTypeResolver`, a fresh `ConcurrentDictionary<Type, DerivedJsonTypeInfo>` | not run | **7 Unloading**, 3 Alive |
+| 13 | FutuRe / `10.0.11` | `background_sweep` | `R15 0x7f02a14f6df0` | persistence/query closures (`StorageAdapterMeshQueryProvider`, `PersistenceService`, `LegacyUserPartitionRepair` display classes and `Func<>`s) | not run | **4 Unloading**, 3 Alive |
+| 14 | FutuRe / `10.0.11` | `revisit_written_page` | `RSI 0x7f59b4ddca00` | `TypeRegistry` state: `ConcurrentDictionary<string, TypeDefinition>` node, `TypeDefinition`, `Func<KeyFunction>` | not run | **7 Unloading**, 3 Alive |
+| 15 | FutuRe / `10.0.12` | `find_first_object` | `R10→0x7f5dd6e057a0` | `List<IComponentRegistration>` = the `_sourceImplementations` of an Autofac `ServiceRegistrationInfo` for `ILogger<HierarchicalRouting>`, among `HierarchicalRouting`, `SyncDelivery`, `ExternalComponentRegistration` | **no** — BFS over 374,060 objects from 722 roots | **5 Unloading**, 0 Alive |
+| 16 | FutuRe / `10.0.12` | `background_sweep` | `R15 0x7fa33ca0b6d0` | the Autofac `ServiceRegistrationInfo` itself, for `ILogger<PolymorphicTypeInfoResolver>`, among that hub's `JsonSerializerOptions`, `PolymorphicTypeInfoResolver` and converter list | **no** — BFS over 644,761 objects from 843 roots; the only word in the heap equal to it is inside the object right after it | **3 Unloading**, 1 Alive |
+
+- **The victim is never a collectible type and never a native wrapper.** Every object around every cursor is
+  an ordinary default-context type (Autofac, System.Text.Json, CoreLib collections, MeshWeaver.Hosting /
+  Messaging / Layout). No SkiaSharp, SQLite, libgit2 or other native-handle wrapper is anywhere near one.
+- **It is what a HUB BUILDS**: its Autofac child-scope registry, its `JsonSerializerOptions` polymorphic
+  metadata, its `TypeRegistry`, its persistence closures. Where reachability was measured (#15, #16) the
+  object is **garbage** — reachable from no root — i.e. the leftovers of a hub that has already been
+  disposed. A GC walks dead objects linearly (sweep, plan, card scan, write-watch revisit), which is why
+  it is the collector that trips over the zeroed word, on whatever thread happens to be walking.
+- **At every FutuRe crash, several `NodeAssemblyLoadContext`s were mid-unload** — `Unload()` called,
+  `_state = 1`, held by the runtime's strong handle, their `LoaderAllocator` objects still present — while
+  the next instance was being built (#15: 5 Unloading and **0** Alive, 12 ms after the previous
+  `DISPOSE_DONE`, the crashing thread inside the new mesh's `HostedHubsCollection.CreateHub` →
+  `MessageHubConfiguration.Build` → an Autofac resolve) or running (#16: 3 Unloading beside the live
+  test's 1 Alive).
+- **Nothing was executing disposal code at the instant of death.** No managed thread is in a `Dispose`,
+  in `AssemblyLoadContext.Unload` or in teardown in any of the six; the finalizer thread sits in
+  `FinalizerThread::WaitForFinalizerEvent` in #15 and #16 (so no `LoaderAllocator` was being destroyed at
+  that instant) and thread 6 is the tiered-compilation worker. The unloads were *pending in the GC*: a
+  collectible context is only freed over the following collections, on the finalizer thread, after
+  `Unload()` returns.
+- **#11 is a different branch.** GitSync ran no dynamic NodeType at all, and its "object" is an interior
+  address in a live array — the stale-reference shape of dotnet/runtime#131267's hijack GC hole, which
+  `10.0.12` fixes. It is not evidence for or against the unload overlap.
+
+#### What this corrects on this page
+
+1. **`alc=1` never measured what it was read as.** `MonolithMeshTestBase.TestMemTrace` counts
+   `AssemblyLoadContext.All`, and the runtime removes a context from that set inside `InitiateUnload` —
+   the moment `Unload()` is called (`AllContexts.Remove(_id)`, `AssemblyLoadContext.cs`, `release/10.0`).
+   A context that is still unloading, types and `LoaderAllocator` intact, is therefore invisible to it.
+   And the checkpoints are **not** after a forced GC on CI: the forced collection is gated on
+   `MESHWEAVER_TEST_FORCE_GC`, which no workflow sets. So "`alc=1` at every checkpoint — no collectible
+   context survived any teardown" (entries #13/#14, #15, #16) is unsupported: the same processes held 3–7
+   contexts mid-unload when they died.
+2. **#15's "live, REFERENCED object" is wrong.** The 96-byte object whose `+0x20` field points at the
+   cursor is an Autofac `ServiceRegistrationInfo`; it is itself reachable from no GC root. Both are the
+   garbage of a disposed hub's registry. "A published, referenced managed object lost its type slot" — and
+   the conclusion drawn from it that the zeroing cannot be free-space housekeeping — does not follow.
+3. **Eliminations 1 and 2 of "What the sixteen have already eliminated" are unsound as written.** The
+   three arguments of #1 only exclude *a freed collectible MethodTable being dereferenced* — the zeroed
+   word here is a default-context object's header, so they say nothing about whether an unload *in
+   progress* is involved — and its `alc=1` support is item 1 above. #2 rests on every `DISPOSE_DONE`
+   being clean, but `DISPOSE_DONE` is written when `Unload()` has been *requested*, before any context has
+   been freed; a clean teardown log is exactly what the overlap looks like.
+
+#### What it does NOT show
+
+No dump names the writer of the zero. The write happened before the collection that found it, so the
+thread that made it is long gone from the stack; nothing in either repository writes the heap through
+`Unsafe`, `MemoryMarshal`, `GCHandle` or `Marshal` (the one `MemoryMarshal.AsBytes` is a read-only hash
+input). What the dumps establish is the **state** the maintainer described — a disposed instance whose
+collectible contexts are still being unloaded while the next instance builds and runs — at 5 of 5 FutuRe
+crashes that could be read. In this workload that state is also the steady state after every fixture, so
+its presence at the crash is necessary for the hypothesis and not by itself sufficient; the repro below
+is what separates the two.
+
+#### The forced overlap, and what it did not reproduce
+
+A crash needs a deterministic repro before a fix, so the overlap was forced first, in two workloads.
+
+- **No MeshWeaver code at all.** Six workers loop: load a fresh collectible context, build six Autofac child scopes over its types (constructor lambdas are LCG), serialise and deserialise through `System.Text.Json` (reflection-emit accessors), dispose, `Unload()` — and start the next iteration **immediately**, while a hammer thread interleaves background gen2, gen0/gen1 and finalizer passes with a 2 MiB gen0 budget. It ran **16,112** overlapped iterations on macOS arm64 (`10.0.11`) and **11,289** on linux-arm64 (`10.0.12`), 180 s each, exit 0. The runtime, Autofac and STJ do not corrupt the heap on this overlap alone, at this scale, on arm64.
+- **The real suite.** `MeshWeaver.FutuRe.Test`, built against core `main`, run 20 times back to back through its native xUnit host with a 4 MiB gen0 budget: **1,180 fixtures, 20 of 20 green**, no signal death, on macOS arm64.
+
+At the measured CI rate — about 1 % of x64 runs, i.e. about one crash per 4,500 fixtures — neither could be expected to crash, so these are not evidence of absence, and they are recorded so the next reader does not re-run them expecting otherwise. What they do settle is that the state is not *sufficient* on arm64 at this scale: whatever writes the zero needs more than a context unloading while the next instance builds.
+
+#### The fix — teardown finishes when the unload has finished
+
+The maintainer's design (2026-09-11): *"we need to wait (reactively, i.e. observable.Subscribe()) until all is really finished disposing"*. "Really finished" for a collectible context is not `Unload()` returning and not `DISPOSE_DONE`: it is the runtime releasing the context after destroying its LoaderAllocator, over later collections, on the finalizer thread.
+
+- **`CollectibleContextUnloads`** (`MeshWeaver.Mesh.Contract`, a mesh-scoped singleton next to `MeshTeardownSignal`) records every context the mesh retires — by its signal, never by reference, so it cannot root what it waits for. `AllCollected` completes when every context retired before the subscription has been collected, **errors** when an unload was abandoned (the drain faulted, or `Unload()` threw — an `Unloading` handler raising), and emits synchronously when nothing is pending.
+- **How "collected" is observed.** `Unload()` calls `GC.SuppressFinalize` on the context, so a finalizer on `NodeAssemblyLoadContext` would never run. `RetireInto` instead gives the context a finalizable sentinel that only the context references; the context stays reachable through the runtime's strong handle until the LoaderAllocator is destroyed, so the sentinel's finalizer runs only after that. It stops the entry counting as pending synchronously and releases subscribers on the thread pool — never on the finalizer thread.
+- **`CompilationCacheService`** retires every context it disposes (`UnloadContext` and `Dispose`), once per context even when one generation is aliased under two keys.
+- **The test bases** (`MonolithMeshTestBase`, `HubTestBase`, and MeshWeaver.Plugins' `MonolithMeshTestBase`) end teardown with `CollectibleUnloadDrain`: drive full collections — an idle test host allocates nothing, so nothing would ever collect — then observe `AllCollected`. xUnit does not construct the next fixture until `DisposeAsync` returns. A faulted unload fails the class (`DISPOSE_UNLOAD_FAULTED`); a context still rooted after collections stop freeing anything is **reported** (`DISPOSE_ALC_RETAINED`, naming it), never waited on; the ordinary case writes `DISPOSE_UNLOADS_COLLECTED` with the round count.
+
+Nothing is cancelled and nothing unloads earlier or later than before — teardown lets the work finish, and simply stops claiming to be finished before it has. In-process recompiles on a live portal (a superseded generation evicted while other hubs keep running) are **not** sequenced by this; that belongs with the retention work of #4017/#4029.
+
+Pinned by `test/MeshWeaver.Compiler.Pipeline.Test/RetiredContextCollectedSignalTest.cs`: a start sequenced on the signal does not run while the context is only `Unload()`-requested, and runs after it is collected; the context **is** collected (so the fix cannot pass by retaining); a faulted unload releases its waiter with the fault; nothing retired means no delay.
+
+#### What held the contexts — System.Text.Json's static accessor cache, measured with gcroot
+
+The first version of the fix waited for every retired context to be collected, and the real suite showed that
+this was not enough. Across three `MeshWeaver.FutuRe.Test` runs, **84** teardowns ended `DISPOSE_ALC_RETAINED`,
+against 81 `DISPOSE_UNLOADS_COLLECTED`. In half the fixtures, three rounds of full collections freed nothing,
+and the next mesh still started over contexts that were only unloading.
+
+**How the holder was found.** A heap dump was taken (`dotnet-dump collect --type Heap`, macOS-native, so SOS
+runs natively) the instant a teardown wrote `DISPOSE_ALC_RETAINED` for `BusinessUnit` and `LocalAnalysis`.
+`gcroot` was then run on each **`LoaderAllocator`** — not on the `AssemblyLoadContext`. An unloading context is
+always strongly held by the runtime's own handle, so its gcroot answers nothing. What decides whether an unload
+can finish is what keeps its `LoaderAllocator` alive.
+
+**What held both.** Both have exactly one strong root, and it is the same one:
+
+```
+HandleTable (strong handle)
+  -> System.Text.Json.Serialization.Metadata.ReflectionEmitCachingMemberAccessor      (static)
+  -> ReflectionEmitCachingMemberAccessor+Cache<(string, Type, MemberInfo)>
+  -> ConcurrentDictionary<…> -> …CacheEntry
+  -> System.Action<object, string>                  (an emitted property setter)
+  -> System.Reflection.Emit.DynamicMethod -> DynamicResolver -> DynamicScope -> List<object>
+  -> System.RuntimeTypeHandle -> System.RuntimeType (the collectible node type)
+  -> System.Reflection.LoaderAllocator
+```
+
+Every other root `gcroot` lists is handle type **10**, which is `HNDTYPE_WEAK_INTERIOR_POINTER` in
+`gcinterface.h`. It is weak and keeps nothing alive; SOS prints it without a name.
+
+**Why the cache has this effect.** On CoreCLR, System.Text.Json emits property accessors and constructors as
+`DynamicMethod`s and shares them through a process-static cache with a **1 s sliding expiry, evicted by a
+200 ms timer**. A dynamic method's scope holds the handle of every type its IL touches. So serialising a
+NodeType-compiled instance even once roots that type's LoaderAllocator from a static field until STJ's timer
+drops the entry.
+
+The unload therefore *finished* whenever that timer fired: typically a second after teardown, while the next
+mesh was already being built. That is the maintainer's "disposal in progress while new instance starting",
+and a timer decided it.
+
+**This is the brief's prime lead, confirmed.** A process-wide library cache holds delegates over types from a
+collectible context, with no eviction on `Unloading`. It has the same shape as the Autofac cache that
+`ReflectionCacheEviction` already purges.
+
+**The fix.** `NodeAssemblyLoadContext` now also registers `JsonMemberAccessorCacheEviction` on `Unloading`. It
+calls STJ's own published hook: the `MetadataUpdateHandler` declared on the assembly, whose static
+`ClearCache(Type[]?)` is what the hot-reload agent calls. That hook clears the member-accessor cache; the
+per-options caches it also clears exist only under hot reload. Live options keep the accessors they already
+hold; the cost is a re-emit when a *new* options instance resolves a type.
+
+**Pinned by** `ATypeSerializedThroughSystemTextJson_IsCollectedAtTeardown_NotWhenStjsTimerFires`, which also
+asserts that the hook still exists, so a future STJ that drops it fails a test instead of silently resuming
+the retention.
+
+**Measured after this fix.** STJ was one holder among several. Over three FutuRe runs with the eviction
+(macOS arm64), **93** teardowns ended `DISPOSE_UNLOADS_COLLECTED` and **45** ended `DISPOSE_ALC_RETAINED`,
+against 81 and 84 before it:
+- 48 teardowns had nothing to wait for;
+- 43 collected everything in 2 rounds;
+- 2 collected everything in 3 rounds.
+
+The contexts still retained are `LocalAnalysis`, `BusinessUnit` and `GroupAnalysis`. What holds them is the
+subject of the next gcroot, below.
 
 ## Reading the result honestly
 
