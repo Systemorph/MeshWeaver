@@ -122,6 +122,48 @@ the fault is, *what* it is, and *which* one it is:
   pods are recorded on the incident instead — and so a defect every tenant hits opens one ticket
   rather than one per tenant.
 
+🚨 **Which means `namespace` on an incident is FIRST-SEEN, while `pods[]`, `occurrences`, `lastSeen`
+and `samples[]` keep folding — across DEPLOYMENTS.** The auto-filed issue prints that stale
+`namespace` in its evidence table as though it described every occurrence, and it is the first thing
+a reader uses to pick which portal to go and look at. Measured on the control instance,
+2026-09-11 — `Admin/_LogIncident/c0b1424c7beb28e0`, `content.namespace: "memex"`, `occurrences: 62`:
+
+| pod, from that incident's `pods[]` | actually in namespace | established by |
+|---|---|---|
+| `memex-portal-deployment-7f74766b8d-rltnt` | **`memex`** | `Ops/Logs/memex-1789108640040221110-766b8d-rltnt` — `deployment: memex`, selector `{namespace="memex"}` |
+| `memex-portal-deployment-6d7497cb58-jc296` | **`memex-cloud`** | `Ops/Logs/memex-cloud-1789104559148633219-97cb58-jc296` — `deployment: memex-cloud`, selector `{namespace="memex-cloud"}` |
+
+Both portals, one incident, one namespace label. And because the normaliser masks the varying node
+path (`Failed to compile assembly for node '{value}'`), that incident's ten most recent `samples[]`
+name `MeshWeaver/samples/Graph/Data/Type/article`, `…/Northwind/Product` and `Hosting/InstanceAction`
+— **not** the `BinaryClickerV2/BinaryToggle` the issue it opened ([#3883](https://github.com/Systemorph/MeshWeaver/issues/3883))
+is titled after and whose last recorded occurrence is still 2026-09-10 02:30:43Z.
+
+> **So `occurrences` counts the FINGERPRINT, not the defect named in the title, and `lastSeen` is
+> the last time ANY member of the group fired on ANY portal.** A rising counter on an auto-filed
+> issue is not evidence that its headline defect is still live; read `samples[]` — the unmasked node
+> paths are in there — and resolve each `pods[]` entry to a deployment before naming a portal.
+
+Re-measured 2026-09-11T09:1xZ, same incident, and the spread had widened rather than settled:
+`occurrences: 62`, **26** entries in `pods[]`, `firstSeen` 2026-09-10T02:26:49Z,
+`lastSeen` 2026-09-11T05:22:40Z. All **ten** retained `samples[]` are one of three node paths —
+`MeshWeaver/samples/Graph/Data/Type/article` (CS0246 `Article`, *Matched Code nodes (0)*),
+`MeshWeaver/samples/Graph/Data/Northwind/Product` (CS0246 `Supplier`/`Category`) and
+`Hosting/InstanceAction` (CS0103 `ObserverExpiryTests` ×1307) — and **none** is the
+`BinaryClickerV2/BinaryToggle` the issue is titled after. Note the three carry *different* Roslyn
+error codes from the CS1929 the normaliser recorded: the masked template keeps `CS1{n} Error … does
+not contain a definition for …`, yet CS0246 and CS0103 lines fold into it anyway, so the fingerprint
+is broader than its own `normalizedMessage` reads.
+
+🚨 **And the issue's evidence table does not track the incident, because the sync is erroring.** That
+incident carries `occurrencesAtLastComment: 2` beside `error: "Resource not accessible by
+integration"` — the GitHub write has been failing since the issue was filed, so #3883 still prints
+*Occurrences 2 / Last seen 2026-09-10 02:30:43Z*. Here that staleness is a mercy: those two really
+were the only `BinaryClickerV2/BinaryToggle` compiles in the record. Had the sync worked, the issue
+would now claim 62 occurrences across 26 pods and two portals for a node that has not been seen
+since. **A stuck syncer and an accurate counter are indistinguishable from the issue page** — check
+`error` and `occurrencesAtLastComment` on the incident before quoting either number.
+
 ### The two cases this has to get right
 
 Both are measured, both from `memex-cloud` on 2026-08-17 (#1787), and
