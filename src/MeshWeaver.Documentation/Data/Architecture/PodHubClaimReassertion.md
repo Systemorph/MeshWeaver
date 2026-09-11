@@ -140,7 +140,7 @@ So the claim is now re-asserted on **every cluster membership change** —
 `IClusterMembershipFeed`, fed on the silo by Orleans' own `ISiloStatusListener`:
 
 ```
-ClaimTriggers()            // immediately, then once per membership change
+ClaimTriggers()            // after Active, then once per membership change
     .Select(_ => ClaimOnce())
     .Switch()              // exactly one claim in flight per address, ever
     .Subscribe(…)
@@ -194,13 +194,15 @@ measurement, and it is stated here rather than glossed. A stronger form (the own
 unreachability directly) has no seam today: the refusal is raised on a silo that does not know who
 the owner is.
 
-The claim's placement during **silo startup** is also not ordered on readiness. `RegisterStream`
-orders its Orleans *stream* subscription on `OrleansStreamingReadiness` (lifecycle stage `Active`)
-and issues the pod-hub claim immediately, unordered — which is why the eagerly-registered
-`mesh/{meshId}` and `cache/{meshId}` hubs burn their whole initial budget in a window where
-prefer-local provably cannot place locally. The membership change that fires when the silo reaches
-`Active` now repairs that, so the fault is closed; the wasted burst and its per-pod startup `Warning`
-remain, and closing *those* is a separate, smaller change.
+The claim's placement during **silo startup** is now ordered on the same
+`OrleansStreamingReadiness` signal as the stream subscription (lifecycle stage `Active`). Before
+#3983/#3984, `RegisterStream` issued the pod-hub claim immediately, unordered. The eagerly-registered
+`mesh/{meshId}` and `cache/{meshId}` hubs therefore called `IPodHubGrain.Attach` before this silo —
+and sometimes before any silo — advertised the grain type. Orleans rejected the invalid placement
+with `Known nodes with grain type: none`; its per-attempt logger produced #3983 while the exhausted
+Polly call produced #3984. The claim now waits for `Active` and then moves off the lifecycle thread
+before touching the grain factory. The membership-change re-assertion remains the repair for a
+mapping lost after startup.
 
 ## Related
 
