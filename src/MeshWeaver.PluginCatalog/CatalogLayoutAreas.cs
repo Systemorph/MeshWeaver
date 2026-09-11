@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Buffers.Text;
 using System.ComponentModel;
 using System.Reactive.Linq;
+using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -591,15 +593,13 @@ public static class CatalogLayoutAreas
         // hand; the installed set is the shell listing plus the records this page read.
         var knownInstalled = installedIds.Union(installedById.Keys);
 
-        var n = 0;
         foreach (var pkg in plan.Packages)
         {
-            n++;
             installedById.TryGetValue(pkg.Id, out var inst);
             container = container.WithView(
                 BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin, plan.Available, knownInstalled,
                     activation),
-                $"pkg-{n}");
+                CardId("pkg", pkg.Id));
         }
 
         if (plan.Kind != CatalogPage.All)
@@ -612,17 +612,21 @@ public static class CatalogLayoutAreas
                 .WithStyle("margin: 24px 0 4px 0;"));
             container = container.WithView(Controls.Markdown(host.Localize("ui.mdOrphanedInstallRecords"))
                 .WithStyle("margin-bottom: 8px;"));
-            var o = 0;
             foreach (var orphan in orphans)
             {
-                o++;
                 container = container.WithView(
-                    BuildOrphanCard(host, orphan, viewerIsGlobalAdmin), $"orphan-{o}");
+                    BuildOrphanCard(host, orphan, viewerIsGlobalAdmin), CardId("orphan", orphan.Id));
             }
         }
 
         return container;
     }
+
+    // ClickedEvent carries an area path; the owner resolves it against CURRENT controls. A row
+    // position can belong to another package after a refresh. Encode the package identity as one
+    // collision-free path segment, and name actions independently of optional card text.
+    private static string CardId(string kind, string packageId) =>
+        $"{kind}-{Base64Url.EncodeToString(Encoding.UTF8.GetBytes(packageId))}";
 
     /// <summary>
     /// The install records this source no longer offers — a record whose package left the registry
@@ -677,7 +681,7 @@ public static class CatalogLayoutAreas
             {
                 RemoveInstallRecord(host, orphan.Id);
                 return Task.CompletedTask;
-            }));
+            }), "remove");
     }
 
     /// <summary>
@@ -749,7 +753,7 @@ public static class CatalogLayoutAreas
                 {
                     InstallPackage(host, source, sourceRef, pkg, catalog, installedIds);
                     return Task.CompletedTask;
-                }));
+                }), "install");
         }
 
         // 🚨 The LAST STEP of the install, said out loud (#1979). Loading a module is
