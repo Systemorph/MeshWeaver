@@ -69,10 +69,10 @@ public class RetiredContextCollectedSignalTest
         var unloads = new CollectibleContextUnloads();
         using var cache = NewCache(unloads);
 
-        // Unload() throws out of the context's Unloading handler. The drain subscription meets it
-        // through Rx's SubscribeSafe, so it lands in the drain's Catch arm: logged at Error, the
-        // context KEPT, nothing thrown at the caller — that behaviour is unchanged here. What this
-        // pins is that the one party WAITING for the unload is told, instead of waiting forever.
+        // Unload() throws out of the context's Unloading handler. CompleteUnload handles it where it
+        // happens — logged at Error, the context KEPT, nothing thrown at the caller (a rethrow would
+        // escape into whichever scan released the last pin). What this pins is that the one party
+        // WAITING for the unload is told, instead of waiting forever.
         LoadHookAndRetire(cache, "Fault1605");
 
         // Awaited with a budget only so a regression FAILS instead of hanging the suite; the

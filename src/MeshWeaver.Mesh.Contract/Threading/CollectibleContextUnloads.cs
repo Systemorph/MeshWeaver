@@ -93,7 +93,11 @@ public sealed class CollectibleContextUnloads
         private readonly CollectibleContextUnloads owner;
         private readonly AsyncSubject<Unit> signal = new();
         private Exception? fault;
-        private int collected;
+        // ONE terminal transition: 0 pending → Collected (1) or Faulted (2), whichever comes first.
+        // A kept (faulted) context can still be collected later if everyone drops it; that must not
+        // turn the abandoned unload into a success or erase the fault (Copilot review, #4042).
+        private int terminal;
+        private const int Pending0 = 0, CollectedState = 1, FaultedState = 2;
 
         internal Retirement(CollectibleContextUnloads owner, long id, string contextName)
         {
@@ -109,9 +113,9 @@ public sealed class CollectibleContextUnloads
 
         internal IObservable<Unit> Signal => signal.AsObservable();
 
-        internal Exception? Fault => Volatile.Read(ref fault);
+        internal Exception? Fault => Volatile.Read(ref terminal) == FaultedState ? Volatile.Read(ref fault) : null;
 
-        internal bool IsCollected => Volatile.Read(ref collected) != 0;
+        internal bool IsCollected => Volatile.Read(ref terminal) == CollectedState;
 
         /// <summary>
         /// The context has really been collected. Called from the sentinel's FINALIZER: it stops
@@ -121,7 +125,7 @@ public sealed class CollectibleContextUnloads
         /// </summary>
         public void Collected()
         {
-            if (Interlocked.Exchange(ref collected, 1) != 0)
+            if (Interlocked.CompareExchange(ref terminal, CollectedState, Pending0) != Pending0)
                 return;
             ThreadPool.UnsafeQueueUserWorkItem(static r =>
             {
@@ -139,7 +143,11 @@ public sealed class CollectibleContextUnloads
         /// </summary>
         public void Faulted(Exception exception)
         {
+            // The first fault is the one recorded; the terminal transition then decides whether it
+            // counts — a context already collected stays collected (the fault is then moot).
             if (Interlocked.CompareExchange(ref fault, exception, null) is not null)
+                return;
+            if (Interlocked.CompareExchange(ref terminal, FaultedState, Pending0) != Pending0)
                 return;
             ThreadPool.UnsafeQueueUserWorkItem(static s => s.subject.OnError(s.exception),
                 (subject: signal, exception), preferLocal: false);

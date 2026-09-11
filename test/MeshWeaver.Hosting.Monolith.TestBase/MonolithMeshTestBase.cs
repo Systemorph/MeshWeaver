@@ -271,20 +271,31 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// a failure traced rather than thrown, so a teardown fault cannot red a suite that passed.
     /// </summary>
     private sealed class SharedMeshProvider(IServiceProvider serviceProvider, string testClassName)
-        : IDisposable
+        : IAsyncDisposable
     {
         /// <summary>The provider every test of the class shares.</summary>
         public IServiceProvider ServiceProvider { get; } = serviceProvider;
 
-        /// <inheritdoc/>
-        public void Dispose()
+        /// <summary>
+        /// Disposes the shared provider, then — like the per-test path (Plugins#1605) — waits until
+        /// every collectible context its mesh retired has REALLY unloaded, so a collection that starts
+        /// next never builds a mesh over this one's unloading contexts. The tracker is resolved BEFORE
+        /// the provider is disposed (resolving afterwards races the scope's own teardown).
+        /// </summary>
+        public async ValueTask DisposeAsync()
         {
+            var unloads = ServiceProvider.GetService<CollectibleContextUnloads>();
             try { (ServiceProvider as IDisposable)?.Dispose(); }
             catch (Exception ex)
             {
                 Fixture.TestTraceLog.AppendPhase(
                     testClassName, "DISPOSE_SHARED_SP_ERROR", 0, $"{ex.GetType().Name}: {ex.Message}");
             }
+            var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
+            Fixture.TestTraceLog.AppendPhase(testClassName,
+                outcome.Fault is not null ? "DISPOSE_SHARED_UNLOAD_FAULTED"
+                : outcome.Retained ? "DISPOSE_SHARED_ALC_RETAINED"
+                : "DISPOSE_SHARED_UNLOADS_COLLECTED", 0, outcome.ToString());
         }
     }
 

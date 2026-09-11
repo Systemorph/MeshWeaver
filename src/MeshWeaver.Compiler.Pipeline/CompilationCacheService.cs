@@ -920,15 +920,20 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
         // Initiate unload outside the lock — the context is collected once all references release.
         // An Unload() that throws (an Unloading handler, raised first, faulting) leaves the context
-        // loaded: report that to whoever waits for it, then let the fault propagate as before.
+        // LOADED. This runs as the OnNext of the drain subscription — synchronously inside Dispose
+        // when the drain was already quiet, but on the thread of the LAST scan's pin release when it
+        // was not — so a rethrow would escape into that scan's Dispose (Copilot review, #4042). It is
+        // handled here instead: logged at Error, and reported to whoever waits for the unload, which
+        // fails the teardown that expected it (DISPOSE_UNLOAD_FAULTED).
         try
         {
             Unload();
         }
         catch (Exception ex)
         {
+            _logger?.LogError(ex,
+                "Unload() of AssemblyLoadContext {ContextName} threw — the context stays LOADED", Name);
             _retirement?.Faulted(ex);
-            throw;
         }
 
             // Diagnostic probe (opt-in, off by default): drive a collection right after the unload so a

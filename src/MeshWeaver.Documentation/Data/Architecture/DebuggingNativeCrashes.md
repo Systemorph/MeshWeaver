@@ -1682,6 +1682,69 @@ Nothing is cancelled and nothing unloads earlier or later than before — teardo
 
 Pinned by `test/MeshWeaver.Compiler.Pipeline.Test/RetiredContextCollectedSignalTest.cs`: a start sequenced on the signal does not run while the context is only `Unload()`-requested, and runs after it is collected; the context **is** collected (so the fix cannot pass by retaining); a faulted unload releases its waiter with the fault; nothing retired means no delay.
 
+#### What held the contexts — System.Text.Json's static accessor cache, measured with gcroot
+
+The first version of the fix waited for every retired context to be collected, and the real suite showed that
+this was not enough. Across three `MeshWeaver.FutuRe.Test` runs, **84** teardowns ended `DISPOSE_ALC_RETAINED`,
+against 81 `DISPOSE_UNLOADS_COLLECTED`. In half the fixtures, three rounds of full collections freed nothing,
+and the next mesh still started over contexts that were only unloading.
+
+**How the holder was found.** A heap dump was taken (`dotnet-dump collect --type Heap`, macOS-native, so SOS
+runs natively) the instant a teardown wrote `DISPOSE_ALC_RETAINED` for `BusinessUnit` and `LocalAnalysis`.
+`gcroot` was then run on each **`LoaderAllocator`** — not on the `AssemblyLoadContext`. An unloading context is
+always strongly held by the runtime's own handle, so its gcroot answers nothing. What decides whether an unload
+can finish is what keeps its `LoaderAllocator` alive.
+
+**What held both.** Both have exactly one strong root, and it is the same one:
+
+```
+HandleTable (strong handle)
+  -> System.Text.Json.Serialization.Metadata.ReflectionEmitCachingMemberAccessor      (static)
+  -> ReflectionEmitCachingMemberAccessor+Cache<(string, Type, MemberInfo)>
+  -> ConcurrentDictionary<…> -> …CacheEntry
+  -> System.Action<object, string>                  (an emitted property setter)
+  -> System.Reflection.Emit.DynamicMethod -> DynamicResolver -> DynamicScope -> List<object>
+  -> System.RuntimeTypeHandle -> System.RuntimeType (the collectible node type)
+  -> System.Reflection.LoaderAllocator
+```
+
+Every other root `gcroot` lists is handle type **10**, which is `HNDTYPE_WEAK_INTERIOR_POINTER` in
+`gcinterface.h`. It is weak and keeps nothing alive; SOS prints it without a name.
+
+**Why the cache has this effect.** On CoreCLR, System.Text.Json emits property accessors and constructors as
+`DynamicMethod`s and shares them through a process-static cache with a **1 s sliding expiry, evicted by a
+200 ms timer**. A dynamic method's scope holds the handle of every type its IL touches. So serialising a
+NodeType-compiled instance even once roots that type's LoaderAllocator from a static field until STJ's timer
+drops the entry.
+
+The unload therefore *finished* whenever that timer fired: typically a second after teardown, while the next
+mesh was already being built. That is the maintainer's "disposal in progress while new instance starting",
+and a timer decided it.
+
+**This is the brief's prime lead, confirmed.** A process-wide library cache holds delegates over types from a
+collectible context, with no eviction on `Unloading`. It has the same shape as the Autofac cache that
+`ReflectionCacheEviction` already purges.
+
+**The fix.** `NodeAssemblyLoadContext` now also registers `JsonMemberAccessorCacheEviction` on `Unloading`. It
+calls STJ's own published hook: the `MetadataUpdateHandler` declared on the assembly, whose static
+`ClearCache(Type[]?)` is what the hot-reload agent calls. That hook clears the member-accessor cache; the
+per-options caches it also clears exist only under hot reload. Live options keep the accessors they already
+hold; the cost is a re-emit when a *new* options instance resolves a type.
+
+**Pinned by** `ATypeSerializedThroughSystemTextJson_IsCollectedAtTeardown_NotWhenStjsTimerFires`, which also
+asserts that the hook still exists, so a future STJ that drops it fails a test instead of silently resuming
+the retention.
+
+**Measured after this fix.** STJ was one holder among several. Over three FutuRe runs with the eviction
+(macOS arm64), **93** teardowns ended `DISPOSE_UNLOADS_COLLECTED` and **45** ended `DISPOSE_ALC_RETAINED`,
+against 81 and 84 before it:
+- 48 teardowns had nothing to wait for;
+- 43 collected everything in 2 rounds;
+- 2 collected everything in 3 rounds.
+
+The contexts still retained are `LocalAnalysis`, `BusinessUnit` and `GroupAnalysis`. What holds them is the
+subject of the next gcroot, below.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is

@@ -118,7 +118,14 @@ every retained FutuRe dump (#12–#16) held **3–7 `NodeAssemblyLoadContext`s m
 instance was built or run, and the zeroed object is the **garbage of a disposed hub** (Autofac child
 registry, STJ polymorphic metadata, `TypeRegistry`) — see DebuggingNativeCrashes.md, *"the MANAGED view
 of sightings #11–#16"*. The GitSync pair (#10/#11, `GetCodeInfo`) is a different branch: no collectible
-context at all, an interior stale reference. And **do not "fix" it by disabling concurrent GC** — that was tried
+context at all, an interior stale reference. 🚨 **When an unload does not finish, gcroot the
+`LoaderAllocator`, never the context** (the runtime's own strong handle always holds an unloading context).
+Measured 2026-09-11: the one strong holder of FutuRe's unfinished unloads was **System.Text.Json's static
+`ReflectionEmitCachingMemberAccessor` cache** (a `DynamicMethod` accessor's scope holds the collectible
+type; 1 s sliding expiry on a 200 ms timer), so contexts were freed when STJ's timer fired — during the
+next mesh. Evicted now on `Unloading` (`JsonMemberAccessorCacheEviction`), like Autofac's. Handle type
+`(10)` in gcroot output is `HNDTYPE_WEAK_INTERIOR_POINTER` — weak, not a root. And **do not "fix" it by
+disabling concurrent GC** — that was tried
 (#1274), changed nothing measurable, and was removed. Read the instruction + registers, not the
 function name: the frame moved across `background_sweep` → `plan_phase` → `find_first_object` →
 `background_mark_simple1` (2026-09-03) while the fault did not. 🚨 **And sighting #10 (2026-09-06)
