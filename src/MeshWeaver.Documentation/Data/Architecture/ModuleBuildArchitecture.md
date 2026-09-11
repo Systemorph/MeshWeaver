@@ -419,9 +419,10 @@ keeps the supersede model in the next section.
    `minMeshVersion`/`requires` ranges, and an instance adopts it only when they hold. Consistency is
    forced inside a dependency network (rule 2) and never across unrelated modules.
 8. **No job spans more than one atomic unit — and the atomic unit IS the dependency network.**
-   Relayed by the DeepSign session on 2026-09-11 as the maintainer's words — *"we must not have any
-   job going across the atomic unit"*, *"atomic unit == all dependency patterns in repo"* — and to be
-   confirmed by him. A unit is a changed package together with everything that depends on it (rule 2's
+   The maintainer, 2026-09-11 ~19:40–19:50Z, typed in the DeepSign session (Claude Code session
+   01R6Cbf8RzXXHJvsjMBYLmjg) and relayed from there verbatim: *"we wanted to disentangle in atomic
+   units"* · *"we must not have any job going across the atomic unit"* · *"(atomic unit == all
+   dependency patterns in repo)"*. A unit is a changed package together with everything that depends on it (rule 2's
    network). One job covering one whole network is right; a job that covers two UNRELATED networks
    couples their verdicts — one network's red or flake holds the other, and neither can be skipped on
    its own. The shape is the module lane's: one leg per affected network, and a receipt-count aggregate
