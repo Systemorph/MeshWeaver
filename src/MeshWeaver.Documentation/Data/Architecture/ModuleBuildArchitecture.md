@@ -418,14 +418,16 @@ keeps the supersede model in the next section.
 7. **Compatibility is decided by floors.** A bundle states the framework it was built against and its
    `minMeshVersion`/`requires` ranges, and an instance adopts it only when they hold. Consistency is
    forced inside a dependency network (rule 2) and never across unrelated modules.
-8. **No job spans more than one atomic unit.** Relayed by the DeepSign session on 2026-09-11 as the
-   maintainer's words — *"we must not have any job going across the atomic unit"* — and to be
-   confirmed by him. A job that builds, tests or gates several modules (or several test projects)
-   couples their verdicts: one unit's red or flake holds the others, and the job cannot be skipped
-   for a unit that did not change. The shape is the module lane's: one job per unit, and a
-   receipt-count aggregate (`… / All selected bundles built`) as the one required context. Two items
-   below are therefore violations to remove, not costs to accept: the one-workspace build and the
-   portal-host shards that mix test projects.
+8. **No job spans more than one atomic unit — and the atomic unit IS the dependency network.**
+   Relayed by the DeepSign session on 2026-09-11 as the maintainer's words — *"we must not have any
+   job going across the atomic unit"*, *"atomic unit == all dependency patterns in repo"* — and to be
+   confirmed by him. A unit is a changed package together with everything that depends on it (rule 2's
+   network). One job covering one whole network is right; a job that covers two UNRELATED networks
+   couples their verdicts — one network's red or flake holds the other, and neither can be skipped on
+   its own. The shape is the module lane's: one leg per affected network, and a receipt-count aggregate
+   (`… / All selected bundles built`) as the one required context. Two items below are therefore
+   violations to remove, not costs to accept: a workspace build spanning unrelated networks, and
+   portal-host shards that mix test projects from unrelated networks.
 
 ### What it costs, and what it does not cover
 
@@ -436,11 +438,11 @@ keeps the supersede model in the next section.
   red is on the trunk and names the module.
 * **The seal window.** A module built while a platform release is still sealing can be built against
   the outgoing platform; the release run, and at the latest the daily poll, rebuild it.
-* **One workspace per run — a rule 8 violation.** A push touching two unrelated networks still compiles them in one
+* **One workspace per run — a rule 8 violation when the run spans unrelated networks.** A push touching two unrelated networks still compiles them in one
   fail-fast workspace, so a compile error in one stops the other's legs in that run. A workspace per
   network is the next step.
 * **Compiled test projects and the portal-host shards have no content key, and each shard mixes
-  test projects in one job (rule 8).** A module is skipped
+  test projects of unrelated networks in one job (rule 8).** A module is skipped
   when its key is already published, but a `src/` test project has no key and no `Tested` record:
   `node-repo-project-scope.py` narrows WHICH suites run, and every selected suite re-runs from
   scratch on every push. Measured on Plugins run 34618468550 (a pull request, 2026-09-11): the four
