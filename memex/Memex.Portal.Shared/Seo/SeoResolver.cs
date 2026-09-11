@@ -1,6 +1,8 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Graph;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -48,9 +50,40 @@ public sealed record PageIcon(string Href, string? Type)
 /// </summary>
 public sealed record SeoPageData(MeshNode Node, string? Description, string? Image)
 {
-    /// <summary>The node's pre-rendered markdown body, when it carries one — served inside
-    /// <c>&lt;noscript&gt;</c> so non-JS crawlers index the actual page content.</summary>
+    /// <summary>The node's pre-rendered markdown body, when the node CARRIES one. Prefer
+    /// <see cref="Body"/>: this is null for every node whose markdown was never mirrored onto the
+    /// node (a plugin cover's <c>body</c>, a node read through a projection that drops the mirror),
+    /// and a crawler served nothing for exactly those pages (#4056).</summary>
     public string? PreRenderedHtml => Node.PreRenderedHtml;
+
+    /// <summary>
+    /// The part of the request path BEYOND the resolved node — a layout-area route
+    /// (<c>/{node}/{area}/{id}</c>) or a path that does not exist and fell back to its nearest
+    /// ancestor. Null when the URL named the node exactly. The head reads it to keep a fallback
+    /// page out of the index: the framework answers such a URL with the ancestor and HTTP 200,
+    /// which a search engine otherwise files as a soft 404 against the ancestor.
+    ///
+    /// <para><c>init</c> property, not a primary-constructor parameter — the record's constructor is
+    /// a binary contract with every module compiled against it (see <see cref="PageIcon.Rel"/>).</para>
+    /// </summary>
+    public string? Remainder { get; init; }
+
+    /// <summary>
+    /// 🚨 THE PAGE BODY A CRAWLER READS — the node's content as HTML, rendered on the server so the
+    /// FIRST HTTP response carries it. A Blazor Server page otherwise ships an empty
+    /// <c>&lt;body&gt;</c> and fills it over the circuit, and a crawler does not hold a circuit:
+    /// measured 2026-09-11 on memex.meshweaver.cloud, every public page — documentation, course
+    /// lessons, plugin covers — arrived at Googlebot with a rich head and no text at all, and the
+    /// host had zero pages in Google's index.
+    ///
+    /// <para>Resolution order: the prerendered HTML the node already carries; else the
+    /// <c>prerenderedHtml</c> member of its content; else its markdown (<c>content</c> for a
+    /// markdown node, <c>body</c> for a plugin cover) rendered now. Null when the node has no
+    /// document-shaped content (a data node, a pure layout-area page). Only ever produced for a
+    /// node the <see cref="AnonymousGate"/> admitted, like every other member here — a gated
+    /// chapter is refused before this is computed.</para>
+    /// </summary>
+    public string? Body => PreRenderedHtml ?? SeoResolver.RenderBody(Node);
 }
 
 /// <summary>
@@ -105,6 +138,11 @@ public static class SeoResolver
                     .Take(1)
                     .Select(allowed => allowed
                         ? new SeoPageData(node, ExtractDescription(node), ShareImage(node))
+                        {
+                            Remainder = string.IsNullOrEmpty(resolution.Remainder)
+                                ? null
+                                : resolution.Remainder,
+                        }
                         : null))
             .Timeout(TimeSpan.FromSeconds(3))
             .Catch<SeoPageData?, Exception>(_ => Observable.Return<SeoPageData?>(null));
@@ -130,6 +168,24 @@ public static class SeoResolver
             .FirstAsync()
             .ObserveCompletion(ex => logger?.LogWarning(
                 ex, "SEO resolution for '{Path}' faulted after the head had already been produced", path));
+    }
+
+    /// <summary>
+    /// The node's document body as HTML, for <see cref="SeoPageData.Body"/>: the content's own
+    /// <c>prerenderedHtml</c> when it carries one, else its markdown — <c>content</c> (a markdown
+    /// node) or <c>body</c> (a plugin cover) — rendered through the SAME pipeline the portal renders
+    /// it with, so the crawler reads what a visitor reads. Both content shapes (typed record,
+    /// untyped JSON) resolve through <see cref="ContentString"/>. Null for content that is not a
+    /// document. Pure: no hub, no IO.
+    /// </summary>
+    public static string? RenderBody(MeshNode node)
+    {
+        if (ContentString(node, "prerenderedHtml") is { Length: > 0 } prerendered)
+            return prerendered;
+        var markdown = FirstNonEmpty(ContentString(node, "content"), ContentString(node, "body"));
+        return markdown is null
+            ? null
+            : MarkdownContent.Parse(markdown, node.Path, node.Path).PrerenderedHtml;
     }
 
     /// <summary>
@@ -320,6 +376,32 @@ public static class SeoResolver
             JsonElement or null => null,
             var typed => TypedMember(typed, property) as string,
         };
+
+    /// <summary>
+    /// A string-to-string map member of the node's content, by camelCase JSON name (both shapes) —
+    /// e.g. a course's <c>translations</c> (<c>{"de-CH": "AgenticPrimerDe"}</c>), which the head
+    /// turns into <c>hreflang</c> links. Empty when absent or not a map of strings.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ContentStringMap(MeshNode node, string property)
+    {
+        switch (node.Content)
+        {
+            case JsonElement { ValueKind: JsonValueKind.Object } je
+                when je.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Object:
+                return value.EnumerateObject()
+                    .Where(p => p.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(p.Value.GetString()))
+                    .ToDictionary(p => p.Name, p => p.Value.GetString()!, StringComparer.OrdinalIgnoreCase);
+            case JsonElement or null:
+                return ImmutableDictionary<string, string>.Empty;
+            default:
+                return TypedMember(node.Content, property) switch
+                {
+                    IReadOnlyDictionary<string, string> typed => typed,
+                    IDictionary<string, string> typed => new Dictionary<string, string>(typed, StringComparer.OrdinalIgnoreCase),
+                    _ => ImmutableDictionary<string, string>.Empty,
+                };
+        }
+    }
 
     /// <summary>A decimal member of the node's content, by camelCase JSON name (both shapes).</summary>
     public static decimal? ContentDecimal(MeshNode node, string property) =>

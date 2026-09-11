@@ -225,6 +225,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Controls That Cannot Fail](ControlsThatCannotFail)
 - [Catalog Action Identity](CatalogActionIdentity) — a retained click keeps its package when the catalog refreshes
 - [Link Previews](LinkPreviews)
+- [Public Web Presence](PublicWebPresence) — one public host, a body in the first response, a sitemap that descends to every page a stranger may open
 - [Local-First Client & Bootstrap](LocalFirstClient)
 - [PDF Export — one browser, two fidelities](PixelFaithfulExport)
 - [UI Extensibility](UiExtensibility)
