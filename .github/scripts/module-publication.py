@@ -354,6 +354,17 @@ def _needs_output(value, output: str) -> str | None:
     return m.group(1) if m and m.group(2) == output else None
 
 
+def _publish_mode(with_: dict) -> str:
+    """The pack call's `publish-mode` EXACTLY as the lane will compare it — never stripped.
+
+    The lane tests `inputs.publish-mode == 'staged'` and `case "$MODE" in direct|staged)`, both
+    exact. Normalising here (`' staged '` -> `staged`) would let this check pass a value the lane
+    reads as neither arm, so the two would disagree about what the call does.
+    """
+    raw = with_.get("publish-mode", "direct")
+    return raw if isinstance(raw, str) else str(raw)
+
+
 def _calls(jobs: dict, lane: str) -> dict[str, dict]:
     return {jid: job for jid, job in jobs.items()
             if isinstance(job, dict) and isinstance(job.get("uses"), str)
@@ -432,7 +443,7 @@ def check_callers(root: Path) -> int:
                 problems.append(f"{wf.name}: `{pid}` reads needs.{src}.outputs but `{src}` is not in "
                                 "its own `needs:` — that context resolves only for a job named there.")
             pw = packs[src].get("with") or {}
-            mode = str(pw.get("publish-mode", "direct")).strip()
+            mode = _publish_mode(pw)
             if mode in PUBLISH_MODES and mode != "staged":
                 problems.append(f"{wf.name}: `{pid}` publishes `{src}`, whose publish-mode is "
                                 f"`{mode}`, not `staged` — that call POSTs in-leg itself and stages "
@@ -447,10 +458,10 @@ def check_callers(root: Path) -> int:
 
         for kid, kj in sorted(packs.items()):
             kw = kj.get("with") or {}
-            mode = str(kw.get("publish-mode", "direct")).strip()
+            mode = _publish_mode(kw)
             if mode not in PUBLISH_MODES:
                 problems.append(
-                    f"{wf.name}: `{kid}` passes `publish-mode: {mode}` — it must be the literal "
+                    f"{wf.name}: `{kid}` passes `publish-mode: {mode!r}` — it must be the literal "
                     "`staged` or `direct`. An expression resolves only at run time, so this check "
                     "could not tell whether the call stages (and needs a publisher) or POSTs in-leg; "
                     "a staged call nobody publishes would then pass here and hand the registry nothing.")
@@ -899,6 +910,9 @@ jobs:
               rc == 1 and "expression" in out, out)
         rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: ${{ vars.PUBLISH_MODE }}"))
         check("a `publish-mode` passed as an expression is caught (staged or direct cannot be read)",
+              rc == 1 and "must be the literal" in out, out)
+        rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: ' staged '"))
+        check("a padded `publish-mode` is caught — the lane compares it exactly, so it is neither arm",
               rc == 1 and "must be the literal" in out, out)
         rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: stagd"))
         check("an unknown literal `publish-mode` is caught", rc == 1 and "must be the literal" in out, out)
