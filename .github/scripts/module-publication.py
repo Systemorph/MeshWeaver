@@ -267,6 +267,12 @@ def check_caller(workflow: Path, uses_suffix: str, required_raw: str, unrelated_
 
     graph = _job_graph(jobs)
     problems: list[str] = []
+    for name, reason in sorted(unrelated.items()):
+        if not reason:
+            problems.append(
+                f"`unrelated-jobs` exempts `{name}` with NO reason. An exemption is what excuses a job "
+                "that could still fail after the hand-over from the verdict, and one that says nothing "
+                "is indistinguishable from one nobody meant — say why it validates no source.")
     for pub in publishers:
         job = jobs[pub] or {}
         anc = _ancestors(graph, pub)
@@ -318,6 +324,8 @@ def check_caller(workflow: Path, uses_suffix: str, required_raw: str, unrelated_
 # ══════════════════════════════════ check-callers ══════════════════════════════════
 PACK_LANE = "node-repo-module-pack.yml"
 PUBLISH_LANE = "node-repo-module-publish.yml"
+#: The only values the pack lane accepts (its `select` job refuses anything else at run time).
+PUBLISH_MODES = ("direct", "staged")
 
 
 def _norm_condition(value) -> str:
@@ -344,6 +352,17 @@ def _needs_output(value, output: str) -> str | None:
     m = re.fullmatch(r"\$\{\{\s*needs\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}",
                      str(value or "").strip())
     return m.group(1) if m and m.group(2) == output else None
+
+
+def _publish_mode(with_: dict) -> str:
+    """The pack call's `publish-mode` EXACTLY as the lane will compare it — never stripped.
+
+    The lane tests `inputs.publish-mode == 'staged'` and `case "$MODE" in direct|staged)`, both
+    exact. Normalising here (`' staged '` -> `staged`) would let this check pass a value the lane
+    reads as neither arm, so the two would disagree about what the call does.
+    """
+    raw = with_.get("publish-mode", "direct")
+    return raw if isinstance(raw, str) else str(raw)
 
 
 def _calls(jobs: dict, lane: str) -> dict[str, dict]:
@@ -424,8 +443,8 @@ def check_callers(root: Path) -> int:
                 problems.append(f"{wf.name}: `{pid}` reads needs.{src}.outputs but `{src}` is not in "
                                 "its own `needs:` — that context resolves only for a job named there.")
             pw = packs[src].get("with") or {}
-            mode = str(pw.get("publish-mode", "direct")).strip()
-            if mode != "staged":
+            mode = _publish_mode(pw)
+            if mode in PUBLISH_MODES and mode != "staged":
                 problems.append(f"{wf.name}: `{pid}` publishes `{src}`, whose publish-mode is "
                                 f"`{mode}`, not `staged` — that call POSTs in-leg itself and stages "
                                 "nothing, so this lane would refuse on an empty staged set.")
@@ -439,7 +458,14 @@ def check_callers(root: Path) -> int:
 
         for kid, kj in sorted(packs.items()):
             kw = kj.get("with") or {}
-            mode = str(kw.get("publish-mode", "direct")).strip()
+            mode = _publish_mode(kw)
+            if mode not in PUBLISH_MODES:
+                problems.append(
+                    f"{wf.name}: `{kid}` passes `publish-mode: {mode!r}` — it must be the literal "
+                    "`staged` or `direct`. An expression resolves only at run time, so this check "
+                    "could not tell whether the call stages (and needs a publisher) or POSTs in-leg; "
+                    "a staged call nobody publishes would then pass here and hand the registry nothing.")
+                continue
             wired = sorted(pid for pid, pj in pubs.items()
                            if _needs_output((pj.get("with") or {}).get("lane"), "lane") == kid)
             if mode == "staged" and not wired:
@@ -803,6 +829,10 @@ jobs:
         check("…and passes once it is DECLARED unrelated with a reason", rc == 0, out)
 
         rc, out = caller(good_caller.replace(
+            "  summary:\n    needs: [publish]\n", "  summary:\n"), unrelated="summary:")
+        check("MUTATION: an unrelated-jobs entry with NO reason is caught", rc == 1 and "NO reason" in out, out)
+
+        rc, out = caller(good_caller.replace(
             "node-repo-module-publish.yml@abc", "node-repo-tag-modules.yml@abc"))
         check("a workflow with NO publishing job refuses (empty denominator)", rc == 1, out)
 
@@ -878,6 +908,17 @@ jobs:
                                         "required-jobs: ${{ vars.REQUIRED }}"))
         check("a `required-jobs` passed as an expression is caught (the static half could not read it)",
               rc == 1 and "expression" in out, out)
+        rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: ${{ vars.PUBLISH_MODE }}"))
+        check("a `publish-mode` passed as an expression is caught (staged or direct cannot be read)",
+              rc == 1 and "must be the literal" in out, out)
+        rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: ' staged '"))
+        check("a padded `publish-mode` is caught — the lane compares it exactly, so it is neither arm",
+              rc == 1 and "must be the literal" in out, out)
+        rc, out = callers(wired.replace("publish-mode: staged", "publish-mode: stagd"))
+        check("an unknown literal `publish-mode` is caught", rc == 1 and "must be the literal" in out, out)
+        rc, out = callers(wired.replace("required-jobs: validate modules gate",
+                                        "required-jobs: validate modules\n      unrelated-jobs: 'gate:'"))
+        check("MUTATION pre-merge: a gate exempted with an EMPTY reason is caught", rc == 1 and "NO reason" in out, out)
         direct = wired.split("  publish-modules:")[0].replace("publish-mode: staged", "publish-mode: direct")
         rc, out = callers(direct)
         check("an in-leg (direct) publisher is NOT refused, but is NAMED", rc == 0 and "IN-LEG" in out, out)

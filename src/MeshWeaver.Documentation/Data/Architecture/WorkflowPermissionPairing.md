@@ -144,7 +144,7 @@ the new pair's grant before either half merges. The marker is deliberately narro
 |---|---|
 | `pending:` row, caller not in the repository yet | passes, and prints the reason |
 | the same row with no marker | **red** — a caller deleted and its row forgotten describes a repository that does not exist |
-| `pending:` with an empty reason | **red** in `--assert-fleet-row` **and** in `--fleet`, so core refuses it before any satellite sees it |
+| `pending:` with an empty reason | **red** in `--assert-fleet-row` (whether or not the caller has landed) **and** in `--fleet`, so core refuses it before any satellite sees it |
 | `pending:` row, caller present with exactly its grant | passes; the note says the marker is spent |
 | `pending:` row, caller present with a lower grant | **red** — the marker excuses absence only, never a mismatch |
 
@@ -215,7 +215,7 @@ The falsification that closes the loop, run on this tree:
 | | pairing mode | fleet mode |
 |---|---|---|
 | `id-token: write` injected on `pack` | **exit 0** (3 pairs, 0 violations) | **exit 1** — names `node-repo-module-pack.yml#pack` and `MeshWeaver.Plugins ci.yml#modules-floor` |
-| tree restored | exit 0 | **exit 0** (45 pairs) |
+| tree restored | exit 0 | **exit 0** (46 pairs since #3878's pending row; 45 when measured) |
 
 The mode the self-test ran in is **printed**, and so is the denominator (`N pair(s) resolved`), green
 or red — a check pointed at the wrong root cannot tick like a clean measurement.

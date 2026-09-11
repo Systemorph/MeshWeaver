@@ -446,8 +446,17 @@ def assert_fleet_row(root: str, repo: str, roster_path: str, platform_repo: str)
         label = f"{row.get('workflow')}#{row.get('job')} -> {row.get('lane')}"
         if _row_key(row) in present_keys:
             if "pending" in row:
-                print(f"  note: {label} is still marked `pending:` in the roster and this repository "
-                      f"now HAS it — the marker is spent; remove it from {platform_repo}.")
+                # The reason is validated BEFORE the marker is treated as spent: an empty one is RED
+                # whether or not the caller has landed, exactly as `--fleet` reads it.
+                if not str(row.get("pending") or "").strip():
+                    out.append(
+                        f"fleet roster: {repo}'s row for {label} is marked `pending:` with no reason. An "
+                        f"exemption that says nothing is indistinguishable from one nobody meant — "
+                        f"and this caller has landed, so the marker is spent: remove it from "
+                        f"{platform_repo}.")
+                else:
+                    print(f"  note: {label} is still marked `pending:` in the roster and this "
+                          f"repository now HAS it — the marker is spent; remove it from {platform_repo}.")
             continue
         pending = row.get("pending")
         if pending is None:
@@ -662,6 +671,8 @@ def _pending_cases(fleet: str) -> list[tuple[str, bool]]:
          verdict(dict(arriving, pending="  "), []) != []),
         ("a SPENT marker (the caller has landed, exact grant) passes and is compared key for key",
          verdict(pending, [arriving]) == []),
+        ("a SPENT marker with an EMPTY reason is caught too — the reason is read before the match",
+         verdict(dict(arriving, pending=""), [arriving]) != []),
         ("a `pending:` marker cannot launder a LOWERED grant once the caller lands",
          verdict(pending, [lowered]) != []),
     ]
