@@ -112,7 +112,10 @@ public static class InstanceTokenEndpoints
                 return keys.Resolve().Select(material =>
                 {
                     var token = SyncAccessToken.Mint(
-                        caller.Instance.InstanceId, caller.Instance.KeyHash, effective, now, lifetime,
+                        // Bound to the key the caller PRESENTED — during a rotation that may be the
+                        // staged key, which the commit promotes, so the token outlives the commit
+                        // instead of dying with the key it was not minted from (MeshWeaver#2802).
+                        caller.Instance.InstanceId, caller.PresentedKeyHash ?? caller.Instance.KeyHash, effective, now, lifetime,
                         material.Current, Issuer(http));
                     var claims = SyncAccessToken.Verify(token, now, material.Current)!;
 

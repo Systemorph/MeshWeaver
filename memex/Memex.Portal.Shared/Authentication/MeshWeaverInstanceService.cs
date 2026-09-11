@@ -428,50 +428,161 @@ public sealed class MeshWeaverInstanceService(
                 "keyHash must be the lowercase SHA-256 hex of the raw key (64 hex chars) — the registry "
                 + "stores hashes only, and this one arrived in the wrong shape", nameof(keyHash)));
 
-        var workspace = hub.GetWorkspace();
-        return workspace.GetMeshNodeStream(instancePath)
-            .Where(node => node is not null)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .SelectMany(node =>
-            {
-                var instance = node!.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
-                    ?? throw new InvalidOperationException($"Node {instancePath} is not a MeshWeaverInstance.");
-                if (string.Equals(instance.KeyHash, keyHash, StringComparison.Ordinal))
-                {
-                    logger.LogInformation("Instance {InstanceId} already carries key hash {Prefix}… — nothing to adopt",
-                        instance.InstanceId, InstanceKeys.HashPrefix(keyHash));
-                    return Observable.Return(Unit.Default);
-                }
-                var previousHash = instance.KeyHash;
-                return WriteIndex(keyHash, instancePath, instance.InstanceId)
-                    .SelectMany(_ => workspace.GetMeshNodeStream(instancePath)
-                        .Update(current => current with
-                        {
-                            Content = (current.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
-                                       ?? instance) with
-                            {
-                                KeyHash = keyHash,
-                                KeyIssuedAt = DateTimeOffset.UtcNow,
-                            },
-                        }))
-                    .SelectMany(_ => DeleteIndex(previousHash))
-                    .Select(_ =>
-                    {
-                        logger.LogInformation("Adopted rotated key for instance {InstanceId} (hash prefix {Prefix}); previous index entry removed",
-                            instance.InstanceId, InstanceKeys.HashPrefix(keyHash));
-                        return Unit.Default;
-                    });
-            });
+        // 🚨 The same transition machinery as stage/commit/revoke (InstanceKeyRotation.Adopt): an
+        // immediate adoption supersedes a staged rotation, so a staged key is retired even when the
+        // adopted hash is ALREADY current — the idempotent short-cut used to return first and leave a
+        // staged key nobody installed authenticating (Copilot review on #4055).
+        return ApplyKeyTransition(instancePath,
+                (instance, now) => InstanceKeyRotation.Adopt(instance, keyHash, now), "Adopted")
+            .Select(_ => Unit.Default);
     }
 
     /// <inheritdoc cref="IInstanceKeyRegistry.AdoptKeyHash"/>
     /// <remarks>Resolves the instance NODE by id first — the operator knows the deployment's
     /// instance id, never the owner's node path — then adopts on that path.</remarks>
-    IObservable<Unit> IInstanceKeyRegistry.AdoptKeyHash(string instanceId, string keyHash)
+    IObservable<Unit> IInstanceKeyRegistry.AdoptKeyHash(string instanceId, string keyHash) =>
+        ResolveInstancePath(instanceId).SelectMany(path => AdoptKeyHash(path, keyHash));
+
+    /// <inheritdoc cref="IInstanceKeyRegistry.RevokeKey"/>
+    /// <remarks>
+    /// 🚨 A GLOBAL ADMINISTRATOR's act (<c>hub.IsGlobalAdmin()</c>, read off the caller's own
+    /// identity): it cuts an instance off by id, with no key presented, so
+    /// nothing short of the platform-admin grant may authorise it. The record's writes then run as
+    /// System, because the instance lives in its owner's partition, which a platform admin — not a
+    /// data superuser — cannot write.
+    /// </remarks>
+    IObservable<Unit> IInstanceKeyRegistry.RevokeKey(string instanceId) =>
+        hub.IsGlobalAdmin()
+            .Take(1)
+            .SelectMany(isAdmin => isAdmin
+                ? ResolveInstancePath(instanceId)
+                    .SelectMany(path => ApplyKeyTransition(path,
+                        (instance, now) => InstanceKeyRotation.RevokeAll(instance, now), "Revoked every"))
+                    .Select(_ => Unit.Default)
+                : Observable.Throw<Unit>(new UnauthorizedAccessException(
+                    $"revoking the keys of instance '{instanceId}' is a global administrator's act on the registry")));
+
+    /// <summary>
+    /// STAGES <paramref name="newHash"/> as the instance's next key — the first phase of a two-phase
+    /// rotation (<see cref="InstanceKeyRotation.Stage"/>, MeshWeaver#2802). Authorised by the hash of
+    /// the key the caller PRESENTED, which must be one of this instance's keys; afterwards both that
+    /// key and the new one authenticate, so nothing the instance holds stops working until the new
+    /// key has been proven to reach it (<see cref="CommitStagedKey"/>). Only hashes cross this
+    /// method. A refusal is an <see cref="InstanceKeyRefusedException"/> and writes nothing.
+    /// </summary>
+    /// <param name="instancePath">The <c>MeshWeaverInstance</c> node the presented key resolved to.</param>
+    /// <param name="presentedHash">Hash of the key the caller authenticated with.</param>
+    /// <param name="newHash">Lowercase SHA-256 hex of the new raw key.</param>
+    public IObservable<MeshWeaverInstance> StageKeyHash(string instancePath, string presentedHash, string newHash) =>
+        ApplyKeyTransition(instancePath,
+            (instance, now) => InstanceKeyRotation.Stage(instance, presentedHash, newHash, now), "Staged");
+
+    /// <summary>
+    /// COMMITS the staged key — the second phase (<see cref="InstanceKeyRotation.Commit"/>). The
+    /// caller presents the STAGED key, which is the proof that the key the instance reads is the new
+    /// one; the old current key's index entry is deleted and it stops authenticating.
+    /// </summary>
+    /// <param name="instancePath">The <c>MeshWeaverInstance</c> node the presented key resolved to.</param>
+    /// <param name="presentedHash">Hash of the key the caller authenticated with.</param>
+    public IObservable<MeshWeaverInstance> CommitStagedKey(string instancePath, string presentedHash) =>
+        ApplyKeyTransition(instancePath,
+            (instance, now) => InstanceKeyRotation.Commit(instance, presentedHash, now), "Committed");
+
+    /// <summary>
+    /// REVOKES the presented key without a successor (<see cref="InstanceKeyRotation.RevokePresented"/>)
+    /// — for a key found somewhere it should not be, revoked by whoever can read it there, without
+    /// anybody having to know its value.
+    /// </summary>
+    /// <param name="instancePath">The <c>MeshWeaverInstance</c> node the presented key resolved to.</param>
+    /// <param name="presentedHash">Hash of the key the caller authenticated with.</param>
+    public IObservable<MeshWeaverInstance> RevokePresentedKey(string instancePath, string presentedHash) =>
+        ApplyKeyTransition(instancePath,
+            (instance, now) => InstanceKeyRotation.RevokePresented(instance, presentedHash, now), "Revoked");
+
+    /// <summary>
+    /// Applies one key transition: the NEW index entry first (so there is no window where a valid key
+    /// resolves to nothing), then the instance record, then the deletion of every retired hash's
+    /// index entry (the instance record is the authority, so a retired hash stops authenticating the
+    /// moment the record is written; the deletion removes the routing hint as well). The record
+    /// write sets only the key fields, onto the CURRENT content, so a concurrent
+    /// <see cref="MeshWeaverInstance.LastSeenAt"/> stamp is never reverted.
+    /// </summary>
+    private IObservable<MeshWeaverInstance> ApplyKeyTransition(
+        string instancePath, Func<MeshWeaverInstance, DateTimeOffset, InstanceKeyTransition> transition, string verb)
+    {
+        var workspace = hub.GetWorkspace();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // 🚨 A FRESH point read, not the node stream's first frame. The stream replays the last
+        // value it holds, and the frame that arrives first can predate the write the PREVIOUS call
+        // in this rotation just made — measured on CI (#4055): an adoption read an instance whose
+        // staged key was not in its snapshot yet, decided the hash was new, and tried to write an
+        // index entry the stage had already created ("Node already exists"). The same staleness
+        // would make a COMMIT refuse a perfectly good staged key as "not a key of this instance",
+        // which is the worse half. GetMeshNode re-probes rather than replaying.
+        return accessService.RunAsSystem(() => hub.GetMeshNode(instancePath, TimeSpan.FromSeconds(10)).Take(1))
+            .SelectMany(node =>
+            {
+                if (node is null)
+                    throw new InvalidOperationException(
+                        $"no MeshWeaverInstance node at '{instancePath}' — a key transition acts on a registered instance");
+                var instance = node.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)
+                    ?? throw new InvalidOperationException($"Node {instancePath} is not a MeshWeaverInstance.");
+                var step = transition(instance, DateTimeOffset.UtcNow);
+                if (step.Refusal is { } refusal)
+                    return Observable.Throw<MeshWeaverInstance>(new InstanceKeyRefusedException(instance.InstanceId, refusal));
+                if (!step.Changed)
+                    return Observable.Return(instance);
+
+                var indexed = step.Indexed is { } hash
+                    ? WriteIndex(hash, instancePath, instance.InstanceId).Select(_ => Unit.Default)
+                    : Observable.Return(Unit.Default);
+                var next = step.Next;
+                return indexed
+                    .SelectMany(_ => Observable.Defer(() =>
+                    {
+                        // The record is the owner's node, in the owner's partition: the registry
+                        // writes it as System — it already decided the caller holds a key of THIS
+                        // instance (or is a global admin), which is the only authority a
+                        // key-lifecycle call carries. Same Defer/Finally discipline as WriteIndex.
+                        var disposable = accessService.ImpersonateAsSystem();
+                        return workspace.GetMeshNodeStream(instancePath)
+                            .Update(current => current with
+                            {
+                                Content = (current.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions) ?? instance) with
+                                {
+                                    KeyHash = next.KeyHash,
+                                    KeyIssuedAt = next.KeyIssuedAt,
+                                    PendingKeyHash = next.PendingKeyHash,
+                                    PendingKeyIssuedAt = next.PendingKeyIssuedAt,
+                                    KeyRevokedAt = next.KeyRevokedAt,
+                                },
+                            })
+                            .Finally(() => disposable.Dispose());
+                    }))
+                    .SelectMany(_ => step.Retired.Select(DeleteIndex).Concat().DefaultIfEmpty(Unit.Default).LastAsync())
+                    .Select(_ =>
+                    {
+                        logger.LogInformation(
+                            "{Verb} key for instance {InstanceId}: current {Current}, staged {Staged}, retired [{Retired}]",
+                            verb, instance.InstanceId,
+                            string.IsNullOrEmpty(next.KeyHash) ? "none" : InstanceKeys.HashPrefix(next.KeyHash) + "…",
+                            string.IsNullOrEmpty(next.PendingKeyHash) ? "none" : InstanceKeys.HashPrefix(next.PendingKeyHash) + "…",
+                            string.Join(", ", step.Retired.Select(h => InstanceKeys.HashPrefix(h) + "…")));
+                        return next;
+                    });
+            });
+    }
+
+    /// <summary>
+    /// The path of the instance registered as <paramref name="instanceId"/> in THIS registry's store,
+    /// or a failure naming the id. 🚨 Never a silent no-op: a lookup on a store that does not hold the
+    /// instance (a portal that is not the registry) must say so, or a rotation would believe it had
+    /// adopted a key that the real registry never saw.
+    /// </summary>
+    private IObservable<string> ResolveInstancePath(string instanceId)
     {
         if (string.IsNullOrWhiteSpace(instanceId))
-            return Observable.Throw<Unit>(new ArgumentException("instanceId is required", nameof(instanceId)));
+            return Observable.Throw<string>(new ArgumentException("instanceId is required", nameof(instanceId)));
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         // An instance is keyed by its id but LIVES under whichever user registered it
@@ -496,9 +607,8 @@ public sealed class MeshWeaverInstanceService(
                     string.Equals(n.Id, instanceId, StringComparison.Ordinal)
                     && !string.Equals(n.Namespace, MeshWeaverInstanceNodeType.IndexNamespace, StringComparison.Ordinal));
                 return node?.Path is null
-                    ? Observable.Throw<Unit>(new InvalidOperationException(
-                        $"no MeshWeaverInstance is registered as '{instanceId}' — nothing to rotate"))
-                    : AdoptKeyHash(node.Path, keyHash);
+                    ? Observable.Throw<string>(new InstanceNotRegisteredException(instanceId))
+                    : Observable.Return(node.Path);
             });
     }
 
@@ -613,7 +723,24 @@ public sealed class MeshWeaverInstanceService(
         {
             var disposable = accessService.SwitchAccessContext(
                 new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" });
-            return nodeFactory.CreateNode(indexNode).Finally(() => disposable.Dispose());
+            return nodeFactory.CreateNode(indexNode)
+                // 🚨 Writing the SAME entry twice is not a failure — a rotation can legitimately
+                // re-derive an index it already wrote (a re-run, or a read that lagged). But a
+                // DIFFERENT instance behind the same 12-hex prefix is a real collision and must
+                // stay loud: the older key's routing would be silently repointed, and it would stop
+                // authenticating with nothing said (#4055).
+                .Catch((Exception ex) => Observable
+                    .Defer(() => hub.GetMeshNode(indexNode.Path, TimeSpan.FromSeconds(10)).Take(1))
+                    .SelectMany(existing =>
+                    {
+                        var content = existing?.ContentAs<MeshWeaverInstanceIndex>(hub.JsonSerializerOptions);
+                        return content is not null
+                               && InstanceKeys.HashEquals(hash, content.KeyHash)
+                               && string.Equals(content.InstancePath, instancePath, StringComparison.Ordinal)
+                            ? Observable.Return(existing!)
+                            : Observable.Throw<MeshNode>(ex);
+                    }))
+                .Finally(() => disposable.Dispose());
         }));
     }
 }
@@ -631,6 +758,27 @@ public sealed class InstanceIdTakenException(string instanceId)
 {
     /// <summary>The id that was requested.</summary>
     public string InstanceId { get; } = instanceId;
+}
+
+/// <summary>This registry's store holds no instance with the id — the named, hard failure a key
+/// lifecycle call on the WRONG portal gets (MeshWeaver#2802), never a silent no-op.</summary>
+public sealed class InstanceNotRegisteredException(string instanceId)
+    : InvalidOperationException($"no MeshWeaverInstance is registered as '{instanceId}' in this registry — nothing to rotate or revoke")
+{
+    /// <summary>The id that was looked up.</summary>
+    public string InstanceId { get; } = instanceId;
+}
+
+/// <summary>A key transition the rules refuse (<see cref="InstanceKeyRotation"/>) — the key
+/// endpoints' 409. Nothing was written.</summary>
+public sealed class InstanceKeyRefusedException(string instanceId, string reason)
+    : InvalidOperationException($"instance '{instanceId}': {reason}")
+{
+    /// <summary>The instance the transition was asked of.</summary>
+    public string InstanceId { get; } = instanceId;
+
+    /// <summary>Why it was refused.</summary>
+    public string Reason { get; } = reason;
 }
 
 /// <summary>The presented registration bootstrap key is unknown, revoked or expired — the

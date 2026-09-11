@@ -420,6 +420,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Payment Provider Contract](PaymentProviderContract)
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)
 - [Project Templates](ProjectTemplates)
+- [Registry-key rotation — two phases, at the registry that holds the instance](RegistryKeyRotation)
 - [The Release Event Bus](ReleaseEventBus)
 - [The Release Gate's Denominator](ReleaseGateDenominator)
 - [Release to Production — the whole path](ReleaseToProductionPipeline)

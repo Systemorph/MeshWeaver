@@ -56,6 +56,26 @@ public record MeshWeaverInstance
     /// <summary>When the current key was issued. Re-issuing replaces <see cref="KeyHash"/>.</summary>
     public DateTimeOffset? KeyIssuedAt { get; init; }
 
+    /// <summary>
+    /// SHA-256 hex hash of a key STAGED by a rotation that has not been committed yet, or empty.
+    /// While it is set, BOTH <see cref="KeyHash"/> and this hash authenticate — which is the whole
+    /// point of staging: the registry learns the new key before Key Vault is written, and forgets
+    /// the old one only once the new one has been PROVEN to reach the instance
+    /// (<see cref="InstanceKeyRotation"/>, MeshWeaver#2802). A rotation that stops anywhere in
+    /// between therefore leaves an instance whose pods authenticate whichever key they present.
+    /// </summary>
+    public string PendingKeyHash { get; init; } = "";
+
+    /// <summary>When <see cref="PendingKeyHash"/> was staged.</summary>
+    public DateTimeOffset? PendingKeyIssuedAt { get; init; }
+
+    /// <summary>
+    /// When a key of this instance was last REVOKED — a key the registry stopped accepting without
+    /// a successor (<see cref="InstanceKeyRotation.RevokePresented"/>, <see cref="InstanceKeyRotation.RevokeAll"/>).
+    /// Informational: authentication reads the hashes, never this stamp.
+    /// </summary>
+    public DateTimeOffset? KeyRevokedAt { get; init; }
+
     /// <summary>When the instance was registered.</summary>
     public DateTimeOffset CreatedAt { get; init; }
 

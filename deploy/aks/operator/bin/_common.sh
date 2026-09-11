@@ -86,3 +86,64 @@ hosting::do() {
 
 # Capture a command's stdout (queries, never mutations — a dry run still needs to read).
 hosting::read() { "$@"; }
+
+# ── the plugin registry's key-lifecycle surface (MeshWeaver#2802) ───────────────────────────────
+
+# A registry BASE URL: https, a hostname, an optional port — no path, no query, nothing else. It is
+# interpolated into a curl command line, so it is validated like every other name. In place.
+hosting::safe_url() {
+  local what="$1" value="${2:-}"
+  [[ "$value" =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$ ]] \
+    || hosting::die "${what} '${value}' is not an https base URL (https://host[:port], nothing after it) — refusing"
+}
+
+# The decoded value of one key of a Secret, on STDOUT — for CAPTURE into a variable, never for
+# printing. An absent Secret, an absent key and an empty value all print nothing and return 1.
+# 🚨 Callers capture with $(...) and CHECK THE STATUS THEMSELVES: a hosting::die inside a command
+# substitution ends the substitution, not the script (see hosting::safe_name).
+hosting::secret_value() {
+  local namespace="$1" secret="$2" key="$3" json value
+  json="$(kubectl -n "$namespace" get secret "$secret" -o json 2>/dev/null)" || return 1
+  value="$(printf '%s' "$json" | jq -r --arg k "$key" '.data[$k] // empty' 2>/dev/null | base64 -d 2>/dev/null)" || return 1
+  [ -n "$value" ] || return 1
+  printf '%s' "$value"
+}
+
+# The containers of <deployment> in <namespace> that set <key> INLINE (an `env:` entry), joined by
+# ", " on STDOUT — empty when none does. Names only; a value is never read out. Returns 1 when the
+# Deployment cannot be read. An inline entry outranks every envFrom, so where one exists the pods
+# present ITS value, and no Secret an operator step reads says which key that is.
+hosting::inline_setters() {
+  local namespace="$1" deployment="$2" key="$3" json
+  json="$(kubectl -n "$namespace" get deployment "$deployment" -o json 2>/dev/null)" || return 1
+  printf '%s' "$json" | jq -r --arg k "$key" '[.spec.template.spec.containers[] | select(any(.env[]?; .name == $k)) | .name] | join(", ")'
+}
+
+# SHA-256 hex of STDIN — how two keys are compared without either being shown.
+hosting::sha256() { sha256sum | cut -c1-64; }
+
+# One call to the registry, AUTHENTICATED BY THE KEY IN THE NAMED VARIABLE:
+#   hosting::registry_call <key-variable-name> <GET|POST> <url> [json-body]
+# Sets REGISTRY_STATUS (the HTTP code; "000" when nothing answered) and REGISTRY_BODY.
+#
+# 🚨 The key travels by variable NAME and reaches curl on STDIN as a config line (`-K -`), so it is
+# never an ARGUMENT — not this function's, not curl's, never visible in `ps` while the call runs.
+# printf is a shell builtin: it forks no process that could carry the key in its argv either. The
+# body is only ever a HASH. Must not be called in a command substitution (it sets globals).
+# shellcheck disable=SC2034  # REGISTRY_STATUS/REGISTRY_BODY are read by the scripts sourcing this file
+REGISTRY_STATUS="" REGISTRY_BODY=""
+hosting::registry_call() {
+  local keyvar="$1" method="$2" url="$3" body="${4:-}" out
+  out="$(mktemp)"
+  local args=(-sS -K - -X "$method" -o "$out" -w '%{http_code}' --max-time 20)
+  [ -z "$body" ] || args+=(-H 'Content-Type: application/json' --data "$body")
+  REGISTRY_STATUS="$(printf 'header = "Authorization: Bearer %s"\n' "${!keyvar}" | curl "${args[@]}" "$url" 2>/dev/null)" || true
+  REGISTRY_STATUS="${REGISTRY_STATUS:-000}"
+  REGISTRY_BODY="$(cat "$out" 2>/dev/null || true)"
+  rm -f "$out"
+}
+
+# One field of the last registry answer (REGISTRY_BODY), or nothing.
+hosting::registry_field() {
+  printf '%s' "$REGISTRY_BODY" | jq -r --arg f "$1" 'if type == "object" then (.[$f] // empty | tostring) else empty end' 2>/dev/null
+}

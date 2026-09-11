@@ -114,6 +114,7 @@ jobs:
           hosting-pv-purge
           hosting-pv-resize
           hosting-redirect
+          hosting-registry-key
           hosting-restore
           hosting-tls
           hosting-verify
