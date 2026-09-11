@@ -1007,7 +1007,11 @@ Two facts about the fixture that matter for reading the rest: `FutuReAnalysisTes
 `ShareMeshAcrossTests => true`, but no `DISPOSE_SHARED_SKIP` was ever written — the cluster kill-switch
 had sharing off, so **every `[Fact]` built and disposed its own mesh** (30 full teardowns in 47 s in #13).
 And `alc=1` at every checkpoint — each `INIT_MEM`/`DISPOSE_MEM` line is written after a forced full
-GC — means **no collectible `AssemblyLoadContext` survived any teardown** in either process. It does
+GC — means **no collectible `AssemblyLoadContext` survived any teardown** in either process.
+🚨 *Corrected 2026-09-11 (see the entry “the MANAGED view of sightings #11–#16”): both halves of that sentence are wrong.
+The count is `AssemblyLoadContext.All`, which drops a context the moment `Unload()` is called, and CI
+never sets the `MESHWEAVER_TEST_FORCE_GC` that gates the forced collection — #13 died holding 4
+contexts mid-unload and #14 held 7.* It does
 NOT mean none existed: `asm` moves 127 → 129 → 127 → 128 → 130 → 131 → 128 → 130 → 129 … → 133 across
 #13's checkpoints, so contexts (the per-node `DynamicNode_*` / `node-config-script:*` ones) were being
 created inside tests and fully reclaimed by the next checkpoint. Unloads therefore DO happen in this
@@ -1102,7 +1106,7 @@ Plugins #1507 (`fix/1390-teardown-resolve-guard`, merged 13:13Z) converts 22 Rx 
 (shard 1)` passing on the 13:13 push run `34230683846` is one green sample at a low-single-digit-percent
 rate — the reading the base-rate section above already warns against — not the fix working.
 
-### 2026-09-10: sighting #15 — a NEW RUNTIME BUILD (`10.0.12`), and the corrupt block is a LIVE, REFERENCED object
+### 2026-09-10: sighting #15 — a NEW RUNTIME BUILD (`10.0.12`), and the corrupt block is a LIVE, REFERENCED object *(corrected 2026-09-11: it is garbage — reachable from no root)*
 
 `MeshWeaver.Futu-51647.dmp` (MeshWeaver.Plugins run
 [`34476948303`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34476948303), job
@@ -1138,6 +1142,11 @@ builds apart.
 binary whose build-id (`79945f51…`) differs — verified as mapped *inside the crashed process*, not
 merely as shipped. So "wait for the next runtime patch" is not a plan, and any upstream report should
 be written against three patch releases rather than one.
+
+🚨 *Corrected 2026-09-11 — the paragraph below does not hold. The 96-byte referrer is an Autofac
+`ServiceRegistrationInfo`, and a BFS from every GC root (374,060 objects) never reaches it: referrer and
+cursor are both the garbage of a disposed hub's registry. "Well-formed" was read as "live". See the
+entry “the MANAGED view of sightings #11–#16”.*
 
 **2. The corrupt block is a live object that something POINTS AT.** The 2026-08-17 entry established
 the free-list shape by finding that *no managed object points at the cursor*. Run the same scan here
@@ -1226,6 +1235,8 @@ The last five records are `CTOR 12:45:24.607`, `INIT_START .607`, `INIT_BASE_DON
 fixture 18, not tearing down fixture 17**, which had completed cleanly 18 ms earlier. Read the bottom
 of the stack, not the top: this is construction, exactly as in sightings #1 and #3, and no teardown
 guard could have been in the path. `alc=1` throughout — no collectible context survived any teardown.
+🚨 *Corrected 2026-09-11: `alc` cannot see a context that is unloading; this process died with **5**
+`NodeAssemblyLoadContext`s mid-unload and none alive, 12 ms after the previous teardown.*
 
 The truncation machinery did its job: the trx carries **18** results — 17 `Passed` plus
 `MeshWeaver.FutuRe.Test.HOST_CRASHED` `Failed` — so the `Passed! … Passed: 17` console line is
@@ -1481,18 +1492,29 @@ Every crash is `Portal hosts (shard 1)`:
 
 #### What the sixteen have already eliminated — do not re-open these
 
-1. **Use-after-unload of a collectible ALC** — falsified three ways (`RIP` in file-backed runtime code;
-   a freed `LoaderAllocator` yields a non-null *unmapped* pointer, never a zero word at a mapped
-   address; a free-list item has no ALC), and `alc=1` at every checkpoint of #11–#15.
-2. **A teardown-ordering race** — every `DISPOSE_DONE` in every complete record reads
-   `teardown clean`, zero `DISPOSE_QUIESCE_LEAK` / `DISPOSE_DIRTY_TEARDOWN`; and the phase at death
-   varies (construction in #1, #3, #15; inside a test in #11–#13; inside a teardown in #2, #14).
+1. ⚠️ **Unsound as written (2026-09-11).** *Use-after-unload of a collectible ALC* — falsified three
+   ways (`RIP` in file-backed runtime code; a freed `LoaderAllocator` yields a non-null *unmapped*
+   pointer, never a zero word at a mapped address; a free-list item has no ALC), and `alc=1` at every
+   checkpoint of #11–#15. The three arguments exclude only *a freed collectible MethodTable being
+   dereferenced* — the zeroed word is a default-context object's header, so they are silent on an
+   unload IN PROGRESS — and `alc=1` cannot see a context that is unloading: every readable FutuRe dump
+   held 3–7 of them. See the entry “the MANAGED view of sightings #11–#16”.
+2. ⚠️ **Unsound as written (2026-09-11).** *A teardown-ordering race* — every `DISPOSE_DONE` in every
+   complete record reads `teardown clean`, zero `DISPOSE_QUIESCE_LEAK` / `DISPOSE_DIRTY_TEARDOWN`; and
+   the phase at death varies (construction in #1, #3, #15; inside a test in #11–#13; inside a teardown
+   in #2, #14). A clean `DISPOSE_DONE` proves every teardown FINISHED; it says nothing about whether
+   one instance's unload OVERLAPPED the next instance's start, because `DISPOSE_DONE` is written when
+   `Unload()` has been requested, before any context is freed. A clean log is exactly what the overlap
+   looks like.
 3. **Concurrent GC as the mechanism** — #1274 disabled it; the rate did not move (4.2 % → 3.8 %) and
    `plan_phase` runs in blocking GCs; removed again.
 4. **An unhandled managed exception routed through `createdump`** — no `Unwind: exception type` in any.
 5. **The ClrMD DAC `pthread_key` teardown** — no `libmscordaccore.so` mapped (#15).
 6. **MeshWeaver code writing the heap** — zero `AllowUnsafeBlocks` in either repository; every mapped
-   native module is the runtime's or the OS's.
+   native module is the runtime's or the OS's. *(2026-09-11: `AllowUnsafeBlocks` alone does not prove
+   it — `Unsafe.*`, `MemoryMarshal`, `GCHandle` and `Marshal.Write*` need no unsafe block. A direct grep
+   of both `src/` trees finds none of them writing; the one `MemoryMarshal.AsBytes` is a read-only
+   hash input. The conclusion stands on that grep.)*
 7. **Disk pressure** — #15 wrote a complete 849 MiB core and nine suites ran after it.
 8. **Re-entrant hub construction** — 1,350 per green run; on non-faulting threads in #8.
 9. **The quiescing-leak family (#981)** — never co-occurs with the signal death.

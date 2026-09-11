@@ -9,6 +9,7 @@ using System.Runtime.Loader;
 using MeshWeaver.Compiler;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Persistence;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -598,6 +599,38 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         public void Dispose() { }
     }
 
+    // 🚨 Plugins#1605 — the point at which this context has REALLY unloaded. Unload() only starts
+    // an unload (and calls GC.SuppressFinalize on the context, so a finalizer here would never run);
+    // the runtime keeps the context alive through a strong handle until it destroys the
+    // LoaderAllocator. So the signal is a separate sentinel referenced ONLY by this field: it
+    // becomes unreachable in the same collection as the context — which the runtime allows only
+    // after phase two of the unload — and its finalizer reports the retirement collected. Set once,
+    // at retirement: a context aliased under two cache keys is ONE generation and must be tracked
+    // once, or its second retirement would never complete.
+    private CollectibleContextUnloads.Retirement? _retirement;
+    private RetirementSentinel? _retirementSentinel;
+
+    /// <summary>
+    /// Records this context on <paramref name="unloads"/> as asked to unload, so the mesh can wait
+    /// until it has really been collected (<see cref="CollectibleContextUnloads.AllCollected"/>).
+    /// Call BEFORE <see cref="Dispose"/>; a second call is a no-op.
+    /// </summary>
+    internal void RetireInto(CollectibleContextUnloads unloads)
+    {
+        lock (_loadLock)
+        {
+            if (_retirement is not null)
+                return;
+            _retirement = unloads.Retire(Name ?? _nodeName);
+            _retirementSentinel = new RetirementSentinel(_retirement);
+        }
+    }
+
+    private sealed class RetirementSentinel(CollectibleContextUnloads.Retirement retirement)
+    {
+        ~RetirementSentinel() => retirement.Collected();
+    }
+
     public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null)
         : base(name: $"DynamicNode_{nodeName}", isCollectible: true)
     {
@@ -856,6 +889,12 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
                     "Drain signal for AssemblyLoadContext {ContextName} faulted — KEEPING its load "
                     + "context rather than unloading an assembly a scan may still be reading",
                     Name);
+                // Kept means this unload will never finish: say so to whoever waits for it. This arm
+                // also receives an Unload() that threw inside CompleteUnload (the drain subscription
+                // reaches the completed subject through Rx's SubscribeSafe); CompleteUnload has
+                // already reported that exact exception, and the first fault is the one signalled.
+                _retirement?.Faulted(new InvalidOperationException(
+                    $"AssemblyLoadContext {Name} was KEPT loaded: its unload faulted", ex));
                 return Observable.Empty<Unit>();
             })
             .Subscribe(_ => CompleteUnload());
@@ -875,7 +914,17 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         _loadedAssembly = null;
 
         // Initiate unload outside the lock — the context is collected once all references release.
-        Unload();
+        // An Unload() that throws (an Unloading handler, raised first, faulting) leaves the context
+        // loaded: report that to whoever waits for it, then let the fault propagate as before.
+        try
+        {
+            Unload();
+        }
+        catch (Exception ex)
+        {
+            _retirement?.Faulted(ex);
+            throw;
+        }
 
             // Diagnostic probe (opt-in, off by default): drive a collection right after the unload so a
             // use-after-unload dangling native pointer trips at THIS unload — naming the culprit node
@@ -921,9 +970,18 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 /// </summary>
 internal class CompilationCacheService(
     IOptions<CompilationCacheOptions> options,
-    ILogger<CompilationCacheService> logger)
+    ILogger<CompilationCacheService> logger,
+    CollectibleContextUnloads? unloads = null)
     : ICompilationCacheService, IDisposable
 {
+    /// <summary>Records <paramref name="context"/> as retired on the mesh's tracker (if any) so the
+    /// mesh can wait until it has REALLY been collected — Plugins#1605.</summary>
+    private void Retire(NodeAssemblyLoadContext context)
+    {
+        if (unloads is not null)
+            context.RetireInto(unloads);
+    }
+
     private readonly CompilationCacheOptions _options = options.Value ?? new CompilationCacheOptions();
     private readonly ConcurrentDictionary<string, NodeAssemblyLoadContext> _loadContexts = new();
     private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _probingDirs = new();
@@ -1492,6 +1550,7 @@ internal class CompilationCacheService(
         if (_loadContexts.TryRemove(nodeName, out var context))
         {
             logger.LogDebug("Unloading AssemblyLoadContext for {NodeName}", nodeName);
+            Retire(context);
             context.Dispose();
         }
     }
@@ -1637,6 +1696,7 @@ internal class CompilationCacheService(
             {
                 try
                 {
+                    Retire(context);
                     context.Dispose();
                 }
                 catch (Exception ex)
