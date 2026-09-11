@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Api;
@@ -41,8 +43,18 @@ public class ModulePublishShelfTest : IDisposable
 {
     private const string Token = "shelf-test-token";
 
+    private const string Module = "MeshWeaver.Speech";
+
+    /// <summary>The module-relative asset every bundle here carries. Its BODY is what makes two
+    /// uploads differ in content — the generation leaf is a SHA-256 content address (#3656), so
+    /// without it a "second" publish would resolve to the first one's directory and every
+    /// head-pointer claim below would be vacuous.</summary>
+    private const string MarkerAsset = "wwwroot/build.txt";
+
     private readonly string root =
         Path.Combine(Path.GetTempPath(), "mw-shelf-" + Guid.NewGuid().ToString("N"));
+
+    private WebApplication? registry;
 
     /// <summary>Creates the per-test landing root the shelf writes into.</summary>
     public ModulePublishShelfTest() => Directory.CreateDirectory(root);
@@ -50,6 +62,8 @@ public class ModulePublishShelfTest : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        try { (registry as IDisposable)?.Dispose(); }
+        catch { /* the host is the test's, never an assertion */ }
         try { Directory.Delete(root, recursive: true); }
         catch { /* temp cleanup is the OS's problem, never a test failure */ }
     }
@@ -57,63 +71,117 @@ public class ModulePublishShelfTest : IDisposable
     /// <summary>A packed module bundle the route can read, declaring the given floor. A null
     /// <paramref name="frameworkMvid"/> omits the field entirely — the shape a producer on a lane
     /// older than #3211 uploads, and the one the registry refuses since #3240.</summary>
-    private static byte[] Bundle(string? minMeshVersion, string? frameworkMvid = "test-build")
+    /// <param name="minMeshVersion">The module's declared platform floor — advisory since #3648.</param>
+    /// <param name="frameworkMvid">The producer's framework identity.</param>
+    /// <param name="version">The package version this bundle is packed at — what the head rule of
+    /// #3996 orders uploads by.</param>
+    /// <param name="content">The marker asset's body, i.e. what makes these bytes distinct.
+    /// Defaults to <paramref name="version"/>, so two versions are automatically two
+    /// generations; pass it explicitly to publish DIFFERENT bytes at the SAME version.</param>
+    private static byte[] Bundle(
+        string? minMeshVersion,
+        string? frameworkMvid = "test-build",
+        string version = "1.0.0",
+        string? content = null)
     {
+        var body = content ?? version;
         var manifestJson = JsonSerializer.Serialize(new
         {
             plugin = "SpeechPkg",
-            version = "1.0.0",
+            version,
             frameworkMvid,
             module = new
             {
-                assemblyName = "MeshWeaver.Speech",
-                assemblies = new[] { "MeshWeaver.Speech.dll" },
+                assemblyName = Module,
+                assemblies = new[] { Module + ".dll" },
                 minMeshVersion,
+                staticAssets = new[] { MarkerAsset },
             },
         });
 
         var buffer = new MemoryStream();
         NuGetPackageWriter.Write(
             buffer,
-            new PackagingManifest("SpeechPkg", "MeshWeaver.Plugin.SpeechPkg", "1.0.0", "SpeechPkg", null, []),
+            new PackagingManifest("SpeechPkg", "MeshWeaver.Plugin.SpeechPkg", version, "SpeechPkg", null, []),
             "3.0.0",
             [
                 new NuGetPackageWriter.Entry(
-                    NuGetPackageWriter.ModuleEntryPathFor("MeshWeaver.Speech.dll"),
+                    NuGetPackageWriter.ModuleEntryPathFor(Module + ".dll"),
                     // 🚨 REAL assembly bytes since #3538: the landing MEASURES the module's link
                     // requirements against this platform, so a short literal is refused as
                     // unreadable metadata — correctly, and these tests are about the FLOOR.
                     () => new MemoryStream(
                         File.ReadAllBytes(typeof(BundleReader).Assembly.Location))),
+                new NuGetPackageWriter.Entry(
+                    NuGetPackageWriter.ModuleAssetEntryPathFor(MarkerAsset),
+                    () => new MemoryStream(Encoding.UTF8.GetBytes(body))),
             ],
             manifestJson);
         return buffer.ToArray();
     }
 
-    private async Task<HttpResponseMessage> Publish(
-        string? minMeshVersion, string? frameworkMvid = "test-build")
+    /// <summary>
+    /// The registry host, created once per test and REUSED across publishes — two uploads of one
+    /// module are the whole subject of the #3996 controls, and they have to reach the same landing
+    /// root through the same route the CI publishers use.
+    /// </summary>
+    private async Task<HttpClient> Registry()
     {
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        // The publish route is mapped only when a token is configured; the shelf lands into this
-        // test's own temp root, never the testhost's bin (the sidecar is a persistent file).
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        if (registry is null)
         {
-            [ModulePublish.TokenConfigKey] = Token,
-        });
-        builder.Services.AddSingleton(new ModuleLandingService(baseDirectory: root));
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            // The publish route is mapped only when a token is configured; the shelf lands into this
+            // test's own temp root, never the testhost's bin (the sidecar is a persistent file).
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [ModulePublish.TokenConfigKey] = Token,
+            });
+            builder.Services.AddSingleton(new ModuleLandingService(baseDirectory: root));
 
-        var app = builder.Build();
-        app.MapPluginBundles();
-        await app.StartAsync();
+            registry = builder.Build();
+            registry.MapPluginBundles();
+            await registry.StartAsync();
+        }
 
-        var client = app.GetTestClient();
+        return registry.GetTestClient();
+    }
+
+    private async Task<HttpResponseMessage> Publish(
+        string? minMeshVersion,
+        string? frameworkMvid = "test-build",
+        string version = "1.0.0",
+        string? content = null)
+    {
+        var client = await Registry();
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             PluginBundleEndpoints.RoutePrefix + "/SpeechPkg?packagePath=Plugins/SpeechPkg");
         request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + Token);
-        request.Content = new ByteArrayContent(Bundle(minMeshVersion, frameworkMvid));
+        request.Content = new ByteArrayContent(Bundle(minMeshVersion, frameworkMvid, version, content));
         return await client.SendAsync(request);
+    }
+
+    /// <summary>The publish route's JSON body, as the publishing CI job reads it.</summary>
+    private static async Task<JsonElement> Body(HttpResponseMessage response)
+        => JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
+
+    /// <summary>The marker body inside one landed generation — WHICH bytes a generation holds,
+    /// read off the disk rather than inferred from the version the record claims.</summary>
+    private string MarkerIn(ModuleActivationEntry entry) =>
+        File.ReadAllText(Path.Combine(
+            ModuleLandingService.ModuleDirectoryFor(root, Module, entry),
+            MarkerAsset.Replace('/', Path.DirectorySeparatorChar)));
+
+    /// <summary>The marker body the SERVE side hands a consumer — the same
+    /// <see cref="ModuleBundleSource.Collect"/> the index and the download route resolve through,
+    /// so the claim is about what this registry actually serves, not about a record.</summary>
+    private string ServedMarker(ModuleActivationList activation)
+    {
+        var (_, assets, decline) = ModuleBundleSource.Collect(root, Module, activation);
+        Assert.Null(decline);
+        var asset = Assert.Single(assets, a => a.RelativePath == MarkerAsset);
+        return File.ReadAllText(asset.FullPath);
     }
 
     /// <summary>
@@ -234,5 +302,194 @@ public class ModulePublishShelfTest : IDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var entry = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
         Assert.Equal(mvid, entry.FrameworkMvid);
+    }
+
+    // ─────────────────── #3996: the head is a VERSION order, never an arrival order ───────────────────
+
+    /// <summary>
+    /// 🚨 <b>THE DEFECT (#3996).</b> The publish route moved the head pointer for every accepted
+    /// upload, so which version a registry SERVED — and which one its own next restart loaded —
+    /// was decided by CI queue timing. Measured on memex.meshweaver.cloud 2026-09-11:
+    /// <c>MeshWeaver.Mail.MicrosoftGraph</c> 1.7.0 landed at 02:49Z and 1.6.1 displaced it at
+    /// 03:00Z; the 03:30Z activation entry read <c>Version=1.6.1 PreviousVersion=1.7.0</c>, so the
+    /// next restart would have silently un-shipped a merged change. Two lanes publish the same
+    /// module (#3461) and core CD runs take 40–50 minutes, so the older gate routinely finished
+    /// last.
+    ///
+    /// <para>The older upload is still ACCEPTED and still SHELVED — its bytes are on the volume and
+    /// its generation is the entry's fallback, which is what keeps the modules GC off it. An upload
+    /// that merely failed to become head and was recorded NOWHERE would be reclaimed five minutes
+    /// later, trading one silent loss for another, so the GC pass below is part of the claim rather
+    /// than decoration.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnOlderUpload_ArrivingAfterANewerOne_DoesNotBecomeTheHead_AndIsStillShelvedAndResolvable()
+    {
+        using (var newer = await Publish(minMeshVersion: null, version: "1.7.0"))
+        {
+            Assert.Equal(HttpStatusCode.OK, newer.StatusCode);
+            Assert.False((await Body(newer)).GetProperty("shelfOnly").GetBoolean(),
+                "the FIRST publish of a module has no head to rank below — it IS the head");
+        }
+
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries).Directory;
+
+        using var older = await Publish(minMeshVersion: null, version: "1.6.1");
+
+        // 🚨 200, never 409: the publisher did its job — these bytes ARE on the shelf. The reason
+        // they are not the head is the other lane's timing, which no build job can see, and redding
+        // a repo's CI for it would be a band-aid pointed at the wrong repo.
+        Assert.Equal(HttpStatusCode.OK, older.StatusCode);
+        var body = await Body(older);
+        Assert.True(body.GetProperty("shelfOnly").GetBoolean(),
+            "an upload ranking below the landed head is shelved WITHOUT becoming the head");
+        var reason = body.GetProperty("shelfOnlyReason").GetString();
+        Assert.Contains("1.6.1", reason!, StringComparison.Ordinal);
+        Assert.Contains("1.7.0", reason!, StringComparison.Ordinal);
+        Assert.False(body.GetProperty("held").GetBoolean(),
+            "shelf-only is not the link probe's hold — these bytes load here perfectly well");
+        Assert.False(body.GetProperty("pendingRestart").GetBoolean(),
+            "the head did not move, so a restart would load exactly what is already running — "
+            + "'restart required' would be a prompt no restart can clear");
+
+        var list = ModuleActivationSidecar.Read(root);
+        var entry = Assert.Single(list.Entries);
+
+        // ── the head did NOT regress ──────────────────────────────────────────────────────────
+        Assert.Equal("1.7.0", entry.Version);
+        Assert.Equal(head, entry.Directory);
+        Assert.Equal("1.7.0", MarkerIn(entry));
+        Assert.Equal("1.7.0", ServedMarker(list));
+
+        // ── and the older upload is STILL SHELVED, and RESOLVABLE ─────────────────────────────
+        Assert.Equal("1.6.1", entry.PreviousVersion);
+        var previous = ModuleActivationBoot.PreviousGeneration(entry);
+        Assert.NotNull(previous);
+        Assert.True(ModuleActivationBoot.LandedModuleDllExists(root, previous!),
+            "a shelf-only upload that cannot be resolved is not shelved, it is lost");
+        Assert.Equal("1.6.1", MarkerIn(previous!));
+
+        // 🚨 Reachable means SURVIVES THE SWEEP. The modules GC reclaims every generation directory
+        // no entry and no module set references, and the grace window is the only thing that would
+        // otherwise hide the loss for five minutes — so the pass runs here with the window collapsed
+        // and the clock pushed forward, exactly as the other generation-lifetime tests run it.
+        ModuleLandingService.CollectGarbage(root, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+        Assert.True(ModuleActivationBoot.LandedModuleDllExists(root, previous!),
+            "the shelf-only generation is referenced as the entry's fallback, so GC must not reclaim it");
+        Assert.True(ModuleActivationBoot.LandedModuleDllExists(root, entry),
+            "and the head it did not displace is untouched");
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE POSITIVE CONTROL, and the test without which the one above is worthless.</b> "The
+    /// head never moves" satisfies every assertion in
+    /// <see cref="AnOlderUpload_ArrivingAfterANewerOne_DoesNotBecomeTheHead_AndIsStillShelvedAndResolvable"/>
+    /// while breaking the registry completely — no module would ever be updated again. A genuinely
+    /// NEWER upload must move the head, raise the restart, and become what the serve side hands out.
+    ///
+    /// <para>The two tests together state the fix in one sentence: whichever order the two lanes
+    /// finish in, the registry converges on the SAME head — 1.7.0 — because the ordering is the
+    /// artifacts' and not the build queue's.</para>
+    /// </summary>
+    [Fact]
+    public async Task ANewerUpload_ArrivingAfterAnOlderOne_BecomesTheHead()
+    {
+        using (var older = await Publish(minMeshVersion: null, version: "1.6.1"))
+            Assert.Equal(HttpStatusCode.OK, older.StatusCode);
+
+        var displaced = Assert.Single(ModuleActivationSidecar.Read(root).Entries).Directory;
+
+        using var newer = await Publish(minMeshVersion: null, version: "1.7.0");
+
+        Assert.Equal(HttpStatusCode.OK, newer.StatusCode);
+        var body = await Body(newer);
+        Assert.False(body.GetProperty("shelfOnly").GetBoolean(),
+            "a newer version MUST take the head — a rule that never moved it would pass the "
+            + "older-arrives-last control and ship a registry that can never be updated again");
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("shelfOnlyReason").ValueKind);
+        Assert.True(body.GetProperty("pendingRestart").GetBoolean(),
+            "the head moved, so this instance genuinely loads something else at its next restart");
+
+        var list = ModuleActivationSidecar.Read(root);
+        var entry = Assert.Single(list.Entries);
+        Assert.Equal("1.7.0", entry.Version);
+        Assert.NotEqual(displaced, entry.Directory);
+        Assert.Equal("1.7.0", MarkerIn(entry));
+        Assert.Equal("1.7.0", ServedMarker(list));
+        Assert.True(list.PendingRestart);
+
+        // #3649 is unchanged by #3996: the generation the landing displaced becomes the fallback.
+        Assert.Equal(displaced, entry.PreviousDirectory);
+        Assert.Equal("1.6.1", entry.PreviousVersion);
+    }
+
+    /// <summary>
+    /// 🚨 The comparison is STRICTLY BELOW, never at-or-below — and this is the test that says why.
+    /// A module's version encodes CONTENT only, so a rebuild of unchanged source against a new
+    /// platform republishes under the SAME version (Plugins#931/#723); that artifact is exactly the
+    /// one consumers in fallback are waiting for. Writing <c>&lt;= 0</c> instead of <c>&lt; 0</c>
+    /// would leave a registry permanently unable to serve a rebuild, with nothing anywhere saying so.
+    /// </summary>
+    [Fact]
+    public async Task ARebuildRepublishedAtTheSameVersion_StillBecomesTheHead()
+    {
+        using (var first = await Publish(minMeshVersion: null, version: "1.7.0", content: "built-against-A"))
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        var before = Assert.Single(ModuleActivationSidecar.Read(root).Entries).Directory;
+
+        using var rebuild = await Publish(minMeshVersion: null, version: "1.7.0", content: "built-against-B");
+
+        Assert.Equal(HttpStatusCode.OK, rebuild.StatusCode);
+        Assert.False((await Body(rebuild)).GetProperty("shelfOnly").GetBoolean(),
+            "an equal version is not an older version — a rebuild for a new platform ships under "
+            + "the same version and must reach the shelf's head");
+
+        var list = ModuleActivationSidecar.Read(root);
+        var entry = Assert.Single(list.Entries);
+        Assert.NotEqual(before, entry.Directory);
+        Assert.Equal("built-against-B", MarkerIn(entry));
+        Assert.Equal("built-against-B", ServedMarker(list));
+    }
+
+    /// <summary>
+    /// The ordering itself, stated as a table, through the SAME <see cref="NuGetVersionComparer"/>
+    /// <c>ModuleUpdateDecision</c> uses for <see cref="ModuleUpdateAction.SkipOlder"/>. That
+    /// identity is load-bearing rather than tidy: a registry whose head ranked by a different order
+    /// than its consumers' would serve a version every one of them refuses as older, and nothing
+    /// would ever converge.
+    ///
+    /// <para>The <c>ci.900</c> / <c>ci.3758</c> pair is the case <c>NuGetVersionComparer</c> exists
+    /// for — as TEXT <c>"900"</c> sorts above <c>"3758"</c>, and a string comparison here would pin
+    /// a registry to a build thousands of runs stale with nothing red anywhere.</para>
+    /// </summary>
+    [Theory]
+    // second becomes the head
+    [InlineData("1.6.1", "1.7.0", true)]
+    [InlineData("1.7.0-rc1", "1.7.0", true)]            // the stable outranks the pre-release it follows
+    [InlineData("3.0.0-ci.900", "3.0.0-ci.3758", true)] // numeric identifiers, not text
+    // second is shelf-only
+    [InlineData("1.7.0", "1.6.1", false)]
+    [InlineData("1.7.0", "1.7.0-rc1", false)]           // a pre-release published after its stable
+    [InlineData("3.0.0-ci.3758", "3.0.0-ci.900", false)]
+    public async Task TheHeadFollowsSemVerOrder_NeverArrivalOrder(
+        string first, string second, bool secondBecomesTheHead)
+    {
+        using (var one = await Publish(minMeshVersion: null, version: first))
+            Assert.Equal(HttpStatusCode.OK, one.StatusCode);
+
+        using var two = await Publish(minMeshVersion: null, version: second);
+
+        Assert.Equal(HttpStatusCode.OK, two.StatusCode);
+        Assert.Equal(
+            !secondBecomesTheHead,
+            (await Body(two)).GetProperty("shelfOnly").GetBoolean());
+
+        var list = ModuleActivationSidecar.Read(root);
+        var entry = Assert.Single(list.Entries);
+        var head = secondBecomesTheHead ? second : first;
+        Assert.Equal(head, entry.Version);
+        Assert.Equal(head, MarkerIn(entry));
+        Assert.Equal(head, ServedMarker(list));
     }
 }

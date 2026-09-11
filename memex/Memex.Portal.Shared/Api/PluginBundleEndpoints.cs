@@ -674,7 +674,19 @@ public static class PluginBundleEndpoints
                         statusCode: StatusCodes.Status409Conflict);
                 }
 
-                if (outcome.Held)
+                // 🚨 #3996 — the upload is ACCEPTED but did not become the head. Deliberately a 200
+                // and not a 409: the publisher did its job (its artifact is on the shelf), and the
+                // reason it is not the head is the OTHER lane's timing, not a fault in this upload.
+                // Failing the build for it would red a repo's CI for a race it cannot see.
+                if (outcome.ShelfOnly)
+                    logger?.LogInformation(
+                        "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
+                        + "{Version}) but NOT as the head — {Reason} Two lanes publish this module "
+                        + "(#3461); the head is the highest version the shelf holds, never the last "
+                        + "upload to arrive.",
+                        accepted.Module, plugin, accepted.Files.Count,
+                        accepted.Version ?? "(unversioned)", outcome.ShelfOnlyReason);
+                else if (outcome.Held)
                     logger?.LogInformation(
                         "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
                         + "{Version}) — HELD from local activation ({Reason}); it serves from this "
@@ -728,6 +740,10 @@ public static class PluginBundleEndpoints
                 // held/holdReason let the publisher tell "shelved, will serve" apart from
                 // "activated here"; pendingRestart is honest for the held case — a restart of
                 // THIS instance would not load a held module, so nothing is pending on one.
+                // 🚨 shelfOnly/shelfOnlyReason are the third answer (#3996): the bytes are on the
+                // shelf but a HIGHER version is the head, so this registry serves that one and no
+                // restart is pending on this upload either. Additive fields — an older publisher
+                // reads the response exactly as it did before.
                 return Results.Json(new
                 {
                     plugin,
@@ -736,7 +752,9 @@ public static class PluginBundleEndpoints
                     files = accepted.Files.Count,
                     held = outcome.Held,
                     holdReason = outcome.HoldReason,
-                    pendingRestart = !outcome.Held,
+                    shelfOnly = outcome.ShelfOnly,
+                    shelfOnlyReason = outcome.ShelfOnlyReason,
+                    pendingRestart = !outcome.Held && !outcome.ShelfOnly,
                 });
             })
             .AllowAnonymous();
