@@ -21,6 +21,117 @@ guards. This matters in both directions: a scheduled PR updater once authorized 
 tree more than twenty times, while a green core Chart Gate could have masked a red build-and-test
 run (#3978).
 
+## Which workflow proves a repository — the declaration, and what happens when it is missing
+
+The `workflow_run` payload carries two facts that are easy to confuse. `event` is **how** the run
+started; `path` is **what** ran. Keying the publish signal on the first is a proxy, and the proxy
+came apart in both directions:
+
+- A `*/10` cron called **Auto-update green armed PRs** — present in Reinsurance, SocialMedia and Crm,
+  and whose whole body is `gh pr list` → `gh api -X PUT …/update-branch` — checks out nothing and
+  builds nothing. Measured over 48 h to 2026-09-10T19:36Z it recorded **20** build completions at
+  `MeshWeaver.Reinsurance@7d29a303` and **40+** at `MeshWeaver.SocialMedia@07cc155e`, both commits
+  whose own content CI had **failed**.
+- Narrowing the trigger set does not close it. On core `192a60d84a36`, `push Chart Gate` and
+  `push Hosting Operator` both concluded `success` in the second that
+  `push MeshWeaver Build and Test` **failed**.
+- And narrowing has already misfired the other way: the pre-2026-09-02 `event == "push"` test
+  discarded Reinsurance's three green `repository_dispatch` runs and left `Underwriting/_GitSync`
+  **38 h** behind a merged `main` with every delivery answering 200 OK
+  (`Systemorph/MeshWeaver.Plugins#1194`).
+
+So the trigger allow-list stays exactly as wide as it was — it answers a different question, and
+narrowing it is what caused #1194 — and a third, independent guard answers the one that matters.
+
+**Re-measured 2026-09-11, and the premise needed correcting.** #3978 stated that every repository's
+content CI fires on `push` *and* `repository_dispatch` *and* `schedule`. Over the eight live
+repositories (the ninth record, `Systemorph/education`, is a stale pre-rename alias last written
+2026-08-14):
+
+| repository | content CI | `push` | `repository_dispatch` | `schedule` |
+|---|---|:--:|:--:|:--:|
+| MeshWeaver.Plugins · .Education · .Reinsurance · .SocialMedia · .Manufacturing · .Crm | `ci.yml` | ✅ | ✅ | ✅ |
+| Systemorph/MeshWeaver | `dotnet-test.yml` | ✅ | ✗ | ✗ (`merge_group`, `workflow_dispatch`) |
+| Systemorph/Memex | `build.yml` | ✅ | ✗ | ✗ (`pull_request`, `workflow_dispatch`) |
+
+Six of eight fire on all three; core and Memex publish on `push` alone. That changes nothing about
+keying on the path — the two guards are orthogonal — but it does mean the allow-list is carrying
+`repository_dispatch` and `schedule` **for the six satellites specifically**, which is exactly the
+population #1194 was measured on. Dropping either would take their release-follow and cron signals
+away again.
+
+### Where the declaration lives
+
+`GitHubWebhookProcessor.ContentWorkflowFor` resolves one repository's content-CI path, **and says
+where that answer came from**, in this order:
+
+| source | what declares it | why |
+|---|---|---|
+| `Configured` | `GitHub:ContentWorkflows:Repositories` — `{ Repository: "owner/repo", Path: ".github/workflows/x.yml" }` | a deployment's own escape hatch for a repository the platform does not know |
+| `Platform` | the fleet's own table: `Systemorph/MeshWeaver` → `dotnet-test.yml`, `Systemorph/Memex` → `build.yml` | the platform ships the declaration, so it needs no portal's settings edited |
+| `Convention` | `.github/workflows/ci.yml` | every node repo, enforced by the shared lane's `check-content-ci-path.py` |
+
+**It is a fact about the REPOSITORY, not about one Space's source.** A field on `GitHubSyncConfig`
+would be the wrong home: several Spaces sync the same repository, and they must not be able to
+disagree about what proved it — 34 sources on memex.meshweaver.cloud point at MeshWeaver.Plugins
+alone. The declaration therefore sits beside the platform, next to the `Admin/_Build/{owner}.{repo}`
+record it governs, and is keyed by `owner/repo`.
+
+**Why `Platform` exists rather than "convention plus config".** Measured 2026-09-11, with the
+denominator: **nine** repositories hold an `Admin/_Build/{owner}.{repo}` record — the same nine on
+memex.meshweaver.cloud and on memex.systemorph.com, both listings `truncated:false`. Eight satisfy
+the convention or core's exception. The ninth, `Systemorph/Memex`, has **no `ci.yml` at all** (its
+workflows are `build.yml`, `config-key-coverage.yml`, `deploy-drift.yml`, `helm-release.yml`,
+`image-pins.yml`, `smoke.yml`), and two portals sync its `mesh/Deployments` tree. On the convention
+alone it would have frozen on both, silently, the moment this shipped — #1194 recreated by the change
+meant to prevent it. A configuration override would have fixed it only on portals whose settings
+somebody edited; a platform declaration ships with the platform.
+
+### 🚨 What happens when the declaration is absent or wrong
+
+This is the whole risk of a fail-closed gate, and it is why the refusal is **reported**. A repository
+whose content CI is somewhere the platform does not expect has every delivery refused, GitHub
+answered 200, and every Space that syncs it silently stops advancing. #1194's entire cost was that
+nothing said so.
+
+The refusal is therefore classified, not just taken:
+
+| the run's path | the repository | reported at |
+|---|---|---|
+| absent from the payload | any | **Warning** — the payload did not say what ran; that is the absence of evidence, not a verdict on it |
+| not the expected path | nothing syncs it | Debug — no Space can be frozen, so the refusal cost nothing |
+| not the expected path | synced, and a run at the expected path **has** been accepted before | Debug — routine: some other workflow finished green |
+| not the expected path | synced, and **no** run at the expected path has ever been accepted | **Warning** — `I COULD NOT DETERMINE THIS REPOSITORY'S CONTENT CI` |
+
+The Warning names both paths, the count and names of the frozen Spaces, that they are frozen and that
+GitHub is answered 200, and the configuration section that fixes it. It **self-clears**: the
+repository's next genuine content-CI run records `BuildCompletion.WorkflowPath`, and every later
+refusal drops to Debug.
+
+The conditioning is load-bearing rather than tidy. An unconditional Warning would fire on roughly
+200 of core's refusals a day plus 144 from the PR-updater cron in each of three satellites, and
+burying the one line that matters is the same failure as not emitting it. The precedent is
+`ConfigsTargeting`'s zero-match Warning, which reports a delivery that matches no sync config for the
+same reason and with the same reasoning.
+
+**The residual, stated rather than implied.** A repository that has already published and *then*
+moves its content CI keeps a record whose path still equals the expected one, so this stays quiet.
+That case is covered a layer up instead: the shared `node-repo-validate` lane runs
+`check-content-ci-path.py` against every satellite's tree, so moving the file reds that repository's
+own CI, and `CoreContentCiRemainsAtThePublishSignalPath` does the same for core. Neither covers a
+repository that calls neither — which is exactly why the two such repositories in the fleet are
+`Platform`-declared rather than left to the convention.
+
+### The build record says what proved it
+
+`BuildCompletion` already carried `WorkflowName`; it now also carries **`WorkflowPath`**. The name is
+a display string a maintainer can change in a one-line diff, and measured 2026-09-11 no consumer ever
+keyed on it — its two readers are a log line in `PluginUpdateWatcher` and the identity comparison in
+`MissedBuildFact`. The path is the identity the webhook actually admitted the run on, so recording it
+makes the record self-describing, and it is what makes "this repository's content CI has never been
+seen" an answerable question rather than a time-based guess. A record written before #3978 carries
+`null`; the repository's next content-CI run fills it in.
+
 ## The two refs, and why they are not the same ref
 
 A GitSync'd Space is configured with a repository and a **branch**
