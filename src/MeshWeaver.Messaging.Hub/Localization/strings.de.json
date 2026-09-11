@@ -1481,5 +1481,9 @@
   "unifiedData.error.readStreamEnded": "Der gemeinsame Lesedatenstrom für {0}/{1} endete, bevor er seinen aktuellen Zustand bereitstellte.",
   "unifiedData.error.readBarrierEnded": "Der gemeinsame Lesedatenstrom für {0}/{1} endete, bevor er die bestätigte Version erreichte.",
   "unifiedData.error.updateFailed": "Die Aktualisierung ist fehlgeschlagen.",
-  "unifiedData.error.deleteFailed": "Das Löschen ist fehlgeschlagen."
+  "unifiedData.error.deleteFailed": "Das Löschen ist fehlgeschlagen.",
+  "logIncident.refused.commentTitle": "Vorfall {0}: Aktualisierungen erreichen {1} nicht",
+  "logIncident.refused.commentMessage": "Die Aktualisierung konnte nicht gepostet werden: {0}\n\n{1} Vorkommen haben das Ticket nie erreicht — der Vorfall ist {2}-mal aufgetreten, {3} davon wurden dort gemeldet. Ein stiller Ticket-Verlauf bedeutet NICHT, dass der Vorfall still ist.\n\nVorfall: {4}",
+  "logIncident.refused.fileTitle": "Vorfall {0} konnte nicht gemeldet werden",
+  "logIncident.refused.fileMessage": "Das Ticket konnte nicht eröffnet werden: {0}\n\nDer Vorfall ist {1}-mal aufgetreten und hat kein Ticket.\n\nVorfall: {2}"
 }
