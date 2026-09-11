@@ -431,6 +431,16 @@ keeps the supersede model in the next section.
 * **One workspace per run.** A push touching two unrelated networks still compiles them in one
   fail-fast workspace, so a compile error in one stops the other's legs in that run. A workspace per
   network is the next step.
+* **Compiled test projects and the portal-host shards have no content key.** A module is skipped
+  when its key is already published, but a `src/` test project has no key and no `Tested` record:
+  `node-repo-project-scope.py` narrows WHICH suites run, and every selected suite re-runs from
+  scratch on every push. Measured on Plugins run 34618468550 (a pull request, 2026-09-11): the four
+  portal-host shards cost 38 + 21 + 19 runner-minutes, plus 11 for a shard cancelled with the run.
+  The next step after a workspace per network: a per-project key in the `module-build-key.py` shape
+  (the project closure's tree hashes + globals + the platform set) and a `Tested` record per test
+  project in the same ledger, so a push re-runs only the projects whose key changed and an unchanged
+  one carries its previous verdict — the rule the modules already follow: re-run only when the atomic
+  unit actually changed. (Raised by the DeepSign session, 2026-09-11.)
 * **An in-flight platform run is not cancelled** by a newer one (rule 6 replaces only a queued one):
   cancelling it mid-seal is the torn publication of Plugins#826.
 
