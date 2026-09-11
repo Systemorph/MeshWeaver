@@ -1,6 +1,6 @@
 ---
 Name: The test suite and the shipped platform now run the same Rx
-Category: Fix
+Category: Feature
 Description: The reactive library that every stream in the platform is built on was pinned at version 6 for the product and version 7 for the tests that gate it. Both now run version 7, and a guard was added so the pair cannot drift apart again.
 Icon: Checkmark
 Order: -20260911
