@@ -41,10 +41,22 @@ Never adopt a target version asserted by an earlier session, an issue, or a memo
 and **gate the read on HTTP status AND byte count** — a failed request's empty body greps to zero
 and reads exactly like "no such version".
 
+🚨 **PRINTING the status and the byte count is not GATING on them.** Plain `curl -sS -o file -w …`
+exits **0** on an HTTP 404, writes the error body into the output file, and prints a tidy
+`HTTP=404 BYTES=14` that a hurried reader skims as evidence — this repository's own "a verification
+step that cannot fail is not a verification step" rule, broken in the one place it is being taught.
+Make the command *refuse*:
+
 ```bash
-curl -sS -o idx.json -w "HTTP=%{http_code} BYTES=%{size_download}\n" \
-  https://api.nuget.org/v3-flatcontainer/<package-id-lowercased>/index.json
+curl -sS --fail-with-body -o idx.json \
+     -w "HTTP=%{http_code} BYTES=%{size_download}\n" \
+     "https://api.nuget.org/v3-flatcontainer/<package-id-lowercased>/index.json" \
+  || { echo "registry read FAILED — premise unmeasured, do not proceed"; exit 1; }
+[ -s idx.json ] || { echo "registry read returned an EMPTY body — do not proceed"; exit 1; }
 ```
+
+`--fail-with-body` turns a 4xx/5xx into a non-zero exit while still keeping the body to look at, and
+the `-s` test refuses a zero-byte success.
 
 ### 2. Read the licence at the NEW major, not at the old one
 
@@ -54,9 +66,15 @@ Compare the `<license>` element of both nuspecs; a change is a **stop-and-report
 make alone.
 
 ```bash
-curl -sS -w "HTTP=%{http_code} BYTES=%{size_download}\n" -o new.nuspec \
-  https://api.nuget.org/v3-flatcontainer/<id>/<new>/<id>.nuspec
+curl -sS --fail-with-body -o new.nuspec \
+     -w "HTTP=%{http_code} BYTES=%{size_download}\n" \
+     "https://api.nuget.org/v3-flatcontainer/<id>/<new>/<id>.nuspec" \
+  || { echo "nuspec read FAILED — licence unread, do not proceed"; exit 1; }
+[ -s new.nuspec ] || { echo "empty nuspec — do not proceed"; exit 1; }
 ```
+
+🚨 The same trap as step 1, and worse here: an unguarded `grep '<license'` over a 404 body finds
+nothing, and "no licence element" is easy to misread as "no licence change".
 
 ### 3. Diff the real public API, don't read the release notes alone
 
@@ -65,8 +83,25 @@ both `.nupkg`s, extract the assembly for the TFM we actually resolve, and enumer
 surface of each with `MetadataLoadContext`. Sort, normalise away the assembly-qualified version
 stamps (they otherwise dominate the diff), and `comm` the two lists.
 
-What matters is the **removal** set — additions cannot break a consumer. Then check that set against
-what this repository and the satellites actually call.
+The **removal** set matters first: check it against what this repository and the satellites actually
+call.
+
+🚨 **But "additions cannot break a consumer" is FALSE, and believing it is how a major audit misses
+an entire break class.** Additions cannot break a **caller**. They routinely break an
+**implementer**: a member added to an interface with no default implementation, or an `abstract`
+member added to an abstract class, breaks every outside type that implements it — `CS0535` at the
+dependent's next pin move, long after this repository went green. The YamlDotNet entry below is an
+instance: 18.0.0 added `HasParseMethod` and `Parse` to `ITypeInspector` with no default
+implementation, and that is the single declared breaking change of that major. It missed us only
+because neither repository implements the interface.
+
+So the addition set is **not** dismissible — partition it. Additions to *static* types, to sealed
+types, and new overloads are caller-only and safe to skim. Additions of abstract or default-less
+members to a type an outside assembly may implement are **removals in disguise**, and get the same
+treatment: enumerate them, then search both repositories for implementers. (Core carries the
+mirror-image obligation on its own surface — the `Interface additions (implementers declared)` gate —
+for exactly this reason.) One more caller-side trap an addition can cause here: a new overload can
+make a dependent's `<see cref>` ambiguous, `CS0419` under `-warnaserror`.
 
 ### 4. Run the change against the CORPUS, not only the suite
 
