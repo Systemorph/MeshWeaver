@@ -37,6 +37,9 @@
 #     that is the intended way to say "not ready", rather than withholding the arm.
 #   * forks are skipped: arming a PR from a fork would let an outside branch merge itself the
 #     moment the required set passes.
+#   * a PR whose BASE is not the default branch is NOT armed, and is told so. Auto-merge waits for
+#     the base's required contexts, and an unprotected base has none — so an arm there is an
+#     immediate merge, not a deferred one. See the base step for the measured instance.
 #
 # 🚨🚨 THE ARM CREDENTIAL IS LEAD, NOT TRIM — it decides whether main's push lanes run at all.
 # This lane armed with `secrets.GITHUB_TOKEN` for six hours on 2026-09-01, and the consequence was
@@ -111,15 +114,17 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      # No `if:` on any step that DECIDES anything below. The assert, the mint and the arm run
-      # unconditionally: they assert and fail, they do not choose whether to run. The ONE exemption
-      # is on the job, and it is a property of the EVENT (draft, fork), never a question about
-      # whether a credential happens to be set — invariant #3.
+      # No `if:` on any step that ASSERTS anything. The credential assert, the base read and the
+      # mint run unconditionally: they assert and fail, they do not choose whether to run. Every
+      # exemption in this file is a property of the EVENT (draft, fork, base branch), never a
+      # question about whether a credential happens to be set — invariant #3.
       #
-      # The single `if:` further down is on a step that only PRINTS, and it is conditioned on a
-      # failure having already happened. A diagnostic that can turn nothing green is not a
-      # trapdoor — the distinction that matters is whether an `if:` can make a gate not run, and
-      # that one cannot.
+      # The `if:`s further down govern ACTIONS and DIAGNOSTICS, not gates: one prints because a
+      # failure already happened, one comments because the base already disqualified the arm, and
+      # the arm itself runs only when there is a token to arm with and a protected base to arm
+      # onto. None of them can make a verification not run, which is the distinction that matters —
+      # and the job itself is never skipped by any of them, so "not armed" and "the lane never ran"
+      # stay two different things a reader can tell apart.
       - name: The App credential, or a red run naming what to provision
         env:
           MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
@@ -134,6 +139,75 @@ jobs:
             exit 1
           fi
           echo "App credential present."
+
+      # 🚨🚨 ARM ONLY ONTO THE DEFAULT BRANCH. On any other base, `--auto` does not mean
+      # "merge when green" — it means "merge NOW".
+      #
+      # Auto-merge waits for exactly the contexts BRANCH PROTECTION requires of the pull request's
+      # BASE. In this fleet protection is configured on the default branch and nowhere else (core:
+      # ruleset `main pr protection`; the satellites: classic protection on `main`). A STACKED pull
+      # request — one opened against another pull request's feature branch, which is how a change
+      # set gets split for review — therefore has a base that is protected by nothing, an EMPTY
+      # required set, and a condition that is satisfied the instant GitHub first reads it.
+      #
+      # Measured 2026-09-11: MeshWeaver.Plugins#1685 was opened against the feature branch of
+      # #1681, this lane armed it, and GitHub merged it at 21:03:23Z — 61 seconds after it was
+      # opened, BEFORE its own CI had started a single job. Nothing failed and nothing was
+      # bypassed: the stack simply collapsed unreviewed, exactly as configured. This lane is the
+      # fleet's only copy, so the same hole was open in all eight repositories at once.
+      #
+      # 🚨 The default branch is READ, never assumed. Every repo in the fleet uses `main` today —
+      # which is precisely why a literal `main` here would be indistinguishable from a correct
+      # check while quietly being a copy of a fact, the drift this file's header exists to stop.
+      # `github.event.repository.default_branch` is on the pull-request payload in BOTH modes (a
+      # caller forwards its own event), so there is one reading and no fallback to get wrong.
+      #
+      # 🚨 This is NOT a skip-trapdoor. It asks a property of the EVENT, exactly as the job's
+      # draft/fork exemption does, never whether a credential happens to be set — and the job still
+      # RUNS and still reports on a non-default base rather than vanishing, so "not armed" and
+      # "lane never ran" stay distinguishable. This lane publishes no required context.
+      - name: The base branch decides whether arming means "when green" or "now"
+        id: base
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Assert the readings rather than defaulting them. An empty default branch would make
+          # every base look non-default and silently stop arming the entire fleet — the mirror
+          # image of the failure above — so it gets a red that names itself instead.
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            echo "::error::the pull-request payload carried no repository.default_branch, so this lane cannot tell a protected base from an unprotected one. Refusing to arm."
+            exit 1
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::error::the pull-request payload carried no base.ref, so this lane cannot tell what this pull request would merge into. Refusing to arm."
+            exit 1
+          fi
+          if [ "$BASE" = "$DEFAULT_BRANCH" ]; then
+            echo "onto-default=true" >> "$GITHUB_OUTPUT"
+            echo "base '$BASE' is the default branch: arming means 'merge when the required contexts pass'."
+            exit 0
+          fi
+          echo "onto-default=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::auto-merge was NOT armed on this pull request — it targets '$BASE', not the default branch '$DEFAULT_BRANCH'. A non-default base carries no branch protection and therefore no required contexts, so arming would merge this pull request immediately, before its own CI has run."
+          {
+            echo "### Auto-merge not armed — the base is not the default branch"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| base | \`$BASE\` |"
+            echo "| default branch | \`$DEFAULT_BRANCH\` |"
+            echo
+            echo "Auto-merge waits for the required contexts of the **base**. \`$BASE\` is not the"
+            echo "default branch, so branch protection does not cover it, the required set is empty,"
+            echo "and the condition is satisfied the moment GitHub reads it — the pull request would"
+            echo "merge before any check started (measured: MeshWeaver.Plugins#1685, merged 61"
+            echo "seconds after it was opened)."
+            echo
+            echo "Merge this pull request by hand once you are satisfied with it, or retarget it at"
+            echo "\`$DEFAULT_BRANCH\` and the next event on it will arm it normally."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # 🚨 `gh pr merge --auto` either enables ordinary auto-merge or enqueues the PR, depending on
       # the repository. Both mutations need `Pull requests: write`; the merge they later perform
@@ -200,11 +274,49 @@ jobs:
             echo "not granted. \`arm-credential.yml\` is the lane that stays red until that is done."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Conditioned on the MINT's outcome, never on whether a secret "looks set" — the shape
-      # AGENTS.md forbids. Without a token there is nothing to arm with; running gh anyway would
-      # fall back to the runner's default credential, which is the #2916 outage exactly.
+      # Silence is the thing to avoid. The warning above lands in a run log nobody opens for a
+      # lane whose entire normal output is the word "armed" — so an author whose stacked pull
+      # request is sitting there unarmed cannot tell this from a lane that is simply broken, and
+      # waits for an arm that is never coming. Say it once on the pull request itself, where the
+      # author already is.
+      #
+      # ONCE, not once per event: `synchronize` fires on every push, and a lane that repeats itself
+      # is a lane people mute. The marker is read back before anything is written.
+      - name: Say on the pull request that a non-default base was not armed
+        if: steps.base.outputs.onto-default == 'false' && steps.arm-token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.arm-token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          MARKER: '<!-- auto-arm:non-default-base -->'
+        run: |
+          set -euo pipefail
+          # Not swallowed: a read that fails says so and leaves the run-log warning standing. It
+          # must not fail the job — the honest per-PR outcome of a comment that could not be
+          # written is still "this pull request was not armed", which is already reported above.
+          if ! existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[].body'); then
+            echo "::warning::could not read the existing comments on #$PR, so nothing was posted; the run-log warning above stands."
+            exit 0
+          fi
+          if printf '%s' "$existing" | grep -qF -- "$MARKER"; then
+            echo "already said so on #$PR — nothing to do"
+            exit 0
+          fi
+          body=$(printf '%s\n%s\n' \
+            "$MARKER" \
+            "**Auto-merge was not armed.** This pull request targets \`$BASE\`, not the default branch \`$DEFAULT_BRANCH\` — a non-default base has no branch protection and therefore no required contexts, so arming it would merge it immediately, before its own CI runs. Merge it by hand when you are ready, or retarget it at \`$DEFAULT_BRANCH\` to have it armed normally.")
+          gh pr comment "$PR" --repo "$REPO" --body "$body"
+          echo "commented on #$PR"
+
+      # Conditioned on the MINT's outcome and on the BASE, never on whether a secret "looks set" —
+      # the shape AGENTS.md forbids. Without a token there is nothing to arm with; running gh
+      # anyway would fall back to the runner's default credential, which is the #2916 outage
+      # exactly. And without a default-branch base there is nothing to WAIT for, so an arm here is
+      # an immediate merge rather than a deferred one (see the base step above).
       - name: Arm it
-        if: steps.arm-token.outcome == 'success'
+        if: steps.arm-token.outcome == 'success' && steps.base.outputs.onto-default == 'true'
         env:
           GH_TOKEN: ${{ steps.arm-token.outputs.token }}
           PR: ${{ github.event.pull_request.number }}
