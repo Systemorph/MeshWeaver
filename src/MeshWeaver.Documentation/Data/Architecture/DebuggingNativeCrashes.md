@@ -1290,6 +1290,134 @@ ran no tests"; the two arms' totals are printed in the `Observed:` line but neve
 neither the exit code nor a signal is looked at anywhere. Tracked as
 [MeshWeaver.Plugins#1620](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1620).
 
+### 2026-09-11: the runtime question — the upstream GC-hole fix ships in `10.0.12`, and sighting #15 crashed ON `10.0.12`
+
+This entry records no new dump. It answers the question every reader of sightings #10/#11 eventually
+asks — *is this a known CoreCLR bug that a newer runtime fixes?* — and it records the fifteen sightings
+grouped in one table, so the next reader does not have to re-derive them from the sections above.
+Tracked on [MeshWeaver.Plugins#1605](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1605).
+
+#### The upstream candidate, and what was confirmed about it
+
+[dotnet/runtime#131267](https://github.com/dotnet/runtime/issues/131267) (filed 2026-07-23 against
+`10.0.9`, closed 2026-08-05) is an external team's report of the same *symptom* — "a SIGSEGV reported as
+*test host process crashed* while every test passes" — whose faulting frame is
+**`LCGMethodResolver::GetCodeInfo`**, which is exactly sightings #10 and #11. The root cause given by the
+runtime team on that issue is more general than its title: on x64/arm64 a thread suspended for GC by
+**return-address hijacking**, whose return address lies inside `CallDescrWorkerInternal` (hand-written
+assembly with no GC info), holds the returned object reference in `rax`/`x0` where **no GC reports or
+relocates it**; a compacting GC then leaves the native caller holding a **stale pointer**. Every
+`MethodDescCallSite::Call_RetOBJECTREF` site is exposed — 33 of them in `release/10.0` — and
+`GetCodeInfo` is one of them. The fix is an early-out in `Thread::HijackThread` (main: #129714;
+`release/10.0` backport:
+[dotnet/runtime#131708](https://github.com/dotnet/runtime/pull/131708), *"Fix GC hole when method return
+is hijacked for GC suspension"*).
+
+**That the backport ships in `10.0.12` is confirmed three independent ways**, all read on 2026-09-11:
+
+| check | result |
+|---|---|
+| PR metadata | merged 2026-08-03T18:27Z into `release/10.0`, milestone **`10.0.12`**, merge commit `4a08ab901db1` |
+| the source at each tag | `src/coreclr/vm/threadsuspend.cpp` contains `IsCallDescrWorkerInternalReturnAddress` **2×** at `v10.0.12`, **0×** at `v10.0.11` |
+| ancestry | `compare 4a08ab90…v10.0.12` = `ahead 23, behind 0` (an ancestor); against `v10.0.11` = `behind 6` (not) |
+
+The early-out is `#ifndef TARGET_X86`, so it applies to the `linux-x64` runners. `v10.0.12` was published
+2026-09-08T22:11Z; no later `v10.0.x` tag exists, and the two `release/10.0` pull requests already
+milestoned `10.0.13` (#133073, debugger sequence map; #133161, JIT visit budget) are not GC fixes.
+
+**And the confirmation stops there, because sighting #15 is a counter-example.** #15 ran on `10.0.12` —
+its job installed `dotnet-install: Installed version is 10.0.12` (SDK `10.0.401`), and the libcoreclr
+mapped *inside the crashed process* has build-id `79945f51…`, the stock `10.0.12` binary. So the fix was
+present at the moment of the fault. The honest reading:
+
+- The upstream GC hole **fits sightings #10 and #11 precisely**. Their `R15` is the `byte[]` returned by
+  `Call_RetOBJECTREF`, and #10 found that "array" to be a recycled run of pointers in anonymous memory —
+  the victim-side read of a stale reference, which is exactly what the hole produces.
+- It **does not account for #15**: a published, *referenced* heap object lost its type slot on a
+  runtime that carries the fix, and it was found by a mutator's blocking GC, not by a stale native read.
+- Whether the thirteen `gc_heap` sightings are downstream damage of the same hole (a stale reference
+  *written through* corrupts whatever now occupies the old address) is **not decidable from a core
+  dump**, and is exactly what the rate measurement below is for.
+
+<!--MEASUREMENT-->
+
+#### The fifteen sightings, grouped
+
+| # | date | suite | runtime | faulting frame | thread | `si_addr` |
+|---|---|---|---|---|---|---|
+| 1 | 08-06 | FutuRe | `10.0.10` | `background_sweep` | BGC | `0x0` |
+| 2 | 08-09 | FutuRe | `10.0.10` | `background_sweep+0xa61` | BGC | `0x0` |
+| 3 | 08-09 | FutuRe | `10.0.10` | `background_sweep+0xa61` | BGC | `0x0` |
+| 4–6 | 08-12 | FutuRe | `10.0.11` | `plan_phase+0x24fc` (×3) | blocking GC (thread not recorded) | `0x0` |
+| 7 | 08-17 | — (shard 2) | `10.0.11` | `find_first_object+0x132` | not recorded | `0x0` |
+| 8 | 08-18 | FutuRe | `10.0.11` | `background_sweep+0xa61` | BGC | `0x0` |
+| 9 | 09-03 | FutuRe | `10.0.11` | `background_mark_simple1+0x827` | BGC | `0x0` |
+| 10 | 09-06 | FutuRe | `10.0.11` | `LCGMethodResolver::GetCodeInfo+0x1f7` | mutator, in the JIT | `0x4` |
+| 11 | 09-07 | **GitSync** | `10.0.11` | `LCGMethodResolver::GetCodeInfo+0x1f7` | mutator, in the JIT | `0x4` |
+| 12 | 09-08 | FutuRe | `10.0.11` | `background_sweep+0xa61` | BGC | `0x0` |
+| 13 | 09-08 | FutuRe | `10.0.11` | `background_sweep+0xa61` | BGC | `0x0` |
+| 14 | 09-08 | FutuRe | `10.0.11` | `revisit_written_page+0x1aa` | BGC | `0x0` |
+| 15 | 09-10 | FutuRe | **`10.0.12`** | `find_first_object+0x132` | mutator, blocking GC | `0x0` |
+
+- **15 of 15 share the fingerprint**: `SEGV_MAPERR`, `TRAPNO=14`/`ERR=0x4`, `RIP` in file-backed
+  `libcoreclr`, and a MethodTable word that reads **exactly zero** (`si_addr` is only the field offset —
+  `0x0` for `m_dwFlags` in 13, `0x4` for `m_BaseSize` in 2).
+- **No frame is shared by a majority.** By frame: `background_sweep` **6**, `plan_phase` **3**,
+  `find_first_object` **2**, `GetCodeInfo` **2**, `background_mark_simple1` **1**,
+  `revisit_written_page` **1** — six functions, and the frame *revisits* rather than progresses.
+- **By thread**: a dedicated background-GC thread with no managed frame in **8** (#1–#3, #8, #9, #12–#14);
+  a mutator in **3** (#10, #11 in the JIT; #15 in a blocking GC); unrecorded in 4 (#4–#7).
+- **By runtime**: `10.0.10` ×3, `10.0.11` ×11, `10.0.12` ×1 — three distinct libcoreclr builds.
+- **By suite**: `MeshWeaver.FutuRe.Test` 13, `MeshWeaver.GitSync.Test` 1, unrecorded 1 (plus the
+  undissected 2026-08-24 `MeshWeaver.Hosting.Orleans.Test` crash at `GetCodeInfo+0x1f7`).
+
+#### What the fifteen have already eliminated — do not re-open these
+
+1. **Use-after-unload of a collectible ALC** — falsified three ways (`RIP` in file-backed runtime code;
+   a freed `LoaderAllocator` yields a non-null *unmapped* pointer, never a zero word at a mapped
+   address; a free-list item has no ALC), and `alc=1` at every checkpoint of #11–#15.
+2. **A teardown-ordering race** — every `DISPOSE_DONE` in every complete record reads
+   `teardown clean`, zero `DISPOSE_QUIESCE_LEAK` / `DISPOSE_DIRTY_TEARDOWN`; and the phase at death
+   varies (construction in #1, #3, #15; inside a test in #11–#13; inside a teardown in #2, #14).
+3. **Concurrent GC as the mechanism** — #1274 disabled it; the rate did not move (4.2 % → 3.8 %) and
+   `plan_phase` runs in blocking GCs; removed again.
+4. **An unhandled managed exception routed through `createdump`** — no `Unwind: exception type` in any.
+5. **The ClrMD DAC `pthread_key` teardown** — no `libmscordaccore.so` mapped (#15).
+6. **MeshWeaver code writing the heap** — zero `AllowUnsafeBlocks` in either repository; every mapped
+   native module is the runtime's or the OS's.
+7. **Disk pressure** — #15 wrote a complete 849 MiB core and nine suites ran after it.
+8. **Re-entrant hub construction** — 1,350 per green run; on non-faulting threads in #8.
+9. **The quiescing-leak family (#981)** — never co-occurs with the signal death.
+10. **The AI engine's teardown callbacks (#1507)** — `FutuRe.Test` does not reference `MeshWeaver.AI`.
+11. **The `MeshNodeStreamCache` query straggler** — real and fixed (#13/#14 entry), but a *managed*
+    `ObjectDisposedException` (exit 1), not a header write (exit 139).
+12. **"A single bad runtime build"** — three builds.
+13. **`10.0.12`'s hijack GC-hole fix as the whole answer** — #15 crashed on it (this entry).
+
+#### Cause or victim
+
+**`MeshWeaver.FutuRe.Test` is the sampler, not the cause.** Eight of the fifteen faulting threads run no
+application code at all, the faulting instruction is always inside the runtime, no assembly in the
+process can contain `unsafe` code, and a second suite (`GitSync.Test`) and a third
+(`Hosting.Orleans.Test`) have taken the same fault. What the suite contributes is the densest workload
+in the fleet for the two things the fingerprint needs — **garbage collections** (`gc0=493 gc1=184
+gc2=29` in ~40 s in #15) and **LCG `DynamicMethod` emit** (System.Text.Json's reflection-emit member
+accessors, one per serialized type, per `[Fact]`-built mesh) — so it is where a process-wide heap
+corruption is most often *discovered*. Moving, skipping or shrinking it would move the discovery, not
+the defect.
+
+**The truncation is per suite, not per shard.** The `Portal hosts` lane runs each suite as its own
+`dotnet test` process, so a crash ends only that suite's remaining tests; #15's shard ran nine further
+suites green after it.
+
+#### Does the lane turn the crash into a verdict? — yes
+
+`Portal hosts (shard N)` runs `classify-test-run.py --record-crash-into … --crash-recorder
+<platform>/.github/scripts/record-host-crash.py` (MeshWeaver.Plugins `.github/workflows/ci.yml`, the
+test step, no `matrix.shard` condition), and #15's trx carries `MeshWeaver.FutuRe.Test.HOST_CRASHED`
+`Failed` beside the 17 passes. The evidence-preserving machinery core #2495 introduced is in place on
+this lane; nothing needs landing there.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is
