@@ -537,14 +537,61 @@ happened.
 Each deferral case asserts the recycle **then runs**, not merely that it did not run. A change that
 swallowed the recycle would pass a "did not tear down" assertion and silently re-break #1104.
 
+### The lease names the root the install WRITES under — not the record's partition
+
+The three package kinds do not agree on how that root is derived, and `TargetPartitionOf` answers a
+different question (which partition an install *record* is about). `InstallCode` falls back to the
+shared `type` partition when a manifest declares no `targetPartition`; the record rule falls back to
+the package id. A lease keyed on the record rule would hold `<id>` for a blank-target Code package
+whose writes land in `type/<id>` — **a lease on a root nothing is writing to**, which in the log and
+in every other test reads exactly like a lease that is working, while the root that IS being written
+stays freely recyclable. `PackageInstaller.InstallRootOf` is the one definition, pinned by
+`TheLeaseNamesTheRootTheInstallWritesUnder_ForEveryKind` including the control that the other kinds
+still resolve to the package id.
+
+### The reach of the gate, and the three teardowns outside it
+
+🚨 **A guard whose reach is assumed rather than written down gets read as a guarantee it does not
+keep** — the same defect as the installer's own recycle line, which claimed *"work in flight beneath
+this root is answered by the teardown"* and was measurably false one lane over. So, explicitly: the
+lease is consulted by `HubRecycleExtensions.RecycleNode` and `NodeTypeRebindWatcher`. These still
+post a `DisposeRequest` without consulting it:
+
+| poster | why it is outside | |
+|---|---|---|
+| `MeshOperations.Recycle` | the operations / MCP recycle posts directly. An operator recycling a package root mid-install can still strand that install. | **an uncovered case** — routing it through the gate is a separate change |
+| `PackageInstaller.SettleRetypedRoot` | it is the lease HOLDER; a holder deferring against its own lease is a deadlock, and its recycle is ordered and waited on | **deliberate** |
+| `NodeTypeEnrichmentHelpers` (stale-build convergence, overlay self-heal) | they recycle per-TYPE hubs *beneath* a root, which is work the install is often waiting for | **deliberate** |
+
+### Two repairs considered and REJECTED, with the reason
+
+Both were raised in review, both look right, and both are wrong as stated. Recording why is the
+point — the next reader will have the same two ideas.
+
+**1. "Make `SettleRetypedRoot` wait for every holder that is not its own."** Two packages can target
+one partition, so install A's recycle can tear down a root install B is writing under — a real hole.
+But B's own `SettleRetypedRoot` would symmetrically wait for A's lease: **two installs each holding
+and each waiting is a mutual deadlock**, which no timeout may resolve (raising one is the band-aid,
+and dropping one recycle re-breaks #1732). The sound repair is to serialise installs per root, which
+is a different change with its own risk. Until then this is a **known residual**, not a covered case.
+
+**2. "Make the release hand the root atomically to the waiting recycler."** The wide window — the
+scheduler hop between the release and the waiter's continuation — *is* closed: `WhenReleased`
+re-evaluates the condition on the far side of the hop, recursing on the next genuine release (not a
+timer, not a retry, not a poll). What is left is the caller's own emission-to-post distance, with
+nothing in between. Closing *that* would mean either posting a teardown from inside the registry's
+own synchronisation, or letting a pending recycle RESERVE the root — and a reservation a new install
+has to queue behind inverts the priority this whole mechanism exists to protect.
+
 ### What this does NOT claim
 
-It does not claim the install can no longer lose a write. A root **beneath** an install still hosts
-per-type recyclers that are deliberately not deferred, and the installer's own `SettleRetypedRoot`
-still tears a root down while that root's background pipeline may be issuing correlated requests —
-the shape `RetypedRootRecycleNeedsAJobTest` records and #3800 narrowed by declining the recycle when
-the install wrote nothing. What is closed is the class the issue named: **nobody but the install
-itself takes that root down while the install is writing under it.**
+It does not claim the install can no longer lose a write. Besides the two residuals above, a root
+**beneath** an install still hosts per-type recyclers that are deliberately not deferred, and the
+installer's own `SettleRetypedRoot` still tears a root down while that root's background pipeline may
+be issuing correlated requests — the shape `RetypedRootRecycleNeedsAJobTest` records and #3800
+narrowed by declining the recycle when the install wrote nothing. What is closed is the class the
+issue named: **the automatic rebind recycle no longer takes a package root down while that package's
+own install is writing under it.**
 
 ## What this page does not claim
 

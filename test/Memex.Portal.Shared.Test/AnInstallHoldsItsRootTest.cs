@@ -103,6 +103,41 @@ public class AnInstallHoldsItsRootTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
+    /// 🚨 <b>The lease must name the root the install actually WRITES under, and the three package
+    /// kinds do not agree on how that is derived.</b> <c>InstallCode</c> falls back to the shared
+    /// <c>type</c> partition when the manifest declares no target, while the install RECORD's rule
+    /// (<c>TargetPartitionOf</c>) falls back to the package id. A lease keyed on the record's rule
+    /// would hold <c>&lt;id&gt;</c> for a blank-target Code package whose writes land in
+    /// <c>type/&lt;id&gt;</c> — a lease on a root nothing is writing to, which reads in the log and
+    /// in every other test exactly like a lease that is working, while the root that IS being
+    /// written stays freely recyclable. Pure, so the rule is pinned without a mesh.
+    /// </summary>
+    [Fact]
+    public void TheLeaseNamesTheRootTheInstallWritesUnder_ForEveryKind()
+    {
+        // A declared target always wins, whatever the kind.
+        PackageInstaller.InstallRootOf(Manifest(Package)).Should().Be(Package);
+        PackageInstaller.InstallRootOf(Manifest(Package) with { Kind = PackageKind.Code })
+            .Should().Be(Package);
+
+        // 🚨 THE REGRESSION CASE: no declared target, Code kind — the install writes under `type`.
+        PackageInstaller.InstallRootOf(
+                Manifest(Package) with { Kind = PackageKind.Code, TargetPartition = null })
+            .Should().Be(PackageInstaller.CodeDefaultPartition,
+                "InstallCode writes its NodeType into the shared `type` partition when the manifest "
+                + "declares no target, so that is the root whose teardown would strand its writes");
+
+        // …and the control: for the other kinds a blank target still means the package's own id,
+        // so a change that pointed every lease at `type` would fail here.
+        PackageInstaller.InstallRootOf(
+                Manifest(Package) with { Kind = PackageKind.NodeRepo, TargetPartition = null })
+            .Should().Be(Package);
+        PackageInstaller.InstallRootOf(
+                Manifest(Package) with { Kind = PackageKind.Content, TargetPartition = null })
+            .Should().Be(Package);
+    }
+
+    /// <summary>
     /// 🚨 THE CONTROL THAT MATTERS MOST. "Defer" is only allowed to mean <i>wait for a state that
     /// always arrives</i>. An install that FAILS is exactly when a recycle behind it must not be
     /// stranded — and a lease held by a dead install would be a permanently un-recyclable root,

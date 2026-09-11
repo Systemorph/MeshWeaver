@@ -131,6 +131,23 @@ public sealed class PackageRootInstallLeases
     /// in order, so the deferred re-check runs with the subject subscription already live and one
     /// of the two legs is guaranteed to answer. Same construction, same reason, as
     /// <c>NodeTypeAdoptionRegistry.WhenClear</c>.</para>
+    ///
+    /// <para>🚨 <b>And re-checked again AFTER the scheduler hop</b>, which is the wide window. The
+    /// release fires on the install's thread and the continuation runs on the pool, so a NEW
+    /// install can take the root in between — and a waiter that emitted then would hand its caller
+    /// a "clear" that was already stale, which is the very race this type exists to remove. The
+    /// re-check is a WAIT on the condition, re-evaluated on each real release event: it is not a
+    /// timer, not a retry and not a poll, and each iteration is triggered by an actual release
+    /// rather than by a clock.</para>
+    ///
+    /// <para>🚨 <b>What this still does NOT make atomic</b>, stated because a control that
+    /// overstates its reach is worse than none: between this emission and the caller's own
+    /// <c>Post</c> there is no lock, so an install that starts in those few instructions is not
+    /// waited for. Closing that would mean either posting the teardown from inside this registry's
+    /// own synchronisation, or letting a pending recycle RESERVE the root — and a reservation a
+    /// new install has to queue behind inverts the priority this whole type exists to protect. The
+    /// residual window is bounded by the emission-to-post distance, with nothing in between;
+    /// the measured defect was a teardown landing in the middle of a 145-file install.</para>
     /// </summary>
     /// <param name="rootPath">The root path to wait on.</param>
     public IObservable<Unit> WhenReleased(string? rootPath)
@@ -152,7 +169,13 @@ public sealed class PackageRootInstallLeases
             // releasing thread would put a teardown inside the install's terminal — the "work in a
             // Subscribe callback on the emission thread" shape this codebase removes everywhere
             // else. Hopping costs one scheduled continuation per deferred recycle.
-            .ObserveOn(TaskPoolScheduler.Default));
+            .ObserveOn(TaskPoolScheduler.Default)
+            // …and the hop is exactly where a new install can slip in, so the condition is
+            // re-evaluated on the far side of it. Recursion, not a loop with a delay: the only
+            // thing that can wake the next iteration is another genuine release.
+            .SelectMany(_ => IsHeld(rootPath)
+                ? WhenReleased(rootPath)
+                : Observable.Return(Unit.Default)));
     }
 
     private void Release(string rootPath, string holder)

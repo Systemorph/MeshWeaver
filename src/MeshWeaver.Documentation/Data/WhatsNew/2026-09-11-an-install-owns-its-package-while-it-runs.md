@@ -16,8 +16,8 @@ That happened six times, and it cost four publishes.
 
 ## What changed
 
-**An install now owns its package for as long as it runs.** Anything that would restart that package
-— an automatic rebind after the package's own type is rebuilt, an operations action, a reconcile —
+**An install now owns its package for as long as it runs.** The restart that used to land in the
+middle of one — the automatic rebind that follows the package's own type being rebuilt — now
 **waits**, and happens the moment the install finishes.
 
 Nothing is dropped and nothing is retried on a clock. The wait ends on the install ending, which is
@@ -39,7 +39,16 @@ including one landing on top of the fresh start the install was waiting for.
 
 ## What this does not do
 
-It does not make an install immune to every kind of interruption. Individual types inside a package
-can still be recycled while their package installs — deliberately, because the install is often
-waiting for exactly those rebuilds. What is closed is the case the incident was about: nobody but
-the install itself takes the package down while the install is writing into it.
+It does not make an install immune to every kind of interruption, and it is worth being exact about
+which ones remain:
+
+- **Individual types inside a package can still be restarted while their package installs** —
+  deliberately, because the install is usually waiting for exactly those rebuilds.
+- **An operator restarting a package by hand still goes through a different route**, which does not
+  yet consult this. That route is unchanged by this work.
+- **Two packages installing into one shared area** can still interrupt each other. Making them wait
+  for one another would let each wait for the other for ever, so the right answer there is to run
+  them one at a time — a separate change.
+
+What is closed is the case the incident was about: the package's own install is no longer
+interrupted by the automatic restart that its own work triggers.

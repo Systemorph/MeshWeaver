@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading.Tasks;
@@ -65,24 +65,26 @@ public class ARecycleWaitsForTheInstallHoldingTheRootTest(ITestOutputHelper outp
     /// </summary>
     private sealed class TestChangeFeed : IMeshChangeFeed
     {
-        private readonly List<Action<MeshChangeEvent>> handlers = [];
+        // 🚨 Instance ConcurrentDictionary, never a mutable List: the repository's collections
+        // policy holds in test/ too, and this feed is published from one thread while a watcher's
+        // disposal removes from another — the exact shape a bare List gets wrong.
+        private readonly ConcurrentDictionary<Guid, Action<MeshChangeEvent>> handlers = new();
 
         public void Publish(MeshChangeEvent change)
         {
-            foreach (var handler in handlers.ToArray())
+            foreach (var handler in handlers.Values)
                 handler(change);
         }
 
         public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
         {
-            void Wrapped(MeshChangeEvent e)
+            var key = Guid.NewGuid();
+            handlers[key] = e =>
             {
                 if (filter is null || e.Kind == filter)
                     handler(e);
-            }
-
-            handlers.Add(Wrapped);
-            return System.Reactive.Disposables.Disposable.Create(() => handlers.Remove(Wrapped));
+            };
+            return System.Reactive.Disposables.Disposable.Create(() => handlers.TryRemove(key, out _));
         }
     }
 

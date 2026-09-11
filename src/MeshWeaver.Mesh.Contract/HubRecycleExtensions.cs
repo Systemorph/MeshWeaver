@@ -38,6 +38,23 @@ namespace MeshWeaver.Mesh;
 /// release is a state that always arrives, because the install's lease is tied to its own
 /// subscription. With no install holding the root this is a straight pass-through, which is the
 /// common case and is a positive control in its own right.</para>
+///
+/// <para>🚨 <b>THIS IS NOT THE ONLY WAY A HUB IS TORN DOWN, and the gate reaches only what comes
+/// through here.</b> Stating that is the point: a guard whose reach is assumed rather than written
+/// down gets read as a guarantee it does not keep — the same defect as the installer's own recycle
+/// line, which claimed *"work in flight beneath this root is answered by the teardown"* and was
+/// measurably false one lane over. What still posts a <see cref="DisposeRequest"/> WITHOUT
+/// consulting the lease, at the time of writing:
+/// <list type="bullet">
+///   <item><c>MeshOperations.Recycle</c> — the operations/MCP recycle. It posts directly, so an
+///     operator recycling a package root mid-install can still strand that install. Routing it
+///     through here is a separate change in a separate file.</item>
+///   <item><c>PackageInstaller.SettleRetypedRoot</c> — deliberately, and the reason is on that
+///     method: it is the lease HOLDER, and a holder deferring against its own lease deadlocks.</item>
+///   <item><c>NodeTypeEnrichmentHelpers</c>' stale-build convergence and overlay self-heal — also
+///     deliberately: they recycle per-TYPE hubs beneath a root, which is work the install is often
+///     waiting for.</item>
+/// </list></para>
 /// </summary>
 public static class HubRecycleExtensions
 {

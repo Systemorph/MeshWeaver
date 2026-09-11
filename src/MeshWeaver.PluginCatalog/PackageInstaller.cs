@@ -121,6 +121,38 @@ public static class PackageInstaller
         $"PackageInstaller: the install of package '{manifest.Id}' is writing under this root";
 
     /// <summary>
+    /// 🚨 <b>The root an install actually writes under — the ONE definition, because the three
+    /// kinds do not agree and the lease has to name the same partition the writes land in
+    /// (#3510).</b>
+    ///
+    /// <para><b>Why this is not <see cref="TargetPartitionOf"/>.</b> That method answers a
+    /// different question — which partition an install RECORD is about — and its fallback is the
+    /// record id. <see cref="InstallCode"/>'s fallback is the shared <c>type</c> partition, so a
+    /// Code package that declares no <c>targetPartition</c> writes <c>type/&lt;id&gt;</c> while a
+    /// lease keyed on the record id would hold <c>&lt;id&gt;</c> — a lease on a root nothing is
+    /// writing to, leaving the root that IS being written freely recyclable. A lease that names the
+    /// wrong root is worse than no lease: it reads, in the log and in every test, exactly like a
+    /// lease that is working.</para>
+    ///
+    /// <para>Content and node-repo installs both write under
+    /// <c>TargetPartition ?? Id</c> (<see cref="InstallCore"/> refuses a Content package with no
+    /// target outright, so the fallback there is unreachable rather than wrong).</para>
+    /// </summary>
+    /// <param name="manifest">The package being installed.</param>
+    /// <returns>The partition root this install writes under.</returns>
+    internal static string InstallRootOf(PackageManifest manifest) =>
+        !string.IsNullOrWhiteSpace(manifest.TargetPartition)
+            ? manifest.TargetPartition!
+            : manifest.Kind == PackageKind.Code
+                ? CodeDefaultPartition
+                : manifest.Id;
+
+    /// <summary>The partition <see cref="InstallCode"/> writes a Code package's NodeType into when
+    /// the manifest declares no <c>targetPartition</c>. Named once so
+    /// <see cref="InstallRootOf"/> and the install itself cannot drift.</summary>
+    internal const string CodeDefaultPartition = "type";
+
+    /// <summary>
     /// 🚨 <b>Holds the package's root for exactly as long as the install runs (#3510) — so nothing
     /// else recycles it out from under the writes in flight beneath it.</b>
     ///
@@ -161,7 +193,7 @@ public static class PackageInstaller
         return leases is null
             ? install
             : leases.HoldDuring(
-                TargetPartitionOf(manifest.Id, manifest), InstallLeaseHolder(manifest), install);
+                InstallRootOf(manifest), InstallLeaseHolder(manifest), install);
     }
 
     private static IObservable<InstallResult> InstallCore(
@@ -1754,6 +1786,16 @@ public static class PackageInstaller
                 // unordered, possibly ON TOP of the fresh activation this method just waited for.
                 // That watcher's subscription dies with the hub this recycle tears down, so its
                 // deferred post is cancelled rather than replayed — one recycle, not two.
+                // 🚨 AND IT DOES NOT WAIT FOR ANOTHER INSTALL'S LEASE EITHER, which is a real hole
+                // and is named here rather than papered over. Two packages can target ONE partition
+                // (`targetPartition`), so install A's recycle here can tear down a root install B is
+                // still writing under. The obvious repair — wait for every holder that is not mine —
+                // is WRONG: B's own SettleRetypedRoot would symmetrically wait for A's lease, and
+                // two installs each holding and each waiting is a mutual deadlock that no timeout
+                // may resolve (raising one would be the band-aid, and dropping one recycle would
+                // re-break #1732). The sound repair is to serialise installs per root, which is a
+                // different change with its own risk and does not belong in a recycle gate. Until
+                // then this is a KNOWN residual, not a covered case.
                 // 🚨 The reason travels WITH the request (#3510). The log line above says why to
                 // whoever reads the INSTALLER's log; the root's own [QUIESCE-START] — and, through
                 // the cascade, every per-node child that goes down with it, which is where #3510's
@@ -2277,7 +2319,12 @@ public static class PackageInstaller
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Code package '{manifest.Id}' has no nodeTypeConfiguration."));
 
-        var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition) ? "type" : manifest.TargetPartition!;
+        // 🚨 ONE definition of this fallback, shared with InstallRootOf — the install's lease must
+        // name the partition the writes actually land in, and a Code package with no declared
+        // target writes under `type`, not under its own id (#3510).
+        var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition)
+            ? CodeDefaultPartition
+            : manifest.TargetPartition!;
         var nodeTypePath = $"{partition}/{manifest.Id}";
         var sourceFolder = manifest.SourceFolder ?? manifest.Id;
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
