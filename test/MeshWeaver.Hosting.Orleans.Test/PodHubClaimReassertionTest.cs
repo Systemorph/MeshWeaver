@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
+using MeshWeaver.Fixture;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,6 +59,18 @@ public class PodHubClaimReassertionTest
     private static readonly Address Hub = new("portal", "reassert");
 
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// How long a "no further claim arrives" reading watches for. Negative assertions are the one
+    /// place a fixed wait is correct — there is no positive signal to filter for — so it is kept
+    /// short, but DERIVED rather than written as a literal so it still scales on a loaded runner.
+    /// </summary>
+    private static TimeSpan StormWindow => TestTimeouts.Quick / 10;
+
+    /// <summary>Attach-call ordinals no run reaches: the grain's default, unmodified behaviour.</summary>
+    private const int NeverPark = -1;
+
+    private const int NeverRefuse = -1;
 
     private static IObservable<IMessageDelivery> Ignore(IMessageDelivery d, CancellationToken _) =>
         Observable.Return(d);
@@ -141,6 +154,132 @@ public class PodHubClaimReassertionTest
         await WaitForAttaches(factory, 4,
             "EVERY membership change, not just the first — the ClientDirectory prior art republishes "
             + "its whole routing table on each one");
+    }
+
+    /// <summary>
+    /// 🚨 THE #4013 PIN, half one: a membership change that arrives while the INITIAL claim is
+    /// still inside its attach window must still be asserted.
+    ///
+    /// <para><b>What it caught.</b> <c>ClaimTriggers</c> composed the initial assertion as
+    /// <c>Changes.StartWith(0L)</c> — and <c>StartWith</c> is a <c>Concat</c>, so the feed was
+    /// subscribed only after the prefix had been fully PROCESSED. Processing it runs the whole
+    /// first round synchronously, <c>Attach</c> included, and
+    /// <see cref="IClusterMembershipFeed.Changes"/> is hot and does not replay — so a change landing
+    /// in that window was delivered to every OTHER subscriber and silently discarded here. The
+    /// window is a hub's first claim, i.e. the pod's boot, which is exactly when membership moves.
+    /// The claim then stood against a directory partitioning that had already moved, with nothing
+    /// left to re-make it until the next change — the #2938 state that #3034 was supposed to have
+    /// removed.</para>
+    ///
+    /// <para><b>Why the count discriminates a MISSED assertion from an unobserved one.</b> The
+    /// number this waits on is published by the GRAIN, from inside <c>Attach</c> itself. A claim
+    /// that was made but whose result went unobserved still moves it; only a claim that was never
+    /// made leaves it where it was.</para>
+    /// </summary>
+    [Fact]
+    public async Task AMembershipChangeDuringTheInitialClaim_IsStillAsserted()
+    {
+        using var feed = new TestMembershipFeed();
+        var factory = new AcceptingGrainFactory(parkOnCall: 1);
+        await using var sp = await Services(feed);
+        using var routing = Router(factory, sp, new RecordingLogger());
+
+        using var registration = routing.RegisterStream(Hub, Ignore);
+        try
+        {
+            SpinWait.SpinUntil(() => factory.IsParked, TestTimeouts.Quick).Should().BeTrue(
+                "the initial claim must reach its attach window before this test can contend with it");
+
+            // The contended push: a real membership change, on its own thread, while the initial
+            // claim is demonstrably mid-attach — the interleaving the shard-0 failures hit.
+            feed.PushChange();
+        }
+        finally
+        {
+            factory.Release();
+        }
+
+        await WaitForAttaches(factory, 2,
+            "a membership change that lands while the INITIAL claim is still in its attach window is "
+            + "the one the grain directory most needs re-asserted against, and the claim's own feed "
+            + "was not yet subscribed to hear it (#4013)");
+    }
+
+    /// <summary>
+    /// 🚨 THE #4013 PIN, half two: the same obligation for a claim that is RETRYING.
+    ///
+    /// <para>Here the feed is demonstrably subscribed — the first round has already bounced once —
+    /// so the trigger reaches the claim. It was then thrown away by the claim/dispose handshake: a
+    /// round that found <c>claimState == StartingAttempt</c> answered <c>Observable.Empty</c>, a
+    /// TERMINAL answer to a TRANSIENT condition. A retry round runs on its timer's thread and a
+    /// membership round on the feed's, so the overlap is ordinary — and it is at its most likely
+    /// precisely during churn, because churn is what makes a claim bounce in the first place.</para>
+    /// </summary>
+    [Fact]
+    public async Task AMembershipChangeDuringARetryingClaim_IsStillAsserted()
+    {
+        using var feed = new TestMembershipFeed();
+        // Refuse the first attempt so the round retries, and park on the retry: by then the initial
+        // trigger has been processed and the feed is subscribed, so this isolates the handshake.
+        var factory = new AcceptingGrainFactory(parkOnCall: 2, refuseCall: 1);
+        await using var sp = await Services(feed);
+        using var routing = Router(factory, sp, new RecordingLogger());
+
+        using var registration = routing.RegisterStream(Hub, Ignore);
+        try
+        {
+            SpinWait.SpinUntil(() => factory.IsParked, TestTimeouts.Quick).Should().BeTrue(
+                "the retry must reach its attach window before this test can contend with it");
+            feed.PushChange();
+        }
+        finally
+        {
+            factory.Release();
+        }
+
+        await WaitForAttaches(factory, 3,
+            "a membership change that lands while a RETRYING round is in its attach window carries "
+            + "cluster shape that round predates, so it must make its own claim rather than be "
+            + "discarded as 'someone is already starting one' (#4013)");
+    }
+
+    /// <summary>
+    /// 🚨 THE OPPOSITE DIRECTION, and the reason the pins above cannot be satisfied by simply
+    /// firing more often: ONE membership change is ONE claim, contended or not.
+    ///
+    /// <para>A fix that re-triggered the round — on the retry, on the trigger it could not place,
+    /// on anything — would satisfy both pins above and reintroduce the claim storm
+    /// <c>Switch</c> exists to bound: every attempt makes the owning silo log a line, so an
+    /// over-asserting claim is the #2426/#2546 log-storm shape wearing a repair's colours.</para>
+    /// </summary>
+    [Fact]
+    public async Task AContendedMembershipChange_IsAssertedExactlyOnce()
+    {
+        using var feed = new TestMembershipFeed();
+        var factory = new AcceptingGrainFactory(parkOnCall: 1);
+        await using var sp = await Services(feed);
+        using var routing = Router(factory, sp, new RecordingLogger());
+
+        using var registration = routing.RegisterStream(Hub, Ignore);
+        try
+        {
+            SpinWait.SpinUntil(() => factory.IsParked, TestTimeouts.Quick).Should().BeTrue(
+                "the initial claim must reach its attach window before this test can contend with it");
+            feed.PushChange();
+        }
+        finally
+        {
+            factory.Release();
+        }
+
+        await WaitForAttaches(factory, 2, "the contended change is asserted");
+
+        // Negative, with no positive signal to filter for: a THIRD claim is the storm, and the only
+        // honest instrument is to wait a bounded while and require it never to arrive.
+        await factory.Attaches.Where(count => count >= 3).Should().NotEmit(StormWindow,
+            "one membership change is one claim: the initial assertion plus this change is exactly "
+            + "two, and a third would mean the contended round was re-fired rather than made once — "
+            + "which is the claim storm Switch bounds and the log storm #2426/#2546 removed");
     }
 
     /// <summary>
@@ -258,27 +397,51 @@ public class PodHubClaimReassertionTest
     /// what <c>PodHubGrain.Attach</c> returns on the silo that owns the address. Counting happens on
     /// the GRAIN, so a <c>Detach</c> during teardown can never be mistaken for another assertion.
     /// </summary>
-    private sealed class AcceptingPodHubGrain : IPodHubGrain, IDisposable
+    private sealed class AcceptingPodHubGrain(int parkOnCall = NeverPark, int refuseCall = NeverRefuse)
+        : IPodHubGrain, IDisposable
     {
         // 🚨 A BehaviorSubject, so a waiter that subscribes AFTER the count already reached its
         // target still sees it. With a plain Subject the test would be a race it usually wins,
         // which is the worst kind of green.
         private readonly BehaviorSubject<int> attaches = new(0);
         private int attachCalls;
+        private int parked;
+        private int released;
         public int AttachCalls => Volatile.Read(ref attachCalls);
 
         /// <summary>The running attach count — the CONDITION the tests wait on.</summary>
         public IObservable<int> Attaches => attaches;
 
+        /// <summary>True once the nominated <c>Attach</c> call is parked inside the grain.</summary>
+        public bool IsParked => Volatile.Read(ref parked) == 1;
+
+        /// <summary>
+        /// Lets the parked <c>Attach</c> return. A plain volatile write into a worker the test
+        /// deliberately parked — never a gate, and always called from a <c>finally</c> so a failing
+        /// assertion cannot strand the claim thread.
+        /// </summary>
+        public void Release() => Volatile.Write(ref released, 1);
+
         public Task<bool> Attach()
         {
-            // Switch keeps exactly one claim in flight per address, so these are serialised.
-            attaches.OnNext(Interlocked.Increment(ref attachCalls));
+            var call = Interlocked.Increment(ref attachCalls);
+            attaches.OnNext(call);
+            // "Landed on a silo that is not the owner" — the answer that makes the round RETRY, so
+            // a test can reach the retry window without a clock.
+            if (call == refuseCall)
+                return Task.FromResult(false);
+            if (call == parkOnCall)
+            {
+                Volatile.Write(ref parked, 1);
+                // Bounded, so a defect cannot hang the suite; the release is the real terminal.
+                SpinWait.SpinUntil(() => Volatile.Read(ref released) == 1, TestTimeouts.Quick);
+            }
             return Task.FromResult(true);
         }
 
         public void Dispose()
         {
+            Release();
             attaches.OnCompleted();
             attaches.Dispose();
         }
@@ -293,11 +456,18 @@ public class PodHubClaimReassertionTest
     /// because it is the only shape the mesh uses — every other member throws, so a new call shape
     /// fails loudly here instead of passing silently.
     /// </summary>
-    private sealed class AcceptingGrainFactory : IGrainFactory
+    private sealed class AcceptingGrainFactory(int parkOnCall = NeverPark, int refuseCall = NeverRefuse)
+        : IGrainFactory
     {
-        private readonly AcceptingPodHubGrain podHub = new();
+        private readonly AcceptingPodHubGrain podHub = new(parkOnCall, refuseCall);
 
         public int AttachCalls => podHub.AttachCalls;
+
+        /// <inheritdoc cref="AcceptingPodHubGrain.IsParked"/>
+        public bool IsParked => podHub.IsParked;
+
+        /// <inheritdoc cref="AcceptingPodHubGrain.Release"/>
+        public void Release() => podHub.Release();
 
         /// <summary>The running attach count — see <see cref="AcceptingPodHubGrain.Attaches"/>.</summary>
         public IObservable<int> Attaches => podHub.Attaches;
