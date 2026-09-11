@@ -342,15 +342,23 @@ loud, once, where it can be found.
 **Once per refusal, not once per recurrence.** A ticketed incident requests a `Comment` on every
 report, and after filing `LastCommentedAt` is `null`, so the comment rate limit never engages while
 the post keeps failing — a refused incident retries on **every** report. A bell per attempt would
-turn one missing permission into one notification per occurrence. So the failure write stamps
-`RefusalAnnouncedAt` when it rings the bell, and a post that lands clears it: one refusal episode,
-one bell, and the next refusal after a landed post rings again. The marker cannot be `Error` — the
+turn one missing permission into one notification per occurrence. So `RefusalAnnouncedAt` is
+stamped once the bell has been written, and a post that lands clears it: one refusal episode, one
+bell, and the next refusal after a landed post rings again. The marker cannot be `Error` — the
 claim clears `Error` before every attempt, so a marker keyed on it would announce the same refusal
 every time.
 
+**Bell first, marker second — and the bell row has an identity.** The two writes are not one
+transaction, so their order decides what a crash between them costs. Marker first leaves a marker
+with no bell: every later refusal reads "already announced" and the episode stays silent for good.
+So the bell is written first, under a deterministic identity — the fingerprint, the leg, and the
+`occurrencesAtLastComment` the episode started from, which nothing moves until a post lands — and
+upserted; the marker is written second. A crash between them costs one re-announcement into the
+SAME row, refreshed and unread: never a silent episode, never a duplicate.
+
 A refusal is information, not a transient: nothing retries it and nothing swallows it. If the bell
 itself cannot be written, that is logged at Error — which the watcher tickets like any other red
-line — and the marker is cleared, so the next refusal tries again.
+line — and the marker stays unset, so the next refusal announces again, into the same row.
 
 The bell's text is platform-owned and lives in the catalog (`logIncident.refused.*`, English and
 German). A notification row stores its title and message **verbatim**, and the platform addressee
