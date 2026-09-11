@@ -2102,6 +2102,76 @@ record byte-for-byte untouched, and on a live hub adopts.
 
 ---
 
+### 🚨 The batch bake compiles the definition the mesh holds WHEN IT COMPILES (2026-09-11)
+
+A pod's bake sweep enumerates every NodeType definition **once, at its start**
+(`DynamicTypePreWarmer.WarmDynamicTypes` → `DynamicTypesOf`), the batched discovery pass
+(`NodeTypeBatchBake.ResolveSources`) resolves source sets from those enumerated definitions later,
+and the sequential compile reaches each type minutes after that. `BakeOne` used to hand the
+compiler the **enumerated** node together with the **later** source set. A module update landing
+inside that window moves a definition and its files together, and the pair Roslyn received was
+neither the old content nor the new one.
+
+Measured on `memex.systemorph.com`, new pod on `3.0.0-ci.8372` started 18:50Z, while the Hosting
+module moved 1.15 → 1.16 (Plugins `cff9fb34cb`, which added `FleetWatch` and its
+`shared=@Hosting/InstanceAction/Source/ObservationQueries` entry together):
+
+| When (UTC) | `Hosting/Issue` |
+|---|---|
+| 18:53:04 — v458 | no `sources` (the defaults), module 1.15, fingerprint `ca01bf82…` `AdoptedVerified` |
+| 18:53:51 — v462 | `sources` = own `Source` + the `shared=` entry, module 1.16; `FleetWatch` in the source set |
+| ~18:55 — the pod's batch compile | "Executed source queries (2)" (the 1.15 definition) over a set holding `FleetWatch` → `CS0103 'ObservationQueries'` → a CompileError on a previously healthy type → readiness refused ~30 min |
+
+Nothing read anything partially and no resolver dropped the `shared=` entry: v458 genuinely declared
+no sources, and the pod's prebuilt DECLINE of the 1.16 bundle (`d251868c…` against the live
+`ca01bf82…`) was correct when it was taken. A fresh pod on the same image baked the type cleanly.
+It is not a regression of the core range the image moved across either: the repro below fails
+identically on `45306a33e` and on `74d4c8527`.
+
+**The rule now:** `NodeTypeBatchBake.CurrentCompileInput` re-reads the type's row immediately before
+the compile, through the same `IStorageAdapter.Read` the compile stamp already uses (never a routed
+point read, which on a type a sync has just pruned opens the storm-breaker), and compiles THAT row.
+The batch's pre-resolved set is reused only when both witnesses say it is still the set: the row
+declares the very source queries the batch resolved it with, AND the row's own
+`CurrentSourceVersions` record is absent or names exactly the versions the batch holds. Otherwise the
+sources are resolved again from the current queries through the batch's own bounded,
+truncation-checked `RunQuery` (same `DiscoveryUnestablished` invariant), and the row is read once more
+afterwards; a definition that moved AGAIN meanwhile is not compiled. One deadline covers the re-read,
+any re-resolution, the compile and the stamp — the compile gets only the time that is left.
+
+Every "I don't know" is a non-verdict (`TimedOut`, "not evaluated"), never a compile of a pair nobody
+can vouch for: a re-read that faults or runs out of budget, a row that no longer reads as a
+`NodeTypeDefinition`, a current source set that cannot be established, a definition that moved again.
+A row absent from storage is confirmed by a listing and reported `Removed` WITHOUT a compile or a
+stamp — the stamp's insert-if-absent would otherwise re-create the type its repository just pruned.
+
+**What it does NOT establish: an atomic snapshot.** Neither a row read nor a query is a transaction,
+and the version record lags the files by the sources watcher's own latency, so a source edited in the
+last instant before the compile can still be compiled at its earlier version. That residue heals
+itself — `CompiledSources` records what was compiled, the watcher's newer record reads dirty, the type
+rebuilds — and a verdict it produces is the one #1214's recovery watch exists for (see the residue
+note below).
+
+**Test:** `ABakeCompilesTheDefinitionItResolvedTest` (MeshWeaver.Hosting.Test) runs the sweep's own
+enumeration, discovery and compile against a real monolith mesh. Its repro moves a consumer's
+definition between enumeration and compile, adding a single-node `shared=` entry, and expects the
+verdict the CURRENT content earns — `Compiled` for sound content, a gating `CompileError` naming the
+genuine defect for broken content. Without the fix both cases fail with the production text
+(`Executed source queries (2)` … `CS0103 The name 'LibAnswers' does not exist`) on `45306a33e` and on
+`main`; two controls — an unmoved definition compiles from the batch set, and a genuine compile
+error still gates — pass on all three. Three further cases pin the review's findings (#4051): a source
+edited under UNCHANGED queries is compiled as it now stands once its version record moved; a moved
+definition whose current source set cannot be established inside the per-type deadline is `TimedOut`,
+never a `CompileError`; and a type pruned during the sweep is `Removed` and is NOT re-created by a
+stamp.
+
+**Residue, named rather than closed.** A mesh that is itself torn when the compile runs — the file
+has landed and its definition has not — still earns a CompileError, because that is what the content
+IS at that instant. Its cure remains #1214's `WatchForRecovery`, which retracts the regression on a
+fresh usable build on THIS image. Whether that watch can be starved when the type's own hub is hosted
+by a previous-generation pod (whose rebuild is stamped for the old framework) is consistent with this
+incident's ~30-minute hold but was not established here.
+
 ## 🚨 That recompile can FAIL — and nothing upstream can warn you
 
 Rule 3 guarantees a framework upgrade recompiles **every** dynamic NodeType. That recompile

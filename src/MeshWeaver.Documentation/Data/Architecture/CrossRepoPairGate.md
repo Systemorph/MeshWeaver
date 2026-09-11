@@ -258,6 +258,25 @@ seal time, not merge time** — attribute by the set each run's `Resolve the rel
 names, never by the clock. And **a red in the dependent is evidence about core only after the diff
 is held constant** — one commit, two sets.
 
+### A shape-7 suspect that was NOT shape 7: the torn bake input (2026-09-11)
+
+`Hosting/Issue` compiled on core set `3.0.0-ci.8314` and failed with `CS0103 'ObservationQueries'` on a
+new pod of `3.0.0-ci.8372`; the range between them touched source resolution and compile-cache code,
+nothing touched the `shared=` literal, and the obvious reading was shape 7 — behaviour changed behind
+an unchanged signature. It was not. The failing type's own version history showed its definition
+MOVING during the pod's bake (v458 at 18:53:04Z with no declared sources, v462 at 18:53:51Z with the
+`shared=` entry): the bake had compiled the definition it enumerated before a module update over
+the files that landed after it. The deterministic repro fails identically on both ends of the range
+(`45306a33e` and `74d4c8527`), and a fresh pod on the same image baked the type cleanly. Bisecting
+the range would have found nothing.
+
+**The discriminating read before bisecting a shape-7 suspect in a NodeType compile:** read the
+failing type's versions across the failing process's bake window (`get_versions`, then
+`get_version` on each side of the window). If the definition moved while the process was baking,
+the verdict was measured against a moving input, and the image range is the wrong place to look.
+The defect and its fix: [the batch bake compiles the definition the mesh holds when it
+compiles](../NodeTypeCompilation).
+
 ### 🚨 Shape 7 in the by-hand sweep: a `!` on the WRONG receiver hides the site (#3321)
 
 Shape 7 has no gate, so the only control is a **by-hand sweep of the dependents**. This is about how
