@@ -105,8 +105,95 @@ public static class PackageInstaller
         // the other, and a licence that asks nothing costs a single null check.
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, logger)
             .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, logger))
-            .SelectMany(_ => InstallCore(
-                hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId));
+            .SelectMany(_ => HoldRootDuringInstall(hub, manifest, InstallCore(
+                hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId)));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The sentence a deferred recycle prints when it names who is holding the root</b>
+    /// (#3510). Pure, so it is pinned without a mesh, and deliberately not an anonymous string
+    /// literal: the whole point of the lease is that a recycle which waits SAYS what it is waiting
+    /// for, and a holder with no name reads to the next person as no holder at all.
+    /// </summary>
+    /// <param name="manifest">The package being installed.</param>
+    /// <returns>The phrase carried on the lease.</returns>
+    internal static string InstallLeaseHolder(PackageManifest manifest) =>
+        $"PackageInstaller: the install of package '{manifest.Id}' is writing under this root";
+
+    /// <summary>
+    /// 🚨 <b>The root an install actually writes under — the ONE definition, because the three
+    /// kinds do not agree and the lease has to name the same partition the writes land in
+    /// (#3510).</b>
+    ///
+    /// <para><b>Why this is not <see cref="TargetPartitionOf"/>.</b> That method answers a
+    /// different question — which partition an install RECORD is about — and its fallback is the
+    /// record id. <see cref="InstallCode"/>'s fallback is the shared <c>type</c> partition, so a
+    /// Code package that declares no <c>targetPartition</c> writes <c>type/&lt;id&gt;</c> while a
+    /// lease keyed on the record id would hold <c>&lt;id&gt;</c> — a lease on a root nothing is
+    /// writing to, leaving the root that IS being written freely recyclable. A lease that names the
+    /// wrong root is worse than no lease: it reads, in the log and in every test, exactly like a
+    /// lease that is working.</para>
+    ///
+    /// <para>Content and node-repo installs both write under
+    /// <c>TargetPartition ?? Id</c> (<see cref="InstallCore"/> refuses a Content package with no
+    /// target outright, so the fallback there is unreachable rather than wrong).</para>
+    /// </summary>
+    /// <param name="manifest">The package being installed.</param>
+    /// <returns>The partition root this install writes under.</returns>
+    internal static string InstallRootOf(PackageManifest manifest) =>
+        !string.IsNullOrWhiteSpace(manifest.TargetPartition)
+            ? manifest.TargetPartition!
+            : manifest.Kind == PackageKind.Code
+                ? CodeDefaultPartition
+                : manifest.Id;
+
+    /// <summary>The partition <see cref="InstallCode"/> writes a Code package's NodeType into when
+    /// the manifest declares no <c>targetPartition</c>. Named once so
+    /// <see cref="InstallRootOf"/> and the install itself cannot drift.</summary>
+    internal const string CodeDefaultPartition = "type";
+
+    /// <summary>
+    /// 🚨 <b>Holds the package's root for exactly as long as the install runs (#3510) — so nothing
+    /// else recycles it out from under the writes in flight beneath it.</b>
+    ///
+    /// <para><b>The defect.</b> The <c>Hosting</c> root's hub was torn down while <c>Hosting</c>'s
+    /// own 145-file install was in flight. Its per-node children went with it, the writes those
+    /// children owed acks for were stranded (<c>ADVANCE_WITHOUT_HANDOFF … the owner never
+    /// acknowledged this write</c>), the <c>nodeops</c> handler that owed its reply to one of those
+    /// acks never replied, and the install ran out the gate's ten-minute bound — six occurrences,
+    /// four lost bake seals. <i>The install is the writer that should own the root's lifetime.</i></para>
+    ///
+    /// <para>🚨 <b>Why the lease is released on EVERY ending, and why that matters more than the
+    /// hold.</b> The hold is taken through <c>Observable.Using</c>, so the handle is disposed on
+    /// OnCompleted, on OnError, <b>and</b> on unsubscribe — the complete set of ways an Rx
+    /// subscription can end. A failed install releases; an install whose caller gives up releases;
+    /// the mesh going down takes the whole registry with it. There is deliberately NO timer that
+    /// force-releases a lease: "defer" has to mean <i>wait for a state that always arrives</i>, and
+    /// a clock would hand the recycle back the very race the lease removes.</para>
+    ///
+    /// <para>🚨 <b>Wrapped OUTSIDE the two gates, not inside.</b> An install refused by
+    /// <see cref="PackageEntitlement"/> or <see cref="LicenseAcceptanceGate"/> writes nothing, so
+    /// it must hold nothing — but because the wrap is around <c>InstallCore</c> only, a refusal
+    /// short-circuits before the resource is ever acquired rather than taking and dropping a
+    /// lease.</para>
+    ///
+    /// <para>🚨 <b>The installer's OWN recycle is not deferred against this lease, and must not
+    /// be.</b> <see cref="SettleRetypedRoot"/> is the holder: its recycle is the install's own
+    /// ordered act, placed between the two <c>RequestReleases</c> waves because the deferred wave's
+    /// compiles read a root that must already be bound to the package's own type (#1732), and it
+    /// WAITS for the root to answer again before the install proceeds. A holder deferring against
+    /// its own lease is a deadlock. What the lease removes is the SECOND, unordered teardown —
+    /// <c>NodeTypeRebindWatcher</c> firing on the placeholder retype this very install performed,
+    /// or any other party recycling the root mid-flight.</para>
+    /// </summary>
+    private static IObservable<InstallResult> HoldRootDuringInstall(
+        IMessageHub hub, PackageManifest manifest, IObservable<InstallResult> install)
+    {
+        var leases = hub.ServiceProvider.GetService<PackageRootInstallLeases>();
+        return leases is null
+            ? install
+            : leases.HoldDuring(
+                InstallRootOf(manifest), InstallLeaseHolder(manifest), install);
     }
 
     private static IObservable<InstallResult> InstallCore(
@@ -1688,6 +1775,27 @@ public static class PackageInstaller
                     + "anything still pending at that bound is force-cancelled and surfaces to its "
                     + "issuer as HubDisposedBeforeResponseException.",
                     rootPath);
+                // 🚨 THIS recycle is NOT deferred against the install's own root lease (#3510),
+                // and that is deliberate: this method IS the lease holder. Its teardown is the
+                // install's own ordered act — it sits between the two RequestReleases waves
+                // because the deferred wave's compiles read a root that must already carry the
+                // package's own binding (#1732), and WaitForRootReady below holds the install
+                // until the address answers again. Deferring a holder against its own lease is a
+                // deadlock. The lease exists to stop the OTHER teardown: NodeTypeRebindWatcher
+                // firing on the placeholder retype this very install performed, which would land
+                // unordered, possibly ON TOP of the fresh activation this method just waited for.
+                // That watcher's subscription dies with the hub this recycle tears down, so its
+                // deferred post is cancelled rather than replayed — one recycle, not two.
+                // 🚨 AND IT DOES NOT WAIT FOR ANOTHER INSTALL'S LEASE EITHER, which is a real hole
+                // and is named here rather than papered over. Two packages can target ONE partition
+                // (`targetPartition`), so install A's recycle here can tear down a root install B is
+                // still writing under. The obvious repair — wait for every holder that is not mine —
+                // is WRONG: B's own SettleRetypedRoot would symmetrically wait for A's lease, and
+                // two installs each holding and each waiting is a mutual deadlock that no timeout
+                // may resolve (raising one would be the band-aid, and dropping one recycle would
+                // re-break #1732). The sound repair is to serialise installs per root, which is a
+                // different change with its own risk and does not belong in a recycle gate. Until
+                // then this is a KNOWN residual, not a covered case.
                 // 🚨 The reason travels WITH the request (#3510). The log line above says why to
                 // whoever reads the INSTALLER's log; the root's own [QUIESCE-START] — and, through
                 // the cascade, every per-node child that goes down with it, which is where #3510's
@@ -2211,7 +2319,12 @@ public static class PackageInstaller
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Code package '{manifest.Id}' has no nodeTypeConfiguration."));
 
-        var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition) ? "type" : manifest.TargetPartition!;
+        // 🚨 ONE definition of this fallback, shared with InstallRootOf — the install's lease must
+        // name the partition the writes actually land in, and a Code package with no declared
+        // target writes under `type`, not under its own id (#3510).
+        var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition)
+            ? CodeDefaultPartition
+            : manifest.TargetPartition!;
         var nodeTypePath = $"{partition}/{manifest.Id}";
         var sourceFolder = manifest.SourceFolder ?? manifest.Id;
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
@@ -3380,9 +3493,11 @@ public static class PackageInstaller
         var effectiveLogger = logger;
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, effectiveLogger)
             .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, effectiveLogger))
-            .SelectMany(_ => InstallNodeRepoDeltaCore(
+            // The delta path writes under the SAME root as the full one, so it holds the same lease
+            // (#3510) — an incremental update is no less able to lose its writes to a recycle.
+            .SelectMany(_ => HoldRootDuringInstall(hub, manifest, InstallNodeRepoDeltaCore(
                 hub, manifest, newManifest, changedFiles, removedNodePaths, installedFromRef,
-                effectiveLogger, authorizingUserId));
+                effectiveLogger, authorizingUserId)));
     }
 
     private static IObservable<InstallResult> InstallNodeRepoDeltaCore(

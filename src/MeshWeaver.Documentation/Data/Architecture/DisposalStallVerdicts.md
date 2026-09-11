@@ -424,6 +424,175 @@ for why the precondition was made causal in the first place.
 to what either twin asserts is not done until the Plugins copy carries it (break shape 7; see
 [Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) → "Shape 7's worst form").
 
+## The install holds the root: deferring a recycle instead of stranding a write (#3510)
+
+Naming the disposer (the section above) made the next occurrence a read. It did not stop the
+teardown. This is the part that does.
+
+### What was measured
+
+> The `Hosting` root hub was disposed at 23:37:51Z while `Hosting`'s own 145-file install was in
+> flight. Its per-node children — the owners of `Hosting/*/_Activity/compile-state`,
+> `Hosting/_Access/Public_Access` — went with it. The `nodeops` handler had already written through
+> those node streams and returned `Processed()`, owing its reply to the write's ack; the ack never
+> came (`[UpdateQueue] ADVANCE_WITHOUT_HANDOFF … the owner never acknowledged this write`), so the
+> reply was never posted, the installer's `Observe` never fired, and the install ran out its
+> ten-minute bound as `[FAIL] Hosting — install: TimeoutException`.
+
+Six occurrences, four lost bake seals, one package every time.
+
+### The rule
+
+> **The install is the writer that owns the root's lifetime.** While an install holds a package
+> root, a recycle aimed at that root **waits**, and runs the moment the install releases it.
+
+`PackageRootInstallLeases` (mesh-scoped singleton, `MeshBuilder`) is that statement in code.
+`PackageInstaller.Install` and `InstallNodeRepoDelta` take a lease on
+`TargetPartitionOf(id, manifest)` for the whole run; `HubRecycleExtensions.RecycleNode` and
+`NodeTypeRebindWatcher` consult it before posting their `DisposeRequest`.
+
+### Why DEFER and not NACK
+
+The issue offered two remedies. The second — answer every in-flight write under the recycling root
+with a NACK the handler turns into the caller's reply — was **measured wrong one lane over**, in
+[#3112](https://github.com/Systemorph/MeshWeaver/issues/3112): faulting a write at
+`ADVANCE_WITHOUT_HANDOFF` reports failure for a write that **may well have committed**, because the
+caller's terminal has already fired at `LOCAL_EMIT` and the 5 s handoff bound is the *writer's*
+patience, not a statement about the store. A false "your write failed" is worse than a slow one.
+
+What the NACK arm *can* do correctly is already done and already green: the UPDATE leg's
+`RegisterOwnerDisposingNack` mints `OwnerDisposing` — a code the writer **re-enqueues** rather than
+surfaces — and `UpsertAnswersWhenTheOwnerGoesAwayTest` pins it. That is the owner *answering*, not
+the writer *guessing*, and it is why extending it further is not the remedy left open here.
+
+So: defer. And deferring has exactly one obligation.
+
+### "The install released the root" — why that state always arrives
+
+The lease is taken through `Observable.Using`, so the handle is disposed on **OnCompleted**, on
+**OnError**, and on **unsubscribe** — the complete set of ways an Rx subscription can end.
+
+| the install… | releases because |
+|---|---|
+| succeeds | `Using` disposes the resource on the terminal |
+| **faults** | same terminal path — an install that fails is exactly when a deferred recycle must not be stranded |
+| is abandoned (its caller's budget elapses, the caller's hub goes down) | the unsubscribe disposes the resource |
+| never ends at all | the mesh does — the registry is a mesh-scoped instance, not static state |
+
+🚨 **There is deliberately no timer that force-releases a lease.** "Defer" has to mean *wait for a
+state that always arrives*, never *wait a while*: a clock would hand the recycle back the very race
+the lease removes, and it is the band-aid this repository refuses. The cost of that choice is that a
+leaked lease would be an un-recyclable root — so the release arms are pinned by name
+(`AnInstallReleasesItsRoot_OnCompletion_OnFault_AndOnUnsubscribe`,
+`AnInstallThatFAILS_StillReleasesItsRoot`) and **a deferral is never silent**: it logs once when it
+defers, naming the holder, and once when it proceeds.
+
+### Scope: the ROOT PATH exactly, never the subtree
+
+The lease key is the whole path, and a recycle defers only when its target **is** that path. That is
+not conservatism, it is a deadlock avoidance that has to be stated:
+
+- an install **waits** on work beneath its own root — `PackageInstaller.MayPublishIntoRoot` holds
+  until the root's in-package NodeType has a loadable build;
+- the recyclers that serve those rebuilds — `NodeTypeEnrichmentHelpers`' stale-build convergence and
+  `WithOverlaySelfHeal` — live on the per-type hubs **beneath** the root.
+
+Deferring those against the install that is waiting for them would deadlock the install. They are
+out of scope, by design.
+
+### And the installer's own recycle is NOT deferred
+
+`PackageInstaller.SettleRetypedRoot` is the lease **holder**. Its teardown is the install's own
+ordered act: it sits between the two `RequestReleases` waves because the deferred wave's compiles
+read a root that must already carry the package's own binding (#1732), and `WaitForRootReady` holds
+the install until the address answers again. A holder deferring against its own lease is a deadlock,
+so it posts directly — and the code says so at the post.
+
+What the lease removes is the **second, unordered** teardown. `NodeTypeRebindWatcher` is armed on
+every instance hub at activation, package roots included, and `RequiresRebind` fires on precisely
+the event the installer's placeholder dance produces — the root's retype. Before this it could post
+a `DisposeRequest` at any moment of the write stage, including on top of the fresh activation
+`SettleRetypedRoot` had just waited for. It now waits; and because its subscription is registered
+for disposal on the hub it would recycle, the installer's own recycle **cancels** it rather than
+replaying it afterwards. One recycle per install, not two.
+
+### Both directions, and why the second one is the one to watch
+
+#3965 measured that **a root recycling with no install of its own is the COMMON case**. A change
+that deferred every recycle would satisfy the regression case and break the mesh's ability to rebind
+a hub at all — a hub left serving the configuration it was born with, which is #1104 all over again.
+Every regression case therefore has a paired control holding no lease:
+
+| regression | control |
+|---|---|
+| `ARetypeOfARootAnInstallHolds_DoesNotRecycleUntilTheInstallReleasesIt` | `ARetypeWithNoInstallHoldingTheRoot_RecyclesAtOnce` |
+| `WhileAnInstallHoldsTheRoot_TheRecycleWaitsAndThenRuns` | `WithNoInstallHoldingTheRoot_TheRecycleProceedsAtOnce` |
+| `TheRootIsHeldWhileTheInstallRuns_AndReleasedWhenItFinishes` | `AnInstallThatFAILS_StillReleasesItsRoot` |
+
+plus `ALeaseOnANeighbouringRoot_DoesNotDeferThisOne` and
+`WithNoLeaseRegistryAtAll_TheRecycleIsUnchanged`, because a fix that keyed on a prefix — or became a
+hard dependency on the registry — would look in production exactly like a recycle that never
+happened.
+
+Each deferral case asserts the recycle **then runs**, not merely that it did not run. A change that
+swallowed the recycle would pass a "did not tear down" assertion and silently re-break #1104.
+
+### The lease names the root the install WRITES under — not the record's partition
+
+The three package kinds do not agree on how that root is derived, and `TargetPartitionOf` answers a
+different question (which partition an install *record* is about). `InstallCode` falls back to the
+shared `type` partition when a manifest declares no `targetPartition`; the record rule falls back to
+the package id. A lease keyed on the record rule would hold `<id>` for a blank-target Code package
+whose writes land in `type/<id>` — **a lease on a root nothing is writing to**, which in the log and
+in every other test reads exactly like a lease that is working, while the root that IS being written
+stays freely recyclable. `PackageInstaller.InstallRootOf` is the one definition, pinned by
+`TheLeaseNamesTheRootTheInstallWritesUnder_ForEveryKind` including the control that the other kinds
+still resolve to the package id.
+
+### The reach of the gate, and the three teardowns outside it
+
+🚨 **A guard whose reach is assumed rather than written down gets read as a guarantee it does not
+keep** — the same defect as the installer's own recycle line, which claimed *"work in flight beneath
+this root is answered by the teardown"* and was measurably false one lane over. So, explicitly: the
+lease is consulted by `HubRecycleExtensions.RecycleNode` and `NodeTypeRebindWatcher`. These still
+post a `DisposeRequest` without consulting it:
+
+| poster | why it is outside | |
+|---|---|---|
+| `MeshOperations.Recycle` | the operations / MCP recycle posts directly. An operator recycling a package root mid-install can still strand that install. | **an uncovered case** — routing it through the gate is a separate change |
+| `PackageInstaller.SettleRetypedRoot` | it is the lease HOLDER; a holder deferring against its own lease is a deadlock, and its recycle is ordered and waited on | **deliberate** |
+| `NodeTypeEnrichmentHelpers` (stale-build convergence, overlay self-heal) | they recycle per-TYPE hubs *beneath* a root, which is work the install is often waiting for | **deliberate** |
+
+### Two repairs considered and REJECTED, with the reason
+
+Both were raised in review, both look right, and both are wrong as stated. Recording why is the
+point — the next reader will have the same two ideas.
+
+**1. "Make `SettleRetypedRoot` wait for every holder that is not its own."** Two packages can target
+one partition, so install A's recycle can tear down a root install B is writing under — a real hole.
+But B's own `SettleRetypedRoot` would symmetrically wait for A's lease: **two installs each holding
+and each waiting is a mutual deadlock**, which no timeout may resolve (raising one is the band-aid,
+and dropping one recycle re-breaks #1732). The sound repair is to serialise installs per root, which
+is a different change with its own risk. Until then this is a **known residual**, not a covered case.
+
+**2. "Make the release hand the root atomically to the waiting recycler."** The wide window — the
+scheduler hop between the release and the waiter's continuation — *is* closed: `WhenReleased`
+re-evaluates the condition on the far side of the hop, recursing on the next genuine release (not a
+timer, not a retry, not a poll). What is left is the caller's own emission-to-post distance, with
+nothing in between. Closing *that* would mean either posting a teardown from inside the registry's
+own synchronisation, or letting a pending recycle RESERVE the root — and a reservation a new install
+has to queue behind inverts the priority this whole mechanism exists to protect.
+
+### What this does NOT claim
+
+It does not claim the install can no longer lose a write. Besides the two residuals above, a root
+**beneath** an install still hosts per-type recyclers that are deliberately not deferred, and the
+installer's own `SettleRetypedRoot` still tears a root down while that root's background pipeline may
+be issuing correlated requests — the shape `RetypedRootRecycleNeedsAJobTest` records and #3800
+narrowed by declining the recycle when the install wrote nothing. What is closed is the class the
+issue named: **the automatic rebind recycle no longer takes a package root down while that package's
+own install is writing under it.**
+
 ## What this page does not claim
 
 The wedge in #3593 is **not fixed**. What changed is that the next occurrence is nameable: the
