@@ -1,5 +1,8 @@
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh;
 
@@ -25,6 +28,33 @@ namespace MeshWeaver.Mesh;
 /// delivering the node the moment the address reactivates (#1726). So there is no timer here, no
 /// watchdog, and no sleep — the framework's read IS the wait, and a recycle that outlasts the whole
 /// budget surfaces the typed <c>AddressRecyclingException</c> rather than a silent nothing.</para>
+///
+/// <para>🚨 <b>And why it may WAIT before it posts</b> (#3510). A recycle aimed at a package root
+/// that an install is writing under strands that install's work: the root's per-node children go
+/// down with it, the writes they owed acks for are never answered, and the handler that owed its
+/// reply to one of those acks never replies. So the post is deferred while
+/// <see cref="PackageRootInstallLeases"/> says an install holds that exact path, and runs the
+/// moment the install releases it. Nothing is dropped, nothing is retried, no bound moves — the
+/// release is a state that always arrives, because the install's lease is tied to its own
+/// subscription. With no install holding the root this is a straight pass-through, which is the
+/// common case and is a positive control in its own right.</para>
+///
+/// <para>🚨 <b>THIS IS NOT THE ONLY WAY A HUB IS TORN DOWN, and the gate reaches only what comes
+/// through here.</b> Stating that is the point: a guard whose reach is assumed rather than written
+/// down gets read as a guarantee it does not keep — the same defect as the installer's own recycle
+/// line, which claimed *"work in flight beneath this root is answered by the teardown"* and was
+/// measurably false one lane over. What still posts a <see cref="DisposeRequest"/> WITHOUT
+/// consulting the lease, at the time of writing:
+/// <list type="bullet">
+///   <item><c>MeshOperations.Recycle</c> — the operations/MCP recycle. It posts directly, so an
+///     operator recycling a package root mid-install can still strand that install. Routing it
+///     through here is a separate change in a separate file.</item>
+///   <item><c>PackageInstaller.SettleRetypedRoot</c> — deliberately, and the reason is on that
+///     method: it is the lease HOLDER, and a holder deferring against its own lease deadlocks.</item>
+///   <item><c>NodeTypeEnrichmentHelpers</c>' stale-build convergence and overlay self-heal — also
+///     deliberately: they recycle per-TYPE hubs beneath a root, which is work the install is often
+///     waiting for.</item>
+/// </list></para>
 /// </summary>
 public static class HubRecycleExtensions
 {
@@ -59,21 +89,61 @@ public static class HubRecycleExtensions
     /// <c>AddressRecyclingException</c> if the address is still recycling when the budget runs out.</returns>
     public static IObservable<MeshNode?> RecycleNode(
         this IMessageHub hub, string path, TimeSpan? budget = null, string? reason = null)
+        => WaitWhileAnInstallHoldsIt(hub, path)
+            .SelectMany(_ => Observable.Defer(() =>
+            {
+                hub.Post(
+                    new DisposeRequest
+                    {
+                        Reason = reason
+                                 ?? $"HubRecycleExtensions.RecycleNode: {hub.Address} asked for this "
+                                    + "address to be recycled and is waiting for a fresh activation to "
+                                    + "answer",
+                    },
+                    o => o.WithTarget(new Address(path)));
+                // The read is issued AFTER the dispose is posted, so it queues behind it at the target
+                // and is answered by the reactivated hub (or NACKed ShuttingDown and re-probed until it
+                // is). Deliberately NOT ReadTimeoutBehavior.EmitNull: "I could not tell" must reach the
+                // caller as an error, because the caller's next act is to send a user somewhere.
+                return hub.GetMeshNode(path, budget ?? DefaultRecycleBudget);
+            }));
+
+    /// <summary>
+    /// Emits once nothing is installing under <paramref name="path"/> — at once in the ordinary
+    /// case, and on the install's release when one holds it (#3510).
+    ///
+    /// <para>🚨 <b>The deferral is announced in both directions.</b> A recycle that silently waited
+    /// would be indistinguishable from a recycle that was never asked for, which is exactly the
+    /// unreadability that cost this issue six occurrences; and a lease that somehow outlived its
+    /// install would show up as nothing at all. So the wait logs when it starts, naming the holder,
+    /// and again when it proceeds. <b>Information</b>, not Debug: it is one line per deferred
+    /// recycle — an event that by construction only happens while a package install is running —
+    /// and the reader needing it is looking at a stalled install, not at a trace.</para>
+    ///
+    /// <para>No registry (a host composed without <c>MeshBuilder</c>'s registrations, a bare test
+    /// hub) means no lease can exist, so the answer is "proceed" and the pre-#3510 behaviour is
+    /// unchanged.</para>
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> WaitWhileAnInstallHoldsIt(
+        IMessageHub hub, string path)
         => Observable.Defer(() =>
         {
-            hub.Post(
-                new DisposeRequest
-                {
-                    Reason = reason
-                             ?? $"HubRecycleExtensions.RecycleNode: {hub.Address} asked for this "
-                                + "address to be recycled and is waiting for a fresh activation to "
-                                + "answer",
-                },
-                o => o.WithTarget(new Address(path)));
-            // The read is issued AFTER the dispose is posted, so it queues behind it at the target
-            // and is answered by the reactivated hub (or NACKed ShuttingDown and re-probed until it
-            // is). Deliberately NOT ReadTimeoutBehavior.EmitNull: "I could not tell" must reach the
-            // caller as an error, because the caller's next act is to send a user somewhere.
-            return hub.GetMeshNode(path, budget ?? DefaultRecycleBudget);
+            var leases = hub.ServiceProvider.GetService<PackageRootInstallLeases>();
+            if (leases?.HeldBy(path) is not { } holder)
+                return Observable.Return(System.Reactive.Unit.Default);
+
+            var logger = hub.ServiceProvider
+                .GetService<ILoggerFactory>()?.CreateLogger(typeof(HubRecycleExtensions).FullName!);
+            logger?.LogInformation(
+                "[Recycle] deferring the recycle of {Path} requested by {Asker}: an install is "
+                + "writing under that root ({Holder}). Tearing it down now would strand that "
+                + "install's writes — their owners would go down owing acks nobody would ever "
+                + "send. The recycle runs when the install releases the root; nothing is retried "
+                + "and no bound is widened",
+                path, hub.Address, holder);
+            return leases.WhenReleased(path)
+                .Do(_ => logger?.LogInformation(
+                    "[Recycle] the install released {Path} — proceeding with the recycle requested "
+                    + "by {Asker}", path, hub.Address));
         });
 }
