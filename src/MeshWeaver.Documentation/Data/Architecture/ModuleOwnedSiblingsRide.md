@@ -1,7 +1,7 @@
 ---
 Name: Module-Owned Siblings Ride
 Category: Architecture
-Description: The decision behind #3221 — a module-owned MeshWeaver.* sibling that another package DECLARES as its module still rides into a second bundle, and the invariant that closes the double-production hazard is byte equality, not exclusivity.
+Description: The settled answer to #3221 — a module-owned MeshWeaver.* sibling rides every bundle that references it IFF the platform host does not already ship it; being another package's declared module is no reason to exclude it, and what closes the double-production hazard is one build per name per publication, asserted at the producer and again at the consumer.
 Icon: /static/NodeTypeIcons/code.svg
 ---
 
@@ -13,8 +13,9 @@ another package's declared module. That makes one assembly name reach a mesh fro
 once — two module-side producers of one name — which is the shape that
 [#3175](../ModuleBuildArchitecture) exists to be afraid of.
 
-This page records the decision (**it rides**), the evidence, and the invariant that replaces the
-exclusivity the question proposed.
+This page records the decision (**it rides, iff the host does not ship it**), the evidence, and the
+invariant that replaces the exclusivity the question proposed. The answer, with today's
+measurements, is the first section; the argument that reached it follows.
 
 ## The question
 
@@ -26,6 +27,143 @@ exclusivity the question proposed.
 host* also ships. It does not look at whether a *second module bundle* carries a copy of the same
 assembly name. The proposed extension — refuse a bundle carrying an assembly another package
 declares as its module — is the same shape one hop further out.
+
+## Settled: the rule in its final form
+
+**Measured 2026-09-11, and this is the answer to the title question.** The rule is not "declared
+modules ride" and not "declared modules are excluded". It is:
+
+> **A module-owned `MeshWeaver.*` sibling rides every bundle that references it, IFF the platform
+> host does not already ship it — and being another package's declared module is not a reason to
+> exclude it.** What makes the ride safe is not exclusivity but **one build per name per
+> publication**, asserted by the producer at compose time and by the consumer over the whole sealed
+> set.
+
+Three measurements, each with its denominator, and the third is the one the question was opened
+about.
+
+### 1. How often the shape occurs — the reference graph
+
+`MeshWeaver.Plugins` `main` at `d6fa0338`, every `index.json` in the tree joined against each
+declared module project's transitive in-repo `ProjectReference` closure:
+
+| | |
+|---|---|
+| `index.json` files scanned | 79 |
+| of those, declaring a `content.module` | **37** (37 distinct assembly names; none declared twice) |
+| `.csproj` under `src/` | 148 |
+| declared modules whose closure contains ANOTHER package's declared module | **18 of 37** |
+| declared modules that are RIDDEN by at least one other bundle | **4 of 37** — `MeshWeaver.Markdown.Collaboration` (by 14), `MeshWeaver.AI` (13), `MeshWeaver.Maps` (4), `MeshWeaver.Import` (1) |
+
+The 2026-09-03 table below read 19 and 12 for the same two rows; the reference graph moved, the
+shape did not. **This is the upper bound, not the answer** — it counts what the compiler sees, and
+the packer then subtracts what the image ships.
+
+### 2. What is actually PACKED — the witness decides, and for the pair #3221 names it says "no"
+
+Same run (`34563887604`, `success`), read off the pack jobs rather than the source tree:
+
+* `MeshWeaver.AI` (job `103155487545`):
+  `closure: MeshWeaver.Markdown.Collaboration.dll does NOT ride — the platform ships it (measured off …/platform-refs)`.
+  **The exact pair this issue is about — Essentials' declared module riding the AI bundle — no
+  longer rides at all**, because Plugins#1515 seeds it into the image and
+  [The Platform-Shipped Witness](../PlatformShippedWitness) measures that rather than trusting a list.
+* `MeshWeaver.Northwind.Application` (job `103155487593`):
+  `closure: MeshWeaver.Maps.dll RIDES — module-owned` and
+  `closure: MeshWeaver.Import.dll RIDES — module-owned`, with
+  `platform-shipped: measured against … 54 MeshWeaver.* assembl(y|ies) shipped by that host, 0 dropped from this bundle's closure`.
+  **`MeshWeaver.Maps` is declared by `Maps` and `MeshWeaver.Import` by `Import`** — so the shape the
+  question asks about is LIVE today, in one bundle of the 37, on two names.
+
+So the honest statement of current behaviour is neither "it always rides" nor "it never does": the
+ride survives exactly where the image supplies nothing, which is the predicate argument 3 below was
+always really about.
+
+### 3. What it costs — and why the surviving ride is safe
+
+`MeshWeaver.Plugins` publish-bake (job `103160836446`, 05:43:41Z) and its gate shard
+(`103159059393`), and `MeshWeaver.Crm` publish-bake (run `34567369849`, job `103166073109`,
+06:11:35Z) — the last composing `ai.module.nupkg` and `essentials.module.nupkg` side by side, which
+is the pair the 2026-09-08 hold named:
+
+```text
+module set: 5 MeshWeaver.* assembly file(s) across 5 bundle(s), 5 distinct name(s),
+            0 carried by more than one bundle, 0 carried at more than one BUILD
+module set: 4 MeshWeaver.* assembly file(s) across 4 bundle(s), 4 distinct name(s),
+            0 carried by more than one bundle, 0 carried at more than one BUILD
+```
+
+Against that, the costs, each stated as it stands today:
+
+* **The adoption decline is GONE for same-version copies.** A module entry of a dependency record is
+  a floor (`min:<version>`), compared through the one `CompiledDependencies.Satisfies`
+  ([The Dependency Record Floor](../DependencyRecordFloor)). A rebuilt copy at the same version
+  satisfies a stamped floor; only a copy genuinely BELOW it declines (`FloorNotMet`).
+* **The loader coin toss SURVIVES, and is now the whole of the harm.** Two copies under one simple
+  name are one assembly identity; the loser's bytes are never in memory and its callers silently run
+  the winner. That is untouched by any record change — which is why #3962 rewrote the guard's own
+  message to stop citing the decline and cite this.
+* **A floor is offered only for names an instance REGISTERS.** `MeshBuilder` adds one
+  `InstalledModuleAssembly` per installed module ENTRY, so `ModuleVersionsOf` / `ModuleMvidsOf` see
+  declared entries only and a ride-only name keeps the pre-#3934 `mvid:` pin (`Satisfies` refuses to
+  compare across schemes). That asymmetry cuts IN FAVOUR of the case this issue asks about: a
+  sibling that is another package's declared module is exactly the one a floor covers.
+* **Nothing else is relaxed** — `!toolchain`, the framework identity and the content key stay
+  ordinal.
+
+### 🚨 The cycle argument does NOT cover the one ride that is still live — and it still rides
+
+The exclusion was rejected below because resolving a declared module from its owner is a package
+cycle. That is true of `AI` → `Essentials`, and **false of the only instance left**:
+
+```
+Northwind/index.json  requires: [Store, Import, Maps]   module: MeshWeaver.Northwind.Application
+Maps/index.json       requires: [Store]                 module: MeshWeaver.Maps
+Import/index.json     requires: [Store]                 module: MeshWeaver.Import
+```
+
+`Northwind` already depends on both owners, so for this bundle a "declared modules do not ride" rule
+would be **satisfiable**. It is still the wrong rule, for a reason that does not depend on the
+package graph at all:
+
+* **Dropping the copy does not change which bytes run.** Two copies under one simple name are one
+  assembly identity, so the loader already runs exactly one of them. Removing the ride removes a
+  redundant FILE, not a coin toss — the toss is decided by whichever copy is seen first either way,
+  and with one build per publication both answers are the same bytes.
+* **It converts a present file into a cross-module load order.** Without the ride, `Northwind`'s
+  assembly resolves `MeshWeaver.Maps` from whatever generation the `Maps` module landed — and under
+  [Module Adoption Policy](../ModuleAdoptionPolicy) R1 that may deliberately be an OLDER generation
+  than this publication's, or, if nothing of it loads, none at all. That is the
+  `ReflectionTypeLoadException` on first touch [Module Closure Accounting](../ModuleClosureAccounting)
+  was written after, re-introduced for a file the bundle was already carrying correctly.
+* **`requires` is a CONTENT relation, not a load guarantee.** It orders installation and it is
+  authored; it does not promise that the owner's entry assembly loaded in this process on this boot.
+  Making the closure depend on it would make a packaging graph load-bearing for the loader.
+
+So the rule stays predicate-based — *ship it unless the host already does* — rather than
+graph-based. Where the graph happens to permit exclusion it buys nothing and costs a load ordering.
+
+### The verdict
+
+**Yes, it rides — and the guard #3221 asked for exists, as a divergent-build refusal rather than an
+exclusivity rule.** Exclusivity was never available: `AI` `requires [Store]` while `Essentials`,
+which declares the assembly, `requires [AI, …]`, so resolving the sibling from its owner is a package
+cycle (argument 2 below), and the exclusion would break an install that is supported today
+(argument 3). What changed between the question and this answer is that the safety stopped being an
+accident of a uniform CD wave:
+
+1. **one compilation per publication** (#3732/#3933 — one container workspace, the `sdk` entries that
+   rebuilt shared siblings moved into it),
+2. **a producer refusal at the one place every copy is in one hand** (the `ext-modules` composition
+   step of `node-repo-gate.yml` and `node-repo-publish-bake.yml`, denominator printed green or red),
+3. **a consumer HOLD over the whole sealed set** (`PublishedBundleCatalogue` →
+   `SealedModuleSet.Conflicts` → `PackageAvailabilityKind.SealedSetInconsistent`), and
+4. **a record that is a floor rather than a pin** (#3934/#3946).
+
+The producer half sees only the bundles ONE run of ONE source composed; the consumer half reads
+every sealed module bundle of EVERY source under the identity (`plugins`, `crm`, `education`, …),
+which is the only place a set torn ACROSS sources can be seen. That division is deliberate and is
+why both exist.
 
 ## The decision: it rides
 
@@ -267,17 +405,24 @@ is the implemented choice and the second remains rejected:
    (MeshWeaver#3732). Merging the former `floor` and `rest` calls then took this assembly from TWO
    builds to **ONE**. `Northwind`, the only remaining SDK entry that rode an in-repo module sibling
    (`MeshWeaver.Maps`), moved into the same workspace in that change.
-🚦 **The refusal reaches a satellite only when that satellite MOVES ITS PIN, so the ordering is
-free.** Every node repo consumes these lanes at a full sha (`uses:
-Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@<40-char sha>`), and moving that
-pin is a deliberate, reviewed act by each repo's own rule. So this assertion is INERT for
-MeshWeaver.Plugins and every other satellite until its pin bump — which is the moment to land the
-remedy below and the pin move together, rather than discovering the refusal on a publish that had
-nowhere to go. Measured 2026-09-10: on today's bytes the strip that #3751 added would keep the
-`MeshWeaver.Markdown.Collaboration` and `MeshWeaver.AI` rides out of the portal-pinned lane (the
-image seeds both), but `MeshWeaver.Maps` is seeded by nothing and is declared by the `floor` call
-while `Northwind` rides it from the `sdk` lane — two compilations, so that is where the refusal
-would first speak.
+🚦 **The refusal is ALREADY LIVE in five of the six node repos — this page said the opposite, and
+the opposite is what would have been planned around.** The claim here was that every node repo
+consumes these lanes at a full sha, so the assertion stayed INERT until each repo's own pin bump.
+Measured 2026-09-11 over every `uses: Systemorph/MeshWeaver/.github/workflows/…` line in all six
+(`MeshWeaver.Plugins`, `.Education`, `.Reinsurance`, `.SocialMedia`, `.Manufacturing`, `.Crm`):
+**five consume `node-repo-gate.yml` and `node-repo-publish-bake.yml` at `@main`**, so they took the
+refusal the hour it merged and there is no pin to move; only `MeshWeaver.Education` pins a sha
+(`67cbbe0e…`), and the verdict is absent from that file at that sha. Both directions are read off
+the LOGS rather than inferred from the ref — MeshWeaver.Plugins run `34563887604` and
+MeshWeaver.Crm run `34567369849` (both 2026-09-11, both `success`) print the
+`module set: … carried at more than one BUILD` line, and MeshWeaver.Education's publish-bake for run
+`34487980275` composes the same four bundles and prints no such line at all. So nothing has to be
+sequenced for five of six; what is left is Education's pin, and until it moves that repo's
+publication is the one composed set nothing judges. The 2026-09-10 prediction that `MeshWeaver.Maps`
+is where a refusal would first speak has since been MEASURED and is half right: `Maps` is seeded by
+nothing and does still ride (into `Northwind`), but it rides at ONE build now that both are packed
+from the one workspace, so the verdict on it is green rather than red — see
+[Settled](#settled-the-rule-in-its-final-form) above.
 
 2. **Stop the ride.** Argued and rejected above, and the argument still holds: `AI` `requires`
    `[Store]` while `Essentials` — which DECLARES `MeshWeaver.Markdown.Collaboration` — `requires`
