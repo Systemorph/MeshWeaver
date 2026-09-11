@@ -1546,6 +1546,98 @@ run `10.0.12`. So production does not yet carry dotnet/runtime#131708. Rolling i
 `gh workflow run base-image-acr.yml --ref main` followed by the next `main-cd` roll: an operator
 decision, not taken in this entry. What `10.0.12` is worth is what the measurement above says.
 
+### 2026-09-11: the MANAGED view of sightings #11–#16 — the zeroed header is in a DISPOSED hub's garbage, and collectible contexts were mid-unload at every FutuRe crash
+
+Every entry above read these dumps for the faulting **native** frame. This one reads them for what the
+fault registers cannot say: **what the zeroed object was, who could still reach it, what every managed
+thread was doing, and which collectible contexts existed at the moment of death.** The maintainer's
+reading (2026-09-11) was *"not due to dotnet but due to disposal being in progress while new instance
+starting"*; this read tests that against six dumps, and it corrects three claims made on this page.
+
+**How it was read — no native SOS.** `dotnet-dump analyze` (SOS 10.0.745401) under an amd64 container on
+an arm64 host segfaults in `dumpobj`, in `clrstack -all` at the first native frame, and ClrMD's own heap
+walk AVs on the zeroed header. What worked, all read-only against the `.dmp`:
+
+- `setthread N` + `clrstack` **one process per thread**, so an analyzer crash costs one thread, not all later
+  ones; `lno`/`gcwhere` (ClrMD-backed) for the neighbourhood.
+- a ~250-line ClrMD 3.1 probe (`DataTarget.LoadDump`; `CreateRuntime(dac, ignoreMismatch: true)` for the
+  `10.0.11` dumps, whose DAC version the core does not carry): `FindPreviousObjectOnSegment` for
+  neighbours; a byte scan of every committed heap segment for the cursor value; a **BFS from
+  `heap.EnumerateRoots()`** over `EnumerateReferenceAddresses(carefully: true)` — never building a
+  `ClrObject` for an MT-zero child — for reachability; `runtime.EnumerateHandles()` for the ALC census,
+  reading each `AssemblyLoadContext._state` (`0` Alive, `1` Unloading).
+- the native stacks of the non-managed threads (finalizer, tiered-compilation worker) by scanning each
+  `NT_PRSTATUS` thread's stack for `libcoreclr` return addresses, symbolized against the build-id `.debug`.
+
+The fault cursor of each dump comes from the kernel `ucontext` exactly as in the entries above.
+
+#### What the six dumps show
+
+| # | suite / runtime | frame | cursor | the zeroed object and its neighbourhood | reachable? | collectible contexts at death |
+|---|---|---|---|---|---|---|
+| 11 | GitSync / `10.0.11` | `GetCodeInfo` | `R15 0x7f111956ffe8` | an **interior** address — element 0 of a `ConcurrentDictionary<(string, Type), object>`'s `Int32[]` lock-count array, next to Autofac `ServiceRegistrationInfo` / `ExternalComponentRegistration` objects | — | **none** (`Default` only) |
+| 12 | FutuRe / `10.0.11` | `background_sweep` | `R15 0x7f1c8a0c5c10` | STJ polymorphic metadata: `JsonPolymorphismOptions`, `PolymorphicTypeResolver`, a fresh `ConcurrentDictionary<Type, DerivedJsonTypeInfo>` | not run | **7 Unloading**, 3 Alive |
+| 13 | FutuRe / `10.0.11` | `background_sweep` | `R15 0x7f02a14f6df0` | persistence/query closures (`StorageAdapterMeshQueryProvider`, `PersistenceService`, `LegacyUserPartitionRepair` display classes and `Func<>`s) | not run | **4 Unloading**, 3 Alive |
+| 14 | FutuRe / `10.0.11` | `revisit_written_page` | `RSI 0x7f59b4ddca00` | `TypeRegistry` state: `ConcurrentDictionary<string, TypeDefinition>` node, `TypeDefinition`, `Func<KeyFunction>` | not run | **7 Unloading**, 3 Alive |
+| 15 | FutuRe / `10.0.12` | `find_first_object` | `R10→0x7f5dd6e057a0` | `List<IComponentRegistration>` = the `_sourceImplementations` of an Autofac `ServiceRegistrationInfo` for `ILogger<HierarchicalRouting>`, among `HierarchicalRouting`, `SyncDelivery`, `ExternalComponentRegistration` | **no** — BFS over 374,060 objects from 722 roots | **5 Unloading**, 0 Alive |
+| 16 | FutuRe / `10.0.12` | `background_sweep` | `R15 0x7fa33ca0b6d0` | the Autofac `ServiceRegistrationInfo` itself, for `ILogger<PolymorphicTypeInfoResolver>`, among that hub's `JsonSerializerOptions`, `PolymorphicTypeInfoResolver` and converter list | **no** — BFS over 644,761 objects from 843 roots; the only word in the heap equal to it is inside the object right after it | **3 Unloading**, 1 Alive |
+
+- **The victim is never a collectible type and never a native wrapper.** Every object around every cursor is
+  an ordinary default-context type (Autofac, System.Text.Json, CoreLib collections, MeshWeaver.Hosting /
+  Messaging / Layout). No SkiaSharp, SQLite, libgit2 or other native-handle wrapper is anywhere near one.
+- **It is what a HUB BUILDS**: its Autofac child-scope registry, its `JsonSerializerOptions` polymorphic
+  metadata, its `TypeRegistry`, its persistence closures. Where reachability was measured (#15, #16) the
+  object is **garbage** — reachable from no root — i.e. the leftovers of a hub that has already been
+  disposed. A GC walks dead objects linearly (sweep, plan, card scan, write-watch revisit), which is why
+  it is the collector that trips over the zeroed word, on whatever thread happens to be walking.
+- **At every FutuRe crash, several `NodeAssemblyLoadContext`s were mid-unload** — `Unload()` called,
+  `_state = 1`, held by the runtime's strong handle, their `LoaderAllocator` objects still present — while
+  the next instance was being built (#15: 5 Unloading and **0** Alive, 12 ms after the previous
+  `DISPOSE_DONE`, the crashing thread inside the new mesh's `HostedHubsCollection.CreateHub` →
+  `MessageHubConfiguration.Build` → an Autofac resolve) or running (#16: 3 Unloading beside the live
+  test's 1 Alive).
+- **Nothing was executing disposal code at the instant of death.** No managed thread is in a `Dispose`,
+  in `AssemblyLoadContext.Unload` or in teardown in any of the six; the finalizer thread sits in
+  `FinalizerThread::WaitForFinalizerEvent` in #15 and #16 (so no `LoaderAllocator` was being destroyed at
+  that instant) and thread 6 is the tiered-compilation worker. The unloads were *pending in the GC*: a
+  collectible context is only freed over the following collections, on the finalizer thread, after
+  `Unload()` returns.
+- **#11 is a different branch.** GitSync ran no dynamic NodeType at all, and its "object" is an interior
+  address in a live array — the stale-reference shape of dotnet/runtime#131267's hijack GC hole, which
+  `10.0.12` fixes. It is not evidence for or against the unload overlap.
+
+#### What this corrects on this page
+
+1. **`alc=1` never measured what it was read as.** `MonolithMeshTestBase.TestMemTrace` counts
+   `AssemblyLoadContext.All`, and the runtime removes a context from that set inside `InitiateUnload` —
+   the moment `Unload()` is called (`AllContexts.Remove(_id)`, `AssemblyLoadContext.cs`, `release/10.0`).
+   A context that is still unloading, types and `LoaderAllocator` intact, is therefore invisible to it.
+   And the checkpoints are **not** after a forced GC on CI: the forced collection is gated on
+   `MESHWEAVER_TEST_FORCE_GC`, which no workflow sets. So "`alc=1` at every checkpoint — no collectible
+   context survived any teardown" (entries #13/#14, #15, #16) is unsupported: the same processes held 3–7
+   contexts mid-unload when they died.
+2. **#15's "live, REFERENCED object" is wrong.** The 96-byte object whose `+0x20` field points at the
+   cursor is an Autofac `ServiceRegistrationInfo`; it is itself reachable from no GC root. Both are the
+   garbage of a disposed hub's registry. "A published, referenced managed object lost its type slot" — and
+   the conclusion drawn from it that the zeroing cannot be free-space housekeeping — does not follow.
+3. **Eliminations 1 and 2 of "What the sixteen have already eliminated" are unsound as written.** The
+   three arguments of #1 only exclude *a freed collectible MethodTable being dereferenced* — the zeroed
+   word here is a default-context object's header, so they say nothing about whether an unload *in
+   progress* is involved — and its `alc=1` support is item 1 above. #2 rests on every `DISPOSE_DONE`
+   being clean, but `DISPOSE_DONE` is written when `Unload()` has been *requested*, before any context has
+   been freed; a clean teardown log is exactly what the overlap looks like.
+
+#### What it does NOT show
+
+No dump names the writer of the zero. The write happened before the collection that found it, so the
+thread that made it is long gone from the stack; nothing in either repository writes the heap through
+`Unsafe`, `MemoryMarshal`, `GCHandle` or `Marshal` (the one `MemoryMarshal.AsBytes` is a read-only hash
+input). What the dumps establish is the **state** the maintainer described — a disposed instance whose
+collectible contexts are still being unloaded while the next instance builds and runs — at 5 of 5 FutuRe
+crashes that could be read. In this workload that state is also the steady state after every fixture, so
+its presence at the crash is necessary for the hypothesis and not by itself sufficient; the repro below
+is what separates the two.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is
