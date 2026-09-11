@@ -86,7 +86,7 @@ Its cover is narrow by construction: it hard-codes **one lane** and **three job 
 | | lane jobs it reds on |
 |---|---|
 | `test-cd-steps.py` | **3** of 22 (`node-repo-module-pack.yml` only, and only 3 of its 6 jobs) |
-| the fleet roster | **16** of 22 — every lane job that has a recorded caller |
+| the fleet roster | **17** of 22 — every lane job that has a recorded caller (16 before MeshWeaver#3878 recorded `node-repo-module-publish`'s first caller) |
 
 `node-repo-module-pack.yml`'s `select`, `tests` and `verify` are in that lane, break the fleet
 identically, and were covered by neither before this change.
@@ -120,14 +120,45 @@ roster mismatch is not a permission escalation and so the run graph is accepted.
 python3 check-workflow-permission-pairing.py --root . --emit-fleet-row Systemorph/<repo>
 ```
 
+## A caller that is arriving: `pending:`
+
+A satellite gains a caller of a platform lane in two repositories, and the roster made that
+unlandable. Every satellite asserts its row against core's `main` (`scripts-ref: main`), so under
+strict equality:
+
+| lands first | what reds | where |
+|---|---|---|
+| the roster row | "the roster records a caller this repository does not have" | every pull request of the satellite, until its half merges |
+| the satellite's caller | "a caller the roster records no row for" | the satellite's own pull request, which cannot merge |
+
+`validate / Validate node repos` is a required context in every satellite, so either order is a
+repository-wide block. Found while wiring MeshWeaver#3878's `publish-modules` job into
+MeshWeaver.Plugins — whose `main` was already red on a host shard, so "the window is short" could
+not be assumed.
+
+So a row may carry `pending: <reason naming the change that lands it>`, and the roster row lands
+**first**, like `Pairs-with:` and `Implementers:` — which is what lets core's own pull request check
+the new pair's grant before either half merges. The marker is deliberately narrow:
+
+| state | verdict |
+|---|---|
+| `pending:` row, caller not in the repository yet | passes, and prints the reason |
+| the same row with no marker | **red** — a caller deleted and its row forgotten describes a repository that does not exist |
+| `pending:` with an empty reason | **red** in `--assert-fleet-row` **and** in `--fleet`, so core refuses it before any satellite sees it |
+| `pending:` row, caller present with exactly its grant | passes; the note says the marker is spent |
+| `pending:` row, caller present with a lower grant | **red** — the marker excuses absence only, never a mismatch |
+
+`--fleet` checks a pending row's grant like any other and prints it as `PENDING:`, not under
+`NOT COVERED:`. Once the satellite's caller merges, a core follow-up removes the spent marker.
+
 ## What the guard does not see
 
 A reader should not leave this page believing it covers more than it does.
 
 - **It does not see a repository that is not in the roster.** Coverage is exactly the roster's rows.
-- **It does not see a lane with no recorded caller.** Four lanes / **6 of 22 lane jobs** are in
-  that state today (`node-repo-module-publish`, `node-repo-platform-canary`,
-  `node-repo-platform-ref-bump`, `plugin-build`). They are **printed as `NOT COVERED` on every run**
+- **It does not see a lane with no recorded caller.** Three lanes / **5 of 22 lane jobs** are in
+  that state today (`node-repo-platform-canary`, `node-repo-platform-ref-bump`, `plugin-build`;
+  `node-repo-module-publish` left the list when MeshWeaver#3878 recorded its first caller). They are **printed as `NOT COVERED` on every run**
   rather than folded into the green, because a lane with zero known callers is a coverage gap, not a
   clean measurement.
 - **A silent lane job is not always a gap, and the two causes must not be conflated.** Adding
@@ -171,10 +202,13 @@ nothing about the thing it names.
 |---|---|
 | the unmodified tree pairs cleanly, with a non-zero pair count | green must be earned |
 | a scope the real caller lacks, injected into a lane it really calls, is caught **and names that caller** | red |
-| the unmodified tree passes the fleet roster (45 pairs) | green must be earned |
+| the unmodified tree passes the fleet roster (46 pairs) | green must be earned |
 | **`id-token: write` on `node-repo-module-pack.yml#pack`** reds the fleet check and names the ungranting callers | red |
 | a checkout rebuilt from a recorded roster row matches it | green must be earned |
 | a repo that lowers a grant / adds a caller / is missing entirely | red |
+| a `pending:` row whose caller has not landed / a spent marker with exactly its grant | green must be earned |
+| the same row with no marker / an empty reason / a lowered grant behind a marker | red |
+| an empty `pending:` reason in core's own fleet run | red |
 
 The falsification that closes the loop, run on this tree:
 
