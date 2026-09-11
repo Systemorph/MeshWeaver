@@ -245,6 +245,11 @@ await browser.close();
 | `…/BlazorMonaco/…/min/vs/loader.js` | **404** | **404** |
 | `…/BlazorMonaco/jsInterop.js` | 200 · 41,627 B | 200 · 41,627 B |
 
+🚨 **This table is what the portals SERVED on 2026-09-11, and 3.4.14 is no longer what is
+committed.** MeshWeaver.Plugins#1640 moved the pin to 3.4.15 the same day — see *DOMPurify 3.4.15*
+below for the new bytes — so both portals answer `8e991296…` until the next roll and `51408c8f…`
+after it. Neither reading changes rule 10003: both versions are above the retire.js floor.
+
 🚨 **memex.systemorph.com has now rolled.** On 2026-09-08 it was still on `ci.8059` and still served
 the flagged 3.6 MB chunk; it no longer does. The pre-fix control described in the previous section
 is therefore **expired** — the fleet no longer has a portal on the old side of the filter, and
@@ -268,6 +273,76 @@ The headless run, against the anonymous shell:
 - **Zero** console errors and **zero** failed or 4xx requests across the whole run.
 
 So the editor the portal serves is intact end to end, on the same bytes the scanner reads.
+
+### Running the same check BEFORE the roll, with no portal at all
+
+The recipe above drives a portal, so it can only answer *after* a deploy. On a bundle bump the only
+thing that changed is the bundle, so the same checks run against the freshly built bytes on a static
+file server: stage the built folder under `_content/MeshWeaver.Blazor/lib/monaco-editor/` and
+BlazorMonaco's `jsInterop.js` under `_content/BlazorMonaco/`, put **App.razor's bootstrap block
+copied verbatim** into a bare page with `<base href="/">`, serve it, and point the script at
+`http://127.0.0.1:<port>/`. Copying the bootstrap rather than paraphrasing it is the point — a
+hand-written one tests your bootstrap, not the portal's. Every row of the table is reachable this
+way, workers and hover sanitisation included; the step-by-step is in
+`tools/monaco-editor/README.md` (MeshWeaver.Plugins). What it does **not** cover is delivery — that
+the portal serves these bytes — which is the `curl` half above and only answerable after the roll.
+
+### 2026-09-11 — DOMPurify 3.4.15, verified on the bundle before it shipped
+
+MeshWeaver.Plugins#1640 moved the pinned sanitiser 3.4.14 → **3.4.15** (published 2026-09-06;
+`https://registry.npmjs.org/dompurify/latest` answered HTTP 200 / 6,547 B with `version: 3.4.15`,
+re-measured 2026-09-11). 🚨 **This was freshness, not exposure, and the distinction is worth keeping
+straight**: 3.4.14 was already above the retire.js floor of 3.4.13, so nothing was flagged and no
+scan moved. OSV answers **zero** vulnerabilities for *both* 3.4.14 and 3.4.15
+(`api.osv.dev/v1/query`, HTTP 200), the newest GitHub advisory touching the package is
+`GHSA-55q2-fjhq-7xh7` (`<= 3.4.12`, patched 3.4.13), and 3.4.15's own release notes are hardening —
+clobbering when XML content is involved, edge cases, dependency bumps — with no advisory attached.
+The bump is the standing *use the latest within the minor line* directive, nothing more.
+
+| | before | after |
+|---|---|---|
+| `monaco.js` | 4,483,269 B · `sha256:8e991296…b039e846` | 4,483,398 B · `sha256:51408c8f804b7723b55b9ffb66ec7df202ca7cdfcfc86ffc02a248ef5691dfb4` |
+| banners in it | exactly one: `@license DOMPurify 3.4.14` | exactly one: `@license DOMPurify 3.4.15` |
+| `versions.json` | `monaco-editor 0.56.0 · dompurify 3.4.14 · vendored 3.4.8` | `monaco-editor 0.56.0 · dompurify **3.4.15** · vendored 3.4.8` |
+| the five workers | — | **byte-identical** |
+
+The workers not moving is the check that the swap stayed confined: only
+`esm/vs/base/browser/domSanitize.js` imports the vendored sanitiser and no worker entry point
+reaches it, so a DOMPurify-only bump that moved one would mean something else changed too. Two
+consecutive builds produced the same sha256, so the output is reproducible and a differing hash is a
+real difference.
+
+The full editor check was run against those bytes on the local harness described above, and matched
+the portal run line for line: `window.monacoReady` resolved, **91** languages registered, editor
+created, `getValue`/`setValue` round-tripped, the `csharp` grammar registered after 203 ms and
+tokenized to real types with **5** distinct `mtk*` colour classes rendered, one `Error` marker round-
+tripped through `setModelMarkers`/`getModelMarkers` painting one `.squiggly-error`, the JSON worker
+answered an invalid model in 103 ms (`Trailing comma`), and **zero** console errors and **zero**
+failed or 4xx requests. The hover rendered as
+
+```html
+<div class="rendered-markdown"><p>x</p><img>
+
+<p></p><p><strong>bold survives</strong></p></div>
+```
+
+— `[x](javascript:alert(1))` reduced to its text, `<img src=x onerror=…>` stripped to a bare `<img>`,
+`<svg onload=…>` dropped entirely, nothing executed, **and `**bold survives**` through as
+`<strong>`**. That last clause is the whole point of the check: without it, an empty output would be
+indistinguishable from a renderer that failed.
+
+**Licences now travel with the bytes.** esbuild keeps DOMPurify's `/*! @license … */` banner inline —
+that banner is what retire.js reads, and it carries a permalink pinned to the exact tag — but a
+banner is not a licence text. `build.mjs` now also emits `LICENSE-monaco-editor-MIT.txt`,
+`LICENSE-dompurify-Apache-2.0.txt` and `LICENSE-dompurify-MPL-2.0.txt` beside the output (Monaco is
+MIT; DOMPurify is dual licensed **Apache-2.0 OR MPL-2.0** and ships both). They have to be emitted
+rather than committed by hand: the output directory is wiped on every build.
+
+🚨 **`npm audit` reports a vulnerable `dompurify` in this workspace and it is not the output.** Read
+the path — `node_modules/monaco-editor/node_modules/dompurify` is Monaco's own transitive 3.4.8, the
+copy this build exists to replace. `npm audit fix --force` "fixes" it by downgrading `monaco-editor`
+to 0.53.0. The output's only DOMPurify is the top-level pin, and `build.mjs` fails on any banner but
+that one.
 
 ## Findings by release
 
