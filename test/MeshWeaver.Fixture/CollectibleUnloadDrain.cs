@@ -61,6 +61,15 @@ public static class CollectibleUnloadDrain
         if (unloads is null || unloads.Pending == 0)
             return new CollectibleUnloadOutcome(0, [], null);
 
+        // 🚨 Leave the caller's frame BEFORE collecting (measured, Plugins#1605). The drain is called
+        // from a teardown that has just disposed the mesh, and that frame's stack slots still hold it:
+        // a heap dump taken INSIDE the drain found the only non-weak root of every still-unloading
+        // context in MonolithMeshTestBase.DisposeAsync's MoveNext frame — the disposed MessageHub →
+        // Workspace → MeshDataSource → MeshContentTypeRegistry → DiscriminatorClaim → the collectible
+        // RuntimeType. Collecting while that frame is live measures the teardown's own reference, not
+        // the unload. After the yield the caller has returned to its awaiter and its frame is gone.
+        await Task.Yield();
+
         var rounds = 0;
         var stalled = 0;
         var before = unloads.Pending;
