@@ -155,8 +155,9 @@ with the same tick as a passed one. So:
 - the one exemption is expressed on the **event**: a pull request from a fork cannot mint the token
   by GitHub's design. It is written once, on the event, never on the secret.
 
-The credential is a GitHub App installation token minted per run (`MESHWEAVER_APP_ID` +
-`MESHWEAVER_APP_PRIVATE_KEY`, the org's `meshweaver-cloud` App), scoped to `contents: read` on
+The credential is a GitHub App installation token minted per run (`FLEET_READER_APP_ID` +
+`FLEET_READER_APP_PRIVATE_KEY`, the org's READ-ONLY `fleet-reader` App — see
+[GitHub App Credentials](../GitHubAppCredentials)), scoped to `contents: read` on
 exactly the repos in the register — never a stored PAT, which has no owner, no expiry anyone
 watches, and fails indistinguishably from a scope problem.
 
