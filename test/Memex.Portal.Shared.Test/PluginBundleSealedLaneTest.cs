@@ -255,7 +255,7 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
                 [new PackageFile($"{Package}/Doc.md", $"# {Package}")],
                 "HEAD")
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(120))
+            .Timeout(TestTimeouts.CrossSilo)
             .Await();
 
     private Task<string> RegisterInstance(params string[] defaultGrants) =>
@@ -271,7 +271,7 @@ public class PluginBundleSealedLaneTest(ITestOutputHelper output) : MonolithMesh
             .Register("sealed-lane-owner", "Owner", "owner@test.com", Instance, Instance)
             .Select(r => r.RawKey)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(60))
+            .Timeout(TestTimeouts.Convergence)
             .Await();
 
     private async Task<WebApplication> StartHost(string publishedRoot)
