@@ -95,6 +95,30 @@ them agree by construction.
 READ — renamed, moved, reformatted onto several lines — leaves the platform unable to know what the
 caller believes, and "cannot verify" has exactly one honest answer: the full set.
 
+## A declared home for dev tools — `devtools/`
+
+`scripts/` is the gates' directory, so a change there is EVERYTHING, and that is right: a gate
+script genuinely changes what a run proves. But it left a script that NO lane runs — a local dev
+loop, a triage helper — with nowhere to live except the gates' directory. Measured on
+MeshWeaver.Plugins run 34618468550 (#1668, 2026-09-11): a one-line edit to
+`scripts/run-node-tests.py`, which no workflow references, selected **52 of 52** compiled projects
+and every module suite — about 89 runner-minutes of portal-host shards and 200 of module tests,
+15:50Z → 18:45Z — while the same diff without that one file selected **1 of 52**.
+
+`devtools` is therefore in `NOOP_DIRS` (2026-09-11). Two choices in that are deliberate:
+
+- **A new name, not `tools/`.** MeshWeaver.Plugins has a `tools/` directory and it is **not**
+  inert there: `src/Directory.Build.targets` and two test projects read it (the Monaco bundle and
+  the Memex template pack). Declaring it a no-op would have under-built them.
+- **The platform declares it first.** No repository in the fleet had a `devtools/` directory, so
+  `check-noop-scope-parity.py` reports the new name as *dormant* in every caller and nothing turns
+  red. A caller then adds `devtools` to its own `scripts/affected-modules.py` literal in the same
+  change that creates the directory, and from that commit the two sets agree about a directory
+  that exists. The reverse order would red that caller's `Validate node repos` for the whole gap.
+
+A file placed under `devtools/` claims that no compiled project, no module content and no gate
+reads it. If that stops being true, the file belongs back in `scripts/`.
+
 ## Both denominators, printed
 
 `selected` answers what is BUILT. A floor-only entry — one the caller's gates compose on every run,
@@ -139,7 +163,7 @@ image digests, and a pin move genuinely invalidates every bundle in the reposito
 Two, and each was made to fail before it was believed.
 
 **`node-repo-scope.py --self-test`** runs unconditionally in the `select` job of every satellite's
-every run, next to the answer it produces, and again in core's own `dotnet-test.yml`. 63 cases.
+every run, next to the answer it produces, and again in core's own `dotnet-test.yml`. 73 cases (2026-09-11).
 The load-bearing ones for this change:
 
 - every name in `NOOP_FILES` narrows to nothing on its own — asserted by iterating the set itself,
