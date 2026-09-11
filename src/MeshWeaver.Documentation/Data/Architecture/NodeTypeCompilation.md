@@ -1929,6 +1929,64 @@ which is why a LOAD is safe; with none, the drain may already be over, so a new 
 `TypeLoadException '…format is invalid'` tear the pin exists to prevent. The refusal is the
 contract; the recovery was the defect.
 
+### 🚨 One build at two paths is ONE generation — a read reuses, it never duplicates
+
+The "narrowed trigger" section above priced its residue at *generations a process only
+**hydrated***, and pictured a foreign silo's build. It missed the commonest hydration of all: the
+process's **own** publish. The post-emit scan publishes from the compile's
+`{nodeName}_{ticks}_{guid}/` directory; `UploadToStoreIfNeeded` then copies those bytes into the
+assembly store as `v{version}-{frameworkTag}-{hash}.dll`; and every instance activation resolves
+the **store** path (`MeshDataSource` / `NodeTypeEnrichmentHelpers` →
+`IAssemblyStore.TryGetAssemblyPath` → `GetConfigurationsFromExistingAssembly`). Two paths, one
+generation. While reads superseded, that read quietly evicted the publish's context. Once they
+stopped, every locally compiled generation got a **second collectible context over identical
+bytes** — and the instance hub's lifetime lease (`LeaseNodeContexts`, which leases *every* context of
+the NodeType) pinned both for the hub's whole life.
+
+Measured by `NodeTypeRecompileAlcLeakTest.RecompilingANodeType_WithALiveInstance_StillReleasesSupersededContexts`
+(MeshWeaver.Plugins, `Portal hosts (shard 3)`), which prints the file each live context was loaded
+from:
+
+| | contexts | loaded from |
+|---|---|---|
+| instance activated | 2 | `…/assembly-store…/AlcLeakTest_LeakType/v3-1a9794ba-dd22c75f5a55.dll` **and** `…/mesh-cache…/AlcLeakTest_LeakType_8df1004b5063522_…/AlcLeakTest_LeakType.dll` — the same build |
+| after each of 3 recompiles | 3, 3, 3 | those two, plus the current emit |
+
+Flat, not per-recompile — so not the unbounded curve the assertion's message describes — but a
+doubled pin on every generation a live instance runs, in every monolith and on every replica that
+compiles. The assertion (`≤ 2`: the current build plus the one generation the instance runs) was
+right; the core change was wrong. Across the 42 shard-3 runs from 05:10Z to 11:32Z on 2026-09-11 it
+failed **6 of 6** on core sets 8345/8350/8352 (all carrying #4013's fix, `b128b804d`) and **0 of 36**
+on sets 8323–8340; the same Plugins commit `401fcadb` passed at 09:56Z on 8340 and failed at 10:09Z
+on 8345.
+
+The repair keeps #4013's rule — **a read never supersedes** — and closes the duplicate at its
+source. `ResolveLoadContextForPath`, on a READ of a path it has not seen, asks whether a live
+(not retired) context of the NodeType already serves the same build — **same MVID**, read from the
+loaded assembly or, failing that, from the file's metadata via `ServedBuildIdentity.OfFile` (a header
+read, nothing loaded) — and if so answers that context, aliased under the new path. It is a REUSE:
+nothing is evicted, so the ping-pong above cannot come back through it. Three details make the alias
+safe:
+
+- **Eviction is by CONTEXT, not by key.** A read may alias the store path to the very context a
+  publish is keeping; a key-based evictor would dispose the build it had just published.
+- **A retired context is never aliased.** A publish can retire the context between the search and
+  the alias (its evictor enumerated before the alias key existed); the resolver then drops its own
+  alias and creates a fresh context, exactly as a first read of that path always did.
+- **One lease per context.** `LeaseNodeContexts` leases each context once however many keys name it,
+  so releasing the hub's one lease performs the deferred unload.
+
+No identity ⇒ no alias: an unreadable file, or an in-memory context, resolves a fresh context as
+before. Pinned in core by `ScanPinSupersessionTest.AReadOfTheStoreCopyOfThePublishedBuildIsThatBuildsContext`,
+`…AReadOfASupersededBuildsStoreCopyGetsItsOwnContextAndDoomsNothing` and
+`…AnAliasedGenerationIsLeasedOnceAndReclaimedByTheNextPublish`.
+
+🚨 **What this does NOT close.** A replica that never compiles a type still reads each new VERSION
+another replica published (a different build, a different MVID), and those reader-created contexts
+are still reclaimed only when the NodeType hub disposes — the residue the section above states. The
+alias removes the same-build duplicate; it does not decide which of two *different* builds is current,
+and must not (#4013).
+
 ### 🚨 Reading a node's content ACROSS two generations already works — #3911's headline, re-measured
 
 The 2026-09-10 control-instance incident (#3911) reported two collectible builds of

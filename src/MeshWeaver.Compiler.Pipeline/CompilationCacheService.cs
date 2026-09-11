@@ -223,6 +223,11 @@ internal interface ICompilationCacheService
     /// Resolving an assembly PATH is what a hub activation, a cell-surface session and an
     /// assembly-hydration scan all do, and none of them is evidence about which build is
     /// current.</para>
+    /// <para>🚨 <b>But it IS evidence about which build it wants.</b> A path this cache has not
+    /// seen whose bytes a live context of the NodeType already serves (same MVID — the assembly
+    /// store's copy of a build this process published) answers THAT context, aliased under the
+    /// new path. One generation, one collectible context, however many places its bytes
+    /// live.</para>
     /// </summary>
     NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath);
 
@@ -261,6 +266,16 @@ internal interface ICompilationCacheService
     /// superseded would re-create the CURRENT generation's context under its own path, putting two
     /// live ALCs behind one file — the two-generations split #3911 describes, manufactured by the
     /// reclaim itself.</para>
+    ///
+    /// <para>🚨 <b>The cost the paragraph above MISSED, and how it is now closed.</b> "Hydrated"
+    /// is not only a foreign silo's build: THIS silo's own publish is copied into the store by
+    /// <c>UploadToStoreIfNeeded</c>, and instance activation resolves that store copy — so every
+    /// locally compiled generation was read back under a second path, got a second collectible
+    /// context over identical bytes, and the instance's lifetime lease (which covers every
+    /// context of the NodeType) pinned both. NodeTypeRecompileAlcLeakTest (MeshWeaver.Plugins)
+    /// caught it on the first core set carrying #4013's fix: 3 live contexts after 3 recompiles
+    /// against a bound of 2. A read now REUSES the live context that already serves its build
+    /// (same MVID) — never a supersession, so the ping-pong above cannot return through it.</para>
     /// </summary>
     NodeAssemblyLoadContext PublishLoadContextForPath(string nodeName, string dllPath);
 
@@ -1416,8 +1431,8 @@ internal class CompilationCacheService(
     }
 
     /// <summary>
-    /// Unloads every load context for <paramref name="nodeName"/> whose dictionary key is not
-    /// <paramref name="keepKey"/> — the assemblies a just-loaded recompile/release superseded —
+    /// Unloads every load context for <paramref name="nodeName"/> other than
+    /// <paramref name="keep"/> — the assemblies a just-loaded recompile/release superseded —
     /// bounding <see cref="_loadContexts"/> to the current context per NodeType instead of one per
     /// recompile.
     /// </summary>
