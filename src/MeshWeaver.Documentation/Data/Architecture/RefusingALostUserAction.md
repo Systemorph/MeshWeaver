@@ -149,6 +149,136 @@ There is no retry, grace extension, timer, or second disposal gate. The receipt 
 action part of the lifecycle mechanism the hub already drains. An action whose stream was genuinely
 gone before it arrived is still refused by the path documented above.
 
+### 🚨 Step 4 was only half true, and the half that was missing is the one that loses the click
+
+A pending callback is drained in **Quiescing**, and Quiescing is a phase of the HUB. So the
+acknowledgement orders ahead of the release only if the release is posted from a point that comes
+*after* Quiescing. It was not.
+
+The release is one line — the `UnsubscribeRequest` that destroys the owner-side `sync/{id}` sub-hub,
+registered in `JsonSynchronizationStream.CreateExternalClient`. It was registered on the **stream**:
+
+```csharp
+reduced.RegisterForDisposal(new AnonymousDisposable(
+    () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner))));
+```
+
+and `SynchronizationStream.Dispose()` disposes its registrants **synchronously, and deliberately
+before `Hub.Dispose()`** — that ordering is [#1613's own fix](../StreamLivenessAndTheHubReference)
+and is correct for what it was for (it is what removes the pending `SubscribeRequest` callback
+promptly). Its cost here is that **the whole disposal ordering runs before the hub has a phase in
+which to wait**. So the two teardown routes behaved differently:
+
+| route | what disposes first | did the receipt order ahead? |
+|---|---|---|
+| the per-circuit portal hub disposes its hosted `sync/{id}` | the HUB — `streamDisposables` run from its `DisposeImpl` in ShutDown | yes, Quiescing came first |
+| the STREAM is disposed directly — a workspace eviction, `ReclaimIfUnheld`, `EvictClientSubscriptions`, a consumer's `.Finally(stream.Dispose)` | the STREAM — synchronously, ahead of `Hub.Dispose()` | **no** |
+
+The second route is not an edge: *released read stream* is one of the three ways into
+`RefuseStreamMessage` this page already names, and it is the one where the person is still sitting
+in front of the page.
+
+**The fix is where the line is registered, not what it does.** It now goes on the stream's hub, so it
+runs from `DisposeImpl` in ShutDown — strictly after Quiescing — on **both** routes:
+
+```csharp
+var release = new AnonymousDisposable(
+    () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner)));
+if (reducedHub is not null) reducedHub.RegisterForDisposal(release);
+else                        reduced.RegisterForDisposal(release);   // no hub left to wait in
+```
+
+Nothing new waits, nothing is delayed "to be safe": the release simply sits behind the drain the hub
+already performs.
+
+### The sender is a surface, not a call shape — `stream.SubmitUserAction(...)`
+
+The ordering above is only armed if the sender registered the callback, which `Post` does not do. So
+the acknowledged send is a named surface — `UserActionSubmission.SubmitUserAction`, an
+`ISynchronizationStream` extension — rather than an `Observe` incantation copied into every view
+that raises a click. It carries the acting user's `AccessContext` (a user action must; the sync hub
+has no identity of its own), owns its own subscription, and hands a refusal to the caller as the
+already-localized `error.userActionNotRun` sentence.
+
+### 🚨 And a second thing the refusal was doing, which nobody had measured
+
+A refusal is a `DeliveryFailure` posted back to the **sender**, and the sender of a click is the
+stream's own `sync/{id}` hub — whose `ConfigureSynchronizationHub` carries a blanket
+`DeliveryFailure` handler that answers `OnError` for anything that is not a transient
+`ShuttingDown`. So a bare `Post` of a click that cannot be delivered does not merely lose the click:
+it **faults the whole synchronization stream**, and every view bound to that mirror dies with it.
+Measured on a real fixture — the stream terminated with
+
+```
+DeliveryFailureException: Your last action (“ProbeArea/Button”) did not run — the view it was
+sent from had already closed. Nothing was changed; please try again.
+```
+
+`DroppedUserActionIsRefusedTest` could not see this: it posts from the client HUB, so its refusal
+never reaches a stream's handler.
+
+🚨 **Registering the callback is not on its own enough, and assuming it was cost one wrong claim.**
+`HandleCallbacks` runs FIRST in the rule chain and then the chain keeps running, so a matched
+response reaches the blanket handler as well — the fault still fired. What the match does leave
+behind is the flag the framework already uses for exactly this: `PostOptions.CallbackDispatched`,
+which `PortalErrorSink` has long consulted so a failure the call site's `OnError` handled is not
+*also* popped as a modal. The sync hub's `DeliveryFailure` handler simply never adopted it. It does
+now, as the same one-line filter:
+
+```csharp
+(_, delivery) => !delivery.Properties.ContainsKey(PostOptions.CallbackDispatched)
+```
+
+An **un-awaited** failure — the subscribe protocol, an RLS denial, a `NotFound` — still faults the
+stream exactly as before. Only a failure somebody is already holding is left to them.
+
+The order in which this was found is worth keeping: the "does not fault" half **passed in a filtered
+run and failed in the full suite**, because the test's fault probe was a bare `Subject` and the fault
+landed before the assertion window opened. A replay-backed subject made the observation honest, and
+the honest observation falsified the claim.
+`ARefusedActionSurfacesToTheCallerWithoutFaultingTheView` pins both halves.
+
+### The measurement
+
+`UserActionOutlivesStreamReleaseTest` asserts both directions against real hubs and a real remote
+stream, with the owner-side `sync/{id}` sub-hub's own `DisposalCompleted` as the instrument:
+
+| test | asserts | goes red on |
+|---|---|---|
+| `AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` | the owner's sub-hub does not die while an action is owed, and does die once it is answered | the defect |
+| `AnOrdinaryReleaseIsPrompt` | a release with nothing owed still reaches the owner | "never release the stream", which would satisfy the first test alone |
+| `AnActionOnALiveStreamStillRuns` | the acknowledged path still INVOKES the action | an ordering guarantee that stopped delivering clicks |
+| `ARefusedActionSurfacesToTheCallerWithoutFaultingTheView` | a refusal reaches the caller as the catalog sentence, and the mirror stays live | a refusal that is swallowed, re-worded, or still faults the stream |
+
+The owed-work window is made deterministic rather than raced: the action names a stream id with no
+`sync/{id}` on the owner, so the owner holds it for `SyncStreamOptions.SyncHubRegistrationGrace`
+(400 ms in the test, well inside the hub's 2 s Quiescing budget) and then refuses — the real
+reaped-sync-hub shape. **Falsified by re-registering the release on the stream and rerunning:
+`AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` fails at 200 ms** — *"Expected the observable
+not to emit … but it emitted ()"* — while the other two stay green.
+
+### What is still owed, and where
+
+The **Blazor sender** still calls `Stream.Hub.Post(...)`. Until it moves to `SubmitUserAction` the
+portal registers no callback and the ordering above is armed but unused. Measured in
+MeshWeaver.Plugins on 2026-09-11 — **eight call sites in seven files**, and the list is here so the
+next session does not have to rediscover it:
+
+| file | action |
+|---|---|
+| `MeshWeaver.Blazor/BlazorView.razor.cs` | `ClickedEvent` — the one every control inherits |
+| `MeshWeaver.Blazor/Components/FormComponentBase.cs` | `BlurEvent` |
+| `MeshWeaver.Blazor/Components/DialogView.razor.cs` | `CloseDialogEvent`, twice (OK and the dismiss path) |
+| `MeshWeaver.Blazor.Views/Components/DataGridView.razor.cs` | `ClickedEvent` carrying a `DataGridCellClick` payload |
+| `MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.cs` | `ClickedEvent` |
+| `MeshWeaver.Blazor.AppleMaps/AppleMapView.razor.cs` | `ClickedEvent` |
+| `MeshWeaver.Blazor.OpenStreetMap/OpenStreetMapView.razor.cs` | `ClickedEvent` |
+
+Each already resolves the hub defensively and already stamps the circuit user's `AccessContext`, so
+the move is `hub.Post(evt, o => …)` → `Stream.SubmitUserAction(evt, userContext, ErrorSink.Report)`
+— the refusal sentence going where that view already surfaces errors. That half needs a platform pin
+carrying this commit.
+
 ## What this deliberately does not do
 
 - **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an

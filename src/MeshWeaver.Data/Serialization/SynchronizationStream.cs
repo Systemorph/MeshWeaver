@@ -1444,7 +1444,21 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                     logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
                     OnError(new DeliveryFailureException(failure));
                     return delivery.Processed();
-                }
+                },
+                // 🚨 AWAITED failures are excluded, and this filter is the #3986 half nobody had
+                // measured. `HandleCallbacks` runs first in the rule chain and stamps
+                // `CallbackDispatched` on a response a live `hub.Observe` callback consumed — that
+                // call site's `OnError` has already dealt with it. Without the gate the failure was
+                // ALSO handled here, and this handler's answer is `OnError` on the STREAM: one
+                // refused click (`stream.SubmitUserAction`, or any awaited post from this hub)
+                // faulted the whole mirror and every view bound to it died. Measured on a real
+                // fixture: the stream terminated with `DeliveryFailureException: Your last action
+                // (“…/Button”) did not run …`. Exactly the gate `PortalErrorSink` already applies
+                // for the same reason, and for the same reason the filter REPLACES the default
+                // target-address check: a response's target is always this hub, so the stamp is the
+                // only gate needed. An UN-awaited failure — the subscribe protocol, an RLS denial,
+                // a NotFound — still faults the stream, unchanged.
+                (_, delivery) => !delivery.Properties.ContainsKey(PostOptions.CallbackDispatched)
             ).WithHandler<StreamErrorEvent>((_, delivery) =>
                 {
                     var evt = delivery.Message;
