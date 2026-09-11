@@ -3,6 +3,7 @@ Name: Returning imports restore the selected source
 Category: Fix
 Order: -20260910
 Description: Re-importing a previously used source no longer skips on an older success marker.
+Icon: ArrowSync
 ---
 
 Returning a synced partition to a previously imported revision restores changed and missing nodes.

@@ -258,8 +258,8 @@ In the **distributed (Orleans/PG) portal, routing does not consult the in-memory
 A source can move **B → A → B** during a rollback or a change of sealed publication. The old
 `import-{B}` activity survives the A import because import history is outside the content prune.
 Its success is historical evidence. Before skipping, the importer reads the current
-`import-manifest` authoritatively and compares its source tokens with every requested node and the
-root. A mismatch clears any Git-diff scope and evaluates the full source with the existing conflict
+`import-manifest` authoritatively and compares its content tokens with every requested non-empty
+node path and the root. A mismatch clears any Git-diff scope and evaluates the full source with the existing conflict
 policy. The manifest remains the same path-to-token map; older maps without a root entry receive
 one incremental full pass before they can authorize a skip. The root is always recorded as evaluated:
 `EnsureRoot` runs independently of the child Git-diff scope. Retaining its previous token after a
@@ -282,7 +282,8 @@ absent. This is a bounded historical observation, not a claim about production a
 or replica turnover.
 
 `ReturningSourceConvergesTest` drives the real GitSync service and monolith importer, substituting
-only the GitHub I/O boundary. On unchanged core `f1a945d5`, all six cases fail: B → A → B returns `Skipped` (including
+only the GitHub I/O boundary. Its initial six-case matrix, before the scoped-root follow-up below,
+fails on unchanged core `f1a945d5`: B → A → B returns `Skipped` (including
 a root-only change); both same-SHA reconciliation cases restore the missing node but leave the
 existing source stale; an ordinary import whose recorded SHA is already B skips; and explicit
 reconciliation trusts a matching manifest despite measured live drift. The corrected regression
@@ -290,8 +291,8 @@ also verifies unchanged repeats and a person's two-way edit with its conflict ho
 concurrently importing different selected publications; durable delivery still requires the intended
 publication and actual final source fingerprints to agree.
 
-**Initial local validation:** the six-case regression is red on unchanged core `f1a945d5` and green
-with this change. All 19 targeted Hosting/GitSync cases and 51 existing Graph importer cases pass.
+**Initial local validation:** those six cases are red on unchanged core `f1a945d5` and green
+with the initial correction. All 19 targeted Hosting/GitSync cases and 51 existing Graph importer cases pass.
 Release builds of the touched projects and test dependencies report zero warnings and errors.
 The regression reads actual node content and checks written/pruned paths; it does not assert only
 on the sync SHA or on a success message. Production acceptance remains a separate release step.
@@ -301,7 +302,31 @@ on the sync SHA or on a success message. Production acceptance remains a separat
 retains B's root token; returning to B skips and leaves the actual root at A. Recording the root's
 current token independently of the child scope corrects this. The test checks actual root content
 and the subsequent ordinary zero-content-write repeat. The new case is red on `7aac375b` and green
-with the correction; all 20 targeted Hosting/GitSync cases pass on the corrected source.
+with the correction. This follow-up expands `ReturningSourceConvergesTest` from six to seven
+executed cases; all 20 targeted Hosting/GitSync cases pass on the corrected source. The initial
+six-case and later scoped-root red receipts describe separate validation runs.
+
+**Review controls, 2026-09-11:** a `Versioned` source's revision changes the partition fingerprint;
+the manifest deliberately stores authored-content tokens. The new
+`VersionOnlySourceRevision_DoesNotRewriteIdenticalContentOrTheOwnerClock` case passes on unchanged
+`f1ce3394`: importing identical content at revisions 42 → 43 → 42 → 43 preserves both the content
+and the mesh owner's node version. A source revision alone must not manufacture a content write.
+
+The separate `EmptyPathIgnoredByTheFingerprint_DoesNotInvalidateTheCurrentManifest` case exposes
+a real mismatch on that same baseline: the fingerprint and manifest writer omit empty paths,
+while the returning-source comparison included one. An otherwise unchanged repeat returns
+`ImportedWithContentErrors` instead of `Skipped`. Applying the same non-empty-path filter to the
+comparison keeps those three decisions consistent. Its comparison map and the test fixture's
+source list use immutable collections (correction commit `6dae9421`). All nine cases then pass: the previous seven plus these
+two review controls. The 25 existing conflict-policy, scoped-marker and sync-mode cases also pass.
+Strict Release `Hosting.Test` and `Graph.Test` builds report zero warnings and errors.
+The distinct baseline and corrected receipts are
+`/tmp/core3991-review-results/core3991-review-before.trx` and
+`/tmp/core3991-review-results/core3991-review-final.trx`; the existing controls are in
+`/tmp/core3991-review-results/core3991-review-graph.trx`. The review baseline executes the two new
+controls: the version-only case passes and the empty-path case fails.
+The strict `Documentation.Test` build and 12 release-note, link and embed integrity cases also pass;
+their receipt is `/tmp/core3991-review-results/core3991-review-doc.trx`.
 
 **Removal review:** adding the root to the manifest does not make it a prune candidate. `Run` reads
 existing **descendants**, and `ComputePrunableNodes` filters that existing set; manifest keys only
