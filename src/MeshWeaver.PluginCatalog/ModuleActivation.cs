@@ -178,10 +178,11 @@ public sealed record ModuleActivationList
 /// <para>So the contended cell is removed rather than guarded: each module owns
 /// <c>modules/activation.d/&lt;Name&gt;.json</c> and a writer touches ONLY its own file. Two
 /// landings of DIFFERENT modules now share no path at all — no contention, and lost updates are
-/// structurally impossible. Two landings of the SAME module are inherently ordered work whose
-/// last-writer-wins is the correct answer, and can no longer cost any OTHER module its entry.
-/// A per-entry file that cannot be read costs exactly that one entry, reported loudly, instead of
-/// the whole deployment's module set.</para>
+/// structurally impossible. Two landings of the SAME module do share that module's file, but can
+/// no longer cost any OTHER module its entry; their semantic order is decided by
+/// <see cref="ModuleLandingService"/> before it writes. On the registry shelf an older arrival
+/// cannot replace a newer, present, loadable head (#3996). A per-entry file that cannot be read
+/// costs exactly that one entry, reported loudly, instead of the whole deployment's module set.</para>
 ///
 /// <para><b>The legacy aggregate file is still READ, never written by the runtime lane.</b>
 /// <c>modules/activation.json</c> is what deployments already on disk carry, so

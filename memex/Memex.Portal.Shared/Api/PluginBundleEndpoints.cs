@@ -659,7 +659,14 @@ public static class PluginBundleEndpoints
                         statusCode: StatusCodes.Status409Conflict);
                 }
 
-                if (outcome.Held)
+                if (!outcome.SelectedAsHead)
+                    logger?.LogInformation(
+                        "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
+                        + "{Version}) as older warehouse stock; activation stays on newer head "
+                        + "{HeadVersion}, so no restart or module-set change is required",
+                        accepted.Module, plugin, accepted.Files.Count,
+                        accepted.Version ?? "(unversioned)", outcome.HeadVersion ?? "(unversioned)");
+                else if (outcome.Held)
                     logger?.LogInformation(
                         "Module publish: SHELVED '{Module}' for {Plugin} ({Files} file(s), version "
                         + "{Version}) — HELD from local activation ({Reason}); it serves from this "
@@ -711,8 +718,10 @@ public static class PluginBundleEndpoints
                 BroadcastPublished(http, plugin, accepted, logger);
 
                 // held/holdReason let the publisher tell "shelved, will serve" apart from
-                // "activated here"; pendingRestart is honest for the held case — a restart of
-                // THIS instance would not load a held module, so nothing is pending on one.
+                // "activated here". selectedAsHead/headVersion make the #3996 third outcome
+                // explicit: an older upload is valid warehouse stock but does not move activation
+                // backwards. pendingRestart is honest for BOTH non-activation cases — a restart
+                // neither loads a held module nor changes anything for an older shelf-only one.
                 return Results.Json(new
                 {
                     plugin,
@@ -721,7 +730,9 @@ public static class PluginBundleEndpoints
                     files = accepted.Files.Count,
                     held = outcome.Held,
                     holdReason = outcome.HoldReason,
-                    pendingRestart = !outcome.Held,
+                    selectedAsHead = outcome.SelectedAsHead,
+                    headVersion = outcome.HeadVersion,
+                    pendingRestart = outcome.SelectedAsHead && !outcome.Held,
                 });
             })
             .AllowAnonymous();
