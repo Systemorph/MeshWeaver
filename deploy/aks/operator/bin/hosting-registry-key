@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # hosting-registry-key commit --registry-url <https://registry> --instance-id <id>
 #                             --namespace <ns> --synced-secret <k8s secret> [--key <config key>]
+#                             [--deployment memex-portal-deployment]
 # hosting-registry-key revoke --registry-url <https://registry>
 #                             --namespace <ns> --secret <k8s secret> --key <config key>
 #                             --live-secret <k8s secret> [--live-key <config key>]
+#                             [--deployment memex-portal-deployment]
 #
 # The plugin registry's key lifecycle, driven BY POSSESSION of the key (MeshWeaver#2802): every call
 # presents a key the operator reads out of a Secret in the instance's namespace, and the registry
@@ -20,6 +22,12 @@
 #            registry's revoke. Refuses to revoke the key the pods present (--live-secret/--live-key)
 #            — that one is rotated, never revoked.
 #
+# 🚨 BOTH verbs refuse while the Deployment sets the key INLINE. An inline `env:` entry outranks every
+# envFrom, so the pods then present a value no Secret here says anything about: a commit would retire
+# the key they actually hold, and a revocation's live-key guard would compare against the wrong value
+# and could revoke it. The Hosting plan refuses the same from the RECORD; this is the in-cluster half,
+# because a record is a snapshot and the Deployment is the fact (the rule hosting-kv-rotate follows).
+#
 # 🚨 NEVER PRINTS A KEY — compared by hash, presented on curl's STDIN (hosting::registry_call), unset.
 # shellcheck source=_common.sh
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
@@ -34,6 +42,7 @@ case "$verb" in
 esac
 
 registry="" instance="" namespace="" synced="" secret="" key="PluginCatalog__RegistryToken" live="" live_key=""
+deployment="memex-portal-deployment"
 while [ $# -gt 0 ]; do
   case "$1" in
     --registry-url)  registry="${2:-}";  shift 2 ;;
@@ -44,6 +53,7 @@ while [ $# -gt 0 ]; do
     --key)           key="${2:-}";       shift 2 ;;
     --live-secret)   live="${2:-}";      shift 2 ;;
     --live-key)      live_key="${2:-}";  shift 2 ;;
+    --deployment)    deployment="${2:-}"; shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -52,7 +62,17 @@ hosting::need_flag namespace "$namespace"
 hosting::safe_url registry-url "$registry"
 hosting::safe_name namespace "$namespace"
 hosting::safe_name key "$key"
+hosting::safe_name deployment "$deployment"
 self="${registry}/api/instances/self"
+
+# refuse_inline <key> <why the pods' inline value defeats this verb> — names only, before anything is read.
+refuse_inline() {
+  local setters
+  setters="$(hosting::inline_setters "$namespace" "$deployment" "$1")" \
+    || hosting::die "could not read deployment/${deployment} in ${namespace} — whether it sets ${1} inline decides which key the pods present. Nothing was changed."
+  [ -z "$setters" ] \
+    || hosting::die "${1} is set INLINE on ${setters} of deployment/${deployment} — an inline env: entry outranks every envFrom, so the pods present THAT value, which ${2}. Retire the entry first (Reconcile — its RetireInlineEnv remedy), drop it from the record, then retry. Nothing was changed."
+}
 
 # ─────────────────────────────────────── commit ───────────────────────────────────────
 if [ "$verb" = "commit" ]; then
@@ -66,6 +86,7 @@ if [ "$verb" = "commit" ]; then
     exit 0
   fi
 
+  refuse_inline "$key" "the Secret this commit reads cannot see — committing would retire the key the pods actually present"
   hosting::step "Commit the new key at the registry"
   # shellcheck disable=SC2034  # read BY NAME in hosting::registry_call, so the key is never an argument
   presented="$(hosting::secret_value "$namespace" "$synced" "$key")" \
@@ -114,6 +135,7 @@ if hosting::dry; then
   exit 0
 fi
 
+refuse_inline "$live_key" "--live-secret cannot see — the guard against revoking the pods' own key would compare the wrong value"
 hosting::step "Revoke the key at the registry"
 target="$(hosting::secret_value "$namespace" "$secret" "$key")" \
   || hosting::die "${secret} in ${namespace} carries no ${key} — there is no key there to revoke. Nothing was changed."

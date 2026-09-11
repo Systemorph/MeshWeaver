@@ -912,6 +912,24 @@ case "$_rk_out" in *"SAME key"*"ROTATED"*) ok "revoking the key the pods present
 holds "…so it still authenticates" "${LIVE_KEY_HASH} memex current"
 rm -rf "$_reg"
 
+# 🚨 An inline env: entry for the key means the pods present a value no Secret here describes:
+# both verbs refuse before the registry is asked (Copilot review on Plugins#1683).
+reg_state normal
+regkey base "${REVOKE[@]}"
+case "$_rk_out" in *"set INLINE on memex-portal, python-gate, node-gate"*"Nothing was changed"*)
+    ok "a revocation under an inline shadow of the live key is refused, naming every container" ;;
+  *) bad "a revocation under an inline shadow is refused" "said: ${_rk_out}" ;; esac
+[ -z "$_rk_reg" ] && ok "…before the registry is asked" || bad "the inline refusal asks nothing" "registry saw: ${_rk_reg}"
+holds "…so the outranked key still authenticates" "${OUTRANKED_HASH} crm-old current"
+rm -rf "$_reg"
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+regkey base "${COMMIT[@]}"
+case "$_rk_out" in *"set INLINE"*"would retire the key the pods actually present"*)
+    ok "a commit under an inline shadow is refused" ;;
+  *) bad "a commit under an inline shadow is refused" "said: ${_rk_out}" ;; esac
+holds "…retiring nothing" "${LIVE_KEY_HASH} memex current"
+rm -rf "$_reg"
+
 reg_state normal
 grep -v ' crm-old ' "$_reg/keys" > "$_reg/keys.new"; mv "$_reg/keys.new" "$_reg/keys"
 regkey absent "${REVOKE[@]}"

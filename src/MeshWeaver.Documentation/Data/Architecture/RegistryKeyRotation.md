@@ -123,8 +123,10 @@ so a fresh stage replaces it.
 `revokeSecretKey`). `hosting-registry-key revoke` reads the key there and presents it to the
 registry's revoke, then reads it back as **refused** before it reports `key_revoked=1` and the
 `revoked_instance` it belonged to. It refuses if that key is the one the pods present (the token
-class's synced Secret) — that key is rotated, never revoked. A key the registry already refuses
-reports `key_revoked=already`.
+class's synced Secret) — that key is rotated, never revoked — and it refuses, like the commit, while
+the Deployment sets the key INLINE: the pods then present a value no Secret describes, so the guard
+would compare the wrong key (the plan refuses the same from the record). A key the registry already
+refuses reports `key_revoked=already`.
 
 ## Rolling it out — three independent halves
 

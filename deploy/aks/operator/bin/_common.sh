@@ -109,6 +109,16 @@ hosting::secret_value() {
   printf '%s' "$value"
 }
 
+# The containers of <deployment> in <namespace> that set <key> INLINE (an `env:` entry), joined by
+# ", " on STDOUT — empty when none does. Names only; a value is never read out. Returns 1 when the
+# Deployment cannot be read. An inline entry outranks every envFrom, so where one exists the pods
+# present ITS value, and no Secret an operator step reads says which key that is.
+hosting::inline_setters() {
+  local namespace="$1" deployment="$2" key="$3" json
+  json="$(kubectl -n "$namespace" get deployment "$deployment" -o json 2>/dev/null)" || return 1
+  printf '%s' "$json" | jq -r --arg k "$key" '[.spec.template.spec.containers[] | select(any(.env[]?; .name == $k)) | .name] | join(", ")'
+}
+
 # SHA-256 hex of STDIN — how two keys are compared without either being shown.
 hosting::sha256() { sha256sum | cut -c1-64; }
 
