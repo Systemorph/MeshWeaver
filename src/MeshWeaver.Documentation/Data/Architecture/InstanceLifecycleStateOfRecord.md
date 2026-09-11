@@ -44,7 +44,17 @@ core and all work — configured module installation, package install, and per-u
 of them is connected to the manifest. Wiring those three fields is therefore mechanical, and doing
 it is what makes the manifest more than an artifact.
 
-## Registry-key rotation — the dangerous half is done and correct
+## Registry-key rotation — superseded by the two-phase design
+
+> 🚨 **2026-09-11 (MeshWeaver#2802): the assessment below was wrong about the part that mattered.**
+> The mint-and-store script was careful, but the ORDER around it was not: the key was stored in
+> Key Vault first, and the registry was told afterwards — through the control instance's own
+> `IInstanceKeyRegistry`, a store that does not hold the instance — while nothing stopped the job
+> restarting the pods onto a key the registry never adopted. The rotation now asks the registry
+> first, stages, proves, stores, restarts and only then retires the old key, at the registry and
+> authorised by the key itself: [Registry-key rotation](../RegistryKeyRotation). The table below is
+> kept as the record of what was measured on 2026-09-01; the "Adopting a rotated key's hash" and
+> "Behaviour tests" rows are closed by that change.
 
 The operator script that mints and stores a new key exists and does the delicate part right:
 

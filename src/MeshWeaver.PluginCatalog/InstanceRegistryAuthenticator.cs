@@ -392,7 +392,9 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                         var instance = Content<MeshWeaverInstance>(instanceRead.Node);
                         // Re-check the hash on the instance itself: the index is a routing hint,
                         // the instance record is the authority. A stale index must not authenticate.
-                        if (instance is null || !InstanceKeys.HashEquals(hash, instance.KeyHash))
+                        // Either slot authenticates: a key STAGED by a rotation is valid alongside
+                        // the current one until the rotation commits (InstanceKeyRotation, #2802).
+                        if (instance is null || InstanceKeyRotation.SlotOf(instance, hash) == InstanceKeySlot.None)
                             return Observable.Return(InstanceAuthResult.Resolved(null));
                         if (instance.IsDisabled)
                         {
@@ -416,7 +418,10 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                                 return InstanceAuthResult.Resolved(new AuthenticatedInstance(
                                     instance,
                                     Content<PluginGrant>(grantRead.Node)
-                                    ?? new PluginGrant { InstanceId = instance.InstanceId }));
+                                    ?? new PluginGrant { InstanceId = instance.InstanceId })
+                                {
+                                    InstancePath = index.InstancePath,
+                                });
                             })
                             // The plan ladder rides on the caller: a plan-scoped grant entry is
                             // decided against it at every surface, and reading it HERE — inside the
@@ -665,6 +670,13 @@ public sealed record AuthenticatedBuild(
 /// grant, which authorizes nothing.</param>
 public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGrant Grant)
 {
+    /// <summary>
+    /// Full path of the <see cref="MeshWeaverInstance"/> node the key resolved to — what the
+    /// registry's own key-lifecycle endpoints write to. Null only for a result built without a
+    /// resolution (a test's hand-made caller).
+    /// </summary>
+    public string? InstancePath { get; init; }
+
     /// <summary>
     /// Present when the caller authenticated with a short-lived token rather than its durable key.
     /// A token can only NARROW what the grant already allows — never widen it — so this is an

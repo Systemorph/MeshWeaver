@@ -95,6 +95,25 @@ refuses "kv-ensure needs --vault"          "missing required flag --vault"      
 refuses "kv-purge needs --vault"           "missing required flag --vault"      hosting-kv-purge --namespace n
 refuses "kv-rotate needs --vault"          "missing required flag --vault"      hosting-kv-rotate --namespace n
 refuses "kv-rotate needs --namespace"      "missing required flag --namespace"  hosting-kv-rotate --vault V
+# MeshWeaver#2802 — a rotation that does not know WHICH registry holds the instance is the defect;
+# an older plan that does not pass it stops here, before anything is read, minted or stored.
+refuses_hard "kv-rotate needs --registry-url" "missing required flag --registry-url" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s
+refuses_hard "kv-rotate needs --instance-id"  "missing required flag --instance-id" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s --registry-url https://registry.test
+refuses_hard "kv-rotate refuses a registry URL that is not https" "is not an https base URL" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s --registry-url http://registry.test --instance-id memex
+refuses_hard "kv-rotate refuses a registry URL carrying a path"   "is not an https base URL" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s --registry-url 'https://registry.test/$(id)' --instance-id memex
+refuses_hard "kv-rotate object with a metacharacter"               "is not a plain name" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s --object 'o;id' --registry-url https://registry.test --instance-id memex
+refuses "registry-key needs a verb"               "first argument must be 'commit' or 'revoke'" hosting-registry-key
+refuses "registry-key commit needs --instance-id" "missing required flag --instance-id" \
+  hosting-registry-key commit --registry-url https://registry.test --namespace n --synced-secret s
+refuses "registry-key revoke needs --live-secret" "missing required flag --live-secret" \
+  hosting-registry-key revoke --registry-url https://registry.test --namespace n --secret s --key k
+refuses_hard "registry-key refuses a registry URL that is not https" "is not an https base URL" \
+  hosting-registry-key commit --registry-url http://registry.test --namespace n --synced-secret s --instance-id memex
 refuses "pv-purge needs --namespace"       "missing required flag --namespace"  hosting-pv-purge
 refuses "pv-purge rejects unknown flags"   "unknown argument"                   hosting-pv-purge --namespace n --nope 1
 refuses "pv-resize needs --namespace"      "missing required flag --namespace"  hosting-pv-resize --claim c --size 1Gi
@@ -162,7 +181,8 @@ echo "── the rotated key never leaves the process ────────�
 # A dry run reaches the point where a real run would hold the minted key and reports what it WOULD
 # do — exactly the window in which a careless `echo` or a `set -x` would leak it. `mwi_` is the
 # scheme prefix (InstanceKeys.Generate), so its presence anywhere in the output is the leak.
-_rot_out="$(env HOSTING_DRY_RUN=true hosting-kv-rotate --vault V --namespace n --prefix memex- --synced-secret s 2>&1 || true)"
+_rot_out="$(env HOSTING_DRY_RUN=true hosting-kv-rotate --vault V --namespace n --prefix memex- --synced-secret s \
+  --registry-url https://registry.test --instance-id memex 2>&1 || true)"
 case "$_rot_out" in
   *mwi_*) bad "kv-rotate never prints the minted key" "a 'mwi_' token appeared in its output: ${_rot_out}" ;;
   *)      ok  "kv-rotate never prints the minted key" ;;
@@ -656,13 +676,30 @@ echo "── hosting-kv-rotate refuses under an inline shadow ──────
 # kubectl and an az stub lead PATH: the control case really does reach the vault write, and the az
 # stub refuses it without recording the argv that carries the minted key.
 KVR_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-rotate" && pwd)"
-kvr() {  # kvr <inline-env scenario> — sets $_kvr_out $_kvr_rc $_kvr_az
+# The stand-in REGISTRY (stubs/registry/curl): the real two-slot rules — current + staged — over a
+# state file of key HASHES. The fixture keys are fake placeholders; the stub never logs one.
+REG_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/registry" && pwd)"
+_sha() { printf '%s' "$1" | sha256sum | cut -c1-64; }
+LIVE_KEY_HASH="$(_sha fake-inline-registry-token-0001)"      # memex-portal-keyvault — what the pods present
+OUTRANKED_HASH="$(_sha fake-chart-secret-token-OUTRANKED)"   # memex-portal-secrets — the third key
+VAULT_KEY_HASH="$(_sha fake-vault-staged-token-0002)"        # a key an earlier rotation put in the vault
+reg_state() {  # reg_state <normal|absent|old> [extra "<hash> <instance> <slot>" lines…] — sets $_reg
+  _reg="$(mktemp -d)"
+  printf '%s\n' "$1" > "$_reg/mode"; shift
+  { printf '%s memex current\n%s crm-old current\n' "$LIVE_KEY_HASH" "$OUTRANKED_HASH"
+    for line in "$@"; do printf '%s\n' "$line"; done; } > "$_reg/keys"
+  : > "$_reg/log"
+}
+kvr() {  # kvr <inline-env scenario> — sets $_kvr_out $_kvr_rc $_kvr_az $_kvr_reg
   _kvr_state="$(mktemp -d)"
-  _kvr_out="$(env PATH="$KVR_STUBS:$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$1" HOSTING_IE_BASE="$IE_FIXTURES/base" \
-    HOSTING_IE_STATE="$_kvr_state" HOSTING_KV_SYNC_ATTEMPTS=1 \
-    hosting-kv-rotate --vault V --prefix memex- --namespace memex --synced-secret memex-portal-keyvault 2>&1)"; _kvr_rc=$?
+  reg_state normal
+  _kvr_out="$(env PATH="$REG_STUBS:$KVR_STUBS:$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$1" HOSTING_IE_BASE="$IE_FIXTURES/base" \
+    HOSTING_IE_STATE="$_kvr_state" HOSTING_REG_STATE="$_reg" HOSTING_KV_SYNC_ATTEMPTS=1 HOSTING_KV_SYNC_INTERVAL=0 \
+    hosting-kv-rotate --vault V --prefix memex- --namespace memex --synced-secret memex-portal-keyvault \
+      --registry-url https://registry.test --instance-id memex 2>&1)"; _kvr_rc=$?
   _kvr_az="$(cat "$_kvr_state/az.log" 2>/dev/null || true)"
-  rm -rf "$_kvr_state"
+  _kvr_reg="$(cat "$_reg/log" 2>/dev/null || true)"
+  rm -rf "$_kvr_state" "$_reg"
 }
 kvr base
 [ "$_kvr_rc" -ne 0 ] && ok "a rotation with the key set INLINE on the Deployment is refused" \
@@ -671,7 +708,9 @@ case "$_kvr_out" in *"PluginCatalog__RegistryToken is set INLINE on memex-portal
     ok "…naming every container that carries it and the prior step (RetireInlineEnv)" ;;
   *) bad "the shadow refusal names the containers and the prior step" "said: ${_kvr_out}" ;; esac
 case "$_kvr_out" in *"::hosting::"*) bad "…before anything is reported" "said: ${_kvr_out}" ;;
-  *) ok "…before anything is reported — no key_hash line, so the registry adopts nothing" ;; esac
+  *) ok "…before anything is reported — no key_hash line" ;; esac
+[ -z "$_kvr_reg" ] && ok "…and before the registry is even asked" \
+  || bad "an inline shadow refuses before the registry is asked" "registry saw: ${_kvr_reg}"
 [ -z "$_kvr_az" ] && ok "…and before anything is minted or stored (no az call at all)" \
   || bad "nothing is stored under a refusal" "az saw: ${_kvr_az}"
 kvr absent
@@ -681,6 +720,204 @@ case "$_kvr_az" in "az keyvault secret"*) ok "…and reaches the vault write (th
   *) bad "the control reaches the vault write" "az saw: '${_kvr_az}', said: ${_kvr_out}" ;; esac
 case "$_kvr_out" in *mwi_*) bad "…without ever printing the minted key" "said: ${_kvr_out}" ;;
   *) ok "…without ever printing the minted key" ;; esac
+
+echo
+echo "── the rotation asks the REGISTRY before it mints (MeshWeaver#2802) ──"
+# The defect this section pins. The rotation used to mint and STORE the key first and let the control
+# plane adopt its hash afterwards — through whatever IInstanceKeyRegistry the control instance's hub
+# resolved, which is not the registry (the instances live only in memex.meshweaver.cloud's store). The
+# adoption failed AFTER Key Vault held a key nothing accepted, and the Job restarted the pods anyway:
+# the next restart presented a key the registry never adopted. Now the registry is asked first, the
+# vault is written last, and every failure in between leaves the key the pods present authenticating.
+rot() {  # rot <inline-env fixture> [VAR=value …] — a real (non-dry) rotation against the stubs
+  local fixture="$1"; shift
+  _rot_state="$(mktemp -d)"
+  _rot_out="$(env PATH="$REG_STUBS:$KVR_STUBS:$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$fixture" \
+    HOSTING_IE_BASE="$IE_FIXTURES/base" HOSTING_IE_STATE="$_rot_state" HOSTING_REG_STATE="$_reg" \
+    HOSTING_KV_SYNC_ATTEMPTS=1 HOSTING_KV_SYNC_INTERVAL=0 "$@" \
+    hosting-kv-rotate --vault V --object PluginCatalog-RegistryToken --namespace memex \
+      --synced-secret memex-portal-keyvault --registry-url https://registry.test --instance-id memex 2>&1)"; _rot_rc=$?
+  _rot_az="$(cat "$_rot_state/az.log" 2>/dev/null || true)"
+  _rot_reg="$(cat "$_reg/log" 2>/dev/null || true)"
+  rm -rf "$_rot_state"
+}
+never_minted() {  # never_minted <what> — no hash reported, no vault write, nothing staged
+  case "$_rot_out" in *"::hosting:: key_hash="*) bad "$1: no key hash is reported" "said: ${_rot_out}" ;;
+    *) ok "$1: no key hash is reported" ;; esac
+  case "$_rot_az" in *"secret set"*) bad "$1: Key Vault is never written" "az saw: ${_rot_az}" ;;
+    *) ok "$1: Key Vault is never written" ;; esac
+  case "$_rot_reg" in *"/key/stage"*) bad "$1: nothing is staged" "registry saw: ${_rot_reg}" ;;
+    *) ok "$1: nothing is staged" ;; esac
+}
+no_value_printed() {  # no_value_printed <output> <what>
+  case "$1" in *mwi_*|*fake-inline-registry*|*fake-vault-staged*|*fake-chart-secret*|*nobody-holds*)
+      bad "$2" "a key value appeared: $1" ;;
+    *) ok "$2" ;; esac
+}
+holds() {  # holds <what> <line> — the registry's key file carries that exact line
+  if grep -qx "$2" "$_reg/keys"; then ok "$1"; else bad "$1" "keys: $(tr '\n' ';' < "$_reg/keys")"; fi
+}
+lacks() {  # lacks <what> <pattern>
+  if grep -q "$2" "$_reg/keys"; then bad "$1" "keys: $(tr '\n' ';' < "$_reg/keys")"; else ok "$1"; fi
+}
+
+# 🚨 THE CONTROL-INSTANCE CASE: a portal that does not hold the instance answers 401 to its key.
+reg_state absent
+rot absent
+[ "$_rot_rc" -ne 0 ] && ok "a registry that does not hold the instance refuses the rotation" \
+  || bad "a registry that does not hold the instance refuses the rotation" "exited 0: ${_rot_out}"
+case "$_rot_out" in *"does not accept the key"*"Nothing was minted"*) ok "…saying so, and that nothing was minted" ;;
+  *) bad "the no-instance refusal says so" "said: ${_rot_out}" ;; esac
+never_minted "no instance at the registry"
+rm -rf "$_reg"
+
+reg_state old
+rot absent
+case "$_rot_out" in *"older than MeshWeaver#2802"*) ok "a registry without the key surface refuses, naming the roll it needs" ;;
+  *) bad "a registry without the key surface refuses" "said: ${_rot_out}" ;; esac
+never_minted "no key surface"
+rm -rf "$_reg"
+
+reg_state normal
+printf '%s someone-else current\n' "$LIVE_KEY_HASH" > "$_reg/keys"
+rot absent
+case "$_rot_out" in *"belongs to instance 'someone-else'"*) ok "a key of ANOTHER instance refuses, naming it" ;;
+  *) bad "a key of another instance refuses" "said: ${_rot_out}" ;; esac
+never_minted "the wrong instance"
+rm -rf "$_reg"
+
+# CONTROL: a registry that holds the instance — the rotation reaches the vault, in the right order.
+reg_state normal
+rot absent
+case "$_rot_reg" in *"GET /api/instances/self current"*"POST /api/instances/self/key/stage current"*"GET /api/instances/self staged"*)
+    ok "CONTROL: asks the registry, stages the hash with the current key, proves the new key — in that order" ;;
+  *) bad "the registry is asked, then staged, then the new key proven" "registry saw: ${_rot_reg}" ;; esac
+case "$_rot_out" in *"::hosting:: key_hash="*"::hosting:: key_staged=1"*) ok "…reports the hash and that it is staged" ;;
+  *) bad "the staged hash is reported" "said: ${_rot_out}" ;; esac
+case "$_rot_az" in *"az keyvault secret set"*) ok "…and only then reaches the vault write (refused by the stub)" ;;
+  *) bad "the vault write comes after the proof" "az saw: ${_rot_az}" ;; esac
+case "$_rot_out" in *"Key Vault is unchanged"*) ok "…whose failure says Key Vault is unchanged" ;;
+  *) bad "a failed vault write states the vault's state" "said: ${_rot_out}" ;; esac
+holds "…while the key the pods present still authenticates" "${LIVE_KEY_HASH} memex current"
+if grep -q ' memex staged$' "$_reg/keys"; then ok "…beside the staged one"; else bad "the new key is staged" "keys: $(cat "$_reg/keys")"; fi
+no_value_printed "$_rot_out" "…and no key value is ever printed"
+rm -rf "$_reg"
+
+# The vault IS written but the Secret never catches up: nothing is retired, and it says so.
+reg_state normal
+rot absent HOSTING_AZ_ACCEPT_SET=1
+case "$_rot_out" in *"Key Vault now holds the NEW key"*"has NOT been retired"*"pods were NOT restarted"*)
+    ok "a sync that never arrives fails naming the vault, the registry and the pods' state" ;;
+  *) bad "a failed sync states what it left behind" "said: ${_rot_out}" ;; esac
+case "$_rot_out" in *"kv_rotated=1"*) bad "…and never claims the rotation" "said: ${_rot_out}" ;;
+  *) ok "…and never claims the rotation" ;; esac
+holds "…with the previous key still authenticating" "${LIVE_KEY_HASH} memex current"
+rm -rf "$_reg"
+
+# A rotation already in flight whose key is IN THE VAULT is RESUMED — never replaced.
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+rot absent HOSTING_KV_VAULT_VALUE=fake-vault-staged-token-0002
+case "$_rot_out" in *"::hosting:: key_resumed=1"*) ok "a key an earlier rotation left in the vault is RESUMED" ;;
+  *) bad "an in-flight rotation is resumed" "said: ${_rot_out}" ;; esac
+case "$_rot_out" in *"step=Mint a new instance key"*) bad "…without minting another" "said: ${_rot_out}" ;;
+  *) ok "…without minting another" ;; esac
+case "$_rot_az" in *"secret set"*) bad "…or writing the vault" "az saw: ${_rot_az}" ;; *) ok "…or writing the vault" ;; esac
+holds "…leaving the staged key the vault holds staged" "${VAULT_KEY_HASH} memex staged"
+rm -rf "$_reg"
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+rot rotated HOSTING_KV_VAULT_VALUE=fake-vault-staged-token-0002
+[ "$_rot_rc" -eq 0 ] && ok "…and once the Secret carries it, the resume completes for the restart and commit to finish" \
+  || bad "a resumed rotation whose Secret caught up completes" "exited ${_rot_rc}: ${_rot_out}"
+rm -rf "$_reg"
+
+reg_state normal "$(_sha nobody-holds-this) memex staged"
+rot absent HOSTING_KV_VAULT_VALUE=fake-vault-staged-token-0002
+case "$_rot_out" in *"nobody holds it"*) ok "a staged key in neither the vault nor the Secret is replaced by a new stage" ;;
+  *) bad "an orphaned staged key is replaced" "said: ${_rot_out}" ;; esac
+lacks "…and stops authenticating" "^$(_sha nobody-holds-this) "
+rm -rf "$_reg"
+
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+rot absent
+case "$_rot_out" in *"could not be read"*) ok "a staged key with an unreadable vault refuses rather than guessing" ;;
+  *) bad "an unreadable vault refuses" "said: ${_rot_out}" ;; esac
+never_minted "an unreadable vault"
+rm -rf "$_reg"
+
+echo
+echo "── hosting-registry-key commit: retire the old key only when the new one is proven ──"
+regkey() {  # regkey <inline-env fixture> <args…> — sets $_rk_out $_rk_rc $_rk_reg
+  local fixture="$1" rk_state; shift
+  rk_state="$(mktemp -d)"
+  _rk_out="$(env PATH="$REG_STUBS:$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$fixture" HOSTING_IE_BASE="$IE_FIXTURES/base" \
+    HOSTING_IE_STATE="$rk_state" HOSTING_REG_STATE="$_reg" hosting-registry-key "$@" 2>&1)"; _rk_rc=$?
+  _rk_reg="$(cat "$_reg/log" 2>/dev/null || true)"
+  rm -rf "$rk_state"
+}
+COMMIT=(commit --registry-url https://registry.test --instance-id memex --namespace memex --synced-secret memex-portal-keyvault)
+
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+regkey rotated "${COMMIT[@]}"
+[ "$_rk_rc" -eq 0 ] && ok "a Secret carrying the staged key commits it" || bad "the staged key commits" "exited ${_rk_rc}: ${_rk_out}"
+case "$_rk_out" in *"::hosting:: key_committed=1"*) ok "…and says so" ;; *) bad "a commit is reported" "said: ${_rk_out}" ;; esac
+holds "…the new key is now current" "${VAULT_KEY_HASH} memex current"
+lacks "…and the previous key no longer authenticates" "^${LIVE_KEY_HASH} "
+no_value_printed "$_rk_out" "…printing no key"
+rm -rf "$_reg"
+
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+regkey absent "${COMMIT[@]}"
+case "$_rk_out" in *"still carries the PREVIOUS key"*"Nothing was retired"*) ok "a Secret still carrying the previous key refuses the commit" ;;
+  *) bad "a commit refuses when the new key never reached the Secret" "said: ${_rk_out}" ;; esac
+case "$_rk_reg" in *"/key/commit"*) bad "…without asking the registry to commit" "registry saw: ${_rk_reg}" ;;
+  *) ok "…without asking the registry to commit" ;; esac
+holds "…so the key the pods present still authenticates" "${LIVE_KEY_HASH} memex current"
+holds "…and the staged one too" "${VAULT_KEY_HASH} memex staged"
+rm -rf "$_reg"
+
+reg_state normal
+regkey absent "${COMMIT[@]}"
+case "$_rk_out" in *"::hosting:: key_committed=already"*) ok "a commit with nothing staged is an idempotent repeat" ;;
+  *) bad "a repeated commit is idempotent" "said: ${_rk_out}" ;; esac
+rm -rf "$_reg"
+
+reg_state absent
+regkey absent "${COMMIT[@]}"
+[ "$_rk_rc" -ne 0 ] && ok "a registry that rejects the pods' key fails the commit" || bad "a rejected key fails the commit" "exited 0: ${_rk_out}"
+rm -rf "$_reg"
+
+echo
+echo "── hosting-registry-key revoke: a key stops authenticating, nobody reads its value ──"
+REVOKE=(revoke --registry-url https://registry.test --namespace memex --secret memex-portal-secrets
+  --key PluginCatalog__RegistryToken --live-secret memex-portal-keyvault)
+
+reg_state normal
+regkey absent "${REVOKE[@]}"
+[ "$_rk_rc" -eq 0 ] && ok "the outranked key in the chart Secret is revoked" || bad "the outranked key is revoked" "exited ${_rk_rc}: ${_rk_out}"
+case "$_rk_out" in *"::hosting:: revoked_instance=crm-old"*"::hosting:: key_revoked=1"*) ok "…naming the instance it belonged to" ;;
+  *) bad "a revocation names the instance" "said: ${_rk_out}" ;; esac
+lacks "…and the registry no longer accepts it" "^${OUTRANKED_HASH} "
+holds "…while the key the pods present still authenticates" "${LIVE_KEY_HASH} memex current"
+case "$_rk_reg" in *"POST /api/instances/self/key/revoke current"*"GET /api/instances/self none"*) ok "…proven by reading it back as refused" ;;
+  *) bad "a revocation is read back" "registry saw: ${_rk_reg}" ;; esac
+no_value_printed "$_rk_out" "…printing no key"
+rm -rf "$_reg"
+
+reg_state normal
+regkey absent revoke --registry-url https://registry.test --namespace memex --secret memex-portal-keyvault \
+  --key PluginCatalog__RegistryToken --live-secret memex-portal-keyvault
+case "$_rk_out" in *"SAME key"*"ROTATED"*) ok "revoking the key the pods present is refused — it is rotated, never revoked" ;;
+  *) bad "the live key is never revoked" "said: ${_rk_out}" ;; esac
+[ -z "$_rk_reg" ] && ok "…before the registry is asked" || bad "the live-key refusal asks nothing" "registry saw: ${_rk_reg}"
+holds "…so it still authenticates" "${LIVE_KEY_HASH} memex current"
+rm -rf "$_reg"
+
+reg_state normal
+grep -v ' crm-old ' "$_reg/keys" > "$_reg/keys.new"; mv "$_reg/keys.new" "$_reg/keys"
+regkey absent "${REVOKE[@]}"
+case "$_rk_out" in *"::hosting:: key_revoked=already"*) ok "a key the registry already refuses is reported revoked, idempotently" ;;
+  *) bad "revoking a dead key is idempotent" "said: ${_rk_out}" ;; esac
+rm -rf "$_reg"
 
 echo
 echo "── hosting-audit: what lives only on the cluster ─────────────────"

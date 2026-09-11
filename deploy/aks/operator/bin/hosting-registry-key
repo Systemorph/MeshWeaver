@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# hosting-registry-key commit --registry-url <https://registry> --instance-id <id>
+#                             --namespace <ns> --synced-secret <k8s secret> [--key <config key>]
+# hosting-registry-key revoke --registry-url <https://registry>
+#                             --namespace <ns> --secret <k8s secret> --key <config key>
+#                             --live-secret <k8s secret> [--live-key <config key>]
+#
+# The plugin registry's key lifecycle, driven BY POSSESSION of the key (MeshWeaver#2802): every call
+# presents a key the operator reads out of a Secret in the instance's namespace, and the registry
+# acts only on the instance that key belongs to. No standing credential can rotate or revoke
+# someone else's instance — the keys this replaces sat in plaintext pod specs (MeshWeaver#3201).
+#
+#   commit   the SECOND half of a rotation (`hosting-kv-rotate` is the first), run after the portal
+#            restarted onto the new key: presents the key the synced Secret carries — the key the
+#            restarted pods read — and the registry promotes it and RETIRES the previous one. It
+#            refuses, retiring nothing, when that Secret still carries the previous key.
+#
+#   revoke   stops a key the registry still accepts from authenticating, without anyone knowing its
+#            value: the key is read from where it sits (--secret/--key) and presented to the
+#            registry's revoke. Refuses to revoke the key the pods present (--live-secret/--live-key)
+#            — that one is rotated, never revoked.
+#
+# 🚨 NEVER PRINTS A KEY — compared by hash, presented on curl's STDIN (hosting::registry_call), unset.
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-registry-key"
+
+verb="${1:-}"
+[ $# -gt 0 ] && shift
+case "$verb" in
+  commit|revoke) ;;
+  *) hosting::die "first argument must be 'commit' or 'revoke', not '${verb}'" ;;
+esac
+
+registry="" instance="" namespace="" synced="" secret="" key="PluginCatalog__RegistryToken" live="" live_key=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --registry-url)  registry="${2:-}";  shift 2 ;;
+    --instance-id)   instance="${2:-}";  shift 2 ;;
+    --namespace)     namespace="${2:-}"; shift 2 ;;
+    --synced-secret) synced="${2:-}";    shift 2 ;;
+    --secret)        secret="${2:-}";    shift 2 ;;
+    --key)           key="${2:-}";       shift 2 ;;
+    --live-secret)   live="${2:-}";      shift 2 ;;
+    --live-key)      live_key="${2:-}";  shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag registry-url "$registry"
+hosting::need_flag namespace "$namespace"
+hosting::safe_url registry-url "$registry"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name key "$key"
+self="${registry}/api/instances/self"
+
+# ─────────────────────────────────────── commit ───────────────────────────────────────
+if [ "$verb" = "commit" ]; then
+  hosting::need_flag instance-id "$instance"
+  hosting::need_flag synced-secret "$synced"
+  hosting::safe_name instance-id "$instance"
+  hosting::safe_name synced-secret "$synced"
+  if hosting::dry; then
+    hosting::log "(dry run) would present ${synced}/${key} to ${registry}/api/instances/self/key/commit, retiring '${instance}'s previous key"
+    hosting::say key_committed dry-run
+    exit 0
+  fi
+
+  hosting::step "Commit the new key at the registry"
+  # shellcheck disable=SC2034  # read BY NAME in hosting::registry_call, so the key is never an argument
+  presented="$(hosting::secret_value "$namespace" "$synced" "$key")" \
+    || hosting::die "the synced Secret ${synced} in ${namespace} carries no ${key} — there is no key the pods read to present. Nothing was retired."
+  hosting::registry_call presented GET "$self"
+  slot="$(hosting::registry_field key)" seen="$(hosting::registry_field instanceId)" staged="$(hosting::registry_field staged)"
+  if [ "$REGISTRY_STATUS" != "200" ]; then
+    unset presented
+    hosting::die "the registry at ${registry} does not accept the key ${synced}/${key} carries (HTTP ${REGISTRY_STATUS}) — the restarted pods present a key it rejects. Nothing was retired; restore the previous key into ${synced} from the vault's previous version and restart."
+  fi
+  if [ "$seen" != "$instance" ]; then
+    unset presented
+    hosting::die "${synced}/${key} carries a key of instance '${seen:-?}', not '${instance}' — refusing to commit someone else's rotation. Nothing was retired."
+  fi
+  if [ "$slot" = "current" ] && [ "$staged" != "true" ]; then
+    unset presented
+    hosting::log "nothing staged — '${instance}' already presents its current key (a commit that already happened)"
+    hosting::say key_committed already
+    exit 0
+  fi
+  if [ "$slot" != "staged" ]; then
+    unset presented
+    hosting::die "${synced}/${key} still carries the PREVIOUS key while a new one is staged — the new key never reached the Secret the pods read, so retiring the previous one would lock them out. Nothing was retired; the registry still accepts both. Re-run RotateRegistryKey: it resumes the rotation."
+  fi
+  hosting::registry_call presented POST "${registry}/api/instances/self/key/commit"
+  if [ "$REGISTRY_STATUS" != "200" ] || [ "$(hosting::registry_field key)" != "current" ]; then
+    unset presented
+    hosting::die "the registry refused the commit (HTTP ${REGISTRY_STATUS}: $(hosting::registry_field error)). Nothing was retired; the registry still accepts both keys."
+  fi
+  unset presented
+  hosting::log "committed — the new key is '${instance}'s current key; the previous key no longer authenticates"
+  hosting::say key_committed 1
+  exit 0
+fi
+
+# ─────────────────────────────────────── revoke ───────────────────────────────────────
+hosting::need_flag secret "$secret"
+hosting::need_flag live-secret "$live"
+live_key="${live_key:-PluginCatalog__RegistryToken}"
+hosting::safe_name secret "$secret"
+hosting::safe_name live-secret "$live"
+hosting::safe_name live-key "$live_key"
+if hosting::dry; then
+  hosting::log "(dry run) would present ${secret}/${key} to ${registry}/api/instances/self/key/revoke — after refusing if it is the key ${live}/${live_key} presents"
+  hosting::say key_revoked dry-run
+  exit 0
+fi
+
+hosting::step "Revoke the key at the registry"
+target="$(hosting::secret_value "$namespace" "$secret" "$key")" \
+  || hosting::die "${secret} in ${namespace} carries no ${key} — there is no key there to revoke. Nothing was changed."
+target_hash="$(printf '%s' "$target" | hosting::sha256)"
+# The live key must be READ, not assumed: an unreadable one would make the comparison below
+# meaningless, and the one thing this command must never do is revoke the key the pods present.
+live_value="$(hosting::secret_value "$namespace" "$live" "$live_key")" || {
+  unset target
+  hosting::die "${live}/${live_key} in ${namespace} could not be read — without the key the pods present there is no way to be sure ${secret}/${key} is not that key. Nothing was changed."
+}
+live_hash="$(printf '%s' "$live_value" | hosting::sha256)"
+unset live_value
+if [ "$target_hash" = "$live_hash" ]; then
+  unset target
+  hosting::die "${secret}/${key} carries the SAME key as ${live}/${live_key}, the key the pods present — revoking it would lock this instance out of its registry. That key is ROTATED (RotateRegistryKey), never revoked. Nothing was changed."
+fi
+
+hosting::registry_call target GET "$self"
+case "$REGISTRY_STATUS" in
+  200) ;;
+  401|403)
+    unset target
+    hosting::log "the registry at ${registry} already does not accept ${secret}/${key} (HTTP ${REGISTRY_STATUS}) — nothing left to revoke"
+    hosting::say key_revoked already
+    exit 0 ;;
+  *)
+    unset target
+    hosting::die "the registry at ${registry} answered HTTP ${REGISTRY_STATUS} to /api/instances/self — not a verdict about the key. Nothing was changed." ;;
+esac
+owner="$(hosting::registry_field instanceId)" owner_slot="$(hosting::registry_field key)"
+hosting::log "${secret}/${key} is the ${owner_slot:-?} key of instance '${owner:-?}' at ${registry} — revoking it"
+hosting::registry_call target POST "${registry}/api/instances/self/key/revoke"
+if [ "$REGISTRY_STATUS" != "200" ]; then
+  unset target
+  hosting::die "the registry refused the revocation (HTTP ${REGISTRY_STATUS}: $(hosting::registry_field error)). The key still authenticates."
+fi
+# Read it back: a revocation is proven by the key being REFUSED, not by the call returning.
+hosting::registry_call target GET "$self"
+unset target
+[ "$REGISTRY_STATUS" = "401" ] || [ "$REGISTRY_STATUS" = "403" ] \
+  || hosting::die "the registry answered the revocation, but still answers HTTP ${REGISTRY_STATUS} to that key — it is NOT revoked."
+hosting::log "revoked — the registry now refuses that key (HTTP ${REGISTRY_STATUS})"
+hosting::say revoked_instance "${owner:-unknown}"
+hosting::say key_revoked 1
