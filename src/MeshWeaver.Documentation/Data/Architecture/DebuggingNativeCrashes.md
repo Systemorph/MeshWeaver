@@ -1742,8 +1742,78 @@ against 81 and 84 before it:
 - 43 collected everything in 2 rounds;
 - 2 collected everything in 3 rounds.
 
-The contexts still retained are `LocalAnalysis`, `BusinessUnit` and `GroupAnalysis`. What holds them is the
-subject of the next gcroot, below.
+The contexts still retained are `LocalAnalysis`, `BusinessUnit` and `GroupAnalysis`.
+
+**What still holds them: nothing strong.** A second heap dump was taken at a `DISPOSE_ALC_RETAINED` teardown,
+this time with the eviction active (pid 61593: `LocalAnalysis`, `BusinessUnit` and `GroupAnalysis` Unloading).
+`gcroot` on their three LoaderAllocators finds **no strong, pinned or dependent root at all**.
+
+Every chain starts at a handle of type 10, `HNDTYPE_WEAK_INTERIOR_POINTER`. It runs to the collectible assembly's
+own statics array, then to a static delegate in it (for example the compiler's method-group cache
+`<4>__ProfitByLoB`, typed `Func<LayoutAreaHost, RenderingContext, UiControl>`), then to its `RuntimeMethodInfo`
+and the LoaderAllocator. That is the context referring to itself through a weak handle.
+
+**But they were not slow — they were held, and the holder was the teardown itself.** A controlled run let the
+drain go on for up to **20** rounds with no progress, 40 full collections with a finalizer pass after each. It
+still ended **30** teardowns `DISPOSE_ALC_RETAINED`, each in about 250 ms, and nothing was collected between
+round 4 and round 20. So something **live** held these contexts *during* the drain and let go the moment
+`DisposeAsync` returned. That is why a dump taken afterwards shows no strong root.
+
+A third dump was taken **inside** the drain, at the instant it concluded "retained" (a local diagnostic that ran
+`dotnet-dump collect` on its own process). It names the holder. For every Unloading context, the only non-weak
+root is a stack slot of `MonolithMeshTestBase.<DisposeAsync>d__87.MoveNext()`, the very frame running the drain:
+
+```
+MonolithMeshTestBase.<DisposeAsync>d__87.MoveNext()  Fp+118
+  -> MeshWeaver.Messaging.MessageHub                (the mesh teardown had just disposed)
+  -> its properties dictionary -> RecycleAnnouncement -> Action -> MeshWeaver.Data.Workspace
+  -> SynchronizationStream<MeshNode> -> ReduceManager<MeshNode> -> … -> MeshWeaver.Graph.MeshDataSource
+  -> MeshNodeTypeSource -> MeshWeaver.Mesh.Services.MeshContentTypeRegistry
+  -> ConcurrentDictionary<string, DiscriminatorClaim> -> DiscriminatorClaim
+  -> System.RuntimeType (the collectible node type) -> System.Reflection.LoaderAllocator
+```
+
+The teardown was waiting to see an unload while holding, in its own frame, the mesh that pins it. The fixture's
+`ServiceProvider` field is a second route to the same graph: `MonolithMeshTestBase` disposes the provider but,
+unlike `ServiceSetup.Dispose`, never clears the field.
+
+**The fix — the waiter lets go before it waits.**
+- The test bases clear `ServiceProvider` before the drain.
+- `CollectibleUnloadDrain` yields before its first collection, so the calling frame and its temporaries are
+  gone by the time anything is collected.
+
+**Measured after this fix.** Over three FutuRe runs (macOS arm64, all green, 138 teardowns), **126** ended
+`DISPOSE_UNLOADS_COLLECTED` (48 with nothing to wait for, 78 collected in 2 rounds) and **12** ended
+`DISPOSE_ALC_RETAINED`. None faulted.
+
+The progression, each step measured the same way:
+
+| state | collected | retained |
+|---|---|---|
+| waiting for "really unloaded" only | 81 | 84 |
+| + evicting STJ's accessor cache | 93 | 45 |
+| + the teardown releasing its own mesh first | 126 | 12 |
+
+The 12 that remain are reported and named, never waited on.
+
+**The residual has no managed root, and the cutoff is measured, not guessed.**
+- A second heap dump taken *inside* the drain, with both fixes active, shows **no** non-weak root on either
+  still-unloading LoaderAllocator. None is a stack root, a strong or pinned handle, a dependent handle, or a
+  finalizer-queue root.
+- Letting the drain run **20** no-progress rounds instead of 3 then collected **88** teardowns: 32 with nothing
+  to wait for, 56 in 2 rounds. It left **4** retained after 20 rounds. **No teardown was collected at any round
+  from 3 to 20.**
+- So three rounds is right: raising the number frees nothing.
+
+What holds the last 4–9 % is outside the managed heap. The most likely candidates are a native
+LoaderAllocator-to-LoaderAllocator reference between NodeType contexts (one context's types used by another's)
+or a runtime-internal reference, and `gcroot` cannot see either. It is left to the retention work of
+#4017/#4029, and the teardown reports each such case by name.
+
+**For the retention work (#4017/#4029).** On a long-lived portal, `MeshContentTypeRegistry`'s discriminator
+claims hold `RuntimeType`s of superseded NodeType generations for as long as the mesh lives. In a test that
+registry dies with its mesh, so the fix above is enough; on a portal it is a retention candidate of exactly
+the kind #4017 measures.
 
 ## Reading the result honestly
 
