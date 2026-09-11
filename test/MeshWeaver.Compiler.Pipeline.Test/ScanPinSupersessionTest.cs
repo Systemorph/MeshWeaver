@@ -253,6 +253,93 @@ public sealed class ScanPinSupersessionTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 ONE BUILD AT TWO PATHS IS ONE GENERATION. The post-emit scan publishes from the compile's
+    /// own directory; <c>UploadToStoreIfNeeded</c> then copies those bytes into the assembly store,
+    /// and every instance activation resolves the STORE path. Since reads stopped superseding
+    /// (#4013), that read minted a second collectible context over identical bytes, and the
+    /// instance hub's lifetime lease pinned both — NodeTypeRecompileAlcLeakTest in
+    /// MeshWeaver.Plugins measured 3 live contexts against a bound of 2 on every core set carrying
+    /// #4017. A read of the store copy must answer the context the publish already created.
+    /// </summary>
+    [Fact]
+    public void AReadOfTheStoreCopyOfThePublishedBuildIsThatBuildsContext()
+    {
+        var published = EmitAssembly("emit");
+        var storeCopy = CopyToStore(published, "v3-tag-hash.dll");
+
+        using var publishScan = _service.PinForScan(NodeName, published, publishesTheBuild: true);
+        var read = _service.GetOrCreateLoadContextForPath(NodeName, storeCopy);
+
+        read.Should().BeSameAs(publishScan.Context,
+            "the store copy carries the published build's own bytes (same MVID), so a read of it is a "
+            + "read of that generation — a second collectible context over identical bytes is the "
+            + "duplicate a live instance's lease then pins for its whole lifetime");
+        read.LoadNodeAssembly().Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// The reuse must be a REUSE and nothing else: once a publish has superseded the build, a read of
+    /// its store copy must NOT be handed the retired context (that would resurrect a generation the
+    /// publish already let go of, and hand a new caller a context closed to new scans), and it must
+    /// not supersede the newer publish either (#4013).
+    /// </summary>
+    [Fact]
+    public void AReadOfASupersededBuildsStoreCopyGetsItsOwnContextAndDoomsNothing()
+    {
+        var first = EmitAssembly("emit-1");
+        var firstStoreCopy = CopyToStore(first, "v1-tag-hash.dll");
+        var second = EmitAssembly("emit-2");
+
+        var firstContext = _service.PublishLoadContextForPath(NodeName, first);
+        var secondContext = _service.PublishLoadContextForPath(NodeName, second);
+        firstContext.IsDisposed.Should().BeTrue("the second publish supersedes the first generation");
+
+        var read = _service.GetOrCreateLoadContextForPath(NodeName, firstStoreCopy);
+
+        read.Should().NotBeSameAs(firstContext,
+            "a retired context is never handed to a new caller as the context for its build");
+        read.IsDisposed.Should().BeFalse();
+        read.LoadNodeAssembly().Should().NotBeNull();
+        secondContext.IsDisposed.Should().BeFalse(
+            "a read never supersedes — the published generation stays live (#4013)");
+    }
+
+    /// <summary>
+    /// A publish evicts by CONTEXT, so a store-copy alias of the build it keeps is not a
+    /// "superseded" entry — and one lease covers the generation however many paths name it.
+    /// </summary>
+    [Fact]
+    public void AnAliasedGenerationIsLeasedOnceAndReclaimedByTheNextPublish()
+    {
+        var first = EmitAssembly("emit-a");
+        var firstStoreCopy = CopyToStore(first, "v1-tag-hash.dll");
+
+        var published = _service.PublishLoadContextForPath(NodeName, first);
+        _service.GetOrCreateLoadContextForPath(NodeName, firstStoreCopy).Should().BeSameAs(published);
+
+        var lease = _service.LeaseNodeContexts(NodeName);
+        var next = _service.PublishLoadContextForPath(NodeName, EmitAssembly("emit-b"));
+
+        published.IsDisposed.Should().BeFalse("the instance's lease defers the unload while it runs");
+        next.IsDisposed.Should().BeFalse();
+        published.IsRetired.Should().BeTrue("the next publish superseded it under BOTH of its paths");
+
+        lease.Dispose();
+        published.IsDisposed.Should().BeTrue(
+            "releasing the ONE lease performs the deferred unload — a second lease taken through "
+            + "the alias would keep the generation pinned after the hub that ran it is gone");
+    }
+
+    private string CopyToStore(string dllPath, string storeFileName)
+    {
+        var storeDir = Path.Combine(_cacheDir, "store", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storeDir);
+        var copy = Path.Combine(storeDir, storeFileName);
+        File.Copy(dllPath, copy);
+        return copy;
+    }
+
+    /// <summary>
     /// Emits a real, loadable assembly into its own release-shaped subdirectory, mirroring the
     /// one-directory-per-compile layout <c>EmitToDiskWithRetry</c> produces (which is why each
     /// recompile yields a NEW path key and evicts the previous one).
