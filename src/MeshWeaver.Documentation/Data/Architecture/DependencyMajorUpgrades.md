@@ -164,7 +164,7 @@ Measured 2026-09-11.
 | Surface we rely on | `System.Reactive.Linq.Observable` is byte-identical at **656 members**; every `Subject`/`ReplaySubject`/`BehaviorSubject`/`AsyncSubject`, every `System.Reactive.Disposables` type and every scheduler are member-identical. |
 | Upstream's own verdict | `ApiCompatSuppressions.xml` at tag `rxnet-v7.0.0` (HTTP 200, 22,564 B) carries **57** entries: 51 `CP0001` (40 naming Windows-UI/WinRT types, 11 `AsyncInfoObservable`/`IEventPatternSource`), 5 `CP0008` and 1 `CP0002`. 🚨 The six non-`CP0001` ones DO name core types (`ThreadPoolScheduler`, `NotificationKind`), so "all are UI omissions" would be wrong — but every one of them is a **cross-TFM** comparison against `netstandard2.0` or `uap10.0.18362`, and **none involves the `net8.0` pair this repo resolves**. Both types, and the `CP0002` member, are present in `ref/net8.0` and `lib/net8.0` alike. |
 | In-mesh sweep | **31 of 638** in-mesh artefacts reference Rx — 30 of 93 `.cs` node sources, and 1 of 545 node `.json` (`samples/Graph/Data/Northwind/AnalyticsCatalog.json`, Rx inside escaped source). None compiles in CI. Since the removal set on the resolved assets is empty, there is nothing for any of them to have used. |
-| Suites | 4,780 tests, **0 failures**: Graph 1536 · Compiler.Pipeline 841 · Hosting 608 · Data 508 · Layout 484 · Messaging.Hub 409 · Documentation 394. |
+| Suites | **15 suites, 6,909 tests, 0 errors, 0 failures** (2 skipped), run as the test executables: Graph 1545 · Memex.Portal.Shared 1291 · Compiler.Pipeline 841 · Hosting 619 · Data 508 · Layout 484 · Messaging.Hub 409 · Documentation 397 · PluginTester 362 · Hosting.Orleans 256 · ContainerImages 112 · ContentCollections 28 · Testing.Xunit 23 · Cli 19 · Deployment.Contract 15. |
 
 **The defect this bump actually fixed was not a version being old.** `Microsoft.Reactive.Testing` was
 already pinned at **7.0.0** while `System.Reactive` read **6.1.0**. The testing package depends on
@@ -188,7 +188,15 @@ surface — `DispatcherScheduler`, `ControlScheduler`, `CoreDispatcherScheduler`
 keeping them in `lib`. That is *source*-breaking, not binary-breaking, and it is invisible to a diff
 taken against `lib`. Those types now live in the separate `System.Reactive.Wpf`,
 `System.Reactive.Windows.Forms`, `System.Reactive.WindowsRuntime` and `System.Reactive.Uwp`
-packages. (The nine pre-6.x facades — `System.Reactive.Core`, `.Linq`, `.Interfaces`,
+packages.
+
+🚨 **It is confined to the WINDOWS target frameworks, and that is why the diff above still reads
+zero.** Those symbols only ever existed in the Windows-flavoured assets — measured by raw presence:
+`DispatcherScheduler` is in 7.0.0's `lib/net472`, `lib/net8.0-windows10.0.19041` and
+`lib/uap10.0.18362` and in *none* of its `ref/` assemblies, and it is in no `net6.0`/`net8.0` asset
+of either version. This repo resolves the non-Windows `net8.0` pair and declares no `*-windows*` TFM,
+so the source break cannot reach it. Read the removal count without that qualification and you would
+conclude either that the diff was broken or that the break was ours. (The nine pre-6.x facades — `System.Reactive.Core`, `.Linq`, `.Interfaces`,
 `.PlatformServices`, `.Providers`, `.Experimental`, `.Compatibility`, `.Runtime.Remoting`,
 `.Windows.Threading` — are frozen at 6.1.0; no 7.0.0 of them exists. We reference none.)
 
