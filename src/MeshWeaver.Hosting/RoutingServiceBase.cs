@@ -72,9 +72,13 @@ namespace MeshWeaver.Hosting
 
         private void RouteInMesh(IMessageDelivery delivery)
         {
-            // Don't route during shutdown - recipients are likely also disposing
+            // 🚨 "Recipients are likely also disposing" is the #2778 assumption — "nobody is
+            // waiting" — and it is FALSE for an answer. See RouteReplyDuringMeshTeardown.
             if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            {
+                RouteReplyDuringMeshTeardown(delivery);
                 return;
+            }
 
             // ONE traversal is enough, and the serializer key MUST be this same value:
             // GetHostAddress is idempotent (every return path yields an address with
@@ -122,6 +126,60 @@ namespace MeshWeaver.Hosting
             // drains and the serializer self-retires — subsequent messages take the
             // direct short-circuit above (no per-message ResolvePath).
             EnqueueForActivation(delivery, address);
+        }
+
+        /// <summary>
+        /// 🚨 A correlated REPLY is still carried to its LIVE recipient once the mesh has reached
+        /// <see cref="MessageHubRunLevel.DisposeHostedHubs"/> — issue #4023, the third site of the
+        /// #2778 assumption.
+        ///
+        /// <para><b>The defect.</b> This router dropped EVERY delivery from that run level on, with no
+        /// NACK, no log, and a <c>Forwarded</c> result — on the stated ground that "recipients are
+        /// likely also disposing". That is the sentence #2778 removed from the owner's disposal NACK
+        /// ("nobody is waiting") and #3303 removed from <c>HierarchicalRouting</c>'s route-up refusal,
+        /// and it is false here for the same reason: a hosted hub whose parent is in
+        /// <c>DisposeHostedHubs</c> has only just been ASKED to dispose. It is Quiescing — and the one
+        /// thing a Quiescing hub does is wait for the replies it is still owed. Measured
+        /// (<c>NackReachesTheWaiterDuringTeardownTest</c>, CI runs 34513634943 and 34581527040, and a
+        /// local capture): the owner COMMITTED the patch and posted its ack while the mesh was
+        /// Quiescing; the mesh accepted it (a reply is exempt from the Quiescing intake tier) and
+        /// routed it one turn later, after its own <c>DisposeHostedHubs</c> turn — here — where it was
+        /// dropped. The caller's hub sat Quiescing with the callback for exactly that reply pending
+        /// for its whole quiesce budget, its 2 s response wait expired first and left the late watch
+        /// armed, and the writer then reported <c>OwnerUnreachable</c> after 31 s for a write the owner
+        /// had applied.</para>
+        ///
+        /// <para><b>Scoped exactly as #3303 scoped its seam.</b> Only a delivery carrying
+        /// <see cref="PostOptions.RequestId"/> — an ANSWER somebody is waiting for — is carried, and
+        /// only to a hub that ALREADY exists (<see cref="HostedHubCreation.Never"/>: nothing is built
+        /// during teardown). Everything else keeps the historical drop: fire-and-forget traffic and
+        /// new requests have nothing to finish here, and answering them is the storm shape the guard
+        /// exists to avoid. The recipient's own intake gate still decides what it accepts — a
+        /// Quiescing hub admits answers by design, a hub past its own <c>DisposeHostedHubs</c> refuses
+        /// them — so this adds no new admission rule; it stops pre-empting that gate.</para>
+        ///
+        /// <para>No undeliverable-reply sink here, deliberately: the mesh's routing handler hands this
+        /// router a PACKAGED delivery (<c>RawJson</c>), which the sink cannot type. The case with no
+        /// live recipient stays a drop — now a named one on the request's trail.</para>
+        /// </summary>
+        private void RouteReplyDuringMeshTeardown(IMessageDelivery delivery)
+        {
+            if (delivery.Target is null
+                || !delivery.Properties.TryGetValue(PostOptions.RequestId, out var raw)
+                || raw?.ToString() is not { Length: > 0 } requestId)
+                return;
+
+            var address = GetHostAddress(delivery.Target);
+            if (Mesh.GetHostedHub(address, HostedHubCreation.Never) is { } recipient)
+            {
+                Mesh.NoteRequestStage(requestId,
+                    $"REPLY_ROUTED_DURING_MESH_TEARDOWN to={recipient.Address} meshRunLevel={Mesh.RunLevel}");
+                recipient.DeliverMessage(delivery);
+                return;
+            }
+
+            Mesh.NoteRequestStage(requestId,
+                $"REPLY_UNROUTABLE_DURING_MESH_TEARDOWN target={delivery.Target} — no live recipient hub");
         }
 
         private void EnqueueForActivation(IMessageDelivery delivery, Address hostAddress)
