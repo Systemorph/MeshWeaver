@@ -603,17 +603,26 @@ public record LayoutAreaHost : IDisposable
             catch (Exception ex)
             {
                 FailRequest(ex, request);
+                return request.Processed();
             }
-        return request.Processed();
+        return AcceptUserAction(request);
     }
 
     private IMessageDelivery OnCloseDialog(IMessageDelivery<CloseDialogEvent> request)
     {
         if (GetControl(request.Message.Area) is DialogControl { CloseAction: not null } control)
-            InvokeAsync(() => control.CloseAction.Invoke(
-                new(request.Message.Area, request.Message.State, request.Message.Payload ?? new object(), Hub, this)
-            ), ex => FailRequest(ex, request));
-        return request.Processed();
+        {
+            InvokeAsync(() =>
+            {
+                control.CloseAction.Invoke(
+                    new(request.Message.Area, request.Message.State,
+                        request.Message.Payload ?? new object(), Hub, this));
+                AcceptUserAction(request);
+            }, ex => FailRequest(ex, request));
+            return request.Processed();
+        }
+
+        return AcceptUserAction(request);
     }
 
     private IMessageDelivery OnBlur(IMessageDelivery<BlurEvent> request)
@@ -628,7 +637,22 @@ public record LayoutAreaHost : IDisposable
             catch (Exception ex)
             {
                 FailRequest(ex, request);
+                return request.Processed();
             }
+        return AcceptUserAction(request);
+    }
+
+    /// <summary>
+    /// Completes the sender-side receipt only after this stream-scoped handler has accepted the
+    /// action. <c>Observe</c> registers that receipt before posting, so an immediate circuit dispose
+    /// sees the callback as pending and the existing Quiescing phase drains it before releasing the
+    /// synchronization stream. This is ordering, not retry: a genuinely gone stream is still
+    /// refused by <c>DataExtensions.RefuseUserAction</c>.
+    /// </summary>
+    private IMessageDelivery AcceptUserAction<TAction>(IMessageDelivery<TAction> request)
+        where TAction : IUserAction
+    {
+        Hub.Post(new UserActionAccepted(), options => options.ResponseFor(request));
         return request.Processed();
     }
 
