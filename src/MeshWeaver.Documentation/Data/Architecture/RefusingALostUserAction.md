@@ -88,7 +88,7 @@ is looking at a page that silently did nothing.
 ## The one line that separates the two classes
 
 ```csharp
-public interface IUserAction
+public interface IUserAction : IRequest<UserActionAccepted>
 {
     string ActionArea { get; }
 }

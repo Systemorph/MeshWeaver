@@ -611,9 +611,17 @@ public record LayoutAreaHost : IDisposable
     private IMessageDelivery OnCloseDialog(IMessageDelivery<CloseDialogEvent> request)
     {
         if (GetControl(request.Message.Area) is DialogControl { CloseAction: not null } control)
-            InvokeAsync(() => control.CloseAction.Invoke(
-                new(request.Message.Area, request.Message.State, request.Message.Payload ?? new object(), Hub, this)
-            ), ex => FailRequest(ex, request));
+        {
+            InvokeAsync(() =>
+            {
+                control.CloseAction.Invoke(
+                    new(request.Message.Area, request.Message.State,
+                        request.Message.Payload ?? new object(), Hub, this));
+                AcceptUserAction(request);
+            }, ex => FailRequest(ex, request));
+            return request.Processed();
+        }
+
         return AcceptUserAction(request);
     }
 

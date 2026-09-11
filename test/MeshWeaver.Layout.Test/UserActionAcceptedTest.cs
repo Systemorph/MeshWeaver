@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -17,7 +18,12 @@ public class UserActionAcceptedTest(ITestOutputHelper output) : HubTestBase(outp
 {
     private const string Area = "ActionReceipt";
     private const string ButtonArea = Area + "/Button";
-    private readonly AsyncSubject<string> invoked = new();
+    private const string BlurArea = Area + "/Blur";
+    private const string DialogArea = Area + "/Dialog";
+    private readonly AsyncSubject<long> clickInvoked = new();
+    private readonly AsyncSubject<long> blurInvoked = new();
+    private readonly AsyncSubject<long> closeInvoked = new();
+    private long ordering;
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -27,10 +33,15 @@ public class UserActionAcceptedTest(ITestOutputHelper output) : HubTestBase(outp
                 Controls.Stack.WithView(
                     Controls.Button("Run").WithClickAction(_ =>
                     {
-                        invoked.OnNext(ButtonArea);
-                        invoked.OnCompleted();
+                        Signal(clickInvoked);
                     }),
-                    "Button")));
+                    "Button")
+                    .WithView(
+                        Controls.Text("draft").WithBlurAction(_ => Signal(blurInvoked)),
+                        "Blur")
+                    .WithView(
+                        Controls.Dialog("Body").WithCloseAction(_ => Signal(closeInvoked)),
+                        "Dialog")));
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -38,26 +49,60 @@ public class UserActionAcceptedTest(ITestOutputHelper output) : HubTestBase(outp
 
     [HubFact]
     public async Task ClickReceipt_IsPostedOnlyAfterTheStreamScopedActionWasInvoked()
+        => await ReceiptFollowsInvocation(
+            ButtonArea,
+            streamId => new ClickedEvent(ButtonArea, streamId),
+            clickInvoked);
+
+    [HubFact]
+    public async Task BlurReceipt_IsPostedOnlyAfterTheStreamScopedActionWasInvoked()
+        => await ReceiptFollowsInvocation(
+            BlurArea,
+            streamId => new BlurEvent(BlurArea, streamId),
+            blurInvoked);
+
+    [HubFact]
+    public async Task DialogCloseReceipt_IsPostedOnlyAfterTheQueuedCloseActionWasInvoked()
+        => await ReceiptFollowsInvocation(
+            DialogArea,
+            streamId => new CloseDialogEvent(DialogArea, streamId, DialogCloseState.OK),
+            closeInvoked);
+
+    private async Task ReceiptFollowsInvocation(
+        string controlArea,
+        Func<string, IUserAction> action,
+        AsyncSubject<long> invoked)
     {
         var client = GetClient();
         var reference = new LayoutAreaReference(Area);
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        await stream.GetControlStream(ButtonArea).Should().Within(10.Seconds()).Match(
-            control => control is ButtonControl,
-            "the owner-side LayoutAreaHost and its stream-scoped ClickedEvent handler must exist");
+        await stream.GetControlStream(controlArea).Should().Within(10.Seconds()).Match(
+            control => control is not null,
+            "the owner-side LayoutAreaHost and its stream-scoped action handler must exist");
 
+        long receiptOrder = 0;
         var receipt = await client
             .Observe<UserActionAccepted>(
-                new ClickedEvent(ButtonArea, stream.StreamId),
+                action(stream.StreamId),
                 options => options.WithTarget(CreateHostAddress()))
+            .Do(_ => receiptOrder = Interlocked.Increment(ref ordering))
             .Should().Within(10.Seconds()).Emit(
-                "an accepted click must answer the callback the sender uses as its teardown drain");
+                "an accepted user action must answer the callback the sender uses as its teardown drain");
 
         receipt.Message.Should().BeOfType<UserActionAccepted>();
-        await invoked.Should().Within(10.Seconds()).Emit(
+        var invocationOrder = await invoked.Should().Within(10.Seconds()).Emit(
             "the receipt cannot precede invocation of the stream-scoped action it acknowledges");
+        receiptOrder.Should().BeGreaterThan(invocationOrder,
+            "the owner must not release the sender's quiesce drain before its handler accepts the action");
+    }
+
+    private Task Signal(AsyncSubject<long> invoked)
+    {
+        invoked.OnNext(Interlocked.Increment(ref ordering));
+        invoked.OnCompleted();
+        return Task.CompletedTask;
     }
 
     [Fact]
