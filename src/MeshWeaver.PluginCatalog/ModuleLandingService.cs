@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
@@ -43,6 +44,20 @@ namespace MeshWeaver.PluginCatalog;
 /// refusing: an instance must never hold bytes its own next boot would try to load into a
 /// platform that lacks their types… which for the adopt path is the point of the install, so a
 /// hold there would be a package whose binary half silently never arrives.</para>
+///
+/// <para><b>The shelf never moves its head backwards (#3996).</b> The publish endpoint can receive
+/// the same module from more than one release lane. A slower, older build is still valid warehouse
+/// stock, but arrival order is not version order: on 2026-09-11 Mail 1.7.0 landed first and a core
+/// CD carrying 1.6.1 arrived eleven minutes later, moved the activation head, and a restart silently
+/// un-shipped 1.7.0. Shelf landings therefore compare a known incoming version with the current
+/// head through <see cref="NuGetVersionComparer"/>, and an older upload never displaces a head whose
+/// bytes are PRESENT — whether or not that head links on this registry's own platform, because the
+/// shelf warehouses modules for newer platforms and boot runs the fallback when the head does not
+/// load here. The older upload is kept as the head's fallback generation when it is the better one
+/// (loadable here first, then the higher version); direct adoption remains unchanged because
+/// <see cref="ModuleUpdateDecision"/> already refuses unattended downgrades before it downloads a
+/// byte. The rule holds per process (landings are serialised on one pool slot); two REPLICAS landing
+/// the same module in the same few seconds are still last-writer-wins — #4026.</para>
 ///
 /// <para><b>The generation a landing displaces is KEPT, as the new entry's fallback (#3649).</b>
 /// <see cref="ModuleActivationEntry.PreviousDirectory"/> names it, the GC references it, and boot
@@ -483,7 +498,7 @@ public sealed class ModuleLandingService : IDisposable
         => pool.InvokeBlocking(_ =>
         {
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, holdUnloadable: false);
+                staticAssets, holdUnloadable: false, keepNewerHead: false);
             return Unit.Default;
         })
         .Do(_ => AnnounceActivationChanged());
@@ -522,6 +537,22 @@ public sealed class ModuleLandingService : IDisposable
     /// would shadow the platform binary then. Cold; the outcome says whether the landing was held
     /// and why, so the publish endpoint can tell its caller "shelved, will serve" apart from
     /// "activated here".</para>
+    ///
+    /// <para>🚨 <b>The second difference (#3996): the HEAD is the highest version the shelf holds,
+    /// never the last upload to arrive.</b> An upload whose version ranks strictly BELOW the
+    /// landed head's lands its bytes WITHOUT moving the head pointer — <c>shelf-only</c> — and is
+    /// kept as the entry's fallback generation when it is the better one; the outcome says whether
+    /// it was (<see cref="ModuleLandingOutcome.RetainedAsFallback"/>). The adopt path
+    /// (<see cref="LandModule"/>) deliberately does NOT carry the rule: there, an older version is
+    /// an operator who asked for it through the Store, and the unattended lane that could arrive at
+    /// one by accident already refuses it upstream (<see cref="ModuleUpdateAction.SkipOlder"/>).
+    /// On the publish route there is no operator: the caller is CI, and since #3461 two lanes push
+    /// the same module — core CD's <c>plugins-bake</c> at the gate's Plugins sha, and the Plugins
+    /// repo's own publish-bake — so the head was decided by whichever upload FINISHED last. Core CD
+    /// runs take 40–50 minutes, so an older gate routinely landed after a newer publish. Measured on
+    /// memex.meshweaver.cloud 2026-09-11: <c>MeshWeaver.Mail.MicrosoftGraph</c> 1.7.0 landed at
+    /// 02:49Z and 1.6.1 displaced it at 03:00Z, so the next restart would have silently un-shipped
+    /// the merge. See <c>Doc/Architecture/ModuleAdoptionPolicy</c>, "Never roll back unattended".</para>
     /// </summary>
     public IObservable<ModuleLandingOutcome> ShelveModule(
         string name,
@@ -533,7 +564,7 @@ public sealed class ModuleLandingService : IDisposable
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null)
         => pool.InvokeBlocking(_ =>
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
-                staticAssets, holdUnloadable: true))
+                staticAssets, holdUnloadable: true, keepNewerHead: true))
             .Do(_ => AnnounceActivationChanged());
 
     /// <summary>
@@ -628,7 +659,8 @@ public sealed class ModuleLandingService : IDisposable
         string? version,
         string? minMeshVersion,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
-        bool holdUnloadable)
+        bool holdUnloadable,
+        bool keepNewerHead)
     {
         foreach (var (relativePath, _) in staticAssets ?? [])
             ValidateAssetPath(relativePath, name);
@@ -740,7 +772,69 @@ public sealed class ModuleLandingService : IDisposable
             e.Enabled
             && string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(e.Directory));
-        var previous = displaced is null ? null : PreviousToKeep(displaced);
+
+        // 🚨 #3996 — THE HEAD IS THE HIGHEST VERSION THE SHELF HOLDS, NEVER THE LAST TO ARRIVE.
+        //
+        // A publish makes bytes AVAILABLE; it does not, by itself, choose what the registry serves.
+        // The head pointer used to move for every accepted upload, so which version a registry
+        // served — and which one its own next restart loaded — was decided by CI queue timing.
+        // Since #3461 two lanes push the SAME module (core CD's plugins-bake at the gate's Plugins
+        // sha, and the Plugins repo's own publish-bake), and core CD runs take 40–50 minutes, so
+        // the older gate routinely finished AFTER the newer publish. Measured on
+        // memex.meshweaver.cloud 2026-09-11: MeshWeaver.Mail.MicrosoftGraph 1.7.0 landed 02:49Z
+        // (237,568 B) and 1.6.1 displaced it at 03:00Z (231,424 B); the 03:30Z activation entry read
+        // `Version=1.6.1 PreviousVersion=1.7.0`, i.e. the next restart silently un-shipped a merged
+        // change. MeshWeaver.AI showed the same shape the same night.
+        //
+        // The rule, stated: ARRIVAL ORDER is a property of the build queue; VERSION ORDER is a
+        // property of the artifacts, and it is the only order the two publishers — and every
+        // consumer — already agree on. So the head moves only for an upload that does not rank
+        // BELOW it, and the comparer is the SAME NuGetVersionComparer ModuleUpdateDecision uses for
+        // SkipOlder ("never rolled back unattended"). That identity is load-bearing rather than
+        // tidy: a registry whose head ranked by a different order than its consumers' would serve a
+        // version every one of them refuses as older, and nothing would ever converge.
+        //
+        // What each case does, deliberately:
+        //   • STRICTLY OLDER  → shelf-only. The bytes land (the publisher's job succeeded — its
+        //     artifact is on the shelf and is this instance's fallback generation), the head stays.
+        //     A DELIBERATE ROLLBACK therefore cannot be expressed by re-publishing an older
+        //     version any more: publish the fixed build under a HIGHER version (roll forward), or
+        //     uninstall the module on this registry first (RemoveModule disables the entry, so the
+        //     next publish is a first landing). The Store's adopt path (LandModule) does not carry
+        //     the rule at all. That is the same trade SkipOlder already makes on the consumer side,
+        //     and it is worth making here because the publish route has no operator to mean it —
+        //     the caller is a build job, and a build job never intends a rollback.
+        //   • EQUAL VERSION   → the head MOVES. Strictly-below, never at-or-below: a module's
+        //     version encodes CONTENT only, so a rebuild of unchanged source against a new platform
+        //     republishes under the SAME version and is exactly the artifact consumers are waiting
+        //     for (Plugins#931/#723). If the bytes are also identical the content address resolves
+        //     to the generation the entry already names, so it is the no-op it should be.
+        //   • PRE-RELEASE     → SemVer order, from the same comparer: 1.7.0 outranks 1.7.0-rc1, and
+        //     3.0.0-ci.3758 outranks 3.0.0-ci.900 (numerically, which is the whole reason that type
+        //     exists). Publishing a pre-release after the stable it precedes is shelf-only.
+        //   • UNKNOWN VERSION on either side → the head MOVES, as before. An unrecorded version is
+        //     absence of evidence, not evidence of olderness, and reading it as "older" would let
+        //     one unversioned entry freeze a module's head for good — a string deciding what the
+        //     bytes should (rule R2 of Doc/Architecture/ModuleAdoptionPolicy).
+        //   • A NEWER HEAD WHOSE BYTES ARE GONE → the head MOVES. Only a LANDED generation is
+        //     protected: a record naming a directory whose entry DLL is missing (a lost volume, a
+        //     manual deletion) is not a version this registry holds, and protecting it would make
+        //     the rule a self-sealing outage — the one upload that could heal it, refused.
+        //   • A NEWER HEAD THAT DOES NOT LINK HERE → the head STAYS, deliberately. The shelf
+        //     carries modules for platforms NEWER than the registry serving them (ModuleBundleSource),
+        //     and boot already runs the fallback when the head does not load here (#3649, rule R1).
+        //     Letting an older loadable upload take the head would, the moment this registry's own
+        //     platform caught up, restart it onto the OLDER version — #3996 again by another road —
+        //     and PreviousToKeep would drop the newer generation outright whenever a loadable
+        //     fallback already existed, taking it away from every consumer too. Loadability HERE is
+        //     the FALLBACK's question, and the older upload competes for that slot (ShelfOnlyEntry).
+        var keepsNewerHead = keepNewerHead
+            && displaced is { Version.Length: > 0 }
+            && !string.IsNullOrWhiteSpace(version)
+            && NuGetVersionComparer.Instance.Compare(version, displaced.Version) < 0
+            && ModuleActivationBoot.LandedModuleDllExists(baseDirectory, displaced);
+
+        var previous = displaced is null || keepsNewerHead ? null : PreviousToKeep(displaced);
 
         ModuleActivationEntry? PreviousToKeep(ModuleActivationEntry current)
         {
@@ -833,20 +927,93 @@ public sealed class ModuleLandingService : IDisposable
             throw;
         }
 
-        var entry = new ModuleActivationEntry
+        var entry = !keepsNewerHead
+            ? new ModuleActivationEntry
+            {
+                Name = name,
+                Source = ModuleActivationSources.Store,
+                PackagePath = packagePath,
+                FrameworkMvid = frameworkMvid,
+                Version = version,
+                MinMeshVersion = minMeshVersion,
+                Enabled = true,
+                Directory = generation,
+                PreviousDirectory = previous?.Directory,
+                PreviousVersion = previous?.Version,
+                PreviousFrameworkMvid = previous?.FrameworkMvid,
+            }
+            : ShelfOnlyEntry(displaced!);
+
+        // 🚨 #3996 — a SHELF-ONLY landing keeps the head and still has to leave its generation
+        // REACHABLE. The modules GC reclaims any directory no entry and no module set references
+        // (CollectGarbage above), so an upload that merely fails to become head and is recorded
+        // NOWHERE is not "shelved" at all — it is deleted five minutes later, which would trade one
+        // silent loss for another. The slot it belongs in already exists and means exactly this: the
+        // entry's PREVIOUS generation (#3649) — the one boot loads when the head does not load on
+        // this platform, kept out of the GC's reach by the same rule.
+        //
+        // It takes that slot only when it is genuinely the better second-best, judged by the two
+        // things the policy judges everything else by, in this order (KeepsRecordedFallback):
+        //   • LOADING here comes first (measured, not declared) — a working fallback is never
+        //     displaced by bytes this platform just measured as unloadable, and an unloadable one is
+        //     displaced by bytes that load, whatever the two versions say; then
+        //   • the HIGHER version, by the same comparer as the head rule. On a tie the recorded one
+        //     stays: identical rank is no reason to rewrite a shared file, and the generation already
+        //     referenced is the one a running pod may hold open.
+        // A fallback whose bytes are GONE is replaced regardless — it references nothing. An upload
+        // that loses is NOT retained and the GC reclaims it; the outcome says so (RetainedAsFallback)
+        // rather than calling it shelved. One slot means a registry holds at most two generations of
+        // a module, which is the #3649 design, not a new limit.
+        ModuleActivationEntry ShelfOnlyEntry(ModuleActivationEntry head)
         {
-            Name = name,
-            Source = ModuleActivationSources.Store,
-            PackagePath = packagePath,
-            FrameworkMvid = frameworkMvid,
-            Version = version,
-            MinMeshVersion = minMeshVersion,
-            Enabled = true,
-            Directory = generation,
-            PreviousDirectory = previous?.Directory,
-            PreviousVersion = previous?.Version,
-            PreviousFrameworkMvid = previous?.FrameworkMvid,
-        };
+            // A re-upload of the head's OWN bytes at a lower version label resolves to the head's
+            // generation. There is nothing to keep beside it, and PreviousGeneration would read a
+            // self-referencing fallback back as none anyway.
+            if (string.Equals(head.Directory, generation, StringComparison.OrdinalIgnoreCase))
+                return head;
+            if (KeepsRecordedFallback(ModuleActivationBoot.PreviousGeneration(head)))
+                return head;
+            return head with
+            {
+                PreviousDirectory = generation,
+                PreviousVersion = version,
+                PreviousFrameworkMvid = frameworkMvid,
+            };
+        }
+
+        bool KeepsRecordedFallback(ModuleActivationEntry? recorded)
+        {
+            if (recorded is null || !ModuleActivationBoot.LandedModuleDllExists(baseDirectory, recorded))
+                return false;
+            // These very bytes already ARE the fallback (an identical older re-publish).
+            if (string.Equals(recorded.Directory, generation, StringComparison.OrdinalIgnoreCase))
+                return true;
+            var recordedLoads = ModulePlatformLink.Check(
+                ModuleActivationBoot.LandedDllPath(baseDirectory, recorded), surface).MayLoad;
+            var incomingLoads = held is null;
+            if (recordedLoads != incomingLoads)
+                return recordedLoads;
+            return !string.IsNullOrWhiteSpace(recorded.Version)
+                   && NuGetVersionComparer.Instance.Compare(version, recorded.Version) <= 0;
+        }
+
+        string ShelfOnlyReason(ModuleActivationEntry head, ModuleActivationEntry kept) =>
+            $"version {version} ranks below {head.Version}, which this registry already holds as the "
+            + $"head generation {head.Directory} — the upload is SHELF-ONLY and the head does not "
+            + "regress (#3996). "
+            + (string.Equals(kept.PreviousDirectory, generation, StringComparison.OrdinalIgnoreCase)
+                ? $"Its bytes are retained as the head's fallback generation and serve at version {version}. "
+                : string.Equals(head.Directory, generation, StringComparison.OrdinalIgnoreCase)
+                    ? "Its bytes are identical to the head's, so there is nothing to keep beside it. "
+                    : $"Its bytes are NOT retained: the fallback slot keeps {kept.PreviousVersion ?? "(unversioned)"} "
+                      + $"({kept.PreviousDirectory}), the better fallback by loadability here first and "
+                      + "version second, so the modules GC reclaims this generation. ")
+            + "To make these bytes the head, publish them under a higher version.";
+
+        var retainedAsFallback = keepsNewerHead
+            && string.Equals(entry.PreviousDirectory, generation, StringComparison.OrdinalIgnoreCase);
+        var shelfOnly = keepsNewerHead ? ShelfOnlyReason(displaced!, entry) : null;
+
         // 🚨 THIS MODULE'S OWN FILE, and nothing else (#2090). The landing used to read the whole
         // shared activation index, append to it and rename the result over the live file — a
         // read-modify-write of state every replica shares on the RWX /data volume. Two concurrent
@@ -855,15 +1022,38 @@ public sealed class ModuleLandingService : IDisposable
         // file ('Access to the path …/activation.json is denied' → HTTP 409). Writing only
         // activation.d/<Name>.json removes the shared cell instead of guarding it — different
         // modules no longer share a path at all.
-        ModuleActivationSidecar.WriteEntry(baseDirectory, entry);
+        // 🚨 A shelf-only landing that changed nothing on the entry writes NOTHING: the record is
+        // shared by every replica on /data, and re-writing a byte-identical entry is contention
+        // with no reader. It writes exactly when the fallback moved.
+        if (!keepsNewerHead || !entry.Equals(displaced))
+            ModuleActivationSidecar.WriteEntry(baseDirectory, entry);
         // A HELD landing does not raise the restart signal: a restart cannot activate it (boot runs
         // the same link probe on the same bytes and parks the entry again), so "restart required"
         // would be a prompt no restart can clear. The platform update that DOES carry the types
-        // is itself a restart, which activates the entry with no flag.
-        if (held is null)
+        // is itself a restart, which activates the entry with no flag. 🚨 Neither does a SHELF-ONLY
+        // landing (#3996): the head did not move, so a restart would load exactly what this process
+        // is already running — the same false prompt from the other direction. The ONE exception:
+        // a shelf-only landing that MOVED the fallback while the head does not load here. Boot runs
+        // the fallback then, so a restart genuinely loads something different, and staying silent
+        // would be the false negative of the same prompt.
+        var restartRequired = held is null
+            && (!keepsNewerHead
+                || (!string.Equals(entry.PreviousDirectory, displaced!.PreviousDirectory,
+                        StringComparison.OrdinalIgnoreCase)
+                    && !ModulePlatformLink.Check(
+                        ModuleActivationBoot.LandedDllPath(baseDirectory, displaced), surface).MayLoad));
+        if (restartRequired)
             ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
-        if (held is null)
+        if (shelfOnly is not null)
+            logger?.LogInformation(
+                "Module '{Name}' SHELVED into modules/{Generation}/ ({Count} assemblies) but it is "
+                + "NOT the head: {Reason}{HeldNote} This registry keeps {Head} as the head; the "
+                + "head's fallback is now {Fallback}",
+                name, generation, assemblies.Count, shelfOnly,
+                held is null ? string.Empty : $" (it is also unloadable here: {held}).",
+                entry.Directory, entry.PreviousDirectory ?? "(none)");
+        else if (held is null)
             logger?.LogInformation(
                 "Module '{Name}' LANDED into modules/{Generation}/ ({Count} assemblies, declared "
                 + "floor {MinMeshVersion} — advisory, platform {Running}; built against framework "
@@ -880,7 +1070,13 @@ public sealed class ModuleLandingService : IDisposable
                 + "carries the types it links against, and that same boot then loads it",
                 name, generation, assemblies.Count, held, previous?.Directory ?? "(none)");
 
-        return new ModuleLandingOutcome(Held: held is not null, HoldReason: held);
+        return new ModuleLandingOutcome(Held: held is not null, HoldReason: held)
+        {
+            ShelfOnlyReason = shelfOnly,
+            RetainedAsFallback = retainedAsFallback,
+            HeadVersion = entry.Version,
+            RestartRequired = restartRequired,
+        };
     }
 
     /// <summary>
@@ -1128,4 +1324,43 @@ public sealed class ModuleLandingService : IDisposable
 /// hold — it is recorded and logged as an advisory, and bytes that link land unheld.</param>
 /// <param name="HoldReason">Why the activation is held, naming the missing type
 /// (<see cref="MeshWeaver.Mesh.ModuleLinkVerdict.Report"/>'s text), or null when not held.</param>
-public sealed record ModuleLandingOutcome(bool Held, string? HoldReason);
+public sealed record ModuleLandingOutcome(bool Held, string? HoldReason)
+{
+    /// <summary>
+    /// Why this upload did NOT become the module's head generation (#3996): its version ranks
+    /// strictly below the version this registry already holds as the head, so the bytes are on the
+    /// shelf and recorded as the entry's fallback generation while the head — what the registry
+    /// SERVES, and what its own next restart loads — stays where it is. Null for the ordinary case
+    /// where the head moved.
+    ///
+    /// <para>An INIT property rather than a third primary-constructor parameter on purpose: adding
+    /// one replaces this public record's constructor and <c>Deconstruct</c> signatures, which is a
+    /// binary break for every repo in the fleet that holds an outcome (the same rule
+    /// <c>BundleReader.AssemblyRef.SourceFingerprint</c> states).</para>
+    /// </summary>
+    public string? ShelfOnlyReason { get; init; }
+
+    /// <summary>True when this upload was shelved WITHOUT becoming the head — see
+    /// <see cref="ShelfOnlyReason"/>. Orthogonal to <see cref="Held"/>: an older upload can also be
+    /// unloadable here, and each says a different thing to the publisher.</summary>
+    public bool ShelfOnly => ShelfOnlyReason is not null;
+
+    /// <summary>For a <see cref="ShelfOnly"/> upload: whether its generation was KEPT, as the head's
+    /// fallback (<see cref="ModuleActivationEntry.PreviousDirectory"/>), so it stays on the volume,
+    /// in the bundle index and downloadable at its own version. False means the fallback slot kept
+    /// a better generation (loadable here first, then the higher version) and the modules GC
+    /// reclaims this one — the entry has ONE fallback slot, so a registry holds at most two
+    /// generations of a module. Always false when the head moved.</summary>
+    public bool RetainedAsFallback { get; init; }
+
+    /// <summary>The version at the activation head AFTER this landing: the incoming version when
+    /// the head moved, the retained newer head's version for a <see cref="ShelfOnly"/> upload.</summary>
+    public string? HeadVersion { get; init; }
+
+    /// <summary>Whether this landing raised the deployment's pending-restart flag, i.e. whether this
+    /// instance loads something DIFFERENT at its next restart because of it. True for an ordinary
+    /// unheld landing; false for a held one (boot parks it again) and for a shelf-only one — except
+    /// when the shelf-only upload moved the fallback while the head does not load here, because boot
+    /// then runs the fallback it names.</summary>
+    public bool RestartRequired { get; init; }
+}
