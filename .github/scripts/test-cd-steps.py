@@ -352,6 +352,25 @@ def run_decide_cases(root, case) -> None:
         case(f"an OLDER run still publishing this sha defers the {reason} path (#3376)",
              rc == 0 and "publish=false" in outputs and older in log and "bake_only=true" not in outputs,
              f"rc={rc} out={outputs!r} log={log}")
+    # Exercise the REAL jq discriminator, not a pre-computed stub answer. GitHub reports a run held
+    # behind a concurrency group as `pending`; that exact status escaped the old queued/in_progress
+    # enumeration and let the scheduled reconcile duplicate the same commit's delivery.
+    pending = {
+        "id": 999,
+        "name": "Continuous Delivery (main)",
+        "status": "pending",
+        "html_url": "https://example.invalid/actions/runs/999",
+    }
+    rc, log, outputs = run_step(
+        body,
+        {**reconcile, "REASON": "reconcile", "COMPLETE": "false"},
+        None,
+        runs=[pending],
+    )
+    case("a PENDING older delivery defers the reconcile instead of duplicating it",
+         rc == 0 and "publish=false" in outputs and pending["html_url"] in log,
+         f"rc={rc} out={outputs!r} log={log}")
+
     # And the probe must be inert when nothing is in flight: the same inputs with an empty answer
     # publish exactly as they did before the probe existed. Without this, "defers" would also
     # pass if the step deferred unconditionally.
@@ -426,7 +445,7 @@ def run_verdict_cases(root, case) -> None:
     case("a green, incomplete main with NOTHING in flight is still RED",
          rc != 0 and "Delivery is stuck" in log, f"rc={rc} log={log}")
     case("...and the red now carries the negative finding that makes it a measurement",
-         "NO run of this workflow is queued or in progress" in log, f"log={log}")
+         "NO non-completed run of this workflow" in log, f"log={log}")
     case("...and it claims no deferral",
          "deferred_to=" not in outputs, f"out={outputs!r}")
 
@@ -479,6 +498,14 @@ def run_verdict_cases(root, case) -> None:
                                 runs=[me, wf_run(34069402974, "queued", "2026-09-07T01:05:00Z")])
     case("a QUEUED run counts as a live publication, and is reported as queued",
          rc == 0 and "queued" in log, f"rc={rc} log={log}")
+
+    # A run held behind a concurrency group is `pending`, not `queued`. This is the exact state
+    # that escaped both the decision and verdict probes on 2026-09-10.
+    rc, log, outputs = run_step(body, shape, None,
+                                runs=[me, wf_run(34069402974, "pending", "2026-09-10T17:07:55Z")])
+    case("a PENDING run counts as a live publication, and is reported as pending",
+         rc == 0 and "pending" in log and "deferred_status=pending" in outputs,
+         f"rc={rc} out={outputs!r} log={log}")
 
     # A NEWER live run counts too. The gate's #3376 probe looks only at OLDER runs because it has
     # to break a deferral tie; this step decides nothing, so any live run falsifies "nobody is
