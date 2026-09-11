@@ -68,6 +68,15 @@ legitimate; demanding it without pairing the callers is the defect.
 It does not claim to cover a lane nobody is recorded as calling. Those are PRINTED with the verdict,
 never silently folded into a green (`--fleet` names them), because a lane with zero known callers is
 a coverage gap, not a clean measurement.
+
+A ROW MAY BE `pending: <reason>` (MeshWeaver#3878)
+-------------------------------------------------
+A satellite GAINS a caller by the same inverted ordering as `Pairs-with:`: the roster row lands in
+core first, so core's own pull request checks the new pair before either half merges. Strict
+equality in `--assert-fleet-row` made that ordering unlandable — whichever half merged first reddened
+the satellite's required `validate` context — so a row may say it is still arriving. `pending:`
+excuses ABSENCE only: a present caller is compared key for key like every other row, an empty reason
+is RED in both modes, and `--fleet` still checks the pending row's grant against the lane.
 """
 from __future__ import annotations
 import argparse, copy, os, sys, glob, tempfile
@@ -91,6 +100,7 @@ except ImportError:
 DEFAULT_FLOOR = {"contents": "read", "packages": "read", "metadata": "read"}
 
 WORKFLOW_LEVEL = "«workflow»"           # the pseudo-job name a workflow-level demand is reported as
+PENDING_NOTE = "PENDING: "              # a fleet note that IS covered, as opposed to a NOT COVERED one
 
 # Scopes the real-tree control below strengthens a lane with, in order. The first one the caller
 # demonstrably does not grant is used, so the control mutates a lane the repo ACTUALLY calls rather
@@ -312,6 +322,16 @@ def check_fleet(root: str, roster_path: str) -> tuple[list[str], int, list[str]]
             lane_name = str(caller.get("lane") or "")
             grants = _roster_grants(caller.get("grants"))
             label = f"{repo} {caller.get('workflow')}#{caller.get('job')}"
+            if "pending" in caller:
+                reason = str(caller.get("pending") or "").strip()
+                if not reason:
+                    problems.append(
+                        f"fleet roster: {label} is marked `pending:` with no reason. The marker excuses "
+                        f"a caller that has not LANDED yet, and an exemption that says nothing is "
+                        f"indistinguishable from one nobody meant — name the pull request that lands it.")
+                else:
+                    notes.append(f"{PENDING_NOTE}{label} -> {lane_name}: its grant IS checked below; "
+                                 f"{repo} asserts only that the caller has not landed yet — {reason}")
             if lane_name not in lanes:
                 problems.append(
                     f"fleet roster: {label} calls `{lane_name}`, which this checkout does not have as "
@@ -373,6 +393,24 @@ def assert_fleet_row(root: str, repo: str, roster_path: str, platform_repo: str)
     roster does not know and (b) a satellite LOWERS a grant the roster still records — both of them
     "the roster overstates", both caught here, in a job that DOES run (a roster mismatch is not a
     permission escalation, so the graph is accepted and the red is visible).
+
+    🚨 THE THIRD DIRECTION IS NEITHER OF THOSE, AND STRICT EQUALITY MADE IT UNLANDABLE. A row the
+    roster HAS and the repository does NOT is the roster overstating nothing: core checks a caller
+    that is not there yet, which is stricter than reality, never looser. But a satellite gains a
+    caller by the same inverted ordering as `Pairs-with:` — the core half lands first, because the
+    roster is how core's own pull request sees the fleet — and every satellite asserts this row
+    against core's `main` (`scripts-ref: main`). Demanding equality in that direction therefore
+    reddens EVERY pull request in that repository for the whole gap between the two merges, on a
+    caller that is arriving. Measured while wiring MeshWeaver#3878's publication job into
+    MeshWeaver.Plugins: 16 open pull requests, and `validate / Validate node repos` is a required
+    context there, so the window is a repository-wide block, not a warning.
+
+    So a row may declare itself `pending: <reason>`, and that excuses ABSENCE ONLY. The moment the
+    repository has the caller it is compared key for key like every other row, so a pending marker
+    can never launder a lowered grant or an unrecorded caller. An absent row WITHOUT the marker
+    stays RED — a caller deleted and its row forgotten is the roster describing a repository that
+    does not exist — and a marker with an empty reason is RED for the same reason `asserted-by:`
+    must say something.
     """
     roster = _load_roster(roster_path)
     entry = roster["repos"].get(repo)
@@ -385,11 +423,47 @@ def assert_fleet_row(root: str, repo: str, roster_path: str, platform_repo: str)
                 f"a change to a lane it calls is checked against NOTHING in that repo's own pull "
                 f"request — which is how MeshWeaver#3933 reached 28 zero-job runs.\n" + recipe]
     want = sorted((entry.get("callers") or []), key=lambda r: (str(r.get("workflow")), str(r.get("job"))))
-    if [_row_key(r) for r in want] == [_row_key(r) for r in actual]:
-        return []
-    out = [f"fleet roster: {repo}'s recorded callers no longer match this repository.\n"
-           f"      recorded: {[_row_key(r) for r in want]}\n"
-           f"      actual:   {[_row_key(r) for r in actual]}\n" + recipe]
+    recorded_keys = {_row_key(r) for r in want}
+    present_keys = {_row_key(r) for r in actual}
+    out: list[str] = []
+
+    # (a) + (b) — the two directions in which the roster OVERSTATES. Every caller this repository
+    # really has must be recorded WITH EXACTLY ITS GRANT; a lowered grant changes the key, so it
+    # arrives here as an unrecorded caller rather than slipping through as a match.
+    for row in actual:
+        if _row_key(row) not in recorded_keys:
+            out.append(
+                f"fleet roster: {repo} calls `{row['lane']}` from {row['workflow']}#{row['job']} "
+                f"granting {row['grants']}, and the roster records no such caller — it was either "
+                f"ADDED here without a row or LOWERED away from the grant recorded. Both make core's "
+                f"fleet check answer a confident green on a broken fleet.\n"
+                f"      recorded: {sorted(recorded_keys)}\n"
+                f"      actual:   {sorted(present_keys)}\n" + recipe)
+
+    # (c) — a row this repository does not have. Safe for core, so it is a refusal only when nothing
+    # DECLARED it, and the declaration has to say something.
+    for row in want:
+        label = f"{row.get('workflow')}#{row.get('job')} -> {row.get('lane')}"
+        if _row_key(row) in present_keys:
+            if "pending" in row:
+                print(f"  note: {label} is still marked `pending:` in the roster and this repository "
+                      f"now HAS it — the marker is spent; remove it from {platform_repo}.")
+            continue
+        pending = row.get("pending")
+        if pending is None:
+            out.append(
+                f"fleet roster: the roster records {repo} calling {label}, which this repository does "
+                f"not have. A row whose caller was DELETED describes a repository that no longer "
+                f"exists; a row whose caller has not LANDED yet must say so with "
+                f"`pending: <reason naming the pull request that lands it>`.\n" + recipe)
+        elif not str(pending).strip():
+            out.append(
+                f"fleet roster: {repo}'s row for {label} is marked `pending:` with no reason. An "
+                f"exemption that says nothing is indistinguishable from one nobody meant — name the "
+                f"pull request that lands the caller.")
+        else:
+            print(f"  note: {label} is recorded as PENDING and is not in this repository yet — "
+                  f"{str(pending).strip()}")
     return out
 
 
@@ -546,6 +620,53 @@ def _roster_roundtrip_cases(fleet: str) -> list[tuple[str, bool]]:
     return cases
 
 
+def _pending_cases(fleet: str) -> list[tuple[str, bool]]:
+    """🚨 CONTROLS ON THE `pending:` STATE, both directions, from the REAL roster's first row.
+
+    The marker is an exemption, and an exemption that has never been shown to be NARROW is a hole.
+    So each case below is a way it could be too wide — excusing a deleted caller, excusing nothing
+    in particular, or laundering a lowered grant — and each must red, beside the one shape it exists
+    for (a caller that has not landed yet), which must not.
+    """
+    doc = _load(fleet)
+    if isinstance(doc, Exception) or not isinstance(doc, dict) or not (doc.get("repos") or {}):
+        return [("the fleet roster parses and has rows to build the pending controls from", False)]
+    repo, entry = sorted((doc.get("repos") or {}).items())[0]
+    rows = copy.deepcopy((entry or {}).get("callers") or [])
+    arriving = {"workflow": "ci.yml", "job": "arriving-caller", "lane": "node-repo-gate.yml",
+                "grants": {"contents": "read", "id-token": "write"}}
+
+    def roster_with(extra: dict) -> str:
+        d = copy.deepcopy(doc)
+        d["repos"][repo] = dict(d["repos"][repo] or {})
+        d["repos"][repo]["callers"] = rows + [extra]
+        fd, path = tempfile.mkstemp(prefix="wfperm-roster-", suffix=".yml")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(d, fh, sort_keys=False)
+        return path
+
+    def verdict(extra: dict, present: list[dict]) -> list[str]:
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            return assert_fleet_row(_materialize_row(rows + present, "Systemorph/MeshWeaver"), repo,
+                                    roster_with(extra), "Systemorph/MeshWeaver")
+
+    pending = dict(arriving, pending="lands with a named pull request")
+    lowered = dict(arriving, grants={"contents": "read"})
+    return [
+        ("a `pending:` row whose caller has NOT landed passes — the window the marker exists for",
+         verdict(pending, []) == []),
+        ("the same row WITHOUT the marker is caught — a caller deleted and its row forgotten",
+         verdict(arriving, []) != []),
+        ("a `pending:` marker with an EMPTY reason is caught",
+         verdict(dict(arriving, pending="  "), []) != []),
+        ("a SPENT marker (the caller has landed, exact grant) passes and is compared key for key",
+         verdict(pending, [arriving]) == []),
+        ("a `pending:` marker cannot launder a LOWERED grant once the caller lands",
+         verdict(pending, [lowered]) != []),
+    ]
+
+
 def _real_tree_cases(root: str, platform_root: str | None, fleet: str | None) -> list[tuple[str, bool]]:
     """🚨 CONTROLS DERIVED FROM THE REAL TREE, IN BOTH DIRECTIONS.
 
@@ -591,6 +712,7 @@ def _real_tree_cases(root: str, platform_root: str | None, fleet: str | None) ->
 
     if fleet:
         cases += _roster_roundtrip_cases(fleet)
+        cases += _pending_cases(fleet)
 
     # 🚨 THE FLEET CONTROLS BELONG TO THE CHECKOUT THAT OWNS THE LANES, and asking a satellite to run
     # them reds it for a true statement. A satellite's `--root` holds callers and no lane at all, so
@@ -603,6 +725,21 @@ def _real_tree_cases(root: str, platform_root: str | None, fleet: str | None) ->
         fleet_problems, fleet_pairs, _ = check_fleet(root, fleet)
         cases.append((f"the unmodified tree passes the fleet roster ({fleet_pairs} pair(s))",
                       not fleet_problems and fleet_pairs > 0))
+
+        # An empty `pending:` reason must red HERE, in core's pull request — not first in a satellite.
+        roster_doc = copy.deepcopy(_load(fleet))
+        first_repo = sorted(roster_doc["repos"])[0]
+        first_rows = (roster_doc["repos"][first_repo] or {}).get("callers") or []
+        if first_rows:
+            first_rows[0]["pending"] = ""
+            fd, blank = tempfile.mkstemp(prefix="wfperm-blank-pending-", suffix=".yml")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                yaml.safe_dump(roster_doc, fh, sort_keys=False)
+            probs, _, _ = check_fleet(root, blank)
+            cases.append(("an EMPTY `pending:` reason reds the fleet check in core itself",
+                          any("`pending:` with no reason" in p for p in probs)))
+        else:
+            cases.append((f"{first_repo} has a roster row to blank a `pending:` reason on", False))
 
         # 🚨 THE 2026-09-10 SHAPE, ON THE REAL TREE. #3933 put `id-token: write` on
         # node-repo-module-pack.yml's `pack`. Core's own caller grants it; MeshWeaver.Plugins'
@@ -699,7 +836,9 @@ def main() -> int:
               f"resolved, {len(problems)} violation(s), root={os.path.abspath(args.root)}, "
               f"roster={os.path.abspath(args.fleet)}")
         for n in notes:
-            print(f"  NOT COVERED: {n}")
+            # A pending row is COVERED — its grant is checked above — so it must not be printed under
+            # the heading that names what this check cannot see.
+            print(f"  {n}" if n.startswith(PENDING_NOTE) else f"  NOT COVERED: {n}")
         if pairs == 0:
             print("  NOTE: zero roster pairs resolved — the roster is empty or names no lane this "
                   "checkout has. Zero is not a pass.")
