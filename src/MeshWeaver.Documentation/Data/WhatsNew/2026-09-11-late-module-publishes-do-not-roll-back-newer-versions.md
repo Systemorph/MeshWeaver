@@ -13,7 +13,8 @@ finish after a newer release and make its older upload the active registry versi
 arrived last. The next portal restart would then load the older module and silently undo the newer
 release.
 
-The registry now compares published versions before moving its activation head. An older upload is
-still kept as warehouse stock and remains downloadable at its own version, but a newer working
-generation remains current. A missing or unusable newer generation does not block recovery: in that
-case the valid upload still replaces it.
+The registry now compares versions before changing which one it serves. An older upload still
+lands, but a newer version whose files are present stays current. The older one is kept as its
+fallback when it is the better one, and stays downloadable at its own version. A newer version whose
+files have gone missing does not block recovery: the next valid upload replaces it. To go back to an
+older version on purpose, publish the fix under a higher version.

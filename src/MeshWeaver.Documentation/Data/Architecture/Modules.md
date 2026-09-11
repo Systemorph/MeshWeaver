@@ -719,14 +719,15 @@ arrives last is not necessarily the newest. On 2026-09-11 `MeshWeaver.Mail.Micro
 landed at 02:49Z; core CD then delivered 1.6.1 at 03:00Z, the old last-writer rule moved the head to
 1.6.1, and the next restart silently un-shipped the release (#3996).
 
-`ShelveModule` therefore applies the same no-unattended-rollback rule as the consumer decision: a
-known older version may land its content-addressed generation, but it does not replace a newer head
-whose bytes are present and link on this platform. The best older generation remains available as
-the fallback, and a registry advertises both retained versions in its bundle index; each versioned
-download resolves its own generation, so keeping the newer activation head never makes the older
-warehouse stock unreachable. A higher version string does not make a broken head immortal: if its entry assembly is
-missing or its bytes do not link, the valid incoming generation still replaces it. Unknown versions
-retain the legacy behaviour because an absent version is no evidence of an ordering.
+`ShelveModule` therefore applies the consumer's no-unattended-rollback rule to the publish route: a
+known older version lands its content-addressed generation but never displaces a newer head whose
+bytes are present — whether or not that head links on the registry's own platform, because the shelf
+warehouses modules for newer platforms. The older upload competes for the head's single fallback
+slot instead, and the index lists head and retained fallback at their own versions, each download
+resolving its own generation. A head whose entry assembly is missing is healed by the next valid
+upload, and unknown versions keep the legacy behaviour. The full rule, the fallback choice, what a
+deliberate rollback now means, and the unresolved cross-replica case (#4026) are in
+[Module Adoption Policy](../ModuleAdoptionPolicy).
 
 The remaining blind spot (a registry that states no identity) is closed **where it is created**, not
 by churning consumers: a bundle that cannot say what it was built against must not be publishable.
