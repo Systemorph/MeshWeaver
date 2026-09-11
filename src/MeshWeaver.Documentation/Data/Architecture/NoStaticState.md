@@ -7,7 +7,7 @@ Description: "Why static collection and cache fields are forbidden in MeshWeaver
 
 > **The rule in one sentence:** any `static` field that holds a collection or cache is forbidden. Every cache and every repository must be an **instance owned by the mesh**, so its lifetime is bounded and it can never bleed across tests, users, or partitions.
 
-This is an absolute architectural invariant — equal in weight to "nothing async ever" and "`GetMeshNodeStream().Update()` is the only mutation API". It is checked by **`NoStaticCollectionsTest`** (`test/MeshWeaver.PathResolution.Test/NoStaticCollectionsTest.cs`), which reflects over the `MeshWeaver.*.dll` files and fails on any static mutable-collection field not recorded in its `Allowed` map, each entry carrying a one-word `CONST`/`MEMO`/`CACHE`/`PROC` reason. That map is the single source of truth for permitted static state; this document explains the categories and shows you what to do instead.
+This is an absolute architectural invariant — equal in weight to "nothing async ever" and "`GetMeshNodeStream().Update()` is the only mutation API". It is checked by **`NoStaticCollectionsTest`**, which reflects over the `MeshWeaver.*.dll` files and fails on any static mutable-collection field not recorded in its `Allowed` map, each entry carrying a one-word `CONST`/`MEMO`/`CACHE`/`PROC` reason. 🚨 **That test no longer lives in this repository** — it travelled to `MeshWeaver.Plugins` with the emigrated mesh suites (#2276), which keeps TWO copies of it (`src/MeshWeaver.PathResolution.Test/` and `src/Memex.Hosts.Test/`, each with its own `Allowed` map). So a core change that adds a static collection, or that invalidates an existing entry's stated reason, reddens in the PLUGINS repo and not here, and updating the allowlist is a change to that repo. That map is the single source of truth for permitted static state; this document explains the categories and shows you what to do instead.
 
 🚨 **The check is a test, not a compiler rule, and its reach is the test project's own output directory** — i.e. the transitive closure of `MeshWeaver.PathResolution.Test`'s project references, not all 76 `MeshWeaver.*` projects. A static cache added in an assembly that closure does not pull in **will not be caught**. Treat the rule as binding everywhere and the test as a backstop over part of the tree; if you add a static field in a peripheral project, the absence of a red test is not evidence you are allowed to.
 
@@ -156,6 +156,28 @@ Current MEMO caches:
 - `MarkdownExtensions.PipelineCache` — keyed by content
 - `DynamicTypeGenerator.TypeCache` — keyed by property schema
 - `DefaultImplementationOfInterfacesExtensions.NonVirtualInvocationThunks` — keyed by `MethodInfo`
+- `KernelScriptReferences.Materialized` — keyed by absolute assembly path (see the caveat below)
+
+> 🚨 **A MEMO's key space is a claim, and it has to be ENFORCED — `Materialized` is why (#4003).**
+> This entry was allowlisted on the words *"bounded by the set of assemblies on disk … it can pin
+> neither meshes nor collectible NodeType contexts"*. The second half was true of the OBJECT GRAPH
+> and stayed true: no `Type`, no `AssemblyLoadContext` is retained, which is exactly why nothing
+> here ever appeared as a pinned ALC. The first half was **false**, because the key space was not
+> bounded: every NodeType recompile emits into a brand-new `{nodeName}_{ticks}_{guid}/` directory
+> that is never reused, the kernel's cell-surface seam feeds those paths straight in, and
+> `MetadataReference.CreateFromFile` memory-maps the PE — so each recompile left one more native
+> metadata mapping alive for the life of the process, surviving both the ALC's `Unload()` and the
+> file's deletion.
+>
+> The lesson generalises to every entry on this list: **"pure by key" is only half the test; the
+> other half is whether the KEY SPACE is finite, and a memo that cannot answer that is a leak with
+> a reason attached.** `Materialized` now refuses admission to any file belonging to a collectible
+> load context — the reference is still produced, but unmemoized, so its lifetime is the kernel
+> session that asked (which already holds that generation's ALC lease). `IsMemoized(path)` exists
+> so a control test can assert the bound from outside instead of trusting the prose — per PATH, not
+> as an entry count, because the count moves with whatever else the shard has loaded. Full
+> derivation:
+> [NodeType Compilation](../NodeTypeCompilation) → "A THIRD root holds a generation".
 
 ### PROC — Process-global resource registrations
 
