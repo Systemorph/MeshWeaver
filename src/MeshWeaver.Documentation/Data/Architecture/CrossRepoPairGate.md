@@ -232,6 +232,32 @@ Two rules follow, and they generalise past these two files:
 - **The marker goes on BOTH copies.** A one-sided note is addressed to the party who does not need
   it. Core's twins now name the guard that enforces them.
 
+### Shape 7 in a memory bound: #4017 and `NodeTypeRecompileAlcLeakTest` (2026-09-11)
+
+Core #4017 (`b128b804d`) changed WHEN a NodeType load context is superseded — only a publish, never
+a read — behind an unchanged `ICompilationCacheService.GetOrCreateLoadContextForPath` signature. The
+pair gate was green and correct to be green: nothing was added or removed. The behaviour it changed
+is asserted in the dependent, by `NodeTypeRecompileAlcLeakTest.RecompilingANodeType_WithALiveInstance_StillReleasesSupersededContexts`
+(Plugins, `Portal hosts (shard 3)`), and Plugins resolves the newest SEALED core set per run — so the
+red arrived when the set carrying #4017 sealed, on every Plugins PR and on Plugins `main`, with no
+Plugins change:
+
+> `Expected 3 to be less than or equal to 2 because a live instance hub legitimately DEFERS an unload, but nothing may make that deferral permanent: …`
+
+**The control that settled causation held the Plugins diff constant and moved only the core set:**
+the same Plugins commit `401fcadb` passed shard 3 at 09:56Z on `3.0.0-ci.8340` and failed it at
+10:09Z on `3.0.0-ci.8345`. Across the 42 shard-3 runs between 05:10Z and 11:32Z the test failed 6 of
+6 on sets 8345/8350/8352 and 0 of 36 on 8323–8340, and #4017 was the only merge between 8340 and
+8345 touching compilation code. The deciding question was then not *who* but *which side is
+wrong*: the assertion was right (the read path had begun keeping a second context over the same
+build), so core was fixed forward and the test kept its bound — see
+[NodeTypeCompilation](../NodeTypeCompilation) → *One build at two paths is ONE generation*.
+
+Two lessons for this shape. **The dependent resolves the SEALED set, so a shape-7 red surfaces at
+seal time, not merge time** — attribute by the set each run's `Resolve the released platform` job
+names, never by the clock. And **a red in the dependent is evidence about core only after the diff
+is held constant** — one commit, two sets.
+
 ### 🚨 Shape 7 in the by-hand sweep: a `!` on the WRONG receiver hides the site (#3321)
 
 Shape 7 has no gate, so the only control is a **by-hand sweep of the dependents**. This is about how
