@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Text.Json;
 using System.Xml.Linq;
 using Memex.Portal.Shared.Seo;
 using MeshWeaver.Mesh;
@@ -8,7 +7,9 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -68,28 +69,74 @@ public static class SeoEndpoints
                 + "for it", nodePath);
     }
 
-    /// <summary>Node types whose top-level mains are sitemap candidates.</summary>
+    /// <summary>Node types whose top-level mains are sitemap candidates (the partition roots).</summary>
     private static readonly string[] CandidateNodeTypes = ["Store/Plugin", "Store/Catalog", "Space"];
+
+    /// <summary>
+    /// 🚨 WHAT COUNTS AS A PAGE below a public root — the node types whose instances are documents
+    /// a person reads, as opposed to the data, code, releases and registrations a partition also
+    /// holds. A reinsurance plugin's partition carries hundreds of amount types, cashflows, source
+    /// files and release markers; none of those is a page, and listing them would bury the twenty
+    /// pages that are. Anonymous readability is decided separately, per node, by the gate — this
+    /// list only says which readable nodes are worth a search engine's visit.
+    /// </summary>
+    internal static readonly string[] PageNodeTypes =
+        ["Markdown", "Space", "Store/Plugin", "Store/Catalog", "Edu/Module", "Edu/Page"];
+
+    /// <summary>
+    /// Path segments that route to a partition's SATELLITE tables — code, tests, release markers —
+    /// never to a page. Underscore segments (<c>_Thread</c>, <c>_Access</c>, <c>_GitSync</c>, …) are
+    /// the satellite convention itself.
+    /// </summary>
+    private static readonly string[] SatelliteSegments = ["Source", "Test", "Release"];
+
+    /// <summary>Descendants read per public root; a partition with more pages than this is a
+    /// sitemap-index job, not a bigger number.</summary>
+    private const int DescendantLimit = 2000;
+
+    /// <summary>Concurrent per-node gate checks while enumerating one root's pages.</summary>
+    private const int GateConcurrency = 8;
+
+    /// <summary>
+    /// Whether a path below a root can be a page at all: no satellite segment anywhere in it.
+    /// Pure; the gate decides readability afterwards.
+    /// </summary>
+    internal static bool IsPagePath(string path)
+        => path.Split('/').All(segment =>
+            segment.Length > 0
+            && segment[0] != '_'
+            && !SatelliteSegments.Contains(segment, StringComparer.Ordinal));
 
     public static IEndpointRouteBuilder MapSeo(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/robots.txt", (HttpContext http) =>
+        app.MapGet("/robots.txt", (HttpContext http, IConfiguration configuration) =>
         {
-            var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}";
+            var baseUrl = PublicSite.CanonicalBaseUrl(configuration, http.Request);
+            // The app host is the same site under a second name: nothing on it is for the index,
+            // and the sitemap it points at is the public host's. See PublicSite.
+            var rules = PublicSite.IsAppOnlyHost(configuration, http.Request)
+                ? "Disallow: /"
+                : """
+                  Disallow: /login
+                  Disallow: /welcome
+                  Disallow: /api/
+                  Disallow: /_blazor
+                  Disallow: /dev/
+                  """.TrimEnd();
             return Results.Text(
                 $"""
                  User-agent: *
-                 Disallow: /login
-                 Disallow: /api/
-                 Disallow: /_blazor
-                 Disallow: /dev/
+                 {rules}
                  Sitemap: {baseUrl}/sitemap.xml
                  """, "text/plain");
         }).AllowAnonymous();
 
-        app.MapGet("/sitemap.xml", (IMessageHub hub, HttpContext http, CancellationToken ct) =>
+        // [FromServices] on the hub, explicitly: minimal-API parameter inference classifies an
+        // unregistered reference type as the request BODY, so a host that maps these routes
+        // without a mesh (a test of robots.txt alone) failed at map time with "Body was inferred".
+        app.MapGet("/sitemap.xml", ([FromServices] IMessageHub hub, HttpContext http, IConfiguration configuration, CancellationToken ct) =>
         {
-            var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}";
+            var baseUrl = PublicSite.CanonicalBaseUrl(configuration, http.Request);
             return BuildSitemap(hub, baseUrl)
                 .Select(xml => Results.Text(xml, "application/xml"))
                 .FirstAsync()
@@ -121,7 +168,7 @@ public static class SeoEndpoints
     /// </summary>
     private static void MapShareCard(IEndpointRouteBuilder app) =>
         app.MapGet("/api/og/{**path}", (
-            IMessageHub hub, OgCardRenderer renderer, HttpContext http, string path,
+            [FromServices] IMessageHub hub, [FromServices] OgCardRenderer renderer, HttpContext http, string path,
             CancellationToken ct) =>
         {
             var nodePath = (path ?? "").Trim('/');
@@ -169,7 +216,7 @@ public static class SeoEndpoints
     /// </summary>
     private static void MapNodeIcon(IEndpointRouteBuilder app) =>
         app.MapGet("/api/icon/{**path}", (
-            IMessageHub hub, HttpContext http, string path, CancellationToken ct) =>
+            [FromServices] IMessageHub hub, HttpContext http, string path, CancellationToken ct) =>
         {
             var nodePath = (path ?? "").Trim('/');
             if (nodePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
@@ -261,8 +308,8 @@ public static class SeoEndpoints
 
     /// <summary>
     /// The sitemap XML, built reactively: candidate roots from the (System-read) type queries,
-    /// each gated through the REAL anonymous permission check, public-segment children of store
-    /// plugins verified to exist before listing. Cold; never errors (fail-open to fewer URLs).
+    /// each gated through the REAL anonymous permission check, then every page-shaped descendant
+    /// of an admitted root, each gated the same way. Cold; never errors (fail-open to fewer URLs).
     /// </summary>
     public static IObservable<string> BuildSitemap(IMessageHub hub, string baseUrl) =>
         EnumeratePublished(hub)
@@ -285,9 +332,8 @@ public static class SeoEndpoints
     public static IObservable<IReadOnlyList<PublishedPage>> EnumeratePublished(IMessageHub hub)
     {
         var mesh = hub.ServiceProvider.GetService<IMeshService>();
-        var adapter = hub.ServiceProvider.GetService<IStorageAdapter>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        if (mesh is null || adapter is null)
+        if (mesh is null)
             return Observable.Return<IReadOnlyList<PublishedPage>>([]);
 
         // Candidate enumeration runs as System (an anonymous HTTP entry has no query identity);
@@ -320,7 +366,7 @@ public static class SeoEndpoints
                     .Select(root => AnonymousGate.AllowAnonymous(hub, root.Path)
                         .Take(1)
                         .SelectMany(allowed => allowed
-                            ? PagesOf(adapter, hub, root)
+                            ? PagesOf(mesh, accessService, hub, root)
                             : Observable.Return<IReadOnlyList<(MeshNode, string)>>([])))
                     .ToObservable().Concat().ToList()
                     .Select(pages => pages.SelectMany(p => p).ToList()))
@@ -334,36 +380,60 @@ public static class SeoEndpoints
                 Observable.Return<IReadOnlyList<PublishedPage>>([]));
     }
 
-    // The sitemap pages of one anonymous-readable root: the root itself plus, for store
-    // plugins, each declared public segment whose node actually exists (the brochures).
+    /// <summary>
+    /// The sitemap pages of one anonymous-readable root: the root itself plus every page-shaped
+    /// descendant (<see cref="PageNodeTypes"/>, <see cref="IsPagePath"/>) the
+    /// <see cref="AnonymousGate"/> admits — checked PER NODE, because a public course is a root
+    /// grant plus a deny on every chapter that is not free, and a commercial plugin's cover can be
+    /// public while its content is not. The descendant listing runs as System (a listing is a
+    /// valid query use: a stale negative here costs a URL, never a leak — every candidate still
+    /// passes the gate before it is listed).
+    ///
+    /// <para>🚨 This REPLACES the read of each store plugin's declared <c>publicSegments</c>
+    /// (#4056). That read went through the raw storage adapter from an anonymous HTTP entry and
+    /// came back empty on the partitioned Postgres deployment, so no course chapter was ever in the
+    /// sitemap; and it could only ever see one level of one node type, so the documentation tree
+    /// was never in it either. The gate is the one definition of "public" and it already encodes
+    /// the declared segments as grants and denies — asking it per node is both the fix and the
+    /// feature.</para>
+    /// </summary>
     private static IObservable<IReadOnlyList<(MeshNode, string)>> PagesOf(
-        IStorageAdapter adapter, IMessageHub hub, MeshNode root)
+        IMeshService mesh, AccessService? accessService, IMessageHub hub, MeshNode root)
     {
         var self = (root, root.Path);
-        var segments = PublicSegments(root);
-        if (segments.Count == 0)
-            return Observable.Return<IReadOnlyList<(MeshNode, string)>>([self]);
-        return segments
-            .Select(segment => adapter
-                .Read($"{root.Path}/{segment}", hub.JsonSerializerOptions)
-                .Take(1)
-                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null)))
-            .ToObservable().Concat().ToList()
-            .Select(children => (IReadOnlyList<(MeshNode, string)>)
-                new[] { self }
-                    .Concat(children.Where(c => c is not null).Select(c => (c!, c!.Path)))
-                    .ToList());
+        var types = string.Join("|", PageNodeTypes.Select(t => $"\"{t}\""));
+        return accessService.RunAsSystem(() => mesh.Query<MeshNode>(DescendantsOf(root, types)))
+            .Take(1)
+            .Select(change => change.Items
+                .Where(n => n.Path.Length > root.Path.Length
+                            && n.Path.StartsWith(root.Path + "/", StringComparison.Ordinal)
+                            && IsPagePath(n.Path[(root.Path.Length + 1)..]))
+                .DistinctBy(n => n.Path)
+                .ToList())
+            .SelectMany(candidates => candidates.Count == 0
+                ? Observable.Return<IReadOnlyList<(MeshNode, string)>>([self])
+                : candidates
+                    // Same boolean projection as the roots: "not public" and "the gate could not
+                    // decide" both OMIT the page, which is the fail-closed action (#2901).
+                    .Select(node => AnonymousGate.AllowAnonymous(hub, node.Path)
+                        .Take(1)
+                        .Select(allowed => allowed ? node : null))
+                    .Merge(GateConcurrency)
+                    .Where(node => node is not null)
+                    .ToList()
+                    .Select(admitted => (IReadOnlyList<(MeshNode, string)>)
+                        new[] { self }
+                            .Concat(admitted
+                                .OrderBy(n => n!.Path, StringComparer.Ordinal)
+                                .Select(n => (n!, n!.Path)))
+                            .ToList()))
+            .Catch<IReadOnlyList<(MeshNode, string)>, Exception>(
+                _ => Observable.Return<IReadOnlyList<(MeshNode, string)>>([self]));
     }
 
-    private static IReadOnlyList<string> PublicSegments(MeshNode root) =>
-        root.Content is JsonElement { ValueKind: JsonValueKind.Object } je
-            && je.TryGetProperty("publicSegments", out var segs)
-            && segs.ValueKind == JsonValueKind.Array
-            ? segs.EnumerateArray()
-                .Where(s => s.ValueKind == JsonValueKind.String)
-                .Select(s => s.GetString()!)
-                .ToList()
-            : [];
+    private static MeshQueryRequest DescendantsOf(MeshNode root, string types)
+        => MeshQueryRequest.FromQuery(
+            $"namespace:\"{root.Path}\" scope:descendants is:main nodeType:{types} limit:{DescendantLimit}");
 
     private static string Render(string baseUrl, IReadOnlyList<(MeshNode Node, string Url)> pages)
     {
