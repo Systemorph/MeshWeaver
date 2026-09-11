@@ -230,6 +230,58 @@ public class ModulePlatformLinkTest : IDisposable
     }
 
     /// <summary>
+    /// A version that is not SemVer at all is UNKNOWN, not "older". <c>NuGetVersionComparer</c> reads
+    /// an unparseable part as 0, so without the check a "nightly" label would rank below every real
+    /// version and be shelved for good — a string deciding what the bytes should (rule R2).
+    /// </summary>
+    [Fact]
+    public async Task ANonSemVerVersion_IsUnknown_AndMovesTheHeadAsBefore()
+    {
+        const string name = "MeshWeaver.Test.NightlyLabel";
+        Assert.True(MeshWeaver.Plugin.Packaging.NuGetVersionComparer.Instance.Compare("nightly", "1.7.0") < 0,
+            "precondition: the comparer ranks a non-SemVer label below every real version");
+        await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "nightly")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.False(outcome.ShelfOnly,
+            "a non-SemVer label is no evidence of order — it moves the head as an unversioned upload does");
+        Assert.Equal("nightly", Assert.Single(ModuleActivationSidecar.Read(root).Entries).Version);
+    }
+
+    /// <summary>
+    /// A head that LINKS but that the boot already failed to load is running its fallback, which a
+    /// static link probe cannot see — only the boot's unloadable marker says so. A shelf-only upload
+    /// that moves that fallback therefore changes what the next restart loads, and must say so.
+    /// </summary>
+    [Fact]
+    public async Task AShelfOnlyUploadMovingTheFallback_UnderAHeadTheBootFailedToLoad_RequiresARestart()
+    {
+        const string name = "MeshWeaver.Test.BootFailedHead";
+        await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        ModuleActivationSidecar.SetUnloadable(
+            root, name, head.Directory!, "boot-measured", "the boot failed to load it");
+        Assert.NotNull(Assert.Single(ModuleActivationSidecar.Read(root).Entries).UnloadableFrameworkMvid);
+
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "1.6.1")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.True(outcome.ShelfOnly);
+        Assert.True(outcome.RetainedAsFallback);
+        Assert.True(outcome.RestartRequired,
+            "the boot already failed to load the 1.7.0 head, so this process runs its fallback — and "
+            + "the fallback just moved to 1.6.1, which the next restart loads");
+    }
+
+    /// <summary>
     /// 🚨 <b>The third state, and it fails CLOSED.</b> Bytes that are not a readable managed
     /// assembly answer <see cref="ModuleLinkState.Indeterminate"/> — "I could not determine
     /// whether this loads" — and that is NEVER folded into "it loads". A gate whose unknown reads

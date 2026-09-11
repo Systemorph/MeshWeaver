@@ -1,5 +1,4 @@
 using System.IO;
-using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -127,8 +126,11 @@ public static class ModuleBundleSource
 
     /// <summary>The activation entry whose bytes represent <paramref name="version"/>: the head
     /// for a null or matching version, the retained previous generation for its matching version,
-    /// or null when this deployment retains neither. Version equality uses the canonical NuGet
-    /// comparer, so 1.2 and 1.2.0 cannot disagree between index and download.</summary>
+    /// or null when this deployment retains neither. Versions match by their exact TEXT
+    /// (case-insensitive) — the same rule the download route uses to find the index entry it
+    /// serves, and never the SemVer comparer, which reads unparseable parts as 0 and would make any
+    /// two non-SemVer labels "equal". The index advertises the recorded text verbatim, so a
+    /// consumer following an index URL always asks for exactly that text.</summary>
     public static ModuleActivationEntry? ResolveEntry(
         ModuleActivationList activation, string moduleName, string? version)
     {
@@ -136,13 +138,11 @@ public static class ModuleBundleSource
             string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
         if (head is null || !head.Enabled || string.IsNullOrWhiteSpace(version))
             return head;
-        if (!string.IsNullOrWhiteSpace(head.Version)
-            && NuGetVersionComparer.Instance.Compare(version, head.Version) == 0)
+        if (string.Equals(version, head.Version, StringComparison.OrdinalIgnoreCase))
             return head;
         var previous = ModuleActivationBoot.PreviousGeneration(head);
         return previous is not null
-               && !string.IsNullOrWhiteSpace(previous.Version)
-               && NuGetVersionComparer.Instance.Compare(version, previous.Version) == 0
+               && string.Equals(version, previous.Version, StringComparison.OrdinalIgnoreCase)
             ? previous
             : null;
     }

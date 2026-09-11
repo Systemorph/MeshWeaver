@@ -1218,8 +1218,10 @@ public static class PluginBundleEndpoints
                 var match = kept.FindIndex(current =>
                     string.Equals(current.PluginId, candidate.PluginId,
                         StringComparison.OrdinalIgnoreCase)
-                    && NuGetVersionComparer.Instance.Compare(
-                        current.Version, candidate.Version) == 0);
+                    // Exact TEXT, the rule the download route matches by: the SemVer comparer
+                    // reads unparseable parts as 0, so two non-SemVer labels would collapse.
+                    && string.Equals(current.Version, candidate.Version,
+                        StringComparison.OrdinalIgnoreCase));
                 if (match < 0)
                     return kept.Add(candidate);
                 return candidate.ShelfVersion is not null && kept[match].ShelfVersion is null

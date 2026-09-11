@@ -2,6 +2,7 @@ using System.IO;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.Mesh;
@@ -815,11 +816,16 @@ public sealed class ModuleLandingService : IDisposable
         //   • UNKNOWN VERSION on either side → the head MOVES, as before. An unrecorded version is
         //     absence of evidence, not evidence of olderness, and reading it as "older" would let
         //     one unversioned entry freeze a module's head for good — a string deciding what the
-        //     bytes should (rule R2 of Doc/Architecture/ModuleAdoptionPolicy).
+        //     bytes should (rule R2 of Doc/Architecture/ModuleAdoptionPolicy). A version that is
+        //     not SemVer at all counts as unknown too: NuGetVersionComparer reads an unparseable
+        //     part as 0, so "nightly" would otherwise rank below every real version for good.
         //   • A NEWER HEAD WHOSE BYTES ARE GONE → the head MOVES. Only a LANDED generation is
         //     protected: a record naming a directory whose entry DLL is missing (a lost volume, a
         //     manual deletion) is not a version this registry holds, and protecting it would make
-        //     the rule a self-sealing outage — the one upload that could heal it, refused.
+        //     the rule a self-sealing outage — the one upload that could heal it, refused. A
+        //     re-publish of the head's OWN bytes is not this case: it resolves to the head's own
+        //     directory, the landing restores the files that directory lost, and the head keeps
+        //     its (higher) label.
         //   • A NEWER HEAD THAT DOES NOT LINK HERE → the head STAYS, deliberately. The shelf
         //     carries modules for platforms NEWER than the registry serving them (ModuleBundleSource),
         //     and boot already runs the fallback when the head does not load here (#3649, rule R1).
@@ -830,9 +836,14 @@ public sealed class ModuleLandingService : IDisposable
         //     the FALLBACK's question, and the older upload competes for that slot (ShelfOnlyEntry).
         var keepsNewerHead = keepNewerHead
             && displaced is { Version.Length: > 0 }
-            && !string.IsNullOrWhiteSpace(version)
+            && IsOrderableVersion(version)
+            && IsOrderableVersion(displaced.Version)
             && NuGetVersionComparer.Instance.Compare(version, displaced.Version) < 0
-            && ModuleActivationBoot.LandedModuleDllExists(baseDirectory, displaced);
+            && (ModuleActivationBoot.LandedModuleDllExists(baseDirectory, displaced)
+                // These very bytes ARE the head's generation (the content address ignores the
+                // version label), and the landing below restores any file that generation lost
+                // (RestoreMissingFiles) — so it is present again by the time this is acted on.
+                || string.Equals(displaced.Directory, generation, StringComparison.OrdinalIgnoreCase));
 
         var previous = displaced is null || keepsNewerHead ? null : PreviousToKeep(displaced);
 
@@ -909,6 +920,7 @@ public sealed class ModuleLandingService : IDisposable
             }
             if (alreadyLanded)
             {
+                RestoreMissingFiles(staging, target, name, generation);
                 Directory.Delete(staging, recursive: true);
                 AdoptLandedGeneration(target, name, generation);
             }
@@ -1033,15 +1045,18 @@ public sealed class ModuleLandingService : IDisposable
         // is itself a restart, which activates the entry with no flag. 🚨 Neither does a SHELF-ONLY
         // landing (#3996): the head did not move, so a restart would load exactly what this process
         // is already running — the same false prompt from the other direction. The ONE exception:
-        // a shelf-only landing that MOVED the fallback while the head does not load here. Boot runs
+        // a shelf-only landing that MOVED the fallback while the head does not load here — measured
+        // by the link probe now, or by the boot that already failed to load it (its unloadable
+        // marker, which a static probe cannot see). Boot runs
         // the fallback then, so a restart genuinely loads something different, and staying silent
         // would be the false negative of the same prompt.
         var restartRequired = held is null
             && (!keepsNewerHead
                 || (!string.Equals(entry.PreviousDirectory, displaced!.PreviousDirectory,
                         StringComparison.OrdinalIgnoreCase)
-                    && !ModulePlatformLink.Check(
-                        ModuleActivationBoot.LandedDllPath(baseDirectory, displaced), surface).MayLoad));
+                    && (displaced.UnloadableFrameworkMvid is not null
+                        || !ModulePlatformLink.Check(
+                            ModuleActivationBoot.LandedDllPath(baseDirectory, displaced), surface).MayLoad)));
         if (restartRequired)
             ModuleActivationSidecar.SetPendingRestart(baseDirectory, true);
 
@@ -1146,6 +1161,62 @@ public sealed class ModuleLandingService : IDisposable
                 + "still reclaim it as unreferenced, and the next reconcile re-lands it.",
                 name, generation, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 🚨 A content-addressed generation's NAME asserts its content, so a directory that carries
+    /// the name but lacks a file (a lost entry DLL, a partial volume restore) is an INCOMPLETE
+    /// store entry, not a different one. Adopting it as-is recorded a broken generation as the
+    /// head, and a re-publish of the very same bytes — the one upload that could heal it —
+    /// changed nothing (#4031 review). The staged copy is byte-identical by construction, so every
+    /// file the target lacks is moved in from it. A file the target HAS is never touched: a
+    /// running pod may hold it open, which is why landings write generations instead of swapping.
+    /// </summary>
+    private void RestoreMissingFiles(string staging, string target, string name, string generation)
+    {
+        var restored = ImmutableList<string>.Empty;
+        foreach (var staged in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories)
+                     .ToImmutableArray())
+        {
+            var relative = Path.GetRelativePath(staging, staged);
+            var destination = Path.Combine(target, relative);
+            if (File.Exists(destination))
+                continue;
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            try
+            {
+                File.Move(staged, destination);
+                restored = restored.Add(relative);
+            }
+            catch (IOException) when (File.Exists(destination))
+            {
+                // Another replica restored the same file first — identical bytes by construction.
+            }
+        }
+        if (!restored.IsEmpty)
+            logger?.LogWarning(
+                "Module '{Name}': generation {Generation} was on the volume but INCOMPLETE — restored "
+                + "{Count} missing file(s) from this landing's identical bytes: {Files}",
+                name, generation, restored.Count, string.Join(", ", restored));
+    }
+
+    /// <summary>Whether <paramref name="candidate"/> is a SemVer version
+    /// <see cref="NuGetVersionComparer"/> orders meaningfully: a numeric dotted core of one to four
+    /// parts, optionally a pre-release and build metadata. The comparer reads any unparseable part
+    /// as 0, so without this check "nightly" would rank below 0.0.1.</summary>
+    private static bool IsOrderableVersion(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+            return false;
+        var plus = candidate.IndexOf('+');
+        var withoutBuild = plus >= 0 ? candidate[..plus] : candidate;
+        var dash = withoutBuild.IndexOf('-');
+        var core = dash >= 0 ? withoutBuild[..dash] : withoutBuild;
+        var coreParts = core.Split('.');
+        return coreParts.Length is >= 1 and <= 4
+               && coreParts.All(part => part.Length > 0 && part.All(char.IsAsciiDigit))
+               && (dash < 0 || withoutBuild[(dash + 1)..].Split('.').All(id =>
+                   id.Length > 0 && id.All(c => char.IsAsciiLetterOrDigit(c) || c == '-')));
     }
 
     private void RemoveCore(string name)
@@ -1328,10 +1399,11 @@ public sealed record ModuleLandingOutcome(bool Held, string? HoldReason)
 {
     /// <summary>
     /// Why this upload did NOT become the module's head generation (#3996): its version ranks
-    /// strictly below the version this registry already holds as the head, so the bytes are on the
-    /// shelf and recorded as the entry's fallback generation while the head — what the registry
-    /// SERVES, and what its own next restart loads — stays where it is. Null for the ordinary case
-    /// where the head moved.
+    /// strictly below the version this registry already holds as the head, so its bytes land on
+    /// the volume while the head — what the registry SERVES, and what its own next restart loads —
+    /// stays where it is. The bytes are recorded as the entry's fallback generation (and so kept
+    /// and served at their own version) ONLY when <see cref="RetainedAsFallback"/> is true;
+    /// otherwise the modules GC reclaims them. Null for the ordinary case where the head moved.
     ///
     /// <para>An INIT property rather than a third primary-constructor parameter on purpose: adding
     /// one replaces this public record's constructor and <c>Deconstruct</c> signatures, which is a

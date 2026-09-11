@@ -247,6 +247,34 @@ public class ModulePublishShelfTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 The SAME-BYTES case of a lost head (#4031 review). The generation directory is a CONTENT
+    /// address that ignores the version label, so re-publishing the head's own bytes resolves to the
+    /// very directory that lost its entry DLL — and the landing used to adopt that directory as-is,
+    /// recording a broken head and changing nothing. The files it lost are restored from the
+    /// identical staged copy, and the head keeps its higher label.
+    /// </summary>
+    [Fact]
+    public async Task ARepublishOfTheHeadsOwnBytes_RestoresTheFilesItsGenerationLost()
+    {
+        using (var first = await Publish(minMeshVersion: null, version: "1.7.0", content: "same-bytes"))
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var broken = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        File.Delete(ModuleActivationBoot.LandedDllPath(root, broken));
+        Assert.False(ModuleActivationBoot.LandedModuleDllExists(root, broken));
+
+        using var again = await Publish(minMeshVersion: null, version: "1.6.1", content: "same-bytes");
+
+        Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+        var list = ModuleActivationSidecar.Read(root);
+        var head = Assert.Single(list.Entries);
+        Assert.Equal(broken.Directory, head.Directory);
+        Assert.True(ModuleActivationBoot.LandedModuleDllExists(root, head),
+            "the re-published identical bytes restore the entry DLL the head generation lost");
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("same-bytes", ServedMarker(list));
+    }
+
+    /// <summary>
     /// 🚨 <b>An above-floor publish is neither 409'd nor HELD (#3648)</b> — it lands, unheld, with
     /// the floor recorded as an advisory. The upload that used to 409 into the 2026-08-22 deadlock
     /// answered <c>held: true</c> from then until #3648; on 2026-09-07 that same string comparison
