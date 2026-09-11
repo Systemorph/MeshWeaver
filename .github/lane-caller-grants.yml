@@ -73,12 +73,12 @@ repos:
         lane: node-repo-publish-bake.yml
         grants: {contents: read, id-token: write}
       # The module registry hand-over, moved out of `modules-floor`'s matrix legs to after the whole
-      # validation verdict (MeshWeaver#3878). The lane's one job demands `contents: read`.
+      # validation verdict (MeshWeaver#3878, landed by MeshWeaver.Plugins#1663). The lane's one job
+      # demands `contents: read`.
       - workflow: ci.yml
         job: publish-modules
         lane: node-repo-module-publish.yml
         grants: {contents: read}
-        pending: lands with Systemorph/MeshWeaver.Plugins branch fix/3878-staged-module-publication, which switches modules-floor to publish-mode staged and adds this caller (MeshWeaver#3878). Once it has merged the marker is spent and this row is compared key for key.
       - workflow: ci.yml
         job: supersede
         lane: node-repo-supersede.yml
