@@ -1,7 +1,7 @@
 ---
 Name: Measuring a Live Portal Read-Only
 Category: Architecture
-Description: How to re-measure an ops issue against the private AKS cluster without mutating anything — the four read-only instruments, the retention check that has to come first, and the four traps that turn "I could not find it" into a false close.
+Description: How to re-measure an ops issue on a live portal without mutating anything — /health first (public, unauthenticated, past RLS, and it samples a different replica each call), then the incident store, then the four break-glass cluster instruments; plus the traps that turn "I could not find it" into a false close.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/><path d="M11 8v6"/></svg>
 ---
 
@@ -28,6 +28,138 @@ answer on this cluster, and each is one command away from being settled.
 The positive form: **every "not happening" verdict must cite a coverage fact** — retention ≥ the
 age of the event, the rule group exists, N samples across M replicas. A verdict with no coverage
 fact is a guess.
+
+## 🚨 Start with `/health` — the one instrument that is not break-glass
+
+Everything further down this page needs `az aks command invoke` and is break-glass. **`/health` is
+not.** It is a plain unauthenticated HTTP GET against the portal's public ingress, it needs no
+credential, no cluster, no grant and no MCP session, and it is the only read on this page that a
+person with a browser can take.
+
+```bash
+curl -s https://memex.meshweaver.cloud/api/version    # ALWAYS first — which portal am I reading?
+curl -s https://memex.meshweaver.cloud/health
+```
+
+Measured 2026-09-11 06:49Z, with no credential of any kind:
+
+| Portal | `/api/version` | `/health` |
+|---|---|---|
+| memex.meshweaver.cloud (the public portal / plugin registry — MCP server `memex`) | `3.0.0+6231c4da` | HTTP 200, 671 B |
+| memex.systemorph.com (the CONTROL instance — MCP server `systemorph`) | `3.0.0+45306a33` | HTTP 200, 2570 B |
+
+🚨 **Say which portal every number came from.** The two hold same-named nodes and answer differently;
+reading the wrong one and concluding "the sync is frozen" cost two sessions an hour on 2026-09-10.
+`/api/version` is the cheapest possible confirmation and it is one call.
+
+### What makes it strictly better than a `search` sweep
+
+The NodeType sweep (`search 'nodeType:NodeType content.compilationStatus:Error'`) runs **as you**, so
+it is RLS-filtered: a type parked at `Error` in a partition you hold no grant on is silently not
+counted, and `get` answers `Not found` for it — the same string an absent node gets. The sweep
+returns a smaller number, never an error.
+
+**`/health` is composed by the process, as the system.** It is past RLS by construction, so its
+denominator is *this replica*, whole, whoever is reading. That is the property, and it is why the
+entries below can answer a question the sweep cannot.
+
+### 🚨 Repeated calls sample DIFFERENT replicas — that is a feature, and a trap
+
+There is no session affinity on the health path. Ten consecutive calls to memex.meshweaver.cloud
+(2026-09-11 06:49Z) returned **two distinct bodies**, 7 × 671 B and 3 × 873 B, and the two readings
+were disjoint:
+
+| | replica A | replica B |
+|---|---|---|
+| `content-types` | 3 types (`Edu/LearningJourney`, `Store/Tier`, `rsalzmann/GemschiGame`) | 7 types (`Store/Catalog`, `Store/Plugin` ×249, `AgenticPrimer/WishBook`, …) |
+| `pending_module_activation` | 6 modules | 3 modules, **none of them the same six** |
+
+So: **one call answers about ONE replica and you do not get to choose which.** A single clean read is
+not a verdict about the deployment — call it until the body stops changing, and say how many samples
+you took. Conversely, the variation is itself the measurement when the question is *"do my replicas
+agree?"*, which is exactly the question a half-rolled deploy raises.
+
+The per-replica form with no guesswork is the control instance's `Sample` action, which carries each
+pod's whole `/health` body — see [Operating from the
+Portal](/Doc/Architecture/OperatingFromThePortal).
+
+### 🚨 Only non-Healthy entries print — EXCEPT the census entries, which always do
+
+`WriteHealthWithDetail` puts the aggregate status on line one and then one line per check that is
+**not** Healthy. A check that is Healthy prints nothing, so for most entries **an absent line does not
+mean a clean one** — it is equally consistent with the check never having been registered in this
+host at all. `nodetype_bake`, for instance, is registered only `if (gateBake)`: its silence on a
+given portal says nothing until you have confirmed it is registered AND armed.
+
+The exception is deliberate. A check tagged `ProbeEndpoints.CensusTag` prints its reading whatever
+its status, because for a census the NUMBER is the publication and a silent clean reading would be
+byte-identical on the wire to an unregistered check. Two entries carry it today, and both exist
+because their verdict used to live only in a boot log that nobody here is authorised to read:
+
+| Entry | Answers | Silent when… |
+|---|---|---|
+| `content-types` | which node types this replica cannot TYPE — their pages render empty | Healthy (not a census) |
+| `pending_module_activation` | modules landed but not loaded in this process; a restart activates them | Healthy |
+| `required_modules` | a required module that is store-delivered and not here | Healthy |
+| `bundle_adoption` | prebuilt bundles the registry was meant to serve and this replica compiled instead | Healthy |
+| `nodetype_bake` | the readiness gate's own phase — **only when `gateBake` is on** | Healthy **or not registered** |
+| `bake-report` **(census)** | this replica's bake report: `total`/`baked`/`pending`, the per-state breakdown, the adoption-stamp count, and `ClassifiedFromLocalAdoption` — MeshWeaver#3703's verdict | **never** — Degraded when there is no report at all |
+| `source-discovery` **(census)** | the batched source discovery's folded-change count and LARGEST inter-chunk gap against the completion window — MeshWeaver#3704's discriminator | **never** — Healthy and still printed when no pass ran |
+
+🚨 **Read a census line's SENTENCE, not just its status.** `bake-report: Degraded — NO bake report on
+this replica` and `bake-report: Degraded — the NodeType enumeration snapshot PREDATED …` are two
+completely different findings wearing one word, and the first is an absence of measurement rather
+than a fault. Likewise `source-discovery: Healthy — NO source-discovery pass recorded` means nothing
+needed building on this replica; it is not a clean gap reading, because there was no gap to read.
+
+### What STILL has no portal surface
+
+Two of the three reads this page used to call unanswerable now have a control-instance action
+(`Sample`, `Logs`). The third — *"can THIS replica load NodeType X"* — is now **partly** answered and
+no longer entirely dark:
+
+- **`content-types` names every type this replica could not type**, from the system's own denominator,
+  which is the half a `search` sweep cannot reach.
+- **`bake-report` says whether the replica's bake was even measured**, and `nodetype_bake` (where
+  armed) names every non-`Ok` type.
+- **What is still missing** is the per-TYPE, per-REPLICA answer for a type nothing has tried to read
+  yet: `content-types` records a degradation only once a read degrades, so a type nobody has opened on
+  this replica appears in neither list. For that, the boot log is still the only source.
+
+## The incident store: `Admin/_LogIncident`, and the three ways to misread it
+
+The log-watch pipeline folds every red burst into a `LogIncident` node
+(mechanics: [Log-Watch Triage](/Doc/Architecture/LogWatchTriage)). For *measuring* purposes it is the
+cheapest read on this page after `/health`, and all three of its traps produce a confident wrong
+answer rather than an error.
+
+**1 · It lives on ONE portal, and it is not the one you are investigating.** Measured 2026-09-11:
+`namespace:Admin/_LogIncident scope:subtree` on **memex.systemorph.com** returns incidents and is
+truncated at any limit; the identical query on **memex.meshweaver.cloud** returns **0**. The control
+instance is where the store is, and it covers the other portals — the `nodetype_bake` incident
+`0a24845deb486a56`, read on memex.systemorph.com, carries `"namespace": "memex-cloud"` and 400+
+memex-cloud pod names. So *"I searched the portal that had the problem and found nothing"* is the
+expected outcome of looking in the wrong place, not evidence.
+
+**2 · It is invisible to an unscoped query.** Measured the same day on memex.systemorph.com:
+
+```text
+search 'nodeType:LogIncident'                              → count 0
+search 'namespace:Admin/_LogIncident scope:subtree'        → truncated at the limit
+```
+
+Same portal, same moment, same nodes. The Admin partition is not in an unscoped query's reach, so
+**the namespace is load-bearing** — exactly like the `content.` prefix on the NodeType sweep. A zero
+from the first form is a statement about the query, not about the mesh.
+
+**3 · 🚨 A frozen `occurrences` count can mean RENAMED, not FIXED.** The node id *is* the
+fingerprint, and the fingerprint's third part is the masked **message** — the exception's, or the log
+line's where there is no exception. So re-wording a message mints a **new fingerprint**, which means
+a **new node**: the old incident stops accruing at the moment of the re-wording and looks cured,
+while the identical fault carries on under an id nothing links to the old one. Before reading a flat
+`lastSeen`/`occurrences` as a fix, check whether the message text moved in the same window — `git
+log -S` on the literal is the cheapest form — and compare against the coverage rule at the top of
+this page: an instrument that stopped being able to see the event did not observe its absence.
 
 ## Reaching the cluster at all
 
@@ -340,6 +472,10 @@ prevent.
 
 ## Related
 
+- [Operating from the Portal](../OperatingFromThePortal) — the actions that replaced two of the
+  break-glass reads, and the `Sample` that carries every replica's `/health` body at once.
+- [Source Set Establishment](../SourceSetEstablishment) — what a short discovery pass may conclude,
+  and the verdict `source-discovery` now publishes.
 - [Deployment — AKS](../DeploymentAKS) — the deploy routes and the private-cluster rule.
 - [Red-Log Watching & Ticketing](../LogWatchTriage) — how these issues get filed in the first place.
 - [Reading CI Signals](../ReadingCiSignals) — the same "absent reads as satisfied" hazard in CI.

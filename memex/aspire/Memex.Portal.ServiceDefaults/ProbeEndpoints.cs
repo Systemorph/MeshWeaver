@@ -84,4 +84,24 @@ public static class ProbeEndpoints
     /// about the siblings' spare capacity, not only about this pod.
     /// </summary>
     public const string ReadyTag = "ready";
+
+    /// <summary>
+    /// 🚨 <b>Makes a check's reading PRINT on <see cref="Health"/> even when it is Healthy — the
+    /// one thing that lets an operator tell "I measured nothing" from "I measured, and it was
+    /// clean"</b> (MeshWeaver#3703, #3704).
+    ///
+    /// <para><c>WriteHealthWithDetail</c> prints only entries that are NOT Healthy, which is right
+    /// for a VERDICT — nobody wants a wall of green — and wrong for a CENSUS, where the number IS
+    /// the publication. A census check that answered Healthy-and-silent would be indistinguishable
+    /// from one that was never registered, and that ambiguity is precisely what left #3703 and
+    /// #3704 unanswerable: their readings existed only in a boot log, and log access on this fleet
+    /// is break-glass.</para>
+    ///
+    /// <para>🚨 It is NOT a probe tag. <see cref="Live"/> and <see cref="Ready"/> filter on their
+    /// own tags, so a census check reaches neither: publishing a number can never restart a pod or
+    /// take it out of rotation. Tag a check with this ONLY when a reader needs its reading whether
+    /// or not the reading is a problem — and keep the STATUS meaning what it always meant, so the
+    /// aggregate word on line one does not turn Degraded for a clean census.</para>
+    /// </summary>
+    public const string CensusTag = "census";
 }

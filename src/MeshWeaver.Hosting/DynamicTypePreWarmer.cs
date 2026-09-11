@@ -448,6 +448,8 @@ public static class DynamicTypePreWarmer
                         {
                             ClassifiedFromLocalAdoption = overlay.Applied.Count,
                         })
+                        .Do(report => PublishReport(
+                            mesh, report, NodeTypeBakeReportRegistry.CompilingSweep))
                         .SelectMany(report => BakeOrFollow(
                             mesh, workspace, accessService, classified, nodes, store, report,
                             budget, pacing, batchBake, buildProtocol, logger));
@@ -590,8 +592,47 @@ public static class DynamicTypePreWarmer
                         .Select(report => report with
                         {
                             ClassifiedFromLocalAdoption = overlay.Applied.Count,
-                        });
+                        })
+                        .Do(report => PublishReport(
+                            mesh, report, NodeTypeBakeReportRegistry.AdoptOnlyProbe));
                 }));
+    }
+
+    /// <summary>
+    /// 🚨 <b>Publishes the report so <c>/health</c> can carry it</b> (#3703).
+    ///
+    /// <para>The report's numbers — and above all
+    /// <see cref="NodeTypeBakeReport.ClassifiedFromLocalAdoption"/>, which says out loud that the
+    /// sweep's input was behind this process's own writes — existed only as a boot LOG line. Log
+    /// access on this fleet is break-glass, so the confirming reading for #3703 could not be taken
+    /// by anyone authorised to take it, and the issue could be neither settled nor closed. Recorded
+    /// here, at both report sites, it is one unauthenticated <c>curl</c> away.</para>
+    ///
+    /// <para>The adoption-stamp count is captured at the SAME instant, because the pair is the
+    /// point: "N assemblies adopted" and "M types whose record and the share agree" are different
+    /// populations in different units, and reading them as a contradiction is what #3703 was filed
+    /// as. Published side by side, they cannot be read that way again.</para>
+    ///
+    /// <para>Best-effort by construction: a host that registered no registry publishes nothing and
+    /// the health check says so in those words. It must never be able to fault the sweep.</para>
+    /// </summary>
+    private static void PublishReport(IMessageHub mesh, NodeTypeBakeReport report, string pass)
+    {
+        var registry = mesh.ServiceProvider.GetService<NodeTypeBakeReportRegistry>();
+        if (registry is null)
+            return;
+        var stamps = mesh.ServiceProvider
+            .GetService<NodeTypeAdoptionRegistry>()?.AdoptedStamps.Count ?? 0;
+        registry.Record(new BakeReportReading(
+            pass,
+            report.FrameworkVersion,
+            report.Entries.Count,
+            report.Entries.Count(e => !e.NeedsBake),
+            report.Pending.Count,
+            report.ClassifiedFromLocalAdoption,
+            stamps,
+            report.Summary,
+            DateTimeOffset.UtcNow));
     }
 
     /// <summary>
@@ -981,7 +1022,13 @@ public static class DynamicTypePreWarmer
         // baked a fleet of empty assemblies with nothing refusing readiness. Whole-batch fallback is
         // the only safe answer: the activation-driven sweep resolves each type's sources itself.
         return NodeTypeBatchBake
-            .ResolveSources(batchMeshService!, accessService, definitions, pending, logger)
+            // 🚨 The registry is the PUBLICATION of #3704's discriminator — the per-pass chunk
+            // count and the largest inter-chunk gap — so /health can carry what only a Loki query
+            // could read before. Resolved, never required: a host without one publishes nothing and
+            // the check says so in those words rather than reading as clean.
+            .ResolveSources(
+                batchMeshService!, accessService, definitions, pending, logger,
+                mesh.ServiceProvider.GetService<SourceDiscoveryRegistry>())
             .Select(index =>
                 (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)index)
             .Catch<ImmutableDictionary<string, IReadOnlyList<MeshNode>>?, Exception>(ex =>
