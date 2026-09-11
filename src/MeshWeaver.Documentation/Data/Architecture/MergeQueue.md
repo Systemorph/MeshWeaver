@@ -175,11 +175,50 @@ seeded on weaker evidence than that would be an automatic re-runner with a JSON 
 - `dotnet-test.yml`'s *CI's own shell* job runs the steward's `--self-test` on every pull request,
   so a classifier regression cannot merge on a branch that never dequeued anything.
 
+## 🚨 Auto-merge waits on the BASE's protection — so a stacked PR is armed to merge NOW
+
+`--auto` does not mean "merge when this pull request is green". It means "merge when the contexts
+**branch protection requires of the BASE** are satisfied" — and in this fleet protection is
+configured on the default branch and nowhere else. A **stacked** pull request, opened against
+another pull request's feature branch, therefore has a base that is protected by nothing, an EMPTY
+required set, and a condition that is met the instant GitHub first reads it.
+
+**Measured 2026-09-11.** `MeshWeaver.Plugins#1685` was opened against the feature branch of #1681.
+`auto-arm.yml` armed it and GitHub merged it at 21:03:23Z — **61 seconds after it was opened, before
+its own CI had started a single job**. Nothing failed and nothing was bypassed; the stack collapsed
+unreviewed, exactly as configured. `auto-arm.yml` is the fleet's only copy of the arm lane and every
+satellite reaches it through `workflow_call`, so the hole was open in all eight repositories at once
+and closing it in core closed it everywhere without a satellite-side change.
+
+The lane now reads `github.event.repository.default_branch` off the event — **never a literal
+`main`**, which would be a copy of a fact every repo happens to share today and the exact drift the
+single-copy design exists to end — compares it with `github.event.pull_request.base.ref`, and arms
+only on a match.
+
+🚨 **The decision is announced, and the JOB is never what skips.** Moving the base test onto the
+job's `if:` is the tidy-looking version of this fix and deletes the message with it: a skipped job
+renders like a passed one and carries no warning, no summary and no comment, so "the lane declined"
+and "the lane is broken" become the same page. Instead the job runs, a `::warning::` plus a step
+summary name the base, and one idempotent comment says so on the pull request itself. Draft and fork
+stay on the job condition, because for those there is genuinely nothing to say.
+
+**The other lanes were checked and are clean structurally, not by luck** — which is why none is
+exempted by name in the guard: `arm-credential.yml` mints and inspects a token and arms nothing;
+this steward acts only on a `dequeued` event, which cannot occur for a pull request never admitted
+to a queue, and a queue exists only on a branch configured to have one; `release.yml` and
+`node-repo-platform-ref-bump.yml` OPEN pull requests (`--base main`, explicitly) without arming them.
+
+`ArmedMergeMustTriggerMainsPushLanesGuard` holds all three properties: the arming step is governed
+by an `if:` consuming a step output whose producer reads `default_branch` (a condition moved into
+`env:`, or one that consults only the token mint, breaks the chain and fails); no workflow in the
+directory arms without that chain; and the non-default path still warns and still comments.
+
 ## Working with the queue
 
-- **`gh pr merge <n> --auto` enqueues.** With a queue enabled, "auto-merge" means *enqueue when the
-  PR's own required checks are green*. `auto-arm.yml` does this for every non-draft PR, so a green PR
-  lands without anyone pressing anything. Marking a PR **draft** is the opt-out.
+- **`gh pr merge <n> --auto` enqueues — but only onto the default branch.** With a queue enabled,
+  "auto-merge" means *enqueue when the PR's own required checks are green*. `auto-arm.yml` does this
+  for every non-draft PR **whose base is the default branch**; see the section above for why a
+  stacked PR is deliberately left unarmed. Marking a PR **draft** is the opt-out.
 - **A push to a queued branch ejects it.** GitHub removes the entry (reason `MANUAL`-shaped from the
   steward's point of view: it comments once and takes no action); auto-arm re-arms on the
   `synchronize` event, so the new head re-enters the queue once its own run is green. Do not push to
