@@ -209,6 +209,13 @@ console.log(await page.evaluate(async () => {
   out.markers = m.editor.getModelMarkers({ owner: 'probe' }).length;
   out.rendered = host.querySelectorAll('.squiggly-error').length;
 
+  // workers answer: only the JSON worker can mark an invalid JSON model — poll for its marker
+  const jm = m.editor.createModel('{ "a": 1, }', 'json', m.Uri.parse('inmemory://probe/bad.json'));
+  const j0 = Date.now(); let jmk = [];
+  while (Date.now() - j0 < 20000 && (jmk = m.editor.getModelMarkers({ resource: jm.uri })).length === 0)
+    await new Promise(r => setTimeout(r, 100));
+  out.jsonWorker = { ms: Date.now() - j0, messages: jmk.map(x => x.message) };
+
   m.languages.registerHoverProvider('csharp', { provideHover: () => ({ contents: [{
     value: '[x](javascript:alert(1))\n\n<img src=x onerror="alert(2)">\n\n'
          + '<svg onload="alert(3)"></svg>\n\n**bold survives**',
