@@ -228,8 +228,20 @@ and a disposal fence, so a shift in when Rx signals disposal would be a correctn
 than a performance note. Every item in the Rx 7.0 milestone is packaging, analyzers, tooling, docs,
 or the annotation below. Two things often *attributed* to Rx 7 in fact shipped in 6.1.0 and were
 already in force here: the `RefCount` fixes and the opt-in `ResetExceptionDispatchState`. And ADR
-0004, which would change when `OnError` becomes a thrown exception, is still **Proposed** — that is,
-not implemented.
+0004 (`Rx.NET/Documentation/adr/0004-onerror-to-throw.md` at tag `rxnet-v7.0.0`, HTTP 200, 14,436 B),
+which would change when `OnError` becomes a thrown exception, reads `Status: Proposed` — that is, not
+implemented.
+
+🚨 **All of that is still upstream's word about itself, so pair it with OUR OWN observation of the
+property that matters.** `MeshWeaver.Messaging.Hub.Test` carries **40** `[Fact]`/`[Theory]` tests
+across **31** files whose whole subject is disposal, teardown, quiescing, shutdown admission and
+turn/backlog ordering — `RoutedDisposeRequest_Announces_Once_AndBeforeTheTeardownStarts`,
+`GateOpenMustNotLetARunningTurnOvertakeTheBacklog`, `InitializationStopsAtTeardownStart`,
+`ShutdownWindowAdmission`, the `DisposalStall*`/`DisposalRace*` family, and the rest. Every one
+passes on Rx 7 (that suite: 409/409). That is the closest thing to a direct measurement of
+"completion and disposal ordering did not shift" that this repository can make, and it is the check
+to repeat on any future Rx boundary — a suite total alone would not have told you the ordering
+tests were even in it.
 
 The single compile-surface change is a nullability annotation:
 `OfType<TResult>(this IObservable<object>)` became `IObservable<object?>`. It widens what is
