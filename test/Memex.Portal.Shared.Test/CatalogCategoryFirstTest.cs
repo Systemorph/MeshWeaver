@@ -228,7 +228,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(f => f.Value.ToString().Contains(InstalledFragment, StringComparison.Ordinal))
             .FirstAsync().Timeout(RenderBudget).Await();
 
-        Cards(frame).Should().Equal(["pkg-1"], "one member, one card");
+        Cards(frame).Should().Equal(["pkg-Q2ZHYW1tYQ"], "the sole card retains the identity of CfGamma");
         var json = frame.Value.ToString();
         json.Should().Contain("Gamma Cover")
             .And.NotContain("Alpha Course").And.NotContain("Beta Course")

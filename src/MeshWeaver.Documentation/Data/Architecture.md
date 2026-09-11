@@ -223,6 +223,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Apps Home](AppsHome)
 - [Content Favicon Rasterization](ContentFaviconRasterization)
 - [Controls That Cannot Fail](ControlsThatCannotFail)
+- [Catalog Action Identity](CatalogActionIdentity) — a retained click keeps its package when the catalog refreshes
 - [Link Previews](LinkPreviews)
 - [Local-First Client & Bootstrap](LocalFirstClient)
 - [PDF Export — one browser, two fidelities](PixelFaithfulExport)
