@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -113,7 +114,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
     {
         IInstanceKeyRegistry registry = Service();
         var act = () => registry.AdoptKeyHash("not-in-this-registry", InstanceKeys.Hash(InstanceKeys.Generate()))
-            .Timeout(TimeSpan.FromSeconds(30)).Await();
+            .Timeout(TestTimeouts.Convergence).Await();
         (await act.Should().ThrowAsync<InstanceNotRegisteredException>())
             .Which.InstanceId.Should().Be("not-in-this-registry");
     }
@@ -183,7 +184,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
 
         (await Self(app, key)).Status.Should().Be(HttpStatusCode.Unauthorized, "a revoked key no longer authenticates");
         var authenticated = await Mesh.ServiceProvider.GetRequiredService<InstanceRegistryAuthenticator>()
-            .Authenticate(InstanceKeys.AuthorizationHeader(key)).Timeout(TimeSpan.FromSeconds(30)).Await();
+            .Authenticate(InstanceKeys.AuthorizationHeader(key)).Timeout(TestTimeouts.Convergence).Await();
         authenticated.Should().BeNull("and every OTHER surface the registry serves refuses it too — one authenticator");
     }
 
@@ -209,7 +210,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
         (await Self(app, staged)).Status.Should().Be(HttpStatusCode.Unauthorized, "and so is the staged one");
 
         var absent = () => ((IInstanceKeyRegistry)service).RevokeKey("never-registered")
-            .Timeout(TimeSpan.FromSeconds(30)).Await();
+            .Timeout(TestTimeouts.Convergence).Await();
         await absent.Should().ThrowAsync<InstanceNotRegisteredException>(
             "revoking an id this registry does not hold fails by name — never a silent no-op on the wrong store");
     }
@@ -278,7 +279,7 @@ public class InstanceKeyRotationTest(ITestOutputHelper output) : MonolithMeshTes
 
         var authenticator = Mesh.ServiceProvider.GetRequiredService<InstanceRegistryAuthenticator>();
         var outcome = await authenticator.AuthenticateOutcome($"{SyncAccessToken.Scheme} {token}")
-            .Timeout(TimeSpan.FromSeconds(30)).Await();
+            .Timeout(TestTimeouts.Convergence).Await();
         outcome.Instance.Should().NotBeNull("a token minted with the staged key still resolves once that key is current");
         outcome.Instance!.Instance.InstanceId.Should().Be("token-through-commit");
     }
