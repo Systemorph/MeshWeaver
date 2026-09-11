@@ -1418,6 +1418,25 @@ test step, no `matrix.shard` condition), and #15's trx carries `MeshWeaver.FutuR
 `Failed` beside the 17 passes. The evidence-preserving machinery core #2495 introduced is in place on
 this lane; nothing needs landing there.
 
+#### Do the deployed portals run `10.0.12`? — no, and the SDK that builds them does not decide it
+
+Both portal images are **framework-dependent** layers on one hand-built base: core `main-cd.yml` and
+MeshWeaver.Plugins `portal-ai-image.yml` publish with `--no-self-contained` and
+`-p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest`, so the runtime inside a
+portal pod is whatever `mcr.microsoft.com/dotnet/aspnet:10.0` resolved to **when that base was last
+built** — not the SDK the app was compiled with. The image memex.systemorph.com runs (`45306a33`,
+`main-cd` run `34543984567`) was compiled on SDK `10.0.401` with runtime `10.0.12` installed, and its
+log says `Building image 'memex-portal-ai' … on top of base image
+'meshweaver.azurecr.io/memex-portal-ai-base:latest'`.
+
+That base is built by exactly one lane, `base-image-acr.yml`, which is `workflow_dispatch`-only; its
+last successful run is **2026-08-12T14:23Z** (`31606495380`). `v10.0.11` was published 2026-08-11T21:42Z
+and `v10.0.12` on 2026-09-08T22:11Z, so the portals run **`10.0.11` by timing** — inferred, because
+that run's log has aged out (`HTTP 410`) and no portal endpoint reports its runtime — and **cannot**
+run `10.0.12`. So production does not yet carry dotnet/runtime#131708. Rolling it there is
+`gh workflow run base-image-acr.yml --ref main` followed by the next `main-cd` roll: an operator
+decision, not taken in this entry. What `10.0.12` is worth is what the measurement below says.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is
