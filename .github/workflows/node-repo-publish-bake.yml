@@ -884,11 +884,20 @@ jobs:
         env:
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
           UPSTREAMS: ${{ inputs.upstream-sources }}
+          PLATFORM_IMAGE: ${{ inputs.platform-image }}
+          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
         run: |
           set -uo pipefail
+          # 🚨 The identity is resolved two steps up, from the PORTAL image — and WHICH portal image
+          # this run got depends entirely on the trigger (a repo PIN on push/pull_request, the wake's
+          # payload on repository_dispatch, a MOVING release tag on schedule). When this gate holds,
+          # "why is it waiting" is a question about that choice, and the three paths want three
+          # different actions. Stating it here makes the log self-contained (MeshWeaver#3583).
+          ORIGIN="the portal image '$PLATFORM_IMAGE'${PLATFORM_DIGEST:+ @ $PLATFORM_DIGEST}, chosen by this run's trigger (event=$GITHUB_EVENT_NAME)"
           # shellcheck disable=SC2086
           if mw-platform-gate/.github/scripts/check-release-availability.sh \
-               --identity "${{ steps.identity.outputs.identity }}" $UPSTREAMS; then
+               --identity "${{ steps.identity.outputs.identity }}" \
+               --identity-origin "$ORIGIN" $UPSTREAMS; then
             echo "every upstream is published for ${{ steps.identity.outputs.identity }} — building."
             exit 0
           fi
