@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Hosting;
@@ -111,11 +112,19 @@ public static class DeploymentPinnedReferences
         TimeSpan freshnessBudget,
         ILogger? logger = null)
     {
-        var reportOf = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+        // 🚨 AN INSTANCE MAY HAVE MORE THAN ONE RECORD HERE, and which one answers matters. A
+        // control instance files its own report locally while remote ones arrive through the inbox,
+        // so two nodes can describe one deployment. Every one of them contributes its references —
+        // an extra consumer is a consumer — but the FRESHNESS verdict is taken from the newest,
+        // because a stale duplicate beside a current report is not a stale instance.
+        var reportOf = new Dictionary<string, List<MeshNode>>(StringComparer.OrdinalIgnoreCase);
         foreach (var node in inventories)
         {
             var id = Field(node, nameof(DeploymentReport.Deployment), options);
-            reportOf[string.IsNullOrWhiteSpace(id) ? node.Id : id!] = node;
+            var key = string.IsNullOrWhiteSpace(id) ? node.Id : id!;
+            if (!reportOf.TryGetValue(key, out var bucket))
+                reportOf[key] = bucket = [];
+            bucket.Add(node);
         }
 
         var references = ImmutableList.CreateBuilder<PinnedPlatformReference>();
@@ -139,7 +148,7 @@ public static class DeploymentPinnedReferences
             if (pin is not null)
                 references.Add(pin);
 
-            if (!reportOf.Remove(record.Id, out var report))
+            if (!reportOf.Remove(record.Id, out var reports))
             {
                 refusals.Add(
                     $"{record.Path}: no {DeploymentReportService.InventoryNodeType} report has ever arrived, so what this "
@@ -149,27 +158,36 @@ public static class DeploymentPinnedReferences
                     + "installation that is gone and should say so (retired / retiredAt).");
                 continue;
             }
-            try
+            var failed = false;
+            foreach (var report in reports)
             {
-                references.AddRange(ReportedBuildsOf(report, options));
+                try
+                {
+                    references.AddRange(ReportedBuildsOf(report, options));
+                }
+                catch (InvalidOperationException exception)
+                {
+                    refusals.Add($"{record.Path}: {exception.Message}");
+                    failed = true;
+                }
             }
-            catch (InvalidOperationException exception)
-            {
-                refusals.Add($"{record.Path}: {exception.Message}");
+            if (failed)
                 continue;
-            }
-            var age = FreshnessOf(report, options, now);
-            if (age is null)
+            var newest = reports
+                .Select(report => (report, age: FreshnessOf(report, options, now)))
+                .OrderBy(entry => entry.age ?? TimeSpan.MaxValue)
+                .First();
+            if (newest.age is null)
             {
                 refusals.Add(
-                    $"{record.Path}: its report {report.Path} carries no readable {nameof(DeploymentReport.SampledAt)}, so "
+                    $"{record.Path}: its report {newest.report.Path} carries no readable {nameof(DeploymentReport.SampledAt)}, so "
                     + "it cannot be shown to describe the instance as it is now. A report of unknown age is not a fresh one.");
                 continue;
             }
-            if (age > freshnessBudget)
+            if (newest.age > freshnessBudget)
             {
                 refusals.Add(
-                    $"{record.Path}: its newest report {report.Path} was sampled {age.Value.TotalHours:F1} h ago, past the "
+                    $"{record.Path}: its newest report {newest.report.Path} was sampled {newest.age.Value.TotalHours:F1} h ago, past the "
                     + $"{freshnessBudget.TotalHours:F0} h budget. The instance may have rolled since; the build it reports is "
                     + "protected, and the one it is actually running is not known to anybody. Retention must not delete.");
                 continue;
@@ -192,7 +210,7 @@ public static class DeploymentPinnedReferences
                 + "fleet of zero.");
 
         // Whatever is left reported for no record: an unexpected consumer is still a consumer.
-        foreach (var orphan in reportOf.Values)
+        foreach (var orphan in reportOf.Values.SelectMany(bucket => bucket))
         {
             try
             {

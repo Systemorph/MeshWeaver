@@ -289,6 +289,30 @@ public class DeploymentPinnedReferencesTest
     }
 
     [Fact]
+    public void TwoReportsForOneInstance_AreJudgedByTheNEWEST_AndBothStillProtect()
+    {
+        // A control instance files its own report locally while remote ones arrive through the
+        // inbox, so two nodes can describe one deployment. Picking whichever came first out of the
+        // query would make the verdict depend on ordering — a stale duplicate beside a current
+        // report is not a stale instance, and a current duplicate beside a stale one is not a fresh
+        // one either. Both contribute references; the freshness verdict comes from the newest.
+        var stale = Report("memex", TimeSpan.FromDays(9), "s-was-running") with { Id = "legacy" };
+        var current = Report("memex", TimeSpan.FromMinutes(20), "s-running");
+
+        var references = Resolve([Deployment("memex")], [stale, current]);
+        references.Select(r => r.Identity).Should().Contain(["s-running", "s-was-running"],
+            because: "the older report still names a build something may be serving");
+
+        // …and the order it comes back in must not decide the verdict.
+        Resolve([Deployment("memex")], [current, stale]).Select(r => r.Identity)
+            .Should().Contain(["s-running", "s-was-running"]);
+
+        // The stale one ALONE is the refusal, which is what makes the pair above a real distinction
+        // rather than a guard that never fires.
+        Assert.Throws<InvalidOperationException>(() => Resolve([Deployment("memex")], [stale]));
+    }
+
+    [Fact]
     public void AStaleInstance_CannotHaveItsRunningBuildCollected_EvenThoughItsOldReportNamesAnother()
     {
         // The end-to-end shape of the failure, in the store's own terms. The instance reported
