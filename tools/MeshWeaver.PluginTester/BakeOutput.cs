@@ -151,7 +151,14 @@ public static class BakeOutput
                             BundleWriter.Write(
                                 file,
                                 package.Id,
-                                manifest?.ReleasedVersion ?? manifest?.ModuleVersion ?? manifest?.Version,
+                                // 🚨 The SemVer, never the content hash. The bundle's version is
+                                // what ModuleVersionCompatibility reads against the root's
+                                // MAJOR.MINOR; a hash there (ModuleVersion is manifest.lock's
+                                // unordered content hash) is at best UNKNOWN and, when it starts
+                                // with digits, was read as a foreign MAJOR and refused (memex
+                                // 2026-09-12). ModuleVersion is the last resort, for a package
+                                // that records no SemVer at all.
+                                manifest?.ReleasedVersion ?? manifest?.Version ?? manifest?.ModuleVersion,
                                 frameworkMvid,
                                 entries.ToList(),
                                 sourceSha,

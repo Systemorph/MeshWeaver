@@ -392,6 +392,82 @@ public static class PrebuiltAssemblySeeder
                 sourceFingerprint, moduleVersion)
             .Select(outcome => outcome is SeedOutcome.Adopted or SeedOutcome.AdoptedStale);
 
+    /// <summary>What <see cref="DecideAfterStaleDecline"/> concluded for one declined entry.</summary>
+    public enum StaleDeclineAction
+    {
+        /// <summary>The build the record names loads on this process — it keeps serving and the
+        /// bundle is left aside (the pre-existing decline).</summary>
+        KeepLiveBuild = 1,
+
+        /// <summary>Adopt the version-compatible bundle as the last build this mesh holds
+        /// (<see cref="BuildProvenance.StaleAdopted"/>): a page now, on bytes for THIS framework
+        /// identity.</summary>
+        AdoptBundle = 2,
+
+        /// <summary>No bundle can serve and this mesh compiles module content: clear the
+        /// dangling coordinates and dispatch a compile of the live source
+        /// (<see cref="AfterStaleDecline"/>).</summary>
+        DispatchCompile = 3,
+
+        /// <summary>Leave the record exactly as it is — a compile is already in flight, or there
+        /// is nothing to clear.</summary>
+        LeaveRecord = 4,
+
+        /// <summary>Nothing this process can do will serve the type: no loadable build, no
+        /// compatible bundle, and this mesh does not compile. Said at Critical by the caller.</summary>
+        Unservable = 5,
+    }
+
+    /// <summary>
+    /// 🚨 THE RULE for a bundle DECLINED on its source fingerprint, as a checkable table — the
+    /// decision <c>AfterStaleDeclineObserved</c> acts on, pure so the ordering is pinned rather
+    /// than read out of an Rx pipeline (<c>StaleDeclinePrefersBundleTest</c>).
+    ///
+    /// <para><b>A compatible bundle beats a local compile</b> (the tolerance directive of
+    /// 2026-09-12, <i>"it should all be tolerant"</i>, plus two UNATTRIBUTED, unverified statements
+    /// received mid-session — <i>"compile must happen on CI — at runtime you must resolve a package
+    /// version, not try to compile"</i> — flagged in the PR, not claimed as the maintainer's; if
+    /// they are not endorsed, drop the AdoptBundle row for a compiling mesh and nothing else in
+    /// the rule changes). When the build the record names does not
+    /// load on this process and a bundle for THIS framework identity is in hand whose module
+    /// version is compatible (or unknown), that bundle is adopted as the last build the mesh holds
+    /// — a page renders on CI-built bytes immediately — instead of clearing the coordinates and
+    /// dispatching Roslyn, which is a wait every instance of the type sat out behind the
+    /// "did not settle" overlay on memex 2026-09-12. A mesh that compiles module content still
+    /// converges: the stale-adopted record reads dirty and the next release request rebuilds it
+    /// from source in the background, behind a page that is already up.</para>
+    ///
+    /// <para>Every other row is the pre-existing behaviour: a build that resolves here is kept; a
+    /// compile already in flight is never stamped over on a compiling mesh (its terminal write
+    /// would race the adoption's) — a non-compiling mesh still adopts, as it did; a compiling
+    /// mesh with no compatible bundle dispatches; a non-compiling mesh with none is unservable.</para>
+    /// </summary>
+    /// <param name="observed">The owner's current definition.</param>
+    /// <param name="liveBuildResolvesHere">The record's build loads on this process.</param>
+    /// <param name="canCompileLocally">This mesh compiles module content for this partition.</param>
+    /// <param name="bundleAdoptable">A bundle for this identity is in hand and its module version
+    /// is compatible or unknown — never a MAJOR-incompatible one.</param>
+    public static StaleDeclineAction DecideAfterStaleDecline(
+        NodeTypeDefinition observed, bool liveBuildResolvesHere, bool canCompileLocally, bool bundleAdoptable)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        if (liveBuildResolvesHere)
+            return StaleDeclineAction.KeepLiveBuild;
+        var inFlight = observed.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling;
+        if (inFlight)
+            return !canCompileLocally && bundleAdoptable
+                ? StaleDeclineAction.AdoptBundle
+                : StaleDeclineAction.LeaveRecord;
+        if (bundleAdoptable)
+            return StaleDeclineAction.AdoptBundle;
+        if (!canCompileLocally)
+            return StaleDeclineAction.Unservable;
+        return string.IsNullOrEmpty(observed.LatestAssemblyPath)
+               && string.IsNullOrEmpty(observed.LatestAssemblyCollection)
+            ? StaleDeclineAction.LeaveRecord
+            : StaleDeclineAction.DispatchCompile;
+    }
+
     /// <summary>
     /// 🚨 <b>A stale-source decline must never leave a DANGLING record</b> (measured on
     /// memex.systemorph.com, 2026-09-08). The decline-before-writing branch below leaves "the live
@@ -409,6 +485,10 @@ public static class PrebuiltAssemblySeeder
     /// or this mesh may not compile (the caller then logs Critical, as the refusal path does).
     /// Once per decline, never per activation: the <c>Pending</c>/<c>Compiling</c> guard makes a
     /// second decline of the same record a no-op.</para>
+    ///
+    /// <para>Since 2026-09-12 the caller consults <see cref="DecideAfterStaleDecline"/> FIRST and
+    /// reaches this dispatch only for <see cref="StaleDeclineAction.DispatchCompile"/> — a
+    /// compatible bundle for the live identity is adopted instead of compiled.</para>
     /// </summary>
     /// <param name="observed">The owner's current definition.</param>
     /// <param name="liveBuildResolvesHere">Whether the assembly store answered a path for the
@@ -859,16 +939,20 @@ public static class PrebuiltAssemblySeeder
             .SelectMany(probe =>
         {
             var (liveBuildResolvesHere, canCompileLocally) = probe;
-            var dispatch = AfterStaleDecline(
+            var action = DecideAfterStaleDecline(
                 observed, liveBuildResolvesHere, canCompileLocally,
-                NodeTypeCompilationHelpers.ModulesHashOf(hub));
-            if (liveBuildResolvesHere)
-                return Observable.Return(SeedOutcome.DeclinedStaleSources);
-            if (dispatch is null)
+                bundleAdoptable: adoptAnyway is not null);
+            switch (action)
             {
-                if (!canCompileLocally && adoptAnyway is not null)
-                    return adoptAnyway();
-                if (!canCompileLocally)
+                case StaleDeclineAction.KeepLiveBuild:
+                case StaleDeclineAction.LeaveRecord:
+                    return Observable.Return(SeedOutcome.DeclinedStaleSources);
+                case StaleDeclineAction.AdoptBundle:
+                    // A compatible bundle for THIS framework identity is in hand and the build the
+                    // record names cannot be loaded here. Serving the bundle is a page; a Roslyn
+                    // compile is a wait — see DecideAfterStaleDecline for the rule.
+                    return adoptAnyway!();
+                case StaleDeclineAction.Unservable:
                     logger?.LogCritical(
                         "Prebuilt assembly for {NodeTypePath} DECLINED on stale sources AND the live "
                         + "build it left in place does not resolve on this process ({Collection}/{Path}) "
@@ -880,9 +964,11 @@ public static class PrebuiltAssemblySeeder
                         nodeTypePath, observed.LatestAssemblyCollection ?? "(null)",
                         observed.LatestAssemblyPath ?? "(null)", RequirePrebuiltConfigKey,
                         NodeTypeCompilationHelpers.FrameworkVersion);
-                return Observable.Return(canCompileLocally
-                    ? SeedOutcome.DeclinedStaleSources
-                    : SeedOutcome.DeclinedStaleSourcesUnservable);
+                    return Observable.Return(SeedOutcome.DeclinedStaleSourcesUnservable);
+                case StaleDeclineAction.DispatchCompile:
+                    break;
+                default:
+                    return Observable.Return(SeedOutcome.DeclinedStaleSources);
             }
 
             logger?.LogWarning(

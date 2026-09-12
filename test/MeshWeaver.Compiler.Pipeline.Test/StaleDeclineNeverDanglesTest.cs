@@ -109,16 +109,19 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
     private static byte[] BundleBytes() =>
         File.ReadAllBytes(typeof(StaleDeclineNeverDanglesTest).Assembly.Location);
 
-    [Fact]
-    public async Task ADeclinedBundle_OverARecordWhoseBuildTheStoreDoesNotHold_ClearsItAndDispatchesACompile()
+    /// <summary>
+    /// Persists a record that claims a build this mesh's store has never held — the restarted-pod
+    /// shape — and returns its path once the mirror shows it.
+    /// </summary>
+    private async Task<string> PersistDanglingRecord(string typeName, string? currentModuleVersion = null)
     {
-        const string typePath = "type/DanglingStaleType";
+        var typePath = $"type/{typeName}";
         var typeNode = MeshNode.FromPath(typePath) with
         {
-            Name = "DanglingStaleType",
+            Name = typeName,
             NodeType = MeshNode.NodeTypePath,
             State = MeshNodeState.Active,
-            Content = ClaimingABuild(),
+            Content = ClaimingABuild() with { CurrentModuleVersion = currentModuleVersion },
         };
         await MeshService.CreateNode(typeNode).Should().Within(20.Seconds()).Emit();
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
@@ -131,14 +134,60 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
         var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
         var path = await store.TryGetAssemblyPath(typePath, 5).Should().Within(10.Seconds()).Emit();
         path.Should().BeNull("the precondition: the claimed build does not resolve here");
+        return typePath;
+    }
+
+    /// <summary>
+    /// 🚨 Since 2026-09-12 (the tolerance directive, plus an UNATTRIBUTED, unverified statement —
+    /// <i>"at runtime you must resolve a package version, not try to compile"</i> — flagged in the
+    /// PR rather than claimed as the maintainer's): a bundle declined on its fingerprint whose module version is compatible or
+    /// unknown, over a record whose build the store does not hold, is ADOPTED as the last build
+    /// the mesh holds — a page on CI-built bytes now — rather than cleared and compiled. The
+    /// dangling record is still gone: it names the bundle's bytes instead of the dead build. See
+    /// <c>StaleDeclinePrefersBundleTest</c> for the table.
+    /// </summary>
+    [Fact]
+    public async Task ACompatibleDeclinedBundle_OverARecordWhoseBuildTheStoreDoesNotHold_IsAdoptedNotCompiled()
+    {
+        var typePath = await PersistDanglingRecord("DanglingStaleType");
 
         var outcome = await PrebuiltAssemblySeeder.SeedDetailed(
                 SweepHub("sweep"), typePath, BundleBytes(), pdbBytes: null,
                 frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid, logger: null,
                 dependencies: null, sourceFingerprint: FixtureLiveFingerprint + "-stale")
             .Should().Within(20.Seconds()).Emit("a decline completes like any other");
+        outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.AdoptedStale,
+            "the bytes were declined on their fingerprint, the dead build does not resolve here, and "
+            + "the bundle's module version is unknown — so the bundle serves as the last build the "
+            + "mesh holds instead of a Roslyn compile being dispatched");
+
+        await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
+            .Match(n => n?.Content is NodeTypeDefinition d
+                        && !string.Equals(d.LatestAssemblyMvid, DeadMvid, StringComparison.Ordinal)
+                        && d.CompilationStatus == CompilationStatus.Ok
+                        && !string.IsNullOrEmpty(d.LatestAssemblyPath),
+                "the record no longer names the dead build — it names the adopted bundle, Ok and servable");
+    }
+
+    /// <summary>
+    /// The control arm, unchanged: a bundle that DECLARES incompatibility (a MAJOR bump against the
+    /// current source) is never adopted; the dead build is cleared and a compile is dispatched,
+    /// exactly as before.
+    /// </summary>
+    [Fact]
+    public async Task AnIncompatibleDeclinedBundle_OverARecordWhoseBuildTheStoreDoesNotHold_ClearsItAndDispatchesACompile()
+    {
+        var typePath = await PersistDanglingRecord("DanglingIncompatibleType", currentModuleVersion: "1.0");
+
+        var outcome = await PrebuiltAssemblySeeder.SeedDetailed(
+                SweepHub("sweep-incompatible"), typePath, BundleBytes(), pdbBytes: null,
+                frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid, logger: null,
+                dependencies: null, sourceFingerprint: FixtureLiveFingerprint + "-stale",
+                moduleVersion: "2.0.0")
+            .Should().Within(20.Seconds()).Emit("a decline completes like any other");
         outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesCompileDispatched,
-            "the bytes were declined on their fingerprint AND the dead build was cleared with a compile dispatched");
+            "a MAJOR bump is the one declared incompatibility: the bytes are refused, the dead build "
+            + "is cleared and a compile of the live source is dispatched");
 
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
