@@ -496,6 +496,17 @@ data:
   {{- end }}
   # A TimeSpan: a real default, never "" (the same typed-key rule as SelfUpdate__MinRollInterval).
   Hosting__ReportInterval: "{{ .Values.config.memex_portal.Hosting__ReportInterval | default "01:00:00" }}"
+  # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713) -----------------
+  # The URL of the control instance's signed inbox that the Feedback plugin hands a technical
+  # submission (bug / idea / technical question) to after Submit — for the fleet that is
+  # https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds. Binds Hosting:ControlInbox:Url.
+  # Empty = the hand-over is OFF and a submission stays in the instance's own Inbox (one warning
+  # per technical submission naming both keys). The control instance leaves it empty: it lists
+  # Hosting/PlatformBuilds as a webhook target and delivers into its own inbox. The other half,
+  # Hosting__ControlInbox__Secret, is a SECRET (Key Vault via a SecretProviderClass, envFrom) —
+  # never a key here. Rendered explicitly so an overlay setting it reaches the container
+  # (config-key-coverage): before this line existed the key was consumed by nothing.
+  Hosting__ControlInbox__Url: "{{ .Values.config.memex_portal.Hosting__ControlInbox__Url | default "" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 | default "" }}"
   # 🚨 #3312 — how a target says it is AUTHENTICATED, paired with the slot it authenticates.
   # Names the CONFIGURATION KEY holding that target's shared HMAC (never the secret itself), and
