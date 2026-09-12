@@ -134,8 +134,8 @@ which is untouched. Arithmetic for Plugins at N=6: the ~40 sub-minute pack legs 
 from ~40 billed minutes to ~7 (each batch ≈ 6 × 1.1 min of work ≈ 7 min, rounded once), and the
 per-leg checkout + SDK install is paid 7 times instead of 40.
 
-The batching helper is **lane orchestration**, so `pack` and `tests` fetch it at
-`build-logic-ref` (falling back to `platform-ref` only for callers that do not separate the two).
+The batching helper is **lane orchestration**, so `select`, `pack`, and `tests` fetch it at
+`build-logic-ref` (falling back to the exact reusable-workflow SHA when the input is absent).
 Their `meshweaver/` checkout stays at `platform-ref`, because that tree is the framework source and
 reference set the module compiles and tests against. The distinction is executable: the helper's
 self-test reads the exact reusable workflow identified by GitHub's `job.workflow_repository` and

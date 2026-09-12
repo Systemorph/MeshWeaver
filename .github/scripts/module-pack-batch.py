@@ -3,8 +3,8 @@
 per-module bookkeeping that keeps a batch from becoming a coupling.
 
 (The name on this first line is load-bearing: the module-pack lane fetches this file at the
-caller's `build-logic-ref` (falling back to `platform-ref`) and its `select` job self-tests it on
-every run. The framework checkout remains independently pinned by `platform-ref`.)
+caller's `build-logic-ref` (falling back to the exact loaded workflow SHA) and its `select` job
+self-tests it on every run. The framework checkout remains independently pinned by `platform-ref`.)
 
 WHY THIS EXISTS (measured 2026-09-05..12)
 ------------------------------------------
@@ -410,6 +410,9 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
             continue
         block = workflow.split(start_marker, 1)[1].split(end_marker, 1)[0]
         steps = block.split("\n      - ")
+        logic_ref = ("ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}"
+                     if job == "select"
+                     else "ref: ${{ needs.select.outputs.build-logic-ref }}")
         platform_checkouts = [
             step for step in steps
             if "uses: actions/checkout@" in step
@@ -421,7 +424,7 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
             step for step in steps
             if "uses: actions/checkout@" in step
             and "repository: Systemorph/MeshWeaver" in step
-            and "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}" in step
+            and logic_ref in step
             and "path: build-logic" in step
             and (job == "select" or "sparse-checkout: .github/scripts" in step)
         ]
@@ -457,6 +460,10 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
             if ('echo "repository=$repository" >> "$GITHUB_OUTPUT"' not in block
                     or 'echo "sha=$sha" >> "$GITHUB_OUTPUT"' not in block):
                 problems.append("select must expose the validated job workflow identity to checkout")
+            resolved_logic = ("build-logic-ref: "
+                              "${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}")
+            if block.count(resolved_logic) != 1:
+                problems.append("select must expose one exact build-logic ref to downstream jobs")
             executing = ("EXECUTING_WORKFLOW: ${{ github.workspace }}"
                          "/lane-definition/.github/workflows/node-repo-module-pack.yml")
             if block.count(executing) != 1:
@@ -501,12 +508,19 @@ def self_test(workflow_path: Path | None = None) -> int:
         check("select, pack and tests keep workflow, tooling and platform refs distinct",
               not problems, "; ".join(problems))
         wrong_ref = workflow.replace(
-            "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}\n          path: build-logic",
+            "ref: ${{ needs.select.outputs.build-logic-ref }}\n          path: build-logic",
             "ref: ${{ inputs.platform-ref }}\n          path: build-logic",
             1,
         )
         check("the ownership guard catches a helper checkout moved onto platform-ref",
               bool(workflow_script_ownership_problems(wrong_ref)))
+        wrong_default = workflow.replace(
+            "ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}\n          path: build-logic",
+            "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}\n          path: build-logic",
+            1,
+        )
+        check("the ownership guard catches the default tooling ref coupled to platform-ref",
+              bool(workflow_script_ownership_problems(wrong_default)))
         wrong_workflow_ref = workflow.replace(
             "ref: ${{ steps.workflow.outputs.sha }}\n          path: lane-definition",
             "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}\n          path: lane-definition",

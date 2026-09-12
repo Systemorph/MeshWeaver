@@ -627,8 +627,8 @@ on:
         description: >
           Optional immutable core SHA for lane orchestration scripts. Separate from platform-ref,
           which selects the framework source the modules and tests build against. Set it to opt
-          into publication baseline, dependency reuse and newer lane helpers; existing callers
-          fall back to platform-ref.
+          into publication baseline and dependency reuse. When absent, tooling comes from the exact
+          reusable-workflow SHA GitHub loaded — never from an independently older platform ref.
         required: false
         type: string
         default: ''
@@ -817,6 +817,9 @@ jobs:
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
       lane: ${{ steps.lane.outputs.id }}
+      # One concrete tooling identity for every downstream job. An explicit input wins; otherwise
+      # use the exact reusable-workflow commit resolved from the job context below.
+      build-logic-ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}
       # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
       # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
       declared: ${{ inputs.modules }}
@@ -923,16 +926,6 @@ jobs:
           # shallow clone would make every range unresolvable — which the scope script turns into
           # a FULL pack rather than an empty one, but silently paying for 29 jobs is not the plan.
           fetch-depth: 0
-      # The scope scripts are the LANE'S tooling (one implementation, every repo), independently
-      # pinned from the framework source modules compile against. Pack/tests use the same resolved
-      # build-logic ref for their batching helper; an older released platform cannot make a newer
-      # reusable lane call a script that does not exist (Plugins run 34706516117).
-      - name: Check out Systemorph/MeshWeaver at the build-logic ref
-        uses: actions/checkout@v7
-        with:
-          repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
-          path: build-logic
       # A reusable workflow's `github` context belongs to its CALLER. The job context is the
       # identity of the reusable workflow that actually defines this job. Read the whole context
       # here because actionlint 1.7.x predates the workflow_* members and rejects direct property
@@ -949,6 +942,17 @@ jobs:
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is absent or invalid ('$sha')"; exit 1; }
           echo "repository=$repository" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      # The scope scripts are the LANE'S tooling (one implementation, every repo), independently
+      # pinned from the framework source modules compile against. Pack/tests use this same resolved
+      # ref. If the caller does not supply one, the exact loaded workflow SHA is the only safe
+      # default: an older released platform cannot supply a newer lane's scripts (Plugins run
+      # 34706516117).
+      - name: Check out Systemorph/MeshWeaver at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}
+          path: build-logic
       # The next step also verifies HEAD against the resolved job.workflow_sha before trusting the
       # file as structural evidence, so neither build-logic-ref nor a moving @main can substitute.
       - name: Check out the exact reusable workflow that defines this job
@@ -1850,7 +1854,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
+          ref: ${{ needs.select.outputs.build-logic-ref }}
           path: build-logic
           sparse-checkout: .github/scripts
       # ───────────── THIS LEG'S MODULES — enumerated once, from the matrix batch ─────────────
@@ -3711,7 +3715,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
+          ref: ${{ needs.select.outputs.build-logic-ref }}
           path: build-logic
           sparse-checkout: .github/scripts
       - name: This leg's modules
