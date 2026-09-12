@@ -29,7 +29,10 @@ while [ $# -gt 0 ]; do
     *) url="$1"; shift ;;
   esac
 done
-bearer="$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p')"
+# `--data @-` is a body on STDIN (hosting-registry-register's registration); otherwise stdin is the
+# `-K -` config carrying the bearer. Either way the secret arrives on stdin, never in argv.
+if [ "$body" = "@-" ]; then body="$(cat)"; bearer=""; else
+bearer="$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p')"; fi
 presented="$(printf '%s' "$bearer" | sha256sum | cut -c1-64)"
 path="/${url#https://*/}"
 mode="$(cat "$state/mode" 2>/dev/null || echo normal)"
@@ -71,6 +74,22 @@ case "$mode" in
   old)    answer 404 '{"error":"no such route"}' ;;
   absent) answer 401 '{"error":"This registry does not accept the presented instance key"}' ;;
 esac
+# POST /api/instances/register (MeshWeaver.Plugins#1720): the whole request IS the authentication —
+# an EMPTY bootstrapKey is open registration (refused when $state/mode is `closed`), anything else
+# must equal $state/bootstrap. A taken id is 409 (and never says whose). The minted key is an
+# obviously fake `mwi_` sentinel the tests grep for; its hash lands in the keys file as `current`.
+if [ "$method $path" = "POST /api/instances/register" ]; then
+  reg_id="$(printf '%s' "$body" | sed -n 's/.*"instanceId":"\([^"]*\)".*/\1/p')"
+  reg_boot="$(printf '%s' "$body" | sed -n 's/.*"bootstrapKey":"\([^"]*\)".*/\1/p')"
+  printf 'REGISTER %s boot=%s\n' "$reg_id" "$([ -n "$reg_boot" ] && echo present || echo empty)" >> "$state/log"
+  [ "$mode" = "closed" ] && [ -z "$reg_boot" ] && answer 401 '{"error":"open registration is disabled"}'
+  if [ -n "$reg_boot" ] && [ "$reg_boot" != "$(cat "$state/bootstrap" 2>/dev/null)" ]; then answer 403 '{"error":"bootstrap key not accepted"}'; fi
+  printf '%s' "$reg_id" | grep -Eq '^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$' || answer 400 '{"error":"instanceId must be 3-48 chars of lowercase letters, digits and single hyphens"}'
+  while read -r h i s; do [ "$i" = "$reg_id" ] && answer 409 '{"error":"instance id is taken"}'; done < "$keys"
+  minted="mwi_fake-registered-key-NEVER-PRINTED-${reg_id}"
+  printf '%s %s current\n' "$(printf '%s' "$minted" | sha256sum | cut -c1-64)" "$reg_id" >> "$keys"
+  answer 200 "$(printf '{"instanceId":"%s","instanceKey":"%s","plan":"free"}' "$reg_id" "$minted")"
+fi
 [ -n "$slot" ] || answer 401 '{"error":"This registry does not accept the presented instance key"}'
 
 case "$method $path" in

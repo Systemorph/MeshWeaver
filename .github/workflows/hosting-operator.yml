@@ -65,8 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 26 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 26 (23 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 27 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 27 (24 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -116,6 +116,7 @@ jobs:
           hosting-pv-resize
           hosting-redirect
           hosting-registry-key
+          hosting-registry-register
           hosting-restore
           hosting-signin-app
           hosting-tls
@@ -194,7 +195,7 @@ jobs:
         # through to a REAL az/kubectl on a runner that has one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/signin-app/az; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done
