@@ -94,6 +94,20 @@ def run(args, **env):
         return p.returncode, p.stdout + p.stderr
 
 
+WORKFLOW = ROOT.parent / "workflows" / "node-repo-publish-bake.yml"
+STEP_ID = "upstream-gate"
+
+# The `${{ }}` expressions the harness knows how to supply. Anything else in the step is a REFUSAL,
+# not a silent substitution: a step that grew a new input must fail this harness loudly rather than
+# be executed with a guess.
+KNOWN_EXPRESSIONS = {
+    "steps.identity.outputs.identity": "sfeedface",
+    "inputs.upstream-sources": "crm",
+    "inputs.bake-publish-targets": "acct/share/base",
+    "steps.platform.outputs.ref": "portal:resolved-by-this-run",
+    "github.event.action": "meshweaver-framework-released",
+}
+
 FAILURES: list[str] = []
 
 
@@ -109,6 +123,84 @@ def expect_only(case, out, present, absent_list):
     check(case, present in out, f"says {present!r}")
     for other in absent_list:
         check(case, other not in out, f"does NOT also say {other!r}")
+
+
+def extract_step():
+    """The step's `run:` and `env:`, EXTRACTED from the workflow by id — never a copy."""
+    import re as _re
+
+    import yaml  # noqa: PLC0415
+
+    doc = yaml.safe_load(WORKFLOW.read_text())
+    for job in doc.get("jobs", {}).values():
+        for step in job.get("steps", []) or []:
+            if step.get("id") == STEP_ID:
+                run, env = step["run"], step.get("env", {}) or {}
+
+                def fill(text):
+                    def sub(m):
+                        expr = m.group(1).strip()
+                        if expr not in KNOWN_EXPRESSIONS:
+                            raise SystemExit(
+                                f"REFUSING to execute: step '{STEP_ID}' uses an expression this "
+                                f"harness cannot supply: ${{{{ {expr} }}}}. Add it to "
+                                f"KNOWN_EXPRESSIONS deliberately — never guess."
+                            )
+                        return KNOWN_EXPRESSIONS[expr]
+                    return _re.sub(r"\$\{\{([^}]*)\}\}", sub, text)
+
+                return fill(run), {k: fill(str(v)) for k, v in env.items()}
+    raise SystemExit(f"REFUSING: no step with id '{STEP_ID}' in {WORKFLOW}")
+
+
+def run_step(headline: str):
+    """Run the extracted step with the availability script stubbed to print `headline` and fail."""
+    run, env = extract_step()
+    with tempfile.TemporaryDirectory() as tmp:
+        gate = Path(tmp) / "mw-platform-gate" / ".github" / "scripts"
+        gate.mkdir(parents=True)
+        stub = gate / "check-release-availability.sh"
+        stub.write_text("#!/usr/bin/env bash\n"
+                        f"echo {headline!r}\n"
+                        "echo 'identity resolved: sfeedface — from ...'\n"
+                        "exit 1\n" if headline else
+                        "#!/usr/bin/env bash\necho ok\nexit 0\n")
+        stub.chmod(0o755)
+        summary = Path(tmp) / "summary.md"
+        summary.write_text("")
+        e = dict(os.environ)
+        e.update(env)
+        e.update({"GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": tmp,
+                  "GITHUB_EVENT_NAME": "repository_dispatch"})
+        p = subprocess.run(["bash", "-c", run], cwd=tmp, capture_output=True, text=True, env=e)
+        return p.returncode, p.stdout + p.stderr, summary.read_text()
+
+
+def workflow_cases():
+    upstream_absent = "release availability: 1 of 1 source(s) are not available for framework identity sfeedface."
+    for headline, label, must_say, must_not_say in [
+        (upstream_absent, "upstream absent", "Upstreams not ready",
+         ["Could not resolve", "Could not query"]),
+        ("::error::CANNOT RESOLVE a framework identity: ...", "cannot resolve",
+         "Could not resolve a framework identity", ["Upstreams not ready", "Could not query"]),
+        ("::error::CANNOT DETERMINE release availability ...", "cannot determine",
+         "Could not query the artifact store", ["Upstreams not ready", "Could not resolve"]),
+    ]:
+        rc, out, summary = run_step(headline)
+        both = out + summary
+        check(f"case 7 ({label})", rc != 0, f"the step still fails (rc={rc})")
+        check(f"case 7 ({label})", must_say in both, f"reports {must_say!r}")
+        for other in must_not_say:
+            check(f"case 7 ({label})", other not in both,
+                  f"does NOT also report {other!r}")
+
+    # 🚨 The claim that is FALSE on the refusal paths, asserted directly: a refusal must never say an
+    # upstream has no sealed publication, because nothing was checked.
+    for headline, label in [("::error::CANNOT RESOLVE x", "cannot resolve"),
+                            ("::error::CANNOT DETERMINE x", "cannot determine")]:
+        _, out, summary = run_step(headline)
+        check(f"case 7 ({label})", "has no sealed" not in (out + summary),
+              "never claims an upstream has no sealed publication")
 
 
 def main() -> int:
@@ -155,6 +247,9 @@ def main() -> int:
     rc, out = run(["--identity", "sabc", "crm"], AZ_EXISTS="true")
     check("case 6", "identity resolved: sabc" in out, "still names the identity")
     check("case 6", "origin not stated" in out, "says the origin was not supplied")
+
+    print("case 7 — the WORKFLOW step must not re-collapse what the script distinguished")
+    workflow_cases()
 
     print()
     if FAILURES:

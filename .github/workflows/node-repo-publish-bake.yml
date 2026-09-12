@@ -879,13 +879,27 @@ jobs:
           subscription-id: ${{ secrets.azure-subscription-id }}
       # The framework identity BOTH the upstream gate and the scope decision key on is resolved
       # above (steps.identity) — from the PORTAL's /app, unconditionally, since MeshWeaver#3022.
+      # `id:` so test-release-availability-refusals.py can EXTRACT and execute this step rather than
+      # re-implement it — a copy of a workflow step passes while the step itself rots.
       - name: "Gate: every upstream must be published for that identity"
+        id: upstream-gate
         if: inputs.upstream-sources != ''
         env:
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
           UPSTREAMS: ${{ inputs.upstream-sources }}
-          PLATFORM_IMAGE: ${{ inputs.platform-image }}
-          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          # 🚨 The RESOLVED ref, not the declared input. `steps.platform` resolves it from the wake's
+          # payload or from <platform-image>:<released-version>, and `steps.identity` reads its /app
+          # — so on the dispatch paths `inputs.platform-image` can name a DIFFERENT image from the
+          # one the identity actually came from. Logging the declaration instead of the effective
+          # value is the same defect this whole change is about (Copilot on #4084).
+          PORTAL_REF: ${{ steps.platform.outputs.ref }}
+          # Both repository_dispatch actions land on one event_name and they are NOT the same wait:
+          # `meshweaver-framework-released` carries a NEW platform identity nothing may have baked
+          # for yet, while `meshweaver-upstream-published` carries a set the upstream just sealed.
+          # Measured 2026-09-11/12 on MeshWeaver.Reinsurance: 20 of the 23 gate refusals were the
+          # first kind and 3 the second, so collapsing them loses the distinction that explains the
+          # number.
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
           set -uo pipefail
           # 🚨 The identity is resolved two steps up, from the PORTAL image — and WHICH portal image
@@ -893,13 +907,50 @@ jobs:
           # payload on repository_dispatch, a MOVING release tag on schedule). When this gate holds,
           # "why is it waiting" is a question about that choice, and the three paths want three
           # different actions. Stating it here makes the log self-contained (MeshWeaver#3583).
-          ORIGIN="the portal image '$PLATFORM_IMAGE'${PLATFORM_DIGEST:+ @ $PLATFORM_DIGEST}, chosen by this run's trigger (event=$GITHUB_EVENT_NAME)"
+          TRIGGER="event=$GITHUB_EVENT_NAME"
+          [ -z "${EVENT_ACTION:-}" ] || TRIGGER="$TRIGGER action=$EVENT_ACTION"
+          ORIGIN="the portal image '$PORTAL_REF' (the ref this run RESOLVED, whose /app the identity was read from), chosen by this run's trigger ($TRIGGER)"
+          GATE_LOG="$RUNNER_TEMP/upstream-gate.log"
           # shellcheck disable=SC2086
           if mw-platform-gate/.github/scripts/check-release-availability.sh \
                --identity "${{ steps.identity.outputs.identity }}" \
-               --identity-origin "$ORIGIN" $UPSTREAMS; then
+               --identity-origin "$ORIGIN" $UPSTREAMS 2>&1 | tee "$GATE_LOG"; then
             echo "every upstream is published for ${{ steps.identity.outputs.identity }} — building."
             exit 0
+          fi
+          # 🚨 The script distinguishes three outcomes; this block used to assert "at least one
+          # upstream has no sealed publication" for ALL of them, which re-collapsed the distinction
+          # one line after the script made it — and said something FALSE on the refusal paths, where
+          # nothing was ever checked. Branch on the classification the script printed (Copilot on
+          # #4084). A refusal is not a wait on an upstream and must not be reported as one.
+          if grep -q "CANNOT RESOLVE" "$GATE_LOG"; then
+            {
+              echo "### ⛔ Could not resolve a framework identity — did NOT build"
+              echo ""
+              echo "The gate could not determine which framework identity to ask about, so **no"
+              echo "upstream was checked** and none is being reported as unpublished. This is a"
+              echo "REFUSAL, not a wait: nothing in \`$UPSTREAMS\` is implicated."
+              echo ""
+              echo "See the step log for which resolution failed. Re-running will not change it."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Could not resolve a framework identity::the gate could not resolve an identity, so nothing was checked and no upstream is implicated. This is a refusal, not a wait on an upstream."
+            exit 1
+          fi
+          if grep -q "CANNOT DETERMINE" "$GATE_LOG"; then
+            {
+              echo "### ⛔ Could not query the artifact store — did NOT build"
+              echo ""
+              echo "An identity was resolved, but one or more availability probes **errored**, so"
+              echo "the gate could not ask its question. Any count of absent sources in the log is a"
+              echo "**floor**, not a verdict — this says nothing about whether \`$UPSTREAMS\`"
+              echo "published."
+              echo ""
+              echo "This is an ACCESS problem, not an upstream one: check \`az login\` / the OIDC"
+              echo "federation, \`BAKE_PUBLISH_TARGETS\`, and the share's reachability. Waiting for"
+              echo "an upstream will not clear it."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Could not query the artifact store::availability could not be determined for framework identity ${{ steps.identity.outputs.identity }} — probes errored. This is a refusal, not a verdict about any upstream; fix access to the artifact store."
+            exit 1
           fi
           {
             echo "### ⛔ Upstreams not ready — did NOT build"
