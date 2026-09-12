@@ -3730,11 +3730,43 @@ public static class PackageInstaller
     /// "3 of 200 skipped" reads very differently when 150 of the 200 were never node candidates
     /// (Copilot review, #1781). Two copies of this list would drift, and the drift would show up as
     /// a quietly wrong count rather than as a failure.</para>
+    ///
+    /// <para>🚨 <b>A module SOURCE file (<c>src/&lt;Module&gt;/…</c>) is not a node either</b>
+    /// (#4101). The canonical <c>gen-manifests.py</c> folds a mixed package's module sources into
+    /// the SAME <c>files</c> map as its node files (<c>hashModuleSources</c>, Plugins#878 — a
+    /// <c>src/</c>-only change must move the module version), so a lock like
+    /// <c>Hosting/manifest.lock</c> carries 14 <c>src/MeshWeaver.SelfUpdate.Aks/…</c> entries next
+    /// to 176 <c>Hosting/…</c> ones. No install ever writes one as a node —
+    /// <see cref="NodeRepoPackageSource.FetchPackageFiles"/> keeps only <c>{Id}/…</c>, and the
+    /// sources are compiled into the module bundle the pack lane ships — but <c>.cs</c> IS a
+    /// claimed extension, so without this clause <c>src/X/AcrTagLister.cs</c> mapped to the node
+    /// path <c>src/X/AcrTagLister</c>, which is off-partition, and the completeness sweep answered
+    /// <c>NOT VERIFIED (Undeclared)</c> for EVERY mixed package (38 of 63 in MeshWeaver.Plugins) on
+    /// every fresh mesh. The delta prune runs the same rule on removed files, so a removed source
+    /// no longer asks to prune a node path that never existed.</para>
     /// </summary>
     private static bool IsNotANodeFile(string relativePath) =>
         string.Equals(relativePath, "README.md", StringComparison.OrdinalIgnoreCase)
         || ModuleManifest.IsManifestPath(relativePath)
-        || ContentAssetMapper.IsContentPath(relativePath);
+        || ContentAssetMapper.IsContentPath(relativePath)
+        || IsModuleSourcePath(relativePath);
+
+    /// <summary>The directory prefix under which <c>gen-manifests.py</c> declares a mixed
+    /// package's module sources (<c>module_source_files</c>) — and the ONLY place it ever puts
+    /// them.</summary>
+    public const string ModuleSourcePrefix = "src/";
+
+    /// <summary>
+    /// Whether a declared file is a module SOURCE (<c>src/&lt;Module&gt;/…</c>) — compiled into the
+    /// module bundle by the pack lane, never written to the mesh as a node, and therefore neither
+    /// installed nor compared by the completeness sweep (#4101). The one predicate
+    /// <see cref="IsNotANodeFile"/>, the delta prune and <see cref="InstallCompleteness"/> share;
+    /// public so the verdict can COUNT these separately from a README rather than lumping them.
+    /// </summary>
+    /// <param name="relativePath">The file's repo-relative path as the lock declares it.</param>
+    public static bool IsModuleSourcePath(string relativePath) =>
+        relativePath is not null
+        && relativePath.StartsWith(ModuleSourcePrefix, StringComparison.Ordinal);
 
     private static MeshNode? ParseCanonical(
         FileFormatParserRegistry parsers, PackageFile file, ILogger? logger,
@@ -3975,7 +4007,7 @@ public static class PackageInstaller
     /// <para>🚨 <b>TWO reasons for null, and #3659 is what happened when only the first was
     /// asked.</b> A file is not a node candidate when it is a non-node file BY DESIGN
     /// (<see cref="IsNotANodeFile"/> — the README, the manifest sidecar, a <c>content/**</c>
-    /// asset) <b>or</b> when NO REGISTERED PARSER CLAIMS ITS EXTENSION, which is how a package's
+    /// asset, a <c>src/**</c> module source) <b>or</b> when NO REGISTERED PARSER CLAIMS ITS EXTENSION, which is how a package's
     /// ordinary carry-along files (<c>.tsx</c>, <c>.png</c>, <c>.py</c>, an extension-less
     /// <c>LICENSE</c>) are silently skipped by the install. Until #3659 this method asked only the
     /// first question while <c>ParseCanonical</c> asked both, so the two disagreed about the very
