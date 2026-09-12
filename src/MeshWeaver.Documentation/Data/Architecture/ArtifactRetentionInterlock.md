@@ -1,0 +1,198 @@
+---
+Name: ArtifactRetentionInterlock
+Category: Architecture
+Description: Cleanup may only delete what a COMPLETE and FRESH inventory of consumers shows to be unreferenced — the one mechanism behind the four retention issues, the denominator it must state, and the two things it locks
+Icon: ShieldLock
+---
+
+# The Artifact Retention Interlock
+
+**One sentence, and it is the whole of it: a cleanup whose protection set is derived from a stale or
+incomplete source deletes something that is still in use.** Every retention incident in this fleet is
+an instance of that sentence, and the four issues filed against it — [#3438](https://github.com/Systemorph/MeshWeaver/issues/3438)
+(the parent), #3858 (a complete and fresh inventory), #3859 (interlock cleanup with protection), and
+#3860 (the full artifact set) — are four views of one mechanism rather than four pieces of work.
+
+It has cost, so far: a public brand site 503 for ~11 h (Memex#122), three satellite repositories'
+CI dead simultaneously (2026-09-05T15:29Z, #3438), a migration Job in `ImagePullBackOff` 639 times
+unalerted (Memex#219), and every MeshWeaver.Plugins run blocked at preflight (2026-09-07).
+
+## The shape of the failure, every time
+
+| The protection set was derived from | …and the thing in use was |
+|---|---|
+| a human remembering to add a repository to the right one of two purge tasks | a repository in neither |
+| the tags a repository republishes often | a **digest** something pinned (#3438) |
+| committed workflow pins | a **tag** a deployment overlay pinned (Memex#122, #141) |
+| committed deployment overlays | the image an instance was **rolled onto** ahead of its pin (Memex#219, 2026-09-12) |
+| a report an instance filed | a report that **never arrived**, or arrived weeks ago |
+| the **manifest** the pin resolves to | the **tag** that is the actual reference (measured 2026-09-12) |
+
+Note what is NOT on that list: a window that was too short. **Raising `--ago` or `--keep` moves the
+cliff; it does not remove it**, and a pin left stable for a quarter walks off the new one just the
+same. So does a bigger keep count, a retry, and a `continue-on-error` on the step that fetches the
+protection set. Those knobs are what this mechanism exists to make unnecessary.
+
+## The contract
+
+> **Cleanup is eligible only downstream of a protection decision that is COMPLETE and FRESH, and an
+> incomplete inventory is a REFUSAL rather than a smaller number.**
+
+Three consequences, and each is enforced rather than described:
+
+1. **The denominator is stated in the output.** How many installations were expected, how many
+   answered, how many digests and tag references were protected, over what window. A run that
+   protected nothing and a run that had nothing to protect must not print the same thing.
+2. **Absence of evidence is never zero consumers.** An installation that did not answer contributes
+   exactly the same reference list as an installation that consumes nothing, and one of those two
+   readings authorises deleting what it is running.
+3. **Retirement is a declaration, never an inference from silence.** A portal that is down and a
+   portal that was decommissioned are the same silence.
+
+## Where the protected set comes from — four axes, and what each one alone cannot see
+
+`.github/scripts/lock-pinned-digests.py` derives the registry half nightly at 01:00 UTC, two hours
+before the 03:00 `purge-old-images` task.
+
+| Axis | Source | What it alone misses |
+|---|---|---|
+| 1 | digest pins in every repository's `.github/workflows` | tags; anything resolved at run time |
+| 2 | image **tag** pins in the deployment overlays (`values*.yaml`) | an instance running ahead of its committed pin |
+| 3 | **each installation's own `/api/version`** — what it is actually RUNNING | an image no instance has pulled yet |
+| — | official release tags (`v?X.Y.Z`) in the publisher's repositories | — |
+
+### Axis 3, and why the committed pin is only a proxy
+
+An overlay says what an instance *should* run. `/api/version` says what it *does*. On
+2026-09-12 those disagreed on a production instance: memex-cloud was rolled to `3.0.0-ci.8399` at
+06:15Z while its committed pin still read `8372`, so that night's lock protected the manifest it was
+not running — against a purge task that filters `memex-portal-ai:.*` at `--ago 7d --keep 10`.
+
+The route is the instance's own unauthenticated version endpoint
+(`MapVersionEndpoint`, `.AllowAnonymous()`), whose whole contract is `{ "version": …, "commit": … }`.
+The expected set and each host come from the same overlays axis 2 already reads:
+
+```yaml
+config:
+  memex_portal:
+    Hosting__Deployment: "memex-cloud"     # the id, equal to its Hosting/Deployment record's
+ingress:
+  host: "memex.meshweaver.cloud"           # where to ask it
+```
+
+🚨 **The bare short-sha tag cannot identify a build, so the axis protects a CLOSURE.** Measured
+2026-09-12: core `4c99ec26` produced **two** image sets ninety minutes apart — `3.0.0-ci.8399` /
+`4c99ec2-p38ebf08` and `3.0.0-ci.8401` / `4c99ec2` — because the plugins half moved underneath it,
+and the bare `4c99ec2` tag followed the newer one. `/api/version` answers the core commit and
+nothing finer, so *which* of the two an instance runs cannot be decided from outside it. The axis
+therefore protects every manifest tagged for that commit (`<short>`, `<short>-p<plugins>`,
+`staging-<short>-<run>`) in each repository the instance's overlay pins, and says so. Locking a
+superset is safe — a lock destroys nothing — and guessing a member of it is not.
+
+An installation that answers a commit **no manifest carries** is red: either the set it is running
+has already been purged, which is the incident recurring, or the tag scheme moved and the axis
+stopped matching. Neither is a pass.
+
+### The roster: `.github/acr-retention/instances.json`
+
+The overlays are the denominator; that file only ever *explains an absence*. An installation missing
+from it is **live**, so forgetting an entry makes a run stricter and never looser. A non-live entry
+needs a `state` (`not-installed` / `retired`) and a `reason`, and an entry naming an installation no
+overlay declares is red — a stale exemption hides the next one.
+
+## The two locks — the bytes and the reference are different objects
+
+🚨 **A TAG carries its own `deleteEnabled`, and it is the one the purge reads when it deletes a
+tag.** Measured on `meshweaver.azurecr.io`, 2026-09-12:
+
+| | `deleteEnabled` |
+|---|---|
+| tag `memex-portal-ai:3.0.0-ci.8372` — what both production overlays pin | **true** |
+| the manifest it resolves to (`sha256:0217fd11…`) | false (locked) |
+| all 1,396 tags of `memex-portal-ai` | **0 locked** |
+
+`Azure/acr-cli` decides tag deletion on the tag:
+
+```go
+if includeLocked || (*(*tag.ChangeableAttributes).DeleteEnabled && *(*tag.ChangeableAttributes).WriteEnabled) {
+    tagsEligibleForDeletion = append(tagsEligibleForDeletion, tag)
+}
+```
+
+So a manifest lock saves the **bytes** and loses the **reference**: the purge deletes the tag, the
+locked manifest survives untagged, and `…/memex-portal-ai:3.0.0-ci.8372` answers `manifest unknown`
+to the next pull — the same wedge, from a fully protected manifest. Every tag reference the fleet
+depends on is therefore locked too, `deleteEnabled` only: `writeEnabled: false` would additionally
+refuse the retag `release.yml` promotes with, and buys no purge protection, because acr-cli already
+requires **both** to be true before it will delete.
+
+## The instrument is measured, not inferred from the fleet
+
+The old axis-1 rule read: *"six repositories pinned a digest on 2026-09-06, so zero means the
+extractor stopped matching"*. On 2026-09-12 the scheduled run
+([34664099031](https://github.com/Systemorph/MeshWeaver/actions/runs/34664099031), 01:12Z) died on
+exactly that line — two hours before the purge — and the premise was simply no longer true: #3842
+moved every satellite to **resolving** the platform set at run time (`platform-ref` /
+`resolve-platform.py`), and measured with this repository's own extractor the fleet declares zero
+digest pins and six repositories that name a platform image without pinning one. Pinning did stop.
+
+**An assertion about the FLEET can expire like that; an assertion about the INSTRUMENT cannot.** So
+`extractor_control()` runs `extract()` over a fixture carrying two known digest pins on every run and
+reds when they stop being found — which is strictly stronger, because it fires even when the fleet
+happens to declare pins anyway. The denominator that survives is the one that is still impossible:
+a fleet naming **no** platform image anywhere.
+
+## The same contract in the portal — the prebuilt-bundle store
+
+The registry is not the only cleanup that derives a protected set from an inventory.
+`PrebuiltBundleRetention` prunes the prebuilt-bundle store, and its reference source is
+`DeploymentPinnedReferences` on a control instance: the `Hosting/Deployment` records' pins and every
+registered instance's `Hosting/ModuleInventory` report.
+
+[DeploymentInventory](/Doc/Architecture/DeploymentInventory) landed the per-report half — a report
+that read its adoption stamps incompletely says so, and aborts the pass. What was missing is the
+**fleet** half, and that doc named it: *"these fields describe an individual report, not proof that
+every fleet member reported or that an old report is current"*. `DeploymentPinnedReferences.Resolve`
+now takes the Deployment records as the denominator:
+
+- every non-retired record is an **expected consumer**;
+- one with no report, an unreadable report, or a report whose `sampledAt` is older than
+  `StaleAfter` (24 h — twenty-four consecutive missed ticks of the one-hour reporter) refuses the
+  whole pass, naming it;
+- a record declaring `retired` / `retiredAt` leaves the expected set, and that exclusion is logged;
+- reports from instances with **no** record are still read: an unexpected consumer is a consumer;
+- the denominator is logged on every pass.
+
+🚨 **Zero expected consumers is a true answer on a host that is nobody's fleet.** The source is
+registered on every portal, not only the control instance, so an ordinary installation holds no
+Deployment records and has nothing to account for — its own live identity, its adoption stamps and
+the 30-day floor are what protect it, and refusing there would wedge retention fleet-wide. The one
+zero that cannot be honest is a host that **receives reports and holds no records**: it is a control
+instance by construction, and that is refused rather than read as a fleet of zero.
+
+## What is still the maintainer's, and is not code
+
+1. **`purge-old-images` carries `memex-portal-ai` on its 7-day step** — the image both production
+   portals run — while the 30-day step covers only `memex-portal`, a repository no overlay pins.
+   Whether that is the intended policy is a decision, not a defect.
+2. **The two clocks are still two clocks.** The lock is a GitHub Actions cron at 01:00; the purge is
+   an ACR timer task at 03:00; nothing makes the second wait for the first. A pin that lands in that
+   window meets the purge unprotected, and if the lock job does not run at all the purge still does.
+   The structural fix is to make cleanup a step *downstream* of the protection decision — one lane,
+   the destructive step `needs:` the complete verdict, the ACR timer task disabled. That is a
+   registry change and a destructive-schedule change, and it belongs to whoever owns the registry.
+3. **The `latest`-tag question.** A moving tag is named by no file and is outside this model. Four
+   of five filtered repositories have no `:latest`; the survivor survives by being quiet.
+4. **The `Container Registry Repository Writer` grant** is what lets the lane write at all.
+
+Until (2) lands, what this mechanism buys is that the exposure is **visible instead of silent**: a
+run states its denominator, and an incomplete one refuses rather than quietly protecting less.
+
+## Related
+
+- [DeploymentInventory](/Doc/Architecture/DeploymentInventory) — what each instance reports about itself, and the per-report completeness signal
+- [PinnedImageRetention](/Doc/Architecture/PinnedImageRetention) — the lock job's history, the two purge tasks and the incidents
+- [ReleasedArtifactRetention](/Doc/Architecture/ReleasedArtifactRetention) — the policy contract (#3842): 30 days by age, no build-count quota
+- [PrebuiltBundleRetention](/Doc/Architecture/PrebuiltBundleRetention) — the store this protects in the portal
+- [PinSetConsistency](/Doc/Architecture/PinSetConsistency) — the extractor the digest axis shares
+- [ModuleBuildArchitecture](/Doc/Architecture/ModuleBuildArchitecture) — why a pin is meant to be stable for weeks

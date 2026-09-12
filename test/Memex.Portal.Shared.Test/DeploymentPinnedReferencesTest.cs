@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -133,4 +134,174 @@ public class DeploymentPinnedReferencesTest
         DeploymentPinnedReferences.ReportedBuildsOf(node, Options).Select(r => r.Identity).Should().Equal("s-current");
     }
 
+    // ── The FLEET inventory: coverage and freshness, #3438/#3858 ───────────────────────────────
+    //
+    // The per-report signal above answers "did THIS instance answer fully". These answer the two
+    // questions that decide whether anything may be deleted at all: did every expected instance
+    // answer, and does its answer still describe it. A refusal here is the whole point — an
+    // instance whose report never arrived contributes exactly the same reference list as an
+    // instance that consumes nothing, and one of those two readings authorises deleting what it is
+    // running.
+
+    private static readonly DateTimeOffset Now = new(2026, 9, 12, 12, 0, 0, TimeSpan.Zero);
+
+    private static MeshNode Deployment(string id, string? pin = null, string? extra = null)
+    {
+        var content = new JsonObject { ["host"] = id + ".example" };
+        if (pin is not null)
+            content["pinnedImageTag"] = pin;
+        if (extra is not null)
+            foreach (var property in JsonNode.Parse(extra)!.AsObject())
+                content[property.Key] = property.Value?.DeepClone();
+        return new MeshNode(id, "Deployments")
+        {
+            NodeType = DeploymentPinnedReferences.DeploymentNodeType,
+            Content = content,
+        };
+    }
+
+    private static MeshNode Report(string id, TimeSpan age, string running = "s-running",
+        string[]? adopted = null, bool complete = true, bool stamp = true) =>
+        new(id, "Ops/Modules")
+        {
+            NodeType = DeploymentReportService.InventoryNodeType,
+            Content = JsonNode.Parse(JsonSerializer.Serialize(new DeploymentReport
+            {
+                Deployment = id,
+                PlatformVersion = "3.0.0-ci.8399",
+                FrameworkIdentity = running,
+                AdoptedFrameworkIdentities = [.. adopted ?? []],
+                AdoptedFrameworkInventoryComplete = complete,
+                SampledAt = stamp ? DeploymentReportService.Stamp(Now - age) : "",
+            }, Options)),
+        };
+
+    private static ImmutableList<PinnedPlatformReference> Resolve(
+        IReadOnlyList<MeshNode> deployments, IReadOnlyList<MeshNode> reports) =>
+        DeploymentPinnedReferences.Resolve(deployments, reports, Options, Now,
+            DeploymentPinnedReferences.StaleAfter);
+
+    [Fact]
+    public void ACompleteFreshFleet_ProtectsEveryRunningAndAdoptedBuildOfEveryInstance()
+    {
+        var references = Resolve(
+            [Deployment("memex"), Deployment("memex-cloud", pin: "3.0.0-ci.8399")],
+            [Report("memex", TimeSpan.FromMinutes(20), "s-memex", ["s-old-memex"]),
+             Report("memex-cloud", TimeSpan.FromHours(3), "s-cloud")]);
+
+        references.Select(r => r.Identity).Where(i => i is not null).Should().Contain(
+            ["s-memex", "s-old-memex", "s-cloud"],
+            because: "a complete, fresh inventory protects what each instance runs AND the older builds its modules still adopt");
+        references.Select(r => r.Version).Should().Contain("3.0.0-ci.8399",
+            because: "a Deployment record's pin is a reference in its own right");
+    }
+
+    [Fact]
+    public void AnExpectedInstanceThatHasNeverReported_RefusesTheWholePass_NamingIt()
+    {
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(
+            [Deployment("memex"), Deployment("pearl")],
+            [Report("memex", TimeSpan.FromMinutes(5))]));
+
+        refusal.Message.Should().Contain("INCOMPLETE").And.Contain("Deployments/pearl");
+        refusal.Message.Should().Contain("1 of 2 expected instance(s)",
+            because: "the denominator belongs in the refusal, not only in a log line");
+    }
+
+    [Fact]
+    public void AReportOlderThanTheFreshnessBudget_RefusesTheWholePass_NamingTheAge()
+    {
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(
+            [Deployment("memex-cloud")],
+            [Report("memex-cloud", DeploymentPinnedReferences.StaleAfter + TimeSpan.FromHours(1))]));
+
+        refusal.Message.Should().Contain("Deployments/memex-cloud").And.Contain("25.0 h ago");
+    }
+
+    [Fact]
+    public void AReportThatIsExactlyAtTheBudget_IsStillFresh()
+    {
+        Resolve([Deployment("memex-cloud")], [Report("memex-cloud", DeploymentPinnedReferences.StaleAfter)])
+            .Should().NotBeEmpty(because: "the budget is a limit, and a boundary that flips is a flake");
+    }
+
+    [Fact]
+    public void AReportWithNoReadableSampledAt_IsAReportOfUnknownAge_AndRefuses()
+    {
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(
+            [Deployment("memex")], [Report("memex", TimeSpan.Zero, stamp: false)]));
+
+        refusal.Message.Should().Contain("SampledAt");
+    }
+
+    [Fact]
+    public void AnExplicitlyRetiredInstance_LeavesTheExpectedSet_AndItsSilenceIsNotARefusal()
+    {
+        Resolve([Deployment("pearl", extra: """{ "retired": true }""")], []).Should().BeEmpty();
+        Resolve([Deployment("pearl", extra: """{ "retiredAt": "2026-09-01T00:00:00Z" }""")], []).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AnInstanceThatIsMerelyUnREACHABLE_IsNotRetired()
+    {
+        // The distinction #3858 asks for: retirement is a declaration on the record, never an
+        // inference from silence. A portal that is down reports nothing, and so does a portal that
+        // was decommissioned — only one of them may have its artifacts collected.
+        Assert.Throws<InvalidOperationException>(() => Resolve([Deployment("pearl")], []));
+    }
+
+    [Fact]
+    public void AReportFromAnInstanceWithNoRecord_IsStillProtected()
+    {
+        Resolve([Deployment("memex")],
+                [Report("memex", TimeSpan.FromMinutes(1), "s-memex"),
+                 Report("stranger", TimeSpan.FromDays(400), "s-stranger")])
+            .Select(r => r.Identity).Should().Contain("s-stranger",
+                because: "an unexpected consumer is still a consumer; only the EXPECTED set decides completeness");
+    }
+
+    [Fact]
+    public void AHostThatIsNobodysFleet_IsAMeasuredZero_NotARefusal()
+    {
+        // This source is registered on EVERY portal, not only the control instance. An ordinary
+        // installation holds no Deployment records and receives no reports; refusing there would
+        // wedge retention on every portal in the fleet for ever.
+        Resolve([], []).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AControlInstanceHoldingReportsButNoRecords_IsRefused_RatherThanReadAsAFleetOfZero()
+    {
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(
+            [], [Report("memex", TimeSpan.FromMinutes(5)), Report("memex-cloud", TimeSpan.FromMinutes(5))]));
+
+        refusal.Message.Should().Contain("control instance").And.Contain("missing denominator");
+    }
+
+    [Fact]
+    public void AnIncompleteAdoptionInventoryOnAnExpectedInstance_RefusesNamingTheInstance()
+    {
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(
+            [Deployment("memex-cloud")],
+            [Report("memex-cloud", TimeSpan.FromMinutes(5), complete: false)]));
+
+        refusal.Message.Should().Contain("Deployments/memex-cloud").And.Contain("retention must not delete");
+    }
+
+    [Fact]
+    public void AStaleInstance_CannotHaveItsRunningBuildCollected_EvenThoughItsOldReportNamesAnother()
+    {
+        // The end-to-end shape of the failure, in the store's own terms. The instance reported
+        // `s-two-rolls-ago` a week ago and has rolled twice since; without the freshness verdict the
+        // pass would protect `s-two-rolls-ago`, collect everything else, and take with it whatever
+        // the instance is running now — which nothing in this process can name.
+        var stale = new[] { Report("memex-cloud", TimeSpan.FromDays(7), "s-two-rolls-ago") };
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve([Deployment("memex-cloud")], stale));
+        refusal.Message.Should().Contain("Retention must not delete");
+
+        // …and the identical fleet with a fresh report is NOT refused: the guard distinguishes, it
+        // does not simply always refuse.
+        Resolve([Deployment("memex-cloud")], [Report("memex-cloud", TimeSpan.FromHours(2), "s-two-rolls-ago")])
+            .Select(r => r.Identity).Should().Equal("s-two-rolls-ago");
+    }
 }

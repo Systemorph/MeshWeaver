@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Installations that are NOT live, and why. Read by `.github/scripts/lock-pinned-digests.py`",
+    "(AXIS 3) — MeshWeaver#3438 / #3858.",
+    "",
+    "🚨 THIS FILE IS NOT THE ROSTER. The deployment overlays are: every `Hosting__Deployment:` a",
+    "`values*.yaml` in the fleet declares is an installation the protection run EXPECTS to answer",
+    "`/api/version`. An installation that is missing from THIS file is therefore LIVE, and a live",
+    "installation that does not answer makes the run INCOMPLETE and refuses the unlock arm. So",
+    "forgetting an entry here is always the stricter mistake, never the looser one — which is the",
+    "only direction a hand-maintained file is allowed to fail in.",
+    "",
+    "What it exists for is the distinction #3858 asks for in as many words: *retirement is",
+    "explicit and auditable; a temporarily unavailable portal is not treated as retired*. A portal",
+    "that is down and a portal that was decommissioned are the same silence, and only one of them",
+    "may have its images collected. Silence is unavailability. A line here is retirement.",
+    "",
+    "`state` is one of: live | not-installed | retired. Anything else is a RED, as is a non-live",
+    "entry with no `reason`, as is an entry naming an installation no overlay declares (a stale",
+    "exemption hides the next one).",
+    "",
+    "Removing an entry is how an installation re-enters the expected set.",
+    "",
+    "An installation that is LIVE but not reachable from a GitHub-hosted runner is deliberately",
+    "NOT a state here. It would be an exemption meaning `this one never has to answer`, which is",
+    "the shape that goes stale silently — and the two installations measured on 2026-09-12 both",
+    "answer over the public internet. If one ever cannot, that is a decision to take then, in a",
+    "reviewed diff, and it needs its own state rather than being filed under `retired`."
+  ],
+  "instances": [
+    {
+      "id": "pearl",
+      "state": "not-installed",
+      "reason": "Declared by deployments/aks/pearl/values.pearl.public.yaml and never installed — pearl.meshweaver.cloud has no DNS record (measured 2026-09-12). Memex#219 records the same state: 'live on pearl, which has never been installed and would have seeded from an unpullable tag'. Its overlay pins are still protected on AXIS 2; what is not expected is an answer from a portal that was never stood up. Delete this entry the day it is provisioned.",
+      "declaredAt": "2026-09-12",
+      "issue": "Memex#219"
+    }
+  ]
+}

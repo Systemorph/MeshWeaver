@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Hosting;
@@ -24,6 +25,15 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para>Read as System, mesh-wide, on every pass. Errors propagate: a pin set that could not be
 /// read aborts the pass, as does a report with an incomplete adoption inventory.</para>
+///
+/// <para>🚨 A REPORT THAT NEVER ARRIVED IS NOT A CONSUMER THAT IS NOT THERE. The per-report
+/// completeness signal (<c>adoptedFrameworkInventoryComplete</c>) says whether ONE instance
+/// answered fully; it says nothing about whether every instance answered at all, or whether the
+/// answer still describes the instance. <see cref="Resolve"/> therefore takes the
+/// <c>Hosting/Deployment</c> records as the DENOMINATOR — every non-retired record is an expected
+/// consumer — and refuses the whole pass when one of them has no report, an unreadable report or a
+/// report older than <see cref="StaleAfter"/>, naming each. An incomplete inventory is a refusal,
+/// never a shorter reference list. #3438/#3858.</para>
 /// </summary>
 public static class DeploymentPinnedReferences
 {
@@ -55,15 +65,199 @@ public static class DeploymentPinnedReferences
         var access = hub.ServiceProvider.GetService<AccessService>();
         return access.RunAsSystem(() =>
             Records(meshService, DeploymentNodeType)
-                .Zip(Records(meshService, DeploymentReportService.InventoryNodeType), (deployments, inventories) =>
-                    deployments.Select(n => DeploymentPinOf(n, hub.JsonSerializerOptions))
-                        .Concat(inventories.SelectMany(n => ReportedBuildsOf(n, hub.JsonSerializerOptions)))
-                        .Where(r => r is not null)
-                        .Select(r => r!)
-                        .ToImmutableList())
-                .Do(refs => logger?.LogDebug(
-                    "PrebuiltBundleRetention: {Count} pinned platform reference(s) from Deployment records and instance reports",
-                    refs.Count)));
+                .Zip(Records(meshService, DeploymentReportService.InventoryNodeType),
+                    (deployments, inventories) => Resolve(
+                        deployments, inventories, hub.JsonSerializerOptions, DateTimeOffset.UtcNow, StaleAfter, logger)));
+    }
+
+    /// <summary>
+    /// How long after its <see cref="DeploymentReport.SampledAt"/> a report still describes the
+    /// instance. The reporter's cadence is <c>Hosting:ReportInterval</c>, one hour by default
+    /// ([DeploymentInventory](/Doc/Architecture/DeploymentInventory)), so this is twenty-four
+    /// consecutive missed ticks — long enough that a restart, a slow tick or a maintenance window
+    /// is not a refusal, short enough that a version an instance stopped running yesterday cannot
+    /// still be the only thing protection knows about it.
+    /// </summary>
+    public static readonly TimeSpan StaleAfter = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// The fleet's consumer inventory, or a refusal — never a smaller number.
+    ///
+    /// <para>Pure over its inputs so the whole verdict can be driven from fixtures. Every
+    /// <c>Hosting/Deployment</c> record that is not explicitly retired is an EXPECTED consumer, and
+    /// an expected consumer with no report, an unreadable report or a report older than
+    /// <paramref name="freshnessBudget"/> throws. That asymmetry is the point: an instance whose
+    /// report never arrived is indistinguishable, in the references it contributes, from an
+    /// instance that consumes nothing — and one of those two readings authorises deleting what it
+    /// is running. #3438/#3858.</para>
+    ///
+    /// <para>Reports from instances with no Deployment record are still read: an unexpected
+    /// consumer is a consumer. Only the EXPECTED set decides whether the inventory is complete.</para>
+    ///
+    /// <para>🚨 ZERO EXPECTED CONSUMERS IS A TRUE ANSWER, NOT A VACUOUS ONE — but only on a host
+    /// that is nobody's fleet. This source is registered on every portal
+    /// (<c>MemexConfiguration</c>), so an ordinary installation holds no Deployment records and has
+    /// nothing to account for; its own live identity, its adoption stamps and the 30-day floor are
+    /// what protect it. A host that RECEIVES reports is a control instance by construction, and one
+    /// holding reports but no records is refused rather than read as a fleet of zero. A read that
+    /// FAILS never reaches here at all: the queries carry their own budget and their error aborts
+    /// the pass.</para>
+    /// </summary>
+    public static ImmutableList<PinnedPlatformReference> Resolve(
+        IReadOnlyList<MeshNode> deployments,
+        IReadOnlyList<MeshNode> inventories,
+        JsonSerializerOptions options,
+        DateTimeOffset now,
+        TimeSpan freshnessBudget,
+        ILogger? logger = null)
+    {
+        var reportOf = new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in inventories)
+        {
+            var id = Field(node, nameof(DeploymentReport.Deployment), options);
+            reportOf[string.IsNullOrWhiteSpace(id) ? node.Id : id!] = node;
+        }
+
+        var references = ImmutableList.CreateBuilder<PinnedPlatformReference>();
+        var refusals = new List<string>();
+        var expected = 0;
+        var retired = 0;
+        var fresh = 0;
+
+        foreach (var record in deployments)
+        {
+            if (RetirementOf(record, options) is { } retirement)
+            {
+                retired++;
+                logger?.LogInformation(
+                    "PrebuiltBundleRetention: {Deployment} is excluded from the expected consumer set — {Reason}",
+                    record.Path, retirement);
+                continue;
+            }
+            expected++;
+            var pin = DeploymentPinOf(record, options);
+            if (pin is not null)
+                references.Add(pin);
+
+            if (!reportOf.Remove(record.Id, out var report))
+            {
+                refusals.Add(
+                    $"{record.Path}: no {DeploymentReportService.InventoryNodeType} report has ever arrived, so what this "
+                    + "instance runs is unknown. An instance that has not reported is not an instance that consumes "
+                    + "nothing — retention must not delete. Either the reporter is not configured there "
+                    + "(Hosting:Deployment / Hosting:ReportTo / Hosting:ModuleReportSecret), or the record is for an "
+                    + "installation that is gone and should say so (retired / retiredAt).");
+                continue;
+            }
+            try
+            {
+                references.AddRange(ReportedBuildsOf(report, options));
+            }
+            catch (InvalidOperationException exception)
+            {
+                refusals.Add($"{record.Path}: {exception.Message}");
+                continue;
+            }
+            var age = FreshnessOf(report, options, now);
+            if (age is null)
+            {
+                refusals.Add(
+                    $"{record.Path}: its report {report.Path} carries no readable {nameof(DeploymentReport.SampledAt)}, so "
+                    + "it cannot be shown to describe the instance as it is now. A report of unknown age is not a fresh one.");
+                continue;
+            }
+            if (age > freshnessBudget)
+            {
+                refusals.Add(
+                    $"{record.Path}: its newest report {report.Path} was sampled {age.Value.TotalHours:F1} h ago, past the "
+                    + $"{freshnessBudget.TotalHours:F0} h budget. The instance may have rolled since; the build it reports is "
+                    + "protected, and the one it is actually running is not known to anybody. Retention must not delete.");
+                continue;
+            }
+            fresh++;
+        }
+
+        // 🚨 REPORTS WITHOUT RECORDS IS THE ONE ZERO THAT CANNOT BE HONEST. This source is
+        // registered on EVERY portal, not only the control instance, so a host with no
+        // Hosting/Deployment records is the ordinary case and a true measured zero — an instance
+        // that is nobody's fleet has nobody to account for. But an instance OTHERS report to is a
+        // control instance by construction, and a control instance whose Deployment records have
+        // gone missing would otherwise read as "zero expected consumers, inventory complete" over
+        // a fleet that is very much running.
+        if (expected == 0 && retired == 0 && reportOf.Count > 0)
+            refusals.Add(
+                $"{reportOf.Count} instance(s) file {DeploymentReportService.InventoryNodeType} reports here, which makes "
+                + $"this a control instance, and yet it holds NO {DeploymentNodeType} record to account for — so the "
+                + "expected-consumer set is empty for a fleet that is reporting. That is a missing denominator, not a "
+                + "fleet of zero.");
+
+        // Whatever is left reported for no record: an unexpected consumer is still a consumer.
+        foreach (var orphan in reportOf.Values)
+        {
+            try
+            {
+                references.AddRange(ReportedBuildsOf(orphan, options));
+            }
+            catch (InvalidOperationException exception)
+            {
+                refusals.Add($"{orphan.Path}: {exception.Message}");
+            }
+        }
+
+        logger?.LogInformation(
+            "PrebuiltBundleRetention consumer inventory: {Expected} expected instance(s) ({Retired} retired, "
+            + "{Orphan} reporting without a record), {Fresh} with a report no older than {Budget}, "
+            + "{References} protected reference(s){Verdict}",
+            expected, retired, reportOf.Count, fresh, freshnessBudget, references.Count,
+            refusals.Count == 0 ? " — COMPLETE" : $" — INCOMPLETE, {refusals.Count} refusal(s)");
+
+        if (refusals.Count > 0)
+            throw new InvalidOperationException(
+                $"the fleet consumer inventory is INCOMPLETE — {refusals.Count} of {expected} expected instance(s) could "
+                + "not be accounted for, so no artifact can be shown to be unreferenced and nothing may be collected:"
+                + string.Concat(refusals.Select(r => Environment.NewLine + "  • " + r)));
+
+        return references.ToImmutable();
+    }
+
+    /// <summary>Why this record is not an expected consumer, or null when it is one.</summary>
+    private static string? RetirementOf(MeshNode record, JsonSerializerOptions options)
+    {
+        if (record.State != MeshNodeState.Active)
+            return $"its record is {record.State}";
+        var retiredAt = Field(record, "retiredAt", options);
+        if (!string.IsNullOrWhiteSpace(retiredAt))
+            return $"retiredAt = {retiredAt}";
+        return Flag(record, "retired", options) is true ? "retired = true" : null;
+    }
+
+    /// <summary>How long ago the report was sampled, or null when that cannot be read at all.</summary>
+    private static TimeSpan? FreshnessOf(MeshNode report, JsonSerializerOptions options, DateTimeOffset now)
+    {
+        var sampledAt = Field(report, nameof(DeploymentReport.SampledAt), options);
+        return DateTimeOffset.TryParse(sampledAt, CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var stamp)
+            ? now - stamp
+            : null;
+    }
+
+    /// <summary>One boolean field of a node's content, read the same way <see cref="Field"/> reads a string.</summary>
+    internal static bool? Flag(MeshNode node, string name, JsonSerializerOptions options)
+    {
+        if (node.Content is null)
+            return null;
+        var element = node.Content is JsonElement e ? e : JsonSerializer.SerializeToElement(node.Content, options);
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+        foreach (var property in element.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                return property.Value.ValueKind switch
+                {
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    _ => null,
+                };
+        return null;
     }
 
     private static IObservable<IReadOnlyList<MeshNode>> Records(IMeshService meshService, string nodeType) =>
