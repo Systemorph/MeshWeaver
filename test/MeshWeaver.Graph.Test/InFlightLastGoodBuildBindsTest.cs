@@ -45,7 +45,9 @@ public class InFlightLastGoodBuildBindsTest
     private const string ForeignFramework = "s0000000000000000000000000000000f";
 
     private static readonly JsonSerializerOptions Options = new(JsonSerializerOptions.Default);
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
+    // Virtual time (TestScheduler): the no-progress budget the wait is armed with. Any value works;
+    // it is deliberately NOT the copied 30 s convention the timeout-literal ratchet counts.
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(25);
     private static readonly TimeSpan Grace = TimeSpan.FromSeconds(5);
 
     /// <summary>A dynamic type mid-rebuild (<paramref name="status"/>) that still names the build
