@@ -38,12 +38,18 @@ public class ModuleSuiteLaneGuard
     public void TheInlineSuite_RunsOnlyWhenThisCallPublishes()
     {
         var pack = JobBody("pack");
+        // The step's `if:` reads the batch-wide switch (`need_test` = any module of the leg still
+        // owes a suite); INSIDE it, the loop runs only the modules whose own `need_test` fact is
+        // true — the entry's `test != false` folded in by the plan step. Batched legs, 2026-09-12.
         Assert.Contains(
-            "if: ${{ inputs.publish && matrix.entry.test != false && steps.plan.outputs.need_test == 'true' }}",
+            "if: ${{ inputs.publish && steps.plan.outputs.need_test == 'true' }}",
             pack, StringComparison.Ordinal);
+        Assert.Contains("bk list --ok --where need_test=true", pack, StringComparison.Ordinal);
         // Still AFTER the bundle upload and BEFORE the hand-over when it does run: that ordering is
-        // the entire reason a publishing run keeps paying for it.
-        var upload = pack.IndexOf("name: module-bundle-${{ matrix.entry.module }}", StringComparison.Ordinal);
+        // the entire reason a publishing run keeps paying for it. The upload is the first of the
+        // unrolled per-module slots (`module-bundle-<module>` is a per-module NAME every caller's
+        // `module-artifacts` pattern globs, so it cannot become one artifact per batch).
+        var upload = pack.IndexOf("name: module-bundle-${{ steps.bundles.outputs.s1 }}", StringComparison.Ordinal);
         var suite = pack.IndexOf("dotnet test \"$tests\"", StringComparison.Ordinal);
         var publish = pack.IndexOf("-X POST \"$REGISTRY/api/plugins/bundles/$PACKAGE", StringComparison.Ordinal);
         Assert.True(upload >= 0 && suite >= 0 && publish >= 0, "the pack job must still upload, test and publish");
@@ -67,7 +73,8 @@ public class ModuleSuiteLaneGuard
         // A matrix with zero vectors does not evaluate, so the count is asserted the way `pack`
         // asserts its own.
         Assert.Contains("needs.select.outputs.test-count != '0'", tests, StringComparison.Ordinal);
-        Assert.Contains("entry: ${{ fromJson(needs.select.outputs.test-modules) }}", tests, StringComparison.Ordinal);
+        // The matrix is the suite subset cut into batches by `select` (module-pack-batch.py chunk).
+        Assert.Contains("batch: ${{ fromJson(needs.select.outputs.test-batches) }}", tests, StringComparison.Ordinal);
 
         // 🚨 `select` ONLY. Depending on prepare / build-workspace / pack would put the suite back
         // on the very chain this job exists to run beside, and the change would measure as nothing.
@@ -88,16 +95,20 @@ public class ModuleSuiteLaneGuard
         var pack = JobBody("pack");
         // `none` | `inline` | `lane`, written into the receipt rather than inferred afterwards from
         // an `if:` — the pairing below is what makes "it ran nowhere" impossible to do quietly.
-        Assert.Contains(
-            "TESTS: ${{ steps.plan.outputs.need_test != 'true' && 'none' || (inputs.publish && 'inline' || 'lane') }}",
-            pack, StringComparison.Ordinal);
+        // Computed per module in the receipt loop, from the module's own `need_test` fact and the
+        // call's `publish` input — the same three-way rule the `if:` expression used to encode.
+        Assert.Contains("if [ \"$(bk get --module \"$MODULE\" need_test)\" != true ]; then TESTS=none", pack, StringComparison.Ordinal);
+        Assert.Contains("elif [ \"$PUBLISH\" = true ]; then TESTS=inline", pack, StringComparison.Ordinal);
+        Assert.Contains("else TESTS=lane; fi", pack, StringComparison.Ordinal);
         Assert.Contains("tests:$t", pack, StringComparison.Ordinal);
 
         var tests = JobBody("tests");
         Assert.Contains("tests:\"lane\"", tests, StringComparison.Ordinal);
         // Lane-stamped and lane-named, like every other artifact here: artifacts are RUN-WIDE and a
         // repo may call this lane twice in one run.
-        Assert.Contains("name: module-tests-receipt-${{ needs.select.outputs.lane }}-${{ matrix.entry.module }}",
+        // ONE artifact per batch, one `<module>.json` per module inside it: `verify` globs
+        // `module-tests-receipt-<lane>-*` with merge-multiple and keys on the `module` field.
+        Assert.Contains("name: module-tests-receipt-${{ needs.select.outputs.lane }}-${{ matrix.batch.id }}",
             tests, StringComparison.Ordinal);
         Assert.Contains("if-no-files-found: error", tests, StringComparison.Ordinal);
         // The receipt means the suite got to the end green, so it is the LAST evidence step.
