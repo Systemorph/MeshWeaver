@@ -32,6 +32,12 @@ offers none, so a Required field blocks the submit. Without that, a parent decla
 types and still create `Markdown` for anyone who submitted without touching the field — the menu
 honouring the declaration and the write ignoring it.
 
+🚨 **Both shapes of the field come out of the same resolved set**, and that is why the type field is
+one branch rather than two. A pinned single type (`?type=X`, or `?types=X` from the MeshSearch "+"
+button) renders as a read-only label — but only when the parent allows it. The label used to render
+without asking the provider at all, which made a URL parameter a way around the parent's
+declaration: it seeded the type, presented it as settled, and submitted it.
+
 ## The resolution rule
 
 Four sources are merged, deduplicated by NodeType path, and ordered by `Order` then name.
@@ -100,7 +106,24 @@ legs.
 exclusion-aware lookup, so a parent's `CreatableTypes` — or a host's `GlobalCreatableTypes` —
 naming `Partition` does not resurrect it. A whitelist ADDS types the queries could not reach; it
 does not overrule a type's own statement that instances of it are made by the platform rather than
-by a person. See [Query Syntax](/Doc/DataMesh/QuerySyntax) for the `context:` qualifier and the other contexts.
+by a person.
+
+That holds for a RUNTIME NodeType too, and it costs a read to make true. A platform type's opt-out
+is visible in the static registry with no I/O; a persisted type carries it on its node, where the
+create-filtered queries see it and this path would not. So the paths a config source NAMES and the
+static registry does not hold — and only those — are looked up: **one anchored `path:` query each,
+never a point read.** A declared type may legitimately not exist yet (synthesising an entry for it
+is deliberate), and a point read of an absent node answers a routing NotFound that terminates the
+stream and opens the storm-breaker on that path; a `path:a|b|c` alternation names no first segment
+and would fan out over every schema (#3202). One path per query keeps each anchored on its own
+partition.
+
+The exclusion itself is `MeshConfiguration.IsExcludedFromContext(node.NodeType, "create")` **or**
+the node's own `ExcludeFromContext` — the same two halves every query backend applies, written once
+so the menu and the queries feeding it cannot answer differently. Applying only the second half is
+what let the retired form pass 25 *instances* of opted-out types (every `*/_Access/Public_Access`,
+the `Admin/Partition/*` records, the `*/_Policy` nodes, the `Templates/Import/*` templates) into a
+picker that is supposed to list types. See [Query Syntax](/Doc/DataMesh/QuerySyntax) for the `context:` qualifier and the other contexts.
 
 ## Two rules that look like details and are not
 
