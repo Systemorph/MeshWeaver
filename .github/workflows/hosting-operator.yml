@@ -65,8 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 23 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 23 (20 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 25 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 25 (22 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -106,6 +106,7 @@ jobs:
           hosting-dns
           hosting-export
           hosting-federate
+          hosting-image-mirror
           hosting-inline-env-retire
           hosting-kv-ensure
           hosting-kv-purge
@@ -192,7 +193,7 @@ jobs:
         # through to a REAL az/kubectl on a runner that has one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done
@@ -242,7 +243,7 @@ jobs:
             test -x /opt/hosting/bin/run.sh          || { echo "run.sh missing"; exit 1; }
             test -f /opt/hosting/chart/Chart.yaml    || { echo "chart missing — build context must be deploy/"; exit 1; }
             command -v hosting-deploy >/dev/null     || { echo "hosting-* not on PATH"; exit 1; }
-            command -v helm kubectl az pg_dump jq >/dev/null || { echo "a required tool is missing"; exit 1; }
+            command -v helm kubectl az pg_dump jq crane >/dev/null || { echo "a required tool is missing"; exit 1; }
             test -f /opt/hosting/bin/_audit.jq       || { echo "_audit.jq missing — hosting-audit has no detection"; exit 1; }
             echo "image carries: $(ls /opt/hosting/bin/hosting-* | wc -l) commands + chart $(grep ^version /opt/hosting/chart/Chart.yaml)"
           '
