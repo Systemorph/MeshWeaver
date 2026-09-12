@@ -117,7 +117,16 @@ def batch_label(modules: list[str], index: int, total: int, label_max: int = LAB
     return head + ", ".join(shown) + (f", … +{hidden} more" if hidden else "")
 
 
-def chunk(entries: list[dict], size: int, label_max: int = LABEL_MAX) -> list[dict]:
+def parse_solo(value: str | None) -> set[str]:
+    """`solo-modules` is free text from a workflow input: module names separated by whitespace
+    and/or commas. Empty (the default) means no module is set apart."""
+    if not value:
+        return set()
+    return {tok for tok in re.split(r"[\s,]+", value) if tok}
+
+
+def chunk(entries: list[dict], size: int, label_max: int = LABEL_MAX,
+          solo: set[str] | None = None) -> list[dict]:
     """Sort by module name, then STRIPE into ceil(n/size) legs of ≤size: module i goes to leg
     i mod k. Deterministic — the same selection always yields the same legs with the same ids,
     whatever order the selector emitted it in — and balanced (leg sizes differ by at most one).
@@ -127,6 +136,15 @@ def chunk(entries: list[dict], size: int, label_max: int = LABEL_MAX) -> list[di
     correlated, and every job is hard-cut at 45 minutes — six p90 (8.2 min) suites in one leg
     would be 49. Spreading a family over the legs is the one thing a chunker with no duration
     data can do about that; the `batch-size` input is the other.
+
+    `solo` (the caller's `solo-modules` input) is the third: a module named there that IS in the
+    selection gets a leg of its own — id and label are the module, exactly the singleton shape —
+    and those legs come FIRST in the matrix so the heaviest suites start earliest; the remaining
+    modules are striped as before. Measured 2026-09-12 on MeshWeaver.Plugins#1736: MeshWeaver.AI
+    (1,992 tests, 2.5 min of suite + its own compile) was ~6 of the 8.6 min of the leg it shared
+    with five modules whose suites run in seconds. A solo name that is NOT in the selection is
+    simply not there — the selection is incremental, and an absent module is the normal case,
+    never an error.
     """
     if not isinstance(size, int) or size < 1 or size > MAX_BATCH_SIZE:
         raise ValueError(f"batch-size must be an integer from 1 to {MAX_BATCH_SIZE}, got {size!r}")
@@ -136,9 +154,13 @@ def chunk(entries: list[dict], size: int, label_max: int = LABEL_MAX) -> list[di
     if len(set(names)) != len(names):
         dup = sorted({n for n in names if names.count(n) > 1})
         raise ValueError(f"the selection names a module twice: {', '.join(dup)}")
+    solo = solo or set()
     ordered = sorted(entries, key=lambda e: e["module"])
-    total = -(-len(ordered) // size) if ordered else 0
-    runs = [ordered[j::total] for j in range(total)]
+    apart = [e for e in ordered if e["module"] in solo]
+    shared = [e for e in ordered if e["module"] not in solo]
+    striped = -(-len(shared) // size) if shared else 0
+    runs = [[e] for e in apart] + [shared[j::striped] for j in range(striped)]
+    total = len(runs)
     out = []
     for i, run in enumerate(runs, start=1):
         mods = [e["module"] for e in run]
@@ -248,13 +270,16 @@ def cmd_chunk(a: argparse.Namespace) -> int:
         die(f"inputs.batch-size is {a.size!r}, which is not an integer. The only values are 1 to "
             f"{MAX_BATCH_SIZE} (default {DEFAULT_BATCH_SIZE}). A batch size that cannot be read "
             "must never resolve to 'one leg per module' quietly, nor to one giant leg.")
+    solo = parse_solo(a.solo)
     try:
-        batches = chunk(entries, size, a.label_max)
+        batches = chunk(entries, size, a.label_max, solo)
     except ValueError as exc:
         die(str(exc))
     count = len(batches)
     per = ", ".join(f"{b['id']} ({len(b['modules'])})" for b in batches) or "<none>"
-    print(f"batch-size {size}: {len(entries)} module(s) -> {count} leg(s): {per}")
+    apart = sorted(m for m in solo if any(e.get("module") == m for e in entries))
+    solo_note = f"; solo: {', '.join(apart)}" if apart else (f"; solo-modules named {', '.join(sorted(solo))} — none selected" if solo else "")
+    print(f"batch-size {size}: {len(entries)} module(s) -> {count} leg(s): {per}{solo_note}")
     for b in batches:
         print(f"  {b['id']}: {', '.join(b['modules'])}")
     if a.github_output:
@@ -711,6 +736,28 @@ def self_test(workflow_path: Path | None = None) -> int:
     except ValueError:
         check("a duplicate module is refused", True)
 
+    print("== chunk --solo: a named module is a leg of its own, first; the rest stripe as before")
+    solo = chunk(sel, 6, solo={"MeshWeaver.AI"})
+    rest = sorted(n for n in names if n != "MeshWeaver.AI")
+    check("7 modules, AI solo, N=6 → AI alone + ONE leg of the other 6",
+          len(solo) == 2 and solo[0]["modules"] == ["MeshWeaver.AI"] and solo[1]["modules"] == rest, str([b["modules"] for b in solo]))
+    check("the solo leg has the SINGLETON shape — id and label are the module, so its artifact names are unchanged",
+          solo[0]["id"] == "MeshWeaver.AI" and solo[0]["label"] == "MeshWeaver.AI", str(solo[0]))
+    check("the shared legs are numbered over the WHOLE matrix (batch-2-of-2), so ids stay unique",
+          solo[1]["id"] == "batch-2-of-2" and solo[1]["index"] == 2 and solo[1]["total"] == 2, str(solo[1]["id"]))
+    two = chunk(sel, 3, solo={"MeshWeaver.AI", "MeshWeaver.Zeta"})
+    check("two solo modules come first, then the remaining 5 striped over ceil(5/3)=2 legs",
+          [b["modules"] for b in two][:2] == [["MeshWeaver.AI"], ["MeshWeaver.Zeta"]] and len(two) == 4
+          and sorted(m for b in two[2:] for m in b["modules"]) == sorted(n for n in names if n not in ("MeshWeaver.AI", "MeshWeaver.Zeta")),
+          str([b["modules"] for b in two]))
+    check("a solo name absent from the selection changes nothing — incremental selections mostly lack it",
+          chunk(sel, 6, solo={"MeshWeaver.NotSelected"}) == b6)
+    check("solo is deterministic in the input order too",
+          chunk(list(reversed(sel)), 6, solo={"MeshWeaver.AI"}) == solo)
+    check("parse_solo reads whitespace and commas, ignores empties",
+          parse_solo(" MeshWeaver.AI, MeshWeaver.Zeta\n") == {"MeshWeaver.AI", "MeshWeaver.Zeta"} and parse_solo("") == set() and parse_solo(None) == set())
+    check("every entry is still carried verbatim with solo", sorted(e["module"] for b in two for e in b["entries"]) == names)
+
     print("== state: facts, filters, per-module failure isolation, verdict")
     with tempfile.TemporaryDirectory() as td:
         s = Path(td) / "state.json"
@@ -813,6 +860,7 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("chunk", help="split a selection into batches of ≤N")
     c.add_argument("--modules", required=True, help="JSON array of matrix entries, or @file")
     c.add_argument("--size", required=True, help=f"batch size, 1..{MAX_BATCH_SIZE}")
+    c.add_argument("--solo", default="", help="module names (whitespace/comma separated) that get a leg of their own, first")
     c.add_argument("--label-max", type=int, default=LABEL_MAX)
     c.add_argument("--github-output", help="append batches=<json> and batch-count=<n> here")
     c.add_argument("--prefix", default="", help="prefix for the two output names (e.g. test-)")
