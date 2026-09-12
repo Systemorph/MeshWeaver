@@ -406,6 +406,99 @@ case "$_kve_log" in *"memex-postgres-password"*|*"secret set"*) bad "a dry run n
 case "$_kve_out" in *"::hosting:: kv_db_connection=would-create"*) ok "…and reports would-create, never created" ;; *) bad "dry run reports would-create" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 unset _kve_out _kve_rc _kve_log _kve_state _kve_written
+echo "── hosting-image-mirror: the pinned images reach the fleet registry, once, verified ──"
+# MeshWeaver.Plugins#1722 — cr.meshweaver.cloud serves only what was pushed to it; a record pinning
+# a tag it lacks sent a human to `crane copy` (runbook step 4). The crane stub keeps a two-registry
+# world (ref → digest) and records logins BY HOST AND USER only; the az stub answers the publisher
+# password and the ACR token with sentinels. Asserted: present → kept (never re-pushed); absent →
+# copied and both digests compared; absent upstream → refused naming the fix; no credential in any
+# output or argv; a dry run touches nothing.
+IM_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/image-mirror" && pwd)"
+im() {  # im "<images lines>" [env…] -- <args…>
+  local images="$1"; shift
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _im_state="$(mktemp -d)"; printf '%b' "$images" > "$_im_state/images"
+  _im_out="$(env "${envs[@]}" PATH="$IM_STUBS:$PATH" HOSTING_IM_STATE="$_im_state" hosting-image-mirror "$@" 2>&1)"; _im_rc=$?
+  _im_log="$(cat "$_im_state/log" 2>/dev/null || true)"; _im_az="$(cat "$_im_state/az.log" 2>/dev/null || true)"
+  _im_images="$(cat "$_im_state/images" 2>/dev/null || true)"
+}
+IM_ARGS=(--registry cr.meshweaver.cloud --repository memex-portal-ai --tag 3.0.0-ci.8411 --also memex-migration --source meshweaver.azurecr.io --vault Systemorph --publisher-secret memexcloud-Registry-PublisherPassword --publisher publisher)
+IM_SRC='meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8411 sha256:f7e11bb9aaaa\nmeshweaver.azurecr.io/memex-migration:3.0.0-ci.8411 sha256:52ecc7cbbbbb\n'
+
+# Both absent → both copied from ACR, digests equal, as the publisher.
+im "$IM_SRC" -- "${IM_ARGS[@]}"
+[ "$_im_rc" -eq 0 ] && ok "image-mirror copies BOTH images the fleet registry lacks" || bad "image-mirror copies both" "exited ${_im_rc}: ${_im_out}"
+case "$_im_images" in *"cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411 sha256:f7e11bb9aaaa"*"cr.meshweaver.cloud/memex-migration:3.0.0-ci.8411 sha256:52ecc7cbbbbb"*) ok "…portal AND migration land at the source's digests (Memex#141: same tag)" ;; *) bad "both landed" "registry holds: ${_im_images}" ;; esac
+case "$_im_log" in *"auth login cr.meshweaver.cloud -u publisher --password-stdin"*"auth login meshweaver.azurecr.io -u 00000000-0000-0000-0000-000000000000 --password-stdin"*) ok "…signed in to the fleet registry as the publisher and to ACR with the token, both on stdin" ;; *) bad "logins" "crane saw: ${_im_log}" ;; esac
+case "${_im_out}${_im_log}${_im_az}" in *NEVER-PRINTED*) bad "image-mirror never prints the publisher password or the ACR token, nor puts either on argv" "seen in: ${_im_out} ${_im_log} ${_im_az}" ;; *) ok "image-mirror never prints the publisher password or the ACR token, nor puts either on argv" ;; esac
+case "$_im_az" in *"acr login --name meshweaver --expose-token"*) ok "the ACR short name is derived from the source host" ;; *) bad "acr name" "az saw: ${_im_az}" ;; esac
+case "$_im_out" in *"::hosting:: image_mirrored=2"*"::hosting:: image_present=0"*"::hosting:: image_drift=0"*"::hosting:: image_tag=3.0.0-ci.8411"*) ok "the run reports mirrored=2 present=0 drift=0 and the tag" ;; *) bad "mirror facts" "said: ${_im_out}" ;; esac
+rm -rf "$_im_state"
+
+# Both present → kept, ACR never asked, nothing copied.
+im "${IM_SRC}cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411 sha256:f7e11bb9aaaa\ncr.meshweaver.cloud/memex-migration:3.0.0-ci.8411 sha256:52ecc7cbbbbb\n" -- "${IM_ARGS[@]}"
+[ "$_im_rc" -eq 0 ] && ok "images already in the fleet registry are kept (a re-provision copies nothing)" || bad "present kept" "exited ${_im_rc}: ${_im_out}"
+case "$_im_log" in *" copy "*) bad "…nothing is re-pushed" "crane saw: ${_im_log}" ;; *) ok "…nothing is re-pushed" ;; esac
+case "$_im_az" in *"acr login"*) bad "…and ACR is not even asked" "az saw: ${_im_az}" ;; *) ok "…and ACR is not even asked" ;; esac
+case "$_im_out" in *"image_mirrored=0"*"image_present=2"*) ok "…reported as present=2" ;; *) bad "present facts" "said: ${_im_out}" ;; esac
+rm -rf "$_im_state"
+
+# Portal present, migration absent → only the migration is copied; the present portal is compared
+# with ACR and a differing digest is reported as drift, never re-pushed.
+im "${IM_SRC}cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411 sha256:OLDOLDOLD\n" -- "${IM_ARGS[@]}"
+[ "$_im_rc" -eq 0 ] && ok "a partial set copies only what is missing" || bad "partial" "exited ${_im_rc}: ${_im_out}"
+case "$_im_log" in *"copy meshweaver.azurecr.io/memex-migration:3.0.0-ci.8411 cr.meshweaver.cloud/memex-migration:3.0.0-ci.8411"*) ok "…the migration is copied" ;; *) bad "migration copied" "crane saw: ${_im_log}" ;; esac
+case "$_im_log" in *"copy meshweaver.azurecr.io/memex-portal-ai"*) bad "…the present portal is NOT re-pushed even though it differs" "crane saw: ${_im_log}" ;; *) ok "…the present portal is NOT re-pushed even though it differs" ;; esac
+case "$_im_out" in *"image_mirrored=1"*"image_present=1"*"image_drift=1"*) ok "…and the difference is reported as drift=1" ;; *) bad "drift fact" "said: ${_im_out}" ;; esac
+rm -rf "$_im_state"
+
+# Absent upstream too → refused naming the sealed-set fix; nothing copied.
+im "" -- "${IM_ARGS[@]}"
+[ "$_im_rc" -ne 0 ] && ok "a tag absent from ACR as well is a REFUSAL — no copy can put it anywhere" || bad "absent upstream refuses" "exited 0: ${_im_out}"
+case "$_im_out" in *"does not exist"*"SEALED set"*) ok "…naming the fix: pin a sealed set's tag" ;; *) bad "names the fix" "said: ${_im_out}" ;; esac
+case "$_im_log" in *" copy "*) bad "…and copies nothing" "crane saw: ${_im_log}" ;; *) ok "…and copies nothing" ;; esac
+rm -rf "$_im_state"
+
+# The identity cannot log in to ACR → refused naming AcrPull and the hand commands.
+im "$IM_SRC" HOSTING_IM_ACR_DENIED=1 -- "${IM_ARGS[@]}"
+[ "$_im_rc" -ne 0 ] && ok "no AcrPull on the source is a RED step" || bad "acr denied" "exited 0: ${_im_out}"
+case "$_im_out" in *"AcrPull"*"crane copy meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8411 cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411"*) ok "…naming the grant and the exact crane copy commands" ;; *) bad "acr message" "said: ${_im_out}" ;; esac
+rm -rf "$_im_state"
+
+# The publisher password cannot be read → refused before anything.
+im "$IM_SRC" HOSTING_IM_PUBLISHER_ABSENT=1 -- "${IM_ARGS[@]}"
+[ "$_im_rc" -ne 0 ] && ok "an unreadable publisher password refuses" || bad "publisher absent" "exited 0"
+case "$_im_log" in *"auth login"*) bad "…before any login" "crane saw: ${_im_log}" ;; *) ok "…before any login" ;; esac
+rm -rf "$_im_state"
+
+# The fleet registry rejects the publisher password → refused naming the bcrypt hash on the record.
+im "$IM_SRC" HOSTING_IM_LOGIN_FAIL=cr.meshweaver.cloud -- "${IM_ARGS[@]}"
+[ "$_im_rc" -ne 0 ] && ok "a publisher password the registry rejects refuses" || bad "login fail" "exited 0"
+case "$_im_out" in *"publisherPasswordBcrypt"*) ok "…naming the record field it must match" ;; *) bad "bcrypt hint" "said: ${_im_out}" ;; esac
+rm -rf "$_im_state"
+
+# A copy that does not land as the same digest is a failure, not a pass.
+im "$IM_SRC" HOSTING_IM_COPY_FAIL=1 -- "${IM_ARGS[@]}"
+[ "$_im_rc" -ne 0 ] && ok "a failed copy fails the step" || bad "copy fail" "exited 0"
+rm -rf "$_im_state"
+
+refuses_hard "image-mirror needs --registry"   "missing required flag --registry"   hosting-image-mirror --repository r --tag t --vault V --publisher-secret p
+refuses_hard "image-mirror needs --tag"        "missing required flag --tag"        hosting-image-mirror --registry cr.test --repository r --vault V --publisher-secret p
+refuses_hard "image-mirror needs --publisher-secret" "missing required flag --publisher-secret" hosting-image-mirror --registry cr.test --repository r --tag t --vault V
+refuses_hard "image-mirror refuses a non-ACR source" "is not an Azure Container Registry host" hosting-image-mirror --registry cr.test --repository r --tag t --vault V --publisher-secret p --source ghcr.io
+refuses_hard "image-mirror refuses a repository with a metacharacter" "is not a repository path" hosting-image-mirror --registry cr.test --repository 'r;id' --tag t --vault V --publisher-secret p
+refuses_hard "image-mirror refuses a tag with a metacharacter" "is not a plain name" hosting-image-mirror --registry cr.test --repository r --tag 't`id`' --vault V --publisher-secret p
+refuses_hard "image-mirror refuses registry == source" "nothing to mirror" hosting-image-mirror --registry meshweaver.azurecr.io --repository r --tag t --vault V --publisher-secret p
+refuses_hard "image-mirror rejects unknown flags" "unknown argument" hosting-image-mirror --registry cr.test --repository r --tag t --vault V --publisher-secret p --nope 1
+
+# Dry run: no vault, no login, no copy; says what it would do.
+im "$IM_SRC" HOSTING_DRY_RUN=true -- "${IM_ARGS[@]}"
+[ "$_im_rc" -eq 0 ] && ok "a dry-run image-mirror succeeds" || bad "dry run" "exited ${_im_rc}: ${_im_out}"
+[ -z "$_im_log" ] && [ -z "$_im_az" ] && ok "…touching neither registry nor vault" || bad "dry run touches nothing" "crane: ${_im_log} az: ${_im_az}"
+case "$_im_out" in *"::hosting:: image_mirror=dry-run"*) ok "…and reports dry-run" ;; *) bad "dry-run fact" "said: ${_im_out}" ;; esac
+rm -rf "$_im_state"
+unset _im_out _im_rc _im_log _im_az _im_images _im_state
 
 echo
 echo "── the ::hosting:: contract the mesh parses ──────────────────────"
