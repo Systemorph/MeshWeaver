@@ -2250,6 +2250,18 @@ jobs:
     - name: "Execute publish-bake-bundles.sh with two publishers on one prefix"
       run: python3 .github/scripts/test-publish-bake-overlap.py
 
+    # The READER side of the same lane, and a log-quality gate rather than a byte one (#3583).
+    # `check-release-availability.sh` is the step that held MeshWeaver.Reinsurance 23 times in 24
+    # hours. Every refusal exits 1 and must keep doing so — that is not what this asserts. It
+    # asserts the three outcomes are TOLD APART in the log, because they want three different
+    # actions: "no identity at all" (nothing was checked), "a probe errored" (the absent count has
+    # an unknown denominator), and "the upstream answered NO" (the only one to act on by waiting
+    # for it). The middle case used to be folded into the last one's count, reporting "I could not
+    # ask" as "the upstream has not published" — a smaller number in place of a refusal. A control
+    # case must still PASS, so the harness cannot confuse "refuses correctly" with "always refuses".
+    - name: "Execute check-release-availability.sh — the three refusals stay distinguishable"
+      run: python3 .github/scripts/test-release-availability-refusals.py
+
     # The MODULE registry hand-over (MeshWeaver#3878). `node-repo-module-publish.yml` is a
     # `workflow_call` lane a SATELLITE invokes, so nothing on a core pull request runs it — the
     # first execution of an edit to it would otherwise be a satellite's production publication,
