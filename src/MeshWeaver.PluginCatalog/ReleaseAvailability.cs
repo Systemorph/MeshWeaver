@@ -252,7 +252,9 @@ public static class ReleaseAvailability
     /// across the roll, so its bytes were linked against the target's surface
     /// (<see cref="ReleaseArtifacts.ModuleLinks"/>): <c>Unlinkable</c> HOLDS as
     /// <see cref="PackageAvailabilityKind.ModuleUnloadable"/>, naming the module and the missing
-    /// types; <c>Linkable</c> clears; <c>Indeterminate</c> — or no measurement at all, which is
+    /// types, and so does <c>BindingConflict</c> (#4083), naming the assembly versions the target
+    /// cannot bind; <c>Linkable</c> clears, its roll-forward version drift on the advisories;
+    /// <c>Indeterminate</c> — or no measurement at all, which is
     /// what a publication without <c>platform-surface.json</c> yields — is REPORTED as an advisory
     /// and decides nothing.</description></item>
     /// </list>
@@ -305,7 +307,33 @@ public static class ReleaseAvailability
 
         return link.State switch
         {
-            ModuleLinkState.Linkable => (null, null),
+            // Linkable clears — and carries the version drift that rolls FORWARD as an advisory
+            // (#4083): on record, deciding nothing.
+            ModuleLinkState.Linkable => (null,
+                link.Advisories.IsDefaultOrEmpty
+                    ? null
+                    : $"{package.Name}: its landed module {package.ModuleName} links on "
+                      + $"{Describe(target)} with assembly version skew the loader rolls forward "
+                      + "— reported, never a hold: " + string.Join("; ", link.Advisories)),
+            // 🚨 The FileLoadException shape (#4083): the landed generation references an assembly
+            // the target carries at a LOWER version (or under another public key token) than the
+            // module's bytes were bound to. The target's copy is what loads there, and .NET never
+            // binds a reference to a lower version — a definite incompatibility, the same hold as
+            // Unlinkable. The 2026-09-11 shape: MeshWeaver.AI bound to YamlDotNet 18.1.0.0 on an
+            // image carrying 16.3.0.0 crash-looped every new pod at hub construction.
+            ModuleLinkState.BindingConflict => (
+                new PackageAvailability(
+                    package.Name,
+                    PackageAvailabilityKind.ModuleUnloadable,
+                    $"its landed module {package.ModuleName} cannot load on {Describe(target)} "
+                    + $"(framework identity {target.FrameworkIdentity}): no build of it is published "
+                    + "for that identity, and the landed generation references "
+                    + string.Join(", ", link.BindingConflicts)
+                    + " — the target's copy is what the loader binds, and a reference to a higher "
+                    + "version than the platform carries throws FileLoadException the first time "
+                    + "any code path touches the assembly. The roll is held until a build of the "
+                    + "module for this platform is published, or the module is uninstalled"),
+                null),
             ModuleLinkState.Unlinkable => (
                 new PackageAvailability(
                     package.Name,
@@ -615,8 +643,11 @@ public enum PackageAvailabilityKind
     /// 🚨 <b>THE hold on the module lane (#3651).</b> The package's landed module generation —
     /// which keeps running across the roll because no build of it is published for the target
     /// identity — references a type the target's platform surface does not carry
-    /// (<see cref="ModuleLinkState.Unlinkable"/>). Loading it there throws
-    /// <c>TypeLoadException</c> at the first render that touches it (#3538). MEASURED on the bytes,
+    /// (<see cref="ModuleLinkState.Unlinkable"/>), or an assembly the target carries at a LOWER
+    /// version or under another public key token than the bytes were bound to
+    /// (<see cref="ModuleLinkState.BindingConflict"/>, #4083). Loading it there throws
+    /// <c>TypeLoadException</c> at the first render that touches it (#3538), or
+    /// <c>FileLoadException</c> the first time the assembly is touched. MEASURED on the bytes,
     /// never declared; a definite incompatibility, like <see cref="SealedSetInconsistent"/>. The
     /// reason names the module and the missing types. Appended, never inserted.
     /// </summary>

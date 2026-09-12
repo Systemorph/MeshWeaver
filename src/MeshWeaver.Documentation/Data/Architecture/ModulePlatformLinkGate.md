@@ -110,6 +110,106 @@ The one exception: an unresolved assembly whose simple name is the **platform's 
 (`MeshWeaver.`) is refused. That is the whole-assembly shape of the same defect and a certain load
 failure.
 
+### 2026-09-12 — assembly versions are compared, asymmetrically (MeshWeaver#4083)
+
+> This section **narrows** the two paragraphs above it. Where they disagree, this one holds.
+
+**What happened.** On 2026-09-11 core #4012 bumped YamlDotNet 16.3.0 → 18.1.0. `MeshWeaver.AI`
+references YamlDotNet directly and versionless, was built on an image carrying 18, and landed
+through the registry on portal pods whose image shipped 16. The probe said `Linkable`. Every new
+pod crash-looped at hub construction on `FileLoadException 0x80131040` (memex-cloud, 60+ restarts;
+Memex#281 carried the pin move). Two independent causes, neither of them the `MeshWeaver.` prefix
+filter — that line sits inside the *not carried* branch, and a running portal carries YamlDotNet:
+
+1. **The closure rule excluded the reference.** The bundle shipped its own YamlDotNet, so the
+   reference fell under *"built together with the module"* — a premise that is false exactly when
+   the platform carries the same simple name, because the platform's already-loaded copy is what
+   the loader binds and the bundle's copy never runs. The pair that decides is module ↔ platform.
+2. **No version was ever compared.** `ResolveScope` kept only the referenced assembly's *name*;
+   the comparison was type-name existence, and both YamlDotNet majors carry the same type names.
+   `ModuleLinkState` had no state to put a `FileLoadException` verdict in even if one had been
+   computed — `Unlinkable` models the `TypeLoadException` shape.
+
+**The rule now.** For every assembly reference of a module whose simple name the platform surface
+carries — third-party included; `MeshWeaver.*` keep the type-identity rule *and* are compared like
+everything else — the reference's manifest **version and public key token** are compared against
+the **platform's** copy, and the module's own closure no longer short-circuits a reference the
+platform's copy would win (`ModulePlatformSurface.IsPlatformBound`: on a running process the
+trusted platform assemblies and the application directory; every assembly of a published document
+or a file set). The verdict is:
+
+| Reference vs platform copy | Verdict | Why |
+|---|---|---|
+| **higher** version | **`BindingConflict`** — hard: refused at landing and boot, `ModuleUnloadable` at the roll | the loader refuses the bind itself; the exception is certain, not a risk |
+| **lower** version | `Linkable`, with the drift on `Advisories` | the loader rolls **forward** — patch drift is ordinary, and a gate that reds on it is switched off within the week |
+| equal | as before | — |
+| different **public key token** under the same name | **`BindingConflict`** | a different key is a different assembly to the loader, whatever the versions |
+| the surface records **no version** | `Linkable`, advisory | unknown is unknown — never a hard verdict on a document that predates the section |
+
+**Why asymmetric.** .NET binding rolls forward and never back: a request for `16.3.0.0` binds
+happily to a loaded `18.1.0.0`, a request for `18.1.0.0` against a loaded `16.3.0.0` is
+`FileLoadException`. A symmetric equality check would red every portal whose image is a patch
+ahead of a module's build — which is the ordinary state of the fleet between waves — and the gate
+would be switched off. The check refuses only what the loader refuses, and *reports* the rest.
+`AssemblyVersion` is pinned per line (`3.0.0.0` across the whole 3.0 line), so for `MeshWeaver.*`
+the comparison is a no-op today and starts deciding when a module built on the next line meets an
+image on this one — which is exactly a bind the loader would refuse.
+
+**Both directions of the incident.** The probe runs on the *same* code (`ModulePlatformLink.Check`)
+at every call site, and the new state is honoured at each: **(i) the roll candidate** —
+`ReleaseAvailabilityService.SelectRollTarget → Judge → ModuleLinkObservation.Measure` links every
+landed module against the *candidate's* published surface; `BindingConflict` is the
+`ModuleUnloadable` hold, the roll-forward drift is a verdict advisory. **(ii) the module landing**
+— `ModuleLandingService.LandCore` links the incoming bytes, closure and all, against the *running*
+surface before anything touches the disk (this path already probed; the closure rule was what hid
+the reference), and refuses on `MayLoad == false`, which `BindingConflict` is. The boot probe
+(`MeshBuilder.TryLoad`) and prebuilt adoption (`PrebuiltAdoptionPolicy.AfterLink`) refuse the same
+way. There is no call site at which a `BindingConflict` reads as anything but a refusal, because
+`MayLoad` is true for `Linkable` alone.
+
+**The document.** `platform-surface.json` gains an `identities` sibling of `assemblies`, keyed by
+the same names — version and public key token per listed assembly, read from each assembly's
+manifest without loading it:
+
+```json
+{
+  "identity": "s5b8b0e2c…",
+  "assemblies": { "YamlDotNet": ["YamlDotNet.Serialization.Deserializer", "…"], "…": [] },
+  "identities": { "YamlDotNet": { "version": "16.3.0.0", "publicKeyToken": "ec19458f3c15af5e" }, "…": {} }
+}
+```
+
+A sibling, not a richer `assemblies` value, because every reader shipped before this date requires
+each `assemblies` value to be an array of strings and throws otherwise — and ignores an unknown root
+property. An older platform reads the new document as before; a newer platform reading an older
+document sees no identities and reports every version comparison as unknown. The producer is
+unchanged in kind: `ModulePlatformSurface.ToJson`, written by `BakeOutput.WritePlatformSurface`
+and by `mw-plugin-test platform-surface`; `publish-bake-bundles.sh` uploads whatever the bake
+wrote.
+
+**Where a hold shows — a hold must be visible where a person looks, not only logged.**
+
+| Path | Where the verdict is written | What it says |
+|---|---|---|
+| roll candidate (i) | `Admin/UpdatePolicy` → `heldReason` (the poller writes `verdict.HoldReason` verbatim); the Updates tab renders it | `Views: its landed module MeshWeaver.AI cannot load on 3.0.0-ci.8323 (…): … references YamlDotNet 18.0.0.0 (this platform carries 16.0.0.0) — the target's copy is what the loader binds …` |
+| module landing (ii) | the module's own **refusal marker** `modules/activation.d/<Name>.refused` (`ModuleActivationSidecar.RefusedLanding`), read by `PendingModuleActivations` onto the package card (⛔ *Not installed on this platform: it needs YamlDotNet 18.1.0.0, this platform provides 16.3.0.0 …*, localized) and into `/health`'s activation report | `held: references YamlDotNet 18.1.0.0, platform provides 16.3.0.0` |
+| boot | the unloadable marker (`<Name>.unloadable`, unchanged) → quarantined on the card and in `/health` | the probe's report |
+
+Before this date the landing path's refusal was **one warning line in a pod log** (`PluginBundleClient`: *"landing failed — the module is unchanged"*) and nothing else: no entry is written on a refusal, so no status surface had anything to show. The marker is written by the refusing landing, cleared by the next landing of that module that lands anything, and by uninstall.
+
+**Blast radius, measured 2026-09-12** — the registry's published module set (30 module bundles on memex.meshweaver.cloud) under the new rule, each bundle's own copies in its closure, against the image's `/app` + shared frameworks as the surface: `3.0.0-ci.8372` (memex) and `3.0.0-ci.8403` (memex-cloud): **0 held**, 1 advisory (ContainerRegistry: System.Reactive 6.1.0.0 → platform 7.0.0.0, rolls forward). `3.0.0-ci.8323` — the image that crash-looped on 09-11 — **20 of 30 held**: `MeshWeaver.AI` on `YamlDotNet 18.0.0.0` vs `16.0.0.0` *and* `System.Reactive 7.0.0.0` vs `6.1.0.0`, `MeshWeaver.Publish` on YamlDotNet, eighteen others on System.Reactive (core bumped both on 09-11, after 8323 was built). The rule fires on exactly the image that failed and on nothing the fleet runs now.
+
+**What this still does not see.** Member-level skew (below), and the publish side: nothing yet
+compares a bundle about to be published against the images the fleet actually runs (#4066). Every
+receiving pod measures for itself, with this probe.
+
+Tests: `ModuleLinkVersionTest` (the 09-11 shape verbatim — two stand-in `YamlDotNet` builds with
+identical type names — every arm of the table, the closure exception for a module's own superseded
+sibling, and both directions on the real landing service and the boot-shaped check) and, in
+`ReleaseLinkGateTest`, `AModuleBoundAboveTheTargetsVersion_HoldsTheRoll_NamingBothVersions` /
+`AModuleBoundBelowTheTargetsVersion_Clears_WithTheDriftAsAnAdvisory` for the roll-candidate
+direction.
+
 ### What it does NOT see
 
 **Member-level skew.** A method or constructor signature that moved on a type that still exists —
