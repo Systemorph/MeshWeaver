@@ -123,6 +123,16 @@ rule is in the mesh's pure, unit-tested plan. What the scripts themselves guaran
   (`--db-password-secret`, `AZ_POSTGRES_PASSWORD_SECRET` on the control record's
   `operator.environment`) — through `--file`, never an argument, never printed. An existing object
   is kept as written.
+  stored `enc:` value in that instance's database permanently unreadable.
+- **`hosting-signin-app` never rotates the sign-in app's secret and never shows one**
+  (MeshWeaver.Plugins#1719). A present `<prefix>Authentication-Microsoft-ClientSecret` is kept and
+  the app the record names is VERIFIED to redirect to `https://<host>/signin-microsoft` (an identity
+  without Graph `Application.Read.All` reports `signin_app_verify=unknown` with the hand command,
+  not a failure; a readable app missing the URI is RED naming `az ad app update`). An absent object
+  for a named app gets a credential ADDED (`--append`, stderr discarded, `--file` to the vault) —
+  needs Graph `Application.ReadWrite.OwnedBy` on an app the identity owns, else RED with the exact
+  hand commands. Registering the app itself (no client id on the record) stays a hand step, and the
+  step says so with the runbook's commands.
 - **`hosting-export` never prints the URL it mints.** A user-delegation SAS is a bearer credential;
   it goes into a one-shot Secret the mesh reads once and deletes.
 - **`hosting-verify-catalog` proves the plugin mounts took.** An instance with green pods and an
