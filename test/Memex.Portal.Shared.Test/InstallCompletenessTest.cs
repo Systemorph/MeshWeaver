@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -584,6 +585,168 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
     private static InstallCompletenessVerdict Verdict(InstallCompletenessKind kind) =>
         new("x", "x", kind, 0, 0,
             ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal), "");
+
+    // ── #4101: a MIXED package's src/<Module>/ sources are not nodes ────────────────────────────
+
+    private const string Module = "MeshWeaver.SelfUpdate.Aks";
+    private const string ModuleSourceDir = $"src/{Module}";
+
+    /// <summary>Three node files under the partition plus two module sources — the shape the
+    /// canonical <c>gen-manifests.py</c> produces for a mixed package with
+    /// <c>hashModuleSources: true</c> (Plugins#878), which is 38 of the 63 locks in MeshWeaver.Plugins.</summary>
+    private static PackageManifest MixedRecord(ImmutableSortedDictionary<string, string>? extra = null) => new()
+    {
+        Id = Package,
+        TargetPartition = Package,
+        Module = Module,
+        InstalledFiles = (extra ?? ImmutableSortedDictionary<string, string>.Empty)
+            .Add($"{Package}/Guide.md", "aaa")
+            .Add($"{Package}/Other.md", "bbb")
+            .Add($"{Package}/Third.md", "ccc")
+            .Add($"{ModuleSourceDir}/AcrTagLister.cs", "ddd")
+            .Add($"{ModuleSourceDir}/{Module}.csproj", "eee"),
+    };
+
+    /// <summary>
+    /// 🚨 <b>THE repro of #4101.</b> Measured 2026-09-12 on <c>build.meshweaver.cloud</c>, first boot
+    /// after the Hosting package landed: <c>NOT VERIFIED (Undeclared) — 13 of 189 declared file(s)
+    /// map outside the target partition 'Hosting' (e.g. 'src/MeshWeaver.SelfUpdate.Aks/AcrTagLister')</c>.
+    /// <c>.cs</c> is a claimed extension, so a declared module source mapped to an off-partition
+    /// node path and the whole record became uncomparable — for every mixed package, on every fresh
+    /// mesh. No install ever writes a <c>src/</c> file as a node (<c>NodeRepoPackageSource</c> keeps
+    /// only <c>{Id}/…</c>); the pack lane compiles them into the bundle.
+    /// </summary>
+    [Fact]
+    public void ModuleSources_AreNotNodes_AndTheVerdictCountsThemSeparately()
+    {
+        var record = MixedRecord();
+        var parsers = Parsers();
+
+        InstallCompleteness.DeclaredNodePaths(record, parsers).Should().Equal(
+            [GuidePath, OtherPath, $"{Package}/Third"],
+            "a src/<Module>/ source is compiled into the module bundle, never written as a node — "
+            + "counting it made every mixed package read NOT VERIFIED (Undeclared) on every fresh mesh");
+
+        var verdict = InstallCompleteness.Compare(
+            Package, Package, record,
+            ImmutableHashSet.Create(StringComparer.Ordinal, GuidePath, OtherPath, $"{Package}/Third"),
+            parsers);
+
+        verdict.Kind.Should().Be(InstallCompletenessKind.Complete,
+            "every node the record declares is present; the two module sources are not nodes it owes the mesh");
+        verdict.IsComplete.Should().BeTrue();
+        verdict.Declared.Should().Be(3);
+        verdict.DeclaredFiles.Should().Be(5);
+        verdict.NonNodeFiles.Should().Be(2);
+        verdict.ModuleSourceFiles.Should().Be(2,
+            "the sources are counted SEPARATELY from a README so the line says what they are");
+        verdict.ModuleSourceDirectories.Should().ContainSingle().Which.Should().Be(ModuleSourceDir);
+        verdict.Population.Should().Contain("5 file(s) declared, 2 of them not node files")
+            .And.Contain($"2 of them module sources ({ModuleSourceDir})")
+            .And.Contain("not compared as nodes")
+            .And.Contain("3 distinct node path(s) compared",
+                "an operator reading the line must see both counts, or a wrong population is silent again");
+
+        // The install-time rule is the SAME predicate — a removed source must never ask the delta
+        // prune to delete a node path that never existed.
+        PackageInstaller.NodePathForFile($"{ModuleSourceDir}/AcrTagLister.cs", parsers).Should().BeNull();
+        PackageInstaller.IsModuleSourcePath($"{ModuleSourceDir}/AcrTagLister.cs").Should().BeTrue();
+        PackageInstaller.IsModuleSourcePath($"{Package}/src/NotASource.md").Should().BeFalse(
+            "only the lock's top-level src/ is the module-source directory; a package folder named "
+            + "src inside the partition is ordinary content");
+    }
+
+    /// <summary>
+    /// 🚨 The negative control: excluding <c>src/</c> must not buy a VERIFIED for a record that
+    /// genuinely maps outside its partition. A mixed record plus one rogue partition file still
+    /// reads <c>Undeclared</c>, naming the rogue file and NOT any module source.
+    /// </summary>
+    [Fact]
+    public void AGenuinelyUndeclaredPartitionFile_StillReads_NotVerified()
+    {
+        var record = MixedRecord(ImmutableSortedDictionary<string, string>.Empty
+            .Add("SomewhereElse/Rogue.md", "fff"));
+
+        var verdict = InstallCompleteness.Compare(
+            Package, Package, record,
+            ImmutableHashSet.Create(StringComparer.Ordinal, GuidePath, OtherPath, $"{Package}/Third"),
+            Parsers());
+
+        verdict.Kind.Should().Be(InstallCompletenessKind.Undeclared,
+            "a file map that maps outside the target partition still cannot be compared against it");
+        verdict.IsComplete.Should().BeFalse("the negative control must stay red");
+        verdict.Missing.Should().ContainSingle(
+                "the off-partition path named is the rogue node file — never a src/ source")
+            .Which.Should().Be("SomewhereElse/Rogue");
+        verdict.Missing.Should().NotContain(p => p.StartsWith("src/", StringComparison.Ordinal));
+        verdict.ModuleSourceFiles.Should().Be(2);
+        verdict.Because.Should().Contain("1 of 4 declared file(s) map outside the target partition");
+    }
+
+    /// <summary>
+    /// The module half of the sweep reads the REAL activation record through
+    /// <see cref="ModuleLandingService.GetActivation"/> and answers "active on this pod" from the
+    /// entry plus the loaded assembly set — and every wording says the sources themselves were NOT
+    /// checked, because the volume holds assemblies, not sources.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TheModuleLine_ReadsTheActivationRecord_AndSaysWhatItDidNotCheck()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-4101-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var landing = new ModuleLandingService(baseDirectory: root);
+        try
+        {
+            var entry = new ModuleActivationEntry { Name = Module, Directory = $"{Module}@gen1" };
+            ModuleActivationSidecar.WriteEntry(root, entry);
+            var activation = await landing.GetActivation()
+                .Take(1)
+                .Timeout(TestTimeouts.Convergence)
+                .Await();
+            var record = MixedRecord();
+            var loaded = ImmutableHashSet.Create(StringComparer.Ordinal, Module);
+            var expectedDirectory = ModuleLandingService.ModuleDirectoryFor(root, Module, entry);
+
+            var active = InstallCompleteness.ModuleActivation(
+                Package, record, activation, loaded, landing.BaseDirectory);
+            active.Should().NotBeNull();
+            active!.Kind.Should().Be(ModuleActivationVerdictKind.Active);
+            active.IsActive.Should().BeTrue();
+            active.Directory.Should().Be(expectedDirectory,
+                "the line names the generation directory the entry resolves to");
+            active.DeclaredSourceFiles.Should().Be(2);
+            active.Because.Should().Contain($"module '{Module}' active from '{expectedDirectory}'")
+                .And.Contain("cannot be checked file-by-file",
+                    "'active' must never read as 'every source file arrived'");
+
+            var notLoaded = InstallCompleteness.ModuleActivation(
+                Package, record, activation, ImmutableHashSet<string>.Empty, landing.BaseDirectory);
+            notLoaded!.Kind.Should().Be(ModuleActivationVerdictKind.LandedNotLoaded,
+                "an enabled entry whose assembly is not in this process is a restart away, not active");
+            notLoaded.IsActive.Should().BeFalse();
+            notLoaded.Because.Should().Contain("NOT loaded").And.Contain("not a pass");
+
+            var noEntry = InstallCompleteness.ModuleActivation(
+                Package, record with { Module = "MeshWeaver.Nowhere" }, activation, loaded, landing.BaseDirectory);
+            noEntry!.Kind.Should().Be(ModuleActivationVerdictKind.NotActive);
+            noEntry.Because.Should().Contain("NO activation entry");
+
+            var unread = InstallCompleteness.ModuleActivation(
+                Package, record, activation: null, loaded, landing.BaseDirectory);
+            unread!.Kind.Should().Be(ModuleActivationVerdictKind.NotObserved);
+            unread.IsActive.Should().BeFalse("not checked is not a pass");
+            unread.Because.Should().Contain("NOT checked");
+
+            InstallCompleteness.ModuleActivation(
+                    Package, record with { Module = null }, activation, loaded, landing.BaseDirectory)
+                .Should().BeNull("a record that declares no module has nothing to ask");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch { /* temp cleanup is the OS's problem, never a test failure */ }
+        }
+    }
 
     /// <summary>
     /// Waits until <paramref name="path"/> is present (or absent) in STORAGE — a condition, never a
