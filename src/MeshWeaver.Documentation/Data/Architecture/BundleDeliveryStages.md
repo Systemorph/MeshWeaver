@@ -19,7 +19,7 @@ unnecessary.
 > *reading* taken at one stage was routinely attributed to another. That misattribution is the
 > expensive part: #3583's 2026-09-11 re-measurement cited `bundle_adoption 0 of 25
 > FrameworkDeclined` as proof its own requirement was unmet, when that reading was stage 3's defect
-> and was fixed by #4002 the following morning.
+> and was fixed by #4002 **twenty-nine minutes later** (comment 06:44Z, merge 07:13:45Z).
 
 ## The pipeline
 
