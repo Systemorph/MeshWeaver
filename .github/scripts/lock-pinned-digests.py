@@ -1078,7 +1078,8 @@ def emit(text: str) -> None:
 
 
 def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
-           inventory: dict[str, list[Manifest]], apply: bool, release_enabled: bool) -> None:
+           inventory: dict[str, list[Manifest]], apply: bool, release_enabled: bool,
+           root: str = ".") -> None:
     def pins_a_digest(scan) -> bool:
         return any(site.kind == "digest" for site in scan.sites)
 
@@ -1155,6 +1156,14 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
     emit(f"      …TO LOCK                                 {len(plan.tags_to_lock)}")
     emit(f"      …that do NOT resolve                     "
          f"{len([t for t in plan.wanted_tags if t.problem])}")
+    emit("")
+    emit("    THE WINDOW THIS IS RACING — the enabled purge steps, as recorded")
+    windows, window_problem = retention_windows(root)
+    for line in windows:
+        emit(f"      {line}")
+    if window_problem:
+        emit(f"      🚨 {window_problem} (the verdict on the record is the "
+             "--check-retention-record step)")
     emit("")
     emit("    REGISTRY")
     emit(f"      manifests in the registry                {total_manifests}")
@@ -1441,7 +1450,8 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
     if release_enabled and apply and not release_blocked:
         failures.extend(apply_releases(plan, registry))
 
-    report(plan, axis1, axis2, registry_name, inventory, apply, release_enabled)
+    report(plan, axis1, axis2, registry_name, inventory, apply, release_enabled,
+           local_root or ".")
 
     if release_enabled and release_blocked:
         print("::error::the release arm is enabled but this run is DEGRADED, so nothing was "
@@ -1470,6 +1480,42 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
 
 
 # ── The retention record: a credential-free assertion that runs on every pull request ──────────
+
+
+def retention_windows(root: str) -> tuple[list[str], str]:
+    """The ENABLED purge steps this protection is racing, as recorded — the "over what window" half
+    of the denominator.
+
+    A protection report that does not name what it protects against leaves the reader to go and
+    look, and the two numbers that decide whether a lock was needed at all (`--ago`, `--keep`) live
+    in a cloud-only task whose only committed copy is this record. The VERDICT on the record is the
+    separate `--check-retention-record` step, which reds; this only reads it for the report, so an
+    unreadable record prints as unreadable here rather than being quietly omitted."""
+    record = Path(root) / ".github" / "acr-retention"
+    manifest_path = record / "tasks.json"
+    if not manifest_path.is_file():
+        return [], f"{manifest_path} is not there — the window cannot be stated"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [], f"{manifest_path} could not be read ({exc}) — the window cannot be stated"
+    lines: list[str] = []
+    for task in manifest.get("tasks") or []:
+        if str(task.get("status", "")).lower() != "enabled":
+            continue
+        yaml_path = record / str(task.get("file", ""))
+        if not yaml_path.is_file():
+            lines.append(f"{task.get('name')}: its recorded definition is missing")
+            continue
+        for step in re.findall(r"^\s*-\s+cmd:\s*(.+)$", yaml_path.read_text(encoding="utf-8"),
+                               re.MULTILINE):
+            filters = " ".join(re.findall(r"--filter '([^']+)'", step)) or "?"
+            ago = (re.search(r"--ago (\S+)", step) or [None, "?"])[1]
+            keep = (re.search(r"--keep (\S+)", step) or [None, "none"])[1]
+            lines.append(f"{task.get('schedule', '?')}  {filters}  --ago {ago} --keep {keep}")
+    if not lines:
+        return [], "no ENABLED purge step is recorded"
+    return lines, ""
 
 
 def check_retention_record(root: str) -> int:
@@ -2218,6 +2264,19 @@ def self_test() -> int:
     roster, problems = read_instance_roster(str(HERE.parent.parent))
     check(not problems,
           f"ARM 24b: this repository's own {ROSTER_PATH} does not validate: {problems}")
+
+    # ── ARM 24c: the report states the WINDOW it is racing, and cannot state it from nothing ────
+    windows, problem = retention_windows(str(HERE.parent.parent))
+    check(windows and not problem,
+          f"ARM 24c: the enabled purge windows could not be read from this repository's own "
+          f"retention record: {problem}")
+    check(any("--ago" in line for line in windows),
+          f"ARM 24c: a window was reported without the `--ago` that defines it: {windows}")
+    with tempfile.TemporaryDirectory() as scratch:
+        empty, problem = retention_windows(scratch)
+        check(not empty and problem,
+              "ARM 24c: a MISSING retention record reported windows, or reported no problem — "
+              "an unstatable window must say so, never print as an empty list")
 
     # ── ARM 25: a roster entry naming nobody is a stale exemption, and reds ─────────────────────
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
