@@ -1,3 +1,6 @@
+using System.IO;
+using System.IO.Compression;
+using System.Text.Json;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
 using Xunit;
@@ -80,6 +83,54 @@ public class ModuleOnlyBundleIsNotAMissTest
     public void AnUnreadableManifest_StaysAMiss()
     {
         BundleOffering.ClassifyEmpty(null).Should().Be(BundleAdoptionKind.NoAssemblies);
+    }
+
+    /// <summary>
+    /// 🚨 The review finding on #4079. A MIXED package declares NodeType assemblies AND a module.
+    /// <see cref="BundleReader.Read(byte[])"/> skips a declared assembly whose archive entry is
+    /// absent — silently, recording no miss — so a torn bundle reaches the empty branch looking
+    /// exactly like a module-only one. Reading it as "nothing to adopt" would hide a genuinely
+    /// missing NodeType, and would hide it from <c>Modules:RequirePrebuilt</c>, which exists to
+    /// refuse precisely that.
+    /// </summary>
+    [Fact]
+    public void ADeclaredNodeTypeThatDidNotArrive_IsAMiss_EvenWhenTheBundleAlsoShipsAModule()
+    {
+        var manifest = new BundleReader.Manifest("Social", "1.2.0", "sframework",
+            Assemblies: [new BundleReader.AssemblyRef("SocialMedia/Post", "Post.dll")],
+            Module: new BundleReader.ModuleRef("MeshWeaver.Social", ["MeshWeaver.Social.dll"]),
+            Content: ["Post/Readme.md"]);
+
+        BundleOffering.ClassifyEmpty(manifest).Should().Be(BundleAdoptionKind.NoAssemblies,
+            "the manifest PROMISED NodeType bytes and none arrived — a torn bundle, not a "
+            + "module-only one, however the package describes the rest of itself");
+    }
+
+    /// <summary>The same thing end to end: a real archive whose declared assembly entry is absent.</summary>
+    [Fact]
+    public void ARealBundleMissingItsDeclaredAssemblyEntry_ReadsEmpty_AndIsStillAMiss()
+    {
+        var declared = new BundleReader.Manifest("Social", "1.2.0", "sframework",
+            Assemblies: [new BundleReader.AssemblyRef("SocialMedia/Post", "Post.dll")],
+            Module: new BundleReader.ModuleRef("MeshWeaver.Social", ["MeshWeaver.Social.dll"]));
+
+        using var buffer = new MemoryStream();
+        using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using var entry = new StreamWriter(
+                archive.CreateEntry(NuGetPackageWriter.ManifestEntry).Open());
+            entry.Write(JsonSerializer.Serialize(declared, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        }
+        // NOTE: meshweaver/assemblies/Post.dll is deliberately NOT written.
+
+        var (manifest, assemblies) = BundleReader.Read(buffer.ToArray());
+
+        assemblies.Should().BeEmpty("BundleReader skips a declared assembly with no archive entry");
+        manifest!.Assemblies.Should().ContainSingle("…while the manifest still declares it");
+        (manifest.Misses?.Count ?? 0).Should().Be(0, "and the producer recorded no miss for it");
+
+        BundleOffering.ClassifyEmpty(manifest).Should().Be(BundleAdoptionKind.NoAssemblies,
+            "which is exactly the shape that must NOT read as 'nothing to adopt'");
     }
 
     // ---- the rendered sentence keeps its denominator ----

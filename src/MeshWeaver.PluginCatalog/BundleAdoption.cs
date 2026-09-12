@@ -83,13 +83,30 @@ public static class BundleOffering
     /// is a producer defect, and it stays <see cref="BundleAdoptionKind.NoAssemblies"/> so it stays
     /// loud. Inferring the benign reading from emptiness would silence exactly that case.</para>
     ///
-    /// <para>Unresolved producer misses dominate: if the bake could not resolve types it was asked
-    /// for, the bundle is short whatever else it declares, and that is a miss.</para>
+    /// <para>Two things dominate every declaration, and both are misses:</para>
+    /// <list type="number">
+    /// <item>unresolved producer <c>Misses</c> — the bake could not resolve types it was asked for,
+    /// so the bundle is short whatever else it carries;</item>
+    /// <item>🚨 a non-empty <c>Assemblies</c> list. The manifest DECLARED NodeType assemblies and
+    /// none came out, which is a torn bundle, not a module-only one.
+    /// <see cref="BundleReader.Read(System.IO.Stream, System.Collections.Generic.IReadOnlySet{string})"/>
+    /// skips a declared assembly whose archive entry is absent (<c>if (dll is null) continue;</c>)
+    /// — silently, and without recording a miss. A MIXED package (content + NodeTypes + a module)
+    /// whose assembly entries went missing therefore arrives here with zero payloads, a positive
+    /// <c>Module</c> declaration and no <c>Misses</c>, and reading that as "nothing to adopt" would
+    /// hide a genuinely missing NodeType — from <c>Modules:RequirePrebuilt</c> above all, which
+    /// exists to refuse exactly that. Found in review on #4079.</item>
+    /// </list>
     /// </summary>
     /// <param name="manifest">The bundle's manifest, or null from an unreadable bundle.</param>
     public static BundleAdoptionKind ClassifyEmpty(BundleReader.Manifest? manifest)
     {
         if (manifest?.Misses is { Count: > 0 })
+            return BundleAdoptionKind.NoAssemblies;
+
+        // The manifest promised NodeType bytes. Zero of them arrived. That is a miss however the
+        // package describes the rest of itself.
+        if (manifest?.Assemblies is { Count: > 0 })
             return BundleAdoptionKind.NoAssemblies;
 
         var declaresModule = manifest?.Module?.AssemblyName is { Length: > 0 };
