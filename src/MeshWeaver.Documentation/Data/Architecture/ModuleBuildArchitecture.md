@@ -134,6 +134,24 @@ which is untouched. Arithmetic for Plugins at N=6: the ~40 sub-minute pack legs 
 from ~40 billed minutes to ~7 (each batch ≈ 6 × 1.1 min of work ≈ 7 min, rounded once), and the
 per-leg checkout + SDK install is paid 7 times instead of 40.
 
+> 🚨 **The batching script is FETCHED at the lane's `scripts-ref`, never read out of the
+> `platform-ref` checkout** (2026-09-12, the same day). #4096 merged at 16:43Z, and every `pack`
+> leg of MeshWeaver.Plugins main then ran `python3 meshweaver/.github/scripts/module-pack-batch.py`
+> out of a checkout at the run's *platform* — the newest sealed set, cut at a7450f3aa (14:46Z),
+> two hours before the file existed — and died with `python3: can't open file … [Errno 2]`, so
+> Plugins published nothing until a seal carried it (run 34707906260). That is the
+> `scripts-ref` / `platform-ref` split the gate lane already lives by (#3842, #4095): the lane's
+> OWN tooling moves with the lane, the platform moves with the seal, and for a caller at `@main`
+> the two are hours apart. So `node-repo-module-pack.yml` now takes `scripts-ref` (empty →
+> `build-logic-ref` → `platform-ref`; a caller that pins nothing passes `main`) and `select`,
+> `pack` and `tests` each curl `module-pack-batch.py` at that ref into the checkout's path, assert
+> `#!`, and run its `--self-test` before the first `init` — RED by name on a miss, never a
+> warning. `ScriptsRefFetchGuard` (MeshWeaver.Documentation.Test) holds the rule fleet-wide: every
+> `meshweaver/.github/scripts/<x>` a lane job runs is fetched at `${SCRIPTS_REF}` in that job or is
+> on an explicit allow-list of scripts old enough to be in every sealed set (with its landing
+> date); a stale allow-list entry is RED too. The guard fires by content on the lane exactly as
+> #4096 merged it, naming all three jobs.
+
 ### Where a module's own suite runs — and why `publish` decides
 
 A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last
