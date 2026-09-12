@@ -71,10 +71,14 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "PR verdict behind a sibling checkout, or plugin source entering core's build. "
                 + "satellite-compat is neither: it is on no pull request, it builds nothing into an "
                 + "image or seal, it runs after `promote` with nothing waiting on it, and it checks out "
-                + "read-only content at each satellite's main, recording the sha it judged. It CAN turn "
-                + "a core CD run red on a satellite's state — which is the decision (a break known "
-                + "within the hour rather than at 03:00), not a side effect. Its register is pinned by "
-                + "PlatformBakeLaneGuard to exactly the five satellites, inside that job only"),
+                + "read-only content at each satellite's main, recording the sha it judged. And its red "
+                + "is CLASSIFIED, not raw: every leg also compiles the same content against the set the "
+                + "fleet is on (gate's pre-promote record) and compat-verdict.py reds ONLY a type that "
+                + "compiled there and does not now — so a satellite's own broken commit (this hazard, "
+                + "exactly) is an advisory, never a red, and a red means core moved a surface. That is "
+                + "the decision (a break known within the hour rather than at 03:00), not a side effect. "
+                + "Its register is pinned by PlatformBakeLaneGuard to exactly the five satellites, inside "
+                + "that job only"),
             new KeyValuePair<string, string>("edge-images.yml",
                 "the manual edge channel — same two projects"),
         ]);

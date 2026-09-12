@@ -401,6 +401,13 @@ jobs:
       conclusion: ${{ steps.required.outputs.conclusion }}
       # The architectures publish-bake runs a lane for — see that job's matrix.
       bake_arches: ${{ steps.arches.outputs.json }}
+      # The set the fleet is ON, read here BEFORE this run's promote moves `main` (2026-09-12):
+      # satellite-compat's baseline. Empty = could not be established (the reason says why), and
+      # every consumer treats empty as "refuse to judge", never as a verdict either way.
+      baseline_tester_digest: ${{ steps.baseline.outputs.digest }}
+      baseline_tester_version: ${{ steps.baseline.outputs.version }}
+      baseline_run_number: ${{ steps.baseline.outputs.run_number }}
+      baseline_reason: ${{ steps.baseline.outputs.reason }}
     steps:
       - uses: actions/checkout@v7
       # ─────────── Which architectures get a bake lane ───────────
@@ -684,6 +691,44 @@ jobs:
       #     Later ticks then cost ~40 s and print nothing — loud once, then quiet, which is the
       #     opposite of a repeating alarm nobody reads. Closing the issue is a deliberate human
       #     act and legitimately grants a fresh budget.
+      # ─────────── The set the fleet is on — satellite-compat's baseline (2026-09-12) ───────────
+      # Read HERE, pre-promote, from the same registry the completeness probe above reads, because
+      # after `promote` the `main` pointer names THIS run's set and the previous one is gone from
+      # every pointer. One manifest row answers the whole question: the digest (what to compile
+      # against), its version tag (3.0.0-ci.<run> — the run number of the CD run that built it) and
+      # therefore which run's `module-bundle-*` artifacts shipped WITH it (satellite-compat-image
+      # fetches those). A read that fails, or a `main` that carries no version tag, is recorded as
+      # "no baseline" with the reason — never fatal here, because the judge downstream treats an
+      # unestablished baseline as a REFUSAL to judge, which is the only honest reading of it.
+      - name: "Record the set the fleet is on (satellite-compat's baseline)"
+        id: baseline
+        run: |
+          set -euo pipefail
+          row=""
+          if rows=$(az acr manifest list-metadata --registry meshweaver --name mw-plugin-test --top 100 --orderby time_desc -o json --only-show-errors); then
+            row=$(printf '%s' "$rows" | jq -c '[.[] | select(.tags != null) | select(.tags | index("main"))] | .[0] // empty')
+          else
+            echo "reason=ACR manifest metadata for mw-plugin-test could not be read" >> "$GITHUB_OUTPUT"
+            echo "::warning::satellite-compat baseline NOT established: ACR manifest metadata for mw-plugin-test could not be read — every compat leg will refuse to judge this run"
+            exit 0
+          fi
+          if [ -z "$row" ]; then
+            echo "reason=no mw-plugin-test manifest carries the main tag (first publish?)" >> "$GITHUB_OUTPUT"
+            echo "::warning::satellite-compat baseline NOT established: no mw-plugin-test manifest carries the main tag"
+            exit 0
+          fi
+          digest=$(printf '%s' "$row" | jq -r '.digest')
+          version=$(printf '%s' "$row" | jq -r '[.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+(-ci\\.[0-9]+)?$"))] | .[0] // empty')
+          run_number="${version##*-ci.}"
+          case "$digest" in sha256:*) ;; *) echo "reason=the main manifest's digest is not a sha256 (got '$digest')" >> "$GITHUB_OUTPUT"; echo "::warning::satellite-compat baseline NOT established: main's digest is '$digest'"; exit 0 ;; esac
+          if [ -z "$version" ] || ! [ "$run_number" -eq "$run_number" ] 2>/dev/null; then
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+            echo "reason=mw-plugin-test:main ($digest) carries no 3.0.0-ci.<run> version tag, so the bundles that shipped with it cannot be located" >> "$GITHUB_OUTPUT"
+            echo "::warning::satellite-compat baseline NOT established: main ($digest) carries no ci version tag (tags: $(printf '%s' "$row" | jq -c .tags))"
+            exit 0
+          fi
+          { echo "digest=$digest"; echo "version=$version"; echo "run_number=$run_number"; } >> "$GITHUB_OUTPUT"
+          echo "baseline (the set the fleet is on): mw-plugin-test:main = $digest = $version, built by run #$run_number"
       - name: "Are there image-relevant changes since the newest published set?"
         id: relevance
         env:
@@ -2571,10 +2616,20 @@ jobs:
   #     an `if:` on a credential: `preflight` asserts the fleet-reader App RED, and a leg that
   #     cannot mint, pull or compile is a red leg. `fail-fast: false`, so one satellite's red does
   #     not cancel the others' measurement — the verdict is per satellite or it is not a verdict.
+  #   * RED MEANS "THIS BUILD BROKE IT" — and nothing else (maintainer, 2026-09-12: "why fail
+  #     compatibility?"). Each leg compiles the same content TWICE: against this run's set and
+  #     against the set the fleet is ON (`gate` records mw-plugin-test:main's digest and version
+  #     pre-promote; satellite-compat-image verifies GHCR holds it and re-uploads the four module
+  #     bundles the run that built it packed). compat-verdict.py then classifies per NodeType:
+  #     compiled at the baseline, not now → BROKE (the only red); failed at the baseline too, or
+  #     absent there → already broken, satellite side (green, advisory — its own daily run and
+  #     ci-main-red issue own it); no baseline → a refusal to judge (green, advisory, new-image
+  #     failures listed UNJUDGED). So the c88cd5d5c hazard — core reddened by a satellite's own
+  #     broken commit — is classified out, not tolerated. Both digests are in every verdict.
   #
-  # Budget: ubuntu-latest in a public repository — unbilled. Five parallel legs of ~2 min add
-  # ≤ ~3 min of wall time beside `plugins-bake` (which they do not wait for), and five concurrent
-  # jobs per build against the org's job ceiling. Narrowing the matrix to the satellites whose
+  # Budget: ubuntu-latest in a public repository — unbilled. Five parallel legs of ~2 min per
+  # compile, two compiles each (~4–5 min a leg), add ≤ ~5 min of wall time beside `plugins-bake`
+  # (which they do not wait for), and five concurrent jobs per build against the org's job ceiling. Narrowing the matrix to the satellites whose
   # NodeTypes reference the changed surface is the honest lever if that concurrency ever matters;
   # it is NOT done here — nothing in this run knows which satellite binds which surface, and a
   # matrix that guessed would skip exactly the leg it should have run.
@@ -2587,17 +2642,26 @@ jobs:
   # `plugins-bake-image` resolved on ACR; the legs then pull `ghcr.io/…@<that digest>` with
   # GITHUB_TOKEN. One set, one digest, two registries — verified, not assumed.
   satellite-compat-image:
-    name: "Compatibility: the tester on GHCR is this run's digest"
+    name: "Compatibility: this run's tester on GHCR, and the baseline set"
     needs: [preflight, gate, plugin-test-image, promote, plugins-bake-image]
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    # actions: read — `gh run download` of the BASELINE run's module-bundle artifacts (another
+    # run's artifacts need it; this run's do not). Job-level, in this workflow, so it demands
+    # nothing of any lane caller.
     permissions:
       contents: read
       packages: read
+      actions: read
     outputs:
       image: ${{ steps.mirror.outputs.image }}
       digest: ${{ steps.mirror.outputs.digest }}
+      # The baseline as VERIFIED here: the digest gate recorded, only if GHCR holds it AND the
+      # run that built it still has its four module bundles (re-uploaded below as
+      # `satellite-compat-baseline-bundles`). Empty = refuse to judge, with the reason.
+      baseline_digest: ${{ steps.baseline.outputs.digest }}
+      baseline_reason: ${{ steps.baseline.outputs.reason }}
     steps:
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -2623,6 +2687,56 @@ jobs:
           echo "image=ghcr.io/$ns/mw-plugin-test" >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "satellite-compat tester: $ref = $digest (equal to ACR's)"
+      # ─────────── The baseline: verify it is pullable, and fetch the bundles that shipped with it ───────────
+      # `gate` recorded the digest and the run number pre-promote. Here: (1) GHCR must hold that
+      # digest (promote mirrored it when it was promoted); (2) the run that built it must still
+      # hold its four `module-bundle-*` artifacts (7-day retention) — the baseline compile must
+      # see the modules the fleet actually holds. Either missing = NO BASELINE, with the reason,
+      # and every leg refuses to judge; never a leg that compiles against half a baseline.
+      - name: "Establish the baseline set, or say why it cannot be"
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_DIGEST: ${{ needs.gate.outputs.baseline_tester_digest }}
+          BASELINE_VERSION: ${{ needs.gate.outputs.baseline_tester_version }}
+          BASELINE_RUN_NUMBER: ${{ needs.gate.outputs.baseline_run_number }}
+          GATE_REASON: ${{ needs.gate.outputs.baseline_reason }}
+          NEW_DIGEST: ${{ steps.mirror.outputs.digest }}
+          IMAGE: ${{ steps.mirror.outputs.image }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_FILE: main-cd.yml
+        run: |
+          set -euo pipefail
+          refuse() { echo "reason=$1" >> "$GITHUB_OUTPUT"; echo "::warning::satellite-compat baseline NOT established — every leg refuses to judge: $1"; exit 0; }
+          [ -n "$BASELINE_DIGEST" ] || refuse "${GATE_REASON:-gate recorded no baseline digest}"
+          [ -n "$BASELINE_RUN_NUMBER" ] || refuse "${GATE_REASON:-gate recorded no run number for the baseline $BASELINE_DIGEST}"
+          if [ "$BASELINE_DIGEST" = "$NEW_DIGEST" ]; then
+            refuse "the baseline digest equals this run's ($NEW_DIGEST) — main already pointed at this set before promote, so there is no PREVIOUS image to compare against"
+          fi
+          docker buildx imagetools inspect "$IMAGE@$BASELINE_DIGEST" --format '{{json .Manifest.Digest}}' >/dev/null \
+            || refuse "GHCR does not hold the baseline tester $BASELINE_DIGEST ($BASELINE_VERSION)"
+          run_id=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW_FILE/runs?per_page=100" \
+            --jq "[.workflow_runs[] | select(.run_number == $BASELINE_RUN_NUMBER)] | .[0].id // empty") \
+            || refuse "could not list this workflow's runs to locate run #$BASELINE_RUN_NUMBER (the run that built $BASELINE_VERSION)"
+          [ -n "$run_id" ] || refuse "run #$BASELINE_RUN_NUMBER (the run that built $BASELINE_VERSION) is not among the last 100 runs of $WORKFLOW_FILE"
+          rm -rf baseline-bundles; mkdir -p baseline-bundles
+          gh run download "$run_id" -R "$REPO" -p 'module-bundle-*' -D baseline-bundles \
+            || refuse "run $run_id (#$BASELINE_RUN_NUMBER, $BASELINE_VERSION) has no downloadable module-bundle-* artifacts (expired, or that run never packed them)"
+          n=$(find baseline-bundles -name '*.module.nupkg' | wc -l | tr -d ' ')
+          [ "$n" -eq 4 ] || refuse "run $run_id (#$BASELINE_RUN_NUMBER) holds $n module bundle(s), not the 4 the satellites bind (AI, Markdown.Collaboration, Maps, Payments.Stripe)"
+          mkdir -p "$RUNNER_TEMP/baseline-bundles" && find baseline-bundles -name '*.module.nupkg' -exec cp {} "$RUNNER_TEMP/baseline-bundles/" \;
+          echo "digest=$BASELINE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "baseline set: $IMAGE@$BASELINE_DIGEST ($BASELINE_VERSION, run $run_id #$BASELINE_RUN_NUMBER) + 4 module bundles"
+      # Re-uploaded under THIS run so the reusable lane can take them by pattern with the runtime
+      # token — same-run artifacts need no extra scope in the lane.
+      - name: Hand the baseline bundles to the legs
+        if: ${{ steps.baseline.outputs.digest != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: satellite-compat-baseline-bundles
+          path: ${{ runner.temp }}/baseline-bundles/*.module.nupkg
+          retention-days: 1
+          if-no-files-found: error
 
   satellite-compat:
     name: "Compatibility: ${{ matrix.satellite }}'s NodeTypes compile against this set"
@@ -2672,6 +2786,18 @@ jobs:
       # being written by `plugins-bake` in parallel, and the bytes are the same by construction.
       module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration,Maps,Payments.Stripe}
       verdict-artifact: satellite-compat-${{ matrix.satellite }}
+      # 🚨 THE CONTROL (maintainer pushback, 2026-09-12: "why fail compatibility?"). A red compile
+      # alone cannot say which side moved. The same content is compiled a second time against the
+      # set the fleet is ON (gate's pre-promote record, verified by satellite-compat-image with the
+      # bundles that shipped with it), and compat-verdict.py classifies: compiled there and not now
+      # = THIS BUILD BROKE IT, the only red; failed there too = already broken, satellite side,
+      # green + advisory; no baseline = refusal to judge, green + advisory. So a red leg now means
+      # "core broke it", and c88cd5d5c's hazard — core reddened by a satellite's own broken
+      # commit — is classified out rather than merely tolerated.
+      judge-against-baseline: true
+      baseline-image-digest: ${{ needs.satellite-compat-image.outputs.baseline_digest }}
+      baseline-module-artifacts: satellite-compat-baseline-bundles
+      baseline-unavailable-reason: ${{ needs.satellite-compat-image.outputs.baseline_reason }}
     secrets:
       # GHCR takes any username with a token that can read the package; GITHUB_TOKEN can, because
       # promote pushed the mirror under it and the lane's job holds `packages: read`.
@@ -3120,12 +3246,12 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "### 🧩 Compatibility — every satellite's NodeTypes against \`${VERSION}\` (satellite-compat=${COMPAT_RESULT})"
+            echo "### 🧩 Compatibility — every satellite's NodeTypes against \`${VERSION}\`, judged against the set the fleet is on (satellite-compat=${COMPAT_RESULT})"
             echo ""
-            echo "| Satellite | Content | Verdict | NodeTypes | Breaks | Known debt |"
-            echo "|---|---|---|---:|---|---:|"
+            echo "| Satellite | Content | Verdict | NodeTypes | Types | Baseline → new |"
+            echo "|---|---|---|---:|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
-          red=0; unmeasured=0; redlist=""
+          red=0; unmeasured=0; redlist=""; advisory=""
           for sat in $SATELLITES; do
             f="$VERDICTS/satellite-compat-$sat/compile-check-verdict.json"
             if [ ! -f "$f" ]; then
@@ -3134,20 +3260,34 @@ jobs:
               echo "compatibility: $sat — NOT MEASURED (no verdict artifact; read that leg)"
               continue
             fi
-            fail=$(jq -r '.gate_fail' "$f")
+            verdict=$(jq -r '.verdict // (if .gate_fail then "broke" else "compatible" end)' "$f")
             csha=$(jq -r '.content.sha // "" | .[0:9]' "$f")
             types=$(jq -r '.types' "$f")
-            debt=$(jq -r '.known_debt | length' "$f")
-            breaks=$(jq -r --arg bt '`' '([.new_breaks[].type] + [.fp_drift[].type] + [.stale_allow[] | . + " (compiles now — remove from allow)"]) | map($bt + . + $bt) | join(", ")' "$f")
-            if [ "$fail" = "true" ]; then
-              red=$((red + 1)); redlist="${redlist:+$redlist, }$sat"
-              echo "| $sat | \`${csha:-?}\` | ❌ RED | $types | ${breaks:-?} | $debt |" >> "$GITHUB_STEP_SUMMARY"
-              echo "compatibility: $sat@${csha:-?} — RED against $VERSION: ${breaks:-?}"
-              jq -r '(.new_breaks + .fp_drift)[] | "    \(.type): \(.error)"' "$f"
-            else
-              echo "| $sat | \`${csha:-?}\` | ✅ compiles | $types | — | $debt |" >> "$GITHUB_STEP_SUMMARY"
-              echo "compatibility: $sat@${csha:-?} — compiles against $VERSION ($types NodeType(s), $debt known-debt)"
-            fi
+            images=$(jq -r --arg bt '`' '"\($bt)\((.images.baseline // "")[7:19] | if . == "" then "—" else . end)\($bt) → \($bt)\((.images.new // "")[7:19])\($bt)"' "$f")
+            case "$verdict" in
+              broke)
+                red=$((red + 1)); redlist="${redlist:+$redlist, }$sat"
+                list=$(jq -r --arg bt '`' '[.broke[].type] | map($bt + . + $bt) | join(", ")' "$f")
+                echo "| $sat | \`${csha:-?}\` | 🔴 **THIS BUILD BROKE IT** | $types | ${list:-?} | $images |" >> "$GITHUB_STEP_SUMMARY"
+                echo "compatibility: $sat@${csha:-?} — BROKEN BY THIS BUILD ($VERSION): ${list:-?}"
+                jq -r '.broke[] | "    \(.type): \(.error)"' "$f" ;;
+              already-broken)
+                advisory="${advisory:+$advisory; }$sat"
+                list=$(jq -r --arg bt '`' '[.already_broken[].type] | map($bt + . + $bt) | join(", ")' "$f")
+                echo "| $sat | \`${csha:-?}\` | 🟡 already broken (satellite side, advisory) | $types | ${list:-?} | $images |" >> "$GITHUB_STEP_SUMMARY"
+                echo "compatibility: $sat@${csha:-?} — ALREADY BROKEN on the baseline too (satellite side; its own daily run / ci-main-red issue own it): ${list:-?}"
+                jq -r '.already_broken[] | "    \(.type) (baseline: \(.baseline)): \(.error)"' "$f" ;;
+              no-baseline)
+                advisory="${advisory:+$advisory; }$sat (no baseline)"
+                reason=$(jq -r '.images.baseline_reason // .baseline_reason // "?"' "$f")
+                list=$(jq -r --arg bt '`' '[.unjudged[].type] | map($bt + . + $bt) | join(", ")' "$f")
+                echo "| $sat | \`${csha:-?}\` | ⚪ NO BASELINE — refused to judge: $reason | $types | ${list:-—} (unjudged) | $images |" >> "$GITHUB_STEP_SUMMARY"
+                echo "compatibility: $sat@${csha:-?} — could not establish a baseline ($reason); ${list:-no} new-image failure(s) left UNJUDGED" ;;
+              *)
+                stale=$(jq -r --arg bt '`' '[.stale_allow[]] | map($bt + . + $bt + " (compiles now — remove from allow)") | join(", ")' "$f")
+                echo "| $sat | \`${csha:-?}\` | ✅ compatible | $types | ${stale:-—} | $images |" >> "$GITHUB_STEP_SUMMARY"
+                echo "compatibility: $sat@${csha:-?} — compatible with $VERSION ($types NodeType(s))" ;;
+            esac
           done
           case "$COMPAT_RESULT" in
             success|failure) ;;
@@ -3162,16 +3302,21 @@ jobs:
           fi
           echo "compat_red=$red" >> "$GITHUB_OUTPUT"
           echo "compat_red_list=$redlist" >> "$GITHUB_OUTPUT"
+          if [ -n "$advisory" ]; then
+            echo "- 🟡 advisory (not this build's): $advisory" >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "$red" -gt 0 ]; then
             # 🚨 THE CONTRADICTION, STATED. A red leg fails `satellite-compat` (no continue-on-error,
             # by rule), so the RUN's conclusion is `failure` — while promote, notify, bake and seal
             # all completed. The run's colour then says COMPATIBILITY, not shipping. Said first,
             # here and in the run's headline below, so nobody reads "CD failed" as "nothing shipped".
-            echo "🚨 **DELIVERY COMPLETED** — this run is red because $red satellite(s) failed compatibility: ${redlist}. Nothing failed to ship." >> "$GITHUB_STEP_SUMMARY"
-            echo "- The set IS published and every instance gates itself; the red is \`satellite-compat\`'s own and is filed on the \`ci-failure\` issue. Fix lands in the SATELLITE (or core, if the break is the platform's) — the daily rebuild will not repair it on its own." >> "$GITHUB_STEP_SUMMARY"
-            echo "🚨 DELIVERY COMPLETED — this run is red because $red satellite(s) failed compatibility: ${redlist}. Nothing failed to ship."
+            # And since the baseline control, red means ONE thing: these types compiled against the
+            # set the fleet is on and do not against this one — core's side, by measurement.
+            echo "🚨 **DELIVERY COMPLETED** — this run is red because this core build BROKE $red satellite(s): ${redlist} (previous image compiled, new image does not). Nothing failed to ship." >> "$GITHUB_STEP_SUMMARY"
+            echo "- The set IS published and every instance gates itself; the red is \`satellite-compat\`'s own and is filed on the \`ci-failure\` issue. The break is on CORE's side by measurement: fix the surface in core (or, if the move was intended, land the satellite's adaptation) — the daily rebuild will not repair it on its own." >> "$GITHUB_STEP_SUMMARY"
+            echo "🚨 DELIVERY COMPLETED — this run is red because this core build BROKE $red satellite(s): ${redlist} (previous image compiled, new image does not). Nothing failed to ship."
           else
-            echo "compatibility: every satellite compiles against $VERSION"
+            echo "compatibility: no satellite was broken by this build ($VERSION)${advisory:+; advisories: $advisory}"
           fi
 
       # Make the outcome unmissable on the run page. A 3-second success and a 20-minute delivery
@@ -3207,7 +3352,7 @@ jobs:
           elif [ -n "$DEFERRED_TO" ]; then
             echo "### ⏳ DEFERRED for \`${SHORT}\` — run [${DEFERRED_TO}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${DEFERRED_TO}) is \`${DEFERRED_STATUS}\` on this commit since ${DEFERRED_SINCE}. The image set is incomplete because that publication is still creating it — a correct no-op, not a stuck delivery (#3513)." >> "$GITHUB_STEP_SUMMARY"
           elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ] && [ "${COMPAT_RED:-0}" != "0" ]; then
-            echo "### 🚨 DELIVERY COMPLETED — this run is red because ${COMPAT_RED} satellite(s) failed compatibility: ${COMPAT_RED_LIST}. Nothing failed to ship." >> "$GITHUB_STEP_SUMMARY"
+            echo "### 🚨 DELIVERY COMPLETED — this run is red because this core build BROKE ${COMPAT_RED} satellite(s): ${COMPAT_RED_LIST} (previous image compiled, new image does not). Nothing failed to ship." >> "$GITHUB_STEP_SUMMARY"
             echo "✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON}) — the run's colour says COMPATIBILITY, not shipping; see the Compatibility table above and the \`ci-failure\` issue." >> "$GITHUB_STEP_SUMMARY"
           elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then
             echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
@@ -3270,14 +3415,17 @@ jobs:
           for f in "$VERDICTS"/satellite-compat-*/compile-check-verdict.json; do
             [ -f "$f" ] || continue
             sat=$(basename "$(dirname "$f")"); sat="${sat#satellite-compat-}"
-            [ "$(jq -r '.gate_fail' "$f")" = "true" ] || continue
+            # Only BROKE lines: an already-broken satellite or an unestablished baseline is an
+            # advisory on the run page, never a line on an alert about THIS build.
+            [ "$(jq -r '.verdict // (if .gate_fail then "broke" else "" end)' "$f")" = "broke" ] || continue
             nred=$((nred + 1)); redlist="${redlist:+$redlist, }$sat"
             csha=$(jq -r '.content.sha // "" | .[0:9]' "$f")
-            first=$(jq -r --arg bt "$bt" '(.new_breaks + .fp_drift + [.stale_allow[] | {type: ., error: "compiles now — remove it from scripts/compile-check.allow"}]) | .[:3] | map($bt + .type + $bt + " — " + .error) | join("; ")' "$f")
-            compat=$(printf '%s\n* **%s** (main @ %s%s%s) does not compile against %s%s%s: %s' "$compat" "$sat" "$bt" "${csha:-?}" "$bt" "$bt" "${VERSION:-this set}" "$bt" "${first:-(see the leg)}")
+            base=$(jq -r '.images.baseline // "" | .[7:19]' "$f")
+            first=$(jq -r --arg bt "$bt" '.broke | .[:3] | map($bt + .type + $bt + " — " + .error) | join("; ")' "$f")
+            compat=$(printf '%s\n* **%s** (main @ %s%s%s): compiled against the previous image (%s%s%s) and does not against %s%s%s: %s' "$compat" "$sat" "$bt" "${csha:-?}" "$bt" "$bt" "${base:-?}" "$bt" "$bt" "${VERSION:-this set}" "$bt" "${first:-(see the leg)}")
           done
           if [ -n "$compat" ]; then
-            compat=$(printf '\n\n🚨 **DELIVERY COMPLETED** — this run is red because %s satellite(s) failed compatibility: %s. Nothing failed to ship.\n\n**Compatibility** (satellite-compat=%s) — the set IS published and every instance gates itself; what is red is the measurement that a satellite still compiles against it. The fix lands in the SATELLITE (its NodeTypes, or its allow-file ratchet), or in core if the platform broke a surface it should not have — the daily rebuild will not repair it on its own. Triage: the control instance, from the failing types below.%s' "$nred" "$redlist" "$COMPAT_RESULT" "$compat")
+            compat=$(printf '\n\n🚨 **DELIVERY COMPLETED** — this run is red because this core build BROKE %s satellite(s): %s (previous image compiled, new image does not). Nothing failed to ship.\n\n**Compatibility** (satellite-compat=%s) — the set IS published and every instance gates itself; what is red is the measurement that a satellite that compiled against the set the fleet is on no longer compiles against this one. That is CORE'"'"'s side by measurement: fix the surface in core, or — if the move was intended — land the satellite'"'"'s adaptation; the daily rebuild will not repair it on its own. Triage: the control instance, from the failing types below.%s' "$nred" "$redlist" "$COMPAT_RESULT" "$compat")
           fi
           # Ensure the label exists (--force = update-or-create, idempotent). Non-fatal for the
           # same reason as in `gate`: this is the ALERT path, so a 503 here must not swallow the
@@ -3292,7 +3440,7 @@ jobs:
 
           * an IMAGE job / promote / verify-images: no complete image set was published. Publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set.
           * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
-          * satellite-compat (a matrix leg) / satellite-compat-image: the set IS published and the release event WAS sent - what failed is the per-build measurement that a satellite's NodeTypes still compile against it (the counterweight to the daily rebuild, 2026-09-12). A red leg names the satellite; the lines under Compatibility below name the types. No image and no publication is missing.
+          * satellite-compat (a matrix leg) / satellite-compat-image: the set IS published and the release event WAS sent - what failed is the per-build measurement that a satellite's NodeTypes still compile against it (the counterweight to the daily rebuild, 2026-09-12). A red leg means THIS BUILD BROKE that satellite: its types compiled against the set the fleet is on and do not against this one (a satellite that was already broken, or an unestablished baseline, is an advisory on the run page, never a red). The lines under Compatibility below name the types. No image and no publication is missing.
 
           The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. This issue CLOSES ITSELF when a CD run reports a successful heal (#3176) - a later failure files a fresh issue rather than appending here, so this one's title and age stay true to its own cause.${compat}"
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \

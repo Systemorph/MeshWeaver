@@ -270,8 +270,10 @@ public class PlatformBakeLaneGuard
     /// against the set this run ALREADY promoted; nothing from it enters an image, a bundle or a
     /// seal; no version is derived from it; it runs after <c>promote</c> and nothing waits for it;
     /// and nothing downstream consumes the verdict. It cannot put bytes under the wrong identity
-    /// because it publishes no bytes. What it CAN do is make a core CD run red on a satellite's
-    /// state — which is the decision, not a side effect.</para>
+    /// because it publishes no bytes. What it CAN do is make a core CD run red — and, since the
+    /// baseline control (the same content compiled against the set the fleet is on, recorded by
+    /// <c>gate</c> pre-promote), only when a type compiled there and does not against this set:
+    /// core's side by measurement, which is the decision, not a side effect.</para>
     ///
     /// <para>So the register is asserted POSITIVELY below rather than the rule relaxed: exactly the
     /// five satellites, only inside that job, and OUTSIDE it the only repository is still Plugins.
@@ -343,6 +345,21 @@ public class PlatformBakeLaneGuard
     private static string ExecutableLinesOf(string block) =>
         string.Join("\n", block.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
 
+    /// <summary>
+    /// The ONE cross-run download this file tolerates, and the block it must stay inside. The
+    /// original invariant (#1725, below) is about ADOPTION: a bundle from another run is a
+    /// different compilation of the same source, resolves a different framework identity, and so
+    /// must never be PUBLISHED as this run's. <c>satellite-compat-image</c> (2026-09-12) downloads
+    /// the previous run's module bundles for the opposite purpose — as the COMPILE REFERENCE of the
+    /// baseline reading (the set the fleet is on, so a satellite's "does not compile" can be
+    /// attributed to core or to the satellite). Those bytes are re-uploaded under a name only the
+    /// compat legs read, unpacked into <c>refs-baseline/</c>, and never enter a bake directory, a
+    /// seal or a publication. The exemption is the BLOCK, asserted positively by
+    /// <see cref="SatelliteCompatBaselineDownload_IsAReferenceNeverAPublication"/>; a
+    /// <c>gh run download</c> anywhere else in a publishing workflow is still the #1725 defect.
+    /// </summary>
+    private const string BaselineDownloadJob = "satellite-compat-image";
+
     [Fact]
     public void PlatformBake_NeverAdoptsAnotherBuildsBundles()
     {
@@ -352,7 +369,7 @@ public class PlatformBakeLaneGuard
             // Comments stripped for the same reason as above, in the other direction: a workflow is
             // judged on what it RUNS, so prose explaining why the artifact hop was removed must
             // never read as the hop itself.
-            .Select(f => (file: Path.GetFileName(f), text: ExecutableLinesOf(File.ReadAllText(f))))
+            .Select(f => (file: Path.GetFileName(f), text: ExecutableLinesOf(WithoutJob(File.ReadAllLines(f), BaselineDownloadJob))))
             .Where(x => x.text.Contains("publish-bake-bundles.sh", StringComparison.Ordinal))
             // The invariant is CROSS-RUN adoption (#1725): a bundle from another run is a different
             // compilation resolving a different framework identity. `gh run download` is cross-run
@@ -376,6 +393,49 @@ public class PlatformBakeLaneGuard
             + "different framework identity, so no pod can adopt what it publishes (#1725). "
             + "Bake inside the image being shipped instead. Offending workflow(s): "
             + string.Join(", ", offenders));
+    }
+
+    /// <summary>
+    /// <b>The baseline download is a compile reference, never a publication.</b> Both directions:
+    /// the exempted block must still CONTAIN the cross-run download (or the exemption above excuses
+    /// nothing and this guard has gone blind), and it must carry none of the forms by which bytes
+    /// reach a bake, a seal or the portals' storage. The lane that consumes the re-upload is held
+    /// to the same: the baseline bundles unpack into <c>refs-baseline/</c> only.
+    /// </summary>
+    [Fact]
+    public void SatelliteCompatBaselineDownload_IsAReferenceNeverAPublication()
+    {
+        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var start = Array.FindIndex(lines, l => l.Equals($"  {BaselineDownloadJob}:", StringComparison.Ordinal));
+        Assert.True(start >= 0, $"no '{BaselineDownloadJob}:' job in {Workflow} — the exemption in "
+            + "PlatformBake_NeverAdoptsAnotherBuildsBundles names a block that does not exist, so it excuses nothing "
+            + "and this guard measures nothing. Delete the exemption with the job, in the same change.");
+        var end = Array.FindIndex(lines, start + 1, IsJobKey);
+        var block = ExecutableLinesOf(string.Join("\n", lines[start..(end < 0 ? lines.Length : end)]));
+
+        Assert.Contains("gh run download", block, StringComparison.Ordinal);
+        Assert.Contains("name: satellite-compat-baseline-bundles", block, StringComparison.Ordinal);
+        foreach (var publishing in new[] { "publish-bake-bundles.sh", "push-bundle-publication.sh", "--bake-output", "--seed ", "az storage", "BAKE_PUBLISH_TARGETS" })
+            Assert.DoesNotContain(publishing, block, StringComparison.Ordinal);
+
+        // The consumer side: the reusable lane unpacks the baseline bundles into the BASELINE
+        // reference directory and nowhere else, and the lane publishes nothing.
+        var lane = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), ".github", "workflows", "node-repo-compile-check.yml")));
+        Assert.Contains("baseline-module-artifacts", lane, StringComparison.Ordinal);
+        Assert.Contains("refs-baseline/", lane, StringComparison.Ordinal);
+        foreach (var publishing in new[] { "publish-bake-bundles.sh", "push-bundle-publication.sh", "--bake-output", "az storage" })
+            Assert.DoesNotContain(publishing, lane, StringComparison.Ordinal);
+    }
+
+    /// <summary>The workflow's lines with ONE job's block removed — for a detector whose rule the
+    /// block is exempt from by a positive assertion elsewhere.</summary>
+    private static string WithoutJob(string[] lines, string jobName)
+    {
+        var start = Array.FindIndex(lines, l => l.Equals($"  {jobName}:", StringComparison.Ordinal));
+        if (start < 0) return string.Join("\n", lines);
+        var end = Array.FindIndex(lines, start + 1, IsJobKey);
+        if (end < 0) end = lines.Length;
+        return string.Join("\n", lines[..start].Concat(lines[end..]));
     }
 
     /// <summary>

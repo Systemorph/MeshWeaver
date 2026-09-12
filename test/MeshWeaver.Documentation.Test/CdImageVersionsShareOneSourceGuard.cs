@@ -140,8 +140,9 @@ public class CdImageVersionsShareOneSourceGuard
     /// contain is built into an image or sealed beside one, and no tag names them — so there is no
     /// provenance for a mid-run merge to falsify; a merge landing between two legs merely means two
     /// satellites were measured at their own respective tips, each of which the leg RECORDS as a sha
-    /// in its verdict artifact. Pinning them to the plugins sha would be a category error (a
-    /// different repository). The detector still SEES them (it must, or it is blind to a satellite
+    /// in its verdict artifact — beside BOTH image digests it judged against, this run's and the
+    /// baseline's. Pinning them to the plugins sha would be a category error (a different
+    /// repository). The detector still SEES them (it must, or it is blind to a satellite
     /// that a future job promotes into a build input); what excuses them is a POSITIVE assertion
     /// in <see cref="TheSatelliteCompatRegister_IsAMeasurementNotAnImageInput"/>, not a blind spot.</para>
     /// </summary>

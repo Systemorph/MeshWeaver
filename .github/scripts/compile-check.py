@@ -246,6 +246,9 @@ def write_report(path: Path, verdict: dict, result: dict, *, gate_fail: bool, sc
         "types": len(result),
         "elapsed_seconds": round(elapsed, 1),
         "clean": len(verdict["clean"]),
+        # By NAME as well as by count: compat-verdict.py asks "did this type compile against the
+        # PREVIOUS image?", and a count cannot answer for one type.
+        "ok": list(verdict["clean"]),
         "known_debt": [{"type": n, "error": first(n)} for n in verdict["known_debt"]],
         "new_breaks": [{"type": n, "error": first(n)} for n in verdict["new_breaks"]],
         "fp_drift": [{"type": n, "expected": e, "actual": a, "error": first(n)} for n, e, a in verdict["fp_drift"]],
@@ -1093,6 +1096,8 @@ def _self_test() -> int:
             failures.append("  report: a break must carry its FIRST error line")
         if [d.get("type") for d in got.get("known_debt", [])] != ["Pkg/Debt"] or got.get("clean") != 1:
             failures.append(f"  report: known_debt/clean counts wrong: {got!r}")
+        if got.get("ok") != ["Pkg/Fine"]:
+            failures.append(f"  report: the clean types must be listed by NAME, got {got.get('ok')!r}")
         if got.get("scope") != "full" or got.get("types") != 3:
             failures.append(f"  report: scope/types wrong: {got.get('scope')!r}/{got.get('types')!r}")
         os.environ["MW_CONTENT_REPOSITORY"] = "Systemorph/Fixture"; os.environ["MW_CONTENT_SHA"] = "abc1234"

@@ -686,15 +686,25 @@ in parallel runs the same reusable compile gate the satellites run on their own 
 (`node-repo-compile-check.yml`, pointed at the satellite's `main` through the read-only fleet-reader
 App, recording the sha it resolved in the leg's verdict) against the tester **this run** promoted — pulled from its GHCR mirror at the digest
 `satellite-compat-image` asserts equal to ACR's — plus the module bundles **this run** packed, the
-same bytes `plugins-bake` seals. Measured on that lane, a leg costs ~2 min on an unbilled
-`ubuntu-latest` runner. The semantics are *red but not blocking*, and both halves are the point: it
+same bytes `plugins-bake` seals — **and a second time against the set the fleet is on**, the
+control that makes the red attributable (maintainer pushback, 2026-09-12: *"why fail
+compatibility?"* — one compile cannot say which side moved). `gate` records `mw-plugin-test:main`'s
+digest and `3.0.0-ci.<run>` tag before `promote` moves the pointer; `satellite-compat-image` verifies
+GHCR holds that digest and re-uploads the four module bundles the run that built it packed; each leg
+compiles against both sets and `compat-verdict.py` classifies per NodeType: compiled at the baseline
+and not now → **this build broke it**, the only red; failed at the baseline too (or absent there) →
+already broken, satellite side, green with an advisory (its own daily run and ci-main-red issue own
+it); no baseline → a **refusal to judge**, green with an advisory, new-image failures listed
+*unjudged* — an unestablished baseline never reads as "core broke it" nor as "fine". Both digests
+are in every verdict. Measured on that lane, a compile costs ~2 min on an unbilled `ubuntu-latest`
+runner, two per leg. The semantics are *red but not blocking*, and both halves are the point: it
 does not gate `promote`, `notify-platform-update` or `plugins-bake` (the set is published and every
 instance gates itself; a satellite's compile must never hold a veto over the platform's delivery —
 `PlatformNeverDependsOnPluginsGuard` pins the direction), yet a failing leg fails the job, so the run
 is red. **A red satellite leg turns the run RED while delivery has completed; the run's colour then
 says compatibility, not shipping** — which is why the verdict's summary and the alert open with
-`🚨 DELIVERY COMPLETED — this run is red because N satellite(s) failed compatibility: … Nothing
-failed to ship.` `alert-on-failure` files it on the `ci-failure` issue naming the satellite, the set and the
+`🚨 DELIVERY COMPLETED — this run is red because this core build BROKE N satellite(s): … (previous
+image compiled, new image does not). Nothing failed to ship.` `alert-on-failure` files it on the `ci-failure` issue naming the satellite, the set and the
 first failing types (from each leg's `verdict-artifact`), and `delivery-verdict` renders every leg
 under **Compatibility** — and goes red itself if the gate was *skipped* on a publishing run, because
 a skipped measurement painted grey is the one outcome worse than a red one. `fail-fast: false`, no
