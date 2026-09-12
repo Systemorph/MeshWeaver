@@ -981,6 +981,7 @@
   "dialog.imageGenFailed": "Bilderzeugung fehlgeschlagen",
   "create.autoGenIdHint": "Leer lassen, um die ID automatisch aus dem Namen zu erzeugen (aus \"Mein Artikel\" wird \"MeinArtikel\")",
   "create.autoGenIdPlaceholder": "Leer lassen für automatische Erzeugung aus dem Namen",
+  "create.selectType": "Typ auswählen…",
   "apiTokens.intro": "Persönliche Zugriffstoken für API und MCP. Ein Token handelt in Ihrem Namen — behandeln Sie es wie ein Passwort.",
   "apiTokens.createHeading": "Token erstellen",
   "apiTokens.field.label": "Bezeichnung",

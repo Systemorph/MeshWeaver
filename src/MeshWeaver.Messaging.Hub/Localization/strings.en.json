@@ -981,6 +981,7 @@
   "dialog.imageGenFailed": "Image generation failed",
   "create.autoGenIdHint": "Leave empty to auto-generate from the name (e.g. \"My Article\" → \"MyArticle\")",
   "create.autoGenIdPlaceholder": "Leave empty to auto-generate from name",
+  "create.selectType": "Select a type...",
   "apiTokens.intro": "Personal access tokens for the API and MCP. A token acts as you — treat it like a password.",
   "apiTokens.createHeading": "Create a token",
   "apiTokens.field.label": "Label",
