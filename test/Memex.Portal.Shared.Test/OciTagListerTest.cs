@@ -222,6 +222,53 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             "the key is only ever presented to a host this installation was issued one for");
     }
 
+    /// <summary>
+    /// 🚨 NEGATIVE CONTROL for the TARGET, not the declaration (Copilot review on #4094). A
+    /// `SelfUpdate:Registry` carrying userinfo is a valid URI whose host is the LAST one —
+    /// `OciRegistryClient` would build `https://instance:mwi_…@evil…/` and hand it the Basic
+    /// credential — and the raw value is interpolated into that client's errors and this class's
+    /// audit line. Host equality could never match such a value, so it is the declared-validator
+    /// branch that would make it reachable; this refusal is what stops that branch opening a
+    /// disclosure path. The refusal must ALSO not echo the value, which is where the key would be.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARegistryTargetCarryingUserinfo_IsRefused_AndNeverEchoed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string smuggled = "instance:mwi_smuggled-in-the-registry-value";
+
+        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Lister($"{smuggled}@evil.example.test", DeclaredValidator)
+                .ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        fault.Message.Should().NotContain(smuggled,
+            "the refusal must not echo a value of this shape — the userinfo is where a key would be");
+        fault.Message.Should().NotContain("mwi_");
+        fault.Message.Should().Contain("SelfUpdate:Registry");
+        mirror.Requests.Should().Be(0);
+        mirror.PresentedSecret.Should().BeNull(
+            "a declared validator must never make an unparseable target reachable");
+    }
+
+    /// <summary>
+    /// The same normalization closes an ASYMMETRY: the target was compared raw against plugin
+    /// hosts parsed by <c>HostOf</c>, so a URL form missed a registry that IS the same host. It is
+    /// refused rather than silently accepted, because the identical value is interpolated into the
+    /// portal and migration image references, which a URL form makes malformed.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AUrlFormRegistryTarget_IsRefused_NamingTheBareHostToUse()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Lister($"https://{MirrorHost}").ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        fault.Message.Should().Contain(MirrorHost, "the message names the value to set instead");
+        fault.Message.Should().Contain("bare registry host");
+        mirror.Requests.Should().Be(0);
+    }
+
     /// <summary>The declaration is read WHOLE-HOST or not at all — never a suffix, a registrable
     /// domain or anything else that could make a coincidence of naming look like a grant.</summary>
     [Fact]

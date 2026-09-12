@@ -12,16 +12,30 @@ already holds for a plugin registry. WHICH plugin registry's key is a disclosure
 decided by DECLARED PAIRINGS — never by host equality, never by name resemblance, and never by "there
 is only one key, so use it".**
 
-The rule, in `OciTagLister.ResolveCredential`:
+🚨 **Two different questions, and confusing them is how this page would mislead.** The key is always
+**SENT TO** `SelfUpdate:Registry` — the container registry — because that is the host being listed.
+What the rule below decides is **WHICH KEY**: which of this installation's configured
+plugin-registry credentials is selected. The validator host is a *credential source*, never a
+destination; nothing is ever sent to it by the lister.
 
-| The key is presented to… | …because |
-|---|---|
-| the container registry's **own host**, when a plugin registry is configured there | the operator already gave this installation a key for that exact host — a portal serving its images from the `/v2` mirror it also serves its catalog from |
-| the host named by **`SelfUpdate:RegistryValidationUrl`**, when a plugin registry is configured there | the operator declared that portal as the one that *validates* this installation's key at that registry, AND gave this installation a key for it |
-| **nothing else, ever** | an absent declaration is a refusal, not permission |
+So, in `OciTagLister.ResolveCredential` — **selecting** the credential:
+
+| The key selected is the one held for… | …because | the key is sent to |
+|---|---|---|
+| the container registry's **own host**, when a plugin registry is configured there | the operator already gave this installation a key for that exact host — a portal serving its images from the `/v2` mirror it also serves its catalog from | the container registry |
+| the host named by **`SelfUpdate:RegistryValidationUrl`**, when a plugin registry is configured there | the operator declared that portal as the one that *validates* this installation's key at that registry, AND gave this installation a key for it | the container registry — **still**, never the validator |
+| **nothing else, ever** | an absent declaration is a refusal, not permission | nothing is sent |
 
 Both rows need TWO explicit statements. A declaration alone grants nothing (there is still no key for
 that host); a key alone grants nothing (nothing says that registry trusts that portal).
+
+**And the destination itself is validated first.** `SelfUpdate:Registry` must already be a bare
+`host[:port]`: `OciRegistryClient` builds `https://{registry}/` for a value with no scheme, so
+`instance:mwi_…@evil.example` would be a valid URI whose host is `evil.example` and would receive the
+Basic credential. Host equality could never match such a value, so it is the declared-validator row
+that would otherwise make it reachable — the target check is what keeps that row from opening a
+disclosure path. A value that does not parse to an http(s) host is refused **without being echoed**,
+because the userinfo is where a key would be.
 
 ## Why host equality was wrong
 

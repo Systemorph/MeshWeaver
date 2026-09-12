@@ -61,10 +61,44 @@ public sealed class OciTagLister(
     /// </summary>
     public IObservable<IReadOnlyList<string>> ListTags(string repository)
     {
-        var registry = (options.Registry ?? string.Empty).Trim().TrimEnd('/');
-        if (registry.Length == 0)
+        var configured = (options.Registry ?? string.Empty).Trim().TrimEnd('/');
+        if (configured.Length == 0)
             return Observable.Throw<IReadOnlyList<string>>(new InvalidOperationException(
                 "SelfUpdate:Registry is empty — there is no registry to list tags on."));
+
+        // 🚨 THE TARGET IS NORMALIZED AND VALIDATED BEFORE ANY CREDENTIAL IS RESOLVED, and the
+        // check is that the configured value ALREADY IS a bare `host[:port]`.
+        //
+        // Two defects live behind a raw value here, and the second is a key disclosure:
+        //  * ASYMMETRY — `ResolveCredential` compares this against plugin-registry hosts parsed by
+        //    `HostOf`, so a `https://host` form would miss a registry that is in fact the same host.
+        //  * DISCLOSURE — `OciRegistryClient` builds `https://{registry}/` for a value with no
+        //    scheme, so `instance:mwi_…@evil.example` is a VALID URI whose host is `evil.example`;
+        //    it would receive the Basic credential, and the raw value is interpolated into that
+        //    client's error messages and into this class's audit line. Host equality alone could
+        //    never match such a value, so the declared-validator branch below is what would make it
+        //    reachable — this refusal is the reason that branch cannot open a disclosure path.
+        //
+        // Requiring host-equality (not merely "parses to a host") also keeps this in step with
+        // SelfUpdateOptions.PortalImage/MigrationImage, which interpolate the SAME value into an
+        // image reference and need a bare host for it to be well-formed.
+        var registry = SelfUpdateOptions.HostOf(configured);
+        if (registry is null)
+            // 🚨 The value is NOT echoed: this is exactly the branch a userinfo-bearing value lands
+            // in, and the userinfo is where a key would be.
+            return Observable.Throw<IReadOnlyList<string>>(new InvalidOperationException(
+                "SelfUpdate:Registry does not name an http(s) registry host. It must be a bare "
+                + "'host' or 'host:port' (for example cr.meshweaver.cloud) — never a value carrying "
+                + "credentials, and never one this platform cannot also use as the registry half of "
+                + "an image reference. The configured value is not repeated here because a value of "
+                + "this shape can carry a credential."));
+        if (!string.Equals(registry, configured, StringComparison.OrdinalIgnoreCase))
+            // Safe to name: HostOf refuses userinfo, so a value that parsed cannot have carried one.
+            return Observable.Throw<IReadOnlyList<string>>(new InvalidOperationException(
+                $"SelfUpdate:Registry must be a bare registry host, but it carries a scheme or a path; "
+                + $"it names the host '{registry}'. Set SelfUpdate:Registry to '{registry}' — the same "
+                + "value is interpolated into the portal and migration image references, which are "
+                + "malformed with anything else."));
 
         return new OciRegistryClient(
                 hub, registry, ResolveCredential(registry), options.RegistryUsername, HttpClientName, logger)
