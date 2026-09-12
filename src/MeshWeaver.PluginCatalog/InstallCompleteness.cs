@@ -44,7 +44,7 @@ public static class InstallCompleteness
     ///
     /// <para>🚨 <b>The population is the whole point, and getting it wrong is #3659.</b> This used
     /// to apply only the by-design exclusions (<c>README.md</c>, the <c>manifest.lock</c> sidecar,
-    /// <c>content/**</c>) while the installer ALSO skipped every file whose extension no registered
+    /// <c>content/**</c>; since #4101 also <c>src/**</c> module sources) while the installer ALSO skipped every file whose extension no registered
     /// parser claims. So a package's ordinary carry-along files counted as nodes the install owed
     /// the mesh: <c>Chess</c> ships <c>Chess/gui/rn/chess.tsx</c>, nothing ever wrote it, and the
     /// sweep reported <c>Chess/gui/rn/chess</c> ABSENT at Error on every pod boot — indefinitely,
@@ -118,11 +118,10 @@ public static class InstallCompleteness
         // nodes" is a bare number that reads identically whether it was taken over the right set or
         // the wrong one — which is exactly how a `.tsx` asset was reported as a missing node on
         // every boot for as long as the sweep existed.
-        var declaredFiles = record.InstalledFiles?.Count ?? 0;
-        var nonNodeFiles = declaredFiles - (record.InstalledFiles?.Keys
-            .Count(f => PackageInstaller.NodePathForFile(f, parsers) is not null) ?? 0);
+        var population = PopulationOf(record, parsers);
+        var declaredFiles = population.DeclaredFiles;
         InstallCompletenessVerdict WithPopulation(InstallCompletenessVerdict verdict) =>
-            verdict with { DeclaredFiles = declaredFiles, NonNodeFiles = nonNodeFiles };
+            population.Apply(verdict);
         if (declared.Count == 0)
             return WithPopulation(new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.Undeclared, 0, 0,
@@ -133,8 +132,9 @@ public static class InstallCompleteness
                       + "stamped, or by a lane that does not stamp one. The next real install "
                       + "writes one."
                     : $"all {declaredFiles} file(s) the record declares are non-node files (a "
-                      + "README, the manifest sidecar, a content/** asset, or an extension no "
-                      + "parser claims), so this package declares no node to compare against"));
+                      + "README, the manifest sidecar, a content/** asset, a src/** module source, "
+                      + "or an extension no parser claims), so this package declares no node to "
+                      + "compare against"));
 
         // 🚨 A file map that does not map ONTO this partition cannot be compared against it, and
         // guessing a rebase would manufacture a shortfall out of a naming difference. Say so
@@ -214,15 +214,12 @@ public static class InstallCompleteness
     {
         ArgumentNullException.ThrowIfNull(parsers);
         var declared = DeclaredNodePaths(record, parsers);
-        var files = record?.InstalledFiles?.Count ?? 0;
-        var nonNode = files - (record?.InstalledFiles?.Keys
-            .Count(f => PackageInstaller.NodePathForFile(f, parsers) is not null) ?? 0);
+        var population = PopulationOf(record, parsers);
         if (persistence is null)
-            return Observable.Return(new InstallCompletenessVerdict(
+            return Observable.Return(population.Apply(new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.NotObserved, declared.Count, 0,
                 ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-                "this host registers no storage adapter, so the mesh was NOT read")
-            { DeclaredFiles = files, NonNodeFiles = nonNode });
+                "this host registers no storage adapter, so the mesh was NOT read")));
         // Nothing declared ⇒ nothing to read. Compare against an EMPTY observation rather than a
         // null one: the verdict is Undeclared either way, and reading the mesh to learn that would
         // be a round-trip that cannot change the answer.
@@ -236,12 +233,128 @@ public static class InstallCompleteness
             .Select(paths => Compare(packageId, partition, record,
                 paths.ToImmutableHashSet(StringComparer.Ordinal), parsers))
             .Catch<InstallCompletenessVerdict, Exception>(ex => Observable.Return(
-                new InstallCompletenessVerdict(
+                population.Apply(new InstallCompletenessVerdict(
                     packageId, partition, InstallCompletenessKind.NotObserved, declared.Count, 0,
                     ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
                     $"reading the mesh failed, so completeness was NOT checked — this is not a "
-                    + $"pass. Cause: {ex.Message}")
-                { DeclaredFiles = files, NonNodeFiles = nonNode }));
+                    + $"pass. Cause: {ex.Message}"))));
+    }
+
+    /// <summary>
+    /// The population a verdict was taken over, computed ONCE per record: how many files the
+    /// record declares, how many of them are not node candidates, and — separately — how many of
+    /// those are module sources (#4101), so the line can say what the non-node files ARE.
+    /// </summary>
+    private readonly record struct Population(
+        int DeclaredFiles, int NonNodeFiles, int ModuleSourceFiles,
+        ImmutableSortedSet<string> ModuleSourceDirectories)
+    {
+        public InstallCompletenessVerdict Apply(InstallCompletenessVerdict verdict) => verdict with
+        {
+            DeclaredFiles = DeclaredFiles,
+            NonNodeFiles = NonNodeFiles,
+            ModuleSourceFiles = ModuleSourceFiles,
+            ModuleSourceDirectories = ModuleSourceDirectories,
+        };
+    }
+
+    private static Population PopulationOf(PackageManifest? record, FileFormatParserRegistry parsers)
+    {
+        if (record?.InstalledFiles is not { Count: > 0 } files)
+            return new Population(0, 0, 0,
+                ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal));
+        var nonNode = files.Keys.Count(f => PackageInstaller.NodePathForFile(f, parsers) is null);
+        var sources = files.Keys.Where(PackageInstaller.IsModuleSourcePath).ToList();
+        var directories = sources
+            .Select(ModuleSourceDirectoryOf)
+            .ToImmutableSortedSet(StringComparer.Ordinal);
+        return new Population(files.Count, nonNode, sources.Count, directories);
+    }
+
+    /// <summary><c>src/X/a/b.cs</c> → <c>src/X</c>: the module directory a declared source
+    /// belongs to, for the population line.</summary>
+    private static string ModuleSourceDirectoryOf(string relativePath)
+    {
+        var rest = relativePath[PackageInstaller.ModuleSourcePrefix.Length..];
+        var slash = rest.IndexOf('/');
+        return slash < 0
+            ? relativePath
+            : PackageInstaller.ModuleSourcePrefix + rest[..slash];
+    }
+
+    /// <summary>
+    /// The MODULE half of a mixed package's completeness (#4101): whether the compiled module the
+    /// record declares (<see cref="PackageManifest.Module"/>) is active on THIS pod.
+    ///
+    /// <para>🚨 <b>What this can and cannot answer.</b> The sources the lock declares under
+    /// <c>src/&lt;Module&gt;/</c> are compiled into the module bundle by the pack lane; the volume
+    /// holds ASSEMBLIES, not sources, so they cannot be checked file-by-file the way node files
+    /// are. What CAN be asked is the activation record (<see cref="ModuleLandingService.GetActivation"/>)
+    /// and this process's loaded assemblies — the same two the pending-restart surface reads
+    /// (<see cref="ModuleActivationStatus"/>). So "active" here means "an enabled entry names it
+    /// AND an assembly of that name is loaded in this process"; it is NOT "every source file
+    /// arrived", and the wording of every verdict says so. Pure and total: the caller supplies the
+    /// list and the loaded set, so the rule is testable with no host.</para>
+    /// </summary>
+    /// <param name="packageId">The package the record belongs to.</param>
+    /// <param name="record">The install record's manifest.</param>
+    /// <param name="activation">The persisted activation list, or null when it could not be read
+    /// (no landing service on this host, or the read faulted) — which yields
+    /// <see cref="ModuleActivationVerdictKind.NotObserved"/>, never a pass.</param>
+    /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process
+    /// (<see cref="ModuleActivationStatus.LoadedAssemblyNames()"/> in production).</param>
+    /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under
+    /// (<see cref="ModuleLandingService.BaseDirectory"/>), so the line can name the directory.</param>
+    /// <returns>A verdict, or null when the record declares no module — nothing to ask.</returns>
+    public static ModuleActivationVerdict? ModuleActivation(
+        string packageId,
+        PackageManifest? record,
+        ModuleActivationList? activation,
+        IReadOnlySet<string> loadedAssemblyNames,
+        string? baseDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(loadedAssemblyNames);
+        var module = record?.Module;
+        if (string.IsNullOrWhiteSpace(module))
+            return null;
+        var sources = record!.InstalledFiles?.Keys.Count(PackageInstaller.IsModuleSourcePath) ?? 0;
+        var caveat = sources > 0
+            ? $"the {sources} source file(s) the record declares under src/ are compiled into the "
+              + "module bundle and cannot be checked file-by-file on the volume — 'active' is not "
+              + "'every source file arrived'"
+            : "the module's sources are compiled into the bundle and cannot be checked file-by-file "
+              + "on the volume — 'active' is not 'every source file arrived'";
+
+        if (activation is null)
+            return new ModuleActivationVerdict(packageId, module, ModuleActivationVerdictKind.NotObserved,
+                null, sources,
+                $"the activation record could not be read, so whether module '{module}' is active "
+                + $"was NOT checked — this is not a pass; and {caveat}");
+
+        var entry = activation.Entries.LastOrDefault(e =>
+            string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase));
+        if (entry is null || !entry.Enabled)
+            return new ModuleActivationVerdict(packageId, module, ModuleActivationVerdictKind.NotActive,
+                null, sources,
+                entry is null
+                    ? $"module '{module}' is declared by the install record but has NO activation "
+                      + "entry — the bundle never landed on this volume, or its entry was removed"
+                    : $"module '{module}' is declared by the install record but its activation entry "
+                      + "is DISABLED — it was uninstalled after the record was written");
+
+        var directory = string.IsNullOrWhiteSpace(baseDirectory)
+            ? null
+            : ModuleLandingService.ModuleDirectoryFor(baseDirectory, module, entry);
+        var loaded = loadedAssemblyNames.Contains(module);
+        return loaded
+            ? new ModuleActivationVerdict(packageId, module, ModuleActivationVerdictKind.Active,
+                directory, sources,
+                $"module '{module}' active from '{directory ?? entry.Directory ?? module}'; {caveat}")
+            : new ModuleActivationVerdict(packageId, module, ModuleActivationVerdictKind.LandedNotLoaded,
+                directory, sources,
+                $"module '{module}' is landed at '{directory ?? entry.Directory ?? module}' but "
+                + "NOT loaded in this process — it activates on this pod's next restart; not a "
+                + $"pass; and {caveat}");
     }
 
     /// <summary>
@@ -522,18 +635,83 @@ public sealed record InstallCompletenessVerdict(
     /// </summary>
     public int NonNodeFiles { get; init; }
 
+    /// <summary>
+    /// How many of <see cref="NonNodeFiles"/> are module SOURCES (<c>src/&lt;Module&gt;/…</c>,
+    /// #4101) — declared by the lock because a source change must move the module version, compiled
+    /// into the module bundle by the pack lane, never written as nodes. Counted separately so the
+    /// population line says what they are instead of folding 14 sources in with the README.
+    /// Init-only, for the same binary-compatibility reason as <see cref="DeclaredFiles"/>.
+    /// </summary>
+    public int ModuleSourceFiles { get; init; }
+
+    /// <summary>The <c>src/&lt;Module&gt;</c> directories those sources live under, ordinal-sorted;
+    /// empty when the record declares none.</summary>
+    public ImmutableSortedSet<string> ModuleSourceDirectories { get; init; } =
+        ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+
     /// <summary>What this verdict counted, and over what — one clause, on every line that reports
     /// a verdict, so a wrong population is visible instead of silent.</summary>
     public string Population =>
         $"{DeclaredFiles} file(s) declared, {NonNodeFiles} of them not node files "
-        + $"(README/manifest/content assets, or an extension no parser claims) → {Declared} "
-        + "distinct node path(s) compared";
+        + "(README/manifest/content assets, module sources, or an extension no parser claims)"
+        + (ModuleSourceFiles == 0
+            ? ""
+            : $", {ModuleSourceFiles} of them module sources "
+              + $"({string.Join(", ", ModuleSourceDirectories)}), compiled into the module bundle, "
+              + "not compared as nodes")
+        + $" → {Declared} distinct node path(s) compared";
 
     /// <inheritdoc />
     public override string ToString() =>
         $"{PackageId} [{Kind}] {Present}/{Declared} present ({Population})"
         + (Missing.Count == 0 ? "" : $" — missing: {string.Join(", ", Missing.Take(10))}"
                                      + (Missing.Count > 10 ? $" (+{Missing.Count - 10} more)" : ""));
+}
+
+/// <summary>
+/// What <see cref="InstallCompleteness.ModuleActivation"/> concluded about a mixed package's
+/// compiled module on THIS pod. 🚨 Only <see cref="Active"/> is a pass, and even that pass is
+/// about the activation record and the loaded assembly — not about the declared sources, which
+/// cannot be checked (#4101).
+/// </summary>
+public enum ModuleActivationVerdictKind
+{
+    /// <summary>An enabled activation entry names the module and an assembly of that name is
+    /// loaded in this process.</summary>
+    Active,
+
+    /// <summary>An enabled entry names it but no assembly of that name is loaded here — it
+    /// activates on this pod's next restart. NOT a pass.</summary>
+    LandedNotLoaded,
+
+    /// <summary>No enabled activation entry names the module. NOT a pass.</summary>
+    NotActive,
+
+    /// <summary>The activation record could not be read. NOT a pass: it was not checked.</summary>
+    NotObserved,
+}
+
+/// <summary>One mixed package's module-activation verdict (#4101).</summary>
+/// <param name="PackageId">The package the record belongs to.</param>
+/// <param name="Module">The module the record declares (<see cref="PackageManifest.Module"/>).</param>
+/// <param name="Kind">The verdict.</param>
+/// <param name="Directory">The module directory the activation entry resolves to
+/// (<see cref="ModuleLandingService.ModuleDirectoryFor"/>), when an enabled entry exists and the
+/// base directory was known.</param>
+/// <param name="DeclaredSourceFiles">How many <c>src/**</c> files the record declares — the
+/// population this verdict explicitly does NOT check.</param>
+/// <param name="Because">Why, in one sentence, for the log line — always naming what was not
+/// checked.</param>
+public sealed record ModuleActivationVerdict(
+    string PackageId,
+    string Module,
+    ModuleActivationVerdictKind Kind,
+    string? Directory,
+    int DeclaredSourceFiles,
+    string Because)
+{
+    /// <summary>🚨 True ONLY for <see cref="ModuleActivationVerdictKind.Active"/>.</summary>
+    public bool IsActive => Kind is ModuleActivationVerdictKind.Active;
 }
 
 /// <summary>The sweep's denominator.</summary>

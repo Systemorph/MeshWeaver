@@ -86,9 +86,9 @@ name: Node repo publish-bake (reusable)
 #       bake-source: socialmedia
 #       narrow-by-affected: true      # rebuild only the modules a push actually affects
 #       test-image: ${{ vars.MW_TEST_IMAGE }}
-#       image-digest: ${{ vars.MW_IMAGE_DIGEST }}     # or a workflow env / literal pin
+#       image-digest: ${{ vars.MW_IMAGE_DIGEST }}     # or a workflow env / literal pin; or EMPTY (below)
 #       platform-image: meshweaver.azurecr.io/memex-portal-ai        # the PORTAL — the reference set
-#       platform-image-digest: ${{ vars.MW_PORTAL_IMAGE_DIGEST }}    # same CD wave as image-digest
+#       platform-image-digest: ${{ vars.MW_PORTAL_IMAGE_DIGEST }}    # same CD wave as image-digest; or EMPTY
 #       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
 #       upstream-sources: plugins                    # exit unless `plugins` is published for the
 #                                                    # framework identity this bake targets
@@ -120,7 +120,45 @@ name: Node repo publish-bake (reusable)
 # Every externally-provisioned value is an EXPLICIT input/secret — nothing is read from the
 # caller's `vars`/`env` implicitly — so the preflight step below can assert the complete set and
 # fail RED naming exactly what to provision (AGENTS.md: a gate never tests its own inputs, and a
-# grey skip is indistinguishable from a pass).
+# grey skip is indistinguishable from a pass). ONE deliberate exception, below: the platform
+# FREEZE `vars.MW_PLATFORM_REF`, which is empty in the normal state and therefore has nothing for
+# a preflight to assert.
+#
+# ──────── THE LANE RESOLVES THE PLATFORM ITSELF when both digests are EMPTY (2026-09-12) ────────
+# Maintainer rule, 2026-09-12, verbatim: "for compile always find latest package of platform and
+# plugins." Every satellite resolves the newest PLATFORM-SEALED core set at run time
+# (MeshWeaver#3842) and re-resolves it in the first step of every NORMAL job, so a "re-run failed
+# jobs" tests the newest packages (Education#320 / #323, Reinsurance#202, Crm#94, Manufacturing#82,
+# SocialMedia#181, Plugins#1739). What a satellite CANNOT refresh is THIS lane: a `uses:` job takes
+# `image-digest` / `platform-image-digest` as `with:` inputs evaluated when it is CALLED, from the
+# caller's stored `platform-ref` outputs, and GitHub offers no hook inside a reusable workflow for
+# the caller to re-resolve.
+#
+# So when a caller passes BOTH digests EMPTY (no allow-unpinned, and the event does not name its
+# own image — the two dispatch shapes below always do), the FIRST platform step of this job
+# resolves the platform ITSELF with core's `.github/scripts/resolve-platform.py` — fetched at
+# `scripts-ref` like the other lane scripts — by the same rule as the satellites: the newest core
+# `main-cd.yml` run on `main` whose `Promote: tag the full set`, `Verify every image shipped` and
+# `Bake platform content in the shipped image + publish` all succeeded, images present in ACR by
+# the version or identity tag; the Plugins publication found on its own (the newest run whose
+# `Plugins: bake + seal …` succeeded, possibly an OLDER run) and reported beside it; the caller's
+# repository VARIABLE `MW_PLATFORM_REF` honoured as a freeze (`vars` in a reusable workflow resolve
+# from the CALLER's repository — GitHub docs, Variables reference: "For reusable workflows, the
+# variables from the caller workflow's repository are used"). On a `schedule` (the release poll) a
+# set that is sealing right now is waited for, up to 15 minutes, as the satellites do. The chosen
+# set and the plugins publication are printed in the log, the `::notice` and the step summary, and
+# the digests then take exactly the path a caller's pin takes. Because the whole lane is ONE job,
+# a "re-run failed jobs" re-runs this step and therefore re-resolves — nothing upstream holds a
+# stale answer.
+#
+# 🔒 NON-EMPTY DIGESTS KEEP TODAY'S BEHAVIOUR BYTE-FOR-BYTE — a caller that pins still pins, the
+# resolver never runs, `allow-unpinned` still means "follow the tags verbatim", and the two
+# repository_dispatch shapes still take their image from the payload. One empty digest beside a
+# non-empty one is RED by name (a half-pin would compose two CD waves). The resolver needs the
+# BASIC registry credential (`acr-username` / `acr-password`: it proves the set's images are in
+# the registry before it names them) — under OIDC-only registry access, pin the digests. Budget:
+# one resolution ≈ 5-12 GitHub calls on the caller's GITHUB_TOKEN, plus one `contents` read for
+# the script — see the script's own header.
 
 on:
   workflow_call:
@@ -140,15 +178,20 @@ on:
         description: >-
           Digest pin for push-triggered bakes (tag@digest — reproducible, bump deliberately).
           Ignored for repository_dispatch, which always bakes against the released version tag
-          from the payload. Leaving it empty is an ERROR unless allow-unpinned is set.
+          from the payload. EMPTY, together with an empty platform-image-digest and no
+          allow-unpinned, means THE LANE RESOLVES THE PLATFORM ITSELF: the newest platform-sealed
+          core set, images present in ACR, the caller's `MW_PLATFORM_REF` variable honoured as a
+          freeze (see the header). A non-empty value is taken verbatim and the resolver never runs.
+          Empty beside a non-empty platform-image-digest is RED by name.
         required: false
         type: string
         default: ''
       allow-unpinned:
         description: >-
           Explicitly accept an empty image-digest / platform-image-digest and bake against the
-          tags verbatim (a repo that tracks :main accepts that its runs are not reproducible).
-          Never a silent fallback: an empty digest WITHOUT this flag fails red.
+          tags verbatim (a repo that tracks :main accepts that its runs are not reproducible) —
+          and does NOT resolve a sealed set. With both digests empty and this flag unset the lane
+          resolves the newest sealed set instead (the header). Never a silent fallback either way.
         required: false
         type: boolean
         default: false
@@ -171,9 +214,10 @@ on:
           Digest pin for platform-image, resolved EXACTLY as image-digest is for the tester: a
           framework-release dispatch bakes against `<platform-image>:<client_payload.version>`, an
           upstream-published wake against `client_payload.platform_image` (RED when the upstream's
-          payload has none), a push against this pin, and an empty pin is RED unless allow-unpinned
-          is set. Pin both digests from ONE CD wave — the lane asserts that the two images resolve
-          ONE framework identity and refuses a mixed pair by name.
+          payload has none), a push against this pin, and an empty pin — beside an empty
+          image-digest, without allow-unpinned — makes the lane resolve the newest platform-sealed
+          set itself (the header). Pin both digests from ONE CD wave — the lane asserts that the
+          two images resolve ONE framework identity and refuses a mixed pair by name.
         required: false
         type: string
         default: ''
@@ -487,6 +531,9 @@ jobs:
       # The OCI index digest the fleet registry now names for this publication (plugins/<source>:
       # <identity>) — printed by register-publication; the record carries no field for it yet.
       bundle_index_digest: ${{ steps.registry.outputs.index_digest }}
+      # The promoted set (`3.0.0-ci.<n>`) when the lane RESOLVED the platform itself (both digest
+      # inputs empty — the header); EMPTY when the caller pinned, or the event named its image.
+      platform-set: ${{ steps.digests.outputs.platform-set }}
     permissions:
       contents: read
       id-token: write     # azure/login OIDC — no long-lived storage secret in any node repo
@@ -634,11 +681,89 @@ jobs:
       - name: Resolve the content commit
         id: content
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # ───────────── THE PLATFORM: the caller's pins verbatim, or resolved HERE (the header) ─────────────
+      # Not an input-shaped `if:` — the step always runs and branches INSIDE: a caller's pin is
+      # echoed back byte-for-byte, a dispatch that names its own image is left to the two steps
+      # below (they never read a digest on those events), and an empty pair is resolved, out loud.
+      - name: "The platform: the caller's pins, or the newest sealed set resolved here"
+        id: digests
+        env:
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
+          TEST_IMAGE: ${{ inputs.test-image }}
+          PLATFORM_IMAGE: ${{ inputs.platform-image }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          GH_TOKEN: ${{ github.token }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+          # The CALLER's repository variable (GitHub docs, Variables reference: "For reusable
+          # workflows, the variables from the caller workflow's repository are used") — the same
+          # freeze the caller's own jobs honour. Empty in the normal state; the ONE value read from
+          # `vars` in this lane, because a freeze is an incident instruction that must not be
+          # overridable by a caller that forgot to pass it on.
+          FREEZE: ${{ vars.MW_PLATFORM_REF }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          RELEASED_VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          set -euo pipefail
+          verbatim() {
+            {
+              echo "image-digest=${IMAGE_DIGEST}"
+              echo "platform-image-digest=${PLATFORM_DIGEST}"
+              echo "platform-set="
+            } >> "$GITHUB_OUTPUT"
+            echo "platform: $1"
+          }
+          if [ "${EVENT_ACTION:-}" = "meshweaver-upstream-published" ] || [ "${EVENT_ACTION:-}" = "meshweaver-framework-released" ] \
+             || { [ "${EVENT_NAME:-}" = "repository_dispatch" ] && [ -n "${RELEASED_VERSION:-}" ]; }; then
+            verbatim "the ${EVENT_NAME} (${EVENT_ACTION:-}) payload names the image — the two steps below take it from there; no digest is read and none is resolved"
+            exit 0
+          fi
+          if [ -n "${IMAGE_DIGEST:-}" ] && [ -n "${PLATFORM_DIGEST:-}" ]; then
+            verbatim "the caller's pins — tester ${IMAGE_DIGEST}, portal ${PLATFORM_DIGEST} — taken verbatim; nothing resolved"
+            exit 0
+          fi
+          if [ -n "${IMAGE_DIGEST:-}" ] || [ -n "${PLATFORM_DIGEST:-}" ]; then
+            echo "::error::one digest is pinned and the other is empty (image-digest='${IMAGE_DIGEST:-}', platform-image-digest='${PLATFORM_DIGEST:-}') — a half-pin would compose two CD waves. Pin BOTH from one wave, or leave BOTH empty and the lane resolves the newest sealed set itself."
+            exit 1
+          fi
+          if [ "$ALLOW_UNPINNED" = "true" ]; then
+            verbatim "allow-unpinned — the tags are followed verbatim below; no sealed set is resolved"
+            exit 0
+          fi
+          # Both empty, no opt-out: RESOLVE. The registry credential is asserted by name (the
+          # resolver proves the set's images are in ACR before it names them) — never skipped over.
+          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image-digest and platform-image-digest are both empty, so this lane resolves the newest sealed platform set itself — and that needs acr-username + acr-password (secrets, the BASIC registry credential) to prove the set's images are in the registry. Pass them, or pin both digests (an OIDC-only caller pins)."; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — resolve-platform.py has no ref to be fetched at"; exit 1; }
+          SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-platform.py"
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+            || { echo "::error::could not fetch resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          python3 "$SCRIPT" --self-test
+          # The release poll (schedule) is where the set sealing RIGHT NOW is wanted: wait for it,
+          # bounded, as the satellites' own platform-ref does. A push takes what is sealed.
+          wait=0; [ "${EVENT_NAME:-}" = "schedule" ] && wait=900
+          ROWS="${RUNNER_TEMP:-/tmp}/platform-rows.txt"; : > "$ROWS"
+          echo "platform: no pin from the caller — resolving the newest platform-sealed set (freeze: '${FREEZE:-none}', wait-for-seal: ${wait}s)"
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" --wait-for-seal "$wait" ${FREEZE:+--freeze "$FREEZE"}
+          python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
+          import sys
+          rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
+          for key in ("image-digest", "portal-image-digest", "set"):
+              if not rows.get(key):
+                  raise SystemExit(f"::error::the resolver wrote no `{key}` — refusing to bake against an incomplete platform")
+          print(f"image-digest={rows['image-digest']}")
+          print(f"platform-image-digest={rows['portal-image-digest']}")
+          print(f"platform-set={rows['set']}")
+          PY
+          echo "platform: resolved $(grep '^set=' "$ROWS" | cut -d= -f2-) (core $(grep '^sha=' "$ROWS" | cut -d= -f2- | cut -c1-9)); plugins publication: $(grep '^plugins-set=' "$ROWS" | cut -d= -f2-)"
       - name: Resolve the bake image
         id: image
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
-          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          IMAGE_DIGEST: ${{ steps.digests.outputs.image-digest }}
           RELEASED_VERSION: ${{ github.event.client_payload.version }}
           RELEASED_SHA: ${{ github.event.client_payload.sha }}
           UPSTREAM_IMAGE: ${{ github.event.client_payload.image }}
@@ -704,7 +829,7 @@ jobs:
         id: platform
         env:
           PLATFORM_IMAGE: ${{ inputs.platform-image }}
-          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          PLATFORM_DIGEST: ${{ steps.digests.outputs.platform-image-digest }}
           RELEASED_VERSION: ${{ github.event.client_payload.version }}
           UPSTREAM_PLATFORM_IMAGE: ${{ github.event.client_payload.platform_image }}
           UPSTREAM_SOURCE: ${{ github.event.client_payload.source }}
