@@ -78,6 +78,11 @@ public class UnanchoredQueryCensusTest(ITestOutputHelper output) : MonolithMeshT
         yield return ("CompletionUsageIndex", MeshWideQuery.Declare("nodeType:Code limit:2000"));
         yield return ("UiContributionCatalog", MeshWideQuery.OfType("UiContribution"));
         yield return ("CreateLayoutArea namespace picker", MeshWideQuery.OfType("Space"));
+        // The Create menu at the ROOT path has no namespace to scope to, so its NodeType leg is
+        // the declared catalog fan-out (CreatableTypesProvider.BuildQueries). Every other leg it
+        // issues carries a concrete namespace and is anchored by construction.
+        yield return ("CreatableTypesProvider root create menu",
+            MeshWideQuery.Declare("nodeType:NodeType context:create"));
         yield return ("EventSubscriptionRunner", MeshWideQuery.OfType("Invitation") + " content.email:a@b.c");
         yield return ("GitHubWebhookProcessor / ModuleDiscovery / InstanceComboReader", MeshWideQuery.OfType("GitHubSync"));
         yield return ("NodeTypeInstanceProbe", MeshWideQuery.OfType("Acme/Story"));

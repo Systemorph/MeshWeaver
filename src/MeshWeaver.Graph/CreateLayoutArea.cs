@@ -264,6 +264,28 @@ public static class CreateLayoutArea
     }
 
     /// <summary>
+    /// The picker's item shape. <see cref="MeshNodePickerControl.Items"/> takes MeshNodes — it
+    /// stores the selected node's <c>Path</c> as the form value and renders Name/Icon/Description
+    /// — so a <see cref="CreatableTypeInfo"/> is projected onto one. Every entry IS a type
+    /// declaration, hence <see cref="MeshNode.NodeTypePath"/> as the NodeType.
+    /// </summary>
+    private static object ToPickerNode(CreatableTypeInfo info)
+    {
+        var lastSlash = info.NodeTypePath.LastIndexOf('/');
+        var node = lastSlash > 0
+            ? new MeshNode(info.NodeTypePath[(lastSlash + 1)..], info.NodeTypePath[..lastSlash])
+            : new MeshNode(info.NodeTypePath);
+        return node with
+        {
+            Name = info.DisplayName ?? node.Id,
+            Icon = info.Icon,
+            Description = info.Description,
+            Order = info.Order,
+            NodeType = MeshNode.NodeTypePath,
+        };
+    }
+
+    /// <summary>
     /// Builds the unified "Create New" form:
     /// Namespace (MeshNodePicker), Type (MeshNodePicker with Items), Name, Id, Create/Cancel.
     /// Synchronous — defaults are resolved from the already-available nodes array.
@@ -344,15 +366,9 @@ public static class CreateLayoutArea
         if (restrictedNamespaces is { Length: 1 })
             defaultNamespace = restrictedNamespaces[0];
 
-        // 2. Build fixed creatable type Items (alphabetical)
-        var creatableTypeNodes = host.Hub.ServiceProvider.EnumerateStaticNodes()
-            .Where(n => n.ExcludeFromContext?.Contains("create") != true)
-            .OrderBy(n => n.Name ?? n.Path)
-            .ToArray();
-
-        // Resolve the default icon from the selected type's registration so the preview
-        // can show something meaningful before the user clicks "Regenerate".
-        var defaultTypeIcon = creatableTypeNodes.FirstOrDefault(n => n.Path == defaultType)?.Icon;
+        // 2. Resolve the default icon from the selected type's registration so the preview
+        //    can show something meaningful before the user clicks "Regenerate".
+        var defaultTypeIcon = host.Hub.ServiceProvider.FindStaticNode(defaultType)?.Icon;
 
         // 3. Form data
         var formId = $"create_form_{Guid.NewGuid().AsString()}";
@@ -393,7 +409,7 @@ public static class CreateLayoutArea
         if (restrictedTypes is { Length: 1 })
         {
             // Single type restriction — show readonly info
-            var typeNode = creatableTypeNodes.FirstOrDefault(n => n.Path == restrictedTypes[0]);
+            var typeNode = host.Hub.ServiceProvider.FindStaticNode(restrictedTypes[0]);
             var typeLabel = typeNode?.Name ?? restrictedTypes[0];
             stack = stack.WithView(Controls.Stack
                 .WithWidth("100%")
@@ -401,42 +417,40 @@ public static class CreateLayoutArea
                 .WithView(Controls.Body(host.Localize("ui.type")).WithStyle("font-weight: 600; margin-bottom: 4px;"))
                 .WithView(Controls.Body(typeLabel).WithStyle("color: var(--neutral-foreground-rest);")));
         }
-        else if (restrictedTypes is { Length: > 1 })
-        {
-            // Multiple type restriction — filtered picker
-            var filteredTypeNodes = creatableTypeNodes
-                .Where(n => restrictedTypes.Contains(n.Path))
-                .ToArray();
-            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
-            {
-                Label = "Type *",
-                Required = true,
-                Placeholder = "Select a type...",
-                DataContext = dataContext
-            }.WithItems(filteredTypeNodes)
-             .WithMaxResults(15)
-             .WithStyle("width: 100%; margin-bottom: 16px;"));
-        }
         else
         {
-            // No restriction — full picker. Queries cover (a) root-level registered NodeTypes
-            // and (b) any NodeType defined within the current namespace or its ancestors.
-            // context:create excludes NodeTypes that opt out of creation (e.g. Release,
-            // Notification) — the WHERE on Items already filters those, but the QUERY path
-            // must too or the excluded types leak back in via query results.
-            var ancestorQuery = string.IsNullOrEmpty(parentPath)
-                ? "namespace: nodeType:NodeType context:create"
-                : $"namespace:{parentPath} nodeType:NodeType scope:selfAndAncestors context:create";
-            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
-            {
-                Label = "Type *",
-                Required = true,
-                Placeholder = "Select a type...",
-                DataContext = dataContext
-            }.WithItems(creatableTypeNodes)
-             .WithQueries("namespace: nodeType:NodeType context:create", ancestorQuery)
-             .WithMaxResults(15)
-             .WithStyle("width: 100%; margin-bottom: 16px;"));
+            // 🚨 WHAT MAY BE CREATED HERE IS ICreatableTypesProvider'S ANSWER — this form does
+            // not build a second one (#4040). It used to run two query literals of its own
+            // (`namespace: nodeType:NodeType context:create` plus the self-and-ancestors leg),
+            // which meant a type was offered only if it sat at the root namespace or in the
+            // target's own ancestor chain: no declaration on the parent NodeType could add one
+            // and none could take one away. NodeTypeDefinition.CreatableTypes,
+            // NodeTypeDefinition.IncludeGlobalTypes and MeshConfiguration.GlobalCreatableTypes
+            // were documented, populated by modules — MeshWeaver.Crm#82 declared
+            // `"creatableTypes": ["Crm/Question"]` on Crm/Offer — and read by nothing.
+            //
+            // The provider resolves all of it in one place: the namespace-scoped discovery
+            // queries, the parent type's own whitelist (which RESTRICTS discovery as well as
+            // EXTENDING it), and the global set. The picker therefore carries ITEMS and no
+            // queries — a query leg would re-admit exactly what a restricting parent excluded.
+            var creatableTypes = host.Hub.ServiceProvider
+                .GetRequiredService<ICreatableTypesProvider>()
+                .GetCreatableTypes(parentPath, currentNode);
+            stack = stack.WithView((_, _) => creatableTypes.Select(types =>
+                (UiControl)new MeshNodePickerControl(new JsonPointerReference("type"))
+                {
+                    Label = host.Localize("ui.typeRequired"),
+                    Required = true,
+                    Placeholder = host.Localize("create.selectType"),
+                    DataContext = dataContext
+                }
+                .WithItems(types
+                    .Where(t => restrictedTypes is null
+                        || restrictedTypes.Contains(t.NodeTypePath, StringComparer.OrdinalIgnoreCase))
+                    .Select(ToPickerNode)
+                    .ToArray<object>())
+                .WithMaxResults(15)
+                .WithStyle("width: 100%; margin-bottom: 16px;")));
         }
 
         // 7. Namespace — REACTIVE on the selected type. Partition objects (Space, User;
