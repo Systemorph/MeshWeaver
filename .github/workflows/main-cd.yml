@@ -3107,6 +3107,7 @@ jobs:
           pattern: satellite-compat-*
           path: ${{ runner.temp }}/satellite-compat
       - name: "Compatibility: every satellite's NodeTypes compile against this set"
+        id: compat
         if: ${{ always() && needs.gate.outputs.publish == 'true' }}
         env:
           COMPAT_RESULT: ${{ needs.satellite-compat.result }}
@@ -3124,7 +3125,7 @@ jobs:
             echo "| Satellite | Content | Verdict | NodeTypes | Breaks | Known debt |"
             echo "|---|---|---|---:|---|---:|"
           } >> "$GITHUB_STEP_SUMMARY"
-          red=0; unmeasured=0
+          red=0; unmeasured=0; redlist=""
           for sat in $SATELLITES; do
             f="$VERDICTS/satellite-compat-$sat/compile-check-verdict.json"
             if [ ! -f "$f" ]; then
@@ -3139,7 +3140,7 @@ jobs:
             debt=$(jq -r '.known_debt | length' "$f")
             breaks=$(jq -r --arg bt '`' '([.new_breaks[].type] + [.fp_drift[].type] + [.stale_allow[] | . + " (compiles now — remove from allow)"]) | map($bt + . + $bt) | join(", ")' "$f")
             if [ "$fail" = "true" ]; then
-              red=$((red + 1))
+              red=$((red + 1)); redlist="${redlist:+$redlist, }$sat"
               echo "| $sat | \`${csha:-?}\` | ❌ RED | $types | ${breaks:-?} | $debt |" >> "$GITHUB_STEP_SUMMARY"
               echo "compatibility: $sat@${csha:-?} — RED against $VERSION: ${breaks:-?}"
               jq -r '(.new_breaks + .fp_drift)[] | "    \(.type): \(.error)"' "$f"
@@ -3159,9 +3160,16 @@ jobs:
             echo "::error::satellite-compat reports success but $unmeasured satellite(s) above have no verdict artifact — a leg that measured nothing must not read as a pass. Either the matrix and the SATELLITES register in this step diverged, or a leg uploaded no report."
             exit 1
           fi
+          echo "compat_red=$red" >> "$GITHUB_OUTPUT"
+          echo "compat_red_list=$redlist" >> "$GITHUB_OUTPUT"
           if [ "$red" -gt 0 ]; then
-            echo "- ❌ **$red satellite(s) do not compile against this set.** The set IS published and every instance gates itself; the red is \`satellite-compat\`'s own and is filed on the \`ci-failure\` issue. Fix lands in the SATELLITE (or core, if the break is the platform's) — the daily rebuild will not repair it on its own." >> "$GITHUB_STEP_SUMMARY"
-            echo "compatibility: $red satellite(s) RED — see the satellite-compat legs; this verdict lists, it does not re-fail"
+            # 🚨 THE CONTRADICTION, STATED. A red leg fails `satellite-compat` (no continue-on-error,
+            # by rule), so the RUN's conclusion is `failure` — while promote, notify, bake and seal
+            # all completed. The run's colour then says COMPATIBILITY, not shipping. Said first,
+            # here and in the run's headline below, so nobody reads "CD failed" as "nothing shipped".
+            echo "🚨 **DELIVERY COMPLETED** — this run is red because $red satellite(s) failed compatibility: ${redlist}. Nothing failed to ship." >> "$GITHUB_STEP_SUMMARY"
+            echo "- The set IS published and every instance gates itself; the red is \`satellite-compat\`'s own and is filed on the \`ci-failure\` issue. Fix lands in the SATELLITE (or core, if the break is the platform's) — the daily rebuild will not repair it on its own." >> "$GITHUB_STEP_SUMMARY"
+            echo "🚨 DELIVERY COMPLETED — this run is red because $red satellite(s) failed compatibility: ${redlist}. Nothing failed to ship."
           else
             echo "compatibility: every satellite compiles against $VERSION"
           fi
@@ -3181,6 +3189,10 @@ jobs:
           DEFERRED_TO: ${{ steps.verdict.outputs.deferred_to }}
           DEFERRED_STATUS: ${{ steps.verdict.outputs.deferred_status }}
           DEFERRED_SINCE: ${{ steps.verdict.outputs.deferred_since }}
+          # From the Compatibility step above (2026-09-12): a red satellite leg reds the RUN while
+          # delivery completed, so the headline must say which of the two the colour means.
+          COMPAT_RED: ${{ steps.compat.outputs.compat_red }}
+          COMPAT_RED_LIST: ${{ steps.compat.outputs.compat_red_list }}
         run: |
           # 🚨 NO-OP is keyed on the gate having been SKIPPED — never on an empty reason. An empty
           # reason is ALSO what a gate that errored, was cancelled, or produced no outputs looks
@@ -3194,6 +3206,9 @@ jobs:
           # IS publishing it is the whole content of MeshWeaver#3513's third verdict.
           elif [ -n "$DEFERRED_TO" ]; then
             echo "### ⏳ DEFERRED for \`${SHORT}\` — run [${DEFERRED_TO}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${DEFERRED_TO}) is \`${DEFERRED_STATUS}\` on this commit since ${DEFERRED_SINCE}. The image set is incomplete because that publication is still creating it — a correct no-op, not a stuck delivery (#3513)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ] && [ "${COMPAT_RED:-0}" != "0" ]; then
+            echo "### 🚨 DELIVERY COMPLETED — this run is red because ${COMPAT_RED} satellite(s) failed compatibility: ${COMPAT_RED_LIST}. Nothing failed to ship." >> "$GITHUB_STEP_SUMMARY"
+            echo "✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON}) — the run's colour says COMPATIBILITY, not shipping; see the Compatibility table above and the \`ci-failure\` issue." >> "$GITHUB_STEP_SUMMARY"
           elif [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then
             echo "### ✅ PUBLISHED an image set for \`${SHORT}\` (reason: ${REASON})" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$PUBLISH" = "true" ]; then
@@ -3251,17 +3266,18 @@ jobs:
           # One line per satellite whose verdict says RED: the satellite, the set, the first three
           # failing types with their first error. Composed with printf, never a multi-line literal —
           # a body line at column 1 would end this block scalar (same reasoning as `gate`'s ledger).
-          compat=""; bt='`'
+          compat=""; bt='`'; nred=0; redlist=""
           for f in "$VERDICTS"/satellite-compat-*/compile-check-verdict.json; do
             [ -f "$f" ] || continue
             sat=$(basename "$(dirname "$f")"); sat="${sat#satellite-compat-}"
             [ "$(jq -r '.gate_fail' "$f")" = "true" ] || continue
+            nred=$((nred + 1)); redlist="${redlist:+$redlist, }$sat"
             csha=$(jq -r '.content.sha // "" | .[0:9]' "$f")
             first=$(jq -r --arg bt "$bt" '(.new_breaks + .fp_drift + [.stale_allow[] | {type: ., error: "compiles now — remove it from scripts/compile-check.allow"}]) | .[:3] | map($bt + .type + $bt + " — " + .error) | join("; ")' "$f")
             compat=$(printf '%s\n* **%s** (main @ %s%s%s) does not compile against %s%s%s: %s' "$compat" "$sat" "$bt" "${csha:-?}" "$bt" "$bt" "${VERSION:-this set}" "$bt" "${first:-(see the leg)}")
           done
           if [ -n "$compat" ]; then
-            compat=$(printf '\n\n**Compatibility** (satellite-compat=%s) — the set IS published and every instance gates itself; what is red is the measurement that a satellite still compiles against it. The fix lands in the SATELLITE (its NodeTypes, or its allow-file ratchet), or in core if the platform broke a surface it should not have — the daily rebuild will not repair it on its own. Triage: the control instance, from the failing types below.%s' "$COMPAT_RESULT" "$compat")
+            compat=$(printf '\n\n🚨 **DELIVERY COMPLETED** — this run is red because %s satellite(s) failed compatibility: %s. Nothing failed to ship.\n\n**Compatibility** (satellite-compat=%s) — the set IS published and every instance gates itself; what is red is the measurement that a satellite still compiles against it. The fix lands in the SATELLITE (its NodeTypes, or its allow-file ratchet), or in core if the platform broke a surface it should not have — the daily rebuild will not repair it on its own. Triage: the control instance, from the failing types below.%s' "$nred" "$redlist" "$COMPAT_RESULT" "$compat")
           fi
           # Ensure the label exists (--force = update-or-create, idempotent). Non-fatal for the
           # same reason as in `gate`: this is the ALERT path, so a 503 here must not swallow the

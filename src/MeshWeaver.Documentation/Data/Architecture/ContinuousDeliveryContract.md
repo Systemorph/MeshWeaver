@@ -691,7 +691,10 @@ same bytes `plugins-bake` seals. Measured on that lane, a leg costs ~2 min on an
 does not gate `promote`, `notify-platform-update` or `plugins-bake` (the set is published and every
 instance gates itself; a satellite's compile must never hold a veto over the platform's delivery —
 `PlatformNeverDependsOnPluginsGuard` pins the direction), yet a failing leg fails the job, so the run
-is red, `alert-on-failure` files it on the `ci-failure` issue naming the satellite, the set and the
+is red. **A red satellite leg turns the run RED while delivery has completed; the run's colour then
+says compatibility, not shipping** — which is why the verdict's summary and the alert open with
+`🚨 DELIVERY COMPLETED — this run is red because N satellite(s) failed compatibility: … Nothing
+failed to ship.` `alert-on-failure` files it on the `ci-failure` issue naming the satellite, the set and the
 first failing types (from each leg's `verdict-artifact`), and `delivery-verdict` renders every leg
 under **Compatibility** — and goes red itself if the gate was *skipped* on a publishing run, because
 a skipped measurement painted grey is the one outcome worse than a red one. `fail-fast: false`, no
