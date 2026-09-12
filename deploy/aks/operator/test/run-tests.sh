@@ -325,6 +325,87 @@ case "$_ps_out" in *"pull_secret_verify=true"*) bad "a dry-run pull-secret never
 unset _ps_out _ps_rc _ps_dir _ps_log _ns_line _sec_line
 
 echo
+echo "── hosting-kv-ensure: the connection string is composed, kept, never shown ──"
+# MeshWeaver.Plugins#1721 — the Provision creates the database but the string the portal reads
+# (<prefix>db-connection, mapped as ConnectionStrings__memex) was written by hand, and a declared
+# vault object the vault does not hold fails the whole CSI mount (Memex#202). The stub answers the
+# vault from a state directory and records every argv, so the decisions — compose only when
+# ABSENT, keep when present, read the password by name and never print it — are asserted here.
+KVE_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-ensure" && pwd)"
+kve() {  # kve [env…] -- <args…> — runs against a fresh state dir; sets $_kve_out $_kve_rc $_kve_log $_kve_state
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _kve_state="$(mktemp -d)"
+  _kve_out="$(env "${envs[@]}" PATH="$KVE_STUBS:$PATH" HOSTING_KVE_STATE="$_kve_state" hosting-kv-ensure "$@" 2>&1)"; _kve_rc=$?
+  _kve_log="$(cat "$_kve_state/az.log" 2>/dev/null || true)"
+}
+KVE_DB=(--db-connection acme-db-connection --db-host pg.postgres.database.azure.com --db-port 5432 --db-user memexadmin --db-name acmedb --db-password-secret memex-postgres-password)
+
+# Absent: composed from the flags and the password read from the vault, written through --file.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure composes an ABSENT db-connection object" || bad "kv-ensure composes an absent db-connection" "exited ${_kve_rc}: ${_kve_out}"
+_kve_written="$(cat "$_kve_state/set.acme-db-connection" 2>/dev/null || true)"
+if [ "$_kve_written" = "Host=pg.postgres.database.azure.com;Port=5432;Username=memexadmin;Password=fake-server-password-NEVER-PRINTED;Database=acmedb;SslMode=Require;Trust Server Certificate=true" ]; then
+  ok "…in exactly the shape the portal parses (Host;Port;Username;Password;Database;SslMode;Trust Server Certificate)"
+else
+  bad "the composed string has the portal's shape" "wrote: ${_kve_written}"
+fi
+case "$_kve_out" in *NEVER-PRINTED*) bad "kv-ensure never prints the server password" "it did: ${_kve_out}" ;; *) ok "kv-ensure never prints the server password" ;; esac
+case "$_kve_log" in *NEVER-PRINTED*) bad "…and never puts it on an az command line (argv)" "az saw: ${_kve_log}" ;; *) ok "…and never puts it on an az command line (argv)" ;; esac
+case "$_kve_log" in *"secret set --vault-name Systemorph --name acme-db-connection --file "*) ok "the string reaches az through --file" ;; *) bad "the string reaches az through --file" "az saw: ${_kve_log}" ;; esac
+case "$_kve_out" in *"::hosting:: kv_db_connection=created"*) ok "the run reports kv_db_connection=created" ;; *) bad "the run reports created" "said: ${_kve_out}" ;; esac
+case "$_kve_out" in *"::hosting:: kv_created=1"*) ok "…and counts it among the created objects" ;; *) bad "created count" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# Present: KEPT — no read of the password, no write — the master-key rule, one object over.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+[ "$_kve_rc" -eq 0 ] && ok "an EXISTING db-connection object is kept (a re-provision is idempotent)" || bad "existing db-connection is kept" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret set"*"acme-db-connection"*) bad "a kept object is never rewritten" "az saw: ${_kve_log}" ;; *) ok "a kept object is never rewritten" ;; esac
+case "$_kve_log" in *"memex-postgres-password"*) bad "…and the password is not even read" "az saw: ${_kve_log}" ;; *) ok "…and the password is not even read" ;; esac
+case "$_kve_out" in *"::hosting:: kv_db_connection=kept"*) ok "the run reports kv_db_connection=kept" ;; *) bad "reports kept" "said: ${_kve_out}" ;; esac
+case "$_kve_out" in *"::hosting:: kv_kept=3"*) ok "…and the three present objects are counted" ;; *) bad "kept count" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# A record that names no db-connection plans none: today's command line, unchanged.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" -- --vault Systemorph --prefix acme- --namespace acme
+[ "$_kve_rc" -eq 0 ] && ok "without --db-connection nothing about the database is touched" || bad "without --db-connection" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_out" in *kv_db_connection*) bad "…and no kv_db_connection fact is reported" "said: ${_kve_out}" ;; *) ok "…and no kv_db_connection fact is reported" ;; esac
+rm -rf "$_kve_state"
+
+# The refusals, each naming the hand command that still works.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=other \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+[ "$_kve_rc" -ne 0 ] && ok "an unreadable password object refuses" || bad "unreadable password refuses" "exited 0: ${_kve_out}"
+case "$_kve_out" in *"could not read memex-postgres-password"*"az keyvault secret set --vault-name Systemorph --name acme-db-connection --file"*) ok "…naming the object and the exact hand command" ;; *) bad "names the hand command" "said: ${_kve_out}" ;; esac
+case "$_kve_log" in *"secret set"*"acme-db-connection"*) bad "…and writes nothing" "az saw: ${_kve_log}" ;; *) ok "…and writes nothing" ;; esac
+rm -rf "$_kve_state"
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme --db-connection acme-db-connection --db-host pg.postgres.database.azure.com --db-port 5432 --db-user memexadmin --db-name acmedb --db-password-secret ""
+[ "$_kve_rc" -ne 0 ] && ok "an absent object with no password secret named refuses" || bad "no password secret refuses" "exited 0: ${_kve_out}"
+case "$_kve_out" in *"missing --db-password-secret"*"AZ_POSTGRES_PASSWORD_SECRET"*) ok "…naming the flag and the operator.environment key that supplies it" ;; *) bad "names AZ_POSTGRES_PASSWORD_SECRET" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password HOSTING_KVE_SET_FAIL=1 \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+[ "$_kve_rc" -ne 0 ] && ok "a vault that refuses the write fails the step" || bad "refused write fails" "exited 0: ${_kve_out}"
+case "$_kve_out" in *NEVER-PRINTED*) bad "…without printing the password on the failure path" "it did: ${_kve_out}" ;; *) ok "…without printing the password on the failure path" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "kv-ensure refuses a db-host that is not a hostname" "is not a hostname" \
+  hosting-kv-ensure --vault V --namespace n --db-connection c --db-host 'pg;id' --db-port 5432 --db-user u --db-name d --db-password-secret p
+refuses_hard "kv-ensure refuses a db-port that is not a number" "is not a port number" \
+  hosting-kv-ensure --vault V --namespace n --db-connection c --db-host pg.test --db-port '5432;id' --db-user u --db-name d --db-password-secret p
+refuses_hard "kv-ensure refuses a db-connection object with a metacharacter" "is not a plain name" \
+  hosting-kv-ensure --vault V --namespace n --db-connection 'c`id`' --db-host pg.test --db-port 5432 --db-user u --db-name d --db-password-secret p
+
+# A dry run reads no password, writes nothing, and says what it would create.
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+[ "$_kve_rc" -eq 0 ] && ok "a dry-run kv-ensure with --db-connection succeeds" || bad "dry-run kv-ensure" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"memex-postgres-password"*|*"secret set"*) bad "a dry run neither reads the password nor writes" "az saw: ${_kve_log}" ;; *) ok "a dry run neither reads the password nor writes" ;; esac
+case "$_kve_out" in *"::hosting:: kv_db_connection=would-create"*) ok "…and reports would-create, never created" ;; *) bad "dry run reports would-create" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+unset _kve_out _kve_rc _kve_log _kve_state _kve_written
 echo "── hosting-kv-copy: a fleet-shared object materialised under the prefix, never shown ──"
 # MeshWeaver.Plugins#1723 — a credential several instances hold (the fleet GitHub App's PEM) has to
 # exist under EACH holder's prefix, because hosting-kv-purge deletes by prefix on teardown and a

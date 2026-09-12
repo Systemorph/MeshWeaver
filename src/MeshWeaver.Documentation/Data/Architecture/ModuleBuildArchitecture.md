@@ -63,15 +63,25 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 > Memex's `runner-proof.yml`); and it ships **no toolchain** (no .NET, Node, `gh` or `zstd` —
 > setup-dotnet supplies the SDK as before; the moved legs take only `bash`, `git`, `jq`, `curl`,
 > `sudo` and Ubuntu's `python3` from the image). Each runner pod is limited to 2 vCPU / 6 GiB, so
-> an opt-in is a measurement of one job family, not a fleet switch. The gate lane therefore
-> **declares the same input and honours it nowhere**: a shard is a `docker run` of the tester
-> image, so `plan` fails RED on any value but `ubuntu-latest` — a declared input that was silently
-> ignored would let a caller believe its shards moved. A caller opts in per job family behind a
-> repository variable (`runner: ${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}` on the module-pack
-> call; a separate variable for the gate on the day the scale set gains Docker), so the move is one
-> edit to revert. The two steps of `pack` that need what the image lacks — `gh run download` on the
-> ledger's reuse leg and the `docker cp` fallback when `prepare`'s `platform-refs-<digest>` cache
-> entry has been evicted — fail RED naming the missing tool; neither skips.
+> an opt-in is a measurement of one job family, not a fleet switch. The gate lane declared the
+> same input that morning and honoured it nowhere — a shard is a `docker run` of the tester image,
+> and `aks-silos` has no daemon — until the **same afternoon**, when the org gained a SECOND,
+> Docker-capable scale set: **`aks-silos-dind`** (`containerMode: dind`, a privileged `docker:dind`
+> sidecar over `DOCKER_HOST`, min 0 / max 6, on its own pool; proven on Memex run 34694129111 —
+> `docker run --rm hello-world` → "Hello from Docker!", Engine 29.8.0, scale-from-zero 157 s; same
+> non-root `actions-runner:2.337.0` image, so no `gh`, no `az`, no .NET; runner container limited
+> to 6 CPU / 20 GiB, and the tester's container runs in the sidecar's 6 CPU / 16 GiB). Since then
+> **`node-repo-gate.yml`'s `gate` job honours `runner`** (`plan` and `verify` stay on
+> `ubuntu-latest`); the refusal in `plan` is replaced by the shard's first step asserting
+> `docker info` succeeds — RED naming the runner on a label without a daemon, `aks-silos` included
+> — and the two lane-script fetches that used `gh api` now `curl` the same endpoint. A caller opts
+> in per job family behind a repository variable of its own
+> (`runner: ${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}` on the module-pack call,
+> `runner: ${{ vars.MW_RUNNER_GATE || 'ubuntu-latest' }}` on the gate call; both unset today), so
+> each move is one edit to revert. The two steps of `pack` that need what the image lacks —
+> `gh run download` on the ledger's reuse leg and the `docker cp` fallback when `prepare`'s
+> `platform-refs-<digest>` cache entry has been evicted — fail RED naming the missing tool; neither
+> skips.
 
 ### Where a module's own suite runs — and why `publish` decides
 
@@ -635,6 +645,27 @@ line of the verdict naming the CONTENT.
 * Both lanes take **`platform-image` + `platform-image-digest`** (required; resolved branch for
   branch as the tester's `image-digest`, so a framework release, an upstream's publication and a
   push can never pair two waves). The tester **executes**; the portal **supplies**.
+* **Both lanes resolve the platform themselves when called with EMPTY digests** (2026-09-12;
+  maintainer rule, verbatim: *"for compile always find latest package of platform and plugins"*).
+  A satellite resolves the newest platform-sealed core set at run time (#3842) and re-resolves it
+  in the first step of every normal job, so a *Re-run failed jobs* tests the newest packages
+  (Education#320/#323, Reinsurance#202, Crm#94, Manufacturing#82, SocialMedia#181, Plugins#1739) —
+  but a `uses:` job takes its digests as call-time inputs from the caller's stored `platform-ref`
+  outputs, and GitHub offers no hook inside a reusable workflow to re-resolve. So `node-repo-gate.yml`
+  (`plan`, then once more per shard against `plan`'s row as `PLATFORM_BASELINE`) and
+  `node-repo-publish-bake.yml` (the first platform step of its one job) run core's
+  `.github/scripts/resolve-platform.py` — fetched at `scripts-ref` like the other lane scripts —
+  whenever both digest inputs are empty and `allow-unpinned` is not set: the newest `main-cd.yml`
+  run on `main` whose `Promote: tag the full set`, `Verify every image shipped` and `Bake platform
+  content in the shipped image + publish` all succeeded, images present in ACR by the version or
+  identity tag; the Plugins publication found on its own (the newest run whose `Plugins: bake +
+  seal …` succeeded — possibly an older run) and printed beside it in the log, the `::notice` and
+  the step summary; the caller's repository variable `MW_PLATFORM_REF` honoured as a freeze (in a
+  reusable workflow `vars` resolves from the **caller's** repository — GitHub docs, Variables
+  reference). Non-empty digests are taken verbatim and the resolver never runs — a caller that pins
+  still pins; one empty digest beside a pinned one is red by name. The caller can then stop
+  passing digests: `image-digest: ''` / `platform-image-digest: ''`, and the lane's `platform-set`
+  output says what it gated.
 * The lane pulls both images, extracts both `/app` trees, and asserts with the tester's own
   `framework-identity /portal --expect <tester identity>` that the two **resolve one identity** —
   they are one build — before it trusts anything else. On a mismatch the verb names the canonical
