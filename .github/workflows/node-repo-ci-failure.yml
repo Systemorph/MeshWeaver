@@ -21,9 +21,20 @@ name: Node repo ci-failure ledger (reusable)
 # CLOSED it while CI was still red, and between that close and the next reopen the signal reads
 # "resolved" — a day-one silent failure. So: CD's search never finds the ledger, and the ledger
 # never finds CD's. The ledger's find / append / reopen / comment / close all require the label AND
-# the exact `issue-title` AND a hidden line in the body, `<!-- ci-main-red ledger -->`; an issue
-# lacking any of the three (hand-labelled, another writer, a rewritten body) is logged and left
-# exactly as found, and a fresh ledger is filed beside it if one is needed. Self-tested.
+# the exact `issue-title` AND a hidden line in the body, `<!-- ci-main-red ledger -->` AND — the
+# term nobody can forge, since label, title and marker are public fields anyone with triage can set
+# — the issue's AUTHOR is the Actions bot (`user.login == "github-actions[bot]"`, `user.type ==
+# "Bot"`). An issue lacking any of the four (hand-labelled, another writer, a rewritten body, a
+# human's copy with the marker pasted in) is logged and left exactly as found, and a fresh ledger is
+# filed beside it if one is needed. That author rule is the second reason the lane takes the
+# caller's GITHUB_TOKEN and nothing else: an issue filed by any other identity would never be owned.
+# Self-tested.
+#
+# 🚨 NOTHING IS SIGNED FOR AN ARBITRARY URL. Before the ledger writes and before curl runs, the
+# script validates `control-webhook-url` (`--check-url`, self-tested): https, host equal to
+# `control-webhook-host` (default memex.systemorph.com), path under /api/hooks/. A red naming the
+# offending URL otherwise — an HMAC over the event sent to whatever a variable happened to hold is
+# a credential handed to that host.
 #
 # WHAT IT DOES, per outcome — the logic lives in .github/scripts/ci-failure-ledger.py, self-tested
 # (`--self-test`) in core's `workflow-shell` job AND at the start of every run of this lane:
@@ -109,7 +120,9 @@ name: Node repo ci-failure ledger (reusable)
 # fleet repositories, and point at https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds —
 # the same inbox the build fact and the publication records go to. `failed-jobs` may be left out: the
 # lane lists the run's failed jobs itself (that is what `actions: read` is for). Pass it only when the
-# caller has a better list than "every job that concluded failure".
+# caller has a better list than "every job that concluded failure". `control-webhook-host` defaults
+# to memex.systemorph.com and is the host `control-webhook-url` MUST resolve to; override it only for
+# a control instance that is not memex.systemorph.com.
 #
 # 🚨 A satellite's `gates-executed` job (the one that counts how many gate jobs actually ran) must NOT
 # count these two: they are conditional on `main` and skipped on every pull request, so counting them
@@ -164,6 +177,13 @@ on:
         description: The control portal's triage inbox — pass vars.CONTROL_WEBHOOK_URL (https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds).
         required: true
         type: string
+      control-webhook-host:
+        description: >-
+          The host `control-webhook-url` must point at. The lane refuses to sign an event for any
+          other host, any non-https scheme, or any path outside /api/hooks/.
+        required: false
+        type: string
+        default: memex.systemorph.com
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref this lane's ledger script is fetched at. Pin it beside the
@@ -206,6 +226,7 @@ jobs:
           GH_TOKEN: ${{ secrets.github-token }}
           CONTROL_WEBHOOK_URL: ${{ inputs.control-webhook-url }}
           CONTROL_WEBHOOK_SECRET: ${{ secrets.control-webhook-secret }}
+          CONTROL_WEBHOOK_HOST: ${{ inputs.control-webhook-host }}
           OUTCOME: ${{ inputs.outcome }}
           RUN_ID: ${{ inputs.run }}
           RUN_URL: ${{ inputs.run-url }}
@@ -218,6 +239,7 @@ jobs:
           [ -n "${GH_TOKEN:-}" ]               || missing+=("secrets.github-token           the caller's secrets.GITHUB_TOKEN — forward it as \`secrets: github-token:\` = secrets.GITHUB_TOKEN with \`permissions: {contents: read, issues: write, actions: read}\` on the caller job")
           [ -n "${CONTROL_WEBHOOK_URL:-}" ]    || missing+=("inputs.control-webhook-url      pass vars.CONTROL_WEBHOOK_URL — org variable, scoped to the fleet repos, https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds (Settings → Secrets and variables → Actions → Variables, at the ORG)")
           [ -n "${CONTROL_WEBHOOK_SECRET:-}" ] || missing+=("secrets.control-webhook-secret  pass secrets.CONTROL_WEBHOOK_SECRET — org secret, scoped to the fleet repos, byte-identical to the control instance's Hosting:PlatformWebhookSecret (Settings → Secrets and variables → Actions → Secrets, at the ORG; it has NO Dependabot-store copy, and this lane is never reachable from a pull request)")
+          [ -n "${CONTROL_WEBHOOK_HOST:-}" ]   || missing+=("inputs.control-webhook-host     the host control-webhook-url must point at (default memex.systemorph.com) — an empty host would let any URL through")
           [ -n "${RUN_ID:-}" ]                 || missing+=("inputs.run                      github.run_id")
           [ -n "${RUN_URL:-}" ]                || missing+=("inputs.run-url                  github.server_url/github.repository/actions/runs/github.run_id")
           [ -n "${SHA:-}" ]                    || missing+=("inputs.sha                      github.sha")
@@ -263,6 +285,14 @@ jobs:
       # its case before its verdict on the real repository means anything.
       - name: "The ledger can say no (self-test)"
         run: python3 "$RUNNER_TEMP/ci-failure-ledger.py" --self-test
+
+      # Before the ledger writes and before anything is signed: the URL the HMAC would travel to is
+      # the control portal's inbox and nothing else. A red here names the offending URL.
+      - name: The inbox URL is the control portal's, or nothing is signed
+        env:
+          URL: ${{ inputs.control-webhook-url }}
+          HOST: ${{ inputs.control-webhook-host }}
+        run: python3 "$RUNNER_TEMP/ci-failure-ledger.py" --check-url "$URL" --expected-host "$HOST"
 
       - name: Open, append to, reopen, or close the ci-main-red ledger issue
         id: ledger

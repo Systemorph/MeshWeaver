@@ -20,9 +20,16 @@ a signed event to the control portal, whose triage agent opens a thread on it.
 Sharing the label would let a CD heal CLOSE this ledger while CI is still red — and between that
 close and the next reopen the signal reads "resolved". So this ledger has its OWN label
 (`ci-main-red`, never `ci-failure`) and its own ownership mark, a hidden line in the body
-(`<!-- ci-main-red ledger -->`). "Matching" is label AND exact title AND that marker: an issue
-lacking any of the three is never appended to, reopened, commented on or closed — it is logged and
-left alone, and a fresh ledger is filed beside it if one is needed.
+(`<!-- ci-main-red ledger -->`). Label, title and marker are all PUBLIC fields anyone with triage
+can put on any issue, so the fourth term is the one a human cannot forge: the issue's AUTHOR must be
+the Actions bot (`user.login == "github-actions[bot]"`, `user.type == "Bot"`) — which is also why
+the lane takes the caller's GITHUB_TOKEN and nothing else. An issue lacking any of the four is never
+appended to, reopened, commented on or closed — it is logged and left alone, and a fresh ledger is
+filed beside it if one is needed.
+
+The control-portal URL is validated BEFORE anything is signed (`--check-url`): https, the expected
+host (`control-webhook-host`, default memex.systemorph.com), a path under /api/hooks/. A signed
+HMAC must never travel to whatever non-empty string a caller put in a variable.
 
 THE FOUR RULES, each covered by --self-test
 --------------------------------------------
@@ -44,6 +51,7 @@ API failure — each is RED naming the cause, never a quiet "nothing to do". The
 
     python3 ci-failure-ledger.py                 # in Actions: everything from the environment
     python3 ci-failure-ledger.py --self-test     # prove every rule, against a fake GitHub
+    python3 ci-failure-ledger.py --check-url URL --expected-host HOST   # the inbox URL, or red
 """
 from __future__ import annotations
 
@@ -65,6 +73,8 @@ DEFAULT_REOPEN_WINDOW_DAYS = 7
 MAX_LEDGER_ENTRIES = 40          # ~500 bytes an entry; GitHub caps a body at 65,536 characters
 LEDGER_MARK = "<!-- ci-main-red ledger -->"  # the ownership mark: only an issue carrying it is ours
 FORBIDDEN_LABEL = "ci-failure"               # CD's label; the ledger never files under it
+BOT_LOGIN, BOT_TYPE = "github-actions[bot]", "Bot"   # the only author whose issues this ledger owns
+INBOX_PATH_PREFIX = "/api/hooks/"
 ENTRY_HEAD = "### "              # every ledger entry starts with this at column 0
 FAILED_CONCLUSIONS = ("failure", "timed_out")
 
@@ -97,6 +107,8 @@ class Issue:
     html_url: str
     labels: tuple[str, ...] = ()
     closed_at: str | None = None
+    author: str = ""
+    author_type: str = ""
 
 
 @dataclass
@@ -141,10 +153,38 @@ def _parse_iso(ts: str) -> datetime:
 
 
 def owns(issue: Issue, label: str, title: str) -> bool:
-    """The ownership test: label AND exact title AND the hidden marker in the body. All three, so a
-    hand-labelled issue, a same-titled issue from another writer, or a body somebody rewrote is
+    """The ownership test: label AND exact title AND the hidden marker in the body AND authored by
+    the Actions bot. The first three are public fields anyone can set on any issue; the author is
+    the term a human cannot forge, so a marker on a human-authored issue is FOREIGN. A hand-labelled
+    issue, a same-titled issue from another writer, a rewritten body, or a copy someone pasted is
     never something this ledger closes."""
-    return label in issue.labels and issue.title == title and LEDGER_MARK in (issue.body or "")
+    return (label in issue.labels and issue.title == title and LEDGER_MARK in (issue.body or "")
+            and issue.author == BOT_LOGIN and issue.author_type == BOT_TYPE)
+
+
+def validate_control_url(url: str, expected_host: str) -> str | None:
+    """None when `url` is the control portal's inbox; otherwise the sentence that names what is wrong.
+
+    Nothing is signed until this says None: an HMAC over the event, sent to an arbitrary URL, is a
+    credential handed to whoever owns that host.
+    """
+    try:
+        u = urllib.parse.urlsplit(url or "")
+    except ValueError as e:                                     # noqa: BLE001 - reported, not raised
+        return f"control-webhook-url {url!r} does not parse ({e})"
+    if u.scheme != "https":
+        return f"control-webhook-url {url!r} is not https — the signature would travel in clear"
+    if u.username or u.password:
+        return f"control-webhook-url {url!r} carries userinfo — refused"
+    if (u.hostname or "").lower() != (expected_host or "").lower() or not expected_host:
+        return (f"control-webhook-url {url!r} points at host {u.hostname!r}, not the control portal "
+                f"{expected_host!r} (inputs.control-webhook-host) — refusing to sign an event for it")
+    if u.port not in (None, 443):
+        return f"control-webhook-url {url!r} uses port {u.port} — the control portal serves 443 only"
+    if not u.path.startswith(INBOX_PATH_PREFIX):
+        return (f"control-webhook-url {url!r} path {u.path!r} is not under {INBOX_PATH_PREFIX} — the webhook "
+                f"inbox lives at /api/hooks/<target> (e.g. /api/hooks/Hosting/PlatformBuilds)")
+    return None
 
 
 def decide(outcome: str, matching: list[Issue], now: datetime, reopen_window_days: int) -> Verdict:
@@ -298,8 +338,10 @@ class GitHub:
             for it in items:
                 if "pull_request" in it:
                     continue
+                user = it.get("user") or {}
                 out.append(Issue(it["number"], it["title"], it["state"], it.get("body") or "", it["html_url"],
-                                 tuple(l["name"] for l in it.get("labels", [])), it.get("closed_at")))
+                                 tuple(l["name"] for l in it.get("labels", [])), it.get("closed_at"),
+                                 str(user.get("login") or ""), str(user.get("type") or "")))
             if len(items) < 100:
                 break
         return out
@@ -308,8 +350,16 @@ class GitHub:
         if label == FORBIDDEN_LABEL or LEDGER_MARK not in body:
             raise Red(f"refusing to file a ledger issue under `{label}` / without its ownership mark — that is CD's label, and an unmarked issue is one this ledger could never prove it opened")
         _, it = self.call("POST", "issues", body={"title": title, "labels": [label], "body": body})
-        return Issue(it["number"], it["title"], it["state"], it.get("body") or "", it["html_url"],
-                     tuple(l["name"] for l in it.get("labels", [])))
+        user = it.get("user") or {}
+        issue = Issue(it["number"], it["title"], it["state"], it.get("body") or "", it["html_url"],
+                      tuple(l["name"] for l in it.get("labels", [])), it.get("closed_at"),
+                      str(user.get("login") or ""), str(user.get("type") or ""))
+        if not (issue.author == BOT_LOGIN and issue.author_type == BOT_TYPE):
+            raise Red(f"the ledger issue #{issue.number} was created as {issue.author!r} ({issue.author_type!r}), "
+                      f"not as {BOT_LOGIN!r} — the token is not the caller's GITHUB_TOKEN, so this ledger could "
+                      f"never own the issue it just filed and would file a fresh one every run. Pass "
+                      f"`secrets: github-token:` = secrets.GITHUB_TOKEN and nothing else.")
+        return issue
 
     def update_issue(self, number: int, **fields) -> Issue:
         _, it = self.call("PATCH", f"issues/{number}", body=fields)
@@ -409,10 +459,19 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--reopen-window-days", type=int, default=int(env("LEDGER_REOPEN_WINDOW_DAYS") or DEFAULT_REOPEN_WINDOW_DAYS))
     ap.add_argument("--event-out", default=env("LEDGER_EVENT_OUT"), help="file the exact event body is written to")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--check-url", help="validate this control-webhook-url and exit; nothing else runs")
+    ap.add_argument("--expected-host", default=env("LEDGER_CONTROL_HOST") or "memex.systemorph.com")
     a = ap.parse_args(argv)
 
     if a.self_test:
         return self_test()
+    if a.check_url is not None:
+        problem = validate_control_url(a.check_url, a.expected_host)
+        if problem:
+            print(f"::error title=ci-failure-ledger::{problem}", file=sys.stderr)
+            return 1
+        print(f"control-webhook-url is the control portal's inbox ({a.expected_host}, under {INBOX_PATH_PREFIX}) — safe to sign for")
+        return 0
 
     try:
         token = env("GH_TOKEN") or env("GITHUB_TOKEN") or ""
@@ -489,7 +548,8 @@ class _Fake:
         self.writes += 1
         n = self.next_number
         self.next_number += 1
-        self.issues[n] = Issue(n, title, "open", body, f"https://github.com/o/r/issues/{n}", (label,))
+        self.issues[n] = Issue(n, title, "open", body, f"https://github.com/o/r/issues/{n}", (label,),
+                               None, BOT_LOGIN, BOT_TYPE)
         return self.issues[n]
 
     def update_issue(self, number, **fields):
@@ -579,7 +639,8 @@ def self_test() -> int:
 
     # 6. closed 2 days ago → reopened and appended, not duplicated
     closed_recent = Issue(7, title, "closed", new_body("o/r", 7) + "\n\n" + ENTRY_HEAD + "old — **failure** — [run 1](u)\n",
-                          "https://github.com/o/r/issues/7", (label,), (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+                          "https://github.com/o/r/issues/7", (label,), (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          BOT_LOGIN, BOT_TYPE)
     gh6 = _Fake([closed_recent])
     v, issue6, _ = go(gh6, run("failure", [job]))
     check("closed 2 d ago -> reopen the same issue", v.action == "reopen" and issue6 is not None and issue6.number == 7
@@ -587,8 +648,8 @@ def self_test() -> int:
     check("reopened body gained an entry", issue6 is not None and issue6.body.count("\n" + ENTRY_HEAD) == 2)
 
     # 7. closed 9 days ago → a fresh issue
-    closed_old = Issue(8, title, "closed", "x", "https://github.com/o/r/issues/8", (label,),
-                       (now - timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    closed_old = Issue(8, title, "closed", new_body("o/r", 7), "https://github.com/o/r/issues/8", (label,),
+                       (now - timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ"), BOT_LOGIN, BOT_TYPE)
     gh7 = _Fake([closed_old])
     v, issue7, _ = go(gh7, run("failure", [job]))
     check("closed 9 d ago -> create a fresh issue", v.action == "create" and issue7 is not None and issue7.number != 8 and len(gh7.issues) == 2)
@@ -613,7 +674,8 @@ def self_test() -> int:
 
     # 8b. a `ci-main-red` issue WITHOUT the ownership mark (hand-labelled, or a rewritten body) is never
     #     closed, commented on, reopened or appended to — logged as foreign, left exactly as found.
-    unmarked = Issue(10, title, "open", "someone labelled this by hand", "https://github.com/o/r/issues/10", (label,))
+    unmarked = Issue(10, title, "open", "someone labelled this by hand", "https://github.com/o/r/issues/10", (label,),
+                     None, BOT_LOGIN, BOT_TYPE)
     gh8c = _Fake([unmarked])
     mine, foreign = owned_issues(gh8c, label, title)
     check("an unmarked `ci-main-red` issue is FOREIGN, not owned", mine == [] and [f.number for f in foreign] == [10])
@@ -627,6 +689,38 @@ def self_test() -> int:
         check("a write aimed at an unmarked issue is refused at the moment of the write", False, "was allowed")
     except Red:
         check("a write aimed at an unmarked issue is refused at the moment of the write", True)
+
+    # 8c. a HUMAN-authored issue carrying label + title + marker — all three are public fields anyone
+    #     with triage can set — is FOREIGN: the author is the term that cannot be forged.
+    forged = Issue(11, title, "open", new_body("o/r", 7), "https://github.com/o/r/issues/11", (label,),
+                   None, "some-human", "User")
+    gh8d = _Fake([forged])
+    mine, foreign = owned_issues(gh8d, label, title)
+    check("a human-authored issue with label, title AND marker is FOREIGN", mine == [] and [f.number for f in foreign] == [11])
+    v, _, _ = go(gh8d, run("success"))
+    check("green never closes the forged issue", v.action == "noop" and gh8d.writes == 0 and gh8d.issues[11].state == "open")
+    v, issue8d, _ = go(gh8d, run("failure", [job]))
+    check("red files a bot-authored ledger beside the forged one, which is untouched",
+          v.action == "create" and issue8d is not None and issue8d.number != 11 and issue8d.author == BOT_LOGIN
+          and gh8d.issues[11].body == forged.body)
+    check("a bot-typed login that is not github-actions[bot] (an App token) does not own either",
+          not owns(Issue(12, title, "open", new_body("o/r", 7), "u", (label,), None, "meshweaver-cloud[bot]", "Bot"), label, title))
+
+    # 11. the inbox URL: nothing is signed for anything but the control portal's /api/hooks/
+    host = "memex.systemorph.com"
+    good = "https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds"
+    check("the control portal's inbox URL is accepted", validate_control_url(good, host) is None)
+    check("host comparison is case-insensitive", validate_control_url("https://MEMEX.systemorph.com/api/hooks/x", host) is None)
+    for bad, why in [("http://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds", "http"),
+                     ("https://evil.example/api/hooks/Hosting/PlatformBuilds", "other host"),
+                     ("https://memex.systemorph.com.evil.example/api/hooks/x", "host suffix trick"),
+                     ("https://memex.systemorph.com/hooks/Hosting/PlatformBuilds", "path outside /api/hooks/"),
+                     ("https://memex.systemorph.com:8443/api/hooks/x", "odd port"),
+                     ("https://user:pw@memex.systemorph.com/api/hooks/x", "userinfo"),
+                     ("", "empty"), ("not a url", "garbage")]:
+        p = validate_control_url(bad, host)
+        check(f"refused: {why}", p is not None and (bad in p or bad == ""), p or "")
+    check("an empty expected host refuses everything", validate_control_url(good, "") is not None)
 
     # 9. the ledger is bounded
     b = new_body("o/r", 7)
@@ -655,8 +749,8 @@ def self_test() -> int:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
         return 1
     print("✓ ci-failure-ledger self-test: create / append / reopen-recent / create-after-old / close-with-comment / "
-          "noop-when-green / refuse-malformed / cd-ci-failure-untouched / unmarked-ci-main-red-untouched / never-labelled-ci-failure / "
-          "bounded-ledger / jobs-listed — every rule fires and stays silent as designed")
+          "noop-when-green / refuse-malformed / cd-ci-failure-untouched / unmarked-ci-main-red-untouched / human-authored-is-foreign / "
+          "never-labelled-ci-failure / inbox-url-validated / bounded-ledger / jobs-listed — every rule fires and stays silent as designed")
     return 0
 
 

@@ -3376,8 +3376,9 @@ jobs:
   # `main-cd.yml` only fires on a SUCCESSFUL run — so a red main updates nothing and pages nobody
   # (the same empty room a scheduled red goes into; AGENTS.md → "an honest red nobody reads is the
   # same defect as a gate that cannot fail"). Maintainer, 2026-09-12: "put the ci-failure on all
-  # repos, in main; triaging is done by systemorph-com". These two jobs are the same thin caller
-  # every satellite wires (the contract is in node-repo-ci-failure.yml's header): one `ci-main-red`
+  # repos, in main; triaging is done by systemorph-com". These two jobs are the thin caller each
+  # satellite wires in its own follow-up PR once the lane is on main (the contract is in
+  # node-repo-ci-failure.yml's header) — core is wired first, here: one `ci-main-red`
   # issue per repository, a dated ledger entry per red run, closed by the run that goes green, and a
   # signed event to the control portal's triage inbox each way. main-cd.yml's own `ci-failure`
   # DELIVERY alerting is a different subject (an image set that did not publish) and is untouched —
