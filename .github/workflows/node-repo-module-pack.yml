@@ -265,6 +265,56 @@ name: node-repo module pack
 # bytes. There is no `_complete` sentinel to shrink here — unlike the prebuilt-bundle bake, this
 # lane uploads one independent bundle per module and never seals a listing, so a partial run costs
 # only the modules it did not reach, never the ones it did.
+#
+# ──────────── Where the heavy legs run (`runner`, 2026-09-12) ────────────
+# The heaviest billed job family in the fleet comes out of THIS lane: MeshWeaver.Plugins'
+# `Module bundles / Module tests` legs cost ~7,800 billed minutes a day over the seven days to
+# 2026-09-12 (40–76 legs a day). The Systemorph org runs a self-hosted runner scale set on the AKS
+# silos node pool — `runs-on` label `aks-silos`, ARC `gha-runner-scale-set`, ephemeral, min 0 /
+# max 8 — proven on Memex run 34681270793 (runner `aks-silos-gknmd-runner-t9dl7`). The `runner`
+# input is how a caller moves the heavy legs there, and ONLY them:
+#
+#   * `pack` (Module bundle) and `tests` (Module tests) honour `runs-on: ${{ inputs.runner }}`.
+#   * `select`, `prepare`, `build-workspace` and `verify` stay on `ubuntu-latest` whatever the
+#     input says. `select` and `verify` are seconds of orchestration. `prepare` and
+#     `build-workspace` NEED DOCKER — `docker pull/save/load/run` of the platform and tester
+#     images; the compiler IS the image — and the aks-silos runners have NONE. Measured
+#     2026-09-12 in Systemorph/Memex `deployments/aks/ci-runners/arc-runner-scale-set-values.yaml`:
+#     no `containerMode:` at all (neither `dind` nor `kubernetes`), a single `runner` container
+#     from `ghcr.io/actions/actions-runner:2.337.0`, no dind sidecar, no socket mount. That image
+#     carries the `docker` CLI and no daemon, so every `docker …` there dies on the socket — a
+#     red, never a silent pass, but a leg that cannot run. Moving those two is not a `runs-on`
+#     edit; it is `containerMode: dind` on the scale set first.
+#
+# Two more facts about that runner image, both measured on Memex's `runner-proof.yml`:
+#   * it is NON-ROOT (`USER runner`, uid 1001; passwordless `sudo` exists). `actions/setup-dotnet`
+#     installs to `/usr/share/dotnet` by default, which is not writable there, so BOTH honouring
+#     jobs set `DOTNET_INSTALL_DIR=/home/runner/.dotnet` at job level whenever `runner` is anything
+#     but `ubuntu-latest`. On `ubuntu-latest` the variable is left EMPTY, which setup-dotnet reads
+#     as unset (`process.env['DOTNET_INSTALL_DIR'] ? … : default`, v6 installer.ts) — the default
+#     path is byte-identical to before this input existed.
+#   * it ships NO toolchain: no .NET, no Node, no `gh`, no `zstd`. What the moved legs take from
+#     the image is `bash`, `git`, `jq`, `curl`, `sudo` and Ubuntu's `python3` (a dependency of the
+#     `software-properties-common` the image installs); the SDK comes from setup-dotnet exactly as
+#     before. The ONE step in `pack` that needs `gh` (`gh run download`, the ledger's REUSE leg) and
+#     the ONE that needs Docker (the `docker cp` fallback, taken only when the
+#     `platform-refs-<digest>` cache `prepare` filled minutes earlier has been evicted) both fail
+#     RED naming what is missing; neither skips.
+#
+# The runner POD is not the node. The scale set requests 500m / 4Gi and LIMITS each runner to
+# 2 vCPU / 6 GiB (the node behind it is 16 vCPU / 62 GiB, shared with the portals). A suite that
+# needs more than 6 GiB is killed there, not slowed — so the first opt-in is a MEASUREMENT of one
+# job family, not a fleet switch.
+#
+# A caller opts in PER JOB FAMILY behind a repository variable, so the move is revertible in ONE
+# edit and never reaches a family nobody measured:
+#
+#     with:
+#       runner: ${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}
+#
+# Unset, the variable resolves to `ubuntu-latest` and nothing changes. Every current caller — the
+# six satellites and this repo's main-cd — passes nothing and inherits that default. Doc:
+# Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to end", the 2026-09-12 note).
 
 on:
   workflow_call:
@@ -548,6 +598,20 @@ on:
         required: false
         type: string
         default: off
+      runner:
+        description: >-
+          The `runs-on` label for the HEAVY legs — `pack` (Module bundle) and `tests` (Module
+          tests) — and nothing else; see "Where the heavy legs run" at the top of this file.
+          `ubuntu-latest` (the default) is exactly today's behaviour. `aks-silos` is the Systemorph
+          org's self-hosted scale set: non-root, NO Docker, no preinstalled toolchain, 2 vCPU /
+          6 GiB per runner — the two honouring jobs set DOTNET_INSTALL_DIR under /home/runner for
+          it. Wire it from a repository variable (`vars.MW_RUNNER_HEAVY`, falling back to
+          `ubuntu-latest` when unset — the header shows the expression) so the move is one edit
+          to revert. `select`, `prepare`, `build-workspace` and `verify`
+          ignore it — the middle two need a Docker daemon the scale set does not have.
+        required: false
+        type: string
+        default: ubuntu-latest
     secrets:
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
@@ -1494,8 +1558,13 @@ jobs:
   pack:
     name: Module bundle (${{ matrix.entry.module }})
     needs: [select, prepare, build-workspace]
-    runs-on: ubuntu-latest
+    # `runner` — one of the two jobs that honour it; see "Where the heavy legs run" in the header.
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
+    env:
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
     # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
@@ -1783,6 +1852,12 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$IMAGE" ] || { echo "::error::platform-image-digest is set but platform-image is empty — name the image the digest belongs to"; exit 1; }
+          # 🚨 The ONE step in this job that needs a Docker daemon, and it runs only when the
+          # `platform-refs-<digest>` cache `prepare` filled earlier in this run has been evicted. A
+          # runner without a daemon (the `aks-silos` scale set — "Where the heavy legs run", top of
+          # this file) cannot take this fallback: say so by name, not three commands later on a
+          # socket error.
+          docker info >/dev/null 2>&1 || { echo "::error::platform-refs-$DIGEST missed the cache and this runner ($RUNNER_NAME) has no Docker daemon to pull $IMAGE with — prepare filled that cache in this same run, so this is an eviction or a foreign runner label. Re-run, or keep 'pack' on ubuntu-latest (the lane's 'runner' input)."; exit 1; }
           if [ "$ACR_LOGIN" = basic ]; then
             [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but basic ACR credentials were not passed — the image cannot be pulled"; exit 1; }
             echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
@@ -2974,8 +3049,14 @@ jobs:
       !inputs.publish
       && needs.select.result == 'success'
       && needs.select.outputs.test-count != '0'
-    runs-on: ubuntu-latest
+    # `runner` — the other job that honours it; see "Where the heavy legs run" in the header. This
+    # job runs no `docker` at all: a checkout, setup-dotnet, `dotnet test`, `jq`, `python3`.
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
+    env:
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     strategy:
       # One module's red suite must not hide the rest — a sweep wants every verdict in one run.
       fail-fast: false

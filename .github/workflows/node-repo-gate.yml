@@ -56,6 +56,30 @@ name: Node repo gate (reusable)
 #       acr-password: ${{ secrets.ACR_PASSWORD }}
 #       stage-repo-app-id: ${{ secrets.MESHWEAVER_APP_ID }}
 #       stage-repo-app-private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+#
+# ──────── `runner` — declared, and REFUSED for anything but ubuntu-latest (2026-09-12) ────────
+# node-repo-module-pack.yml grew a `runner` input the same day, so a caller can move its heavy
+# legs onto the Systemorph org's self-hosted `aks-silos` scale set (ARC gha-runner-scale-set on
+# the AKS silos pool, ephemeral, min 0 / max 8; proven on Memex run 34681270793). This lane
+# declares the SAME input so a caller sees one contract — and honours it NOWHERE, on purpose. The
+# gate shard's contract is `docker run` of the tester image (above), and the aks-silos runners
+# have NO DOCKER: measured 2026-09-12 in Systemorph/Memex
+# `deployments/aks/ci-runners/arc-runner-scale-set-values.yaml` — no `containerMode:` at all
+# (neither `dind` nor `kubernetes`), one `runner` container from
+# `ghcr.io/actions/actions-runner:2.337.0`, no dind sidecar, no socket mount. That image carries
+# the docker CLI and no daemon. A shard moved there would die at `docker login`, every run.
+#
+# So `plan` REFUSES any value but `ubuntu-latest`, red and by name. A declared input that is
+# silently ignored would let a caller believe its shards moved while they did not — "skipped reads
+# as passed", the shape this file forbids everywhere else. The day the scale set gains a daemon
+# (`containerMode: dind`, or a Kubernetes-mode runner with a daemon sidecar) the change is: drop
+# the refusal in `plan`, put `runs-on: ${{ inputs.runner }}` on `gate`, and — only if a shard ever
+# runs setup-dotnet, which today it does not (the tester runs INSIDE the container, the runner
+# needs no SDK) — `DOTNET_INSTALL_DIR: /home/runner/.dotnet` at job level, because that image is
+# non-root (uid 1001) and ships neither .NET nor Node. Also worth knowing before that day: the
+# runner pod is LIMITED to 2 vCPU / 6 GiB (the node is 16 / 62), and a shard is ~60 serial package
+# installs against a live mesh. Callers: wire this from its OWN repository variable, never the
+# module-pack one — `vars.MW_RUNNER_GATE`, unset today — so a per-family opt-in stays per family.
 
 on:
   workflow_call:
@@ -300,6 +324,17 @@ on:
         required: false
         type: boolean
         default: false
+      runner:
+        description: >-
+          The `runs-on` label the gate shards WOULD run on — declared for parity with
+          node-repo-module-pack.yml's input of the same name, and honoured by NO job here today:
+          a shard is a `docker run` of the tester image, and the self-hosted `aks-silos` scale set
+          has no Docker daemon (measured 2026-09-12; see the header). `plan` fails RED on any value
+          but `ubuntu-latest`, so a caller can never believe its shards moved when they did not.
+          Leave it unset; move the module-pack lane's legs instead.
+        required: false
+        type: string
+        default: ubuntu-latest
     secrets:
       acr-username:
         description: Registry user able to pull the test image.
@@ -351,6 +386,17 @@ jobs:
       run_all: ${{ steps.affected.outputs.run_all }}
       nothing-to-gate: ${{ steps.plan.outputs.nothing_to_gate }}
     steps:
+      # 🚨 The `runner` input is declared and NOT honoured — see the header. An unreadable or
+      # unsupported value is RED here, before anything is planned, so "my shards moved" can never
+      # be believed of a run whose shards stayed. This is an assertion on a caller's CONFIG, not a
+      # skip: nothing downstream is conditional on it.
+      - name: The gate's shards run on GitHub-hosted runners (the `runner` input)
+        env:
+          RUNNER_LABEL: ${{ inputs.runner }}
+        run: |
+          set -euo pipefail
+          [ "$RUNNER_LABEL" = ubuntu-latest ] || { echo "::error::runner is '$RUNNER_LABEL', and this lane honours no other value: a gate shard is a 'docker run' of the tester image, and the self-hosted aks-silos scale set has no Docker daemon (measured 2026-09-12 — header of node-repo-gate.yml). Leave the input unset here; move only node-repo-module-pack.yml's legs."; exit 1; }
+          echo "gate shards: ubuntu-latest — the only value this lane honours (runner='$RUNNER_LABEL')"
       - uses: actions/checkout@v7
         with:
           # The affected computation diffs against the PR base — it needs the base commits.
