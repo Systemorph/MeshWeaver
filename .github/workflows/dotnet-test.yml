@@ -1968,6 +1968,16 @@ jobs:
     - name: "The gate host composes by its rules and refuses a partial one (self-test)"
       run: bash .github/scripts/compose-gate-host.sh --self-test
 
+    # 🚨 The other half of the same property since MeshWeaver#4113: WHERE a gate shard's platform
+    # comes from. When the runner node mounts the CI platform volume the shard runs the tester as a
+    # process off that share, and a set that is absent, half-written or paired with another portal
+    # must be RED naming `ci-platform-refresh` — NEVER a silent fall back to `docker pull`, which
+    # would hide a dead refresh job for as long as the registry answers. The refusals are only
+    # worth having if they can fire, so the script proves each one against a synthetic volume here,
+    # on every platform PR, exactly as compose-gate-host.sh does above.
+    - name: "A gate shard refuses a platform volume it cannot trust (self-test)"
+      run: bash .github/scripts/resolve-gate-platform.sh --self-test
+
     # 🚨 Every job in every workflow carries a LITERAL `timeout-minutes` <= 45 (maintainer, 2026-09-02:
     # "hard cut CI runs after 45min — we pay all this"). GitHub's default is 360; one uncapped job in
     # the module-pack lane held a runner for six hours per run across 19 concurrent Plugins runs and

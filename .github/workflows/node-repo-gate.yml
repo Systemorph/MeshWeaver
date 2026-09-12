@@ -4,8 +4,10 @@ name: Node repo gate (reusable)
 # (unified per #1707): install each package into a real MeshWeaver mesh (in-process,
 # SQLite/filesystem persistence) and assert code packages compile live, render, AND that each
 # type's `Tests` layout area runs green — tests are EXECUTED, not just compiled; a red test
-# fails the PR. The tester ships in the mw-plugin-test image; contract is `docker run` with the
-# checkout mounted (NOT a `container:` job — see MeshWeaver.Plugins ci.yml history).
+# fails the PR. The tester ships in the mw-plugin-test image, and a shard gets its bytes ONE of
+# two ways — off the runner node's platform volume (the default on the self-hosted sets, no Docker
+# at all) or by pulling the image (GitHub-hosted runners). See "Where the heavy legs run" below.
+# Neither is a `container:` job (see MeshWeaver.Plugins ci.yml history).
 #
 # NO input-shaped `if:` anywhere in here, deliberately (AGENTS.md: a gate never tests its own
 # inputs). The caller's `preflight` job asserts the image/registry inputs red-fail-naming-them,
@@ -57,66 +59,92 @@ name: Node repo gate (reusable)
 #       stage-repo-app-id: ${{ secrets.MESHWEAVER_APP_ID }}
 #       stage-repo-app-private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
 #
-# ──────── `runner` — honoured by the gate shards (2026-09-12, afternoon) ────────
-# The morning of 2026-09-12 (#4090) this lane declared `runner` for parity with
-# node-repo-module-pack.yml and REFUSED any value but `ubuntu-latest` in `plan`, because a gate
-# shard is `docker login/pull/run` of the tester image and the org's self-hosted `aks-silos` scale
-# set had no Docker daemon. That stopped being true the same afternoon: the org now runs a SECOND,
-# Docker-capable scale set, and the maintainer's word is "bring them in our infra." The facts, all
-# measured, from Systemorph/Memex `deployments/aks/ci-runners/` (README, "The Docker-capable scale
-# set") and Memex run 34694129111:
+# ──────── Where the heavy legs run (2026-09-12, evening — MeshWeaver#4113) ────────
+# A gate shard needs three things: the TESTER's /app (the CLI), the PORTAL's /app (the reference
+# set, the framework identity, the modules), and a .NET runtime to start the composed host with.
+# Until #4113 all three arrived as CONTAINERS — `docker login`, two `docker pull`s of 279 MB +
+# 833 MB, `docker cp` of both /app trees, then four `docker run`s — which is why this lane needed
+# a Docker daemon and why `aks-silos-dind` (a PRIVILEGED dind sidecar) existed for it at all.
 #
-#   * `runs-on: aks-silos-dind` — ARC gha-runner-scale-set 0.14.2, `containerMode: dind`, helm
-#     release `aks-silos-dind` in namespace `arc-runners-dind`, ephemeral, min 0 / max 6, on its
-#     own pool (spot `cidind`, falling back to the regular CI pool `cibuild`) — never on a node
-#     with a portal, because the daemon is a PRIVILEGED `docker:dind` sidecar the runner reaches
-#     over DOCKER_HOST. `docker run --rm hello-world` → "Hello from Docker!", Docker Engine 29.8.0
-#     (client 29.7.2). Scale-from-zero: job created → started in 157 s (the first job on a fresh
-#     node also pays the dind image pull).
-#   * The runner container is `ghcr.io/actions/actions-runner:2.337.0`: NON-ROOT (`runner`,
-#     uid 1001, passwordless sudo), no .NET, no Node, NO `gh`, NO `az` (measured with
-#     `docker run … command -v` on 2026-09-12). What it has that this job uses: bash, git, curl,
-#     jq, python3, unzip, tar, sha256sum, mawk. `dotnet --version → 10.0.401` came from
-#     setup-dotnet under `DOTNET_INSTALL_DIR=/home/runner/.dotnet`.
-#   * Sizes: the runner container is limited to 6 CPU / 20 GiB (request 2 / 8 GiB); the tester's
-#     `docker run` executes in the dind SIDECAR's cgroup, whose limit is 6 CPU / 16 GiB (request
-#     1 / 4 GiB, the namespace LimitRange) — beside a GitHub-hosted ubuntu-latest's 4 vCPU / 16 GiB.
-#     The node behind it is a D16s_v5: 16 vCPU / 62 GiB "visible" (nproc/free show the node, not
-#     the cgroup).
+# The runner NODES now carry the platform already. Systemorph/Memex#321 (applied 2026-09-12 15:00Z)
+# mounts one read-only Azure Files share at **`/opt/platform`** in every runner pod of BOTH ARC
+# scale sets, and a CronJob (`ci-platform-refresh`) keeps the 3 newest SEALED sets on it:
 #
-# What moved in this file, and what did not:
+#     /opt/platform/current                     the newest set's TESTER digest — a FILE, read ONCE
+#     /opt/platform/sha256-<hex>/app/           the tester image's /app
+#     /opt/platform/sha256-<hex>/platform-refs/ the PORTAL image's /app
+#     /opt/platform/sha256-<hex>/platform.json  set, core sha, BOTH image digests, installed-at
+#     /opt/platform/sha256-<hex>/.complete      the digest, written LAST — no .complete, no set
 #
-#   * `gate` — the shard job — honours `runs-on: ${{ inputs.runner }}`. `plan` and `verify` stay
-#     on `ubuntu-latest` whatever the input says: seconds of orchestration, no Docker, and
-#     `verify` is the required context.
-#   * The refusal in `plan` is GONE. In its place the shard's FIRST step asserts that `docker info`
-#     succeeds and fails RED naming the runner and the label when it does not: a runner without a
-#     daemon was the one thing that made the refusal right, and it is now asserted where it would
-#     bite — on every shard, before `docker login` — instead of inferred from a label. The step
-#     runs on ubuntu-latest too (Docker is part of that image, so it is a sub-second proof that the
-#     check itself fires); a check that only ran on the non-default label would never be seen
-#     working before the day it mattered.
-#   * Job-level `DOTNET_INSTALL_DIR: /home/runner/.dotnet` whenever `runner` is not
-#     `ubuntu-latest` — the #4090 rule for every job that honours the input: the runner is
-#     non-root and setup-dotnet cannot write /usr/share/dotnet there. EMPTY on ubuntu-latest, which
-#     setup-dotnet reads as unset (`process.env['DOTNET_INSTALL_DIR'] ? … : default`), so the
-#     default path is untouched. No step of the shard runs setup-dotnet today (the tester runs
-#     INSIDE the container, on the portal image's own `dotnet`), and the scale set's pod template
-#     sets the same variable — the job-level line keeps the rule uniform across the honouring jobs
-#     of both lanes and holds for the first step that ever does.
-#   * The two fetches of a lane script (`compose-gate-host.sh`, `compose-sealed-modules.sh`) used
-#     `gh api …contents…`, and the runner image has no `gh`. They now `curl` the SAME endpoint at
-#     the SAME ref with `github.token` (`Accept: application/vnd.github.raw+json`), on every
-#     runner — same bytes, no CLI, and the `#!` check on what arrived is unchanged.
-#   * The `az storage` read of an upstream seed — taken only when `upstream-seed` is set and
-#     `registry-url` is NOT — asserts `az` by name in its preflight, red before `azure/login`
-#     would fail on a missing CLI three commands later. Every current caller reads over
-#     `registry-url`; on ubuntu-latest `az` is present and the assertion is silent.
-#   * Not exercised by the proof run, exercised by the first opted-in shard: the bind mounts of
-#     $RUNNER_TEMP and $GITHUB_WORKSPACE into the tester container. They rely on the chart mounting
-#     the runner's `_work` volume into the dind sidecar at the same path (what `containerMode: dind`
-#     is for) and on the tester running as uid 1001 (`--user`) inside it; a `chmod 777` on the
-#     directories the container writes is already there.
+# So this lane has TWO MODES, and `.github/scripts/resolve-gate-platform.sh` decides which by
+# MEASURING whether that mount exists — never by reading a label or an input:
+#
+#   * **volume** — `/opt/platform` is there (every self-hosted ARC runner pod). The shard reads
+#     `app/` and `platform-refs/` off the share, composes the gate host into $RUNNER_TEMP, and runs
+#     the tester **as a process** on a .NET installed by `actions/setup-dotnet` under
+#     `DOTNET_INSTALL_DIR=/home/runner/.dotnet`. No daemon, no registry credential, no pull.
+#   * **container** — `/opt/platform` is absent (a GitHub-hosted `ubuntu-latest` runner: `/opt` is
+#     EMPTY in ghcr.io/actions/actions-runner and the GitHub image has no such mount). The shard
+#     takes the pre-#4113 path verbatim: login, pull both, `docker cp`, four `docker run`s. A
+#     caller that passes nothing is on `ubuntu-latest` and therefore in this mode, unchanged.
+#
+# 🚨 THERE IS NO FALLBACK BETWEEN THE MODES. Once the mount is present, a set that is missing,
+# half-written or paired with another portal is RED and NAMES `ci-platform-refresh`; it never
+# degrades into `docker pull`. A silent fallback would turn "the refresh job has been dead for a
+# day" into "the gate is a bit slower today". The mode taken is printed, and both failure paths
+# name their own fix: a runner with NEITHER the volume NOR a daemon is red naming both.
+#
+# WHAT THE VOLUME SUPPLIES, AND WHAT IT DOES NOT — measured 2026-09-12 against the images of set
+# 3.0.0-ci.8417 (tester sha256:60b2dec8…, portal sha256:bd27c33f…) and
+# ghcr.io/actions/actions-runner:2.337.0:
+#
+#   * tester /app: 433 MB, 358 files, 89 assemblies (27 `MeshWeaver.*`) — ON THE VOLUME.
+#   * portal /app: 544 MB, 1,521 files, 216 assemblies (45 `MeshWeaver.*`), its
+#     `meshweaver-surface.manifest`, its `modules/`, its `wwwroot/` and its NATIVE libraries
+#     (`libSkiaSharp.so`, `libHarfBuzzSharp.so`, `libe_sqlite3.so`, which live INSIDE /app) — ON
+#     THE VOLUME.
+#   * Native OS dependencies: both images are Ubuntu 24.04 with `libicuuc.so.74.2`,
+#     `libssl.so.3`, `libcrypto.so.3`. The ARC runner image is **Ubuntu 24.04.4 with the same
+#     three** — so the globalization and TLS surface is identical and nothing has to be carried.
+#   * Portal-only extras the tester never touches: `chromium`, `/opt/ms-playwright`, `git`
+#     (the runner has git anyway). Grepped: the tester references neither Playwright nor chromium.
+#   * 🚨 **The .NET host is the ONE thing the volume does not carry.** In a container the tester is
+#     started by the PORTAL image's own `dotnet` — `/usr/share/dotnet`, 114 MB, host fxr 10.0.12
+#     with `shared/Microsoft.NETCore.App/10.0.12` AND `shared/Microsoft.AspNetCore.App/10.0.12` —
+#     and that directory is also what `--shared-frameworks` names. In volume mode it comes from
+#     `setup-dotnet` instead, and the step below ASSERTS that the runner's install carries every
+#     framework the portal's own runtimeconfig declares, at the portal's major.minor, printing
+#     both sides' versions on every run. The residual is patch-level: the implementation
+#     assemblies in the reference set are the runner's 10.0.x rather than the portal's 10.0.12
+#     (servicing policy freezes the public API within a band, so a compile cannot see it). Closing
+#     it exactly is a Memex change, not a lane change — `ci-platform-refresh.py` would extract the
+#     portal image's `/usr/share/dotnet` into `<set>/dotnet/` (+114 MB per set, ~12% of a set) and
+#     this lane would prefer it. Tracked with Memex#316/#321.
+#
+# THE RUNNER SET, and what each label buys:
+#
+#   * `aks-silos` — the plain, NON-privileged ARC scale set. **Now accepted**, and the point of
+#     #4113: with the volume there is nothing left for a daemon to do in this lane.
+#   * `aks-silos-dind` — still works (it mounts the same volume, so it takes the same volume mode);
+#     its privileged sidecar is simply unused here. It remains the label for the lanes that
+#     genuinely build or push images (`publish-bake`, `compile-check`, module-pack's `prepare`).
+#   * `ubuntu-latest` — the default, GitHub-hosted, container mode, byte-identical to before.
+#
+#   The runner container is `ghcr.io/actions/actions-runner:2.337.0`: NON-ROOT (`runner`, uid 1001,
+#   passwordless sudo), no .NET, no Node, NO `gh`, NO `az`. What it has that this job uses: bash,
+#   git, curl, jq, python3, unzip, tar, sha256sum, awk, sudo. The `/opt/platform` mount is
+#   `uid=0,gid=0,dir_mode=0755,file_mode=0644` and read-only: uid 1001 reads everything, writes
+#   nothing. Both fetches of a lane script `curl` the contents API (the image has no `gh`), and the
+#   `az storage` read of an upstream seed — taken only when `upstream-seed` is set and
+#   `registry-url` is NOT — asserts `az` by name in its preflight rather than dying on a missing
+#   binary three commands later.
+#
+#   Job-level `DOTNET_INSTALL_DIR: /home/runner/.dotnet` whenever `runner` is not `ubuntu-latest`:
+#   the runner is non-root and setup-dotnet cannot write /usr/share/dotnet there. EMPTY on
+#   ubuntu-latest, which setup-dotnet reads as unset, so the default path is untouched.
+#
+#   `plan` and `verify` stay on `ubuntu-latest` whatever the input says: seconds of orchestration,
+#   no platform, and `verify` is the required context.
 #
 # A caller opts in PER REPOSITORY behind a repository variable — its OWN, never the module-pack
 # lane's `vars.MW_RUNNER_HEAVY`, so one job family moves at a time and the move is one edit to
@@ -127,7 +155,7 @@ name: Node repo gate (reusable)
 #
 # Unset, the variable resolves to `ubuntu-latest` and this lane behaves byte-for-byte as before
 # this input existed. Doc: Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to end",
-# the 2026-09-12 note).
+# the 2026-09-12 notes).
 
 on:
   workflow_call:
@@ -375,14 +403,25 @@ on:
       runner:
         description: >-
           The `runs-on` label for the gate SHARDS (`gate`) and nothing else — `plan` and `verify`
-          stay on `ubuntu-latest`. `ubuntu-latest` (the default) is exactly today's behaviour.
-          `aks-silos-dind` is the Systemorph org's Docker-capable self-hosted scale set (a
-          privileged dind sidecar; non-root runner, no `gh`, no `az`, no preinstalled .NET; see
-          "`runner` — honoured by the gate shards" in the header). The shard's first step asserts
-          the runner HAS a Docker daemon and fails RED naming it otherwise — `aks-silos` (no
-          daemon) is such a red, not a silent ignore. Wire it from a repository variable of its
-          own (`vars.MW_RUNNER_GATE`, falling back to `ubuntu-latest` when unset — the header
-          shows the expression) so the move is one edit to revert.
+          stay on `ubuntu-latest`. `ubuntu-latest` (the default) is exactly today's behaviour: no
+          platform volume, so the shard pulls both images and runs the tester in a container.
+
+          `aks-silos` is the Systemorph org's PLAIN self-hosted scale set — no Docker daemon, no
+          privileged sidecar — and since MeshWeaver#4113 it is the right label for this lane: its
+          runner pods mount the CI platform share read-only at `/opt/platform`, so the shard takes
+          the tester's and the portal's `/app` off the node and runs the tester as a PROCESS.
+          `aks-silos-dind` also works and takes the same volume path; its daemon is simply unused
+          here, so prefer `aks-silos` and leave dind to the lanes that build images.
+
+          The shard does not infer any of this from the label: it MEASURES whether `/opt/platform`
+          is mounted, prints which mode it took, and fails RED naming `ci-platform-refresh` when
+          the volume is there but the pinned set is not — never falling back to a registry pull.
+          A runner with neither the volume nor a Docker daemon is red naming both. See "Where the
+          heavy legs run" in the header.
+
+          Wire it from a repository variable of its own (`vars.MW_RUNNER_GATE`, falling back to
+          `ubuntu-latest` when unset — the header shows the expression) so the move is one edit to
+          revert.
         required: false
         type: string
         default: ubuntu-latest
@@ -529,27 +568,165 @@ jobs:
       contents: read
       id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
     steps:
-      # 🚨 FIRST, before checkout: this job's contract is `docker login/pull/run` of the tester
-      # image, so a runner without a daemon cannot gate — and until 2026-09-12 that was the reason
-      # `plan` refused every label but ubuntu-latest. The assertion replaces the refusal: it holds
-      # on the label that has a daemon (`aks-silos-dind`, a dind sidecar over DOCKER_HOST) and goes
-      # RED naming the runner on one that does not (`aks-silos`, or any label nobody measured). It
-      # runs on ubuntu-latest too — there it is a sub-second proof that the check fires, which a
-      # step conditioned on the non-default label could never give until the day it mattered.
-      # Not an input-shaped `if:`: nothing is skipped on the value, it is asserted against.
-      - name: This runner has a Docker daemon (the `runner` input)
+      # ───────────── TWO IMAGES, ONE BUILD: resolve the pins FIRST (MeshWeaver#3022) ─────────────
+      # 🚨 Before checkout and before anything heavy: pure string work that turns the caller's pins
+      # into the two references every later step names — and refuses the one wrong value GitHub
+      # cannot refuse for us. It runs identically in both modes: in volume mode the digests are
+      # what the set on the share is looked up BY, in container mode they are what is pulled.
+      - name: Resolve the tester and the platform image
+        id: images
         env:
-          RUNNER_LABEL: ${{ inputs.runner }}
+          TEST_IMAGE: ${{ inputs.test-image }}
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          PLATFORM_IMAGE: ${{ inputs.platform-image }}
+          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
         run: |
           set -euo pipefail
-          if ! docker info >/dev/null 2>&1; then
-            echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') has no reachable Docker daemon, and a gate shard is a 'docker run' of the tester image — it cannot gate here. The Docker-capable self-hosted label is 'aks-silos-dind' (a dind sidecar); 'aks-silos' has the CLI and no daemon. Set the caller's runner variable to 'aks-silos-dind' or unset it (ubuntu-latest)."
-            docker info 2>&1 | tail -5 || true
+          # 🚨 The one wrong value GitHub cannot refuse for us: the tester passed as the platform,
+          # which would silently restore the reference-set gap this input closes.
+          case "$PLATFORM_IMAGE" in
+            *mw-plugin-test*) echo "::error::platform-image names the TESTER image ('$PLATFORM_IMAGE') — pass the PORTAL image (meshweaver.azurecr.io/memex-portal-ai); the tester only executes."; exit 1 ;;
+          esac
+          if [ -n "${IMAGE_DIGEST:-}" ]; then
+            TESTER="${TEST_IMAGE%%:*}@${IMAGE_DIGEST}"
+          elif [ "$ALLOW_UNPINNED" = "true" ]; then
+            TESTER="$TEST_IMAGE"
+            echo "gating with ${TEST_IMAGE} verbatim (allow-unpinned — runs are not reproducible)"
+          else
+            echo "::error::image-digest is empty and allow-unpinned is not set — pin a digest (reproducible) or opt in to following the tag."
             exit 1
           fi
-          echo "runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL'): Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?') at ${DOCKER_HOST:-the default socket}"
+          if [ -n "${PLATFORM_DIGEST:-}" ]; then
+            PORTAL="${PLATFORM_IMAGE%%:*}@${PLATFORM_DIGEST}"
+          elif [ "$ALLOW_UNPINNED" = "true" ]; then
+            PORTAL="$PLATFORM_IMAGE"
+            echo "gating against ${PLATFORM_IMAGE} verbatim (allow-unpinned)"
+          else
+            echo "::error::platform-image-digest is empty and allow-unpinned is not set — pin the portal digest from the same CD wave as image-digest, or opt in to following the tag. There is no fallback to the tester's /app (MeshWeaver#3022)."
+            exit 1
+          fi
+          echo "tester=$TESTER" >> "$GITHUB_OUTPUT"
+          echo "platform=$PORTAL" >> "$GITHUB_OUTPUT"
+          echo "tester: $TESTER"; echo "platform: $PORTAL"
+      # 🚨 THE MODE, MEASURED — and the only place this lane decides where the platform comes from
+      # (MeshWeaver#4113; "Where the heavy legs run" in the header). Until 2026-09-12 this first
+      # step asserted `docker info` and failed RED on a runner without a daemon, because a shard
+      # WAS a `docker run`. It no longer is when the runner node carries the platform: the
+      # resolver below reports `volume` when /opt/platform is mounted and `container` when it is
+      # not, and the Docker assertion is now the CONTAINER mode's own precondition, made here so a
+      # runner with NEITHER is red naming both rather than dying on a missing binary later.
+      #
+      # 🚨 Not an input-shaped `if:` and not a label test: the mount either exists on this runner
+      # or it does not, and the answer is printed on every run in both modes. Within volume mode
+      # there is NO fallback — a missing or half-written set is RED naming `ci-platform-refresh`.
+      #
+      # The resolver comes from the platform at the lane's SCRIPTS ref, `curl`ed exactly as
+      # compose-gate-host.sh is (the self-hosted runner image ships no `gh`), before checkout —
+      # this step needs no working tree.
+      - name: Where this shard takes the platform from
+        id: platform
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          GH_TOKEN: ${{ github.token }}
+          TESTER_DIGEST: ${{ inputs.image-digest }}
+          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          RUNNER_LABEL: ${{ inputs.runner }}
+          PLATFORM_VOLUME: /opt/platform
+        run: |
+          set -euo pipefail
+          SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-gate-platform.sh"
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — resolve-gate-platform.sh has no ref to be fetched at"; exit 1; }
+          curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-gate-platform.sh?ref=${SCRIPTS_REF}" \
+            || { echo "::error::could not fetch resolve-gate-platform.sh at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-gate-platform.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          chmod +x "$SCRIPT"
+          OUT="${RUNNER_TEMP:-/tmp}/platform-mode.txt"
+          # `tee`, under pipefail: the resolver's refusals are ::error:: lines on stdout, so they
+          # must be SHOWN, and its exit code must still fail this step.
+          "$SCRIPT" --volume-root "$PLATFORM_VOLUME" \
+            --tester-digest "$TESTER_DIGEST" --portal-digest "$PLATFORM_DIGEST" | tee "$OUT"
+          MODE=$(sed -n 's/^mode=//p' "$OUT" | head -1)
+          case "$MODE" in
+            volume)
+              echo "runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL'): VOLUME mode — the tester runs as a process from $PLATFORM_VOLUME. No Docker daemon is used, needed or asserted in this job."
+              ;;
+            container)
+              # The pre-#4113 contract, and the daemon is its precondition. A runner that has
+              # neither the mount nor a daemon is named for BOTH here, not for one of them later.
+              if ! docker info >/dev/null 2>&1; then
+                echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') has NEITHER the CI platform volume at $PLATFORM_VOLUME NOR a reachable Docker daemon, and a gate shard needs one or the other: the volume (every runner pod of the self-hosted 'aks-silos' / 'aks-silos-dind' scale sets mounts it — Systemorph/Memex deployments/aks/ci-runners/) or a daemon to pull the tester image with. Set the caller's runner variable to 'aks-silos', or unset it (ubuntu-latest, which has Docker)."
+                docker info 2>&1 | tail -5 || true
+                exit 1
+              fi
+              echo "runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL'): CONTAINER mode — Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?') at ${DOCKER_HOST:-the default socket}"
+              ;;
+            *)
+              echo "::error::resolve-gate-platform.sh printed no mode — refusing to guess where this shard's platform comes from."
+              exit 1
+              ;;
+          esac
+          {
+            echo "### Gate shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }} — platform source: \`$MODE\`"
+            echo ""
+            sed -n 's/^\(mode\|set\|digest\|core_sha\|dir\)=/- **\1**: /p' "$OUT"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
       - uses: actions/checkout@v7
+      # ───────────── VOLUME MODE: the runtime the composed host is started with ─────────────
+      # In container mode the tester is started by the PORTAL image's own `dotnet` (10.0.12, with
+      # BOTH Microsoft.NETCore.App and Microsoft.AspNetCore.App under /usr/share/dotnet/shared —
+      # which is also what `--shared-frameworks` names). The volume carries the two /app trees and
+      # NOT that 114 MB directory, so in volume mode the runtime comes from here. The scale set's
+      # runner is non-root, hence the job-level DOTNET_INSTALL_DIR.
+      # 🚨 Not a skip-trapdoor: installing a RUNTIME is not a check, and the step right after it
+      # asserts by name that what landed carries every framework the portal itself declares.
+      - name: Install the .NET the composed host runs on (volume mode)
+        if: steps.platform.outputs.mode == 'volume'
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      # 🚨 THE FIDELITY ASSERTION. `--shared-frameworks` is the reference set's framework half, and
+      # in volume mode it is the RUNNER's install rather than the portal image's. A runner missing
+      # Microsoft.AspNetCore.App, or carrying another major.minor, would compile every NodeType
+      # against a framework the portal does not run — reporting content errors on source nobody
+      # changed, which is the exact misdiagnosis MeshWeaver#3022 exists to prevent. So the portal's
+      # OWN runtimeconfig (read off the volume) is the expectation, what is installed is the
+      # measurement, and BOTH are printed on every run, green or red.
+      - name: The runner's .NET carries every framework the platform host declares
+        id: dotnet
+        if: steps.platform.outputs.mode == 'volume'
+        env:
+          PORTAL_APP: ${{ steps.platform.outputs.portal_app }}
+        run: |
+          set -euo pipefail
+          ROOT="${DOTNET_ROOT:-${DOTNET_INSTALL_DIR:-/usr/share/dotnet}}"
+          [ -x "$ROOT/dotnet" ] || { echo "::error::no dotnet host at '$ROOT/dotnet' — setup-dotnet installed nothing this step can find (DOTNET_ROOT='${DOTNET_ROOT:-}', DOTNET_INSTALL_DIR='${DOTNET_INSTALL_DIR:-}')."; exit 1; }
+          SHARED="$ROOT/shared"
+          [ -d "$SHARED" ] || { echo "::error::'$SHARED' does not exist — a dotnet install without a shared-framework root cannot supply the reference set's framework half."; exit 1; }
+          RC=$(find "$PORTAL_APP" -maxdepth 1 -name '*.runtimeconfig.json' | sort | head -1)
+          [ -n "$RC" ] || { echo "::error::the platform host at '$PORTAL_APP' has no *.runtimeconfig.json, so the frameworks it runs on cannot be read. That is the portal image's /app as ci-platform-refresh laid it down; a set without it is damaged."; exit 1; }
+          echo "platform host runtimeconfig: $(basename "$RC")"
+          missing=0
+          while IFS="$(printf '\t')" read -r name want; do
+            [ -n "$name" ] || continue
+            band="${want%.*}"
+            have=$(find "$SHARED/$name" -maxdepth 1 -mindepth 1 -type d -name "${band}.*" 2>/dev/null | sed 's#.*/##' | sort -V | tail -1)
+            if [ -z "$have" ]; then
+              echo "::error::the platform host declares framework '$name' >= $want, and the runner's .NET at '$SHARED' carries no $band.* of it. The gate would compile against a framework the portal does not run. Installed: $(ls "$SHARED" 2>/dev/null | tr '\n' ' ')"
+              missing=$((missing + 1))
+            else
+              echo "  $name: portal declares >= $want, runner has $have"
+            fi
+          done < <(jq -r '((.runtimeOptions.frameworks // []) + (if .runtimeOptions.framework then [.runtimeOptions.framework] else [] end))[] | [.name, .version] | @tsv' "$RC")
+          [ "$missing" -eq 0 ] || exit 1
+          echo "dotnet=$ROOT/dotnet" >> "$GITHUB_OUTPUT"
+          echo "shared=$SHARED" >> "$GITHUB_OUTPUT"
+          echo "the composed host will be started by $ROOT/dotnet ($("$ROOT/dotnet" --version 2>/dev/null || echo '?')), reference frameworks from $SHARED"
       - name: Log in to the image registry
+        if: steps.platform.outputs.mode == 'container'
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
         run: |
@@ -693,45 +870,13 @@ jobs:
           client-id: ${{ secrets.azure-client-id }}
           tenant-id: ${{ secrets.azure-tenant-id }}
           subscription-id: ${{ secrets.azure-subscription-id }}
-      # ───────────── TWO IMAGES, ONE BUILD: resolve, pull, extract, compose (MeshWeaver#3022) ─────────────
-      - name: Resolve the tester and the platform image
-        id: images
-        env:
-          TEST_IMAGE: ${{ inputs.test-image }}
-          IMAGE_DIGEST: ${{ inputs.image-digest }}
-          PLATFORM_IMAGE: ${{ inputs.platform-image }}
-          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
-          ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
-        run: |
-          set -euo pipefail
-          # 🚨 The one wrong value GitHub cannot refuse for us: the tester passed as the platform,
-          # which would silently restore the reference-set gap this input closes.
-          case "$PLATFORM_IMAGE" in
-            *mw-plugin-test*) echo "::error::platform-image names the TESTER image ('$PLATFORM_IMAGE') — pass the PORTAL image (meshweaver.azurecr.io/memex-portal-ai); the tester only executes."; exit 1 ;;
-          esac
-          if [ -n "${IMAGE_DIGEST:-}" ]; then
-            TESTER="${TEST_IMAGE%%:*}@${IMAGE_DIGEST}"
-          elif [ "$ALLOW_UNPINNED" = "true" ]; then
-            TESTER="$TEST_IMAGE"
-            echo "gating with ${TEST_IMAGE} verbatim (allow-unpinned — runs are not reproducible)"
-          else
-            echo "::error::image-digest is empty and allow-unpinned is not set — pin a digest (reproducible) or opt in to following the tag."
-            exit 1
-          fi
-          if [ -n "${PLATFORM_DIGEST:-}" ]; then
-            PORTAL="${PLATFORM_IMAGE%%:*}@${PLATFORM_DIGEST}"
-          elif [ "$ALLOW_UNPINNED" = "true" ]; then
-            PORTAL="$PLATFORM_IMAGE"
-            echo "gating against ${PLATFORM_IMAGE} verbatim (allow-unpinned)"
-          else
-            echo "::error::platform-image-digest is empty and allow-unpinned is not set — pin the portal digest from the same CD wave as image-digest, or opt in to following the tag. There is no fallback to the tester's /app (MeshWeaver#3022)."
-            exit 1
-          fi
-          echo "tester=$TESTER" >> "$GITHUB_OUTPUT"
-          echo "platform=$PORTAL" >> "$GITHUB_OUTPUT"
-          echo "tester: $TESTER"; echo "platform: $PORTAL"
+      # CONTAINER MODE ONLY. In volume mode the two /app trees are already on the node and were
+      # resolved (and proven complete) by the platform step above — nothing is pulled, nothing is
+      # copied out of an image, and `steps.platform.outputs.{tester,portal}_app` stand in for this
+      # step's outputs everywhere below.
       - name: Pull both images and extract their /app
         id: hosts
+        if: steps.platform.outputs.mode == 'container'
         env:
           TESTER_REF: ${{ steps.images.outputs.tester }}
           PORTAL_REF: ${{ steps.images.outputs.platform }}
@@ -753,17 +898,37 @@ jobs:
       # `framework-identity` verb reads the portal's /app as files and compares — naming the canonical
       # assemblies each side lacks on a mismatch (#1814). The identity it prints is ALSO the address
       # an upstream seed must be sealed under (upstream-seed).
+      # 🚨 IT RUNS IN BOTH MODES, unchanged in what it asserts. In volume mode the tester CLI is
+      # started from the share by the runner's `dotnet` (its own /app carries its deps.json, so the
+      # TPA is the tester's closure exactly as inside its image) and the portal's /app is read at
+      # its path on the share instead of through a bind mount. Same verb, same --expect, same
+      # refusal. This is ALSO what carries the tester↔portal pairing when a bootstrap set's
+      # platform.json records no portal digest for the resolver to cross-check.
       - name: "Resolve the framework identity this gate runs as — the PORTAL's; the tester must resolve the same"
         id: identity
         env:
+          MODE: ${{ steps.platform.outputs.mode }}
+          DOTNET: ${{ steps.dotnet.outputs.dotnet }}
           TESTER_REF: ${{ steps.images.outputs.tester }}
-          PORTAL_APP: ${{ steps.hosts.outputs.portal_app }}
+          TESTER_APP: ${{ steps.hosts.outputs.tester_app || steps.platform.outputs.tester_app }}
+          PORTAL_APP: ${{ steps.hosts.outputs.portal_app || steps.platform.outputs.portal_app }}
         run: |
           set -euo pipefail
-          line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$TESTER_REF" --print-framework-identity)
+          if [ "$MODE" = volume ]; then
+            line=$("$DOTNET" "$TESTER_APP/mw-plugin-test.dll" --print-framework-identity)
+          else
+            line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$TESTER_REF" --print-framework-identity)
+          fi
           tester="${line#*identity=}"; tester="${tester%% *}"
           [ -n "$tester" ] || { echo "::error::could not resolve the tester image's framework identity (got: '$line')"; exit 1; }
-          if ! identity=$(docker run --rm --init -v "$PORTAL_APP:/portal:ro" --entrypoint /app/mw-plugin-test "$TESTER_REF" framework-identity /portal --expect "$tester"); then
+          identity=""
+          if [ "$MODE" = volume ]; then
+            ok=0; identity=$("$DOTNET" "$TESTER_APP/mw-plugin-test.dll" framework-identity "$PORTAL_APP" --expect "$tester") || ok=$?
+          else
+            ok=0; identity=$(docker run --rm --init -v "$PORTAL_APP:/portal:ro" --entrypoint /app/mw-plugin-test "$TESTER_REF" framework-identity /portal --expect "$tester") || ok=$?
+          fi
+          if [ "$ok" -ne 0 ]; then
+            printf '%s\n' "$identity"
             echo "::error::the tester image and the platform image do NOT resolve one framework identity — they are not one build (the verb's output above names the canonical assemblies each side lacks). Pin test-image/image-digest and platform-image/platform-image-digest from the SAME CD wave."
             exit 1
           fi
@@ -778,8 +943,8 @@ jobs:
       - name: Compose the gate host (the portal's /app + the tester CLI)
         id: host
         env:
-          PORTAL_APP: ${{ steps.hosts.outputs.portal_app }}
-          TESTER_APP: ${{ steps.hosts.outputs.tester_app }}
+          PORTAL_APP: ${{ steps.hosts.outputs.portal_app || steps.platform.outputs.portal_app }}
+          TESTER_APP: ${{ steps.hosts.outputs.tester_app || steps.platform.outputs.tester_app }}
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -1237,7 +1402,11 @@ jobs:
       - name: Import + compile + render + run tests for each node repo
         id: gate
         env:
+          MODE: ${{ steps.platform.outputs.mode }}
+          DOTNET: ${{ steps.dotnet.outputs.dotnet }}
+          RUNNER_SHARED_FRAMEWORKS: ${{ steps.dotnet.outputs.shared }}
           PLATFORM_REF: ${{ steps.images.outputs.platform }}
+          PORTAL_APP: ${{ steps.hosts.outputs.portal_app || steps.platform.outputs.portal_app }}
           HOST_DIR: ${{ steps.host.outputs.dir }}
           TARGET_IDENTITY: ${{ steps.identity.outputs.identity }}
           STAGE_MODULES: ${{ inputs.stage-modules }}
@@ -1250,13 +1419,24 @@ jobs:
           SEED_DIR: ${{ steps.seed.outputs.dir }}
         # Allow entries whose module is not mounted on a narrowed run are "unverifiable" —
         # warned, never failed — so narrowing cannot trip the ratchet. On a narrowed run the
-        # affected closure is STAGED into its own tree and mounted as /repo — the tester gates
-        # every package it discovers, so the mount IS the filter.
+        # affected closure is STAGED into its own tree and gated as the repo root — the tester
+        # gates every package it discovers, so the staged tree IS the filter.
         run: |
           set -euo pipefail
+          # ───── THE PATHS THE TESTER IS GIVEN, once, per mode (MeshWeaver#4113) ─────
+          # 🚨 The ARGUMENTS are identical in both modes; only what they point AT differs. In
+          # container mode they are the bind-mount paths inside the tester container, exactly as
+          # before #4113. In volume mode they are the runner's own directories, because the tester
+          # is a process on this runner. Everything below is written once, against these names.
+          if [ "$MODE" = volume ]; then
+            P_APP="$PORTAL_APP"                       # the portal's /app, read off the share
+            P_SHARED="$RUNNER_SHARED_FRAMEWORKS"      # the runner's <dotnet root>/shared
+          else
+            P_APP=/app                                # the portal IMAGE's own /app
+            P_SHARED=/usr/share/dotnet/shared         # the portal IMAGE's implementation frameworks
+          fi
           if [ "$AFFECTED_RUN_ALL" = "true" ]; then
             REPO_MOUNT="$GITHUB_WORKSPACE"
-            ALLOW_PATH="${ALLOW_FILE:+/repo/$ALLOW_FILE}"
             echo "full run: gating every module"
           elif [ -z "$AFFECTED_MOUNT" ]; then
             # 🚨 Unreachable by construction: `plan` turns an empty narrowed mount into an EMPTY
@@ -1270,88 +1450,113 @@ jobs:
             REPO_MOUNT="${RUNNER_TEMP:-/tmp}/gate-stage"
             mkdir "$REPO_MOUNT"
             for m in $AFFECTED_MOUNT; do cp -R "$GITHUB_WORKSPACE/$m" "$REPO_MOUNT/"; done
-            ALLOW_PATH=""
-            if [ -n "${ALLOW_FILE:-}" ]; then
-              cp "$GITHUB_WORKSPACE/$ALLOW_FILE" "$REPO_MOUNT/"
-              ALLOW_PATH="/repo/$(basename "$ALLOW_FILE")"
-            fi
             echo "narrowed run: gating $AFFECTED_MOUNT"
           fi
-          # Staged modules join the mount so every package's requires resolve. On the full-run
-          # path the workspace IS the mount — cross-repo-stage/ itself has no root index.json,
+          # Staged modules join the tree so every package's requires resolve. On the full-run
+          # path the workspace IS the tree — cross-repo-stage/ itself has no root index.json,
           # so the tester never treats it as a module; only the copied module dirs count.
           for m in ${STAGE_MODULES:-}; do
             cp -R "$GITHUB_WORKSPACE/cross-repo-stage/$m" "$REPO_MOUNT/"
           done
-          # The images were resolved, pulled and composed above (steps.images / hosts / identity /
-          # host): both runs below start the PORTAL image's `dotnet` on the composed host.
+          OWN_BAKE="${RUNNER_TEMP:-/tmp}/own-bake"; mkdir -p "$OWN_BAKE"; chmod 777 "$OWN_BAKE"
+          if [ "$MODE" = volume ]; then
+            P_REPO="$REPO_MOUNT"; P_BAKE="$OWN_BAKE"; P_SEED="$OWN_BAKE"
+          else
+            P_REPO=/repo; P_BAKE=/bake; P_SEED=/seed
+          fi
+          ALLOW_PATH=""
+          if [ -n "${ALLOW_FILE:-}" ]; then
+            if [ "$AFFECTED_RUN_ALL" = "true" ]; then
+              ALLOW_PATH="$P_REPO/$ALLOW_FILE"
+            else
+              cp "$GITHUB_WORKSPACE/$ALLOW_FILE" "$REPO_MOUNT/"
+              ALLOW_PATH="$P_REPO/$(basename "$ALLOW_FILE")"
+            fi
+          fi
           ALLOW_ARGS=()
           [ -n "${ALLOW_PATH:-}" ] && ALLOW_ARGS=(--allow "$ALLOW_PATH")
+          # 🚨 `--module` was written with the CONTAINER's /ext prefix by the external-modules step
+          # (whose shell `test-module-asset-landing.py` extracts and executes verbatim, so it is
+          # left byte-identical). In volume mode the same modules are the same files on this
+          # runner, so only the prefix is re-pointed — never the set.
+          MODULE_ARGS="${EXT_MODULE_ARGS:-}"
+          if [ "$MODE" = volume ] && [ -n "${EXT_MODULES_DIR:-}" ]; then
+            MODULE_ARGS=$(printf '%s' "$MODULE_ARGS" | sed "s#--module /ext/#--module ${EXT_MODULES_DIR}/#g")
+          fi
+          EXT_V=()
+          [ -n "${EXT_MODULES_DIR:-}" ] && EXT_V=(-v "$EXT_MODULES_DIR:/ext")
           DUMP_ARGS=()
           if [ "${{ inputs.capture-coredumps }}" = "true" ]; then
             mkdir -p "${RUNNER_TEMP:-/tmp}/coredumps"
             chmod 0777 "${RUNNER_TEMP:-/tmp}/coredumps"
-            DUMP_ARGS=(-v "${RUNNER_TEMP:-/tmp}/coredumps:/coredumps"
-              --cap-add=SYS_PTRACE
-              -e DOTNET_DbgEnableMiniDump=1
-              -e DOTNET_DbgMiniDumpType=2
-              -e DOTNET_DbgMiniDumpName=/coredumps/%e-%p.dmp)
+            if [ "$MODE" = volume ]; then
+              # Same three knobs, set on the process instead of on the container. No SYS_PTRACE:
+              # createdump dumps the process that raised the abort, as the same user.
+              export DOTNET_DbgEnableMiniDump=1
+              export DOTNET_DbgMiniDumpType=2
+              export DOTNET_DbgMiniDumpName="${RUNNER_TEMP:-/tmp}/coredumps/%e-%p.dmp"
+            else
+              DUMP_ARGS=(-v "${RUNNER_TEMP:-/tmp}/coredumps:/coredumps"
+                --cap-add=SYS_PTRACE
+                -e DOTNET_DbgEnableMiniDump=1
+                -e DOTNET_DbgMiniDumpType=2
+                -e DOTNET_DbgMiniDumpName=/coredumps/%e-%p.dmp)
+            fi
           fi
-          # 🚨 `--init` is not cosmetic: without it the tester is the container's PID 1, and a
-          # PID-namespace init with SIG_DFL for SIGABRT is SIGNAL_UNKILLABLE — the kernel DISCARDS
-          # the signal the .NET runtime raises to end a crashed process. `abort()` then falls
-          # through to its trap instruction, the runtime's SIGTRAP handler returns to the very
-          # instruction that trapped, and the process SPINS at 100% CPU forever instead of exiting
-          # (#1741: two such containers "Up" 36 and 57 minutes each, having printed one exception
-          # in their first second). On CI that reads as a hang and burns the job's whole timeout
-          # rather than reporting the crash. With `--init` the tool runs as PID 2 under tini and a
-          # crash exits 134 immediately. The tester itself no longer lets an exception escape
-          # `Main`, but this covers what a `catch` cannot — a stack overflow, an OOM abort, an
-          # unhandled throw on a background thread.
-          # Step 2 of the plugin build contract: hand the tester the upstream seed, mounted
-          # read-only. The tester checks it BEFORE the mesh boots (BakeSeed.Read — a seed it
-          # cannot consume is a usage error, exit 2, never a green gate) and REFUSES a run that
-          # compiled a type the seed declared (BakeSeedConsumer.Shortfall). That mount happens on
-          # the GATE call below, not here: `compile` takes no --seed, and the gate is given
-          # $OWN_BAKE — into which the upstream zips are copied — as /seed.
-          # (SEED_ARGS/SEED_MOUNT arrays used to be built at this point and passed to neither
-          # docker run. shellcheck's SC2034 on them is what surfaced the leftover.)
+          # ───── THE ONE PLACE THE TESTER IS STARTED (MeshWeaver#3022 + #4113) ─────
+          # BOTH modes run the COMPOSED HOST — the portal's /app with the tester CLI beside it —
+          # and never the tester image's own /app: the gate's verdict is only the platform's when
+          # its PROCESS is the platform host (compose-gate-host.sh's header has the full argument).
+          #
+          # container: the PORTAL image's own `dotnet` on the composed host, as the runner's uid
+          #   (HOME=/tmp keeps runtime probes off read-only image paths).
+          #   🚨 `--init` is not cosmetic: without it the tester is the container's PID 1, and a
+          #   PID-namespace init with SIG_DFL for SIGABRT is SIGNAL_UNKILLABLE — the kernel
+          #   DISCARDS the signal the .NET runtime raises to end a crashed process. `abort()` then
+          #   falls through to its trap instruction, the runtime's SIGTRAP handler returns to the
+          #   instruction that trapped, and the process SPINS at 100% CPU for ever instead of
+          #   exiting (#1741: two such containers "Up" 36 and 57 minutes, having printed one
+          #   exception in their first second). With `--init` a crash exits 134 immediately.
+          # volume: the RUNNER's `dotnet` on the composed host. The PID-1 hazard does not exist
+          #   here — the tester is an ordinary child of the job's shell, so SIGABRT is delivered
+          #   and a crash exits 134 the same way.
+          TESTER_MOUNTS=()
+          run_tester() {
+            if [ "$MODE" = volume ]; then
+              "$DOTNET" "$HOST_DIR/mw-plugin-test.dll" "$@"
+            else
+              docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
+                -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" "${TESTER_MOUNTS[@]}" "${DUMP_ARGS[@]}" \
+                --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll "$@"
+            fi
+          }
           # ── BUILD ONCE, TEST WHAT WAS BUILT (Doc/Architecture/PluginBuildContract, step 3 → 4).
           # The gate used to compile in-mesh and DISCARD the result; publish-bake then compiled the
           # identical source again on merge. Now: `compile` (mesh-free, the producer) writes this
-          # repo's OWN bundles to /bake; the gate stands its mesh up on THOSE bytes (`--seed`), so
-          # what is tested is what would ship; and the bake is uploaded as `bake-<sha>` so the
-          # merge's publish-bake can REUSE it (bake-run-id) instead of compiling a third time.
-          # The upstream seed (if any) is a SEPARATE mount: consumed, never re-emitted.
-          OWN_BAKE="${RUNNER_TEMP:-/tmp}/own-bake"; mkdir -p "$OWN_BAKE"; chmod 777 "$OWN_BAKE"
+          # repo's OWN bundles to the bake directory; the gate stands its mesh up on THOSE bytes
+          # (`--seed`), so what is tested is what would ship; and the bake is uploaded as
+          # `bake-<sha>` so the merge's publish-bake can REUSE it instead of compiling a third time.
+          # The upstream seed (if any) is a SEPARATE input: consumed, never re-emitted.
+          #
           # 🚨 The seed rides the GATE call only. `compile` is the mesh-free bake of THIS repo's
           # own types and its parser deliberately takes no --seed ("Unknown argument '--seed'",
           # exit 2 — measured 2026-08-27 on the first run that ever got past the registry auth,
           # Reinsurance run 33091175986; the flag on the compile line had never been exercised).
-          # The gate below stands the mesh up on the repo's own bundles PLUS the upstream seed —
-          # that is where consuming a bake means something.
-          EXT_V=()
-          [ -n "${EXT_MODULES_DIR:-}" ] && EXT_V=(-v "$EXT_MODULES_DIR:/ext")
-          # 🚨 AGAINST THE PORTAL, executed by the tester (MeshWeaver#3022): the portal image's own
-          # `dotnet` on the composed host (/host = the portal's /app + the tester CLI), as the
-          # runner's uid (HOME=/tmp keeps runtime probes off read-only image paths). `--app /app
-          # --shared-frameworks /usr/share/dotnet/shared` makes the reference set the portal's /app
-          # plus its IMPLEMENTATION frameworks — what the portal's runtime compile sees — and keys
-          # the bake to the portal's identity. Same shape as node-repo-publish-bake.yml, on purpose:
-          # the gate and the bake must not disagree about what a portal contains.
-          # shellcheck disable=SC2086  # EXT_MODULE_ARGS is a flag list; word-splitting is the point
-          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
-            -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/bake" "${DUMP_ARGS[@]}" \
-            --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll compile /repo \
-            --app /app --shared-frameworks /usr/share/dotnet/shared \
-            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} \
-            --output /bake --source-sha "$GITHUB_SHA"
+          #
+          # `--app` + `--shared-frameworks`: the reference set is the PORTAL's /app plus its
+          # IMPLEMENTATION frameworks — what the portal's runtime compile sees — which is what keys
+          # the bake to the portal's identity. Same shape as node-repo-publish-bake.yml, on
+          # purpose: the gate and the bake must not disagree about what a portal contains.
+          TESTER_MOUNTS=(-v "$OWN_BAKE:/bake")
+          # shellcheck disable=SC2086  # MODULE_ARGS is a flag list; word-splitting is the point
+          run_tester compile "$P_REPO" \
+            --app "$P_APP" --shared-frameworks "$P_SHARED" \
+            "${ALLOW_ARGS[@]}" ${MODULE_ARGS:-} --output "$P_BAKE" --source-sha "$GITHUB_SHA"
           [ -s "$OWN_BAKE/framework-mvid.txt" ] || { echo "::error::compile ran but wrote no bake identity — the bake stage regressed (or the image predates the compile verb; pin ≥ 77bc5f1)"; exit 1; }
           baked="$(tr -d '[:space:]' < "$OWN_BAKE/framework-mvid.txt")"
-          [ "$baked" = "$TARGET_IDENTITY" ] || { echo "::error::the run's own bake is keyed to '$baked' but the portal's /app resolves '$TARGET_IDENTITY' — the compile did not run against the platform host (is --app /app on the compile line?)"; exit 1; }
+          [ "$baked" = "$TARGET_IDENTITY" ] || { echo "::error::the run's own bake is keyed to '$baked' but the portal's /app resolves '$TARGET_IDENTITY' — the compile did not run against the platform host (is --app set to the portal's /app?)"; exit 1; }
           # Gate on the bake: own bundles AND the upstream seed together in one seed directory.
           if [ -n "${SEED_DIR:-}" ]; then cp "$SEED_DIR"/*.zip "$OWN_BAKE"/ 2>/dev/null || true; fi
-          # shellcheck disable=SC2086
           # The tester's stdout is ALSO the gate log a caller's own ratchets read (MeshWeaver.Manufacturing's
           # Tests-area ratchet, `check-test-suites.py --gate-log`). A reusable workflow cannot hand a
           # file back through outputs, so it is uploaded as an artifact below. `pipefail` keeps the
@@ -1365,26 +1570,26 @@ jobs:
           # 🚨 THE SLICE. Empty for `shards: 1`, which is byte-for-byte the pre-fan-out command line —
           # so a caller that does not opt in cannot be affected by this at all, and an image that
           # predates the flag keeps working for them. When it IS set, the flag is asserted BY NAME
-          # against the pinned image FIRST: without this the run dies on `Unknown argument '--shard'`
-          # (exit 2) with a message that names the tester's argv rather than the pin that is behind.
+          # against the pinned platform FIRST: without this the run dies on `Unknown argument
+          # '--shard'` (exit 2) with a message that names the tester's argv rather than the pin.
           SHARD_ARGS=()
           if [ -n "${SHARD:-}" ]; then
-            if ! docker run --rm --init -v "$HOST_DIR:/host:ro" \
-                 --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll --help 2>&1 | grep -q -- '--shard'; then
-              echo "::error::this lane was called with shards>1 but the PINNED tester image does not accept --shard, so it cannot gate a slice. Bump image-digest/platform-image-digest to a CD wave carrying it (both pins move together, from one wave), or set shards: 1."
+            TESTER_MOUNTS=()
+            if ! run_tester --help 2>&1 | grep -q -- '--shard'; then
+              echo "::error::this lane was called with shards>1 but the PINNED tester does not accept --shard, so it cannot gate a slice. Bump image-digest/platform-image-digest to a CD wave carrying it (both pins move together, from one wave), or set shards: 1."
               exit 1
             fi
             SHARD_ARGS=(--shard "$SHARD")
             echo "this job gates shard $SHARD"
           fi
-          # `--app /app`: the gate must RUN AS the portal host (it resolves the portal's identity),
+          # `--app`: the gate must RUN AS the portal host (it resolves the portal's identity),
           # refused before a mesh boots otherwise — a gate running as another host would decline
           # every bundle and compile the tree itself, passing without judging the bytes that ship.
+          TESTER_MOUNTS=(-v "$OWN_BAKE:/seed:ro")
           set +e
-          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
-            -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$OWN_BAKE:/seed:ro" "${DUMP_ARGS[@]}" \
-            --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll /repo --app /app \
-            "${ALLOW_ARGS[@]}" ${EXT_MODULE_ARGS:-} "${SHARD_ARGS[@]}" --seed /seed | tee "$GATE_LOG"
+          # shellcheck disable=SC2086
+          run_tester "$P_REPO" --app "$P_APP" \
+            "${ALLOW_ARGS[@]}" ${MODULE_ARGS:-} "${SHARD_ARGS[@]}" --seed "$P_SEED" | tee "$GATE_LOG"
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
@@ -1393,10 +1598,13 @@ jobs:
           fi
           echo "OWN_BAKE=$OWN_BAKE" >> "$GITHUB_ENV"
           echo "bake identity: $(cat "$OWN_BAKE/framework-mvid.txt") — $(ls "$OWN_BAKE"/*.zip | wc -l | tr -d ' ') bundle(s), gated on their own bytes"
-      # 🚨 The dump is written by the CONTAINER, which runs as root, so the file lands owned by
-      # root with a restrictive mode — a core dump can contain anything that was in memory, so the
-      # runtime writes it 0600 on purpose. `chmod 0777` on the mount DIRECTORY (above) lets the
-      # container create the file; it does nothing for the file's own permissions. So
+      # 🚨 In CONTAINER mode the dump is written by the container, which runs as root, so the file
+      # lands owned by root with a restrictive mode — a core dump can contain anything that was in
+      # memory, so the runtime writes it 0600 on purpose. `chmod 0777` on the mount DIRECTORY
+      # (above) lets the container create the file; it does nothing for the file's own permissions.
+      # (In VOLUME mode the dump is written by the runner's own uid and this step is a no-op that
+      # still runs — a chown of files you already own, which is cheaper than a second `if:` whose
+      # correctness nobody would ever see tested.) So
       # upload-artifact, which runs as the unprivileged `runner` user, failed with
       #
       #     Error: EACCES: permission denied, open '.../coredumps/mw-plugin-test-7.dmp'

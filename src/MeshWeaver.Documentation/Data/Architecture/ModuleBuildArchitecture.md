@@ -83,6 +83,46 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 > `platform-refs-<digest>` cache entry has been evicted — fail RED naming the missing tool; neither
 > skips.
 
+> 📅 **2026-09-12, evening — the gate lane left dind behind (MeshWeaver#4113).** The paragraph above
+> ends with a gate shard that needs a Docker daemon. It no longer does, because the runner NODES now
+> carry the platform: Systemorph/Memex#321 mounts one read-only Azure Files share at
+> **`/opt/platform`** in every runner pod of BOTH ARC scale sets, holding, per SEALED set,
+> `app/` (the tester image's `/app`) and `platform-refs/` (the portal's), with a `.complete` marker
+> written last and the 3 newest sets kept by the `ci-platform-refresh` CronJob. So
+> `node-repo-gate.yml` has **two modes**, chosen by MEASURING whether that mount exists — never by a
+> label and never by an input:
+>
+> * **volume** — the shard reads both `/app` trees off the share, composes the gate host into
+>   `$RUNNER_TEMP` and runs the tester **as a process** on a .NET that `actions/setup-dotnet` puts
+>   under `DOTNET_INSTALL_DIR`. No `docker info`, `login`, `pull`, `create`, `cp` or `run`. The
+>   `runner` input therefore now accepts the plain, non-privileged **`aks-silos`** set, and that is
+>   the label to use; `aks-silos-dind` still works and takes the same path with its sidecar idle.
+> * **container** — the mount is absent (a GitHub-hosted `ubuntu-latest` runner, whose `/opt` is
+>   empty), so the shard pulls both images and runs the tester in one, byte-identically to before.
+>   A caller that passes nothing is here, unchanged.
+>
+> 🚨 **There is no fallback between them.** Once the mount is there, a set that is missing,
+> half-written or paired with another portal is RED naming `ci-platform-refresh`; it never degrades
+> into a registry pull, because "the refresh job died yesterday" must not read as "CI is a bit
+> slower today". `.github/scripts/resolve-gate-platform.sh` makes that decision and carries a
+> `--self-test` that fires every one of those refusals against a synthetic volume, run on every
+> platform PR beside `compose-gate-host.sh`'s. A runner with NEITHER the volume NOR a daemon is red
+> naming both.
+>
+> **What the volume does not carry, measured 2026-09-12 on set 3.0.0-ci.8417:** the .NET host. Both
+> images are Ubuntu 24.04 and so is `ghcr.io/actions/actions-runner:2.337.0`, with the same
+> `libicuuc.so.74.2` / `libssl.so.3` / `libcrypto.so.3`, so nothing native is missing; the portal's
+> `/app` (544 MB, 216 assemblies) carries its own `libSkiaSharp.so`, `libHarfBuzzSharp.so` and
+> `libe_sqlite3.so`; chromium and Playwright are portal-only and the tester references neither. But
+> in a container the tester is started by the portal image's own `dotnet` — `/usr/share/dotnet`,
+> 114 MB, `Microsoft.NETCore.App` **and** `Microsoft.AspNetCore.App` at 10.0.12 — and that is also
+> what `--shared-frameworks` names. In volume mode it comes from `setup-dotnet`, and the lane
+> ASSERTS that what landed carries every framework the portal's own runtimeconfig declares, at the
+> portal's major.minor, printing both sides on every run. The residual is patch-level only
+> (servicing freezes the public API within a band). Closing it exactly is a Memex change, not a lane
+> change: `ci-platform-refresh.py` extracting the portal image's `/usr/share/dotnet` into
+> `<set>/dotnet/` (+114 MB per set) and this lane preferring it.
+
 ### Where a module's own suite runs — and why `publish` decides
 
 A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last
