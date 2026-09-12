@@ -245,6 +245,48 @@ free. A cap can only lower, never raise — which is precisely what the previous
 *"a plan-less entry covers every tier"* let every instance registered before plans existed pull
 `pro` and `enterprise` bundles, and a `@pro` suffix licensed pro on any instance that carried it.
 
+#### A refusal by plan is said on the instance (2026-09-12, #4097)
+
+Every registry decision above refuses a package the plan does not cover **silently on the wire** —
+the same answer as "no such package" — and logs which it was on the registry. That is the
+enumeration defence, and it stays: a registered instance must not learn what a registry carries
+from the shape of its refusals. But it made one case invisible where it mattered. A fresh instance
+on the free plan (`build.meshweaver.cloud`, 2026-09-12) never saw the enterprise `Hosting` package
+the registry itself declares `preInstalled`; the instance showed `canPatch=False` (pointing at
+`Modules:Assemblies`), `/health` said "install the package from the registry" — which the instance
+cannot do — and the Plugin Catalog had no card for it. One cause, three consequences, nothing on
+the instance naming the cause.
+
+Since #4097 the listing carries the verdict for exactly that case: a package the registry declares
+in the instance's **default set** (`preInstalled: true`), from a source the instance's grant
+**reaches** (some entry matches it, within term), that the **plan** refuses. It rides beside the
+granted packages as `refused: [{ packageId, module, requiredTier, instancePlan }]`
+(`PluginGrant.TierRefusal` → `AuthenticatedInstance.TierRefusal` → `PluginRegistryEndpoints.ListAll`),
+additive in both directions: an old consumer ignores the member, an old registry never writes it.
+The `instancePlan` is the plan the decision was taken at — the record's plan narrowed by the
+reaching entry's cap — so the sentence names the plan that actually refused. A package from an
+**ungranted** source is still absent, tier or no tier: `TierRefusal` answers only when an entry
+reaches the package, so the default set is what the registry chose to tell the instance about and
+nothing else becomes enumerable.
+
+On the consumer the unattended default install (`InstanceAutoRegistrationService`) records each
+refusal typed on the `_DefaultInstallLedger` and keeps one marker per refused module in step with
+the registry's answer of that boot — `modules/activation.d/<Module>.tier-refused`
+(`ModuleActivationSidecar.SyncTierRefusals`), cleared by the next pass in which the registry no
+longer refuses it (a plan upgrade). `ModuleActivationSidecar.Read` folds the markers onto
+`ModuleActivationList.TierRefusals`, which is how the verdict reaches every surface that used to
+name the consequence without a new parameter on a host compiled against the previous platform:
+
+| surface | before | since #4097 |
+|---|---|---|
+| `/health` `required_modules` (`RequiredModuleStatus.Classify`) | "store-delivered and NOT installed on this instance — install the package from the registry" | "⛔ Not installed on this instance: Hosting needs plan tier enterprise, this instance is on free. Installing it from the registry is not possible on this plan — raise the instance's plan on the registry, or delist it from Modules:Required" (still `ExpectedLater`: no rollout changes a plan) |
+| the package card (`CatalogLayoutAreas.BuildCard`) | no card | the card, with the same sentence localized (`ui.packageRefusedByPlanTier`) and no Install button |
+| the activation report (`ModuleActivationReport.TierRefused`, `/health`'s activation line) | nothing | the refused modules, named |
+| the self-updater's startup line (`SelfUpdateHostedService.StartAsync`) | `canPatch=False` and "list MeshWeaver.SelfUpdate.Aks under Modules:Assemblies" | `canPatch=False (⛔ Not installed on this instance: Hosting needs plan tier enterprise, this instance is on free. The Kubernetes patcher ships in that package …)` |
+
+The vocabulary is #4091's binding-conflict sentence ("⛔ Not installed on this platform: it needs
+YamlDotNet 18.1.0.0, this platform provides 16.3.0.0") with the nouns of a plan.
+
 **The ladder is the Store's data, not a table in the platform.** The registry reads its own
 `Admin/Tiers/{id}` nodes (`content.rank`, `content.allAccess`) once a minute (`PlanTierLadder`) and
 hands the snapshot to the authenticated caller, so every surface decides the same way and there is

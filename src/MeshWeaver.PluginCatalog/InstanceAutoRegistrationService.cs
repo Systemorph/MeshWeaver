@@ -950,9 +950,34 @@ public sealed class InstanceAutoRegistrationService(
             .OrderBy(s => s.Package, StringComparer.Ordinal)
             .ToImmutableList();
 
+        var tierRefused = summary.TierRefused
+            .DistinctBy(r => r.PackageId, StringComparer.Ordinal)
+            .OrderBy(r => r.PackageId, StringComparer.Ordinal)
+            .ToImmutableList();
+
+        // 🚨 #4097 — the activation record's plan-tier markers are made to MATCH this pass's
+        // answer, before the ledger and regardless of whether the ledger changes: /health's
+        // required_modules line, the activation report and the self-updater read the markers,
+        // and a marker left standing after a plan upgrade would name a refusal that no longer
+        // exists. Guarded above by the same "a pass that read no listing knows nothing" rule —
+        // a failed listing must not clear a standing refusal. A volume that cannot be written
+        // is reported, never fatal: the ledger below still records the verdict.
+        try
+        {
+            ModuleActivationSidecar.SyncTierRefusals(
+                ModuleRoot.Resolve(hub.ServiceProvider.GetService<IConfiguration>()), tierRefused);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex,
+                "[DefaultInstall] could not write the plan-tier refusal markers under the module root; "
+                + "/health and the self-updater will not name the plan until a pass can.");
+        }
+
         if (delivered.Count == 0
             && failures.SequenceEqual(ledger.Failed, StringComparer.Ordinal)
-            && skipped.SequenceEqual(ledger.Skipped))
+            && skipped.SequenceEqual(ledger.Skipped)
+            && tierRefused.SequenceEqual(ledger.TierRefused))
             return Observable.Return(Unit.Default);
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -978,6 +1003,7 @@ public sealed class InstanceAutoRegistrationService(
                 Seeded = already.Union(delivered).OrderBy(x => x, StringComparer.Ordinal).ToImmutableList(),
                 Failed = failures,
                 Skipped = skipped,
+                TierRefused = tierRefused,
                 UpdatedAt = DateTimeOffset.UtcNow,
             },
         };
@@ -1188,7 +1214,7 @@ public sealed class InstanceAutoRegistrationService(
                         string.Join(", ", sourceNames));
             return Observable.Return(Unit.Default);
         }).SelectMany(_ => sources
-            .Select(source => source.Source.ListPackages(source.GitRef)
+            .Select(source => ListWithRefusals(source)
                 .Take(1)
                 // 🚨 Stamp the source name HERE, not only in the registry's HTTP merge. Source-
                 // scoped matching reads PackageManifest.Source, and until now only
@@ -1314,6 +1340,23 @@ public sealed class InstanceAutoRegistrationService(
             }));
 
     /// <summary>
+    /// One source's listing WITH the registry's plan-tier refusals folded in as refused rows
+    /// (#4097). Only a <see cref="RegistryPackageSource"/> can answer with refusals — a git source
+    /// read directly (a registry installing its own defaults) has no plan to refuse against — so
+    /// every other source is its plain listing. A refused row carries <see cref="PackageManifest.Refusal"/>
+    /// and is selected like the pre-installed package it is, so that the pass SKIPS it with the
+    /// typed reason and records it, instead of never learning the package exists.
+    /// </summary>
+    private static IObservable<IReadOnlyList<PackageManifest>> ListWithRefusals(ConfiguredPackageSource source) =>
+        source.Source is RegistryPackageSource registry
+            ? registry.ListCatalog(source.GitRef).Select(listing => (IReadOnlyList<PackageManifest>)listing.Packages
+                .Concat(listing.Refused
+                    .Where(r => !listing.Packages.Any(p => string.Equals(p.Id, r.PackageId, StringComparison.Ordinal)))
+                    .Select(r => PackageManifest.FromRefusal(r, source.Name)))
+                .ToList())
+            : source.Source.ListPackages(source.GitRef);
+
+    /// <summary>
     /// <paramref name="selected"/> plus everything it transitively REQUIRES that the catalog can
     /// supply — the unattended twin of <see cref="PackageDependencyGraph.InstallClosure"/>, kept
     /// TOLERANT for the same reason the boot sort is: nobody is present to fix a malformed manifest,
@@ -1431,7 +1474,12 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="package">The selected candidate's manifest, as the catalog lists it now.</param>
     /// <returns>The speaking skip reason, or null when the pass may install it.</returns>
     internal static string? TerminalSkipReason(PackageManifest package) =>
-        package.IsCommercial() ? PackageEntitlement.Reason(package, null) : null;
+        package.Refusal is { } refused
+            // #4097 — the registry refuses it to this instance's PLAN. Not an authorization this
+            // lane lacks; a licence the instance does not hold. Re-derived from the listing each
+            // pass, so a plan upgrade lifts it on the next boot.
+            ? refused.Describe()
+            : package.IsCommercial() ? PackageEntitlement.Reason(package, null) : null;
 
     /// <summary>Installs the selected packages sequentially and folds their outcomes into one summary.</summary>
     private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates)
@@ -1451,16 +1499,37 @@ public sealed class InstanceAutoRegistrationService(
         var installable = skipped.Count == 0
             ? candidates
             : candidates.Where(c => TerminalSkipReason(c.Package) is null).ToList();
-        if (skipped.Count > 0)
+        if (skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)) > 0)
             logger.LogWarning(
                 "[DefaultInstall] {Count} declared package(s) require an authorization this "
                 + "unattended install can never obtain and are SKIPPED, not failed: [{Skipped}]. "
                 + "They are recorded with their reasons on {Ledger} and no boot re-attempts them — "
                 + "a Global Admin installing them from the catalog, or the package ceasing to be "
                 + "commercial, is what changes this.",
-                skipped.Count, string.Join(", ", skipped.Select(s => s.Package)), SeedLedgerPath);
+                skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)),
+                string.Join(", ", skipped
+                    .Where(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused))
+                    .Select(s => s.Package)),
+                SeedLedgerPath);
 
-        var seed = DefaultInstallSummary.Empty with { Skipped = skipped };
+        // 🚨 #4097 — the plan-tier refusals, TYPED, beside the string-reasoned skips above: the
+        // ledger and the activation record carry them as data (package, module, tier, plan), and
+        // the log line names the cause the instance never used to see. Warning, once per pass,
+        // like the other skips — this is a standing fact about the plan, not a per-boot error.
+        var tierRefused = candidates
+            .Select(c => c.Package.Refusal)
+            .Where(r => r is not null)
+            .Select(r => r!)
+            .DistinctBy(r => r.PackageId, StringComparer.Ordinal)
+            .ToImmutableList();
+        if (tierRefused.Count > 0)
+            logger.LogWarning(
+                "[DefaultInstall] {Count} package(s) the registry declares in this instance's default "
+                + "set are REFUSED by its plan tier and are not installed: {Refused}. Raise the "
+                + "instance's plan on the registry to receive them; nothing on this instance can.",
+                tierRefused.Count, string.Join("; ", tierRefused.Select(r => r.Describe())));
+
+        var seed = DefaultInstallSummary.Empty with { Skipped = skipped, TierRefused = tierRefused };
         if (installable.Count == 0)
             return Observable.Return(seed);
         logger.LogInformation(
@@ -1698,6 +1767,14 @@ public record DefaultInstallLedger
     public ImmutableList<DefaultInstallSkip> Skipped { get; init; } =
         ImmutableList<DefaultInstallSkip>.Empty;
 
+    /// <summary>
+    /// The default-set packages the registry refused to this instance's PLAN on the last pass
+    /// (#4097), typed. A snapshot with <see cref="Skipped"/>'s semantics: an entry drops off the
+    /// moment the registry stops refusing the package (a plan upgrade) or stops declaring it in
+    /// the default set. Every entry is also in <see cref="Skipped"/> with the same sentence.
+    /// </summary>
+    public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
+
     /// <summary>When the ledger last changed.</summary>
     public DateTimeOffset UpdatedAt { get; init; }
 }
@@ -1740,6 +1817,15 @@ public readonly record struct DefaultInstallSummary(
         ImmutableList<DefaultInstallSkip>.Empty;
 
     /// <summary>
+    /// The default-set packages the registry REFUSED to this instance's plan tier this pass
+    /// (#4097), typed — package, module, required tier, instance plan. Every one is also in
+    /// <see cref="Skipped"/> with the same sentence as its reason; this is the data the ledger
+    /// and the activation record keep, so <c>/health</c>, the package card and the self-updater
+    /// can name the plan instead of the consequence.
+    /// </summary>
+    public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
+
+    /// <summary>
     /// The ids this pass actually DELIVERED — installed or already current. The ledger's input:
     /// what the seed may stop re-asserting.
     /// </summary>
@@ -1761,6 +1847,8 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.Failures ?? ImmutableList<string>.Empty),
         Skipped = (Skipped ?? ImmutableList<DefaultInstallSkip>.Empty)
             .AddRange(other.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty),
+        TierRefused = (TierRefused ?? ImmutableList<PlanTierRefusal>.Empty)
+            .AddRange(other.TierRefused ?? ImmutableList<PlanTierRefusal>.Empty),
     };
 
     /// <inheritdoc />

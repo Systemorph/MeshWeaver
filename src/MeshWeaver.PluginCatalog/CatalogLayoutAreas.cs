@@ -396,7 +396,18 @@ public static class CatalogLayoutAreas
     {
         if (source is null)
             return Observable.Return((Packages: (IReadOnlyList<PackageManifest>)[], Answered: true));
-        return source.ListPackages(sourceRef)
+        // 🚨 #4097 — the registry's plan-tier refusals ride the listing as refused rows: a
+        // pre-installed package the registry declares in this instance's default set but its plan
+        // does not cover gets a CARD saying so, not an absent entry. Only a registry source can
+        // answer with refusals; every other source is its plain listing.
+        var listing = source is RegistryPackageSource registry
+            ? registry.ListCatalog(sourceRef).Select(l => (IReadOnlyList<PackageManifest>)l.Packages
+                .Concat(l.Refused
+                    .Where(r => !l.Packages.Any(p => string.Equals(p.Id, r.PackageId, StringComparison.Ordinal)))
+                    .Select(r => PackageManifest.FromRefusal(r, null)))
+                .ToList())
+            : source.ListPackages(sourceRef);
+        return listing
             .Select(packages => (Packages: packages, Answered: true))
             .Catch<(IReadOnlyList<PackageManifest> Packages, bool Answered), Exception>(ex =>
             {
@@ -729,6 +740,21 @@ public static class CatalogLayoutAreas
                 ? string.Equals(installed.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal)
                 : string.Equals(installed.Version, pkg.Version, StringComparison.Ordinal));
 
+        if (pkg.Refusal is { } tier)
+        {
+            // 🚨 #4097 — the registry declares this package in the instance's default set and
+            // REFUSES it by plan tier. No button: the instance cannot install it on this plan,
+            // and a button whose click is refused is the "consequence without cause" this line
+            // replaces. Same vocabulary as the #4083 landing refusal below, with the nouns of a
+            // plan, as DATA inside a localized sentence — platform-owned chrome follows the VIEWER.
+            card = card.WithView(Controls.Body(
+                    "⛔ " + host.Localize("ui.packageRefusedByPlanTier",
+                        pkg.Name ?? pkg.Id, tier.RequiredTier, tier.InstancePlan))
+                .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
+            return card;
+        }
+
         if (upToDate)
         {
             card = card.WithView(Controls.Body(host.Localize("ui.catalogInstalledVersion", installed!.Version))
@@ -879,8 +905,11 @@ public static class CatalogLayoutAreas
         IReadOnlyList<PackageManifest> closure;
         try
         {
+            // #4097 — a plan-tier refusal is a card, never a dependency universe member: a
+            // closure that pulled one in would fail at /files with the 404 the refusal replaces.
             closure = PackageDependencyGraph.InstallClosure(
-                pkg, catalog ?? [pkg], installedIds ?? ImmutableHashSet<string>.Empty, logger);
+                pkg, catalog?.Where(p => !p.IsRefused).ToList() ?? [pkg],
+                installedIds ?? ImmutableHashSet<string>.Empty, logger);
         }
         catch (InvalidOperationException ex)
         {

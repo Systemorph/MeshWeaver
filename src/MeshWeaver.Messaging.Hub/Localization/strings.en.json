@@ -625,6 +625,7 @@
   "ui.moduleRunsPreviousVersion": "Running the previous version {0}: version {1} is installed but does not load on this platform. It activates once a build that loads here ships.",
   "ui.moduleHeldAtLanding": "Not installed on this platform: it needs {0}, this platform provides {1}. It installs when this installation updates to a platform that provides it.",
   "ui.moduleHeldAtLandingTypes": "Not installed on this platform: it references {0}, which this platform does not have. It installs when this installation updates.",
+  "ui.packageRefusedByPlanTier": "Not installed on this instance: {0} needs plan tier {1}, this instance is on {2}. It installs when the instance's plan on the registry covers it.",
   "ui.orphanedInstallRecords": "Orphaned install records",
   "ui.requestAccess": "Request Access",
   "ui.resetToDefault": "Reset to default",

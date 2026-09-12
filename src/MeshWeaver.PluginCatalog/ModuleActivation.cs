@@ -146,6 +146,25 @@ public sealed record ModuleActivationList
     /// restart — the minimal #1664 step-10 "restart required" signal. Boot consumes it: applying
     /// the list IS the restart, so <c>ConfigureMemexMesh</c> resets it to false.</summary>
     public bool PendingRestart { get; init; }
+
+    /// <summary>
+    /// 🚨 The modules this instance's PLAN keeps it from installing (#4097) — one per
+    /// <c>activation.d/&lt;Module&gt;.tier-refused</c> marker, written by the unattended default
+    /// install from the registry's typed answer (<see cref="Mesh.Security.PlanTierRefusal"/>).
+    /// Read from the markers, never from the aggregate file (<see cref="JsonIgnoreAttribute"/>),
+    /// so a bulk <see cref="ModuleActivationSidecar.Write"/> neither persists nor resurrects one.
+    ///
+    /// <para>Carried on the activation list because the list is what every surface that says
+    /// "not installed" already reads — <c>RequiredModuleStatus.Classify</c> on <c>/health</c>,
+    /// the activation report on the package card — so the refusal reaches them with no new
+    /// parameter on a host that was compiled against the previous platform.</para>
+    /// </summary>
+    [JsonIgnore]
+    public ImmutableList<Mesh.Security.PlanTierRefusal> TierRefusals { get; init; } = [];
+
+    /// <summary>The plan-tier refusal recorded for <paramref name="moduleName"/>, or null.</summary>
+    public Mesh.Security.PlanTierRefusal? TierRefusalFor(string? moduleName) =>
+        TierRefusals.FirstOrDefault(r => r.IsForModule(moduleName));
 }
 
 /// <summary>
@@ -279,7 +298,105 @@ public static class ModuleActivationSidecar
             // The marker is authoritative; the legacy flag is honoured once, for a deployment
             // upgrading with the flag still set. Boot clears both.
             PendingRestart = File.Exists(PendingRestartMarkerPath(baseDirectory)) || legacy.PendingRestart,
+            // #4097 — what the registry said this instance's plan refuses, from the markers the
+            // default install keeps in step with the registry's answer.
+            TierRefusals = [.. ReadTierRefusals(baseDirectory).Values],
         };
+    }
+
+    // ── the plan-tier refusal marker (#4097) ──────────────────────────────────
+
+    /// <summary>The per-module plan-tier refusal marker's file suffix inside
+    /// <see cref="EntriesDirectoryName"/> — like <see cref="RefusedMarkerSuffix"/>, deliberately
+    /// not <c>.json</c>, so entry enumeration never parses it and the bulk write never sweeps it.</summary>
+    public const string TierRefusedMarkerSuffix = ".tier-refused";
+
+    /// <summary>The marker recording that the registry refuses a module's package to this
+    /// instance's PLAN: <c>modules/activation.d/&lt;Module&gt;.tier-refused</c>.</summary>
+    public static string TierRefusedMarkerPath(string baseDirectory, string moduleName) =>
+        Path.Combine(EntriesDirectory(baseDirectory), moduleName + TierRefusedMarkerSuffix);
+
+    /// <summary>
+    /// 🚨 Makes the marker set MATCH <paramref name="refusals"/> — one marker per refusal that
+    /// names a module, every other <c>.tier-refused</c> marker removed. The default-install pass
+    /// calls it with the registry's answer of THIS boot, so a plan upgrade (the registry stops
+    /// refusing) clears the markers on the next pass and a downgrade writes them; a stale marker
+    /// would otherwise say "refused by plan" on a plan that covers the package. A marker whose
+    /// content is unchanged is not rewritten (the directory's write time is the report's cache
+    /// fingerprint). Refusals for content-only packages carry no module and leave no marker — the
+    /// package card renders them from the listing.
+    /// </summary>
+    /// <returns>The module names that carry a marker after the sync, sorted.</returns>
+    public static ImmutableList<string> SyncTierRefusals(
+        string baseDirectory, IEnumerable<Mesh.Security.PlanTierRefusal> refusals)
+    {
+        ArgumentNullException.ThrowIfNull(refusals);
+        var wanted = new Dictionary<string, Mesh.Security.PlanTierRefusal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var refusal in refusals)
+            if (!string.IsNullOrWhiteSpace(refusal.Module))
+                wanted[refusal.Module] = refusal;
+
+        var current = ReadTierRefusals(baseDirectory);
+        foreach (var stale in current.Keys.Where(name => !wanted.ContainsKey(name)))
+            ClearTierRefused(baseDirectory, stale);
+        foreach (var (module, refusal) in wanted)
+        {
+            if (current.TryGetValue(module, out var existing) && existing == refusal)
+                continue;
+            ValidateModuleName(module);
+            WriteAtomic(TierRefusedMarkerPath(baseDirectory, module), JsonSerializer.Serialize(refusal, Json));
+        }
+        return [.. wanted.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>Removes one module's plan-tier marker. Tolerant of an absent file and a read-only
+    /// volume, like <see cref="ClearRefused"/>.</summary>
+    public static void ClearTierRefused(string baseDirectory, string moduleName)
+    {
+        ValidateModuleName(moduleName);
+        try
+        {
+            File.Delete(TierRefusedMarkerPath(baseDirectory, moduleName));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Another replica clearing the same marker, or a read-only volume.
+        }
+    }
+
+    /// <summary>Every plan-tier refusal marker under the deployment, module name → refusal, sorted
+    /// by name. An unreadable or malformed marker contributes nothing.</summary>
+    public static ImmutableSortedDictionary<string, Mesh.Security.PlanTierRefusal> ReadTierRefusals(string baseDirectory)
+    {
+        var builder = ImmutableSortedDictionary.CreateBuilder<string, Mesh.Security.PlanTierRefusal>(StringComparer.OrdinalIgnoreCase);
+        var directory = EntriesDirectory(baseDirectory);
+        if (!Directory.Exists(directory))
+            return builder.ToImmutable();
+        string[] files;
+        try
+        {
+            files = Directory.EnumerateFiles(directory, "*" + TierRefusedMarkerSuffix).ToArray();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return builder.ToImmutable();
+        }
+        foreach (var file in files)
+        {
+            var name = Path.GetFileName(file)[..^TierRefusedMarkerSuffix.Length];
+            try
+            {
+                var text = TryReadAllText(file);
+                if (text is not null
+                    && JsonSerializer.Deserialize<Mesh.Security.PlanTierRefusal>(text, Json) is { } refusal)
+                    builder[name] = refusal;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // Unreadable or malformed: no verdict, never a wrong one.
+            }
+        }
+        return builder.ToImmutable();
     }
 
     // ── the unloadable-head marker (#3650) ──────────────────────────────────

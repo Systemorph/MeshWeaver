@@ -92,15 +92,22 @@ public class SelfUpdateHostedService : IHostedService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        // 🚨 #4097 — canPatch=False used to be the whole story, and it pointed at
+        // Modules:Assemblies. When the patcher's package was refused by the instance's PLAN, the
+        // line now says so: the tier it needs and the plan the instance is on.
+        var cannotPatch = _updater.CanPatch
+            ? string.Empty
+            : UnavailableUpdateMechanics.DescribeCannotPatch(
+                UnavailableUpdateMechanics.PatcherTierRefusal(_hub.ServiceProvider.GetService<IConfiguration>()));
         _logger?.LogInformation(
             "[SelfUpdate] starting (event-driven, with a {SafetyNet} safety net); version={Version}, "
-            + "registry={Registry}/{Repo} listed as {RegistryKind}, canPatch={CanPatch}, retryInterval={Interval}.",
+            + "registry={Registry}/{Repo} listed as {RegistryKind}, canPatch={CanPatch}{CannotPatch}, retryInterval={Interval}.",
             _options.SafetyNetCheckInterval > TimeSpan.Zero
                 ? _options.SafetyNetCheckInterval.ToString()
                 : "disabled",
             ShippedReleaseSeed.InstalledPlatformVersion, _options.Registry, _options.PortalRepository,
             UsesOciListing ? "an OCI Distribution registry (the mirror, instance-key auth)" : "an Azure Container Registry",
-            _updater.CanPatch, _options.RetryInterval);
+            _updater.CanPatch, cannotPatch, _options.RetryInterval);
 
         // 🚨 EVENT-DRIVEN WITH A SAFETY NET, and the event source is deliberately OUTSIDE the
         // policy stream.
@@ -347,7 +354,10 @@ public class SelfUpdateHostedService : IHostedService
         var installed = ShippedReleaseSeed.InstalledPlatformVersion;
         if (!_updater.CanPatch)
             return Observable.Return(SelfUpdateVerdict.RestartUnavailable(
-                platform, installed, "this install does not self-patch (detect-and-notify)"));
+                platform, installed,
+                "this install does not self-patch"
+                + UnavailableUpdateMechanics.DescribeCannotPatch(
+                    UnavailableUpdateMechanics.PatcherTierRefusal(_hub.ServiceProvider.GetService<IConfiguration>()))));
 
         // The same floor read Apply makes, and skipped for the same reason when the floor is off:
         // LastRolledAtAsync is a Kubernetes GET whose answer cannot change a decision the floor
