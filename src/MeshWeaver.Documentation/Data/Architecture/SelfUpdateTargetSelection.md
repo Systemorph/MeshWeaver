@@ -14,6 +14,15 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > authoring lint. §4 below is rewritten accordingly. The floors themselves moved off the retired rc
 > line the day before (MeshWeaver.Plugins#1447 — 42 packages, plus a gate that refuses a new one).
 
+> 📅 **2026-09-12 — the supply side of a candidate changed cadence.** Candidates still appear at every
+> promoted set (phase C arms `<version>`), but the node repositories no longer rebuild per platform
+> build: the per-build `meshweaver-framework-released` wave is off by default (Plugins#1707) and each
+> repo publishes for the newest SEALED set on its own pushes and once a day. Nothing in this page's
+> selection changes — an install still ranks by lineage and takes the newest sealed set its
+> availability + link gates admit (a sealed set of the same line, `Modules:VersionStrictness`
+> `Family`) — but "no bundle yet for this identity" is now the ordinary state for up to a day, not a
+> fault. Full reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 **A version string is a LABEL a human maintains. The CD run number is the ORDER a machine
 produced. The self-updater must rank candidates by the second, because the first can be wrong —
 and when it is wrong, SemVer makes the mistake permanent.**

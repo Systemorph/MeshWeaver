@@ -362,6 +362,15 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
 ## 4. The workflow — continuous → release → next line
 
 1. **Iterate.** Every green merge ships `3.0.0-ci.<n>` (see the ordering note in §1 for who rolls onto it).
+   > 📅 **2026-09-12 — "ships" means: promoted and sealed, then validated by the next daily runs.**
+   > A continuous build no longer wakes every node repository (the per-build
+   > `meshweaver-framework-released` wave is off by default — `Hosting:PlatformBuilds:BroadcastFrameworkReleases`,
+   > Plugins#1707 — and no satellite lists the event). Each node repo builds and tests against the
+   > newest SEALED set on its own pushes and once a day; that daily run is the full run, and its
+   > green on every catalogue is the only "validated" the fleet has — there is no tag for it, and
+   > the clean `X.Y.Z` of step 4 remains the only tag-shaped promotion. Turning the wave on is the
+   > MAJOR-bump exception. The recommended setup, end to end:
+   > `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
 2. **Pick the build to release.** A commit whose CD run has `Promote`, `Verify every image
    shipped` **and** `Plugins: bake + seal` green — read the seal JOB, never the run's conclusion
    ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes

@@ -345,6 +345,7 @@ registry's `PlatformBuildInboxWatcher` from the build fact core CD POSTs into `H
 to the repositories the `Hosting/Deployment` records name as registry sources; `schedule` is the
 fallback. Core dispatches to no repository (maintainer, 2026-09-03: *"core publishes an event and
 finishes"*).
+🚨 No longer true since 2026-09-12 (phase 1): the `schedule` poll is the primary and only per-platform run — `meshweaver-framework-released` is emitted only while `Hosting:PlatformBuilds:BroadcastFrameworkReleases` is `true` (default off, Plugins#1707) and no satellite lists the type; release-follow means the daily run resolving the newest SEALED set. See `Hosting/BuildAndReleaseProcess`.
 
 ### What a satellite passes
 
@@ -415,6 +416,7 @@ keeps the supersede model in the next section.
    rebuild and republish everything against the new platform — the compatibility check across the
    whole catalog. It is the only run that is superseded, and only by the next platform run: the
    release lane shares one concurrency group, so a newer platform run replaces a queued older one.
+   🚨 No longer true since 2026-09-12 (phase 1): the ONE full run is the satellite's DAILY `schedule`, not a platform release — a platform build triggers nothing in a node repository and is validated by the next day's runs. See `Hosting/BuildAndReleaseProcess`.
 7. **Compatibility is decided by floors.** A bundle states the framework it was built against and its
    `minMeshVersion`/`requires` ranges, and an instance adopts it only when they hold. Consistency is
    forced inside a dependency network (rule 2) and never across unrelated modules.
@@ -512,6 +514,7 @@ run publishing between a newer run's `select` and its hand-over.
    and the `schedule` poll are never cancelled by this rule and never cancel anything — the #826
    rule, kept intact. Each `main` push keeps its own concurrency group keyed on the commit, so GitHub
    itself cancels nothing; the lane does, explicitly, under the guards above.
+   🚨 No longer true since 2026-09-12 (phase 1), narrowly: the platform-wave half is gone (no `meshweaver-framework-released` dispatch reaches a satellite by default); the never-cancelled rule itself still holds for `schedule` and `meshweaver-upstream-published` — the maintainer's 2026-09-11 decision, enforced by `scripts/check-main-runs-not-cancelled.py`. See `Hosting/BuildAndReleaseProcess`.
 
 The lane cannot pass silently: if it cannot list runs or resolve ancestry it goes **red naming why**
 — no `continue-on-error`, no `if: secret-is-set` (AGENTS.md → *"A gate NEVER tests its own inputs"*).
@@ -930,6 +933,15 @@ expensive says so rather than merely being slow.
 
 ## The release: the pipeline ends by calling memex
 
+> 📅 **2026-09-12 — sentence 3's platform half is off by default.** The control instance still
+> registers every `platform-build` and still publishes `meshweaver-upstream-published` for a bundle
+> publication, but `meshweaver-framework-released` is broadcast only while
+> `Hosting:PlatformBuilds:BroadcastFrameworkReleases` is `true` (Plugins#1707), and the satellites no
+> longer list the type (Plugins#1709 and the five satellite PRs of the same day). A node repository
+> follows the platform by its daily `schedule` against the newest SEALED set — the recommended setup
+> for every repo and every install; the wave is the MAJOR-bump exception. Full reference:
+> `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 **The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
 register release and publish event"*) is three sentences:**
 
@@ -949,6 +961,7 @@ register release and publish event"*) is three sentences:**
    control instance's `Hosting/Deployment` records name as registry sources. The subscribers' CI
    receives it, resolves both images from the version, builds and publishes for that identity — and
    ends by calling memex (1).
+   🚨 No longer true since 2026-09-12 (phase 1) for the platform event: `meshweaver-framework-released` is not published by default and the diagram's `types:` list below no longer includes it in any satellite — only `meshweaver-upstream-published` still wakes a repo. See `Hosting/BuildAndReleaseProcess`.
 
 ```
  pipeline (core CD | a node repo's publish-bake)        memex (control instance)              subscriber CI
@@ -971,6 +984,14 @@ the inbox watcher, registration and broadcast in the Hosting module's `PlatformB
 `PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository` refuses a dispatch SENDER in any workflow
 under `.github/workflows` — there is no ledger — and
 `UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody` pins the lane's call.
+
+📅 *2026-09-12 — landed:* MeshWeaver.Plugins#1241 (merged 2026-09-03) wired the platform half; the
+watcher registers `Hosting/PlatformBuilds/<source>` and handles `event: bundle-publication` (added
+by Plugins#1274, made directed and non-reflexive by #1484/#1485 on 2026-09-07); every satellite
+passes `webhook-url`/`webhook-secret` to the lane (the pins themselves are gone since #3842). NOT
+landed, by decision: core CD's `plugins-bake` stays (maintainer, 2026-08-29: *"plugins is top level
+— built with platform"*) — the second producer is deduplicated by the register's `IsRepeat` rule.
+And since 2026-09-12 the platform broadcast itself is off by default (see the callout above).
 
 **In flight, in this order (the contract is complete only when all have landed):** MeshWeaver.Plugins#1241
 wires the platform half (broadcast + system identity + subscribers from the records) and is
