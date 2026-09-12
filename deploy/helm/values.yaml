@@ -922,6 +922,12 @@ config:
     Hosting__Deployment: ""
     Hosting__ReportTo: ""
     Hosting__ReportInterval: "01:00:00"
+    # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713). The signed inbox
+    # the Feedback plugin hands a technical submission to; the fleet value is
+    # https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds. Empty = hand-over OFF (the
+    # control instance leaves it empty). The HMAC half, Hosting__ControlInbox__Secret, is a SECRET
+    # from Key Vault — set per environment in the overlay, never here.
+    Hosting__ControlInbox__Url: ""
     # The writable root for store-installed modules (ModuleRoot.ConfigKey). Empty here means
     # "follow Deployment__DataRoot", which the template applies — a deployment only sets this
     # when its module tree must live somewhere other than the data root.
