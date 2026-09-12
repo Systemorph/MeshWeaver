@@ -125,11 +125,42 @@ On a **Premium** ACR you can stop the pile-up at the source instead of hand-prun
   az acr config retention update -r meshweaver --status enabled --days 30 --type UntaggedManifests
   ```
 - **Scheduled purge task** — `az acr task` running [`acr purge`](https://github.com/Azure/acr-cli)
-  on a cron, e.g. keep the 10 newest `memex-portal-ai` tags and drop the rest. Encode the keeper
-  protection with a `--keep` count and a `--filter` that never matches `latest`.
+  on a cron, with a `--filter` per repository and a `--filter` that never matches `latest`.
 
 Automation is good for the untagged/old long tail; the **live keeper rule still stands** — a retention
 window must be long enough that no currently-deployed tag ages out, or pin keepers with an exclusion.
+
+### 🚨 "Is the purge running?" — and the two things that answer it wrongly
+
+```bash
+az acr task list --registry meshweaver -o table         # ← the TASK's status is the answer
+```
+
+**A DISABLED TASK STILL REPORTS AN ENABLED TIMER TRIGGER.** Measured 2026-09-12: both tasks read
+`status: Disabled` while `trigger.timerTriggers[0].status` still read `Enabled` at `0 3 * * *`. Read
+the task's `status`; the trigger's is about the trigger, and a reader who checks the schedule
+concludes a paused purge is live.
+
+**And `.github/acr-retention/` is a RECORD, not the registry.** Nothing deploys from it, so a file
+saying `Enabled` is evidence of what someone last wrote down. `acr-retention-tasks.sh verify` is what
+relates the two.
+
+**State as this is written: `purge-old-images` is PAUSED** while artifact protection is completed
+(Memex#219). The condition for re-enabling is recorded in `.github/acr-retention/tasks.json` under
+`pause.reEnableWhen` — re-enabling before it restores the exposure the pause is holding off.
+
+### 🚨 `--keep N` is not "keep the N newest tags"
+
+It is applied **after** `--ago`, over the already-eligible set: *of the tags older than the window,
+spare the N newest*. A tag younger than `--ago` is never eligible however many newer builds exist —
+and one older than it is spared only until N more tags cross the same line behind it.
+
+So `--keep` is not keeper protection, and on a busy repository it is worth almost nothing. Measured
+on `memex-portal-ai`: **193.1 tags/day**, so a `--keep 10` window is consumed in **~1.2 hours**, and
+the oldest tag in the repository was **exactly 7 days old** — `--ago 7d` was the entire policy. The
+durable protection is a lock, and it has to cover the tag, the manifest **and** the platform
+manifests under a multi-arch index:
+[ArtifactRetentionInterlock](/Doc/Architecture/ArtifactRetentionInterlock).
 
 ---
 

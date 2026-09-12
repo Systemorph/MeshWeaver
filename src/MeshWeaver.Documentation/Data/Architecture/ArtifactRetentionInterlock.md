@@ -350,6 +350,7 @@ run states its denominator, and an incomplete one refuses rather than quietly pr
 ## Related
 
 - [DeploymentInventory](/Doc/Architecture/DeploymentInventory) — what each instance reports about itself, and the per-report completeness signal
+- [ImageCleanup](/Doc/Architecture/ImageCleanup) — the operator page: how to ask whether the purge is running, the disabled-task/enabled-trigger trap, and why `--keep N` is not "keep the N newest"
 - [PinnedImageRetention](/Doc/Architecture/PinnedImageRetention) — the lock job's history, the two purge tasks and the incidents
 - [ReleasedArtifactRetention](/Doc/Architecture/ReleasedArtifactRetention) — the policy contract (#3842): 30 days by age, no build-count quota
 - [PrebuiltBundleRetention](/Doc/Architecture/PrebuiltBundleRetention) — the store this protects in the portal
