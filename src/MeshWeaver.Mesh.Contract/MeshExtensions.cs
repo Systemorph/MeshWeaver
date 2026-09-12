@@ -1818,7 +1818,7 @@ public static class MeshExtensions
         // does not carry (HealPartitionRoot writes the root as System, so root.CreatedBy is
         // never the owner), and it is what distinguishes "I am creating my own partition" from
         // "I am a deploy touching somebody else's".
-        var syncObs = ReadNodeAuthoritative(hub, persistence, $"{partition}/_GitSync");
+        var syncObs = ReadNodeAuthoritative(hub, persistence, AccessAssignmentGuard.SyncConfigPath(partition));
 
         return Observable.Zip(rootObs, grantObs, syncObs, (root, grant, sync) => (root, grant, sync))
             .SelectMany(t =>
@@ -3995,7 +3995,7 @@ public static class MeshExtensions
             return Observable.Return<LocalizableText?>(null);
 
         var partition = AccessAssignmentGuard.PartitionOf(scope);
-        return ReadNodeAuthoritative(hub, persistence, $"{partition}/_GitSync")
+        return ReadNodeAuthoritative(hub, persistence, AccessAssignmentGuard.SyncConfigPath(partition))
             .Select(sync => AccessAssignmentGuard.SystemOwnedRefusal(
                 node, assignment,
                 systemOwned: AccessAssignmentGuard.IsSystemOwned(sync, hub.JsonSerializerOptions)));
