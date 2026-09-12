@@ -274,7 +274,32 @@ name: node-repo module pack
 # max 8 — proven on Memex run 34681270793 (runner `aks-silos-gknmd-runner-t9dl7`). The `runner`
 # input is how a caller moves the heavy legs there, and ONLY them:
 #
-#   * `pack` (Module bundle) and `tests` (Module tests) honour `runs-on: ${{ inputs.runner }}`.
+#   * `pack` (Module bundle) and `tests` (Module tests) honour `runs-on: ${{ inputs.runner }}`,
+#     and NEITHER needs Docker or a registry credential — a claim by CONTENT, not by comment:
+#     no `docker`, no `azure/login`, no `acr-*` secret is referenced anywhere in either job
+#     (grep them). `tests` never consumed an image at all. `pack` takes the pinned image's /app
+#     from, in this order (Memex#316, maintainer decision 2026-09-12):
+#       1. the runner's PLATFORM MOUNT `/opt/platform/<platform-image-digest>/` — an Azure Files
+#          volume the runner pods carry, populated once per sealed set by a refresh job, so a
+#          runner keeps the platform installed until the platform updates. Real only when its
+#          `.complete` marker holds the digest; a plain directory test, never a registry call.
+#       2. the RUN ARTIFACT `platform-refs-<lane>` — the very bytes `prepare` took with
+#          `docker cp` on its hosted runner, tarred and handed over with actions/upload-artifact
+#          (retention 1 day). Guaranteed within the run, which a cache entry never is.
+#       3. neither ⇒ RED, naming the mount path, the artifact and the job that should have
+#          produced it. The job summary states which source was used, on every run.
+#     Until 2026-09-12 `pack` restored `platform-refs-<digest>` from actions/cache and, on a
+#     miss, fell back to `docker create`/`docker cp` from ACR — and on aks-silos EVERY leg
+#     missed: actions/cache versions an entry by the PATH STRING, and `${{ runner.temp }}` is
+#     `/home/runner/work/_temp` on GitHub-hosted but `/home/runner/_work/_temp` under ARC, so the
+#     175 MB entry `prepare` had HIT six minutes earlier was a different entry for the self-hosted
+#     leg, which then died at the fallback (MeshWeaver.SocialMedia run 34696706383):
+#       platform-refs-sha256:ddefa9b0… missed the cache and this runner (aks-silos-g5hdc-runner-pmhpw)
+#       has no Docker daemon to pull meshweaver.azurecr.io/memex-portal-ai with
+#     "should not" need Docker and "should not need acr at all" (maintainer, 2026-09-12): the
+#     fallback, the Azure login, the ACR login and the `acr-*` secrets are GONE from `pack`, not
+#     guarded. The per-digest cache stays in `prepare` only, where it is what it always was — the
+#     accelerator that saves the registry pull on a hosted runner whose path string never moves.
 #   * `select`, `prepare`, `build-workspace` and `verify` stay on `ubuntu-latest` whatever the
 #     input says. `select` and `verify` are seconds of orchestration. `prepare` and
 #     `build-workspace` NEED DOCKER — `docker pull/save/load/run` of the platform and tester
@@ -296,10 +321,10 @@ name: node-repo module pack
 #   * it ships NO toolchain: no .NET, no Node, no `gh`, no `zstd`. What the moved legs take from
 #     the image is `bash`, `git`, `jq`, `curl`, `sudo` and Ubuntu's `python3` (a dependency of the
 #     `software-properties-common` the image installs); the SDK comes from setup-dotnet exactly as
-#     before. The ONE step in `pack` that needs `gh` (`gh run download`, the ledger's REUSE leg) and
-#     the ONE that needs Docker (the `docker cp` fallback, taken only when the
-#     `platform-refs-<digest>` cache `prepare` filled minutes earlier has been evicted) both fail
-#     RED naming what is missing; neither skips.
+#     before. No `zstd` either — which is why the platform hand-over is a gzip tarball and why the
+#     mount is read in place. The ONE step in `pack` that needs `gh` (`gh run download`, the
+#     ledger's REUSE leg) fails RED naming what is missing; it never skips. Nothing in `pack` or
+#     `tests` needs Docker.
 #
 # The runner POD is not the node. The scale set requests 500m / 4Gi and LIMITS each runner to
 # 2 vCPU / 6 GiB (the node behind it is 16 vCPU / 62 GiB, shared with the portals). A suite that
@@ -605,10 +630,13 @@ on:
           `ubuntu-latest` (the default) is exactly today's behaviour. `aks-silos` is the Systemorph
           org's self-hosted scale set: non-root, NO Docker, no preinstalled toolchain, 2 vCPU /
           6 GiB per runner — the two honouring jobs set DOTNET_INSTALL_DIR under /home/runner for
-          it. Wire it from a repository variable (`vars.MW_RUNNER_HEAVY`, falling back to
-          `ubuntu-latest` when unset — the header shows the expression) so the move is one edit
-          to revert. `select`, `prepare`, `build-workspace` and `verify`
-          ignore it — the middle two need a Docker daemon the scale set does not have.
+          it. Neither honouring job runs `docker` or touches a registry: `pack` takes the pinned
+          image's /app from the runner's `/opt/platform/<digest>/` mount, else from the artifact
+          `prepare` hands over, else fails RED naming both; `tests` consumes no image. Wire it
+          from a repository variable (`vars.MW_RUNNER_HEAVY`, falling back to `ubuntu-latest`
+          when unset — the header shows the expression) so the move is one edit to revert.
+          `select`, `prepare`, `build-workspace` and `verify` ignore it — the middle two need a
+          Docker daemon the scale set does not have.
         required: false
         type: string
         default: ubuntu-latest
@@ -622,10 +650,15 @@ on:
           (`Admin/ModuleBuilds`). Required when ledger is `required`; asserted RED, never skipped.
         required: false
       acr-username:
-        description: Pull credential for platform-image's registry. Required when platform-image-digest is set.
+        description: >-
+          Pull credential for platform-image's registry. Required when platform-image-digest is
+          set. Read by `prepare` and `build-workspace` only — the hosted jobs that pull; `pack`
+          and `tests` never see it.
         required: false
       acr-password:
-        description: Pull credential for platform-image's registry. Required when platform-image-digest is set.
+        description: >-
+          Pull credential for platform-image's registry. Required when platform-image-digest is
+          set. Read by `prepare` and `build-workspace` only; `pack` and `tests` never see it.
         required: false
       azure-client-id:
         description: Azure workload-identity client id. Required when acr-login is oidc.
@@ -1173,6 +1206,42 @@ jobs:
             docker rm "$tcid" >/dev/null
             [ -f "$RUNNER_TEMP/tester-app/mw-plugin-test.dll" ] || { echo "::error::the tester image's /app carries no mw-plugin-test.dll — not a tester image"; exit 1; }
           fi
+      # ───────── THE PLATFORM HAND-OVER — the pack matrix's /app comes from HERE, not from a cache ─────────
+      # 🚨 A RUN ARTIFACT, because a cache is best-effort and, worse, runner-shaped: actions/cache
+      # versions an entry by the PATH STRING it was saved under, and `${{ runner.temp }}` is
+      # `/home/runner/work/_temp` on a GitHub-hosted runner but `/home/runner/_work/_temp` under
+      # ARC. So the `platform-refs-<digest>` entry THIS job hits is invisible to a self-hosted
+      # `pack` leg — every one of them missed and dropped into a `docker cp` fallback the aks-silos
+      # runners cannot take (MeshWeaver.SocialMedia run 34696706383; "Where the heavy legs run" in
+      # the header). The artifact is guaranteed within the run whatever the runner, and it carries
+      # the exact bytes `docker cp` produced: a tar keeps modes and names the way a zip of loose
+      # files would not, and gzip because the aks-silos image ships no `zstd`. Lane-scoped like
+      # the pack tool — two calls in one run pin two images. `pack` verifies the digest stamp
+      # before it compiles against a single assembly in here.
+      - name: Hand the platform's /app to the matrix
+        if: inputs.platform-image-digest != ''
+        env:
+          DIGEST: ${{ inputs.platform-image-digest }}
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/platform-refs"
+          [ -d "$src" ] || { echo "::error::$src does not exist — the platform image's /app was neither restored from cache nor taken from the image, so there is nothing to hand to the pack matrix."; exit 1; }
+          out="$RUNNER_TEMP/platform-refs-artifact"
+          rm -rf "$out"; mkdir -p "$out"
+          tar -C "$src" -cf - . | gzip -1 > "$out/platform-refs.tar.gz"
+          printf '%s\n' "$DIGEST" > "$out/digest.txt"
+          n=$(find "$src" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
+          [ "$n" -gt 50 ] || { echo "::error::the platform's /app holds $n assemblies — not a platform image; refusing to hand it over"; exit 1; }
+          echo "platform hand-over: $n assemblies from $DIGEST, $(du -h "$out/platform-refs.tar.gz" | cut -f1) gzipped"
+      - name: Upload the platform's /app for the matrix
+        if: inputs.platform-image-digest != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: platform-refs-${{ needs.select.outputs.lane }}
+          path: ${{ runner.temp }}/platform-refs-artifact
+          retention-days: 1
+          # Already gzipped — a second deflate pass buys nothing and costs the upload minutes.
+          compression-level: 0
       # ───────── THE PLATFORM'S OWN VERSION — the denominator of the module FLOOR gate (#3554) ─────────
       # 🚨 A declared `content.minMeshVersion` was never checked against a platform build that
       # EXISTS. SemVer §11.4 ranks pre-release identifiers as TEXT, so `ci` < `rc` and
@@ -1819,69 +1888,89 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # 🚨 THE PLATFORM IS THE IMAGE. When the caller pins platform-image-digest, the module is
-      # compiled against the assemblies the portal actually runs (docker cp of /app, cached per
-      # digest so a run pulls it once), and the platform checkout above serves only restore
+      # compiled against the assemblies the portal actually runs (the image's /app, taken ONCE by
+      # `prepare` with `docker cp`), and the platform checkout above serves only restore
       # (Directory.Packages.props, the test/ props) — no platform project is built here. The
       # caller's src/Directory.Build.targets must honour MeshWeaverRefs (Plugins #926); a caller
       # without it just builds from source as before, which is why this is additive.
-      - name: Restore the platform image's assemblies from cache
+      #
+      # 🚨 NO DOCKER, NO REGISTRY, NO CACHE IN THIS JOB (Memex#316, "Where the heavy legs run" in
+      # the header). The /app comes from, in order:
+      #   1. the runner's platform mount `/opt/platform/<digest>/`, real only when its `.complete`
+      #      marker holds the digest — a directory test, read in place;
+      #   2. the run artifact `platform-refs-<lane>` that `prepare` handed over;
+      #   3. neither ⇒ RED, naming both and the job that should have produced the artifact.
+      # The download is `continue-on-error` ONLY so that the verdict step below can say all of
+      # that by name instead of "Artifact not found" — the verdict step is unconditional within
+      # the pinned mode and is what goes RED. Which source was taken is in the job summary.
+      - name: Is the platform mounted on this runner? (/opt/platform/<digest>)
         if: inputs.platform-image-digest != ''
-        id: platform-cache
-        uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}/platform-refs
-          key: platform-refs-${{ inputs.platform-image-digest }}
-      - name: Azure login for registry fallback
-        if: inputs.acr-login == 'oidc' && inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.azure-client-id }}
-          tenant-id: ${{ secrets.azure-tenant-id }}
-          subscription-id: ${{ secrets.azure-subscription-id }}
-      - name: Log in to ACR with workload identity
-        if: inputs.acr-login == 'oidc' && inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
-        run: bash meshweaver/.github/scripts/acr-login.sh
-      - name: Take the platform from the image (docker cp /app)
-        if: inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
+        id: platform-mount
         env:
-          IMAGE: ${{ inputs.platform-image }}
           DIGEST: ${{ inputs.platform-image-digest }}
-          ACR_USERNAME: ${{ secrets.acr-username }}
-          ACR_PASSWORD: ${{ secrets.acr-password }}
-          ACR_LOGIN: ${{ inputs.acr-login }}
         run: |
           set -euo pipefail
-          [ -n "$IMAGE" ] || { echo "::error::platform-image-digest is set but platform-image is empty — name the image the digest belongs to"; exit 1; }
-          # 🚨 The ONE step in this job that needs a Docker daemon, and it runs only when the
-          # `platform-refs-<digest>` cache `prepare` filled earlier in this run has been evicted. A
-          # runner without a daemon (the `aks-silos` scale set — "Where the heavy legs run", top of
-          # this file) cannot take this fallback: say so by name, not three commands later on a
-          # socket error.
-          docker info >/dev/null 2>&1 || { echo "::error::platform-refs-$DIGEST missed the cache and this runner ($RUNNER_NAME) has no Docker daemon to pull $IMAGE with — prepare filled that cache in this same run, so this is an eviction or a foreign runner label. Re-run, or keep 'pack' on ubuntu-latest (the lane's 'runner' input)."; exit 1; }
-          if [ "$ACR_LOGIN" = basic ]; then
-            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but basic ACR credentials were not passed — the image cannot be pulled"; exit 1; }
-            echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          mount="/opt/platform/$DIGEST"
+          if [ -d "$mount" ] && [ -f "$mount/.complete" ] && [ "$(tr -d '[:space:]' < "$mount/.complete")" = "$DIGEST" ]; then
+            n=$(find "$mount" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
+            if [ "$n" -gt 50 ]; then
+              echo "mounted=true" >> "$GITHUB_OUTPUT"
+              echo "platform mount: $mount is complete ($n assemblies) — the artifact is not needed"
+              exit 0
+            fi
+            echo "::warning::$mount carries a .complete marker for $DIGEST but only $n assemblies — not a platform /app; falling through to the run artifact"
+          elif [ -d "$mount" ]; then
+            echo "platform mount: $mount exists but its .complete marker is absent or names another digest — a refresh in flight; falling through to the run artifact"
+          else
+            echo "platform mount: $mount is not present on $RUNNER_NAME — falling through to the run artifact"
           fi
-          # 🚨 --platform linux/amd64 ALWAYS: framework identities are per-architecture build (the
-          # ci.6469 manifest list resolves to s770d75c… on x64 and sfe27877f… on arm64), and the
-          # bundles are sealed under the x64 identity the portals run. A multi-arch digest pulled on
-          # an arm64 runner would compile against a platform the gates never test.
-          # Strip a TAG only — a colon after the last slash. `${IMAGE%%:*}` would also eat a registry
-          # port (registry:5000/repo) and `${IMAGE%:*}` would eat the path when there is no tag.
-          case "${IMAGE##*/}" in *:*) IMAGE_NOTAG="${IMAGE%:*}" ;; *) IMAGE_NOTAG="$IMAGE" ;; esac
-          cid=$(docker create --platform linux/amd64 "${IMAGE_NOTAG}@${DIGEST}")
-          mkdir -p "$RUNNER_TEMP/platform-refs"
-          docker cp "$cid:/app/." "$RUNNER_TEMP/platform-refs/"
-          docker rm "$cid" >/dev/null
-          shopt -s nullglob
-          dlls=("$RUNNER_TEMP"/platform-refs/*.dll)
-          n=${#dlls[@]}
-          [ "$n" -gt 50 ] || { echo "::error::the image's /app yielded $n assemblies — not a platform image"; exit 1; }
-          echo "platform refs: $n assemblies from ${IMAGE_NOTAG}@${DIGEST}"
+          echo "mounted=false" >> "$GITHUB_OUTPUT"
+      - name: Fetch the platform's /app (handed over by prepare)
+        if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true'
+        id: platform-artifact
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: platform-refs-${{ needs.select.outputs.lane }}
+          path: ${{ runner.temp }}/platform-refs-artifact
+      - name: The platform reference set — which source, verified
+        if: inputs.platform-image-digest != ''
+        id: platform
+        env:
+          DIGEST: ${{ inputs.platform-image-digest }}
+          LANE: ${{ needs.select.outputs.lane }}
+          MOUNTED: ${{ steps.platform-mount.outputs.mounted }}
+          FETCHED: ${{ steps.platform-artifact.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$MOUNTED" = true ]; then
+            dir="/opt/platform/$DIGEST"
+            source="mount"
+          else
+            tarball="$RUNNER_TEMP/platform-refs-artifact/platform-refs.tar.gz"
+            if [ "$FETCHED" != success ] || [ ! -f "$tarball" ]; then
+              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): /opt/platform/$DIGEST/.complete is absent (the runner's platform mount, Memex#316) AND the run artifact platform-refs-$LANE could not be fetched (download outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) uploads that artifact in this same run — if it is green, the artifact expired (retention 1 day) or this run was re-run past it; re-run the whole lane, never this leg alone. This job runs no docker and holds no registry credential, by design."
+              exit 1
+            fi
+            stampfile="$RUNNER_TEMP/platform-refs-artifact/digest.txt"
+            [ -f "$stampfile" ] || { echo "::error::artifact platform-refs-$LANE carries no digest.txt — it was not produced by this lane's prepare job ('Hand the platform's /app to the matrix' writes one next to the tarball). Refusing to compile against an unstamped platform."; exit 1; }
+            stamp="$(tr -d '[:space:]' < "$stampfile")"
+            [ "$stamp" = "$DIGEST" ] || { echo "::error::artifact platform-refs-$LANE was extracted from image digest '${stamp:-<none>}' but this leg is pinned to $DIGEST — the two calls of this lane in one run share a lane name, or prepare and pack read different inputs. Refusing to compile against the wrong platform."; exit 1; }
+            dir="$RUNNER_TEMP/platform-refs"
+            rm -rf "$dir"; mkdir -p "$dir"
+            tar -xzf "$tarball" -C "$dir"
+            source="artifact"
+          fi
+          n=$(find "$dir" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
+          [ "$n" -gt 50 ] || { echo "::error::the platform /app from the $source ($dir) yielded $n assemblies — not a platform image"; exit 1; }
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "platform refs: $n assemblies for $DIGEST from the $source ($dir)"
+          printf '### Platform reference set\n\n**%s** — %s, %s assemblies for %s (no docker, no registry in this job; sources tried in order: the mount /opt/platform/<digest>/, then the run artifact platform-refs-%s).\n' "$source" "$dir" "$n" "$DIGEST" "$LANE" >> "$GITHUB_STEP_SUMMARY"
       # 🚨 THE SDK LEG NEEDS THE SUPERSEDE TOO — it did not have it, and that is a whole class of
       # red (#3175 wave). `superseded-image-assemblies` reached ONLY the container leg, as
       # `--superseded-image-assembly` on `build-project`. The SDK leg compiles with
-      # `-p:MeshWeaverRefs=$RUNNER_TEMP/platform-refs`, a raw `docker cp` of the image's /app, and
+      # `-p:MeshWeaverRefs=<platform dir>`, a raw `docker cp` of the image's /app, and
       # nothing subtracted the stale copy from it. So a repository that moved a type OUT of an
       # image-shipped assembly saw its container entries go green and its sdk entries fail CS0436 on
       # the very same tree — measured on MeshWeaver.Plugins #1268, where the three collaboration
@@ -1890,12 +1979,11 @@ jobs:
       # moved sources through MeshWeaver.AI while the pinned image still defines them in
       # MeshWeaver.Blazor.Views.
       #
-      # 🚨 A COPY, NEVER AN IN-PLACE DELETE. `platform-refs` is restored AND SAVED under
-      # `platform-refs-<digest>`, a key that says nothing about superseding. Pruning it in place
-      # would let actions/cache store the pruned set under the unpruned key, and the next run that
-      # declares no supersede — any other repository sharing the digest — would silently compile
-      # against a reference set missing a real platform assembly, failing CS0246 naming innocent
-      # code. The copy keeps the cached directory a faithful image copy.
+      # 🚨 A COPY, NEVER AN IN-PLACE DELETE. The reference set may be the runner's READ-ONLY
+      # platform mount, shared by every leg on that runner and every repository pinning the digest
+      # — pruning it in place would (where it is writable at all) leave the next leg that declares
+      # no supersede compiling against a set missing a real platform assembly, failing CS0246
+      # naming innocent code. The copy keeps the source directory a faithful image copy.
       #
       # The staleness check (an entry whose assembly no longer overlaps this repository's source)
       # lives in the container leg's tool, which reads type tables this step cannot. It runs
@@ -1906,9 +1994,12 @@ jobs:
         if: inputs.platform-image-digest != ''
         env:
           SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
+          # The verified location — the read-only mount or the unpacked artifact. Never pruned in
+          # place (below), so a read-only mount is fine: the pruned set is a COPY under RUNNER_TEMP.
+          PLATFORM_DIR: ${{ steps.platform.outputs.dir }}
         run: |
           set -euo pipefail
-          src="$RUNNER_TEMP/platform-refs"
+          src="$PLATFORM_DIR"
           # 🚨 TWO ANSWERS, DELIBERATELY DIFFERENT (MeshWeaver#3732):
           #   refs = the COMPILE reference set, which supersede may prune;
           #   app  = the RAW image copy, which is what the host SHIPS and therefore the only sound
@@ -1924,7 +2015,7 @@ jobs:
             echo "no superseded assemblies declared — SDK reference set is the image's /app unchanged"
             exit 0
           fi
-          [ -d "$src" ] || { echo "::error::platform-image-digest is set but $src does not exist — the reference set was never taken from the image."; exit 1; }
+          [ -n "$src" ] && [ -d "$src" ] || { echo "::error::platform-image-digest is set but the reference set location '${src:-<empty>}' does not exist — the platform-source step above did not run or did not verify."; exit 1; }
           dst="$RUNNER_TEMP/platform-refs-effective"
           rm -rf "$dst"
           cp -a "$src" "$dst"
@@ -2000,8 +2091,6 @@ jobs:
           TESTER_DIGEST: ${{ inputs.tester-image-digest }}
           # For `gh run download` of sibling module-dll artifacts (the prebuilt lane).
           GH_TOKEN: ${{ github.token }}
-          ACR_USERNAME: ${{ secrets.acr-username }}
-          ACR_PASSWORD: ${{ secrets.acr-password }}
           REFS: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.refs || '' }}
           # 🚨 The RAW image copy, never the superseded-pruned reference set: this decides what
           # the host SHIPS, not what the module compiles against (MeshWeaver#3732). Empty when the
