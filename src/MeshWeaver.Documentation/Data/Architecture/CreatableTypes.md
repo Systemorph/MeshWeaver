@@ -23,14 +23,31 @@ The picker therefore carries **items and no queries**. That is not a style choic
 set, so a query alongside the provider would re-admit by discovery exactly what a restricting
 parent excluded.
 
-🚨 **The picker is not the enforcement point — the form's `type` VALUE is.** The Create button reads
-`form["type"]`, never the picker's item list, and that value is seeded before the provider has
-answered (it cannot be otherwise — the answer is reactive). So when the resolved offer does not
-contain the seed, the form replaces it with the first offered type, or with nothing when the parent
-offers none, so a Required field blocks the submit. Without that, a parent declaring
+🚨 **Within the form, the picker is not the deciding surface — the `type` VALUE is.** The Create
+button reads `form["type"]`, never the picker's item list, and that value is seeded before the
+provider has answered (it cannot be otherwise — the answer is reactive). So when the resolved offer
+does not contain the seed, the form replaces it with the first offered type, or with nothing when
+the parent offers none, so a Required field blocks the submit. Without that, a parent declaring
 `CreatableTypes` with `IncludeGlobalTypes: false` would render a picker holding only its declared
 types and still create `Markdown` for anyone who submitted without touching the field — the menu
 honouring the declaration and the write ignoring it.
+
+🚨 **But say plainly what this is: CURATION, not access control.** `CreatableTypes` shapes what the
+Create form offers and submits. It is **not** enforced at the create boundary — `CreateNodeRequest`
+runs the permission pipeline and `NodeTypeResolution`, and asks nothing about the parent's
+declaration. A caller that posts a create directly, or forges the form's `/data` value, can still
+create a type the parent does not list; what stops them creating anything at all is
+`Permission.Create`, which is the actual control. Do not reach for `CreatableTypes` to keep a type
+out of a partition — reach for permissions.
+
+🚨 **Both shapes of the field come out of the same resolved set**, and that is why the type field is
+one branch rather than two. `?types=X` (the MeshSearch "+" button) RESTRICTS: a single value renders
+as a read-only label, and only when the parent allows it — the label used to render without asking
+the provider at all, which made a URL parameter a way around the parent's declaration. `?type=X`
+(the NodeType page's Create link) only PRE-SELECTS: the full picker still renders, restricted to
+what the parent allows, and the pre-selected value is replaced when the parent does not allow it.
+The two parameters have always differed this way; the restriction holds for both because both come
+out of the same resolved set.
 
 ## The resolution rule
 
@@ -100,7 +117,31 @@ legs.
 exclusion-aware lookup, so a parent's `CreatableTypes` — or a host's `GlobalCreatableTypes` —
 naming `Partition` does not resurrect it. A whitelist ADDS types the queries could not reach; it
 does not overrule a type's own statement that instances of it are made by the platform rather than
-by a person. See [Query Syntax](/Doc/DataMesh/QuerySyntax) for the `context:` qualifier and the other contexts.
+by a person.
+
+That holds for a RUNTIME NodeType too, and it costs a read to make true. A platform type's opt-out
+is visible in the static registry with no I/O; a persisted type carries it on its node, where the
+create-filtered queries see it and this path would not. So the paths a config source NAMES and the
+static registry does not hold — and only those — are looked up: **one anchored `path:` query each,
+never a point read.** A declared type may legitimately not exist yet (synthesising an entry for it
+is deliberate), and a point read of an absent node answers a routing NotFound that terminates the
+stream and opens the storm-breaker on that path; a `path:a|b|c` alternation names no first segment
+and would fan out over every schema (#3202). One path per query keeps each anchored on its own
+partition.
+
+🚨 **Three outcomes, not two.** That per-path lookup distinguishes *the node* from *a confirmed
+absence* from *a probe that did not complete*, and the third fails CLOSED. Folding a timeout or a
+fault into "no such node" would synthesise the entry and offer a type whose opt-out simply could not
+be read — the opt-out holding while storage is healthy and lapsing under load, which is the one
+condition it most needs to hold under. A host with no query core at all is a configuration fact, not
+a failure: it has no persisted nodes, so every declared non-static path is a confirmed absence.
+
+The exclusion itself is `MeshConfiguration.IsExcludedFromContext(node.NodeType, "create")` **or**
+the node's own `ExcludeFromContext` — the same two halves every query backend applies, written once
+so the menu and the queries feeding it cannot answer differently. Applying only the second half is
+what let the retired form pass 25 *instances* of opted-out types (every `*/_Access/Public_Access`,
+the `Admin/Partition/*` records, the `*/_Policy` nodes, the `Templates/Import/*` templates) into a
+picker that is supposed to list types. See [Query Syntax](/Doc/DataMesh/QuerySyntax) for the `context:` qualifier and the other contexts.
 
 ## Two rules that look like details and are not
 

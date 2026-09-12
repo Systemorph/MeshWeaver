@@ -131,6 +131,13 @@ rule is in the mesh's pure, unit-tested plan. What the scripts themselves guaran
   registered (`POST /api/instances/register`, empty bootstrap key = open registration on the free
   plan, or a platform admin's `mwr_` key from a vault object), stored through `--file`, read back
   and PROVEN to authenticate before the step reports. Only the key's sha256 crosses back.
+- **`hosting-kv-copy` materialises a fleet-shared object under the instance's prefix and never
+  rewrites one that exists** (MeshWeaver.Plugins#1723). The record's
+  `keyVaultSecrets.secrets[].copyFrom` names the source; an absent target is copied through
+  `--file`, an existing one is kept and compared with its source BY HASH — a difference is a
+  reported fact (`kv_copy_drift`), not a failure — and no value is ever printed or put on argv.
+  It exists because `hosting-kv-purge` deletes by prefix: a cross-prefix mapping would let the
+  first teardown take the shared credential with it.
 - **`hosting-signin-app` never rotates the sign-in app's secret and never shows one**
   (MeshWeaver.Plugins#1719). A present `<prefix>Authentication-Microsoft-ClientSecret` is kept and
   the app the record names is VERIFIED to redirect to `https://<host>/signin-microsoft` (an identity
