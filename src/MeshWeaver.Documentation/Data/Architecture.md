@@ -406,6 +406,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Chart Drift — what a deploy actually does](ChartDriftSemantics)
 - [Configuring an instance from Aspire](ConfiguringAnInstanceFromAspire)
 - [The Dependabot Secret Store](DependabotSecretStore)
+- [GitHub App Credentials](GitHubAppCredentials) — `meshweaver-cloud` writes to its own repo; every cross-repo READ mints from the read-only `fleet-reader`
 - [Deployment env layers — what a record must be able to hold](DeploymentEnvLayers)
 - [DeploymentInventory](DeploymentInventory)
 - [Deployment Options (AKS)](DeploymentOptions)

@@ -78,8 +78,8 @@ FULLY_PROVISIONED = {
     "AZURE_CLIENT_ID": "cid",
     "AZURE_TENANT_ID": "tid",
     "AZURE_SUBSCRIPTION_ID": "sid",
-    "MESHWEAVER_APP_ID": "app",
-    "MESHWEAVER_APP_PRIVATE_KEY": "pem",
+    "FLEET_READER_APP_ID": "app",
+    "FLEET_READER_APP_PRIVATE_KEY": "pem",
     "COMBO_VERIFY_INSTANCES": (
         '[{"name":"memex","baseUrl":"https://memex.systemorph.com"},'
         '{"name":"memex-cloud","baseUrl":"https://memex.meshweaver.cloud"}]'

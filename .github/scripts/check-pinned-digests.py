@@ -298,7 +298,7 @@ def discover_repos() -> list[str]:
             [
                 "A sweep over an empty fleet reports 'every pin resolves' having checked nothing —",
                 "the exact failure this gate exists to prevent. Add the fleet repositories to the",
-                "meshweaver-cloud installation, then re-run.",
+                "fleet-reader installation, then re-run.",
             ],
         )
     return sorted(names)
