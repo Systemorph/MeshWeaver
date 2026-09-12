@@ -56,7 +56,7 @@ public class NodeTypeRebindWatcherTest(ITestOutputHelper output) : HubTestBase(o
     /// the state it was armed on — the replay-and-recycle hot loop that forced the overlay
     /// watcher's version gate). This stand-in has the same shape.
     /// </summary>
-    private sealed class TestChangeFeed : IMeshChangeFeed
+    private sealed class TestChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed
     {
         private readonly List<Action<MeshChangeEvent>> handlers = [];
         public void Publish(MeshChangeEvent change)
