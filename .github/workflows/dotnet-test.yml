@@ -2234,6 +2234,15 @@ jobs:
     - name: "The merge-queue steward's decision table holds (self-test)"
       run: python3 .github/scripts/merge-queue-steward.py --self-test
 
+    # This helper is executed by the reusable module lane in every satellite, while the framework
+    # checkout can deliberately remain on an older released platform. Its self-test reads the
+    # workflow passed explicitly and refuses any select/pack/tests invocation that drifts back onto
+    # that platform checkout.
+    - name: "Module batching runs from build logic, independently of the platform pin"
+      run: >-
+        python3 .github/scripts/module-pack-batch.py --self-test
+        --workflow .github/workflows/node-repo-module-pack.yml
+
     - name: "Gate the shell CI itself runs"
       run: python3 .github/scripts/check-workflow-shell.py
 
