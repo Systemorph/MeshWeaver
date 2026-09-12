@@ -38,6 +38,18 @@ public static class AccessAssignmentGuard
     public const string AccessFolder = "_Access";
 
     /// <summary>
+    /// The fixed id of a partition's GitHub-sync config node (<c>{partition}/_GitSync</c>) — the
+    /// node whose existence (one-way) makes the partition SYSTEM-OWNED (<see cref="IsSystemOwned"/>).
+    /// Declared HERE, below the GitSync assembly, because the ownership question is asked by the
+    /// write boundary (this guard), the partition bootstrap and the Space access rule, none of
+    /// which reference GitSync; <c>GitHubSyncService.ConfigId</c> aliases it so the two cannot drift.
+    /// </summary>
+    public const string SyncConfigId = "_GitSync";
+
+    /// <summary>The sync-config node path for a partition: <c>{partition}/_GitSync</c>.</summary>
+    public static string SyncConfigPath(string partition) => $"{partition}/{SyncConfigId}";
+
+    /// <summary>
     /// The scope a grant's PATH encodes: everything before the trailing <c>/_Access/{id}</c>.
     /// <c>Admin/_Access/x_Access</c> → <c>Admin</c>; <c>Store/Plugin/_Access/x</c> →
     /// <c>Store/Plugin</c> (scopes nest); a root-level <c>_Access/x</c> → <c>""</c> (the
