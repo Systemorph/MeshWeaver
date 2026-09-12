@@ -26,7 +26,7 @@ test that killed the option that looked cheapest.**
 `FrameworkBuildIdentity` (`src/MeshWeaver.Compiler/FrameworkBuildIdentity.cs`) hashes the sorted
 `(name, surface-id)` pairs of 26 canonical `ContentSurfaceAssemblies`, where `surface-id` is the
 **SHA-256 of that assembly's REFERENCE ASSEMBLY** — the compiler's own definition of a public
-surface, byte-stable under body-only and private-member edits. Thirteen of them
+surface, byte-stable under body-only and private-member edits. Seventeen of them
 (`FullMvidAssemblies`, the toolchain closure of `MeshWeaver.Compiler` + `MeshWeaver.NuGet`)
 contribute their **full implementation MVID** instead, because their code shapes the generated input
 of every NodeType compile.
@@ -42,7 +42,7 @@ when the API SURFACE they compiled against changed."*
 |---|---|---|
 | merges to `main` | **43** | `git log --first-parent` (the control for every row below) |
 | touched any of the **26** content-surface projects | **17** | path-filtered `git log` |
-| touched any of the **13** full-MVID projects | **5** | path-filtered `git log` |
+| touched any of the **17** full-MVID projects | **5** | path-filtered `git log` |
 | touched the 2 toolchain roots | **0** | path-filtered `git log` |
 | **distinct identities actually observed** | **≥ 18** | distinct `s…` values across 23 Reinsurance gate refusals — a floor, not a total: only 23 runs sampled |
 
@@ -67,7 +67,7 @@ latter.
 
 ### 🚨 The falsification test — and it killed the obvious fix
 
-**Prediction:** the sha attribute leaks only into the 13 full-MVID members (implementation MVIDs),
+**Prediction:** the sha attribute leaks only into the 17 full-MVID members (implementation MVIDs),
 leaving the 26 reference-assembly surface hashes stable. If true, the fix is small and local:
 exclude assembly-level attributes from the MVID contribution, inside `FrameworkBuildIdentity`.
 
@@ -92,7 +92,7 @@ Confirming the mechanism from the other side: `ShortGuid`, `Utils`, `Reflection`
 `ServiceProvider` — leaf assemblies with no code path to anything that changed — moved identically,
 which rules out any transitive code effect and pins it on the attribute.
 
-**Denominators.** All **13** full-MVID members were built, and all 13 moved. **21 of 26**
+**Denominators.** All **17** full-MVID members were built, and all 17 moved. **21 of 26**
 content-surface assemblies were in this closure; the 5 not measured are
 `Deployment.Contract`, `GitSync`, `Hosting`, `Mesh.Operations`, `PluginCatalog`.
 
@@ -131,7 +131,7 @@ missing in 13 of them; the 23 spanned **18 distinct identities**; all 23 were `r
 |---|---|---|---|---|
 | **1. Bake per live identity** | ≈ 20–47 runner-h/day *(arithmetic)* | nothing structurally | **Convergence is doubtful:** at 43 merges/day the identity moves every ≈ 33 min, while a two-level bake chain is ≈ 22 min *plus* a ≈ 48 min image build. The wake arrives for an identity already superseded — which is the 23/23 pattern above. | identity churn is reduced first. It is a multiplier on a rate that option 3 would cut ~8×. |
 | **2. Consumer resolves a *compatible* identity** | cheapest to write | 🚨 **the most dangerous.** "Compatible" is what the identity already encodes. A bundle manifest carries the identity *string*, not the surface *set*, so a consumer cannot verify compatibility — only assume it. Wrong assumption ⇒ `MissingMethodException` / `TypeLoadException` at NodeType execution: a runtime fault in the portal instead of a declined bundle. | everything — it converts a loud decline into a silent mis-binding | sound only if bundles carried the full surface manifest. They do not. |
-| **3. Make the identity content-derived** | **larger than it looks** — see the falsification test: all 26 surface hashes plus the 13 MVIDs, in a targets file every host imports, needing byte-exact agreement on both sides | risks forking bake-vs-image identity during rollout — the exact failure the current design prevents | nothing, if it lands: **≥ 38 of 43** daily identity moves carry no content reason | reference assemblies carry other per-build variation. The control says they do not: only the sha varied. |
+| **3. Make the identity content-derived** | **larger than it looks** — see the falsification test: all 26 surface hashes plus the 17 MVIDs, in a targets file every host imports, needing byte-exact agreement on both sides | risks forking bake-vs-image identity during rollout — the exact failure the current design prevents | nothing, if it lands: **≥ 38 of 43** daily identity moves carry no content reason | reference assemblies carry other per-build variation. The control says they do not: only the sha varied. |
 | **4. Decouple the bake from the identity** | publish content-addressed, with identity as a compatibility *attribute* a consumer can evaluate | needs the same surface-set-in-manifest work option 2 lacks, done honestly | — | — |
 
 **What this page does not do:** pick one. Option 3 attacks the cause and today's measurement made it
@@ -202,11 +202,26 @@ Read-only. Public `/health` and `/api/version`; GitHub REST counted by job with 
 `git log` path-filtered against a first-parent control; three local Release builds and a PE metadata
 diff. No mesh write, no registry, no cluster.
 
-🚨 Two counts in the first draft of this analysis were **wrong and caught by controls**, both worth
-repeating as traps: `zsh` does not word-split an unquoted variable, so `git log -- $PATHS` passed one
-giant path and returned a confident `0`; and a `sed` range that did not match produced an empty path
-list, which `git log` reads as "no filter" and answers with *every* commit. Both were re-run under
-`bash` with the path list validated and a total-commit control.
+🚨 **Three counts in drafts of this analysis were wrong.** All three are the same shape — an
+instrument that answers confidently on a population it never saw — and they are recorded because the
+page's whole argument is a set of counts:
+
+1. `zsh` does not word-split an unquoted variable, so `git log -- $PATHS` passed one giant path and
+   returned a confident `0`. Caught by a "do these directories exist" control.
+2. A `sed` range that did not match produced an **empty** path list, which `git log` reads as "no
+   filter" and answers with *every* commit — a false 43. Caught by comparing against the
+   total-merge control.
+3. The full-MVID set was extracted from an arbitrary `sed -n '105,172p'` window of the pinning test,
+   which **cut the last four entries**: the set is **17**, not 13. Caught in review on #4082. The
+   window was replaced with an `awk` range that terminates on the block's own closing `];`, and the
+   dependent count was re-run — it is **unchanged at 5**, because none of the four (`Reflection`,
+   `ServiceProvider`, `ShortGuid`, `Utils`) was touched in the window, and all 17 were present in
+   the falsification build and moved. So the conclusion held while the denominator did not, which is
+   exactly why the denominator has to be stated rather than trusted.
+
+The counts that survived re-measurement under `bash`, with validated path lists and a total-commit
+control, are the ones above. **`ContentSurfaceAssemblies` is 26** — re-checked by counting lines that
+are exactly an entry, and confirming no quoted assembly name appears in a comment inside the block.
 
 ## Reading
 
