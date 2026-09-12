@@ -14,12 +14,18 @@
 # arm64 RUN steps emulate on an amd64 runner). For ACR, the equivalent is the same buildx --push to
 # meshweaver.azurecr.io, or `az acr build --platform linux/amd64 --platform linux/arm64`.
 #
-# Both CLIs are bundled deliberately (locked decision) rather than relying on the publish-time
+# The CLIs are bundled deliberately (locked decision) rather than relying on the publish-time
 # copilot fetch, which keys off the build-host RID. npm packages verified: @github/copilot
-# (the GitHub Copilot CLI) + @anthropic-ai/claude-code (Claude Code has no standalone binary).
-# Multi-arch is safe: @anthropic-ai/claude-code is pure JS (arch-independent), and `npm install -g
-# @github/copilot` resolves the matching per-platform optional-dep binary (@github/copilot-linux-x64
-# / @github/copilot-linux-arm64) inside each platform's build — so each arch bakes in its own CLI.
+# (the GitHub Copilot CLI) + @anthropic-ai/claude-code (Claude Code has no standalone binary), and —
+# since the agent-harness roster grew (MeshWeaver.Plugins#1759) — @openai/codex (the Codex CLI the
+# OpenAI Codex harness drives over `codex app-server`), opencode-ai (OpenCode, `opencode acp`) and
+# @xai-official/grok (Grok Build, `grok agent stdio`), the three Agent Client Protocol agents that
+# install from npm. Cursor's agent (a 170 MB tarball) and Google Antigravity's ACP server (an
+# 800 MB binary) are NOT baked in: a deployment mounts them and points `Acp:Agents:{Id}:CliDirectory`
+# at the mount. Multi-arch is safe: @anthropic-ai/claude-code is pure JS (arch-independent), and each
+# of the others resolves its matching per-platform optional-dep binary (@github/copilot-linux-x64 /
+# -arm64, @openai/codex-linux-*, opencode-linux-*, @xai-official/grok-*) inside each platform's
+# build — so each arch bakes in its own CLI.
 ARG DOTNET_VERSION=10.0
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}
 
@@ -31,7 +37,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates gnupg git \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code @github/copilot \
+    && npm install -g @anthropic-ai/claude-code @github/copilot @openai/codex opencode-ai @xai-official/grok \
     && npm cache clean --force \
     && apt-get purge -y gnupg \
     && apt-get autoremove -y \
