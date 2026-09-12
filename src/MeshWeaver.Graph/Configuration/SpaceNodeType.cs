@@ -341,7 +341,8 @@ public static class SpaceNodeType
 
     /// <summary>
     /// DI-registered access rule for Space nodes.
-    /// Read: requires partition Read permission. Create: any authenticated identity for a
+    /// Read: requires partition Read permission — or, for a platform admin, the Space being
+    /// system-owned (see <see cref="ReadAccess"/>). Create: any authenticated identity for a
     /// top-level Space (the creator becomes its Admin), parent Create otherwise. Update: requires
     /// <see cref="Permission.Update"/>; Delete: requires <see cref="Permission.Delete"/>.
     /// </summary>
@@ -358,7 +359,7 @@ public static class SpaceNodeType
                 return Observable.Return(false);
 
             if (context.Operation == NodeOperation.Read)
-                return hub.CheckPermission(context.Node.Path, userId, Permission.Read);
+                return ReadAccess(context.Node.Path, userId);
 
             if (context.Operation == NodeOperation.Create)
             {
@@ -394,5 +395,46 @@ public static class SpaceNodeType
 
             return Observable.Return(false);
         }
+
+        /// <summary>
+        /// Read on the Space's ROOT node: the ordinary fold, OR — for a platform admin only — the
+        /// Space being SYSTEM-OWNED.
+        ///
+        /// <para>A one-way <c>_GitSync</c> makes a Space system-owned: every write grant on it is
+        /// refused (<c>AccessAssignmentGuard.IsForbiddenOnSystemOwned</c>) or retracted
+        /// (<c>SystemOwnedAccessRetractionHandler</c>), so NO human can hold Read on it the ordinary
+        /// way, and a platform admin — deliberately not a data superuser — holds nothing there
+        /// either. The platform created such a Space (<c>MeshWeaver</c> on memex.meshweaver.cloud,
+        /// 2026-09-12), the platform re-imports it on every green build, and the operator who has
+        /// to stop that could not even see that the Space existed. This is the ownership case the
+        /// Admin-partition model has no answer for: a partition owned by the platform itself, with
+        /// nobody to ask for a grant.</para>
+        ///
+        /// <para><b>Scope of the widening.</b> The Space node only — its name, description and
+        /// kind — never its content: children are their own node types and go through the fold,
+        /// where the admin still holds nothing. Update and Delete are untouched; an admin can look
+        /// at a system-owned Space and remove its sync config (<c>GitHubSyncConfigAccessRule</c>),
+        /// and nothing more. A bijective sync is not system-owned (<c>AccessAssignmentGuard.IsSystemOwned</c>):
+        /// there the mesh nodes are somebody's working copy, and their space stays theirs.</para>
+        ///
+        /// <para><b>Cost.</b> The probe — one storage read of <c>{space}/_GitSync</c> — runs only
+        /// after the fold denied AND the caller is a platform admin; an ordinary viewer's Read is
+        /// byte-for-byte the check it always was. Each leg is a live, never-completing fold, hence
+        /// the <c>Take(1)</c>s; an empty leg completes empty and the caller's
+        /// <c>NodeTypeAccessRuleGate.Evaluate</c> reports it Undetermined — fail closed.</para>
+        /// </summary>
+        private IObservable<bool> ReadAccess(string spacePath, string userId)
+            => hub.CheckPermission(spacePath, userId, Permission.Read)
+                .Take(1)
+                .SelectMany(granted => granted
+                    ? Observable.Return(true)
+                    : hub.IsGlobalAdmin(userId)
+                        .Take(1)
+                        .SelectMany(isAdmin => isAdmin
+                            ? NodeTypeAccessRuleGate
+                                .ReadSubjectNode(hub, AccessAssignmentGuard.SyncConfigPath(spacePath))
+                                .Select(sync => AccessAssignmentGuard.IsSystemOwned(
+                                    sync, hub.JsonSerializerOptions))
+                            : Observable.Return(false)));
     }
 }

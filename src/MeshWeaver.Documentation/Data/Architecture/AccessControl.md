@@ -209,6 +209,19 @@ hub.IsGlobalAdmin(userId)    // explicit user
 
 Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeType.GetGlobalAdminTabAsync` (Global Administration tab), `UserProfile`.
 
+### The two type-scoped exceptions: a Space the platform itself owns
+
+"Not a data superuser" holds for every partition a **person** owns — there is always somebody to ask for a grant. It has no answer for a partition **nobody** can own: a Space with a ONE-WAY `_GitSync` is **system-owned** (`AccessAssignmentGuard.IsSystemOwned`) — the repo rewrites it on every sync, `IsForbiddenOnSystemOwned` refuses every Admin/Editor grant on it and `SystemOwnedAccessRetractionHandler` retracts the ones that predate the sync. Measured on memex.meshweaver.cloud 2026-09-12: `MeshWeaver/_GitSync`, created by the platform in a Space owned by `system-security`, re-imported the whole core repository on every green build (Memex#237), and the platform admin got `Not found` on `get` and *"Delete permission denied for 'MeshWeaver/_GitSync'"* on `delete` — no human could remove it through any API.
+
+So two node types carry an `INodeTypeAccessRule` whose non-admin leg is the ordinary fold and whose second leg is `hub.IsGlobalAdmin(userId)` — the same OR `GitHubActivityExtensions.TriggerAuthorizedAsSystem` already applies to every sync trigger ("triggering a sync is a platform action"):
+
+| Node type | Platform admin may | Still on the fold | Where |
+|---|---|---|---|
+| `GitHubSyncConfig` (`{space}/_GitSync`) | **Read, Delete** — always, on every Space | Create, Update | `GitHubSyncConfigAccessRule` (MeshWeaver.GitSync) |
+| `Space` (the ROOT node only) | **Read** — only while the Space is system-owned | Update, Delete, and every child node | `SpaceAccessRule.ReadAccess` (MeshWeaver.Graph) |
+
+The fold itself is untouched — `GetEffectivePermissions` still answers `None` for the admin on both paths, which is what `SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest` pins: the widening comes from the rule, consulted by all three seams (`RlsNodeValidator`, the `[RequiresPermission]` delivery gate, the delete pre-flight) through `NodeTypeAccessRuleGate`, so an ordinary viewer's check is byte-for-byte what it was. A sync config carries the repo, branch and last-sync state — never a credential; that is the separate `GitHubCredential` node in the owner's own partition. Deleting the **Space** of a system-owned partition is deliberately NOT widened: a paid plugin's Space is system-owned too, and its `_Access` entitlement grants would go with it.
+
 ### Where the grant comes from (db-init)
 
 - **Config-driven** — `Auth:GlobalAdmins: [ "rbuergi", … ]` → `GlobalAdminSeed` seeds a static `Admin/_Access/{user}_Access` grant at boot. A fresh DB with the config set comes up with each listed user already a platform admin.

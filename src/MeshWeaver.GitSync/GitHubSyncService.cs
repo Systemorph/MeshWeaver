@@ -27,7 +27,7 @@ namespace MeshWeaver.GitSync;
 public sealed class GitHubSyncService
 {
     /// <summary>The fixed node id of a Space's GitHub-sync config satellite (<c>{space}/_GitSync</c>).</summary>
-    public const string ConfigId = "_GitSync";
+    public const string ConfigId = AccessAssignmentGuard.SyncConfigId;
     /// <summary>The <see cref="MeshNode.NodeType"/> of the sync config node.</summary>
     public const string ConfigNodeType = "GitHubSyncConfig";
     /// <summary>The <see cref="MeshNode.NodeType"/> identifying a Space (the unit GitHub sync acts on).</summary>
