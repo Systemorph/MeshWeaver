@@ -816,6 +816,29 @@ every repo calls `node-repo-publish-bake` (the lane whose script contract must n
 repo whose variant of a gate carries repo-specific machinery (Plugins' Tests-area ratchet,
 Education's course checks) keeps that job vendored until the machinery generalizes.
 
+**Since 2026-09-12 every one of those repositories also calls `node-repo-ci-failure.yml`** — the
+lane that gives a red `main` an audience. Every satellite runs its full build on `push: [main]` and
+once a day on `schedule` (the per-build platform wave was switched off the same day), and a red run
+there is attached to no pull request, no reviewer and no check list: it updates nothing and pages
+nobody. Maintainer, 2026-09-12: *"put the ci-failure on all repos, in main; triaging is done by
+systemorph-com; communicate via MCP — open a thread with a triage agent; pool such connections by
+portal."* The caller is two jobs at the end of `ci.yml` (`ci-failure` on `failure()`, `ci-green` on
+`success()`, both `needs:` every gate job, both statically unreachable from a pull request), and the
+lane does the same thing in every repository: **one** open issue labelled `ci-failure` with the exact
+title `ci-failure: main is red`, whose body is a dated ledger with one entry per red run (run URL,
+sha, trigger, failed jobs with links, platform set); a close inside seven days is *reopened* rather
+than re-filed, so one outage is one story; the run that goes green comments `green again: <run URL>`
+and closes it. Each way the lane POSTs a signed event (`ci-failure` / `ci-green`, HMAC-SHA256 over
+the exact body in `X-Hub-Signature-256`, the same shape as the build fact) to the control portal's
+inbox at `vars.CONTROL_WEBHOOK_URL` — `https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds`
+— and judges the inbox's `"signature"` verdict the same three-way way. The issue writes use the
+caller's `secrets.GITHUB_TOKEN` with `issues: write` granted on the caller job, never a GitHub App
+token (the installation holds no `issues` grant); the ledger logic is
+`.github/scripts/ci-failure-ledger.py`, fetched at the lane's `scripts-ref` and self-tested at the
+start of every run and in core's `workflow-shell` job. Core wires the same two jobs at the end of
+`dotnet-test.yml`; `main-cd.yml`'s own `ci-failure` issue records a different subject (an image set
+that did not publish) and is unchanged.
+
 ## 🚨 `node-repo-validate` is not one lane among several — it is where the FLEET-WIDE guards run
 
 The other lanes do a repo's own work. `node-repo-validate` also carries the checks that apply to
