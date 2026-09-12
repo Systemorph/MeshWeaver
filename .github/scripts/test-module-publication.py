@@ -391,9 +391,13 @@ def main() -> int:  # noqa: C901
     check("a staging step exists as its exact complement", stage is not None
           and "publish-mode == 'staged'" in str(stage.get("if")),
           str(stage.get("if")) if stage else "")
+    # `BUNDLES` since the batched legs (2026-09-12): ONE module -> bundle-path map, read by the
+    # hand-over, the staging and the receipt alike. Asserted non-empty as well as equal, so the
+    # comparison cannot pass on two absent keys.
     check("…and it stages the SAME bytes the hand-over would have posted",
           stage is not None and handover is not None
-          and str(stage.get("env", {}).get("BUNDLE")) == str(handover.get("env", {}).get("BUNDLE")))
+          and bool(stage.get("env", {}).get("BUNDLES"))
+          and str(stage.get("env", {}).get("BUNDLES")) == str(handover.get("env", {}).get("BUNDLES")))
     ledger_published = [s for s in pack["jobs"]["pack"]["steps"] if s.get("name") == "Ledger — Published"]
     check("a staged leg records NO `Published` ledger transition — a staged artifact is not a "
           "publication", len(ledger_published) == 1
