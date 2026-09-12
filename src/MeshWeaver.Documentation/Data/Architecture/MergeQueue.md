@@ -255,14 +255,15 @@ directory arms without that chain; and the non-default path still warns and stil
 ## 🚨 Disarming auto-merge is not a hold — DRAFT is the only durable one
 
 **Measured: `MeshWeaver.Plugins#1683` was deliberately disarmed during a merge window and merged
-anyway.** Nothing malfunctioned. `auto-arm.yml` fires on `synchronize`, so **the next push re-armed
-it** — and a pull request being held is exactly a pull request someone is still pushing to.
+anyway.** Nothing malfunctioned. `auto-arm.yml` fires on `synchronize` among other events, so **the
+next push re-armed it** — and a pull request being held is exactly a pull request someone is still
+pushing to. A push is what happened to re-arm *that* one; it is not the only thing that would have.
 
 The asymmetry is the whole point, and it is structural rather than a bug to fix:
 
 | act | what it is | how long it lasts |
 |---|---|---|
-| `gh pr merge --disable-auto` | a **state** GitHub owns | until the next `synchronize`, `opened`, `reopened` or `ready_for_review` event — i.e. **until the next push** |
+| `gh pr merge --disable-auto` | a **state** GitHub owns | until the next event this lane fires on: `synchronize` (a push), `reopened`, or `ready_for_review`. **A push is the common one, not the only one** — reopening a closed PR, or marking a draft ready, re-arms with no push at all. (`opened` cannot apply: a pull request has to exist before it can be disarmed.) |
 | convert to **draft** | a **property of the pull request** the lane reads | until *you* mark it ready; `ready_for_review` is what re-arms |
 
 Read off the merged lane: `types: [opened, reopened, ready_for_review, synchronize]` and a job
@@ -273,8 +274,10 @@ disables auto-merge when a pull request is converted to draft, so the conversion
 one act. That last clause is GitHub's documented behaviour rather than something measured here.)
 
 **So: to hold a pull request, convert it to draft. Never rely on `--disable-auto`** — and if you
-find a PR merged that you thought you had stopped, look for a push after the disarm before looking
-for anything else.
+find a PR merged that you thought you had stopped, look for one of this lane's trigger events after
+the disarm before looking for anything else. A push is the first thing to check because it is the
+most frequent, but a reopen or a ready-for-review re-arms just as completely and leaves no new
+commit to notice, which makes those the harder two to spot afterwards.
 
 **#4057 does not change this.** That fix stops the lane arming a pull request whose base is not the
 default branch; for an ordinary pull request onto `main`, re-arming after a disarm is unchanged.
