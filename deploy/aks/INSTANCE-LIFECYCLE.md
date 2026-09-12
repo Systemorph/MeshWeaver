@@ -116,6 +116,13 @@ rule is in the mesh's pure, unit-tested plan. What the scripts themselves guaran
 - **`run.sh` stops at the first failure**, and the Job's `backoffLimit` is `0`. A half-finished
   teardown is never retried from the top, where it would re-dump over a verified archive.
 - **`hosting-kv-ensure` never overwrites an existing master key.** Regenerating it would make every
+  stored `enc:` value in that instance's database permanently unreadable. The same rule covers the
+  **database connection string** it composes (MeshWeaver.Plugins#1721): with `--db-connection` the
+  object the record maps `ConnectionStrings__memex` from is written only when ABSENT, from the
+  record's host/port/user/database and the server password it reads from the vault
+  (`--db-password-secret`, `AZ_POSTGRES_PASSWORD_SECRET` on the control record's
+  `operator.environment`) — through `--file`, never an argument, never printed. An existing object
+  is kept as written.
   stored `enc:` value in that instance's database permanently unreadable.
 - **`hosting-signin-app` never rotates the sign-in app's secret and never shows one**
   (MeshWeaver.Plugins#1719). A present `<prefix>Authentication-Microsoft-ClientSecret` is kept and
