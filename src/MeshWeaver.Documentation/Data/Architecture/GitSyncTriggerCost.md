@@ -429,3 +429,4 @@ its path, and the shared node-repo validation lane fails red if a satellite move
 - [The Import Marker Records Convergence](/Doc/Architecture/ImportMarkerRecordsConvergence) — the content-addressed short-circuit and what may write it.
 - [Static Repo Import](/Doc/Architecture/StaticRepoImport) — fingerprint, activity lock, upsert, prune.
 - [Sync Ref Contract](/Doc/Architecture/SyncRefContract) — what a build completion records and who consumes it.
+- [When a Publication Seal Stops Advancing](/Doc/Architecture/PublicationSealStarvation) — the OTHER reason a delivery costs nothing: the publication seal held it. Why that hold can become permanent, and how it is recorded now that a held source is no longer byte-identical to a settled one.
