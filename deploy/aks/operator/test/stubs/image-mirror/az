@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# A stand-in `az` for hosting-image-mirror's behaviour tests (MeshWeaver.Plugins#1722): the vault
+# read of the publisher password, and `acr login --expose-token`. Records every argv.
+#   HOSTING_IM_STATE            directory: az.log
+#   HOSTING_IM_PUBLISHER_ABSENT=1  the publisher password object cannot be read
+#   HOSTING_IM_ACR_DENIED=1     `az acr login` fails as an identity without AcrPull does
+set -uo pipefail
+state="${HOSTING_IM_STATE:?the az stub needs HOSTING_IM_STATE}"
+printf 'az %s\n' "$*" >> "$state/az.log"
+case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret show")
+    [ "${HOSTING_IM_PUBLISHER_ABSENT:-0}" = "1" ] && { echo "ERROR: (SecretNotFound)" >&2; exit 3; }
+    printf 'fake-publisher-password-NEVER-PRINTED\n'; exit 0 ;;
+  "acr login "*)
+    [ "${HOSTING_IM_ACR_DENIED:-0}" = "1" ] && { echo "ERROR: (AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.ContainerRegistry/registries/read'" >&2; exit 1; }
+    printf 'fake-acr-token-NEVER-PRINTED\n'; exit 0 ;;
+esac
+echo "az stub: unexpected invocation: $*" >&2
+exit 1
