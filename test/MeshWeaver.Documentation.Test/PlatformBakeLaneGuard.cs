@@ -249,9 +249,36 @@ public class PlatformBakeLaneGuard
     /// construction: nothing can be built against a framework other than the one shipping.
     ///
     /// <para>What this guard still refuses: the samples trees (no deployment embeds them), and any
-    /// checkout that is not <c>Systemorph/MeshWeaver.Plugins</c>. The plugins checkout is the ONE
-    /// deliberate cross-repo input — a second one would be a new decision, not an extension of
-    /// this one.</para>
+    /// checkout that is not <c>Systemorph/MeshWeaver.Plugins</c> — with ONE further, enumerated
+    /// exception, and the original rule's reason is quoted here so the exception can be judged
+    /// against it rather than against its wording.</para>
+    ///
+    /// <para><b>The original (commit 410538457, 2026-08-26, PR #2445):</b> <i>"the set of
+    /// checked-out repositories in main-cd is exactly ["Systemorph/MeshWeaver.Plugins"]. Present,
+    /// and the only one. A third would be a new decision rather than an extension of this one."</i>
+    /// The HAZARD it closed is named in the same message: the ADOPT model — <i>"plugins arriving
+    /// pre-built from a bundle their own lane published"</i> — i.e. the #1814 bake-identity class,
+    /// <i>"nothing can be built against a framework other than the one shipping"</i>. A checkout is
+    /// dangerous there because what it feeds BECOMES the set: bytes from a tree the identity does not
+    /// name, published under an identity they were not built for.</para>
+    ///
+    /// <para><b>The exception (2026-09-12, maintainer: the fleet rebuilds once a day, so every core
+    /// build must still MEASURE compatibility):</b> <c>satellite-compat</c> points the reusable
+    /// compile gate at each satellite's content. It is OUTSIDE the hazard on every axis the original
+    /// names: the checkout is read-only content at <c>content-ref: main</c>, resolved to a sha that
+    /// the leg records in its verdict artifact; it is compiled into a throwaway <c>check.csproj</c>
+    /// against the set this run ALREADY promoted; nothing from it enters an image, a bundle or a
+    /// seal; no version is derived from it; it runs after <c>promote</c> and nothing waits for it;
+    /// and nothing downstream consumes the verdict. It cannot put bytes under the wrong identity
+    /// because it publishes no bytes. What it CAN do is make a core CD run red — and, since the
+    /// baseline control (the same content compiled against the set the fleet is on, recorded by
+    /// <c>gate</c> pre-promote), only when a type compiled there and does not against this set:
+    /// core's side by measurement, which is the decision, not a side effect.</para>
+    ///
+    /// <para>So the register is asserted POSITIVELY below rather than the rule relaxed: exactly the
+    /// five satellites, only inside that job, and OUTSIDE it the only repository is still Plugins.
+    /// A sixth repository, a satellite named by another job, or a matrix that lost one is a new
+    /// decision and fails here by name.</para>
     /// </summary>
     [Fact]
     public void PlatformBake_CompilesOnlyWhatTheImageEmbeds()
@@ -272,13 +299,41 @@ public class PlatformBakeLaneGuard
             + "still compile-GATE on every PR in dotnet-test.yml's doc-gate — that proves the "
             + "content, which is the part worth paying for.");
 
-        // The main build checks out exactly ONE other repository — the plugins it builds and ships.
-        // Asserted POSITIVELY (present, and the only one) rather than as an absence: the portal
-        // host lives there now, so a main-cd without this checkout cannot build the deployment
-        // image at all (measured 2026-08-26: every push run failed at the version step and nothing
-        // published until this was restored). And a third `repository:` would be a new decision.
-        var text = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
-        var repos = Regex.Matches(text, @"repository:\s*(\S+)")
+        // The main build checks out exactly ONE other repository AS A BUILD INPUT — the plugins it
+        // builds and ships. Asserted POSITIVELY (present, and the only one) rather than as an
+        // absence: the portal host lives there now, so a main-cd without this checkout cannot build
+        // the deployment image at all (measured 2026-08-26: every push run failed at the version
+        // step and nothing published until this was restored).
+        //
+        // The `satellite-compat` job (2026-09-12) is the enumerated exception: it names the five
+        // satellites in its matrix and hands them to node-repo-compile-check.yml as
+        // `content-repository: ${{ matrix.repository }}`. Both halves are asserted — the matrix
+        // lists exactly the five, and OUTSIDE that job the only repository named is Plugins — so a
+        // sixth satellite, a satellite named by another job, or a matrix that silently lost one all
+        // fail here by name. (`${{` is the matrix expression itself, seen through the same regex.)
+        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var (compatStart, compatEnd) = JobRange(lines, "satellite-compat");
+        var compat = ExecutableLinesOf(string.Join("\n", lines[compatStart..compatEnd]));
+        var satellites = Regex.Matches(compat, @"repository:\s*(\S+)")
+            .Select(m => m.Groups[1].Value.Trim())
+            .Where(v => !v.StartsWith("${{", StringComparison.Ordinal))
+            .Distinct()
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(
+            new[]
+            {
+                "Systemorph/MeshWeaver.Crm",
+                "Systemorph/MeshWeaver.Education",
+                "Systemorph/MeshWeaver.Manufacturing",
+                "Systemorph/MeshWeaver.Reinsurance",
+                "Systemorph/MeshWeaver.SocialMedia",
+            },
+            satellites);
+        Assert.Contains("content-repository: ${{ matrix.repository }}", compat, StringComparison.Ordinal);
+
+        var outside = ExecutableLinesOf(string.Join("\n", lines[..compatStart].Concat(lines[compatEnd..])));
+        var repos = Regex.Matches(outside, @"repository:\s*(\S+)")
             .Select(m => m.Groups[1].Value.Trim())
             .Distinct()
             .ToList();
@@ -290,6 +345,21 @@ public class PlatformBakeLaneGuard
     private static string ExecutableLinesOf(string block) =>
         string.Join("\n", block.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
 
+    /// <summary>
+    /// The ONE cross-run download this file tolerates, and the block it must stay inside. The
+    /// original invariant (#1725, below) is about ADOPTION: a bundle from another run is a
+    /// different compilation of the same source, resolves a different framework identity, and so
+    /// must never be PUBLISHED as this run's. <c>satellite-compat-image</c> (2026-09-12) downloads
+    /// the previous run's module bundles for the opposite purpose — as the COMPILE REFERENCE of the
+    /// baseline reading (the set the fleet is on, so a satellite's "does not compile" can be
+    /// attributed to core or to the satellite). Those bytes are re-uploaded under a name only the
+    /// compat legs read, unpacked into <c>refs-baseline/</c>, and never enter a bake directory, a
+    /// seal or a publication. The exemption is the BLOCK, asserted positively by
+    /// <see cref="SatelliteCompatBaselineDownload_IsAReferenceNeverAPublication"/>; a
+    /// <c>gh run download</c> anywhere else in a publishing workflow is still the #1725 defect.
+    /// </summary>
+    private const string BaselineDownloadJob = "satellite-compat-image";
+
     [Fact]
     public void PlatformBake_NeverAdoptsAnotherBuildsBundles()
     {
@@ -299,7 +369,7 @@ public class PlatformBakeLaneGuard
             // Comments stripped for the same reason as above, in the other direction: a workflow is
             // judged on what it RUNS, so prose explaining why the artifact hop was removed must
             // never read as the hop itself.
-            .Select(f => (file: Path.GetFileName(f), text: ExecutableLinesOf(File.ReadAllText(f))))
+            .Select(f => (file: Path.GetFileName(f), text: ExecutableLinesOf(WithoutJob(File.ReadAllLines(f), BaselineDownloadJob))))
             .Where(x => x.text.Contains("publish-bake-bundles.sh", StringComparison.Ordinal))
             // The invariant is CROSS-RUN adoption (#1725): a bundle from another run is a different
             // compilation resolving a different framework identity. `gh run download` is cross-run
@@ -323,6 +393,49 @@ public class PlatformBakeLaneGuard
             + "different framework identity, so no pod can adopt what it publishes (#1725). "
             + "Bake inside the image being shipped instead. Offending workflow(s): "
             + string.Join(", ", offenders));
+    }
+
+    /// <summary>
+    /// <b>The baseline download is a compile reference, never a publication.</b> Both directions:
+    /// the exempted block must still CONTAIN the cross-run download (or the exemption above excuses
+    /// nothing and this guard has gone blind), and it must carry none of the forms by which bytes
+    /// reach a bake, a seal or the portals' storage. The lane that consumes the re-upload is held
+    /// to the same: the baseline bundles unpack into <c>refs-baseline/</c> only.
+    /// </summary>
+    [Fact]
+    public void SatelliteCompatBaselineDownload_IsAReferenceNeverAPublication()
+    {
+        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var start = Array.FindIndex(lines, l => l.Equals($"  {BaselineDownloadJob}:", StringComparison.Ordinal));
+        Assert.True(start >= 0, $"no '{BaselineDownloadJob}:' job in {Workflow} — the exemption in "
+            + "PlatformBake_NeverAdoptsAnotherBuildsBundles names a block that does not exist, so it excuses nothing "
+            + "and this guard measures nothing. Delete the exemption with the job, in the same change.");
+        var end = Array.FindIndex(lines, start + 1, IsJobKey);
+        var block = ExecutableLinesOf(string.Join("\n", lines[start..(end < 0 ? lines.Length : end)]));
+
+        Assert.Contains("gh run download", block, StringComparison.Ordinal);
+        Assert.Contains("name: satellite-compat-baseline-bundles", block, StringComparison.Ordinal);
+        foreach (var publishing in new[] { "publish-bake-bundles.sh", "push-bundle-publication.sh", "--bake-output", "--seed ", "az storage", "BAKE_PUBLISH_TARGETS" })
+            Assert.DoesNotContain(publishing, block, StringComparison.Ordinal);
+
+        // The consumer side: the reusable lane unpacks the baseline bundles into the BASELINE
+        // reference directory and nowhere else, and the lane publishes nothing.
+        var lane = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), ".github", "workflows", "node-repo-compile-check.yml")));
+        Assert.Contains("baseline-module-artifacts", lane, StringComparison.Ordinal);
+        Assert.Contains("refs-baseline/", lane, StringComparison.Ordinal);
+        foreach (var publishing in new[] { "publish-bake-bundles.sh", "push-bundle-publication.sh", "--bake-output", "az storage" })
+            Assert.DoesNotContain(publishing, lane, StringComparison.Ordinal);
+    }
+
+    /// <summary>The workflow's lines with ONE job's block removed — for a detector whose rule the
+    /// block is exempt from by a positive assertion elsewhere.</summary>
+    private static string WithoutJob(string[] lines, string jobName)
+    {
+        var start = Array.FindIndex(lines, l => l.Equals($"  {jobName}:", StringComparison.Ordinal));
+        if (start < 0) return string.Join("\n", lines);
+        var end = Array.FindIndex(lines, start + 1, IsJobKey);
+        if (end < 0) end = lines.Length;
+        return string.Join("\n", lines[..start].Concat(lines[end..]));
     }
 
     /// <summary>
@@ -787,6 +900,19 @@ public class PlatformBakeLaneGuard
         if (end < 0)
             end = lines.Length;
         return string.Join("\n", lines[start..end]);
+    }
+
+    /// <summary>The [start, end) line range of one job's block — the job key line through the line
+    /// before the next job key. Asserted present: a job this guard pins by name that is gone would
+    /// otherwise turn its assertions into a pass over an empty string.</summary>
+    private static (int Start, int End) JobRange(string[] lines, string jobName)
+    {
+        var start = Array.FindIndex(lines, l => l.Equals($"  {jobName}:", StringComparison.Ordinal));
+        Assert.True(start >= 0, $"no '{jobName}:' job in {Workflow} — the per-build satellite compatibility "
+            + "measurement (2026-09-12) is the counterweight to the fleet's once-a-day rebuild; without it a "
+            + "core merge that breaks a satellite is found at 03:00 or on a portal at self-update.");
+        var end = Array.FindIndex(lines, start + 1, IsJobKey);
+        return (start, end < 0 ? lines.Length : end);
     }
 
     private static bool IsJobKey(string line) =>

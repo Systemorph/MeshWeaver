@@ -36,6 +36,15 @@ name: Node repo compile-check (reusable)
 #     secrets:
 #       acr-username: ${{ secrets.ACR_USERNAME }}
 #       acr-password: ${{ secrets.ACR_PASSWORD }}
+#
+# The SECOND caller shape (MeshWeaver, 2026-09-12): the platform's own CD points this lane at a
+# satellite's content — `content-repository: Systemorph/MeshWeaver.<X>`, `content-ref: main`, the
+# tester at THIS run's digest, this run's module bundles as `module-artifacts`, and a
+# `verdict-artifact` so the run can relay WHICH satellite broke on WHICH types. That is the
+# per-build counterweight to the fleet's daily rebuild (satellites rebuild once a day, not per
+# platform build): every core build still MEASURES compatibility, cheaply, so a break is known
+# within the hour rather than at 03:00 or on a portal at self-update. A node repo calling this lane
+# with no content-repository behaves exactly as before.
 
 on:
   workflow_call:
@@ -93,6 +102,72 @@ on:
         required: false
         type: string
         default: main
+      content-repository:
+        description: >-
+          The repository whose NodeTypes are compile-checked. Empty = the caller (every node repo
+          checking its own content — the original shape). The platform's CD sets it to each
+          satellite in turn (its `satellite-compat` matrix), so every core build measures every
+          satellite against the set it just promoted. With it set, `content-app-id` /
+          `content-app-private-key` are REQUIRED and asserted RED before the checkout: the caller's
+          GITHUB_TOKEN cannot read another repository.
+        required: false
+        type: string
+        default: ''
+      content-ref:
+        description: >-
+          The ref of content-repository to check. Empty = the caller's own commit. The platform's
+          CD passes the satellite's default branch — what that satellite's own daily run would bake.
+        required: false
+        type: string
+        default: ''
+      verdict-artifact:
+        description: >-
+          When set, the gate's verdict is ALSO written as JSON (compile-check.py --report) and
+          uploaded under this artifact name — for a caller that has to RELAY the result rather than
+          read this job's log (a matrix of these calls has no steps of its own). Uploaded on red as
+          well as green; a run that produced no report fails the upload RED rather than uploading
+          nothing, so "no verdict" can never be read as "clean".
+        required: false
+        type: string
+        default: ''
+      judge-against-baseline:
+        description: >-
+          When true, a red NEW-image compile is not the verdict — it is one of two readings. The
+          content is compiled a second time against `baseline-image-digest` (the set the fleet is
+          currently on) with `baseline-module-artifacts`, and `compat-verdict.py` classifies each
+          failing type: compiled at the baseline and not now = THIS BUILD BROKE IT (the only red);
+          failed at the baseline too, or did not exist there = already broken, satellite side
+          (green, advisory); no baseline = a refusal to judge (green, advisory, never attributed).
+          The platform's satellite-compat lane sets this; a node repo checking its own PR leaves it
+          false and keeps the plain gate (a red compile is red).
+        required: false
+        type: boolean
+        default: false
+      baseline-image-digest:
+        description: >-
+          The PREVIOUS platform image (digest) — what the fleet runs today, recorded by the caller
+          BEFORE its promote moved the pointer. Empty with judge-against-baseline means the
+          baseline could not be established; say why in baseline-unavailable-reason.
+        required: false
+        type: string
+        default: ''
+      baseline-module-artifacts:
+        description: >-
+          Artifact-name pattern of the module bundles that SHIPPED WITH the baseline image (the
+          previous run's `module-bundle-*`, re-uploaded by the caller in THIS run). The baseline
+          compile must see the modules the fleet actually holds, never this run's — a new bundle
+          against the old framework would misattribute a Plugins-side move as "already broken".
+        required: false
+        type: string
+        default: ''
+      baseline-unavailable-reason:
+        description: >-
+          Why no baseline could be established, when baseline-image-digest is empty and
+          judge-against-baseline is true. Printed in the verdict; a refusal is worth exactly what
+          its reason says.
+        required: false
+        type: string
+        default: ''
       upstream-seed:
         description: >-
           The upstream source(s) whose SEALED publication for this image's framework identity
@@ -116,19 +191,79 @@ on:
       registry-key:
         description: An instance key (mwi_…) able to read the packages named in registry-modules.
         required: false
+      content-app-id:
+        description: >-
+          App id of a GitHub App with Contents: Read on content-repository. Required whenever
+          content-repository is set (the caller's GITHUB_TOKEN cannot read another repository);
+          asserted RED before the checkout, never skipped. The platform passes its READ-ONLY
+          fleet-reader App.
+        required: false
+      content-app-private-key:
+        description: Private key (PEM) of that App.
+        required: false
 
 jobs:
   compile-check:
     name: Compile every NodeType (vs core)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # 🚨 A job-level `permissions:` in a workflow_call lane is a DEMAND on every caller, not a
+    # grant (MeshWeaver#3933 took MeshWeaver.Plugins down for five hours with one `id-token:
+    # write` here). Both scopes below sit inside GitHub's RESTRICTED default (contents / packages /
+    # metadata read), so a caller that writes no `permissions:` at all — four satellites call this
+    # lane exactly that way, see .github/lane-caller-grants.yml — still satisfies them, and
+    # check-workflow-permission-pairing.py --fleet holds that against the roster on every core PR.
+    #   contents — the checkout
+    #   packages — the platform's CD pulls the tester from its GHCR mirror with GITHUB_TOKEN (core
+    #              holds no ACR password and OIDC would be `id-token`, the one scope no default
+    #              grants); a node repo pulling from ACR with its own credential does not use it.
     permissions:
       contents: read
+      packages: read
     steps:
+      # 🚨 A content checkout from ANOTHER repository needs a token that can read it. The caller's
+      # GITHUB_TOKEN is scoped to the calling repository alone, so `repository: Systemorph/<sat>`
+      # (private) answers 404 under it. When content-repository is set, the App credential is
+      # ASSERTED red, never fallen back on: a fallback to github.token would 404 anyway, one step
+      # later and blaming the checkout. Same shape as node-repo-publish-bake.yml's content checkout.
+      - name: Resolve the content repository's credential
+        id: content-repo
+        if: inputs.content-repository != ''
+        env:
+          REPO: ${{ inputs.content-repository }}
+          APP_ID: ${{ secrets.content-app-id }}
+          APP_KEY: ${{ secrets.content-app-private-key }}
+        run: |
+          set -euo pipefail
+          [ -n "$APP_ID" ]  || { echo "::error::content-repository is '$REPO' but secrets.content-app-id is empty — the caller's GITHUB_TOKEN cannot read another repository, so the checkout would 404. Pass a GitHub App installed on '$REPO' with Contents: Read."; exit 1; }
+          [ -n "$APP_KEY" ] || { echo "::error::content-repository is '$REPO' but secrets.content-app-private-key is empty — see content-app-id."; exit 1; }
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO#*/}"   >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the content repository
+        id: content-token
+        if: inputs.content-repository != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.content-app-id }}
+          private-key: ${{ secrets.content-app-private-key }}
+          owner: ${{ steps.content-repo.outputs.owner }}
+          repositories: ${{ steps.content-repo.outputs.name }}
+          permission-contents: read
       - name: Check out the node repo
         uses: actions/checkout@v7
         with:
+          # Empty inputs fall through to the caller's own repo + commit — byte-identical to the
+          # default checkout for every node repo; only the platform's CD points these elsewhere.
+          repository: ${{ inputs.content-repository || github.repository }}
+          ref: ${{ inputs.content-ref || github.sha }}
+          token: ${{ steps.content-token.outputs.token || github.token }}
           path: repo
+      # 🚨 The CONTENT commit, resolved once and recorded in the verdict. `content-ref` may be a
+      # branch (the platform passes each satellite's `main`); the verdict is a fact about ONE tree,
+      # so it names the sha — never "main", which has moved by the time anyone reads it.
+      - name: Resolve the content commit
+        id: content
+        run: echo "sha=$(git -C repo rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -304,7 +439,123 @@ jobs:
         env:
           MW_REPO_ROOT: ${{ github.workspace }}/repo
           MW_ALLOW_FILE: ${{ github.workspace }}/repo/scripts/compile-check.allow
+          VERDICT_ARTIFACT: ${{ inputs.verdict-artifact }}
+          JUDGE: ${{ inputs.judge-against-baseline }}
+          MW_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+          MW_CONTENT_SHA: ${{ steps.content.outputs.sha }}
         # --refs points at the assemblies unpacked from the platform image — a FLAT directory;
         # compile-check.py globs it recursively, dedupes by filename, and compiles each
         # NodeType's resolved source-set. The script is the PLATFORM's, fetched above.
-        run: python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs
+        # --report only when a verdict artifact was asked for: the flag exists from the platform
+        # ref that introduced satellite-compat, and a caller naming an artifact against an older
+        # platform-ref fails here on the unknown flag — RED, not a silent artifact-less pass.
+        run: |
+          set -euo pipefail
+          if [ "${JUDGE:-false}" = "true" ]; then
+            # One of TWO readings (see judge-against-baseline): report to the judge's input, and
+            # let the exit code through as a fact — the judge below decides the leg's colour.
+            mkdir -p "$RUNNER_TEMP/compat"
+            if python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs --report "$RUNNER_TEMP/compat/new.json"; then
+              echo "new image: the compile gate is green"
+            else
+              echo "new image: the compile gate exited $? — judged against the baseline below, not final here"
+            fi
+          else
+            python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs \
+              ${VERDICT_ARTIFACT:+--report "$RUNNER_TEMP/compile-check-verdict.json"}
+          fi
+      # ───────────── THE CONTROL: the same content against the PREVIOUS image ─────────────
+      # A red compile alone cannot say which side moved. The baseline reading — the image the
+      # fleet is on, with the module bundles that shipped with it — is what turns "does not
+      # compile" into "this build broke it" or "was already broken" (compat-verdict.py's header).
+      - name: Take the BASELINE's framework assemblies from the previous image
+        if: ${{ inputs.judge-against-baseline && inputs.baseline-image-digest != '' }}
+        env:
+          TEST_IMAGE: ${{ inputs.test-image }}
+          BASELINE_DIGEST: ${{ inputs.baseline-image-digest }}
+        run: |
+          set -euo pipefail
+          IMAGE="${TEST_IMAGE%%:*}@${BASELINE_DIGEST}"
+          docker pull -q "$IMAGE"
+          id=$(docker create "$IMAGE")
+          mkdir -p refs-baseline/shared-frameworks
+          docker cp "$id:/app/." refs-baseline/ >/dev/null
+          docker cp "$id:/usr/share/dotnet/shared/." refs-baseline/shared-frameworks/ >/dev/null
+          docker rm -v "$id" >/dev/null
+          echo "baseline framework assemblies: $(find refs-baseline -maxdepth 1 -name 'MeshWeaver.*.dll' | wc -l) from /app of $IMAGE"
+      - name: Download the baseline's module bundles
+        if: ${{ inputs.judge-against-baseline && inputs.baseline-image-digest != '' && inputs.baseline-module-artifacts != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ inputs.baseline-module-artifacts }}
+          path: ${{ runner.temp }}/ref-bundles-baseline
+          merge-multiple: true
+      - name: Add the baseline's modules to the baseline reference set
+        if: ${{ inputs.judge-against-baseline && inputs.baseline-image-digest != '' && inputs.baseline-module-artifacts != '' }}
+        run: |
+          set -euo pipefail
+          BUNDLES="${RUNNER_TEMP:-/tmp}/ref-bundles-baseline"
+          shopt -s nullglob
+          added=0
+          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
+            u="${RUNNER_TEMP:-/tmp}/refunpack-baseline-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
+            unzip -o -q "$b" -d "$u"
+            [ -d "$u/meshweaver/modules" ] || { echo "::error::$(basename "$b"): no meshweaver/modules/ in the baseline bundle"; exit 1; }
+            cp -R "$u"/meshweaver/modules/*.dll refs-baseline/ 2>/dev/null || true
+            added=$((added + 1))
+          done
+          [ "$added" -gt 0 ] || { echo "::error::baseline-module-artifacts matched nothing — a baseline compiled against an image-only set would fail every module-binding type and read as 'already broken'"; exit 1; }
+          echo "baseline reference set topped up from $added bundle(s): $(find refs-baseline -name 'MeshWeaver.*.dll' | wc -l) assemblies"
+      - name: Compile-check every NodeType against the BASELINE image
+        if: ${{ inputs.judge-against-baseline && inputs.baseline-image-digest != '' }}
+        working-directory: repo
+        env:
+          MW_REPO_ROOT: ${{ github.workspace }}/repo
+          MW_ALLOW_FILE: ${{ github.workspace }}/repo/scripts/compile-check.allow
+          MW_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+          MW_CONTENT_SHA: ${{ steps.content.outputs.sha }}
+        # The baseline's exit code is a READING too: a red here is the satellite's state on the set
+        # it already runs, which is the judge's second input, never this leg's colour.
+        run: |
+          set -euo pipefail
+          if python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs-baseline --report "$RUNNER_TEMP/compat/baseline.json"; then
+            echo "baseline image: the compile gate is green"
+          else
+            echo "baseline image: the compile gate exited $? — recorded as the baseline reading"
+          fi
+      # 🚨 THE JUDGE decides the leg's colour: red iff a type compiled at the baseline and does not
+      # now. Fetched at the pinned platform ref like compile-check.py; a caller naming
+      # judge-against-baseline against a platform-ref older than the judge fails here RED.
+      - name: "Judge: did THIS build break it, or was it already broken?"
+        if: ${{ inputs.judge-against-baseline }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_REF: ${{ inputs.platform-ref }}
+          NEW_DIGEST: ${{ inputs.image-digest }}
+          BASELINE_DIGEST: ${{ inputs.baseline-image-digest }}
+          BASELINE_REASON: ${{ inputs.baseline-unavailable-reason }}
+        run: |
+          set -euo pipefail
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compat-verdict.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/compat-verdict.py" \
+            || { echo "::error::could not fetch .github/scripts/compat-verdict.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — judge-against-baseline needs a platform ref that carries the judge"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/compat-verdict.py" | grep -q "compat-verdict" || { echo "::error::the fetched compat-verdict.py at ${PLATFORM_REF} does not look like the judge"; exit 1; }
+          python3 "$RUNNER_TEMP/compat-verdict.py" --self-test
+          if [ -n "$BASELINE_DIGEST" ]; then
+            python3 "$RUNNER_TEMP/compat-verdict.py" --new "$RUNNER_TEMP/compat/new.json" --baseline "$RUNNER_TEMP/compat/baseline.json" \
+              --new-digest "$NEW_DIGEST" --baseline-digest "$BASELINE_DIGEST" --out "$RUNNER_TEMP/compile-check-verdict.json"
+          else
+            python3 "$RUNNER_TEMP/compat-verdict.py" --new "$RUNNER_TEMP/compat/new.json" \
+              --new-digest "$NEW_DIGEST" --baseline-reason "${BASELINE_REASON:-no baseline image was supplied}" --out "$RUNNER_TEMP/compile-check-verdict.json"
+          fi
+      # 🚨 `always()` so a RED gate uploads its verdict too — that is the whole point of the
+      # artifact — and `if-no-files-found: error` so a run that died before writing one fails
+      # here rather than handing the consumer nothing to read. This is a reporter riding a
+      # gate whose result is already decided above, never a step the gate's own colour depends on.
+      - name: Upload the verdict
+        if: ${{ always() && inputs.verdict-artifact != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.verdict-artifact }}
+          path: ${{ runner.temp }}/compile-check-verdict.json
+          retention-days: 7
+          if-no-files-found: error
