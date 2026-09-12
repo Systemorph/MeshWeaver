@@ -72,18 +72,6 @@ repos:
         job: publish-bake
         lane: node-repo-publish-bake.yml
         grants: {contents: read, id-token: write}
-      # The module registry hand-over, moved out of `modules-floor`'s matrix legs to after the whole
-      # validation verdict (MeshWeaver#3878). The lane's one job demands `contents: read`.
-      - workflow: ci.yml
-        job: publish-modules
-        lane: node-repo-module-publish.yml
-        grants: {contents: read}
-        pending: on main since Systemorph/MeshWeaver.Plugins#1663 and REMOVED again by Systemorph/MeshWeaver.Plugins#1676 (per-module deploy — ModuleBuildArchitecture → Per-module deploy, so modules publish on their own verdict, not the whole run's). Compared key for key while main still has it; the marker excuses the absence once #1676 merges — delete this row then.
-      - workflow: ci.yml
-        job: supersede
-        lane: node-repo-supersede.yml
-        grants: {actions: write, contents: read}
-        pending: REMOVED by Systemorph/MeshWeaver.Plugins#1676 — per-module deploy never cancels a main run, so Plugins no longer calls the supersede lane (ModuleBuildArchitecture → Per-module deploy). Compared key for key while main still has it; the marker excuses the absence once #1676 merges — delete this row then.
       - workflow: ci.yml
         job: test-repos
         lane: node-repo-gate.yml
