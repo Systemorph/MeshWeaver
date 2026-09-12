@@ -87,7 +87,7 @@ namespace MeshWeaver.Hosting;
 /// Repros: <c>PathResolutionCachePoisonTest</c>.</para>
 ///
 /// <para><b>Invalidation</b>: the constructor subscribes the optional
-/// <see cref="IMeshChangeFeed"/> (the same post-commit broadcast
+/// <see cref="IMeshInvalidationFeed"/> (the same post-commit invalidation
 /// <c>MeshNodeStreamCache</c> uses). A <see cref="MeshChangeEvent"/> with path
 /// <c>P</c> sweeps every entry whose key equals <c>P</c> or starts with
 /// <c>P + "/"</c> — but what the sweep DOES depends on the kind, because the cache
@@ -107,7 +107,7 @@ namespace MeshWeaver.Hosting;
 ///     during the boot NodeType bake and saturated its in-flight window.</item>
 /// </list>
 /// Iterating the whole dictionary per event is fine — events are rare
-/// relative to resolutions. When no <see cref="IMeshChangeFeed"/> is registered
+/// relative to resolutions. When no <see cref="IMeshInvalidationFeed"/> is registered
 /// (minimal test fixtures) the service does not cache at all and behaves exactly
 /// like the uncached implementation.</para>
 /// </summary>
@@ -134,7 +134,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// <summary>
     /// Positive-only value cache: joined segment path → the resolved
     /// <see cref="CachedResolution"/> (never null). Non-null ONLY when an
-    /// <see cref="IMeshChangeFeed"/> is registered — without the invalidation
+    /// <see cref="IMeshInvalidationFeed"/> is registered — without the invalidation
     /// signal, caching would serve stale routes forever, so the service then
     /// resolves uncached (exactly the pre-cache behaviour). Storing the VALUE (not
     /// the in-flight observable) means a hung / errored / null resolution caches
@@ -184,12 +184,17 @@ internal class PathResolutionService : IPathResolver, IDisposable
         // Optional service (same pattern as MeshNodeStreamCache): minimal test
         // fixtures without the feed registration get NO cache — never a cache
         // without its invalidation signal.
-        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-        if (changeFeed is not null)
+        var invalidationFeed = hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
+        var legacyFeed = invalidationFeed is null
+            ? hub.ServiceProvider.GetService<IMeshChangeFeed>()
+            : null;
+        if (invalidationFeed is not null || legacyFeed is not null)
         {
             _resolutionCache = new ConcurrentDictionary<string, CachedResolution>(StringComparer.Ordinal);
             _pendingFills = new ConcurrentDictionary<string, PendingFill>(StringComparer.Ordinal);
-            _changeFeedSubscription = changeFeed.Subscribe(OnMeshChange);
+            _changeFeedSubscription = invalidationFeed is not null
+                ? invalidationFeed.Subscribe(OnMeshChange)
+                : legacyFeed!.Subscribe(OnMeshChange);
         }
         // Gates the partition-root MeshNode synthesis below — we only fall back
         // to a placeholder when at least one writable provider could plausibly
@@ -431,7 +436,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// synchronously on Subscribe — the Blazor skip-progress contract). A miss runs
     /// <see cref="ResolveSegmentsCore"/> and stores ONLY a non-null result, so a
     /// null / errored / never-emitting query caches nothing and can never poison the
-    /// path (see the class doc). Without a registered <see cref="IMeshChangeFeed"/>
+    /// path (see the class doc). Without a registered <see cref="IMeshInvalidationFeed"/>
     /// there is no cache and every call queries.
     ///
     /// <para>🚨 The <see cref="SynthesizePartitionRoot"/> fallback is appended HERE, past
