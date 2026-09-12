@@ -171,6 +171,77 @@ they pass `--ago 7d`.
 So every protected manifest is expanded to its closure: an index pulls in its platform manifests,
 transitively, and a closure that could not be enumerated is a blocker rather than an empty one.
 
+## How exposed this actually is — sized 2026-09-12, read-only
+
+Worth having in one place, because the intuition about `--keep` is wrong in a way that makes the
+exposure look both larger today and smaller later than it is.
+
+**`--keep` is applied AFTER `--ago`, over the eligible set only.** From `getTagsToDelete`:
+
+```go
+if lastUpdateTime.Before(timeToCompare) {
+    if includeLocked || (*(*tag.ChangeableAttributes).DeleteEnabled && *(*tag.ChangeableAttributes).WriteEnabled) {
+        tagsEligibleForDeletion = append(tagsEligibleForDeletion, tag)
+    }
+}
+…
+for _, tag := range tagsEligibleForDeletion {
+    if skippedTagsCount < keep { skippedTagsCount++ } else { tagsToDelete = append(tagsToDelete, tag) }
+}
+```
+
+So `--keep 10` does **not** mean "the ten newest tags in the repository". It means "of the tags
+already older than `--ago`, spare the ten newest". A tag younger than seven days is never eligible,
+however many newer builds exist — and a tag older than seven days is spared only until ten more
+tags cross the same line behind it. The timestamp compared is the **tag's** `lastUpdateTime`, not
+the manifest's creation and not a pull time.
+
+| Measured on `memex-portal-ai`, 2026-09-12T09:09Z | |
+|---|---|
+| tags | **1,402** |
+| …with both `deleteEnabled` and `writeEnabled` true (acr-cli needs both) | **1,402 — none locked** |
+| publication rate, mean over the 7 complete days before | **193.1 tags/day** |
+| …so the 10-tag keep window is consumed in | **1.2 h** |
+| oldest tag in the repository | **exactly 7 days** |
+| eligible at a run right now | 49 |
+| deleted at a run right now | 39, none version-shaped |
+
+The last two rows are the ones that matter: **the repository is already in steady state at a hard
+seven-day horizon.** `--ago 7d` is the entire policy; `--keep` is noise at this publication rate.
+
+### The worked case, and why it is one run rather than two
+
+`3.0.0-ci.8372` is what `memex` runs and what both overlays pinned. Its six tags cross the seven-day
+line within **2m46s** of each other:
+
+```
+18:06:02  staging-74d4c85-…-linux-x64     → child sha256:3296b0ba…  (linux/amd64)
+18:07:16  staging-74d4c85-…-linux-arm64   → child sha256:322de2ff…  (linux/arm64)
+18:07:17  staging-74d4c85-34627334628     → the index sha256:0217fd11… (LOCKED)
+18:08:10  74d4c85 / 74d4c85-p24c2d02      → the index
+18:08:48  3.0.0-ci.8372                   → the index
+```
+
+so the **same** 03:00 run strips the children's tags in `purgeTags`, then re-lists manifests, finds
+the children untagged and past the cutoff — and skips the locked parent index before the walk that
+would have ignore-listed them. What survives is a locked index pointing at two manifests that no
+longer exist.
+
+**The consequence is recoverable for the minutes between those two phases and not afterwards.** While
+the index manifest is intact, `docker buildx imagetools create --tag <repo>:<tag> <repo>@<digest>`
+restores the reference. Once the platform manifests are gone, only a rebuild does.
+
+And what breaks meanwhile is narrower than "nothing can start": the portal container carries
+`imagePullPolicy: "IfNotPresent"`, so a pod restarting on a node that still holds the layers starts
+without pulling. That reprieve is node-local and not durable — kubelet garbage-collects unused images
+under disk pressure. What fails for certain is a pod scheduled onto a node without them (scale-up,
+node upgrade or replacement, eviction, a new nodepool) and the migration Job, whose tag helm derives
+from the portal's (Memex#219's measured case: 639 `ImagePullBackOff` in 146 minutes, unalerted).
+
+🚨 **And the instance whose index is not locked at all is the more exposed one.** Measured the same
+morning, `memex-cloud` runs `3.0.0-ci.8403` / `sha256:81fe4f29…` with `deleteEnabled: true` on the
+index itself.
+
 ## The instrument is measured, not inferred from the fleet
 
 The old axis-1 rule read: *"six repositories pinned a digest on 2026-09-06, so zero means the
