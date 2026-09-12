@@ -102,6 +102,10 @@ name: Node repo publish-bake (reusable)
 #       azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 #       stage-repo-app-id: ${{ secrets.MESHWEAVER_APP_ID }}
 #       stage-repo-app-private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+#       # The fleet registry's publisher (cr.meshweaver.cloud): the sealed publication is pushed
+#       # there after the share seal. Provision MW_REGISTRY_PUBLISHER_PASSWORD in BOTH secret
+#       # stores of the calling repo (Actions AND Dependabot); the lane's preflight asserts it RED.
+#       bundle-registry-publisher-password: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
 #
 # The real topology, and the order it produces without any central scheduler:
 #
@@ -375,6 +379,25 @@ on:
         required: false
         type: string
         default: ''
+      bundle-registry:
+        description: >-
+          The fleet's own OCI registry the sealed publication is pushed to, as ONE image index per
+          source × framework identity (Doc/Architecture/PluginBundlesInTheRegistry), after the
+          share seal succeeds. The default is the fleet registry; core's main-cd.yml carries the
+          same host as env.REGISTRY — keep the two equal. Empty is REFUSED by the preflight: the
+          share copy is kept only until every consumer reads the registry, and a lane that
+          publishes to the shares alone leaves every cr-consuming installation without this
+          source's bundles.
+        required: false
+        type: string
+        default: 'cr.meshweaver.cloud'
+      bundle-registry-publisher:
+        description: >-
+          The registry's publisher account — docker_auth's one static user that may push
+          (`registry.publisher.username` in the chart).
+        required: false
+        type: string
+        default: 'publisher'
     secrets:
       acr-username:
         description: >-
@@ -433,6 +456,14 @@ on:
       content-app-private-key:
         description: Private key (PEM) of that App.
         required: false
+      bundle-registry-publisher-password:
+        description: >-
+          The fleet registry's publisher password (the caller's MW_REGISTRY_PUBLISHER_PASSWORD;
+          the value is Key Vault 'Systemorph' → memexcloud-Registry-PublisherPassword). Declared
+          optional so that a caller which omits it fails in THIS lane's preflight, RED, naming the
+          secret and both stores — never as a workflow startup failure that names nothing. Provision
+          it in the calling repo's Actions AND Dependabot secret stores.
+        required: false
 
 jobs:
   publish-bake:
@@ -453,6 +484,9 @@ jobs:
       # against the SAME one, so it travels in the dispatch payload (client_payload.platform_image).
       platform: ${{ steps.platform.outputs.ref }}
       identity: ${{ steps.identity.outputs.identity }}
+      # The OCI index digest the fleet registry now names for this publication (plugins/<source>:
+      # <identity>) — printed by register-publication; the record carries no field for it yet.
+      bundle_index_digest: ${{ steps.registry.outputs.index_digest }}
     permissions:
       contents: read
       id-token: write     # azure/login OIDC — no long-lived storage secret in any node repo
@@ -479,6 +513,9 @@ jobs:
           REGISTRY_URL_IN: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
           PLATFORM_IMAGE: ${{ inputs.platform-image }}
+          BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
+          BUNDLE_REGISTRY_PUBLISHER: ${{ inputs.bundle-registry-publisher }}
+          BUNDLE_REGISTRY_PUBLISHER_PASSWORD: ${{ secrets.bundle-registry-publisher-password }}
         run: |
           set -euo pipefail
           missing=()
@@ -533,6 +570,15 @@ jobs:
           if [ "${NARROW:-false}" = "true" ] && [ -n "${PRE_BAKE:-}" ]; then
             missing+=("narrow-by-affected and pre-bake-script are mutually exclusive — a hook that builds its own bake mount owns its composition, so the affected closure cannot also decide it. Drop one.")
           fi
+          # 🚨 The fleet registry (Doc/Architecture/PluginBundlesInTheRegistry): the sealed
+          # publication is pushed there after the share seal, and every cr-consuming installation
+          # reads it from there. Asserted HERE, before the bake, RED — never found as `unauthorized`
+          # after twenty minutes of compile, and never skipped: a publication that reaches the
+          # shares and not the registry is invisible to those installations with nothing red.
+          # Both stores: a Dependabot-triggered run reads Settings → Secrets → Dependabot only.
+          [ -n "${BUNDLE_REGISTRY:-}" ]           || missing+=("bundle-registry (input) — the fleet registry host (default cr.meshweaver.cloud); an empty value publishes to the shares alone, which no cr-consuming installation can read")
+          [ -n "${BUNDLE_REGISTRY_PUBLISHER:-}" ] || missing+=("bundle-registry-publisher (input) — the registry's publisher account name (default 'publisher')")
+          [ -n "${BUNDLE_REGISTRY_PUBLISHER_PASSWORD:-}" ] || missing+=("bundle-registry-publisher-password (secret, the caller's MW_REGISTRY_PUBLISHER_PASSWORD) — the fleet registry's publisher password (Key Vault 'Systemorph' → memexcloud-Registry-PublisherPassword). Provision it in BOTH stores of the calling repository: gh secret set MW_REGISTRY_PUBLISHER_PASSWORD --repo ${GITHUB_REPOSITORY} (Actions) AND gh secret set MW_REGISTRY_PUBLISHER_PASSWORD --app dependabot --repo ${GITHUB_REPOSITORY} (Dependabot), then pass it as bundle-registry-publisher-password on the uses: job")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::The bake publication cannot reach any portal — required credentials are not provisioned. This job fails RED rather than skipping: a grey skip is indistinguishable from a pass and would silently leave every portal re-compiling this repo's content at boot."
             for m in "${missing[@]}"; do echo "::error::missing: ${m}"; done
@@ -1439,6 +1485,9 @@ jobs:
           # flat (the default) or generation — see the `publication-layout` input. At `flat` the
           # script behaves byte-identically to before this input existed.
           BAKE_PUBLICATION_LAYOUT: ${{ inputs.publication-layout }}
+          # The exact publication, materialised locally AFTER every share sealed — the directory
+          # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).
+          BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
         # Contract: layout <base>/prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip,
         # every bundle first, the `_complete` sentinel strictly LAST; an already-sealed identity
         # with the same source sha skips (the surface identity is breaking-change-keyed, so
@@ -1453,6 +1502,51 @@ jobs:
             echo "- identity: \`$(cat "$BAKE_DIR/framework-mvid.txt")\`"
             echo "- source: \`${{ inputs.bake-source }}\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+      # ───────── THE SAME SEALED SET, TO THE FLEET REGISTRY (Doc/Architecture/PluginBundlesInTheRegistry) ─────────
+      # After the share seal succeeded — never before, and never instead: the share copy is kept
+      # until every consumer reads the registry (the `bundle-fetch` init container reads cr;
+      # ShippedPrebuiltBundles still reads the share). What is pushed is the directory
+      # publish-bake-bundles.sh materialised from its own verified upload plan
+      # (BAKE_PUBLICATION_DIR), so the registry and the shares hold ONE set — one OCI index
+      # `plugins/<source>:<identity>`, the immutable `<identity>-<run>` tag beside it, the tag move
+      # LAST as the seal. `--skip-if-published` is the registry's sealed-skip, keyed on content ×
+      # identity exactly as the share's. Same `if:` as the publish above: a run whose scope is
+      # `none` verified the shares already hold this content and publishes to neither.
+      #
+      # The scripts come from the platform checkout at `platform-ref` beside publish-bake-bundles.sh
+      # — the three move together (the publisher expects the layout the share script materialises).
+      # ORAS is installed PINNED by the platform's install-oras.sh (the harness executes the
+      # publisher with the same pin); the login is docker's, so ORAS reads the same credential.
+      - name: Install ORAS (pinned, from the platform checkout)
+        if: steps.scope.outputs.scope != 'none'
+        run: bash mw-platform/.github/scripts/install-oras.sh
+      - name: Log in to the fleet registry (publisher)
+        if: steps.scope.outputs.scope != 'none'
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.bundle-registry-publisher-password }}
+        run: bash mw-platform/.github/scripts/registry-login.sh "${{ inputs.bundle-registry }}" "${{ inputs.bundle-registry-publisher }}"
+      - name: "Push the sealed publication to the fleet registry (plugins/<source>:<identity>)"
+        id: registry
+        if: steps.scope.outputs.scope != 'none'
+        env:
+          BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
+          BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
+          SOURCE: ${{ inputs.bake-source }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+        run: |
+          set -euo pipefail
+          [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to $BUNDLE_REGISTRY. (A platform-ref older than the publisher does not write it: move platform-ref forward.)"; exit 1; }
+          [ "$(cat "$BAKE_DIR/framework-mvid.txt")" = "$IDENTITY" ] || { echo "::error::the bake's framework-mvid.txt ($(cat "$BAKE_DIR/framework-mvid.txt")) is not the identity this lane resolved ($IDENTITY) — refusing to tag the publication under an identity the bytes did not resolve"; exit 1; }
+          LOG="${RUNNER_TEMP:-/tmp}/registry-publication.log"
+          # `set -o pipefail` above: the publisher's exit code survives the tee. Its
+          # `index_digest` output lands in $GITHUB_OUTPUT (this step's id is `registry`).
+          mw-platform/.github/scripts/push-bundle-publication.sh \
+            --registry "$BUNDLE_REGISTRY" --source "$SOURCE" --identity "$IDENTITY" \
+            --dir "$BAKE_PUBLICATION_DIR" --tag-run "$GITHUB_RUN_ID" --skip-if-published 2>&1 | tee "$LOG"
+          index=$(sed -n 's/^bundle-publication: index=\([^ ]*\).*/\1/p' "$LOG" | tail -n 1)
+          case "$index" in sha256:*) ;; *) echo "::error::the publisher printed no index digest (got '${index:-<nothing>}') — the publication cannot be named, so it is not published"; exit 1 ;; esac
+          source_lc=$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')
+          echo "- fleet registry: \`$BUNDLE_REGISTRY/plugins/$source_lc:$IDENTITY\` = \`$index\` (immutable tag \`$IDENTITY-$GITHUB_RUN_ID\`)" >> "$GITHUB_STEP_SUMMARY"
 
       # ────────────────── NO DEPENDENT DISPATCH: the wave is PULLED ──────────────────
       # This used to POST an upstream-published event to repos named by `dependent-repos`,
@@ -1521,9 +1615,30 @@ jobs:
           RELEASED_VERSION: ${{ needs.publish-bake.outputs.version }}
           SELF: ${{ inputs.content-repository || github.repository }}
           UPSTREAMS: ${{ inputs.upstream-sources }}
+          BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
+          INDEX_DIGEST: ${{ needs.publish-bake.outputs.bundle_index_digest }}
         run: |
           set -euo pipefail
           RESP="${RESP:-/tmp/resp}"
+          # The OCI index the fleet registry names for this publication. PRINTED, not sent: the
+          # bundle-publication record (BundlePublication in the Hosting module) carries no field
+          # for it yet — Doc/Architecture/PluginBundlesInTheRegistry → Publishing says what is
+          # still to be added. An empty value here is RED: publish-bake pushed the publication
+          # before this job ran, so a record without its digest is a lane whose output wiring broke.
+          # Conditional on the fleet-registry push having been attempted: if we pushed to the fleet
+          # registry we must have its index digest; a repo not publishing there has none to demand.
+          # BUNDLE_REGISTRY is the right key, measured by content (2026-09-12): the push step
+          # (`registry`, publish-bake) runs on `steps.scope.outputs.scope != 'none'` — the SAME
+          # condition as the share publish whose `published` output is this job's `if:` — and pushes
+          # to `--registry "$BUNDLE_REGISTRY"`, the identical `inputs.bundle-registry` read here, which
+          # publish-bake's unconditional preflight refuses when empty. So on the lane a push happened
+          # iff this job runs, with this value non-empty: no path pushes with the assertion disabled.
+          # The guard closes only for a caller that never entered the lane's preflight — the harness in
+          # PluginPublicationProvenanceTest, which executes this step's shell without a registry.
+          if [ -n "${BUNDLE_REGISTRY:-}" ]; then
+            [ -n "${INDEX_DIGEST:-}" ] || { echo "::error::publish-bake reported no fleet-registry index digest (bundle_index_digest) although it published — the registry push step's output did not reach this job; the record below would name a publication the registry cannot be asked about."; exit 1; }
+            echo "fleet registry: $BUNDLE_REGISTRY/plugins/$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')@$INDEX_DIGEST (identity ${IDENTITY:-?}) — not yet a field of the bundle-publication record"
+          fi
           missing=()
           [ -n "${URL:-}" ]    || missing+=("webhook-url (input) — the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds (core CD: vars.PLATFORM_WEBHOOK_URL)")
           [ -n "${SECRET:-}" ] || missing+=("webhook-secret (secret) — the shared HMAC, byte-identical to the instance's Hosting:PlatformWebhookSecret (core CD: secrets.PLATFORM_WEBHOOK_SECRET)")
@@ -1562,6 +1677,7 @@ jobs:
               {
                 echo "### 📣 Publication registered with memex (HTTP $code)"
                 echo "- source: \`$SOURCE\`  identity: \`${IDENTITY:-?}\`  image: \`$IMAGE\`  platform: \`$PLATFORM_IMAGE\`"
+                [ -z "${BUNDLE_REGISTRY:-}" ] || echo "- fleet registry index: \`$BUNDLE_REGISTRY/plugins/$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')@$INDEX_DIGEST\` (printed; not yet a field of the record)"
                 echo "memex STORED the record. Whether it dispatched meshweaver-upstream-published is read on memex and on the dependents, never here."
                 verdict=$(tr -d '\n' < "$RESP" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
                 echo "- signature: **${verdict:-(the answer carried no verdict)}** — judged in the next step."
