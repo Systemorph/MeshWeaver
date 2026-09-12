@@ -327,6 +327,20 @@ name: node-repo module pack
 #     mount is read in place. The ONE step in `pack` that needs `gh` (`gh run download`, the
 #     ledger's REUSE leg) fails RED naming what is missing; it never skips. Nothing in `pack` or
 #     `tests` needs Docker.
+#   * 🚨 AND IT SHIPS NO BROWSER — the fact that cost six tests, 2026-09-12. `ubuntu-latest` carries
+#     Google Chrome, so the pixel-faithful export suites have always found one without anyone
+#     arranging it; the ARC image has nothing at any of the five paths they read
+#     (`/usr/bin/{chromium,chromium-browser,google-chrome,google-chrome-stable,microsoft-edge}`,
+#     after `CHROME_BIN` and `PUPPETEER_EXECUTABLE_PATH`). The first leg moved to `aks-silos-dind`
+#     turned 6 of 201 `MeshWeaver.Markdown.Export` tests red with "Pixel-faithful export needs a
+#     headless Chromium on the server and none is configured" (MeshWeaver.Plugins#1736, run
+#     34700003866) — and `apt-get install chromium` does NOT fix it: noble has no such package, and
+#     its `chromium-browser` is a snap TRANSITIONAL (`Pre-Depends: snapd`) that cannot work in a
+#     pod. So `pack` and `tests` each install google-chrome-stable and export `CHROME_BIN` before
+#     their suite whenever `runner` is anything but `ubuntu-latest`, LAUNCH it to prove it, and go
+#     RED by name when they cannot. Measured cost on a live `aks-silos-dind` runner: see the step.
+#     INTERIM — Systemorph/Memex#323 bakes the browser into our own runner image and deletes both
+#     steps; until then the step's PRESENT branch is already the shape it degrades to.
 #
 # The runner POD is not the node. The scale set requests 500m / 4Gi and LIMITS each runner to
 # 2 vCPU / 6 GiB (the node behind it is 16 vCPU / 62 GiB, shared with the portals). A suite that
@@ -3026,6 +3040,96 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # ─────── A HEADLESS BROWSER — SELF-HOSTED RUNNERS ONLY (interim: Memex#323) ───────
+      # 🚨 INTERIM, and it has a named end: Systemorph/Memex#323 ("bake the toolchain into our own
+      # runner image") puts a browser in the image the ARC scale sets run, and DELETES this step
+      # whole. Until then every self-hosted leg pays the install.
+      #
+      # `ubuntu-latest` ships Google Chrome and is excluded here, so the default caller's behaviour
+      # is byte-identical to before this step existed. The stock
+      # `ghcr.io/actions/actions-runner:2.337.0` image (Ubuntu 24.04, uid 1001, passwordless sudo,
+      # EMPTY apt lists) carries NOTHING at any of the five paths the pixel-faithful export suites
+      # read — so the first leg moved to `aks-silos-dind` turned 6 of 201
+      # `MeshWeaver.Markdown.Export` tests red with "Pixel-faithful export needs a headless
+      # Chromium on the server and none is configured" (MeshWeaver.Plugins#1736, run 34700003866).
+      #
+      # 🚨 INLINE, not a script in `.github/scripts/`, and that is not a style choice. Both jobs
+      # check core out at `inputs.platform-ref` — the newest SEALED set, hours behind this lane,
+      # which arrives from `@main` (MeshWeaver#3842, and the `select` job's own note about "a
+      # workflow newer than the checkout"). A new file would be absent from that checkout and this
+      # step would die `exit 127` until a set seals. `github.job_workflow_sha` cannot rescue it
+      # either: measured EMPTY inside a reusable called from another repo (Plugins#1566). The block
+      # is therefore duplicated in `pack` and `tests` — BYTE-IDENTICAL, and
+      # ModuleSuiteLaneGuard.TheBrowserStep_IsOneImplementation refuses a run where it is not.
+      #
+      # google-chrome-stable, NOT `apt-get install chromium`: measured inside the runner image,
+      # noble has no `chromium` package at all and `chromium-browser` is `2:1snap1-0ubuntu2`,
+      # `Pre-Depends: snapd`, "Transitional package - chromium-browser -> chromium snap" — in a pod
+      # that gets you a snap stub and no browser. The .deb straight from dl.google.com is one HTTPS
+      # fetch from the same host that would serve the repository key (the image ships no `gnupg`).
+      #
+      # WHAT IT COSTS, measured on live runners on 2026-09-12 (Memex runner-proof dispatches, both
+      # labels, Ubuntu 24.04 pods, cold — an ARC runner is EPHEMERAL, so every leg pays it):
+      #     aks-silos-dind (6 vCPU/20 GiB pod): apt-get update 4.7s + download 2.2s + install 46.2s
+      #     aks-silos      (4 vCPU/12 GiB pod): apt-get update 4.7s + download 2.7s + install 51.0s
+      # ⇒ ~53-58 s per leg, nearly all of it dpkg unpacking Chrome and its ~25 dependencies. That
+      # is the price of the interim, and it is the number Memex#323 buys back.
+      #
+      # 🚨 AND IT PROVES THE RESULT BY LAUNCHING IT, on both branches. A browser that is present but
+      # cannot spawn its zygote reads to the suite exactly like a missing one — six tests later, in
+      # a module nobody was editing. So this step renders `about:blank` the way the suite will and
+      # goes RED BY NAME when it cannot, naming the sandbox when that is what the stderr says.
+      - name: A headless browser for the pixel-export suites
+        # Same `if:` as the inline suite below, plus the runner gate: on a PUBLISHING run the
+        # suite runs HERE, so the browser must be here too or trunk breaks the way the PR lane did.
+        if: ${{ inputs.runner != 'ubuntu-latest' && inputs.publish && steps.plan.outputs.need_test == 'true' }}
+        env:
+          CHROME_DEB: https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        run: |
+          set -euo pipefail
+          # The five paths, in this order, behind the same two environment variables, as
+          # MeshWeaver.Plugins src/MeshWeaver.Markdown.Export/Pixel/PixelRenderingOptions.cs. This
+          # list is a COPY OF A CONTRACT: a browser installed anywhere that file does not look is
+          # not installed at all.
+          paths=("${CHROME_BIN:-}" "${PUPPETEER_EXECUTABLE_PATH:-}"
+                 /usr/bin/chromium /usr/bin/chromium-browser
+                 /usr/bin/google-chrome /usr/bin/google-chrome-stable /usr/bin/microsoft-edge)
+          find_browser() { local p; for p in "${paths[@]}"; do if [ -n "$p" ] && [ -x "$p" ]; then printf '%s' "$p"; return 0; fi; done; return 1; }
+          browser="$(find_browser || true)"
+          if [ -n "$browser" ]; then
+            took="PRESENT — the image already carries $browser; nothing installed"
+          else
+            [ "$(uname -m)" = "x86_64" ] || { echo "::error::no browser at any path the export suite reads and this runner is $(uname -m); the google-chrome-stable .deb is amd64-only. Bake one into the runner image (Systemorph/Memex#323) or run this leg on ubuntu-latest."; exit 1; }
+            command -v sudo > /dev/null || { echo "::error::no browser on this runner and no sudo with which to install one."; exit 1; }
+            sudo -n true || { echo "::error::no browser on this runner and sudo is not passwordless here, so one cannot be installed."; exit 1; }
+            echo "no browser at any of: ${paths[*]} — installing google-chrome-stable"
+            sudo apt-get update -qq || { echo "::error::apt-get update failed, so google-chrome-stable's runtime dependencies cannot be resolved and no browser can be installed."; exit 1; }
+            curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused -o "$RUNNER_TEMP/chrome.deb" "$CHROME_DEB" || { echo "::error::could not download the google-chrome-stable .deb from dl.google.com."; exit 1; }
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$RUNNER_TEMP/chrome.deb" || { echo "::error::apt-get could not install the google-chrome-stable .deb (its ~25 runtime dependencies come from the Ubuntu archive)."; exit 1; }
+            browser="$(find_browser || true)"
+            [ -n "$browser" ] || { echo "::error::google-chrome-stable installed without error, yet none of ${paths[*]} is executable. The suite reads exactly those paths, so this is still a runner with no browser."; exit 1; }
+            took="INSTALLED google-chrome-stable in ${SECONDS}s"
+          fi
+          # 🚨 THE ASSERTION. Launched the way the suite will launch it: the renderer adds
+          # `--no-sandbox` only when it runs as ROOT (HeadlessChromiumPdfRenderer, "as root the
+          # sandbox is not a choice"), and a self-hosted runner is uid 1001 — so if this pod cannot
+          # give Chromium a sandbox, the suite dies and this must die with it, HERE, by name.
+          # (Measured 2026-09-12 on both labels: the SUID sandbox at /opt/google/chrome/chrome-sandbox
+          # works in these pods — headless render and --print-to-pdf both exit 0 WITHOUT the flag —
+          # so nothing here needs MarkdownExport:PixelRendering:NoSandbox today. The day a pod
+          # hardens past it, this line is what says so instead of six red tests.)
+          work="$RUNNER_TEMP/chrome-smoke"; rm -rf "$work"; mkdir -p "$work"
+          if ! "$browser" --headless=new --disable-gpu --no-first-run --no-default-browser-check \
+                 --user-data-dir="$work/profile" --dump-dom about:blank \
+                 > "$work/dom.html" 2> "$work/stderr.txt"; then
+            echo "----- the browser's own stderr -----"; tail -20 "$work/stderr.txt"
+            echo "::error::'$browser' is on the runner but did NOT start headless (its stderr is above). A present-but-unlaunchable browser reads to the suite exactly like a missing one, six tests later. If that stderr names the zygote or the sandbox, this pod cannot give Chromium a namespace or SUID sandbox and the module needs MarkdownExport:PixelRendering:NoSandbox — a decision for the module, not one this step may take silently."
+            exit 1
+          fi
+          grep -q "<html" "$work/dom.html" || { echo "::error::'$browser' exited 0 but rendered no document (--dump-dom of about:blank produced $(wc -c < "$work/dom.html") bytes with no <html>). It is not a usable headless browser."; exit 1; }
+          printf 'CHROME_BIN=%s\n' "$browser" >> "$GITHUB_ENV"
+          echo "$took"
+          echo "CHROME_BIN=$browser ($("$browser" --version)) — launched headless OK; ${SECONDS}s in this step"
       # ═══════ THE SUITES, INLINE — ON A PUBLISHING RUN ONLY (see the `tests` job below) ═══════
       # 🚨 Only when THIS diff reaches the module (or on a full run): a floor-only entry — built
       # because the caller's gates compose it — carries test=false from the selection, and its
@@ -3771,6 +3875,94 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
+      # ─────── A HEADLESS BROWSER — SELF-HOSTED RUNNERS ONLY (interim: Memex#323) ───────
+      # 🚨 INTERIM, and it has a named end: Systemorph/Memex#323 ("bake the toolchain into our own
+      # runner image") puts a browser in the image the ARC scale sets run, and DELETES this step
+      # whole. Until then every self-hosted leg pays the install.
+      #
+      # `ubuntu-latest` ships Google Chrome and is excluded here, so the default caller's behaviour
+      # is byte-identical to before this step existed. The stock
+      # `ghcr.io/actions/actions-runner:2.337.0` image (Ubuntu 24.04, uid 1001, passwordless sudo,
+      # EMPTY apt lists) carries NOTHING at any of the five paths the pixel-faithful export suites
+      # read — so the first leg moved to `aks-silos-dind` turned 6 of 201
+      # `MeshWeaver.Markdown.Export` tests red with "Pixel-faithful export needs a headless
+      # Chromium on the server and none is configured" (MeshWeaver.Plugins#1736, run 34700003866).
+      #
+      # 🚨 INLINE, not a script in `.github/scripts/`, and that is not a style choice. Both jobs
+      # check core out at `inputs.platform-ref` — the newest SEALED set, hours behind this lane,
+      # which arrives from `@main` (MeshWeaver#3842, and the `select` job's own note about "a
+      # workflow newer than the checkout"). A new file would be absent from that checkout and this
+      # step would die `exit 127` until a set seals. `github.job_workflow_sha` cannot rescue it
+      # either: measured EMPTY inside a reusable called from another repo (Plugins#1566). The block
+      # is therefore duplicated in `pack` and `tests` — BYTE-IDENTICAL, and
+      # ModuleSuiteLaneGuard.TheBrowserStep_IsOneImplementation refuses a run where it is not.
+      #
+      # google-chrome-stable, NOT `apt-get install chromium`: measured inside the runner image,
+      # noble has no `chromium` package at all and `chromium-browser` is `2:1snap1-0ubuntu2`,
+      # `Pre-Depends: snapd`, "Transitional package - chromium-browser -> chromium snap" — in a pod
+      # that gets you a snap stub and no browser. The .deb straight from dl.google.com is one HTTPS
+      # fetch from the same host that would serve the repository key (the image ships no `gnupg`).
+      #
+      # WHAT IT COSTS, measured on live runners on 2026-09-12 (Memex runner-proof dispatches, both
+      # labels, Ubuntu 24.04 pods, cold — an ARC runner is EPHEMERAL, so every leg pays it):
+      #     aks-silos-dind (6 vCPU/20 GiB pod): apt-get update 4.7s + download 2.2s + install 46.2s
+      #     aks-silos      (4 vCPU/12 GiB pod): apt-get update 4.7s + download 2.7s + install 51.0s
+      # ⇒ ~53-58 s per leg, nearly all of it dpkg unpacking Chrome and its ~25 dependencies. That
+      # is the price of the interim, and it is the number Memex#323 buys back.
+      #
+      # 🚨 AND IT PROVES THE RESULT BY LAUNCHING IT, on both branches. A browser that is present but
+      # cannot spawn its zygote reads to the suite exactly like a missing one — six tests later, in
+      # a module nobody was editing. So this step renders `about:blank` the way the suite will and
+      # goes RED BY NAME when it cannot, naming the sandbox when that is what the stderr says.
+      - name: A headless browser for the pixel-export suites
+        if: inputs.runner != 'ubuntu-latest'
+        env:
+          CHROME_DEB: https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        run: |
+          set -euo pipefail
+          # The five paths, in this order, behind the same two environment variables, as
+          # MeshWeaver.Plugins src/MeshWeaver.Markdown.Export/Pixel/PixelRenderingOptions.cs. This
+          # list is a COPY OF A CONTRACT: a browser installed anywhere that file does not look is
+          # not installed at all.
+          paths=("${CHROME_BIN:-}" "${PUPPETEER_EXECUTABLE_PATH:-}"
+                 /usr/bin/chromium /usr/bin/chromium-browser
+                 /usr/bin/google-chrome /usr/bin/google-chrome-stable /usr/bin/microsoft-edge)
+          find_browser() { local p; for p in "${paths[@]}"; do if [ -n "$p" ] && [ -x "$p" ]; then printf '%s' "$p"; return 0; fi; done; return 1; }
+          browser="$(find_browser || true)"
+          if [ -n "$browser" ]; then
+            took="PRESENT — the image already carries $browser; nothing installed"
+          else
+            [ "$(uname -m)" = "x86_64" ] || { echo "::error::no browser at any path the export suite reads and this runner is $(uname -m); the google-chrome-stable .deb is amd64-only. Bake one into the runner image (Systemorph/Memex#323) or run this leg on ubuntu-latest."; exit 1; }
+            command -v sudo > /dev/null || { echo "::error::no browser on this runner and no sudo with which to install one."; exit 1; }
+            sudo -n true || { echo "::error::no browser on this runner and sudo is not passwordless here, so one cannot be installed."; exit 1; }
+            echo "no browser at any of: ${paths[*]} — installing google-chrome-stable"
+            sudo apt-get update -qq || { echo "::error::apt-get update failed, so google-chrome-stable's runtime dependencies cannot be resolved and no browser can be installed."; exit 1; }
+            curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused -o "$RUNNER_TEMP/chrome.deb" "$CHROME_DEB" || { echo "::error::could not download the google-chrome-stable .deb from dl.google.com."; exit 1; }
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$RUNNER_TEMP/chrome.deb" || { echo "::error::apt-get could not install the google-chrome-stable .deb (its ~25 runtime dependencies come from the Ubuntu archive)."; exit 1; }
+            browser="$(find_browser || true)"
+            [ -n "$browser" ] || { echo "::error::google-chrome-stable installed without error, yet none of ${paths[*]} is executable. The suite reads exactly those paths, so this is still a runner with no browser."; exit 1; }
+            took="INSTALLED google-chrome-stable in ${SECONDS}s"
+          fi
+          # 🚨 THE ASSERTION. Launched the way the suite will launch it: the renderer adds
+          # `--no-sandbox` only when it runs as ROOT (HeadlessChromiumPdfRenderer, "as root the
+          # sandbox is not a choice"), and a self-hosted runner is uid 1001 — so if this pod cannot
+          # give Chromium a sandbox, the suite dies and this must die with it, HERE, by name.
+          # (Measured 2026-09-12 on both labels: the SUID sandbox at /opt/google/chrome/chrome-sandbox
+          # works in these pods — headless render and --print-to-pdf both exit 0 WITHOUT the flag —
+          # so nothing here needs MarkdownExport:PixelRendering:NoSandbox today. The day a pod
+          # hardens past it, this line is what says so instead of six red tests.)
+          work="$RUNNER_TEMP/chrome-smoke"; rm -rf "$work"; mkdir -p "$work"
+          if ! "$browser" --headless=new --disable-gpu --no-first-run --no-default-browser-check \
+                 --user-data-dir="$work/profile" --dump-dom about:blank \
+                 > "$work/dom.html" 2> "$work/stderr.txt"; then
+            echo "----- the browser's own stderr -----"; tail -20 "$work/stderr.txt"
+            echo "::error::'$browser' is on the runner but did NOT start headless (its stderr is above). A present-but-unlaunchable browser reads to the suite exactly like a missing one, six tests later. If that stderr names the zygote or the sandbox, this pod cannot give Chromium a namespace or SUID sandbox and the module needs MarkdownExport:PixelRendering:NoSandbox — a decision for the module, not one this step may take silently."
+            exit 1
+          fi
+          grep -q "<html" "$work/dom.html" || { echo "::error::'$browser' exited 0 but rendered no document (--dump-dom of about:blank produced $(wc -c < "$work/dom.html") bytes with no <html>). It is not a usable headless browser."; exit 1; }
+          printf 'CHROME_BIN=%s\n' "$browser" >> "$GITHUB_ENV"
+          echo "$took"
+          echo "CHROME_BIN=$browser ($("$browser" --version)) — launched headless OK; ${SECONDS}s in this step"
       # The same command, the same evidence trail and the same tolerance for a module that ships
       # no suite as the inline step in `pack` — this is a MOVE, not a rewrite. See that step for
       # what each environment variable buys when a flake has to be diagnosed from the artifacts,
