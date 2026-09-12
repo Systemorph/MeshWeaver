@@ -281,10 +281,15 @@ name: node-repo module pack
 #     no `docker`, no `azure/login`, no `acr-*` secret is referenced anywhere in either job
 #     (grep them). `tests` never consumed an image at all. `pack` takes the pinned image's /app
 #     from, in this order (Memex#316, maintainer decision 2026-09-12):
-#       1. the runner's PLATFORM MOUNT `/opt/platform/<platform-image-digest>/` — an Azure Files
-#          volume the runner pods carry, populated once per sealed set by a refresh job, so a
-#          runner keeps the platform installed until the platform updates. Real only when its
-#          `.complete` marker holds the digest; a plain directory test, never a registry call.
+#       1. the runner's PLATFORM MOUNT `/opt/platform/sha256-<tester hex>/platform-refs/` — an
+#          Azure Files volume the runner pods carry, populated once per sealed set by a refresh
+#          job, so a runner keeps the platform installed until the platform updates. A set is
+#          keyed by the TESTER digest with `:` → `-` (Azure Files forbids `:`), holds the PORTAL
+#          /app under `platform-refs/`, and is real only when its `.complete` marker holds the
+#          tester digest and its `platform.json` pairs the pinned portal; a plain directory
+#          test, never a registry call. The layout is the refresh script's (Systemorph/Memex
+#          deployments/aks/ci-runners/ci-platform-refresh.py); the probe mirrors
+#          resolve-gate-platform.sh, the gate lane's reader of the same volume.
 #       2. the RUN ARTIFACT `platform-refs-<lane>` — the very bytes `prepare` took with
 #          `docker cp` on its hosted runner, tarred and handed over with actions/upload-artifact
 #          (retention 1 day). Guaranteed within the run, which a cache entry never is.
@@ -680,7 +685,7 @@ on:
           org's self-hosted scale set: non-root, NO Docker, no preinstalled toolchain, 2 vCPU /
           6 GiB per runner — the two honouring jobs set DOTNET_INSTALL_DIR under /home/runner for
           it. Neither honouring job runs `docker` or touches a registry: `pack` takes the pinned
-          image's /app from the runner's `/opt/platform/<digest>/` mount, else from the artifact
+          image's /app from the runner's `/opt/platform/sha256-<tester hex>/platform-refs/` mount, else from the artifact
           `prepare` hands over, else fails RED naming both; `tests` consumes no image. Wire it
           from a repository variable (`vars.MW_RUNNER_HEAVY`, falling back to `ubuntu-latest`
           when unset — the header shows the expression) so the move is one edit to revert.
@@ -2140,34 +2145,80 @@ jobs:
       #
       # 🚨 NO DOCKER, NO REGISTRY, NO CACHE IN THIS JOB (Memex#316, "Where the heavy legs run" in
       # the header). The /app comes from, in order:
-      #   1. the runner's platform mount `/opt/platform/<digest>/`, real only when its `.complete`
-      #      marker holds the digest — a directory test, read in place;
+      #   1. the runner's platform mount — the set `/opt/platform/sha256-<tester hex>/`, real only
+      #      when its `.complete` marker holds the tester digest and its `platform.json` pairs the
+      #      pinned portal; the portal's /app is that set's `platform-refs/`. A directory test,
+      #      read in place;
       #   2. the run artifact `platform-refs-<lane>` that `prepare` handed over;
       #   3. neither ⇒ RED, naming both and the job that should have produced the artifact.
       # The download is `continue-on-error` ONLY so that the verdict step below can say all of
       # that by name instead of "Artifact not found" — the verdict step is unconditional within
       # the pinned mode and is what goes RED. Which source was taken is in the job summary.
-      - name: Is the platform mounted on this runner? (/opt/platform/<digest>)
+      #
+      # 🚨 THE VOLUME'S LAYOUT IS READ FROM THE SCRIPT THAT WRITES IT — Systemorph/Memex
+      # deployments/aks/ci-runners/ci-platform-refresh.py (and the README's "Platform kept between
+      # jobs"), measured 2026-09-12 — not from a description of it. Until this step was rewritten
+      # it probed `/opt/platform/$DIGEST` with the PORTAL digest, colon and all, and expected the
+      # assemblies at that directory's top level; the refresh lays a set out as
+      #   /opt/platform/sha256-<hex>/               keyed by the TESTER image digest — Azure Files
+      #                                             forbids `:` in a name, so `sha256:` → `sha256-`
+      #   /opt/platform/sha256-<hex>/platform-refs/ the PORTAL image's /app (what this leg compiles against)
+      #   /opt/platform/sha256-<hex>/platform.json  `portal-image-digest`: the portal the set pairs
+      #   /opt/platform/sha256-<hex>/.complete      the tester digest, COLON form, written LAST
+      # so the probe could never hit and every aks-silos leg took the artifact (Plugins run
+      # 34711540604) while the volume did nothing for this lane. resolve-gate-platform.sh (the gate
+      # lane's reader of the same layout) is what this mirrors — `${digest/:/-}` for the directory,
+      # the colon form for the marker, `platform.json` for the pairing — minus its refusals: here a
+      # miss FALLS THROUGH to the run artifact, by design (the header). PlatformMountLayoutGuard
+      # (test/MeshWeaver.Documentation.Test) holds the probe to this layout.
+      - name: Is the platform mounted on this runner? (/opt/platform/sha256-<tester hex>/platform-refs)
         if: inputs.platform-image-digest != ''
         id: platform-mount
         env:
           DIGEST: ${{ inputs.platform-image-digest }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
         run: |
           set -euo pipefail
-          mount="/opt/platform/$DIGEST"
-          if [ -d "$mount" ] && [ -f "$mount/.complete" ] && [ "$(tr -d '[:space:]' < "$mount/.complete")" = "$DIGEST" ]; then
-            n=$(find "$mount" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ')
-            if [ "$n" -gt 50 ]; then
-              echo "mounted=true" >> "$GITHUB_OUTPUT"
-              echo "platform mount: $mount is complete ($n assemblies) — the artifact is not needed"
-              exit 0
-            fi
-            echo "::warning::$mount carries a .complete marker for $DIGEST but only $n assemblies — not a platform /app; falling through to the run artifact"
-          elif [ -d "$mount" ]; then
-            echo "platform mount: $mount exists but its .complete marker is absent or names another digest — a refresh in flight; falling through to the run artifact"
-          else
-            echo "platform mount: $mount is not present on $RUNNER_NAME — falling through to the run artifact"
+          root=/opt/platform
+          if [ ! -d "$root" ]; then
+            echo "platform mount: $root is not present on $RUNNER_NAME — falling through to the run artifact"
+            echo "mounted=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          if [ -n "$TESTER_DIGEST" ]; then
+            # The set is keyed by the tester digest, so a tester pin names it outright.
+            candidates="$root/${TESTER_DIGEST/:/-}"
+          else
+            # No tester pin: any complete set whose platform.json pairs the pinned portal will do.
+            candidates="$(find "$root" -mindepth 1 -maxdepth 1 -type d -name 'sha256-*' | sort)"
+            [ -n "$candidates" ] || echo "platform mount: $root holds no sha256-* set at all (the refresh has never completed a run on it) — falling through to the run artifact"
+          fi
+          for set in $candidates; do
+            name="$(basename "$set")"
+            case "$name" in *.tmp.*) continue ;; esac     # a refresh's per-run scratch, never a set
+            want="${TESTER_DIGEST:-sha256:${name#sha256-}}"
+            if [ ! -d "$set" ]; then
+              echo "platform mount: no set $name under $root (it holds: $(find "$root" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ')) — ci-platform-refresh (Systemorph/Memex) keeps the 3 newest sealed sets, so this tester pin is older than those or not yet sealed; falling through to the run artifact"
+              continue
+            fi
+            if [ ! -f "$set/.complete" ] || [ "$(tr -d '[:space:]' < "$set/.complete")" != "$want" ]; then
+              echo "platform mount: $set exists but its .complete marker is absent or names another digest — a refresh in flight; falling through to the run artifact"
+              continue
+            fi
+            portal="$(sed -n 's/.*"portal-image-digest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$set/platform.json" 2>/dev/null | head -1)"
+            if [ "$portal" != "$DIGEST" ]; then
+              echo "platform mount: $set pairs portal ${portal:-<none recorded>}, not the pinned $DIGEST — falling through to the run artifact"
+              continue
+            fi
+            n=$(find "$set/platform-refs" -maxdepth 1 -name '*.dll' 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$n" -le 50 ]; then
+              echo "::warning::$set/platform-refs is marked complete for $want but holds only $n assemblies — not a platform /app; falling through to the run artifact"
+              continue
+            fi
+            echo "dir=$set/platform-refs" >> "$GITHUB_OUTPUT"
+            echo "mounted=true" >> "$GITHUB_OUTPUT"
+            echo "platform mount: $set/platform-refs is complete ($n assemblies for $DIGEST; set $name) — the artifact is not needed"
+            exit 0
+          done
           echo "mounted=false" >> "$GITHUB_OUTPUT"
       - name: Fetch the platform's /app (handed over by prepare)
         if: inputs.platform-image-digest != '' && steps.platform-mount.outputs.mounted != 'true'
@@ -2184,16 +2235,17 @@ jobs:
           DIGEST: ${{ inputs.platform-image-digest }}
           LANE: ${{ needs.select.outputs.lane }}
           MOUNTED: ${{ steps.platform-mount.outputs.mounted }}
+          MOUNT_DIR: ${{ steps.platform-mount.outputs.dir }}
           FETCHED: ${{ steps.platform-artifact.outcome }}
         run: |
           set -euo pipefail
           if [ "$MOUNTED" = true ]; then
-            dir="/opt/platform/$DIGEST"
+            dir="$MOUNT_DIR"
             source="mount"
           else
             tarball="$RUNNER_TEMP/platform-refs-artifact/platform-refs.tar.gz"
             if [ "$FETCHED" != success ] || [ ! -f "$tarball" ]; then
-              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): /opt/platform/$DIGEST/.complete is absent (the runner's platform mount, Memex#316) AND the run artifact platform-refs-$LANE could not be fetched (download outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) uploads that artifact in this same run — if it is green, the artifact expired (retention 1 day) or this run was re-run past it; re-run the whole lane, never this leg alone. This job runs no docker and holds no registry credential, by design."
+              echo "::error::no platform /app for $DIGEST on this runner ($RUNNER_NAME): no complete set under /opt/platform/sha256-<tester hex>/ pairs it (the runner's platform mount, Memex#316 — the step above says why) AND the run artifact platform-refs-$LANE could not be fetched (download outcome: ${FETCHED:-skipped}). 'Warm the shared build environment (once)' (job: prepare) uploads that artifact in this same run — if it is green, the artifact expired (retention 1 day) or this run was re-run past it; re-run the whole lane, never this leg alone. This job runs no docker and holds no registry credential, by design."
               exit 1
             fi
             stampfile="$RUNNER_TEMP/platform-refs-artifact/digest.txt"
@@ -2210,7 +2262,7 @@ jobs:
           echo "dir=$dir" >> "$GITHUB_OUTPUT"
           echo "source=$source" >> "$GITHUB_OUTPUT"
           echo "platform refs: $n assemblies for $DIGEST from the $source ($dir)"
-          printf '### Platform reference set\n\n**%s** — %s, %s assemblies for %s (no docker, no registry in this job; sources tried in order: the mount /opt/platform/<digest>/, then the run artifact platform-refs-%s).\n' "$source" "$dir" "$n" "$DIGEST" "$LANE" >> "$GITHUB_STEP_SUMMARY"
+          printf '### Platform reference set\n\n**%s** — %s, %s assemblies for %s (no docker, no registry in this job; sources tried in order: the mount /opt/platform/sha256-<tester hex>/platform-refs/, then the run artifact platform-refs-%s).\n' "$source" "$dir" "$n" "$DIGEST" "$LANE" >> "$GITHUB_STEP_SUMMARY"
       # 🚨 THE SDK LEG NEEDS THE SUPERSEDE TOO — it did not have it, and that is a whole class of
       # red (#3175 wave). `superseded-image-assemblies` reached ONLY the container leg, as
       # `--superseded-image-assembly` on `build-project`. The SDK leg compiles with
