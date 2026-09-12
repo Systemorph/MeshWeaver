@@ -129,9 +129,13 @@ public record PluginGrant
         {
             if (!entry.Matches(sourceName, packageId) || !entry.IsValidAt(now))
                 continue;
-            var effective = ranks.Narrower(instancePlan, entry.Tier);
-            var plan = PlanTierRanks.Canonical(effective) is { Length: > 0 } named
-                ? named
+            // The plan the entry DECIDED with, in the ladder's own words: Narrower reads an
+            // unknown plan or cap as the baseline, and so must the sentence — "this instance is
+            // on gold" for a cap the ladder does not know would name a plan that is neither the
+            // instance's nor an upgrade target.
+            var canonical = PlanTierRanks.Canonical(ranks.Narrower(instancePlan, entry.Tier));
+            var plan = canonical.Length > 0 && (ranks.RankOf(canonical) is not null || ranks.IsAllAccess(canonical))
+                ? canonical
                 : PlanTierRanks.BaselinePlan;
             if (widest is null || (ranks.RankOf(plan) ?? PlanTierRanks.BaselineRank) > (ranks.RankOf(widest) ?? PlanTierRanks.BaselineRank))
                 widest = plan;

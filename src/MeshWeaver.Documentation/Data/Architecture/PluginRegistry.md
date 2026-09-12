@@ -273,14 +273,16 @@ On the consumer the unattended default install (`InstanceAutoRegistrationService
 refusal typed on the `_DefaultInstallLedger` and keeps one marker per refused module in step with
 the registry's answer of that boot — `modules/activation.d/<Module>.tier-refused`
 (`ModuleActivationSidecar.SyncTierRefusals`), cleared by the next pass in which the registry no
-longer refuses it (a plan upgrade). `ModuleActivationSidecar.Read` folds the markers onto
+longer refuses it (a plan upgrade). A pass in which some source's listing FAILED moves nothing —
+neither the ledger's refusals nor the markers — because a registry that was down at boot has not
+lifted anybody's plan. `ModuleActivationSidecar.Read` folds the markers onto
 `ModuleActivationList.TierRefusals`, which is how the verdict reaches every surface that used to
 name the consequence without a new parameter on a host compiled against the previous platform:
 
 | surface | before | since #4097 |
 |---|---|---|
 | `/health` `required_modules` (`RequiredModuleStatus.Classify`) | "store-delivered and NOT installed on this instance — install the package from the registry" | "⛔ Not installed on this instance: Hosting needs plan tier enterprise, this instance is on free. Installing it from the registry is not possible on this plan — raise the instance's plan on the registry, or delist it from Modules:Required" (still `ExpectedLater`: no rollout changes a plan) |
-| the package card (`CatalogLayoutAreas.BuildCard`) | no card | the card, with the same sentence localized (`ui.packageRefusedByPlanTier`) and no Install button |
+| the package card (`CatalogLayoutAreas.BuildCard`) | no card | the card, with the same sentence localized (`ui.packageRefusedByPlanTier`) and no Install button; after a plan DOWNGRADE an already-installed package says installed-but-no-longer-covered (`ui.packageInstalledAboveThisPlan`) and loses its Update button |
 | the activation report (`ModuleActivationReport.TierRefused`, `/health`'s activation line) | nothing | the refused modules, named |
 | the self-updater's startup line (`SelfUpdateHostedService.StartAsync`) | `canPatch=False` and "list MeshWeaver.SelfUpdate.Aks under Modules:Assemblies" | `canPatch=False (⛔ Not installed on this instance: Hosting needs plan tier enterprise, this instance is on free. The Kubernetes patcher ships in that package …)` |
 

@@ -854,10 +854,10 @@ public sealed class InstanceAutoRegistrationService(
                     // package this environment's flags declare must re-assert on every boot — that
                     // is the difference between the two lanes — so it is never dropped here, the
                     // same exemption the platform's own preInstalled baseline already has.
-                    .Select(candidates => (IReadOnlyList<InstallCandidate>)candidates
-                        .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
-                        .ToList())
-                    .SelectMany(InstallAll)
+                    .SelectMany(selection => InstallAll(selection.Candidates
+                            .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
+                            .ToList())
+                        .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }))
                     .SelectMany(summary => RecordSeeded(ledger, summary).Select(_ => summary));
             }));
     }
@@ -950,28 +950,41 @@ public sealed class InstanceAutoRegistrationService(
             .OrderBy(s => s.Package, StringComparer.Ordinal)
             .ToImmutableList();
 
-        var tierRefused = summary.TierRefused
-            .DistinctBy(r => r.PackageId, StringComparer.Ordinal)
-            .OrderBy(r => r.PackageId, StringComparer.Ordinal)
-            .ToImmutableList();
+        // 🚨 #4097 — a pass in which SOME source did not answer knows only what it saw. The
+        // per-source catch in Candidates substitutes an empty list for a failed listing, so
+        // another source can still populate this summary while the failed source's refusals are
+        // simply missing from it — not lifted. Treating that as authoritative would clear the
+        // markers and send /health and the self-updater back to the generic "not installed"
+        // sentence for the length of a registry outage. So an incomplete pass keeps the ledger's
+        // previous refusals and leaves the markers standing; only a pass every source answered
+        // may move them — in either direction.
+        var tierRefused = summary.ListingIncomplete
+            ? ledger.TierRefused
+            : summary.TierRefused
+                .DistinctBy(r => r.PackageId, StringComparer.Ordinal)
+                .OrderBy(r => r.PackageId, StringComparer.Ordinal)
+                .ToImmutableList();
 
-        // 🚨 #4097 — the activation record's plan-tier markers are made to MATCH this pass's
-        // answer, before the ledger and regardless of whether the ledger changes: /health's
-        // required_modules line, the activation report and the self-updater read the markers,
-        // and a marker left standing after a plan upgrade would name a refusal that no longer
-        // exists. Guarded above by the same "a pass that read no listing knows nothing" rule —
-        // a failed listing must not clear a standing refusal. A volume that cannot be written
-        // is reported, never fatal: the ledger below still records the verdict.
-        try
+        // The activation record's plan-tier markers are made to MATCH this pass's answer, before
+        // the ledger and regardless of whether the ledger changes: /health's required_modules
+        // line, the activation report and the self-updater read the markers, and a marker left
+        // standing after a plan upgrade would name a refusal that no longer exists. Guarded by
+        // the "knows nothing" rule above and the completeness rule here — a failed listing must
+        // not clear a standing refusal. A volume that cannot be written is reported, never
+        // fatal: the ledger below still records the verdict.
+        if (!summary.ListingIncomplete)
         {
-            ModuleActivationSidecar.SyncTierRefusals(
-                ModuleRoot.Resolve(hub.ServiceProvider.GetService<IConfiguration>()), tierRefused);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            logger.LogWarning(ex,
-                "[DefaultInstall] could not write the plan-tier refusal markers under the module root; "
-                + "/health and the self-updater will not name the plan until a pass can.");
+            try
+            {
+                ModuleActivationSidecar.SyncTierRefusals(
+                    ModuleRoot.Resolve(hub.ServiceProvider.GetService<IConfiguration>()), tierRefused);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex,
+                    "[DefaultInstall] could not write the plan-tier refusal markers under the module root; "
+                    + "/health and the self-updater will not name the plan until a pass can.");
+            }
         }
 
         if (delivered.Count == 0
@@ -1178,7 +1191,12 @@ public sealed class InstanceAutoRegistrationService(
             ? hit.Flag
             : null;
 
-    private IObservable<IReadOnlyList<InstallCandidate>> Candidates(
+    /// <summary>One pass's selection, and whether every source ANSWERED (#4097): a source whose
+    /// listing failed contributes nothing, and a pass with such a source must not read its own
+    /// silence as "that source refuses nothing".</summary>
+    private sealed record CandidateSelection(IReadOnlyList<InstallCandidate> Candidates, bool ListingIncomplete);
+
+    private IObservable<CandidateSelection> Candidates(
         IReadOnlyList<ConfiguredPackageSource> sources,
         bool baseline,
         IReadOnlyList<PluginGrantEntry> wanted,
@@ -1227,22 +1245,24 @@ public sealed class InstanceAutoRegistrationService(
                 // The WHOLE listing is carried forward, not just the selected packages: a selected
                 // package's requirements are resolved against the full catalog below, and a
                 // dependency that is neither pre-installed nor pattern-matched exists only here.
-                .Select(packages => packages
+                .Select(packages => (Candidates: packages
                     .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
                     .Select(p => new InstallCandidate(source, p))
-                    .ToList())
+                    .ToList(), Failed: false))
                 .Catch((Exception exception) =>
                 {
                     logger.LogWarning(exception,
                         "[DefaultInstall] listing {Name} @ {Ref} failed — its packages are skipped "
                         + "this boot", source.Name, source.GitRef);
-                    return Observable.Return(new List<InstallCandidate>());
+                    return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
                 }))
             .ToObservable()
             .Concat()
             .ToList()
-            .Select(perSource =>
+            .Select(answers =>
             {
+                var listingIncomplete = answers.Any(a => a.Failed);
+                var perSource = answers.Select(a => a.Candidates).ToList();
                 var catalog = perSource
                     .SelectMany(list => list)
                     .GroupBy(c => c.Package.Id, StringComparer.Ordinal)
@@ -1300,7 +1320,7 @@ public sealed class InstanceAutoRegistrationService(
                 // policy (PackageDependencyGraph.InstallClosure).
                 var ordered = PackageDependencyGraph.InDependencyOrder(withDependencies, logger);
                 var bySource = catalog.ToDictionary(c => c.Package.Id, StringComparer.Ordinal);
-                return (IReadOnlyList<InstallCandidate>)ordered
+                return new CandidateSelection(ordered
                     .Select(p => bySource[p.Id])
                     // 🚨 The EXCLUSION is applied LAST — after the dependency closure, so it also
                     // removes a package the closure pulled back in as somebody's requirement. That
@@ -1336,7 +1356,7 @@ public sealed class InstanceAutoRegistrationService(
                                      || IsIncluded(c)
                                      || (c.Source.LocalCheckout && IsWanted(c)),
                     })
-                    .ToList();
+                    .ToList(), listingIncomplete);
             }));
 
     /// <summary>
@@ -1708,7 +1728,8 @@ public sealed class InstanceAutoRegistrationService(
                 sources, baseline, wanted,
                 Parse((composition ?? FeatureComposition.Empty).Included),
                 Parse((composition ?? FeatureComposition.Empty).Excluded))
-            .SelectMany(InstallAll);
+            .SelectMany(selection => InstallAll(selection.Candidates)
+                .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }));
 
     /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and
@@ -1826,6 +1847,14 @@ public readonly record struct DefaultInstallSummary(
     public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
 
     /// <summary>
+    /// 🚨 True when at least one source's listing FAILED this pass (#4097), so what the pass did
+    /// not see is unknown rather than absent. <see cref="TierRefused"/> is then a partial answer:
+    /// the ledger keeps its previous refusals and the activation markers are left standing,
+    /// because a registry that was down at boot has not lifted anybody's plan.
+    /// </summary>
+    public bool ListingIncomplete { get; init; }
+
+    /// <summary>
     /// The ids this pass actually DELIVERED — installed or already current. The ledger's input:
     /// what the seed may stop re-asserting.
     /// </summary>
@@ -1849,6 +1878,7 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty),
         TierRefused = (TierRefused ?? ImmutableList<PlanTierRefusal>.Empty)
             .AddRange(other.TierRefused ?? ImmutableList<PlanTierRefusal>.Empty),
+        ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
     };
 
     /// <inheritdoc />

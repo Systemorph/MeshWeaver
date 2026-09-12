@@ -626,6 +626,7 @@
   "ui.moduleHeldAtLanding": "Auf dieser Plattform nicht installiert: es benötigt {0}, diese Plattform stellt {1} bereit. Es wird installiert, sobald diese Installation auf eine Plattform aktualisiert, die es bereitstellt.",
   "ui.moduleHeldAtLandingTypes": "Auf dieser Plattform nicht installiert: es verweist auf {0}, was diese Plattform nicht hat. Es wird installiert, sobald diese Installation aktualisiert wird.",
   "ui.packageRefusedByPlanTier": "Auf dieser Instanz nicht installiert: {0} benötigt die Tarifstufe {1}, diese Instanz ist auf {2}. Es wird installiert, sobald der Tarif der Instanz auf der Registry es abdeckt.",
+  "ui.packageInstalledAboveThisPlan": "Installiert ({0}), aber der Tarif dieser Instanz deckt es nicht mehr ab: {1} benötigt die Tarifstufe {2}, diese Instanz ist auf {3}. Es funktioniert weiterhin; Aktualisierungen bleiben aus, bis der Tarif der Instanz auf der Registry es abdeckt.",
   "ui.orphanedInstallRecords": "Verwaiste Installationseinträge",
   "ui.requestAccess": "Zugriff anfragen",
   "ui.resetToDefault": "Auf Standard zurücksetzen",

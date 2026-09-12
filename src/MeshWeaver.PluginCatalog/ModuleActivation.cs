@@ -333,8 +333,12 @@ public static class ModuleActivationSidecar
         ArgumentNullException.ThrowIfNull(refusals);
         var wanted = new Dictionary<string, Mesh.Security.PlanTierRefusal>(StringComparer.OrdinalIgnoreCase);
         foreach (var refusal in refusals)
-            if (!string.IsNullOrWhiteSpace(refusal.Module))
-                wanted[refusal.Module] = refusal;
+            // 🚨 The module name arrives from the REGISTRY and becomes a file name. One that is not
+            // a valid module name (which no assembly simple name is) gets no marker rather than an
+            // exception: the refusal is still on the ledger and the card, and one malformed entry
+            // must not abort the pass that records every other one.
+            if (IsValidModuleName(refusal.Module))
+                wanted[refusal.Module!] = refusal;
 
         var current = ReadTierRefusals(baseDirectory);
         foreach (var stale in current.Keys.Where(name => !wanted.ContainsKey(name)))
@@ -343,7 +347,6 @@ public static class ModuleActivationSidecar
         {
             if (current.TryGetValue(module, out var existing) && existing == refusal)
                 continue;
-            ValidateModuleName(module);
             WriteAtomic(TierRefusedMarkerPath(baseDirectory, module), JsonSerializer.Serialize(refusal, Json));
         }
         return [.. wanted.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase)];
@@ -594,13 +597,18 @@ public static class ModuleActivationSidecar
         return entry with { UnloadableFrameworkMvid = marker.FrameworkMvid };
     }
 
+    /// <summary>Whether <paramref name="moduleName"/> may become a file name under the entries
+    /// directory — the predicate behind <see cref="ValidateModuleName"/>.</summary>
+    private static bool IsValidModuleName(string? moduleName) =>
+        !string.IsNullOrWhiteSpace(moduleName)
+        && moduleName is not ("." or "..")
+        && moduleName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+        && !moduleName.Contains('/') && !moduleName.Contains('\\');
+
     /// <summary>The same rule <see cref="WriteEntry"/> applies: the name BECOMES a path.</summary>
     private static void ValidateModuleName(string? moduleName)
     {
-        if (string.IsNullOrWhiteSpace(moduleName)
-            || moduleName is "." or ".."
-            || moduleName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-            || moduleName.Contains('/') || moduleName.Contains('\\'))
+        if (!IsValidModuleName(moduleName))
             throw new ArgumentException(
                 $"'{moduleName}' is not a valid module name — a marker is a file named after its module.",
                 nameof(moduleName));

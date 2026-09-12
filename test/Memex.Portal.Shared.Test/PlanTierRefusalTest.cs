@@ -174,6 +174,19 @@ public class PlanTierRefusalTest : IDisposable
         Assert.Equal("free", refusal!.InstancePlan);
     }
 
+    /// <summary>
+    /// 🚨 The sentence speaks the LADDER's language. A cap the ladder does not know reads as the
+    /// baseline in the decision (<c>Narrower</c>), so the sentence says <c>free</c> too — never
+    /// "this instance is on gold", a plan that is neither the instance's nor an upgrade target.
+    /// </summary>
+    [Fact]
+    public void AnUnknownCap_ReportsTheBaseline_NotTheUnknownWord()
+    {
+        var refusal = Instance("pro", Entry(Platform, cap: "gold"))
+            .TierRefusal(Platform, Hosting.Id, Hosting.Tier, Hosting.Module, Now);
+        Assert.Equal("free", refusal!.InstancePlan);
+    }
+
     /// <summary>A token can only NARROW: a package outside the presented token's scope is absent
     /// to that token, whatever the durable grant says.</summary>
     [Fact]
@@ -328,6 +341,23 @@ public class PlanTierRefusalTest : IDisposable
         Assert.Empty(ModuleActivationSidecar.SyncTierRefusals(root, []));
         Assert.False(File.Exists(ModuleActivationSidecar.TierRefusedMarkerPath(root, Patcher)));
         Assert.Empty(ModuleActivationSidecar.Read(root).TierRefusals);
+    }
+
+    /// <summary>
+    /// A module name arrives from the REGISTRY and becomes a file name. One that cannot be a file
+    /// name gets no marker and no exception — the pass that records every other refusal must not
+    /// abort on it (the refusal is still on the ledger and the card).
+    /// </summary>
+    [Fact]
+    public void AMalformedModuleName_LeavesNoMarker_AndDoesNotThrow()
+    {
+        var written = ModuleActivationSidecar.SyncTierRefusals(root,
+        [
+            new PlanTierRefusal("Evil", "../escape", "enterprise", "free"),
+            new PlanTierRefusal("Hosting", Patcher, "enterprise", "free"),
+        ]);
+        Assert.Equal([Patcher], written);
+        Assert.Single(ModuleActivationSidecar.Read(root).TierRefusals);
     }
 
     /// <summary>The marker is a sibling of the #4083 refusal marker and must not be mistaken for

@@ -743,15 +743,25 @@ public static class CatalogLayoutAreas
         if (pkg.Refusal is { } tier)
         {
             // 🚨 #4097 — the registry declares this package in the instance's default set and
-            // REFUSES it by plan tier. No button: the instance cannot install it on this plan,
-            // and a button whose click is refused is the "consequence without cause" this line
-            // replaces. Same vocabulary as the #4083 landing refusal below, with the nouns of a
-            // plan, as DATA inside a localized sentence — platform-owned chrome follows the VIEWER.
-            card = card.WithView(Controls.Body(
-                    "⛔ " + host.Localize("ui.packageRefusedByPlanTier",
-                        pkg.Name ?? pkg.Id, tier.RequiredTier, tier.InstancePlan))
-                .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
-                           + "display: block; margin-top: 6px;"));
+            // REFUSES it by plan tier. No button either way: the instance cannot install or
+            // update it on this plan, and a button whose click is refused is the "consequence
+            // without cause" this line replaces. Same vocabulary as the #4083 landing refusal
+            // below, with the nouns of a plan, as DATA inside a localized sentence —
+            // platform-owned chrome follows the VIEWER.
+            //
+            // Two truths, two sentences. With NO install record the package is not here. With
+            // one — a plan DOWNGRADE after an install — the package IS here and keeps working;
+            // saying "not installed" would be the catalog lying about a package that is present.
+            // That card says installed, and that the plan no longer covers it, so updates stop.
+            card = card.WithView(Controls.Body(installed is null
+                    ? "⛔ " + host.Localize("ui.packageRefusedByPlanTier",
+                        pkg.Name ?? pkg.Id, tier.RequiredTier, tier.InstancePlan)
+                    : "⚠️ " + host.Localize("ui.packageInstalledAboveThisPlan",
+                        installed.Version ?? "?", pkg.Name ?? pkg.Id, tier.RequiredTier, tier.InstancePlan))
+                .WithStyle((installed is null
+                                ? "color: var(--error-foreground, #a4262c); "
+                                : "color: var(--warning-foreground, #9d5d00); ")
+                           + "font-size: 12px; display: block; margin-top: 6px;"));
             return card;
         }
 
