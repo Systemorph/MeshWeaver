@@ -935,7 +935,7 @@ jobs:
           path: build-logic
       # A reusable workflow's `github` context belongs to its CALLER. The job context is the
       # identity of the reusable workflow that actually defines this job. Read the whole context
-      # here because actionlint 1.7.7 predates the workflow_* members and rejects direct property
+      # here because actionlint 1.7.x predates the workflow_* members and rejects direct property
       # syntax; the runtime fields are then validated before they can become checkout inputs.
       - name: Resolve the exact reusable workflow that defines this job
         id: workflow
