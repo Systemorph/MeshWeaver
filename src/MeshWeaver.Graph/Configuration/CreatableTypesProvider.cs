@@ -312,12 +312,27 @@ internal sealed class CreatableTypesProvider(
             Order: node.Order ?? 0);
     }
 
+    /// <summary>
+    /// A path named by <see cref="NodeTypeDefinition.CreatableTypes"/> or
+    /// <see cref="MeshConfiguration.GlobalCreatableTypes"/>, as a <see cref="CreatableTypeInfo"/> —
+    /// or <c>null</c> when the type it names has opted out of being created.
+    ///
+    /// <para>🚨 <b>A type's own opt-out beats a list that names it.</b>
+    /// <c>ExcludeFromContext: ["create"]</c> is the TYPE saying instances of it are made by the
+    /// platform and not by a person through this form (Release, Build, ModuleBuild, Partition all
+    /// say it). A whitelist or a host's global list naming one of those must not resurrect it —
+    /// the queries and the static bucket both honour the opt-out, and a config source that did not
+    /// would be a hole in the one rule this provider exists to apply. The opt-out is read from the
+    /// static registry, which is where every platform type that declares one lives.</para>
+    /// </summary>
     private static CreatableTypeInfo? BuildInfoFromConfig(
         string typePath, IServiceProvider serviceProvider, System.Text.Json.JsonSerializerOptions options)
     {
         var node = serviceProvider.FindStaticNode(typePath);
         if (node is not null)
-            return BuildInfoFromMeshNode(node, options);
+            return node.IsExcludedFromContext(MeshContexts.Create)
+                ? null
+                : BuildInfoFromMeshNode(node, options);
         return new CreatableTypeInfo(
             NodeTypePath: typePath,
             DisplayName: GetLastSegment(typePath),

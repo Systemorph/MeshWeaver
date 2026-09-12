@@ -264,6 +264,55 @@ public static class CreateLayoutArea
     }
 
     /// <summary>
+    /// Replaces the form's seeded <c>type</c> (and the icon that came with it) when the parent
+    /// does not allow it — with the first offered type, or with nothing when the parent offers
+    /// none, so the Required field blocks the submit rather than writing a type the parent
+    /// forbids.
+    ///
+    /// <para>🚨 <b>Why this is not cosmetic.</b> The Create button reads
+    /// <c>form["type"]</c>; the picker's item list is only what a person is shown. The seed is
+    /// computed before <see cref="ICreatableTypesProvider"/> has answered — it cannot be
+    /// otherwise, the answer is reactive — so without this a parent declaring
+    /// <c>CreatableTypes</c> with <c>IncludeGlobalTypes = false</c> renders a picker holding only
+    /// its declared types and still creates <c>Markdown</c> for anyone who submits without
+    /// touching the field. Same for a <c>?type=</c> URL naming a type the parent excluded.</para>
+    ///
+    /// <para>Idempotent: it rewrites only when the current value is not in the offered set, and
+    /// the provider's answer arrives once per render, before the user can type.</para>
+    /// </summary>
+    private static void AlignSeededTypeWithOffer(
+        LayoutAreaHost host, string formId, IReadOnlyList<CreatableTypeInfo> offered)
+    {
+        var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
+        host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+            .Take(1)
+            .Subscribe(
+                form =>
+                {
+                    var current = form?.GetValueOrDefault("type")?.ToString() ?? "";
+                    if (offered.Any(t => string.Equals(t.NodeTypePath, current, StringComparison.OrdinalIgnoreCase)))
+                        return;
+
+                    var replacement = offered.Count > 0 ? offered[0] : null;
+                    var next = form is null
+                        ? new Dictionary<string, object?>()
+                        : new Dictionary<string, object?>(form);
+                    next["type"] = replacement?.NodeTypePath ?? "";
+                    // The icon preview was seeded from the type we are replacing, so it travels
+                    // with it — otherwise the new node is created carrying the withdrawn type's
+                    // icon.
+                    next["icon"] = replacement?.Icon ?? "";
+                    host.UpdateData(formId, next);
+                },
+                // 🚨 onError is not optional. Rx RETHROWS a fault out of an onNext delegate onto
+                // the scheduler's thread, where nothing is left to catch it — it becomes an
+                // unhandled exception that ends the process (#2666). A form that could not read
+                // its own seed keeps the picker it already has; it must not take the host down.
+                ex => logger?.LogWarning(
+                    ex, "Could not align the seeded type on form {FormId} with the offered set", formId));
+    }
+
+    /// <summary>
     /// The picker's item shape. <see cref="MeshNodePickerControl.Items"/> takes MeshNodes — it
     /// stores the selected node's <c>Path</c> as the form value and renders Name/Icon/Description
     /// — so a <see cref="CreatableTypeInfo"/> is projected onto one. Every entry IS a type
@@ -436,21 +485,30 @@ public static class CreateLayoutArea
             var creatableTypes = host.Hub.ServiceProvider
                 .GetRequiredService<ICreatableTypesProvider>()
                 .GetCreatableTypes(parentPath, currentNode);
-            stack = stack.WithView((_, _) => creatableTypes.Select(types =>
-                (UiControl)new MeshNodePickerControl(new JsonPointerReference("type"))
+            stack = stack.WithView((h, _) => creatableTypes.Select(types =>
+            {
+                var offered = types
+                    .Where(t => restrictedTypes is null
+                        || restrictedTypes.Contains(t.NodeTypePath, StringComparer.OrdinalIgnoreCase))
+                    .ToArray();
+                // 🚨 The SEEDED default has to become one the parent allows. `type` was seeded
+                // several sections above (from ?type=, the current node, or "Markdown") — before
+                // anything knew what this parent permits — and the SUBMIT reads that value, not
+                // the picker's contents. So a restricting parent would render a picker offering
+                // only its declared types while a user who never touched the field still created
+                // the stale default. The restriction has to hold on the path that WRITES.
+                AlignSeededTypeWithOffer(h, formId, offered);
+                return (UiControl)new MeshNodePickerControl(new JsonPointerReference("type"))
                 {
                     Label = host.Localize("ui.typeRequired"),
                     Required = true,
                     Placeholder = host.Localize("create.selectType"),
                     DataContext = dataContext
                 }
-                .WithItems(types
-                    .Where(t => restrictedTypes is null
-                        || restrictedTypes.Contains(t.NodeTypePath, StringComparer.OrdinalIgnoreCase))
-                    .Select(ToPickerNode)
-                    .ToArray<object>())
+                .WithItems(offered.Select(ToPickerNode).ToArray<object>())
                 .WithMaxResults(15)
-                .WithStyle("width: 100%; margin-bottom: 16px;")));
+                .WithStyle("width: 100%; margin-bottom: 16px;");
+            }));
         }
 
         // 7. Namespace — REACTIVE on the selected type. Partition objects (Space, User;

@@ -23,6 +23,15 @@ The picker therefore carries **items and no queries**. That is not a style choic
 set, so a query alongside the provider would re-admit by discovery exactly what a restricting
 parent excluded.
 
+🚨 **The picker is not the enforcement point — the form's `type` VALUE is.** The Create button reads
+`form["type"]`, never the picker's item list, and that value is seeded before the provider has
+answered (it cannot be otherwise — the answer is reactive). So when the resolved offer does not
+contain the seed, the form replaces it with the first offered type, or with nothing when the parent
+offers none, so a Required field blocks the submit. Without that, a parent declaring
+`CreatableTypes` with `IncludeGlobalTypes: false` would render a picker holding only its declared
+types and still create `Markdown` for anyone who submitted without touching the field — the menu
+honouring the declaration and the write ignoring it.
+
 ## The resolution rule
 
 Four sources are merged, deduplicated by NodeType path, and ordered by `Order` then name.
@@ -85,7 +94,13 @@ otherwise omit it and silently round-trip the opt-out back to `true`.
 `ExcludeFromContext: ["create"]` on the NodeType is how a type says it is not creatable —
 `Release`, `Build`, `ModuleBuild` and `Partition` all use it. Every query above names
 `context:create`, and the static bucket applies the same filter, so the opt-out is honoured on both
-legs. See [Query Syntax](/Doc/DataMesh/QuerySyntax) for the `context:` qualifier and the other contexts.
+legs.
+
+🚨 **A type's own opt-out beats a list that names it.** Sources 3 and 4 resolve through the same
+exclusion-aware lookup, so a parent's `CreatableTypes` — or a host's `GlobalCreatableTypes` —
+naming `Partition` does not resurrect it. A whitelist ADDS types the queries could not reach; it
+does not overrule a type's own statement that instances of it are made by the platform rather than
+by a person. See [Query Syntax](/Doc/DataMesh/QuerySyntax) for the `context:` qualifier and the other contexts.
 
 ## Two rules that look like details and are not
 
