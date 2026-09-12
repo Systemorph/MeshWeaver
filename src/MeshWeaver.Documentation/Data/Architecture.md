@@ -281,6 +281,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Install Completeness](InstallCompleteness) — what an install RECORD declares landed, compared against what is actually in the mesh; the comparison nothing made until #3485, and why only one of its five verdicts is a pass
 - [CI Content Bake](CiContentBake)
 - [Bundle Delivery Stages](BundleDeliveryStages) — the four independent stages between a merge and a portal serving prebuilt bytes (write · compose · select · deliver), which of #3461 / #3732 / #3768 / #3583 owns each, the instrument that answers for each — and why a reading taken at one stage is not evidence about another
+- [Framework Identity Churn](FrameworkIdentityChurn) — the identity moves on every core COMMIT, not on every content change (43 merges, 5 touching the full-MVID set, ≥18 identities in 24h); the commit sha compiled into `AssemblyInformationalVersion` is why, the falsification test that refuted the local fix (0 of 22 control, 22 of 22 and 21 of 21), and the four costed options with every runner-hour labelled as arithmetic
 - [Prebuilt Bundle Retention](PrebuiltBundleRetention) — the sweep that prunes what CI bakes: where it is registered (and why "zero callers" was measured twice and wrong both times), the deletion default that is `true` in code and `false` in the chart, the report that names its denominator, and the pinned satellite gate the protected set cannot see
 - [Deploying a plugin change — merging is not shipping](DeployingPluginChanges)
 - [Module Adoption Policy](ModuleAdoptionPolicy)
