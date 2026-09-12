@@ -36,7 +36,13 @@ does what it says:
   under it still contains everything it contained before. That is pinned by a test, because a menu
   that quietly got shorter would have been the same invisible failure aimed the other way.
 
+- **It holds on the button, not just the menu.** The type the form starts on is chosen before
+  anything knows what the parent permits, and that is the value Create reads. Where the parent does
+  not allow it, the form moves to one it does — so a limited menu cannot be submitted past by
+  leaving the field alone.
+
 Two smaller corrections travel with it. Types that had opted out of being created — releases,
-builds, partitions — are honoured everywhere the menu is assembled. And the `includeGlobalTypes`
-switch works, so a type that limits its menu can also decide whether the always-available basics
-(Markdown, Thread, Agent, Node type) still ride along.
+builds, partitions — are honoured everywhere the menu is assembled, including when a list names one
+of them directly: opting out is the type's own statement and a list cannot overrule it. And the
+`includeGlobalTypes` switch works, so a type that limits its menu can also decide whether the
+always-available basics (Markdown, Thread, Agent, Node type) still ride along.
