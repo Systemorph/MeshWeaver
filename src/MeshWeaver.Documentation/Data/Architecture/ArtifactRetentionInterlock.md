@@ -126,6 +126,51 @@ depends on is therefore locked too, `deleteEnabled` only: `writeEnabled: false` 
 refuse the retag `release.yml` promotes with, and buys no purge protection, because acr-cli already
 requires **both** to be true before it will delete.
 
+🚨 **For a RUNNING manifest that means every one of its tags, not only the ones the axis matched on.**
+The pod spec names `memex-portal-ai:3.0.0-ci.N`; `/api/version` answers the core commit; the axis
+matched the short-sha tags. While an instance is AHEAD of its committed pin that `3.0.0-ci.N` tag is
+in **no** committed file, so axis 2 never sees it — and from outside the cluster there is no way to
+tell which of a manifest's names the spec used. Protecting the manifest's whole set of names is the
+decidable move; protecting one of them is a guess that fails on the next restart.
+
+### 🚨 And a locked index does not protect its platform manifests — it REMOVES the protection they had
+
+The third lock, and the least obvious. From `Azure/acr-cli`'s `GetUntaggedManifests`, in statement
+order:
+
+```go
+if _, ok := ignoreList.Load(*manifest.Digest); ok { continue }
+if !includeLocked && manifest.ChangeableAttributes != nil {
+    if …DeleteEnabled != nil && !(*…DeleteEnabled) { continue }          // ← a LOCKED index exits HERE
+    …
+}
+…
+if isProtectedByTags || isProtectedByAge {
+    if *manifest.MediaType != v1.MediaTypeImageIndex && … { continue }
+    group.SubmitErr(func() error { … addDependentManifestsToIgnoreList(…) })   // ← the walk
+    continue
+}
+```
+
+The lock `continue` comes **before** the walk that adds an index's children to the ignore list. So a
+locked index is never walked, its children are never ignore-listed, and each untagged child is then
+judged on its own: no tags, older than `--ago` ⇒ collected. The locked index is left pointing at
+manifests that no longer exist, and the pull fails exactly as if the image had been deleted.
+
+**The corollary is what makes this more than a gap.** An index that is TAGGED and UNLOCKED reaches
+`isProtectedByTags`, IS walked, and its children ARE ignore-listed. Locking it short-circuits that.
+**Protection applied to the index alone makes its children strictly less safe than leaving it
+unprotected** — a fix that causes the failure it prevents, on a delay.
+
+Measured 2026-09-12: `memex-portal-ai@sha256:0217fd11…`, the set `memex` is RUNNING, is locked, and
+its two children (`sha256:3296b0ba…` linux/amd64, `sha256:322de2ff…` linux/arm64) both read
+`deleteEnabled: true`. They survive today only because they still carry
+`staging-74d4c85-…-linux-x64` / `-linux-arm64` tags — which the **same** purge step deletes once
+they pass `--ago 7d`.
+
+So every protected manifest is expanded to its closure: an index pulls in its platform manifests,
+transitively, and a closure that could not be enumerated is a blocker rather than an empty one.
+
 ## The instrument is measured, not inferred from the fleet
 
 The old axis-1 rule read: *"six repositories pinned a digest on 2026-09-06, so zero means the
@@ -166,9 +211,19 @@ now takes the Deployment records as the denominator:
 🚨 **Zero expected consumers is a true answer on a host that is nobody's fleet.** The source is
 registered on every portal, not only the control instance, so an ordinary installation holds no
 Deployment records and has nothing to account for — its own live identity, its adoption stamps and
-the 30-day floor are what protect it, and refusing there would wedge retention fleet-wide. The one
-zero that cannot be honest is a host that **receives reports and holds no records**: it is a control
-instance by construction, and that is refused rather than read as a fleet of zero.
+the 30-day floor are what protect it, and refusing there would wedge retention fleet-wide.
+
+Two zeroes are refused instead, and they are different readings of the same empty answer. A host that
+**receives reports and holds no records** is a control instance by construction. And a host that
+**names itself and posts its report nowhere** (`Hosting:Deployment` set, `Hosting:ReportTo` unset) is
+one too — by its own configuration, which is authoritative where the record query is only eventually
+consistent. Without that second signal, a control instance whose Deployment *and* inventory indexes
+have both not caught up answers exactly as an ordinary portal does, and an empty protected set then
+authorises collecting every remote consumer's artifacts.
+
+A `sampledAt` in the **future** is an unknown age, not a fresh one: a negative age passes the budget
+trivially, so one skewed clock would make every report that producer files permanently fresh —
+protecting a single identity for ever while the installation moves on.
 
 ## What is still the maintainer's, and is not code
 

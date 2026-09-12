@@ -177,9 +177,10 @@ public class DeploymentPinnedReferencesTest
         };
 
     private static ImmutableList<PinnedPlatformReference> Resolve(
-        IReadOnlyList<MeshNode> deployments, IReadOnlyList<MeshNode> reports) =>
+        IReadOnlyList<MeshNode> deployments, IReadOnlyList<MeshNode> reports,
+        bool isControlInstance = false) =>
         DeploymentPinnedReferences.Resolve(deployments, reports, Options, Now,
-            DeploymentPinnedReferences.StaleAfter);
+            DeploymentPinnedReferences.StaleAfter, isControlInstance);
 
     [Fact]
     public void ACompleteFreshFleet_ProtectsEveryRunningAndAdoptedBuildOfEveryInstance()
@@ -204,8 +205,10 @@ public class DeploymentPinnedReferencesTest
             [Report("memex", TimeSpan.FromMinutes(5))]));
 
         refusal.Message.Should().Contain("INCOMPLETE").And.Contain("Deployments/pearl");
-        refusal.Message.Should().Contain("1 of 2 expected instance(s)",
-            because: "the denominator belongs in the refusal, not only in a log line");
+        refusal.Message.Should().Contain("1 refusal(s) over 2 expected instance(s)",
+            because: "the denominator belongs in the refusal, not only in a log line — and a refusal "
+                     + "COUNT is not a fraction of the expected set, because an orphan report can be "
+                     + "the refused subject");
     }
 
     [Fact]
@@ -310,6 +313,44 @@ public class DeploymentPinnedReferencesTest
         // The stale one ALONE is the refusal, which is what makes the pair above a real distinction
         // rather than a guard that never fires.
         Assert.Throws<InvalidOperationException>(() => Resolve([Deployment("memex")], [stale]));
+    }
+
+    [Fact]
+    public void AReportStampedInTheFUTURE_IsAnUnknownAge_NotAFreshOne()
+    {
+        // A negative age passes `age > budget` trivially, so a skewed clock would make every report
+        // that producer files permanently fresh — protecting one identity for ever while the
+        // installation moves on, which is exactly what the budget exists to detect.
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(
+            [Deployment("memex")], [Report("memex", -TimeSpan.FromHours(6))]));
+        refusal.Message.Should().Contain("FUTURE");
+    }
+
+    [Fact]
+    public void AControlInstanceWhoseIndexHasNotCaughtUp_IsRefused_NotReadAsAFleetOfZero()
+    {
+        // `Records` reads an eventually-consistent index, so a control instance whose Deployment
+        // AND inventory queries have both not landed answers exactly as an ordinary portal does.
+        // Configuration is authoritative where the query is not.
+        Resolve([], []).Should().BeEmpty(because: "an ordinary portal owns no fleet");
+        var refusal = Assert.Throws<InvalidOperationException>(
+            () => Resolve([], [], isControlInstance: true));
+        refusal.Message.Should().Contain("control instance").And.Contain("returned NOTHING");
+
+        // …and it says nothing once the records are there.
+        Resolve([Deployment("memex")], [Report("memex", TimeSpan.FromMinutes(5))], isControlInstance: true)
+            .Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public void TheRefusalCountsExpectedAndORPHANReportsSeparately()
+    {
+        // "1 of 0 expected instance(s)" is the shape of an operator message nobody can act on: the
+        // refused subject was an orphan report, not a fraction of the expected set.
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(
+            [], [Report("stranger", TimeSpan.FromMinutes(5))]));
+        refusal.Message.Should().Contain("1 refusal(s) over 0 expected instance(s)")
+            .And.Contain("1 reporting without a record");
     }
 
     [Fact]

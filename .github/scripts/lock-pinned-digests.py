@@ -413,6 +413,7 @@ class Registry:
             parsed.append(Manifest(
                 acr_repo=acr_repo,
                 digest=raw.get("digest", ""),
+                media_type=raw.get("mediaType", "") or "",
                 delete_enabled=attributes.get("deleteEnabled", raw.get("deleteEnabled", True)),
                 write_enabled=attributes.get("writeEnabled", raw.get("writeEnabled", True)),
                 tags=raw.get("tags") or [],
@@ -450,6 +451,23 @@ class Registry:
                 result = (None, "INDETERMINATE: " + " ".join(err.split())[:300])
         self._tag_cache[key] = result
         return result
+
+    def index_children(self, acr_repo: str, digest: str) -> tuple[list[str] | None, str]:
+        """The platform manifests one image index references. `None` is INDETERMINATE."""
+        rc, out, err = consistency.az(
+            ["acr", "manifest", "show", "--registry", self.name,
+             "--name", f"{acr_repo}@{digest}", "-o", "json"]
+        )
+        if rc != 0:
+            return None, " ".join(err.split())[:300]
+        try:
+            document = json.loads(out)
+        except json.JSONDecodeError as exc:
+            return None, f"manifest show did not return JSON: {exc}"
+        children = [child.get("digest", "") for child in document.get("manifests") or []]
+        if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", child) for child in children):
+            return None, "the index lists a child with no usable digest"
+        return children, ""
 
     def read_delete_enabled(self, acr_repo: str, digest: str) -> tuple[bool | None, str]:
         """The manifest's CURRENT `deleteEnabled`, read back. `None` is INDETERMINATE — the
@@ -560,6 +578,7 @@ class Manifest:
     delete_enabled: bool
     write_enabled: bool
     tags: list[str]
+    media_type: str = ""
 
 
 @dataclass
@@ -634,6 +653,7 @@ class Plan:
     tags_already_protected: list[WantedTag] = field(default_factory=list)
     tags_to_lock: list[WantedTag] = field(default_factory=list)
     tags_locked_now: int = 0
+    platform_manifests: int = 0       # children pulled in by an index in the wanted set
     # AXIS 3: the installations, and whether the inventory of them is COMPLETE.
     instances: list[Instance] = field(default_factory=list)
     inventory_complete: bool = False
@@ -787,6 +807,15 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str]], list[st
             problems.append(f"{ROSTER_PATH}: `{ident}` is {state} with no `reason`. A declaration "
                             "that explains nothing is the hand list this job exists to replace.")
             continue
+        if ident in roster:
+            # 🚨 LAST-WINS ON A FILE THAT GRANTS EXEMPTIONS IS A SILENT EXEMPTION. Two entries for
+            # one installation let the order of a JSON array decide whether it must answer, so a
+            # `live` line added above an old `retired` one changes nothing and reads as if it did.
+            problems.append(
+                f"{ROSTER_PATH}: `{ident}` is declared TWICE ({roster[ident][0]} and {state}). "
+                "Which one is in force would be decided by the order of the array, so neither is. "
+                "Delete the line that no longer applies.")
+            continue
         roster[ident] = (state, reason)
     return roster, problems
 
@@ -906,9 +935,17 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
                 entry.sources.append(
                     f"installation `{instance.id}` is RUNNING core {instance.commit[:7]} "
                     f"(tag {', '.join(sorted(matched))})")
-                for tag in matched:
+                # 🚨 EVERY TAG ON A RUNNING MANIFEST IS A REFERENCE THAT MAY BE THE ONE ITS POD
+                # SPEC NAMES, and from outside the cluster there is no way to tell which. The
+                # helm value pins `memex-portal-ai:3.0.0-ci.N`; `/api/version` answers the core
+                # commit; the short-sha tags are what this axis matched on. When the instance is
+                # AHEAD of its committed pin, that `3.0.0-ci.N` tag is in NO committed file, so
+                # axis 2 never sees it — and a purge that deletes it breaks the next restart while
+                # the manifest sits locked. Protect the manifest's whole set of names.
+                for tag in sorted(manifest.tags):
                     want_tag(plan, acr_repo, tag,
-                             f"installation `{instance.id}` runs core {instance.commit[:7]}")
+                             f"installation `{instance.id}` runs core {instance.commit[:7]}"
+                             + ("" if tag in matched else " (a name of that same manifest)"))
         if not instance.manifests:
             plan.blockers.append(
                 f"AXIS 3 — installation `{instance.id}` reports core {instance.commit[:7]} and NO "
@@ -952,6 +989,88 @@ def classify_tags(plan: Plan, registry: Registry) -> None:
 
 
 OFFICIAL_RELEASE_REPOSITORIES = frozenset({"memex-migration", "mw-plugin-test", "memex-portal-ai"})
+
+
+INDEX_MEDIA_TYPES = frozenset({
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+})
+
+
+def expand_platform_closure(plan: Plan, registry: Registry,
+                            inventory: dict[str, list[Manifest]],
+                            inventory_errors: dict[str, str]) -> None:
+    """🚨 LOCKING AN INDEX DOES NOT PROTECT ITS PLATFORM MANIFESTS — IT REMOVES THE PROTECTION THEY
+    HAD. Read from `Azure/acr-cli`'s `GetUntaggedManifests`, in statement order:
+
+        if _, ok := ignoreList.Load(*manifest.Digest); ok { continue }
+        if !includeLocked && manifest.ChangeableAttributes != nil {
+            if …DeleteEnabled != nil && !(*…DeleteEnabled) { continue }      // ← a LOCKED index exits HERE
+            …
+        }
+        …
+        if isProtectedByTags || isProtectedByAge {
+            if *manifest.MediaType != v1.MediaTypeImageIndex && … { continue }
+            group.SubmitErr(func() error { … addDependentManifestsToIgnoreList(…) })   // ← the walk
+            continue
+        }
+
+    The lock `continue` comes BEFORE the walk that adds an index's children to the ignore list. So a
+    locked index is never walked, its children are never ignore-listed, and each untagged child is
+    then judged on its own: no tags, older than `--ago` ⇒ deleted. The locked index is left pointing
+    at manifests that no longer exist, and the pull fails exactly as if the image had been deleted.
+
+    And the perverse corollary, which is why this is not a nice-to-have: an index that is TAGGED and
+    UNLOCKED reaches `isProtectedByTags`, IS walked, and its children ARE ignore-listed. Locking it
+    short-circuits that. Protection applied to the index alone makes its children strictly LESS safe
+    than leaving it unprotected.
+
+    Measured 2026-09-12 on meshweaver.azurecr.io: `memex-portal-ai@sha256:0217fd11…` — the set
+    `memex` is RUNNING — is locked, and its two children (`sha256:3296b0ba…` linux/amd64,
+    `sha256:322de2ff…` linux/arm64) both read `deleteEnabled: true`. They survive today only
+    because they still carry `staging-74d4c85-…-linux-x64` / `-linux-arm64` tags, which the SAME
+    purge step deletes once they pass `--ago 7d`.
+
+    A closure that could not be enumerated is a blocker, never an empty closure."""
+    by_digest = {(m.acr_repo, m.digest): m for group in inventory.values() for m in group}
+    pending = [entry for entry in plan.wanted if entry.digest and not entry.problem]
+    seen: set[tuple[str, str]] = set()
+    while pending:
+        entry = pending.pop()
+        key = (entry.acr_repo, entry.digest or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        manifest = by_digest.get(key)
+        if manifest is None:
+            continue          # absent, or an unreadable repository — already handled downstream
+        if manifest.media_type not in INDEX_MEDIA_TYPES:
+            continue
+        children, error = registry.index_children(entry.acr_repo, entry.digest or "")
+        if children is None:
+            plan.blockers.append(
+                f"could not enumerate the platform manifests of {entry.acr_repo}@{entry.digest} — "
+                f"{error}. A locked index does NOT protect its children (acr-cli skips a locked "
+                "manifest BEFORE it walks the index), so a closure that could not be read is not an "
+                "empty closure.")
+            continue
+        if not children:
+            plan.blockers.append(
+                f"{entry.acr_repo}@{entry.digest} is an image index and lists NO platform "
+                "manifests. An index with nothing under it is a malformed reference set, not a "
+                "single-architecture image.")
+            continue
+        for child in children:
+            existing = next((w for w in plan.wanted
+                             if w.acr_repo == entry.acr_repo and w.digest == child), None)
+            if existing is None:
+                existing = Wanted(acr_repo=entry.acr_repo, digest=child)
+                plan.wanted.append(existing)
+                plan.platform_manifests += 1
+                pending.append(existing)
+            existing.sources.append(
+                f"platform manifest of {entry.acr_repo}@{(entry.digest or '')[:19]}…, which a "
+                "LOCKED index does not protect")
 
 
 def resolve_and_classify(plan: Plan, registry: Registry,
@@ -1014,6 +1133,10 @@ def resolve_and_classify(plan: Plan, registry: Registry,
             for release_tag in release_tags:
                 want_tag(plan, acr_repo, release_tag,
                          f"official release {acr_repo}:{release_tag}")
+
+    # 🚨 THE CLOSURE, BEFORE ANYTHING IS CLASSIFIED. A protected index whose platform manifests are
+    # not also protected is a reference set with a hole in it that opens a week later.
+    expand_platform_closure(plan, registry, inventory, inventory_errors)
 
     # Which of them are already protected?
     known: dict[tuple[str, str], Manifest] = {}
@@ -1146,6 +1269,7 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
     emit(f"      distinct manifests wanted                {len(plan.wanted)}")
     emit(f"      …already protected (deleteEnabled false) {len(plan.already_protected)}")
     emit(f"      …TO LOCK                                 {len(plan.to_lock)}")
+    emit(f"      …platform manifests of an index in it     {plan.platform_manifests}")
     emit(f"      …that could NOT be protected             "
          f"{len([w for w in plan.wanted if w.problem])}")
     emit("")
@@ -1671,7 +1795,9 @@ class FakeRegistry(Registry):
                  tags: dict[tuple[str, str], tuple[str | None, str]],
                  repo_error: str | None = None,
                  locked_tags: set[tuple[str, str]] | None = None,
-                 tag_list_error: str | None = None) -> None:
+                 tag_list_error: str | None = None,
+                 children: dict[tuple[str, str], list[str]] | None = None,
+                 children_error: str | None = None) -> None:
         super().__init__("fake")
         self._manifests = manifests
         self._tags = tags
@@ -1679,6 +1805,8 @@ class FakeRegistry(Registry):
         self.locked_tags = set(locked_tags or set())
         self.tag_list_error = tag_list_error
         self.tag_writes: list[tuple[str, str, bool]] = []
+        self._children = children if children is not None else dict(FAKE_CHILDREN)
+        self.children_error = children_error
         self.writes: list[tuple[str, str, bool]] = []
         # Whether a write actually MOVES the attribute. Default true (a healthy registry); an arm
         # sets it false to drive the "exit 0, nothing changed" case the read-back must catch.
@@ -1729,6 +1857,11 @@ class FakeRegistry(Registry):
         return [Tag(acr_repo, name, manifest.digest, (acr_repo, name) not in self.locked_tags)
                 for manifest in self._manifests.get(acr_repo, [])
                 for name in manifest.tags], ""
+
+    def index_children(self, acr_repo: str, digest: str):
+        if self.children_error:
+            return None, self.children_error
+        return list(self._children.get((acr_repo, digest), [])), ""
 
     def set_tag_delete_enabled(self, acr_repo: str, tag: str, enabled: bool):
         self.tag_writes.append((acr_repo, tag, enabled))
@@ -1790,17 +1923,23 @@ ingress:
   host: "memex.example.cloud"
 """
 
+INDEX = "application/vnd.oci.image.index.v1+json"
 RUNNING = "sha256:" + "a" * 64          # the set the installation is actually running
 RUNNING_TWIN = "sha256:" + "b" * 64     # its migration twin, same core commit
 RUNNING_COMMIT = "1234567" + "0" * 33
+# The platform manifests under the running index — untagged, as buildx leaves them once the
+# `staging-…-linux-x64` tags age out of the same purge step.
+RUNNING_AMD64 = "sha256:" + "1a" * 32
+RUNNING_ARM64 = "sha256:" + "2b" * 32
+FAKE_CHILDREN = {("memex-portal-ai", RUNNING): [RUNNING_AMD64, RUNNING_ARM64]}
 
 
 def _inventory(locked: set[tuple[str, str]] | None = None,
                extra: list[Manifest] | None = None) -> dict[str, list[Manifest]]:
     locked = locked or set()
 
-    def make(acr_repo: str, digest: str, tags: list[str]) -> Manifest:
-        return Manifest(acr_repo, digest, (acr_repo, digest) not in locked, True, tags)
+    def make(acr_repo: str, digest: str, tags: list[str], media_type: str = "") -> Manifest:
+        return Manifest(acr_repo, digest, (acr_repo, digest) not in locked, True, tags, media_type)
 
     short = RUNNING_COMMIT[:7]
     inventory = {
@@ -1812,7 +1951,9 @@ def _inventory(locked: set[tuple[str, str]] | None = None,
                             # third shape as a fixture — memex-cloud on 3.0.0-ci.8399 while its
                             # committed pin still read 8372.
                             make("memex-portal-ai", RUNNING,
-                                 ["3.0.0-ci.9999", short, f"staging-{short}-4242"])],
+                                 ["3.0.0-ci.9999", short, f"staging-{short}-4242"], INDEX),
+                            make("memex-portal-ai", RUNNING_AMD64, []),
+                            make("memex-portal-ai", RUNNING_ARM64, [])],
         "memex-migration": [make("memex-migration", OVERLAY_MIGRATION, ["3.0.0-ci.7926"]),
                             make("memex-migration", RUNNING_TWIN,
                                  ["3.0.0-ci.9999", f"{short}-pabcdef1"])],
@@ -1903,8 +2044,9 @@ def self_test() -> int:
           "whisper charts in the fleet actually use")
     check(not any(enabled for _, _, enabled in registry.writes),
           "ARM 1: a lock run wrote an UNLOCK")
-    # 5 from the two committed axes + 2 the INSTALLATION is running that no file pins (AXIS 3).
-    check(len(plan.wanted) == 7, f"ARM 1: expected 7 wanted manifests, got {len(plan.wanted)}")
+    # 5 from the two committed axes + 2 the INSTALLATION is running that no file pins (AXIS 3)
+    # + the 2 platform manifests under the running index, which a lock on the index does not cover.
+    check(len(plan.wanted) == 9, f"ARM 1: expected 9 wanted manifests, got {len(plan.wanted)}")
 
     # A floating tag is reported and NOT locked — locking `:latest` pins bytes that move.
     check(not any(repo == "memex-log-watcher" for repo, _, _ in registry.writes),
@@ -2190,6 +2332,12 @@ def self_test() -> int:
     short = RUNNING_COMMIT[:7]
     check(("memex-portal-ai", short) in tag_locked,
           "ARM 21: the tag naming the set the installation runs was not locked")
+    # 🚨 …and the VERSION tag on that same manifest, which is what the pod spec names and which no
+    # committed file carries while the installation is ahead of its pin.
+    check(("memex-portal-ai", "3.0.0-ci.9999") in tag_locked,
+          "ARM 21: the version tag of the manifest the installation is RUNNING was left deletable. "
+          "The overlay is behind, so axis 2 never names it; the pod spec does, and a purged tag "
+          "breaks the next restart over a perfectly locked manifest")
     check(not any(enabled for _, _, enabled in registry.tag_writes),
           "ARM 21: a lock run wrote a tag UNLOCK")
 
@@ -2278,6 +2426,18 @@ def self_test() -> int:
               "ARM 24c: a MISSING retention record reported windows, or reported no problem — "
               "an unstatable window must say so, never print as an empty list")
 
+    # ── ARM 24d: a roster that declares one installation TWICE decides nothing, and reds ────────
+    with tempfile.TemporaryDirectory() as scratch:
+        folder = Path(scratch) / ".github" / "acr-retention"
+        folder.mkdir(parents=True)
+        (folder / ROSTER_PATH).write_text(
+            '{"instances": [{"id": "x", "state": "retired", "reason": "old"},'
+            ' {"id": "x", "state": "live", "reason": "back"}]}', encoding="utf-8")
+        _, problems = read_instance_roster(scratch)
+        check(any("declared TWICE" in problem for problem in problems),
+              "ARM 24d: a duplicated roster entry was resolved by array order — which lets a stale "
+              f"exemption outlive the line written to end it: {problems}")
+
     # ── ARM 25: a roster entry naming nobody is a stale exemption, and reds ─────────────────────
     plan, _, _ = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
                         roster={"ghost": ("retired", "decommissioned in 2019")})
@@ -2330,6 +2490,39 @@ env:
     check(plan.tags_locked_now == 0,
           "ARM 28: tag locks were COUNTED although none took")
 
+
+    # ── ARM 30: a LOCKED INDEX DOES NOT PROTECT ITS CHILDREN, so the closure is protected ───────
+    # Read verbatim from Azure/acr-cli `GetUntaggedManifests`: the `continue` for a locked manifest
+    # comes BEFORE the walk that adds an index's children to the ignore list, so a locked index is
+    # never walked and each untagged child is then judged on its own — no tags, past `--ago` ⇒
+    # deleted, leaving the locked index pointing at nothing. Measured on the live registry
+    # 2026-09-12: the index `memex` is RUNNING is locked and BOTH its platform manifests read
+    # deleteEnabled true.
+    plan, fails, registry = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS))
+    locked = {(repo, digest) for repo, digest, enabled in registry.writes if enabled is False}
+    check(("memex-portal-ai", RUNNING_AMD64) in locked and
+          ("memex-portal-ai", RUNNING_ARM64) in locked,
+          "ARM 30: the platform manifests of a protected index were left purgeable — protecting the "
+          "index alone makes them STRICTLY LESS safe than leaving it unprotected, because an "
+          "unlocked tagged index would at least have been walked")
+    check(plan.platform_manifests == 2,
+          f"ARM 30: expected 2 platform manifests in the closure, got {plan.platform_manifests}")
+    check(not any(m.digest in (RUNNING_AMD64, RUNNING_ARM64) for m in plan.release_candidates),
+          "ARM 30: a platform manifest of a protected index was offered as an unlock candidate — "
+          "it is pinned BY that index")
+
+    # ── ARM 30b: a closure that could not be READ is not an empty closure ───────────────────────
+    registry = FakeRegistry(_inventory(), FAKE_TAGS, children_error="az: request failed")
+    plan, _, _ = _drive(clean1, clean2, registry)
+    check(any("could not enumerate the platform manifests" in b for b in plan.blockers),
+          f"ARM 30b: an unreadable index closure passed as complete: {plan.blockers}")
+
+    # ── ARM 30c: an index that lists NOTHING is malformed, not single-architecture ──────────────
+    registry = FakeRegistry(_inventory(), FAKE_TAGS, children={})
+    plan, _, _ = _drive(clean1, clean2, registry)
+    check(any("lists NO platform manifests" in b for b in plan.blockers),
+          f"ARM 30c: an index with no children read as an ordinary image: {plan.blockers}")
+
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no
     # longer what runs. Compare the calls, mechanically.
@@ -2359,6 +2552,11 @@ env:
     required = {"extractor_control", "read_instance_roster", "build_instances",
                 "resolve_running_sets", "resolve_and_classify", "classify_tags",
                 "read_inventory", "build_plan", "apply_locks", "apply_tag_locks"}
+    # expand_platform_closure is called from inside resolve_and_classify, so it is asserted here
+    # by name rather than through run()'s own call list.
+    if "expand_platform_closure" not in _calls(resolve_and_classify):
+        check(False, "ARM 29: resolve_and_classify no longer expands an index to its platform "
+                     "manifests, so a locked index would be protected with a hole under it")
     absent = required - _calls(run)
     check(not absent,
           f"ARM 29: run() no longer calls {sorted(absent)}. The self-test drives its own copy of "
@@ -2374,7 +2572,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, and the harness provably drives the same path as run().")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run().")
     return 0
 
 

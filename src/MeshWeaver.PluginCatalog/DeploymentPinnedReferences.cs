@@ -7,6 +7,7 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -68,7 +69,8 @@ public static class DeploymentPinnedReferences
             Records(meshService, DeploymentNodeType)
                 .Zip(Records(meshService, DeploymentReportService.InventoryNodeType),
                     (deployments, inventories) => Resolve(
-                        deployments, inventories, hub.JsonSerializerOptions, DateTimeOffset.UtcNow, StaleAfter, logger)));
+                        deployments, inventories, hub.JsonSerializerOptions, DateTimeOffset.UtcNow, StaleAfter,
+                        IsControlInstance(hub.ServiceProvider.GetService<IConfiguration>()), logger)));
     }
 
     /// <summary>
@@ -80,6 +82,23 @@ public static class DeploymentPinnedReferences
     /// still be the only thing protection knows about it.
     /// </summary>
     public static readonly TimeSpan StaleAfter = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Does this host own a fleet? The reporter's own contract answers it
+    /// ([DeploymentInventory](/Doc/Architecture/DeploymentInventory)): an instance names itself with
+    /// <c>Hosting:Deployment</c>, and one with no <c>Hosting:ReportTo</c> IS the control instance —
+    /// it files its own record locally instead of posting it.
+    ///
+    /// <para>🚨 THIS IS THE SIGNAL THAT MAKES A ZERO HONEST. Without it, "no Deployment records" is
+    /// read the same way on an ordinary portal (a true measured zero — it has no fleet) and on a
+    /// control instance whose record index has not caught up (an empty protected set over a fleet
+    /// that is very much running). Configuration is authoritative where a query is eventually
+    /// consistent, so the ONE place the two cases can be told apart is here.</para>
+    /// </summary>
+    public static bool IsControlInstance(IConfiguration? configuration) =>
+        configuration is not null
+        && !string.IsNullOrWhiteSpace(configuration[DeploymentReportService.DeploymentKey])
+        && string.IsNullOrWhiteSpace(configuration[DeploymentReportService.ReportToKey]);
 
     /// <summary>
     /// The fleet's consumer inventory, or a refusal — never a smaller number.
@@ -110,6 +129,7 @@ public static class DeploymentPinnedReferences
         JsonSerializerOptions options,
         DateTimeOffset now,
         TimeSpan freshnessBudget,
+        bool isControlInstance,
         ILogger? logger = null)
     {
         // 🚨 AN INSTANCE MAY HAVE MORE THAN ONE RECORD HERE, and which one answers matters. A
@@ -117,18 +137,15 @@ public static class DeploymentPinnedReferences
         // so two nodes can describe one deployment. Every one of them contributes its references —
         // an extra consumer is a consumer — but the FRESHNESS verdict is taken from the newest,
         // because a stale duplicate beside a current report is not a stale instance.
-        var reportOf = new Dictionary<string, List<MeshNode>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var node in inventories)
-        {
-            var id = Field(node, nameof(DeploymentReport.Deployment), options);
-            var key = string.IsNullOrWhiteSpace(id) ? node.Id : id!;
-            if (!reportOf.TryGetValue(key, out var bucket))
-                reportOf[key] = bucket = [];
-            bucket.Add(node);
-        }
+        var unclaimed = inventories
+            .GroupBy(node => Field(node, nameof(DeploymentReport.Deployment), options) is { } id
+                    && !string.IsNullOrWhiteSpace(id) ? id : node.Id,
+                StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(group => group.Key, group => group.ToImmutableList(),
+                StringComparer.OrdinalIgnoreCase);
 
         var references = ImmutableList.CreateBuilder<PinnedPlatformReference>();
-        var refusals = new List<string>();
+        var refusals = ImmutableList.CreateBuilder<string>();
         var expected = 0;
         var retired = 0;
         var fresh = 0;
@@ -148,7 +165,7 @@ public static class DeploymentPinnedReferences
             if (pin is not null)
                 references.Add(pin);
 
-            if (!reportOf.Remove(record.Id, out var reports))
+            if (!unclaimed.TryGetValue(record.Id, out var reports))
             {
                 refusals.Add(
                     $"{record.Path}: no {DeploymentReportService.InventoryNodeType} report has ever arrived, so what this "
@@ -158,6 +175,7 @@ public static class DeploymentPinnedReferences
                     + "installation that is gone and should say so (retired / retiredAt).");
                 continue;
             }
+
             var failed = false;
             foreach (var report in reports)
             {
@@ -171,6 +189,7 @@ public static class DeploymentPinnedReferences
                     failed = true;
                 }
             }
+            unclaimed = unclaimed.Remove(record.Id);
             if (failed)
                 continue;
             var newest = reports
@@ -180,8 +199,9 @@ public static class DeploymentPinnedReferences
             if (newest.age is null)
             {
                 refusals.Add(
-                    $"{record.Path}: its report {newest.report.Path} carries no readable {nameof(DeploymentReport.SampledAt)}, so "
-                    + "it cannot be shown to describe the instance as it is now. A report of unknown age is not a fresh one.");
+                    $"{record.Path}: its report {newest.report.Path} carries no usable {nameof(DeploymentReport.SampledAt)} — "
+                    + "absent, unparseable, or in the FUTURE — so it cannot be shown to describe the instance as it is "
+                    + "now. A report of unknown age is not a fresh one.");
                 continue;
             }
             if (newest.age > freshnessBudget)
@@ -202,15 +222,27 @@ public static class DeploymentPinnedReferences
         // control instance by construction, and a control instance whose Deployment records have
         // gone missing would otherwise read as "zero expected consumers, inventory complete" over
         // a fleet that is very much running.
-        if (expected == 0 && retired == 0 && reportOf.Count > 0)
+        if (expected == 0 && retired == 0 && unclaimed.Count > 0)
             refusals.Add(
-                $"{reportOf.Count} instance(s) file {DeploymentReportService.InventoryNodeType} reports here, which makes "
+                $"{unclaimed.Count} instance(s) file {DeploymentReportService.InventoryNodeType} reports here, which makes "
                 + $"this a control instance, and yet it holds NO {DeploymentNodeType} record to account for — so the "
                 + "expected-consumer set is empty for a fleet that is reporting. That is a missing denominator, not a "
                 + "fleet of zero.");
+        // 🚨 AND THE SAME ZERO WITH NOTHING REPORTED EITHER, which the clause above cannot see.
+        // `Records` reads an eventually-consistent index, so a control instance whose Deployment and
+        // inventory indexes have both not caught up answers exactly as an ordinary portal does —
+        // empty — and an empty expected set authorises collecting every remote consumer's artifacts.
+        // Configuration is authoritative where the query is not: a host that NAMES itself and posts
+        // its report NOWHERE owns a fleet, and a fleet of zero is then a read that has not landed.
+        else if (expected == 0 && retired == 0 && isControlInstance)
+            refusals.Add(
+                $"this host is a control instance ({DeploymentReportService.DeploymentKey} is set and "
+                + $"{DeploymentReportService.ReportToKey} is not) and the {DeploymentNodeType} query returned NOTHING. "
+                + "An eventually-consistent index that has not caught up answers exactly as a host with no fleet does, "
+                + "and only one of those two readings may authorise deleting a remote consumer's artifacts.");
 
         // Whatever is left reported for no record: an unexpected consumer is still a consumer.
-        foreach (var orphan in reportOf.Values.SelectMany(bucket => bucket))
+        foreach (var orphan in unclaimed.Values.SelectMany(bucket => bucket))
         {
             try
             {
@@ -226,13 +258,18 @@ public static class DeploymentPinnedReferences
             "PrebuiltBundleRetention consumer inventory: {Expected} expected instance(s) ({Retired} retired, "
             + "{Orphan} reporting without a record), {Fresh} with a report no older than {Budget}, "
             + "{References} protected reference(s){Verdict}",
-            expected, retired, reportOf.Count, fresh, freshnessBudget, references.Count,
+            expected, retired, unclaimed.Count, fresh, freshnessBudget, references.Count,
             refusals.Count == 0 ? " — COMPLETE" : $" — INCOMPLETE, {refusals.Count} refusal(s)");
 
         if (refusals.Count > 0)
+            // 🚨 THE COUNTS ARE SEPARATE BECAUSE THEY ANSWER DIFFERENT QUESTIONS. "N of M expected"
+            // reads as a fraction of the expected set and silently lies when the refusal was an
+            // ORPHAN report or the missing denominator itself — "1 of 0 expected instance(s)" is
+            // the shape of an operator message nobody can act on.
             throw new InvalidOperationException(
-                $"the fleet consumer inventory is INCOMPLETE — {refusals.Count} of {expected} expected instance(s) could "
-                + "not be accounted for, so no artifact can be shown to be unreferenced and nothing may be collected:"
+                $"the fleet consumer inventory is INCOMPLETE — {refusals.Count} refusal(s) over {expected} expected "
+                + $"instance(s) ({retired} retired, {unclaimed.Count} reporting without a record), so no artifact can "
+                + "be shown to be unreferenced and nothing may be collected:"
                 + string.Concat(refusals.Select(r => Environment.NewLine + "  • " + r)));
 
         return references.ToImmutable();
@@ -253,10 +290,15 @@ public static class DeploymentPinnedReferences
     private static TimeSpan? FreshnessOf(MeshNode report, JsonSerializerOptions options, DateTimeOffset now)
     {
         var sampledAt = Field(report, nameof(DeploymentReport.SampledAt), options);
-        return DateTimeOffset.TryParse(sampledAt, CultureInfo.InvariantCulture,
-            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var stamp)
-            ? now - stamp
-            : null;
+        if (!DateTimeOffset.TryParse(sampledAt, CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var stamp))
+            return null;
+        var age = now - stamp;
+        // 🚨 A STAMP IN THE FUTURE IS AN UNKNOWN AGE, NOT A FRESH ONE. A negative age passes
+        // `age > budget` trivially, so a skewed clock or a malformed producer would make every
+        // report it files permanently fresh — protecting one identity for ever while the
+        // installation moves on, which is precisely the state this budget exists to detect.
+        return age < TimeSpan.Zero ? null : age;
     }
 
     /// <summary>One boolean field of a node's content, read the same way <see cref="Field"/> reads a string.</summary>

@@ -32,6 +32,14 @@ separate from the image it points at, and it is the one a purge reads when it re
 portals pin — so a purge would have left the image intact and the name pointing at nothing, which
 fails a pull exactly as if the image had been deleted. Both are now locked.
 
+**And protecting a multi-architecture image now protects the architectures.** A multi-arch image is
+an index pointing at one manifest per platform, and the cleanup tool skips a protected index before
+it ever looks at what the index points to — so the parts are judged on their own, and once they lose
+the tags they were published with they are collected out from under it. The result is a protected
+image reference that fails to pull. Worse, an *unprotected* index does get walked, so protecting
+only the top-level reference made its parts less safe than leaving it alone. The whole set is
+protected now, and a set that cannot be read is a refusal rather than an empty one.
+
 **An installation that does not answer stops the job instead of shrinking the answer.** It is named,
 the run reports its denominator — how many installations were expected, how many answered, how many
 images and tags were protected — and the arm that releases protection is refused. An installation
