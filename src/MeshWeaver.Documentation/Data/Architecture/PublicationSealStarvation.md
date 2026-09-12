@@ -81,6 +81,25 @@ and nothing in it is ever at `headSha` again. **Hold, on every green build, for 
 Two identities, one letter apart in nothing. The portals had not been rolled onto the image the
 bake resolves, so their `plugins` seal froze at `24c2d024` and the gate held every commit after it.
 
+### The roll is both the last convergence and the start of the freeze
+
+Core `74d4c852` is *"Merge pull request #4044 from Systemorph/feat/per-module-deploy"*, committed
+17:05:45Z on 2026-09-11 — and it is the image both portals are running, 50 core commits behind
+`main` by the next morning. The 18:53:55Z / 18:55:16Z imports were that roll's own boot sweep:
+`SeedPublishedRoot` → `SealedPublicationSyncReconciler` → every source brought onto the commit
+sealed for the freshly-booted identity, `24c2d024`, which the 18:27:53Z green build had just sealed.
+
+That is the whole shape in one sentence: **the roll converged every Space, and then core's surface
+moved while the portals did not.** The next Plugins bake resolved a newer platform image, sealed
+under `s8e1f76cc…`, and the first green build the gate held was `7660ca73` at 21:55:18Z. Everything
+after it — `222853d4` (which tagged `Hosting/v1.17.1` and `v1.18.0`), `4b97be19` (which tagged
+`DeepSign/v1.1.0`) — was held the same way.
+
+So the break is dated **between 18:27Z and 21:55Z on 2026-09-11**, which is *after* core's
+per-module deploy (the portals RUN it) and *before* the Plugins half of it (`MeshWeaver.Plugins#1676`,
+merged 02:37Z on 09-12). The per-module publish path is not the cause; the missed 23:59Z `Hosting`
+publication already said so, four hours before #1676 existed.
+
 ### The branch-by-branch elimination
 
 `MatchingBuildTargets` can drop a candidate for four reasons, and only one of them leaves no trace.
