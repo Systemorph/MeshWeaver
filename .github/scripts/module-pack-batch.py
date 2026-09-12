@@ -428,7 +428,8 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
             problems.append(f"{job} needs exactly one platform-ref checkout at meshweaver")
         if len(logic_checkouts) != 1:
             problems.append(f"{job} needs exactly one build-logic-ref checkout at build-logic")
-        declaration = "MODULE_PACK_BATCH: build-logic/.github/scripts/module-pack-batch.py"
+        declaration = ("MODULE_PACK_BATCH: ${{ github.workspace }}"
+                       "/build-logic/.github/scripts/module-pack-batch.py")
         if block.count(declaration) != 1:
             problems.append(f"{job} must declare its batching helper exactly once from build-logic")
         if "meshweaver/.github/scripts/module-pack-batch.py" in block:

@@ -1751,7 +1751,7 @@ jobs:
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
       # Workflow orchestration belongs to build-logic-ref. The platform checkout below is the
       # framework source/tests compile against and can deliberately predate this lane's scripts.
-      MODULE_PACK_BATCH: build-logic/.github/scripts/module-pack-batch.py
+      MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
     # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
     # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
@@ -3633,7 +3633,7 @@ jobs:
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
       # Keep the orchestration helper on the lane/tooling axis; meshweaver remains the platform
       # source axis used by dotnet test below.
-      MODULE_PACK_BATCH: build-logic/.github/scripts/module-pack-batch.py
+      MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
     strategy:
       # One leg's red suite must not hide the rest — a sweep wants every verdict in one run.
       fail-fast: false
