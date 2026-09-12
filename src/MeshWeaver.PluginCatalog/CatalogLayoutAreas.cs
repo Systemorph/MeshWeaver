@@ -787,6 +787,19 @@ public static class CatalogLayoutAreas
                 .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
                            + "display: block; margin-top: 6px;"));
 
+        // 🚨 #4083 — a landing this installation REFUSED: the bytes cannot bind on this platform
+        // (a higher assembly version than the platform provides, or a missing type), nothing
+        // landed, and a restart changes nothing. It used to be one warning line in a pod log;
+        // the card says what the module needs and what this platform provides, as DATA inside a
+        // localized sentence — platform-owned chrome follows the VIEWER.
+        else if (activation.RefusalForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } refusal)
+            card = card.WithView(Controls.Body(
+                    "⛔ " + (refusal.Provides is not null
+                        ? host.Localize("ui.moduleHeldAtLanding", refusal.Needs ?? "?", refusal.Provides)
+                        : host.Localize("ui.moduleHeldAtLandingTypes", refusal.Needs ?? "?")))
+                .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
+                           + "display: block; margin-top: 6px;"));
+
         // 🚨 #3649 — the FIFTH state, and the first that is not a fault: the newest generation
         // does not load on this platform, so this installation runs the previous one. The module
         // works; the line says which version that is and that the newer one is waiting on a

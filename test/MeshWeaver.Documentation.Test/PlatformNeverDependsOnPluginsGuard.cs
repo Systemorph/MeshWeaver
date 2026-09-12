@@ -63,7 +63,22 @@ public class PlatformNeverDependsOnPluginsGuard
         [
             new KeyValuePair<string, string>("main-cd.yml",
                 "publishes portal-ai + memex-migration from plugins-repo/src, keys the image set on the "
-                + "core/plugins PAIR (#2622), and packs+bakes the Plugins module bundles for that identity"),
+                + "core/plugins PAIR (#2622), packs+bakes the Plugins module bundles for that identity, "
+                + "and — since 2026-09-12, the counterweight to the satellites' once-a-day rebuild — "
+                + "points the reusable compile gate at each satellite's main in `satellite-compat`. "
+                + "This guard's hazard (commit c88cd5d5c, 2026-09-01) is an edge by which 'core's own "
+                + "build or release can be broken by a repository it should not know about': a core "
+                + "PR verdict behind a sibling checkout, or plugin source entering core's build. "
+                + "satellite-compat is neither: it is on no pull request, it builds nothing into an "
+                + "image or seal, it runs after `promote` with nothing waiting on it, and it checks out "
+                + "read-only content at each satellite's main, recording the sha it judged. And its red "
+                + "is CLASSIFIED, not raw: every leg also compiles the same content against the set the "
+                + "fleet is on (gate's pre-promote record) and compat-verdict.py reds ONLY a type that "
+                + "compiled there and does not now — so a satellite's own broken commit (this hazard, "
+                + "exactly) is an advisory, never a red, and a red means core moved a surface. That is "
+                + "the decision (a break known within the hour rather than at 03:00), not a side effect. "
+                + "Its register is pinned by PlatformBakeLaneGuard to exactly the five satellites, inside "
+                + "that job only"),
             new KeyValuePair<string, string>("edge-images.yml",
                 "the manual edge channel — same two projects"),
         ]);
@@ -98,6 +113,10 @@ public class PlatformNeverDependsOnPluginsGuard
         "MeshWeaver.Reinsurance",
         "MeshWeaver.SocialMedia",
         "MeshWeaver.Manufacturing",
+        // Added 2026-09-12 with `satellite-compat`, the first workflow here to name it in an
+        // actionable form. Absent from this list the detector was blind to a Crm reach by
+        // construction — exactly the "stops seeing its subject" defect the summary describes.
+        "MeshWeaver.Crm",
     ];
 
     /// <summary>

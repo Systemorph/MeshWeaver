@@ -717,24 +717,41 @@ public sealed class ModuleLandingService : IDisposable
         var landedBefore = ModuleActivationSidecar.Read(baseDirectory,
             msg => logger?.LogWarning("{Message}", msg));
         var surface = PlatformSurface(landedBefore);
-        var held = LinkHoldReason();
+        var linkVerdict = LinkVerdict();
+        var held = linkVerdict.MayLoad ? null : linkVerdict.Report();
         if (held is not null && !holdUnloadable)
         {
             logger?.LogWarning("Module '{Name}' REFUSED at landing: {Reason}", name, held);
+            // 🚨 The refusal is RECORDED where a person looks (#4083), not only logged: the
+            // module's own refusal marker, which the activation report reads onto the package
+            // card and /health as "held: references YamlDotNet 18.1.0.0, platform provides
+            // 16.3.0.0". Nothing landed, so there is no entry to carry it — the marker is the
+            // record. Best-effort: a marker that cannot be written must not turn a refusal into
+            // a different failure.
+            try
+            {
+                ModuleActivationSidecar.SetRefused(baseDirectory, name, new ModuleActivationSidecar.RefusedLanding(
+                    version, packagePath, linkVerdict.HoldSummary()!, DateTimeOffset.UtcNow,
+                    linkVerdict.Needs(), linkVerdict.Provides()));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                logger?.LogWarning(e, "Module '{Name}': the refusal marker could not be written", name);
+            }
             throw new InvalidOperationException($"Module '{name}' refused: {held}");
         }
 
-        string? LinkHoldReason()
+        ModuleLinkVerdict LinkVerdict()
         {
             var entryBytes = assemblies.First(a =>
                 string.Equals(a.FileName, entryDll, StringComparison.OrdinalIgnoreCase)).Bytes;
             // The module's own closure travels WITH it, so a reference into it is not this gate's
-            // question — the two were built together. Only the PLATFORM side is measured.
+            // question — the two were built together — UNLESS the platform carries the same
+            // simple name and its copy is what binds (#4083); the probe decides which.
             var closure = assemblies
                 .Select(a => Path.GetFileNameWithoutExtension(a.FileName))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var verdict = ModulePlatformLink.Check(entryBytes, name, closure, surface);
-            return verdict.MayLoad ? null : verdict.Report();
+            return ModulePlatformLink.Check(entryBytes, name, closure, surface);
         }
 
         // 🚨 THE GENERATION IS CONTENT-ADDRESSED (#3656) — `name@<16 hex of SHA-256 over the bytes
@@ -1039,6 +1056,9 @@ public sealed class ModuleLandingService : IDisposable
         // with no reader. It writes exactly when the fallback moved.
         if (!keepsNewerHead || !entry.Equals(displaced))
             ModuleActivationSidecar.WriteEntry(baseDirectory, entry);
+        // Bytes landed (head or shelf), so a refusal marker from an earlier landing of this module
+        // no longer describes the state (#4083).
+        ModuleActivationSidecar.ClearRefused(baseDirectory, name);
         // A HELD landing does not raise the restart signal: a restart cannot activate it (boot runs
         // the same link probe on the same bytes and parks the entry again), so "restart required"
         // would be a prompt no restart can clear. The platform update that DOES carry the types
@@ -1249,6 +1269,7 @@ public sealed class ModuleLandingService : IDisposable
         // An uninstalled module has no head to have measured (#3650); a marker left behind would
         // be inert (its generation is gone) but is one more thing to explain.
         ModuleActivationSidecar.ClearUnloadable(baseDirectory, name);
+        ModuleActivationSidecar.ClearRefused(baseDirectory, name);
 
         // Best-effort immediate delete: on a shared volume the files of a LOADED module refuse
         // deletion (SMB keeps them open) — that is fine, the cleared pointers above make the
