@@ -124,6 +124,13 @@ rule is in the mesh's pure, unit-tested plan. What the scripts themselves guaran
   `operator.environment`) — through `--file`, never an argument, never printed. An existing object
   is kept as written.
   stored `enc:` value in that instance's database permanently unreadable.
+- **`hosting-registry-register` issues the instance's plugin-registry key ONCE and never shows
+  it** (MeshWeaver.Plugins#1720). It runs before `hosting-kv-ensure`: a present vault object is
+  presented to the registry and must authenticate as THIS instance ("present"; a rejected or
+  foreign key is a refusal naming the re-issue path, never a re-registration); an absent one is
+  registered (`POST /api/instances/register`, empty bootstrap key = open registration on the free
+  plan, or a platform admin's `mwr_` key from a vault object), stored through `--file`, read back
+  and PROVEN to authenticate before the step reports. Only the key's sha256 crosses back.
 - **`hosting-signin-app` never rotates the sign-in app's secret and never shows one**
   (MeshWeaver.Plugins#1719). A present `<prefix>Authentication-Microsoft-ClientSecret` is kept and
   the app the record names is VERIFIED to redirect to `https://<host>/signin-microsoft` (an identity
