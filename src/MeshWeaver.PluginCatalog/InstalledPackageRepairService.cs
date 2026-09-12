@@ -80,7 +80,8 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                             "[PackageRepair] reconciled declared access + install hooks for {Count} "
                             + "installed partition(s)", records.Count)))
                 .Do(_ => ReportDeclaredModulesWithNoBinary(records, logger))
-                .SelectMany(_ => VerifyCompleteness(records, logger)))
+                .SelectMany(_ => VerifyCompleteness(records, logger))
+                .SelectMany(_ => VerifyModules(records, logger)))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex, "[PackageRepair] repair pass failed"));
@@ -371,6 +372,81 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     "[InstallCompleteness] the completeness sweep failed — NOTHING was verified "
                     + "this boot. Absence of a report here is not evidence that the installs are "
                     + "whole.");
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>
+    /// The MODULE half of the sweep (#4101): for every record that declares a compiled module
+    /// (<see cref="PackageManifest.Module"/>), ask the activation record whether that module is
+    /// active on THIS pod and say so on one line.
+    ///
+    /// <para>🚨 <b>"active" ≠ "every source file arrived".</b> A mixed package's lock declares its
+    /// <c>src/&lt;Module&gt;/…</c> sources so a source-only change moves the module version, but no
+    /// install ever writes them — the pack lane compiles them into the bundle, and the volume holds
+    /// assemblies. So this half cannot compare file-by-file the way <see cref="VerifyCompleteness"/>
+    /// does; it can only ask the two things this pod knows — the activation entry and the loaded
+    /// assembly — and every line it prints says which of the two questions it answered.</para>
+    ///
+    /// <para>Reports; never repairs. Never fails the sweep: a record that cannot be read yields a
+    /// NOT-OBSERVED line, which is a warning and not a pass.</para>
+    /// </summary>
+    private IObservable<Unit> VerifyModules(
+        IReadOnlyList<InstalledRecord> records, ILogger? logger)
+    {
+        var withModule = records
+            .Where(r => !string.IsNullOrWhiteSpace(r.Manifest.Module))
+            .ToList();
+        if (withModule.Count == 0)
+            return Observable.Return(Unit.Default);
+
+        var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+        var activation = landing is null
+            ? Observable.Return<ModuleActivationList?>(null)
+            : landing.GetActivation()
+                .Select(list => (ModuleActivationList?)list)
+                .Catch<ModuleActivationList?, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[InstallCompleteness] reading the module activation record failed — the "
+                        + "module half of the sweep was NOT checked for {Count} package(s).",
+                        withModule.Count);
+                    return Observable.Return<ModuleActivationList?>(null);
+                })
+                .DefaultIfEmpty(null);
+        if (landing is null)
+            logger?.LogWarning(
+                "[InstallCompleteness] this host registers no ModuleLandingService, so whether the "
+                + "{Count} declared module(s) are active was NOT checked.", withModule.Count);
+
+        return activation
+            .Take(1)
+            .Do(list =>
+            {
+                var loaded = ModuleActivationStatus.LoadedAssemblyNames();
+                foreach (var record in withModule)
+                {
+                    var verdict = InstallCompleteness.ModuleActivation(
+                        record.PackageId, record.Manifest, list, loaded, landing?.BaseDirectory);
+                    if (verdict is null)
+                        continue;
+                    if (verdict.IsActive)
+                        logger?.LogInformation(
+                            "[InstallCompleteness] {Package} → module '{Module}': ACTIVE — {Because}.",
+                            verdict.PackageId, verdict.Module, verdict.Because);
+                    else
+                        logger?.LogWarning(
+                            "[InstallCompleteness] {Package} → module '{Module}': NOT ACTIVE ({Kind}) — "
+                            + "{Because}. This is not a clean bill of health; it is an absence of one.",
+                            verdict.PackageId, verdict.Module, verdict.Kind, verdict.Because);
+                }
+            })
+            .Select(_ => Unit.Default)
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[InstallCompleteness] the module half of the sweep failed — NOTHING about "
+                    + "declared modules was verified this boot.");
                 return Observable.Return(Unit.Default);
             });
     }
