@@ -36,10 +36,46 @@ name: Node repo gate (reusable)
 # "Node repos run the same lane" -> "The workflow ref is PINNED".
 #     with:
 #       test-image: ${{ vars.MW_TEST_IMAGE }}
-#       image-digest: ${{ vars.MW_IMAGE_DIGEST }}
+#       image-digest: ${{ vars.MW_IMAGE_DIGEST }}          # or EMPTY: the lane resolves the newest sealed set
 #       platform-image: meshweaver.azurecr.io/memex-portal-ai        # the PORTAL — the reference set (#3022)
-#       platform-image-digest: ${{ vars.MW_PORTAL_IMAGE_DIGEST }}    # same CD wave as image-digest
+#       platform-image-digest: ${{ vars.MW_PORTAL_IMAGE_DIGEST }}    # same CD wave as image-digest; or EMPTY
 #       stage-repo: Systemorph/MeshWeaver.Plugins
+#
+# ──────── THE LANE RESOLVES THE PLATFORM ITSELF when both digests are EMPTY (2026-09-12) ────────
+# Maintainer rule, 2026-09-12, verbatim: "for compile always find latest package of platform and
+# plugins." Every satellite resolves the newest PLATFORM-SEALED core set at run time
+# (MeshWeaver#3842) and re-resolves it in the first step of every NORMAL job, so a "re-run failed
+# jobs" tests the newest packages (Education#320 / #323, Reinsurance#202, Crm#94, Manufacturing#82,
+# SocialMedia#181, Plugins#1739). What a satellite CANNOT refresh is THIS lane: a `uses:` job takes
+# `image-digest` / `platform-image-digest` as `with:` inputs evaluated when it is CALLED, from the
+# caller's stored `platform-ref` outputs, and GitHub offers no hook inside a reusable workflow for
+# the caller to re-resolve. Measured on Education#320 (run 34685497637): the 09:22Z resolution was
+# re-used at 12:5xZ although two newer sets had sealed with the fix.
+#
+# So when a caller passes BOTH digests EMPTY (and does not set allow-unpinned), `plan` resolves the
+# platform ITSELF with core's `.github/scripts/resolve-platform.py` — fetched at `scripts-ref` like
+# compose-gate-host.sh — by the same rule as the satellites: the newest core `main-cd.yml` run on
+# `main` whose `Promote: tag the full set`, `Verify every image shipped` and `Bake platform content
+# in the shipped image + publish` all succeeded, images present in ACR by the version or identity
+# tag; the Plugins publication found on its own (the newest run whose `Plugins: bake + seal …`
+# succeeded, possibly an OLDER run) and reported beside it; the caller's repository VARIABLE
+# `MW_PLATFORM_REF` honoured as a freeze (`vars` in a reusable workflow resolve from the CALLER's
+# repository — GitHub docs, Variables reference: "For reusable workflows, the variables from the
+# caller workflow's repository are used"). The chosen set and the plugins publication are printed
+# in the log, the `::notice` and the step summary, and the digests flow to every shard through
+# `needs.plan.outputs`. Each shard then runs the resolver ONCE MORE with `plan`'s outputs as its
+# `PLATFORM_BASELINE`: a NEWER sealed set is taken (`override=true`, said in a `::notice`), the
+# same or an older one keeps the baseline verbatim, and a failed re-resolution keeps the baseline
+# with a `::warning` — so a "re-run failed jobs" of ONE red shard tests the newest set, which is
+# the whole point of the rule.
+#
+# 🔒 NON-EMPTY DIGESTS KEEP TODAY'S BEHAVIOUR BYTE-FOR-BYTE — a caller that pins still pins, the
+# resolver never runs, and `allow-unpinned` still means "follow the tags verbatim". One empty
+# digest beside a non-empty one is RED by name (a half-pin would compose two CD waves). The
+# resolver needs the caller's `acr-username` / `acr-password` (it proves the set's images are in
+# the registry before it names them) and the caller's `GITHUB_TOKEN` (core is public). Budget:
+# one resolution ≈ 5-12 GitHub calls, plus one per shard for the freshness check, plus one
+# `contents` read per job for the script — see the script's own header.
 #       stage-modules: Store
 #       shards: 4        # opt-in fan-out; 1 (the default) is the unsharded lane, unchanged
 #
@@ -119,6 +155,13 @@ on:
           workflow already guards its own aggregate on) and simply never reachable from a caller —
           a job output is not a `workflow_call` output.
         value: ${{ jobs.plan.outputs.nothing-to-gate }}
+      platform-set:
+        description: >-
+          The promoted set the gate ran against (`3.0.0-ci.<n>`), when the lane RESOLVED the
+          platform itself (both digest inputs empty — see the header); EMPTY when the caller
+          pinned the digests, because then the caller already knows. A shard that took a NEWER set
+          on a re-run says so in its own log and summary; this is `plan`'s baseline.
+        value: ${{ jobs.plan.outputs.platform-set }}
     inputs:
       test-image:
         description: The mw-plugin-test image reference (the caller's vars.MW_TEST_IMAGE).
@@ -128,15 +171,21 @@ on:
         description: >-
           Digest pin (tag@digest — reproducible; an image regression lands on the commit that
           bumps the pin, and a pin that lags the platform by days is a gate reporting on a
-          framework nobody runs, so bump it routinely). Leaving it empty is an ERROR unless
-          allow-unpinned is set.
+          framework nobody runs, so bump it routinely). EMPTY, together with an empty
+          platform-image-digest and no allow-unpinned, means THE LANE RESOLVES THE PLATFORM
+          ITSELF: the newest platform-sealed core set, images present in ACR, the caller's
+          `MW_PLATFORM_REF` variable honoured as a freeze (see the header). A non-empty value is
+          taken verbatim and the resolver never runs. Empty beside a non-empty
+          platform-image-digest is RED by name.
         required: false
         type: string
         default: ''
       allow-unpinned:
         description: >-
           Explicitly accept an empty image-digest / platform-image-digest and gate against the
-          tags verbatim. Never a silent fallback: an empty digest WITHOUT this flag fails red.
+          tags verbatim — a run that is not reproducible and does NOT resolve a sealed set. With
+          both digests empty and this flag unset the lane resolves the newest sealed set instead
+          (the header). Never a silent fallback either way.
         required: false
         type: boolean
         default: false
@@ -153,7 +202,8 @@ on:
       platform-image-digest:
         description: >-
           Digest pin for platform-image (tag@digest), resolved as image-digest is: the pin, else
-          the tag under allow-unpinned, else RED. Pin both digests from ONE CD wave — the lane
+          the tag under allow-unpinned, else — both digests empty — the newest platform-sealed set
+          the lane resolves itself (the header). Pin both digests from ONE CD wave — the lane
           asserts the two images resolve ONE framework identity and refuses a mixed pair by name.
         required: false
         type: string
@@ -385,6 +435,15 @@ jobs:
       mount: ${{ steps.affected.outputs.mount }}
       run_all: ${{ steps.affected.outputs.run_all }}
       nothing-to-gate: ${{ steps.plan.outputs.nothing_to_gate }}
+      # The platform every shard gates against: the caller's pins verbatim, or — both empty — the
+      # set `plan` resolved itself (the header). `resolved` says which; the shards refresh only
+      # a resolved baseline, never a caller's pin. `baseline` is the resolver's whole output row
+      # (JSON), handed to each shard as its PLATFORM_BASELINE.
+      resolved: ${{ steps.digests.outputs.resolved }}
+      image-digest: ${{ steps.digests.outputs.image-digest }}
+      platform-image-digest: ${{ steps.digests.outputs.platform-image-digest }}
+      platform-set: ${{ steps.digests.outputs.platform-set }}
+      baseline: ${{ steps.digests.outputs.baseline }}
     steps:
       # 🚨 The `runner` input is declared and NOT honoured — see the header. An unreadable or
       # unsupported value is RED here, before anything is planned, so "my shards moved" can never
@@ -459,6 +518,86 @@ jobs:
           echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
           echo "matrix=$(seq 1 "$SHARDS" | jq -R . | jq -sc 'map(tonumber)')" >> "$GITHUB_OUTPUT"
           echo "fanning the gate out across $SHARDS shard(s)"
+      # ───────────── THE PLATFORM: the caller's pins verbatim, or resolved HERE (the header) ─────────────
+      # Not an input-shaped `if:` — the step runs whenever there is something to gate and branches
+      # INSIDE on the inputs, so a caller's pin is echoed back byte-for-byte and an empty pair is
+      # resolved, out loud. Gated on the plan's OWN verdict only (as the `gate` job is): a run with
+      # nothing to gate resolves nothing, and says so through an empty `platform-set`.
+      - name: "The platform: the caller's pins, or the newest sealed set resolved here"
+        id: digests
+        if: steps.plan.outputs.nothing_to_gate != 'true'
+        env:
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
+          TEST_IMAGE: ${{ inputs.test-image }}
+          PLATFORM_IMAGE: ${{ inputs.platform-image }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          GH_TOKEN: ${{ github.token }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+          # The CALLER's repository variable (GitHub docs, Variables reference: "For reusable
+          # workflows, the variables from the caller workflow's repository are used") — the same
+          # freeze the caller's own jobs honour, so one variable binds the whole run. Empty in the
+          # normal state; the ONE value read from `vars` here, because a freeze is an incident
+          # instruction that must not be overridable by a caller that forgot to pass it on.
+          FREEZE: ${{ vars.MW_PLATFORM_REF }}
+        run: |
+          set -euo pipefail
+          if [ -n "${IMAGE_DIGEST:-}" ] && [ -n "${PLATFORM_DIGEST:-}" ]; then
+            {
+              echo "resolved=false"
+              echo "image-digest=${IMAGE_DIGEST}"
+              echo "platform-image-digest=${PLATFORM_DIGEST}"
+              echo "platform-set="
+              echo "baseline="
+            } >> "$GITHUB_OUTPUT"
+            echo "platform: the caller's pins — tester ${IMAGE_DIGEST}, portal ${PLATFORM_DIGEST} — taken verbatim; nothing resolved"
+            exit 0
+          fi
+          if [ -n "${IMAGE_DIGEST:-}" ] || [ -n "${PLATFORM_DIGEST:-}" ]; then
+            echo "::error::one digest is pinned and the other is empty (image-digest='${IMAGE_DIGEST:-}', platform-image-digest='${PLATFORM_DIGEST:-}') — a half-pin would compose two CD waves. Pin BOTH from one wave, or leave BOTH empty and the lane resolves the newest sealed set itself."
+            exit 1
+          fi
+          if [ "$ALLOW_UNPINNED" = "true" ]; then
+            {
+              echo "resolved=false"
+              echo "image-digest="
+              echo "platform-image-digest="
+              echo "platform-set="
+              echo "baseline="
+            } >> "$GITHUB_OUTPUT"
+            echo "platform: allow-unpinned — the tags are followed verbatim downstream; no sealed set is resolved"
+            exit 0
+          fi
+          # Both empty, no opt-out: RESOLVE. The registry credential is asserted by name (the
+          # resolver proves the set's images are in ACR before it names them) — never skipped over.
+          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image-digest and platform-image-digest are both empty, so this lane resolves the newest sealed platform set itself — and that needs acr-username + acr-password (secrets) to prove the set's images are in the registry. Pass them, or pin both digests."; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — resolve-platform.py has no ref to be fetched at"; exit 1; }
+          SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-platform.py"
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+            || { echo "::error::could not fetch resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          python3 "$SCRIPT" --self-test
+          # The resolver writes its rows to GITHUB_OUTPUT under ITS names (`portal-image-digest`);
+          # they are captured and re-keyed to this lane's, and the whole row travels to the shards
+          # as their baseline (JSON, one line).
+          ROWS="${RUNNER_TEMP:-/tmp}/platform-rows.txt"; : > "$ROWS"
+          echo "platform: no pin from the caller — resolving the newest platform-sealed set (freeze: '${FREEZE:-none}')"
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${FREEZE:+--freeze "$FREEZE"}
+          python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
+          for key in ("image-digest", "portal-image-digest", "set", "run-number"):
+              if not rows.get(key):
+                  raise SystemExit(f"::error::the resolver wrote no `{key}` — refusing to hand the shards an incomplete platform")
+          print("resolved=true")
+          print(f"image-digest={rows['image-digest']}")
+          print(f"platform-image-digest={rows['portal-image-digest']}")
+          print(f"platform-set={rows['set']}")
+          print("baseline=" + json.dumps(rows, separators=(",", ":")))
+          PY
+          echo "platform: resolved $(grep '^set=' "$ROWS" | cut -d= -f2-) (core $(grep '^sha=' "$ROWS" | cut -d= -f2- | cut -c1-9)); plugins publication: $(grep '^plugins-set=' "$ROWS" | cut -d= -f2-)"
 
   # ─────────────────────────── 2. THE GATE, one job per shard ───────────────────────────
   gate:
@@ -623,14 +762,67 @@ jobs:
           client-id: ${{ secrets.azure-client-id }}
           tenant-id: ${{ secrets.azure-tenant-id }}
           subscription-id: ${{ secrets.azure-subscription-id }}
+      # ───────────── THE PLATFORM FOR THIS SHARD: plan's baseline, re-checked for a NEWER set ─────────────
+      # "Re-run failed jobs" re-runs THIS job with `needs.plan.outputs` exactly as they were hours
+      # ago, because a successful `plan` is not re-run (Education#320). So when `plan` RESOLVED the
+      # platform (the caller pinned nothing), this shard resolves once more with plan's row as its
+      # PLATFORM_BASELINE: a newer sealed set is taken (`override=true`, a `::notice`), the same or
+      # an older one keeps the baseline verbatim, a failed re-resolution keeps it with a `::warning`.
+      # A caller's PIN is never refreshed — it is echoed back byte-for-byte. Not an input-shaped
+      # `if:`: the step always runs and branches inside.
+      - name: "The platform for this shard: the caller's pins, or plan's set re-checked for a newer one"
+        id: platform
+        env:
+          RESOLVED: ${{ needs.plan.outputs.resolved }}
+          IMAGE_DIGEST: ${{ needs.plan.outputs.image-digest }}
+          PLATFORM_DIGEST: ${{ needs.plan.outputs.platform-image-digest }}
+          PLATFORM_BASELINE: ${{ needs.plan.outputs.baseline }}
+          TEST_IMAGE: ${{ inputs.test-image }}
+          PLATFORM_IMAGE: ${{ inputs.platform-image }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          GH_TOKEN: ${{ github.token }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+          FREEZE: ${{ vars.MW_PLATFORM_REF }}    # the CALLER's variable — see `plan`
+        run: |
+          set -euo pipefail
+          if [ "${RESOLVED:-}" != "true" ]; then
+            {
+              echo "image-digest=${IMAGE_DIGEST}"
+              echo "platform-image-digest=${PLATFORM_DIGEST}"
+            } >> "$GITHUB_OUTPUT"
+            echo "platform: as called (tester '${IMAGE_DIGEST:-<tag>}', portal '${PLATFORM_DIGEST:-<tag>}') — nothing was resolved in plan, nothing is refreshed here"
+            exit 0
+          fi
+          [ -n "${PLATFORM_BASELINE:-}" ] || { echo "::error::plan reports resolved=true but handed this shard no baseline row — the plan step and this one disagree about their contract"; exit 1; }
+          SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-platform.py"
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+            || { echo "::error::could not fetch resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          ROWS="${RUNNER_TEMP:-/tmp}/platform-rows.txt"; : > "$ROWS"
+          # With PLATFORM_BASELINE set the resolver never fails the job on its own re-resolution:
+          # the baseline is a valid answer (see the script's FRESHNESS section).
+          GITHUB_OUTPUT="$ROWS" python3 "$SCRIPT" --tester-image "$TEST_IMAGE" --portal-image "$PLATFORM_IMAGE" ${FREEZE:+--freeze "$FREEZE"}
+          python3 - "$ROWS" >> "$GITHUB_OUTPUT" <<'PY'
+          import sys
+          rows = dict(line.rstrip("\n").split("=", 1) for line in open(sys.argv[1], encoding="utf-8") if "=" in line)
+          for key in ("image-digest", "portal-image-digest", "set"):
+              if not rows.get(key):
+                  raise SystemExit(f"::error::the resolver wrote no `{key}` for this shard — refusing to gate against an incomplete platform")
+          print(f"image-digest={rows['image-digest']}")
+          print(f"platform-image-digest={rows['portal-image-digest']}")
+          print(f"platform-set={rows['set']}")
+          print(f"override={rows.get('override', 'false')}")
+          PY
+          echo "platform for this shard: $(grep '^set=' "$ROWS" | cut -d= -f2-) (override=$(grep '^override=' "$ROWS" | cut -d= -f2-))"
       # ───────────── TWO IMAGES, ONE BUILD: resolve, pull, extract, compose (MeshWeaver#3022) ─────────────
       - name: Resolve the tester and the platform image
         id: images
         env:
           TEST_IMAGE: ${{ inputs.test-image }}
-          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          IMAGE_DIGEST: ${{ steps.platform.outputs.image-digest }}
           PLATFORM_IMAGE: ${{ inputs.platform-image }}
-          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          PLATFORM_DIGEST: ${{ steps.platform.outputs.platform-image-digest }}
           ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
         run: |
           set -euo pipefail
