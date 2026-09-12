@@ -625,9 +625,10 @@ on:
         default: install
       build-logic-ref:
         description: >
-          Optional immutable core SHA for selection scripts. Separate from platform-ref, which
-          selects the framework source the tests build. Set it to opt into publication baseline
-          and dependency reuse; existing callers retain their platform-ref selector.
+          Optional immutable core SHA for lane orchestration scripts. Separate from platform-ref,
+          which selects the framework source the modules and tests build against. Set it to opt
+          into publication baseline, dependency reuse and newer lane helpers; existing callers
+          fall back to platform-ref.
         required: false
         type: string
         default: ''
@@ -917,10 +918,11 @@ jobs:
           # shallow clone would make every range unresolvable — which the scope script turns into
           # a FULL pack rather than an empty one, but silently paying for 29 jobs is not the plan.
           fetch-depth: 0
-      # The scope script is the PLATFORM's (one implementation, every repo), read from the same
-      # checkout the pack jobs make at platform-ref — so a workflow newer than the checkout can
-      # never call a script the checkout does not have (run 33073476996's exact failure).
-      - name: Check out Systemorph/MeshWeaver at the pinned ref
+      # The scope scripts are the LANE'S tooling (one implementation, every repo), independently
+      # pinned from the framework source modules compile against. Pack/tests use the same resolved
+      # build-logic ref for their batching helper; an older released platform cannot make a newer
+      # reusable lane call a script that does not exist (Plugins run 34706516117).
+      - name: Check out Systemorph/MeshWeaver at the build-logic ref
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
@@ -1747,6 +1749,9 @@ jobs:
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
+      # Workflow orchestration belongs to build-logic-ref. The platform checkout below is the
+      # framework source/tests compile against and can deliberately predate this lane's scripts.
+      MODULE_PACK_BATCH: build-logic/.github/scripts/module-pack-batch.py
     # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
     # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
@@ -1808,6 +1813,13 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      - name: Check out the batching helper at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
       # ───────────── THIS LEG'S MODULES — enumerated once, from the matrix batch ─────────────
       # The state file every step below drives; `init` refuses an empty or duplicated batch. The
       # module list is printed here so a leg's log opens with what it owns.
@@ -1824,7 +1836,7 @@ jobs:
           # and writes it through module-pack-batch.py; exported ONCE, here, so no step can point
           # at another file (a job-level `env:` cannot read `runner.temp`).
           echo "BATCH_STATE=$RUNNER_TEMP/batch/state.json" >> "$GITHUB_ENV"
-          python3 meshweaver/.github/scripts/module-pack-batch.py --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
+          python3 "$MODULE_PACK_BATCH" --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
       # ═══════ THE .NET SDK — INSTALLED BECAUSE SOMETHING DECLARED IT, NOT BY REFLEX ═══════
       # 🚨 "make installing dotnet sdk a feature flag" (maintainer, 2026-08-31). The rationale and
       # the anti-trapdoor argument are at the top of this file, under "The .NET SDK is a DECLARED
@@ -1841,7 +1853,7 @@ jobs:
           POLICY: ${{ inputs.dotnet-sdk }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           # EVERY consumer this job would hand to a runner SDK, named one by one and evaluated
           # against every entry of the batch — not a summary, an inventory. `build: container`
           # (MeshWeaver#2854) removes the COMPILER from it and NOTHING ELSE: the container path
@@ -1936,7 +1948,7 @@ jobs:
           PLATFORM_VERSION: ${{ needs.prepare.outputs.platform-version }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
             PACKAGE="$(bk get --module "$MODULE" package)"
@@ -2005,7 +2017,7 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
             ENTRY_LEDGER="$(bk get --module "$MODULE" ledger --default null)"
@@ -2266,7 +2278,7 @@ jobs:
           PLATFORM_APP: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.app || '' }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=build)
           [ "${#modules[@]}" -gt 0 ] || echo "no module in this batch is built here — every one is reused from the ledger, or failed before this step (see above)"
           for MODULE in "${modules[@]}"; do
@@ -2448,7 +2460,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=reuse)
           [ "${#modules[@]}" -gt 0 ] || echo "no module in this batch is reused from the ledger"
           for MODULE in "${modules[@]}"; do
@@ -2513,7 +2525,7 @@ jobs:
           PLATFORM_APP: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.app || '' }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=build)
           [ "${#modules[@]}" -gt 0 ] || { echo "nothing to pack in this batch"; exit 0; }
           own="$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src" ${PLATFORM_APP:+"$PLATFORM_APP"})"
@@ -2643,7 +2655,7 @@ jobs:
           PLATFORM_APP: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.app || '' }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=build)
           [ "${#modules[@]}" -gt 0 ] || { echo "nothing to inspect in this batch"; exit 0; }
           # ONE script computes the set for the pack AND for this check — and with $PLATFORM_APP it
@@ -2764,7 +2776,7 @@ jobs:
         id: bundles
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           echo "paths=$(bk paths bundle)" >> "$GITHUB_OUTPUT"
           bk slots --max 10 --where 'bundle!=' --github-output "$GITHUB_OUTPUT"
 
@@ -2869,7 +2881,7 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=build --where 'key!=' --where 'bundle!=')
           for MODULE in "${modules[@]}"; do
             KEY="$(bk get --module "$MODULE" key)"
@@ -2915,7 +2927,7 @@ jobs:
           LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mkdir -p "$RUNNER_TEMP/built"
           [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so no marker of this leg could be attributed to this call and the verifier would refuse it anyway. Failing here, where it is readable."; exit 1; }
           any=false
@@ -3007,7 +3019,7 @@ jobs:
           DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           evidence=false
           mapfile -t modules < <(bk list --ok --where need_test=true)
           for MODULE in "${modules[@]}"; do
@@ -3061,7 +3073,7 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where tested=true --where 'key!=')
           for MODULE in "${modules[@]}"; do
             KEY="$(bk get --module "$MODULE" key)"
@@ -3100,7 +3112,7 @@ jobs:
           TRUNK: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           [ -z "$CONTENT_REPOSITORY" ] || { echo "::error::publish-newest-only reads THIS repository's trunk, but content-repository is '$CONTENT_REPOSITORY' — a lane packing another repository's content cannot say whether a newer commit of it exists. Turn one of the two off."; exit 1; }
           [ -n "$TRUNK" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
           git fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
@@ -3172,7 +3184,7 @@ jobs:
           BUNDLES: ${{ steps.bundles.outputs.paths }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           if [ -z "${TOKEN:-}" ]; then
             echo "::error::publish was requested but no publish-token secret was provided — the registry would never receive this batch's modules, and this job would have reported success"
             exit 1
@@ -3236,7 +3248,7 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where published=true --where 'key!=')
           for MODULE in "${modules[@]}"; do
             KEY="$(bk get --module "$MODULE" key)"
@@ -3276,7 +3288,7 @@ jobs:
           BUNDLES: ${{ steps.bundles.outputs.paths }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mkdir -p "$RUNNER_TEMP/staged"
           [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so no staged publication of this leg could be attributed to this call and the publication lane would refuse it anyway. Failing here, where it is readable."; exit 1; }
           any=false
@@ -3367,7 +3379,7 @@ jobs:
           BUNDLES: ${{ steps.bundles.outputs.paths }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mkdir -p "$RUNNER_TEMP/receipts"
           [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so no receipt of this leg could be attributed to this call."; exit 1; }
           any=false
@@ -3479,8 +3491,8 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -uo pipefail
-          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f meshweaver/.github/scripts/module-pack-batch.py ] || { echo "the leg stopped before its modules were enumerated — no claim of this leg to record against"; exit 0; }
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f "$MODULE_PACK_BATCH" ] || { echo "the leg stopped before its modules were enumerated — no claim of this leg to record against"; exit 0; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           record() {
             local MODULE="$1" phase="$2" note="$3" key trx
@@ -3513,8 +3525,8 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -uo pipefail
-          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f meshweaver/.github/scripts/module-pack-batch.py ] || exit 0
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f "$MODULE_PACK_BATCH" ] || exit 0
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           for MODULE in $(bk list --where 'key!='); do
             python3 meshweaver/.github/scripts/module-build-ledger.py release --key "$(bk get --module "$MODULE" key)" || true
           done
@@ -3529,7 +3541,7 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           for MODULE in $(bk list --ok --where 'key!='); do
             python3 meshweaver/.github/scripts/module-build-ledger.py finish --key "$(bk get --module "$MODULE" key)"
           done
@@ -3543,7 +3555,7 @@ jobs:
       - name: Every module of this batch has its verdict
         run: |
           set -euo pipefail
-          python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
+          python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
 
   # ════════ THE MODULE SUITES — A LANE OF THEIR OWN ON A NON-PUBLISHING RUN ════════
   # 🚨 THE MEASUREMENT THIS JOB EXISTS FOR (MeshWeaver.Plugins run 33656010754, a 39-minute PR):
@@ -3619,6 +3631,9 @@ jobs:
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
+      # Keep the orchestration helper on the lane/tooling axis; meshweaver remains the platform
+      # source axis used by dotnet test below.
+      MODULE_PACK_BATCH: build-logic/.github/scripts/module-pack-batch.py
     strategy:
       # One leg's red suite must not hide the rest — a sweep wants every verdict in one run.
       fail-fast: false
@@ -3659,6 +3674,13 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      - name: Check out the batching helper at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
       - name: This leg's modules
         env:
           BATCH: ${{ toJSON(matrix.batch) }}
@@ -3671,7 +3693,7 @@ jobs:
           # and writes it through module-pack-batch.py; exported ONCE, here, so no step can point
           # at another file (a job-level `env:` cannot read `runner.temp`).
           echo "BATCH_STATE=$RUNNER_TEMP/batch/state.json" >> "$GITHUB_ENV"
-          python3 meshweaver/.github/scripts/module-pack-batch.py --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
+          python3 "$MODULE_PACK_BATCH" --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
       # 🚨 UNCONDITIONAL, and the log says why. `dotnet-sdk: by-declaration` exists so a job that
       # compiles nothing on the runner stops installing an SDK by reflex — but this job's ONLY
       # work is `dotnet test`, a verb the platform image's build-project does not have at all. So
@@ -3704,7 +3726,7 @@ jobs:
           DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           evidence=false
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
@@ -3755,7 +3777,7 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where tested=true --where 'ledger.key!=')
           for MODULE in "${modules[@]}"; do
             KEY="$(bk get --module "$MODULE" ledger.key)"
@@ -3786,7 +3808,7 @@ jobs:
           LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mkdir -p "$RUNNER_TEMP/test-receipts"
           [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so no receipt of this leg could be attributed to this call and the verifier would refuse it anyway."; exit 1; }
           any=false
@@ -3822,8 +3844,8 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -uo pipefail
-          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f meshweaver/.github/scripts/module-pack-batch.py ] || { echo "the leg stopped before its modules were enumerated — nothing to record"; exit 0; }
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f "$MODULE_PACK_BATCH" ] || { echo "the leg stopped before its modules were enumerated — nothing to record"; exit 0; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           record() {
             local MODULE="$1" note="$2" key trx
             key="$(bk get --module "$MODULE" ledger.key)"
@@ -3848,7 +3870,7 @@ jobs:
       - name: Every module of this batch has its verdict
         run: |
           set -euo pipefail
-          python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
+          python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
 
   # ═══════════════ THE COUNT GATE — one STABLE context, on every run ═══════════════
   # 🚨 A dynamic matrix cannot be a fixed list of required status checks: the per-module contexts

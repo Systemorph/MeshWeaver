@@ -3,7 +3,8 @@
 per-module bookkeeping that keeps a batch from becoming a coupling.
 
 (The name on this first line is load-bearing: the module-pack lane fetches this file at the
-caller's `platform-ref` and its `select` job self-tests it on every run.)
+caller's `build-logic-ref` (falling back to `platform-ref`) and its `select` job self-tests it on
+every run. The framework checkout remains independently pinned by `platform-ref`.)
 
 WHY THIS EXISTS (measured 2026-09-05..12)
 ------------------------------------------
@@ -390,6 +391,52 @@ def cmd_verdict(a: argparse.Namespace) -> int:
 
 # ── self-test ──────────────────────────────────────────────────────────────────────────────────
 
+def workflow_script_ownership_problems(workflow: str) -> list[str]:
+    """Keep lane orchestration on build-logic-ref and compilation on platform-ref.
+
+    The two refs deliberately move independently. The 2026-09-12 batching rollout put this helper
+    in a new lane while `pack` and `tests` still invoked it from the older platform checkout; every
+    module-test batch then failed before its first suite. This reads the real workflow beside this
+    script, rather than a copied fixture, so the self-test run by every caller catches that split.
+    """
+    problems: list[str] = []
+    boundaries = {"pack": "tests", "tests": "verify"}
+    for job, next_job in boundaries.items():
+        start_marker = f"\n  {job}:\n"
+        end_marker = f"\n  {next_job}:\n"
+        if start_marker not in workflow or end_marker not in workflow:
+            problems.append(f"cannot find the {job} job boundary")
+            continue
+        block = workflow.split(start_marker, 1)[1].split(end_marker, 1)[0]
+        steps = block.split("\n      - ")
+        platform_checkouts = [
+            step for step in steps
+            if "uses: actions/checkout@" in step
+            and "repository: Systemorph/MeshWeaver" in step
+            and "ref: ${{ inputs.platform-ref }}" in step
+            and "path: meshweaver" in step
+        ]
+        logic_checkouts = [
+            step for step in steps
+            if "uses: actions/checkout@" in step
+            and "repository: Systemorph/MeshWeaver" in step
+            and "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}" in step
+            and "path: build-logic" in step
+            and "sparse-checkout: .github/scripts" in step
+        ]
+        if len(platform_checkouts) != 1:
+            problems.append(f"{job} needs exactly one platform-ref checkout at meshweaver")
+        if len(logic_checkouts) != 1:
+            problems.append(f"{job} needs exactly one build-logic-ref checkout at build-logic")
+        declaration = "MODULE_PACK_BATCH: build-logic/.github/scripts/module-pack-batch.py"
+        if block.count(declaration) != 1:
+            problems.append(f"{job} must declare its batching helper exactly once from build-logic")
+        if "meshweaver/.github/scripts/module-pack-batch.py" in block:
+            problems.append(f"{job} invokes the batching helper from platform-ref")
+        if block.count('"$MODULE_PACK_BATCH"') < 2:
+            problems.append(f"{job} does not drive its batch through MODULE_PACK_BATCH")
+    return problems
+
 def self_test() -> int:
     import subprocess
 
@@ -402,6 +449,29 @@ def self_test() -> int:
 
     def entry(m: str, **kw) -> dict:
         return {"package": m.split(".")[-1], "module": m, "project": f"src/{m}/{m}.csproj", **kw}
+
+    print("== workflow: orchestration ref and platform ref stay separate")
+    workflow_path = Path(__file__).resolve().parents[1] / "workflows" / "node-repo-module-pack.yml"
+    if not workflow_path.is_file():
+        check("the real reusable workflow is present beside the helper", False, str(workflow_path))
+    else:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        problems = workflow_script_ownership_problems(workflow)
+        check("pack and tests fetch this helper from build-logic-ref", not problems, "; ".join(problems))
+        wrong_ref = workflow.replace(
+            "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}\n          path: build-logic",
+            "ref: ${{ inputs.platform-ref }}\n          path: build-logic",
+            1,
+        )
+        check("the ownership guard catches a helper checkout moved onto platform-ref",
+              bool(workflow_script_ownership_problems(wrong_ref)))
+        wrong_path = workflow.replace(
+            'python3 "$MODULE_PACK_BATCH"',
+            "python3 meshweaver/.github/scripts/module-pack-batch.py",
+            1,
+        )
+        check("the ownership guard catches a leg invoking the platform checkout",
+              bool(workflow_script_ownership_problems(wrong_path)))
 
     print("== chunk: deterministic, sorted, ≤N is one leg, singleton unchanged")
     sel = [entry("MeshWeaver.Zeta"), entry("MeshWeaver.AI"), entry("MeshWeaver.Maps"),

@@ -134,6 +134,16 @@ which is untouched. Arithmetic for Plugins at N=6: the ~40 sub-minute pack legs 
 from ~40 billed minutes to ~7 (each batch ≈ 6 × 1.1 min of work ≈ 7 min, rounded once), and the
 per-leg checkout + SDK install is paid 7 times instead of 40.
 
+The batching helper is **lane orchestration**, so `pack` and `tests` fetch it at
+`build-logic-ref` (falling back to `platform-ref` only for callers that do not separate the two).
+Their `meshweaver/` checkout stays at `platform-ref`, because that tree is the framework source and
+reference set the module compiles and tests against. The distinction is executable: the helper's
+self-test reads the real reusable workflow and requires both checkouts in both jobs. This closes the
+2026-09-12 rollout failure in MeshWeaver.Plugins run 34706516117: the reusable workflow already
+contained batched legs, while the released platform pin `4764a607…` predated
+`module-pack-batch.py`; all seven test batches therefore stopped before running a suite. A new lane
+helper must always move on the tooling axis, independently of the platform it verifies.
+
 ### Where a module's own suite runs — and why `publish` decides
 
 A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last
