@@ -260,6 +260,17 @@ them, keeping only repo-specific policy (digest pin, gating, `repository_dispatc
 own `scripts/`). Adopting one renames that repo's required-status-check contexts to
 `<caller job> / <name>` — do it in the same change.
 
+> 📅 **2026-09-12 — two of those "repo-specific" items no longer exist, by decision.** There is no
+> digest pin (the platform is resolved at run time to the newest SEALED set, #3842), and there is no
+> `meshweaver-framework-released` receiver: the per-build release wave is off by default
+> (`Hosting:PlatformBuilds:BroadcastFrameworkReleases`, Plugins#1707) and Plugins#1709 /
+> Reinsurance#198 / Crm#91 / Education#320 / SocialMedia#178 / Manufacturing#79 dropped the type. A
+> satellite runs the shape above on its own pushes and once a day (`schedule`, staggered 03:03 →
+> 03:56 UTC); the daily run is the full run and is what validates a platform build. Only
+> `meshweaver-upstream-published` (a satellite's own publication reaching its declared dependents)
+> still wakes a repo. The shape is unchanged and still mandatory; what changed is WHEN it runs. Full
+> reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 🚨 **`node-repo-validate` is not one lane among several — it is where the FLEET-WIDE guards run**,
 so a copy of it opts out of every guard the lane grows LATER: silently, retroactively, and
 invisibly from inside the repo that made the copy. `check-workflow-timeouts.py` and

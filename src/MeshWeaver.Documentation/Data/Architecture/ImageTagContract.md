@@ -37,6 +37,14 @@ three repositories, `memex-portal-ai` **last** — the same arming-write orderin
 same reason. So a release adds one more immutable pointer, applied symmetrically; it adds no floating
 tag, and since `28fc2da4b` it writes no `latest` at all.
 
+> 📅 **2026-09-12 — and there is no tag that means "validated", by decision.** `<version>` is the
+> arming write; it precedes `publish-bake`, `plugins-bake` and `verify-images`, so a set is *sealed*
+> only by those jobs' conclusions and the `_releases/<version>` markers — which every reader
+> (`resolve-platform.py` in the node repos, `check-release-availability.sh` in CD and `release.yml`,
+> `ReleaseAvailabilityService` on an install) re-derives itself. "Passed the full run" is the next
+> daily satellite runs staying green on it, not a pointer; the clean `X.Y.Z` is the only tag-shaped
+> promotion. See `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 **There is no `memex-portal-ai:latest`, and that is the contract, not an omission.** The portal's
 moving pointer is `main`; its selectable pointer is `<version>`. Nothing in `.github/` writes a
 portal `latest`, and nothing should: a floating tag on the portal would have no producer this

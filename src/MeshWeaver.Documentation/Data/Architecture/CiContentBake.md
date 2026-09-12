@@ -1098,6 +1098,13 @@ as historical.
 
 ### 🚨 Following the release is a POLL in every satellite — and only one repo had it
 
+> 📅 **2026-09-12 — the poll is now the PRIMARY run, not the fallback.** The per-build
+> `meshweaver-framework-released` wave is off by default (`Hosting:PlatformBuilds:BroadcastFrameworkReleases`,
+> Plugins#1707) and no satellite lists the type; each repo's daily `schedule` resolves the newest
+> SEALED set itself (`scripts/resolve-platform.py`, #3842 — not the `:main` tag the table below
+> names) and runs the full bake against it. The four-part shape below remains the reason a satellite
+> carries the poll at all; the cadence rationale is `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 **This is the single defect that makes a fleet boot on an identity nobody baked, and it has been
 rediscovered at least four times. Read this before touching a bake trigger.**
 
