@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
@@ -18,6 +21,13 @@ public record DataChangeNotification(
     DateTimeOffset Timestamp
 )
 {
+    private static readonly JsonSerializerOptions EntityOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip,
+        Converters = { new JsonStringEnumConverter() },
+    };
+
     /// <summary>
     /// Node type carried by the storage backend when it is available without reading the row.
     /// Cross-process feeds may leave this <see langword="null"/> while an older backend payload is
@@ -47,9 +57,12 @@ public record DataChangeNotification(
             NormalizePath(path), DataChangeKind.Deleted, entity, DateTimeOffset.UtcNow));
 
     private static DataChangeNotification WithEntityMetadata(DataChangeNotification notification)
-        => notification.Entity is MeshNode node
+    {
+        var node = notification.Entity.As<MeshNode>(EntityOptions);
+        return node is not null
             ? notification with { NodeType = node.NodeType, Version = node.Version }
             : notification;
+    }
 
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";

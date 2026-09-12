@@ -58,14 +58,14 @@ public class GrainActivationFailureRegistryTest
     {
         using var feed = new InProcessMeshChangeFeed();
         using var registry = GrainActivationFailureRegistry.FromInvalidationFeed(feed);
-        var logical = new List<MeshChangeEvent>();
-        using var logicalSubscription = feed.Subscribe(logical.Add);
+        MeshChangeEvent? logical = null;
+        using var logicalSubscription = feed.Subscribe(change => logical = change);
         registry.Record(RecycledPath, "old compile failure");
 
         feed.PublishLocal(RecycleBroadcast(RecycledPath));
 
         registry.TryGet(RecycledPath).Should().BeNull();
-        logical.Should().BeEmpty(
+        logical.Should().BeNull(
             "a cross-process cache reset must not re-run logical consumers in this replica");
     }
 

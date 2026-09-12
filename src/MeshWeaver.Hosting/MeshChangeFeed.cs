@@ -15,8 +15,10 @@ namespace MeshWeaver.Hosting;
 /// </summary>
 public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, IDisposable
 {
-    private readonly Subject<MeshChangeEvent> _subject = new();
-    private readonly Subject<MeshChangeEvent> _invalidations = new();
+    private readonly Subject<MeshChangeEvent> _subjectLifetime = new();
+    private readonly Subject<MeshChangeEvent> _invalidationLifetime = new();
+    private readonly ISubject<MeshChangeEvent> _subject;
+    private readonly ISubject<MeshChangeEvent> _invalidations;
     private readonly StorageChangeFeedRelay? _storageRelay;
     private readonly ILogger? logger;
     private bool _disposed;
@@ -27,6 +29,11 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     /// </summary>
     public InProcessMeshChangeFeed()
     {
+        // Publish and PublishLocal have independent callers (hub threads, storage LISTEN and the
+        // additive Orleans relay). Rx Subject is not safe for concurrent OnNext calls; the
+        // synchronized wrappers preserve one ordered callback at a time in this process.
+        _subject = Subject.Synchronize(_subjectLifetime);
+        _invalidations = Subject.Synchronize(_invalidationLifetime);
     }
 
     /// <summary>
@@ -36,7 +43,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     /// </summary>
     public InProcessMeshChangeFeed(
         IStorageAdapter storage,
-        ILogger<InProcessMeshChangeFeed>? logger = null)
+        ILogger<InProcessMeshChangeFeed>? logger = null) : this()
     {
         this.logger = logger;
         _storageRelay = new StorageChangeFeedRelay(storage, PublishInvalidation, logger);
@@ -89,7 +96,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
         => Subscribe(_invalidations, handler, filter, "invalidation");
 
     private IDisposable Subscribe(
-        Subject<MeshChangeEvent> subject,
+        ISubject<MeshChangeEvent> subject,
         Action<MeshChangeEvent> handler,
         MeshChangeKind? filter,
         string? channel)
@@ -129,7 +136,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
         _storageRelay?.Dispose();
         _subject.OnCompleted();
         _invalidations.OnCompleted();
-        _subject.Dispose();
-        _invalidations.Dispose();
+        _subjectLifetime.Dispose();
+        _invalidationLifetime.Dispose();
     }
 }

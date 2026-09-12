@@ -18,4 +18,6 @@ feed. Older notification payloads remain supported during rollout by reading the
 for its node type and version. A notification handled by one replica no longer has to reach another
 replica's process memory through a single cluster grain. Database echoes stay on the cache-only
 feed, so actions such as access-grant email and instance synchronization still run once from the
-writer's logical event.
+writer's logical event. Concurrent notifications are serialized, one broken cache cannot starve
+the others, and an older notification whose metadata read fails or stays silent still clears the
+path before the relay continues.

@@ -33,7 +33,8 @@ public interface IMeshChangeFeed
 /// This is deliberately separate from <see cref="IMeshChangeFeed"/>. Logical event consumers can
 /// send mail, run an instance sync or append an outbox entry and therefore must retain the
 /// publisher's single logical delivery. Cache invalidation is idempotent and must run once in every
-/// process, including replicas that did not perform the write.
+/// process, including replicas that did not perform the write. Implementations serialize concurrent
+/// publishers and isolate each invalidation callback, so one cache cannot starve another.
 /// </remarks>
 public interface IMeshInvalidationFeed
 {

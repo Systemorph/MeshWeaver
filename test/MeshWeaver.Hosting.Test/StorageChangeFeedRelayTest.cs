@@ -1,14 +1,17 @@
 #pragma warning disable CS1591
 
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Reactive.Testing;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -40,8 +43,8 @@ public class StorageChangeFeedRelayTest
         invalidations.Should().BeSameAs(local,
             "storage notifications and cache consumers must share that same process-local owner");
 
-        var logical = new List<MeshChangeEvent>();
-        var invalidated = new List<MeshChangeEvent>();
+        var logical = new ImmutableSignal<MeshChangeEvent>();
+        var invalidated = new ImmutableSignal<MeshChangeEvent>();
         using var logicalSubscription = contract.Subscribe(logical.Add);
         using var faultingInvalidator = invalidations.Subscribe(_ =>
             throw new InvalidOperationException("one broken cache"));
@@ -52,18 +55,18 @@ public class StorageChangeFeedRelayTest
             .Write(node, json)
             .Should().Emit();
 
-        logical.Should().BeEmpty(
+        logical.Items.Should().BeEmpty(
             "a durable-store echo must not re-run mail, instance sync or other logical consumers");
-        invalidated.Should().ContainSingle();
-        invalidated[0].Path.Should().Be(Path);
-        invalidated[0].Kind.Should().Be(MeshChangeKind.Updated);
-        invalidated[0].NodeType.Should().Be("Hosting/Publication");
-        invalidated[0].Version.Should().Be(7);
+        invalidated.Items.Should().ContainSingle();
+        invalidated.Items[0].Path.Should().Be(Path);
+        invalidated.Items[0].Kind.Should().Be(MeshChangeKind.Updated);
+        invalidated.Items[0].NodeType.Should().Be("Hosting/Publication");
+        invalidated.Items[0].Version.Should().Be(7);
 
         contract.Publish(MeshChangeEvent.Updated(Node(version: 8, nodeType: "Hosting/Publication")));
 
-        logical.Select(e => e.Version).Should().Equal(8L);
-        invalidated.Select(e => e.Version).Should().Equal(new[] { 7L, 8L },
+        logical.Items.Select(e => e.Version).Should().Equal(8L);
+        invalidated.Items.Select(e => e.Version).Should().Equal(new[] { 7L, 8L },
             "the writer's explicit logical publish must invalidate its own process too");
     }
 
@@ -94,7 +97,7 @@ public class StorageChangeFeedRelayTest
     }
 
     [Fact]
-    public async Task OneMetadataReadFailure_DoesNotStopTheReplicaFromReceivingTheNextCommit()
+    public async Task OneMetadataReadFailure_StillInvalidatesThePath_AndDoesNotStopTheNextCommit()
     {
         var durable = new InMemoryStorageAdapter();
         await durable.Write(Node(version: 20, nodeType: "Hosting/Publication"), json)
@@ -104,7 +107,7 @@ public class StorageChangeFeedRelayTest
             NextReadError = new InvalidOperationException("transient read fault")
         };
         using var feed = new InProcessMeshChangeFeed(adapter);
-        var received = new List<MeshChangeEvent>();
+        var received = new ImmutableSignal<MeshChangeEvent>();
         using var subscription = ((IMeshInvalidationFeed)feed).Subscribe(received.Add);
 
         adapter.Announce(new DataChangeNotification(
@@ -116,9 +119,9 @@ public class StorageChangeFeedRelayTest
             Version = 21,
         });
 
-        received.Should().ContainSingle();
-        received[0].Version.Should().Be(21,
-            "a failed legacy-payload reread may drop that event, but must not terminate the relay");
+        received.Items.Select(e => (e.Path, e.Version, e.NodeType)).Should().Equal(
+            (Path, 0L, (string?)null),
+            (Path, 21L, "Hosting/Publication"));
     }
 
     [Fact]
@@ -127,7 +130,7 @@ public class StorageChangeFeedRelayTest
         var durable = new InMemoryStorageAdapter();
         using var adapter = new ControllableNotificationAdapter(durable);
         using var feed = new InProcessMeshChangeFeed(adapter);
-        var received = new List<MeshChangeEvent>();
+        var received = new ImmutableSignal<MeshChangeEvent>();
         using var subscription = ((IMeshInvalidationFeed)feed).Subscribe(received.Add);
 
         adapter.Announce(new DataChangeNotification(
@@ -143,8 +146,8 @@ public class StorageChangeFeedRelayTest
             Version = 41,
         });
 
-        received.Should().ContainSingle();
-        received[0].Version.Should().Be(41,
+        received.Items.Should().ContainSingle();
+        received.Items[0].Version.Should().Be(41,
             "one unrecognised notification may be dropped, but must not terminate the relay");
     }
 
@@ -158,10 +161,10 @@ public class StorageChangeFeedRelayTest
         using var replicaB = new ControllableNotificationAdapter(durable);
         using var feedA = new InProcessMeshChangeFeed(replicaA);
         using var feedB = new InProcessMeshChangeFeed(replicaB);
-        var seenA = new List<MeshChangeEvent>();
-        var seenB = new List<MeshChangeEvent>();
-        var logicalA = new List<MeshChangeEvent>();
-        var logicalB = new List<MeshChangeEvent>();
+        var seenA = new ImmutableSignal<MeshChangeEvent>();
+        var seenB = new ImmutableSignal<MeshChangeEvent>();
+        var logicalA = new ImmutableSignal<MeshChangeEvent>();
+        var logicalB = new ImmutableSignal<MeshChangeEvent>();
         using var subscriptionA = ((IMeshInvalidationFeed)feedA).Subscribe(seenA.Add);
         using var subscriptionB = ((IMeshInvalidationFeed)feedB).Subscribe(seenB.Add);
         using var logicalSubscriptionA = feedA.Subscribe(logicalA.Add);
@@ -178,10 +181,97 @@ public class StorageChangeFeedRelayTest
         replicaA.Announce(notification);
         replicaB.Announce(notification);
 
-        seenA.Select(e => (e.Path, e.Version)).Should().Equal((Path, 31L));
-        seenB.Select(e => (e.Path, e.Version)).Should().Equal((Path, 31L));
-        logicalA.Should().BeEmpty("a storage listener copy is cache invalidation, not a logical event");
-        logicalB.Should().BeEmpty("a storage listener copy is cache invalidation, not a logical event");
+        seenA.Items.Select(e => (e.Path, e.Version)).Should().Equal((Path, 31L));
+        seenB.Items.Select(e => (e.Path, e.Version)).Should().Equal((Path, 31L));
+        logicalA.Items.Should().BeEmpty("a storage listener copy is cache invalidation, not a logical event");
+        logicalB.Items.Should().BeEmpty("a storage listener copy is cache invalidation, not a logical event");
+    }
+
+    [Fact]
+    public void NeverAnsweringLegacyRead_IsBounded_AndCannotBlockTheNextHintedInvalidation()
+    {
+        var scheduler = new TestScheduler();
+        var durable = new InMemoryStorageAdapter();
+        using var adapter = new ControllableNotificationAdapter(durable) { NeverRead = true };
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        using var relay = new StorageChangeFeedRelay(
+            adapter, received.Add, legacyReadTimeout: TimeSpan.FromTicks(10), scheduler: scheduler);
+
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow)
+        {
+            NodeType = "Hosting/Publication",
+            Version = 52,
+        });
+
+        received.Items.Should().BeEmpty(
+            "Concat preserves order while the first compatibility read remains inside its budget");
+        scheduler.AdvanceBy(11);
+
+        received.Items.Select(e => (e.Path, e.Version)).Should().Equal(
+            (Path, 0L),
+            (Path, 52L));
+    }
+
+    [Fact]
+    public void JsonEntityAndStringEnumReadback_BothRecoverMetadata()
+    {
+        var serialization = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter() },
+        };
+        var entity = JsonSerializer.SerializeToElement(
+            Node(version: 61, nodeType: "Hosting/Publication"), serialization);
+        var factoryNotification = DataChangeNotification.Updated(Path, entity);
+        factoryNotification.NodeType.Should().Be("Hosting/Publication");
+        factoryNotification.Version.Should().Be(61L);
+
+        var durable = new InMemoryStorageAdapter();
+        using var adapter = new ControllableNotificationAdapter(durable)
+        {
+            SerializedRead = JsonSerializer.Serialize(
+                Node(version: 62, nodeType: "Hosting/Publication"), serialization),
+        };
+        using var feed = new InProcessMeshChangeFeed(adapter);
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        using var subscription = ((IMeshInvalidationFeed)feed).Subscribe(received.Add);
+
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: entity, DateTimeOffset.UtcNow));
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+
+        received.Items.Select(e => (e.NodeType, e.Version)).Should().Equal(
+            ("Hosting/Publication", 61L),
+            ("Hosting/Publication", 62L));
+        adapter.ReadCalls.Should().Be(1,
+            "the JSON entity is self-contained; only the legacy path-only event needs a read");
+    }
+
+    [Fact]
+    public void DeleteInvalidation_IsAlwaysVersionless_EvenWhenTheTombstoneCarriesAClock()
+    {
+        var durable = new InMemoryStorageAdapter();
+        using var adapter = new ControllableNotificationAdapter(durable);
+        using var feed = new InProcessMeshChangeFeed(adapter);
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        using var subscription = ((IMeshInvalidationFeed)feed).Subscribe(received.Add);
+
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Deleted,
+            Entity: Node(version: 71, nodeType: "Hosting/Publication"),
+            DateTimeOffset.UtcNow)
+        {
+            NodeType = "Hosting/Publication",
+            Version = 71,
+        });
+
+        received.Items.Should().ContainSingle();
+        received.Items[0].Kind.Should().Be(MeshChangeKind.Deleted);
+        received.Items[0].Version.Should().Be(0,
+            "remote-stream invalidation treats zero as the unconditional deletion signal");
     }
 
     private static MeshNode Node(long version, string nodeType) =>
@@ -202,6 +292,8 @@ public class StorageChangeFeedRelayTest
         private readonly Subject<DataChangeNotification> changes = new();
 
         public Exception? NextReadError { get; set; }
+        public bool NeverRead { get; set; }
+        public string? SerializedRead { get; set; }
         public int ReadCalls { get; private set; }
         public IObservable<DataChangeNotification> Changes => changes;
 
@@ -215,6 +307,10 @@ public class StorageChangeFeedRelayTest
                 NextReadError = null;
                 return Observable.Throw<MeshNode?>(ex);
             }
+            if (NeverRead)
+                return Observable.Never<MeshNode?>();
+            if (SerializedRead is { } serialized)
+                return Observable.Return(JsonSerializer.Deserialize<MeshNode>(serialized, options));
             return inner.Read(path, options);
         }
 
@@ -251,5 +347,17 @@ public class StorageChangeFeedRelayTest
             changes.OnCompleted();
             changes.Dispose();
         }
+    }
+
+    private sealed class ImmutableSignal<T>
+    {
+        private ImmutableList<T> items = ImmutableList<T>.Empty;
+
+        public ImmutableList<T> Items => Volatile.Read(ref items);
+
+        public void Add(T item) => ImmutableInterlocked.Update(
+            ref items,
+            static (current, next) => current.Add(next),
+            item);
     }
 }

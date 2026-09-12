@@ -191,11 +191,14 @@ The first core slice collapses the cache-invalidation leg onto the storage feed 
 Orleans broadcast during the additive rollout:
 
 1. **The notification contract carries `NodeType` and `Version`.** The PostgreSQL trigger already
-   sends `node_type` beside `path` and `op`, and has `NEW.version` in hand. `DataChangeNotification` gains
-   `NodeType` and `Version` as **optional** members (additive; every existing producer passes
-   `null`). Core lands first, the trigger change in the PostgreSql adapter second; the relay below
-   tolerates a payload without them by re-reading the node before any consumer that filters on
-   type sees the event.
+   sends `node_type` beside `path` and `op`, and has `NEW.version` in hand. `DataChangeNotification`
+   gains `NodeType` and `Version` as **optional** members. Typed in-process producers derive the
+   hints from their entity immediately; older and path-only backend payloads leave them null. Core
+   lands first, the trigger change in the PostgreSql adapter second; the relay below tolerates a
+   payload without them by re-reading the node before any consumer that filters on type sees the
+   event. That compatibility read has a five-second bound. An error, silence or missing row still
+   emits a path-only version-zero invalidation, so one backend fault cannot wedge the serial relay
+   or leave the replica's exact-path cache untouched.
 2. **A relay, not a grain.** The mesh-scoped `InProcessMeshChangeFeed` owns one
    `StorageChangeFeedRelay`, which subscribes
    `IStorageAdapter.Changes` and relays each notification into
@@ -212,7 +215,9 @@ Orleans broadcast during the additive rollout:
    `InstanceSyncCoordinator` (which can write to another instance). Sending a database echo through
    the logical feed would run those effects once per replica, while PostgreSQL can additionally
    echo the writer's own commit. Cache invalidators are idempotent and deliberately run in every
-   process; logical effects retain the publisher's single delivery.
+   process; logical effects retain the publisher's single delivery. Both channels serialize
+   concurrent publishers. Invalidation subscribers are isolated per callback, so a broken cache
+   misses its own event and cannot prevent later caches from receiving the same commit.
 4. **Loss semantics are strictly better.** A NOTIFY is missed only inside the listener's own
    reconnect window (a 5 s retry loop, logged at `Error`), which is the window the synced queries
    already accept and the reconcile-on-start pattern in
