@@ -10,7 +10,7 @@ icon: /static/NodeTypeIcons/box.svg
 
 The framework identity is the directory name a prebuilt bundle lives under
 (`<root>/<identity>/<source>/…`), so a consumer that resolves an identity nobody baked does not find
-stale bytes — it finds **nothing**. The companion page *Bundle Delivery Stages* (committed separately, PR #4079) calls this
+stale bytes — it finds **nothing**. [Bundle Delivery Stages](../BundleDeliveryStages) calls this
 stage ④, *deliver*, and names it as the open half of #3583.
 
 This page is the measurement behind the decision, and the decision is **not made here**. It records
@@ -225,7 +225,7 @@ are exactly an entry, and confirming no quoted assembly name appears in a commen
 
 ## Reading
 
-- *Bundle Delivery Stages* (PR #4079) — the four stages and which issue owns each
+- [Bundle Delivery Stages](../BundleDeliveryStages) — the four stages and which issue owns each
 - [CI Content Bake](../CiContentBake) — §"an identity nobody baked"
 - [Module Adoption Policy](../ModuleAdoptionPolicy) · [Rolling Update Build Tolerance](../RollingUpdateBuildTolerance) (#4071)
 - [Publication Seal Starvation](../PublicationSealStarvation) (#4063)
