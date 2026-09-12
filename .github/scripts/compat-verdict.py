@@ -23,10 +23,15 @@ module bundles that shipped with it. Two readings, one verdict per NodeType, one
     no previous image         → NO-BASELINE      a REFUSAL to judge — GREEN with an advisory
                                                  naming why; an unestablished baseline must
                                                  never read as "core broke it" (nor as "fine")
+    type ABSENT at previous   → UNJUDGED         no per-type baseline: the type is newer than
+      + new fail                                 the set the fleet is on, so NOTHING licenses
+                                                 the word "broke" — and nothing licenses
+                                                 "already broken" either. Its own row, GREEN,
+                                                 advisory; never folded into either verdict.
 
-A type that fails on the new image and did not EXIST at the baseline is satellite side too
-(nothing core did can have broken content that was never compiled against the fleet's set): it
-is listed as already-broken with baseline "absent". A type the new-image ratchet calls "compiles
+Every reading is PER TYPE: "compiled at the baseline" is the type's own name in the baseline
+report's `ok` list, never an inference from the satellite's overall colour. Only
+previous-compiled-ok → new-fails licenses "broke". A type the new-image ratchet calls "compiles
 now — remove it from the allow file" (stale allow) is an advisory in every verdict, never red.
 
 USAGE
@@ -43,7 +48,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-VERDICTS = ("broke", "already-broken", "compatible", "no-baseline")
+VERDICTS = ("broke", "already-broken", "unjudged", "compatible", "no-baseline")
+ABSENT_REASON = "no per-type baseline: the type is absent from the previous report (newer than the set the fleet is on)"
 
 
 def _failing(report: dict) -> dict:
@@ -73,28 +79,33 @@ def judge(new: dict, baseline: dict | None, baseline_reason: str = "") -> dict:
             "gate_fail": False,
             "broke": [],
             "already_broken": [],
-            "unjudged": [{"type": t, "error": e} for t, e in sorted(new_gating.items())],
+            "unjudged": [{"type": t, "error": e, "reason": baseline_reason or "no baseline report"}
+                         for t, e in sorted(new_gating.items())],
             "stale_allow": stale_allow,
             "baseline_reason": baseline_reason or "no baseline report",
         }
 
     base_ok = set(baseline.get("ok", []) or [])
     base_fail = _failing(baseline)
-    broke, already = [], []
+    broke, already, unjudged = [], [], []
     for t, e in sorted(new_gating.items()):
         if t in base_ok:
             broke.append({"type": t, "error": e})
         elif t in base_fail:
             already.append({"type": t, "error": e, "baseline": "failed", "baseline_error": base_fail[t]})
         else:
-            already.append({"type": t, "error": e, "baseline": "absent"})
-    verdict = "broke" if broke else ("already-broken" if already else "compatible")
+            # Neither compiled nor failed at the baseline — it was not THERE. Its own row: nothing
+            # licenses "broke" (it never compiled against the fleet's set) and nothing licenses
+            # "already broken" (it never failed against it either).
+            unjudged.append({"type": t, "error": e, "reason": ABSENT_REASON})
+    verdict = ("broke" if broke else "already-broken" if already
+               else "unjudged" if unjudged else "compatible")
     return {
         "verdict": verdict,
         "gate_fail": bool(broke),
         "broke": broke,
         "already_broken": already,
-        "unjudged": [],
+        "unjudged": unjudged,
         "stale_allow": stale_allow,
         "baseline_reason": "",
     }
@@ -156,7 +167,11 @@ def main() -> int:
         "broke": f"🔴 BROKE — this core build broke {sat}: {len(v['broke'])} NodeType(s) compiled against the "
                  f"previous image ({args.baseline_digest[:19]}) and do not against the new one ({args.new_digest[:19]})",
         "already-broken": f"🟡 ALREADY BROKEN — {len(v['already_broken'])} NodeType(s) of {sat} fail on the new image "
-                          f"AND on the previous one (or did not exist there): satellite side, not this build's",
+                          f"AND on the previous one: satellite side, not this build's"
+                          + (f" (+{len(v['unjudged'])} unjudged: no per-type baseline)" if v["unjudged"] else ""),
+        "unjudged": f"🟡 UNJUDGED — {len(v['unjudged'])} NodeType(s) of {sat} fail on the new image and are ABSENT "
+                    f"from the previous report (newer than the set the fleet is on): no per-type baseline, so "
+                    f"neither 'broke' nor 'already broken' is licensed",
         "compatible": f"✅ COMPATIBLE — every NodeType of {sat} compiles against the new image "
                       f"({len(v['already_broken'])} advisory)",
         "no-baseline": f"⚪ NO BASELINE — refusing to judge {sat}: {v['baseline_reason']}. "
@@ -168,7 +183,7 @@ def main() -> int:
     for row in v["already_broken"]:
         print(f"  already-broken   {row['type']} (baseline: {row['baseline']}): {row['error']}")
     for row in v["unjudged"]:
-        print(f"  unjudged         {row['type']}: {row['error']}")
+        print(f"  unjudged         {row['type']} ({row.get('reason', '')}): {row['error']}")
     for t in v["stale_allow"]:
         print(f"  advisory         {t}: compiles now — remove it from scripts/compile-check.allow")
     if v["gate_fail"]:
@@ -209,10 +224,28 @@ def _self_test() -> int:
     if v["verdict"] != "no-baseline" or v["gate_fail"] or v["broke"] or [r["type"] for r in v["unjudged"]] != ["P/A"] \
        or "previous image" not in v["baseline_reason"]:
         failures.append(f"row4 no-baseline: {v!r}")
-    # edge: the type did not exist at the baseline → satellite side, never BROKE
+    # row 5: type ABSENT from the baseline report, fails on new ⇒ UNJUDGED — its own row, green,
+    # never BROKE and never folded into already-broken
     v = judge(rep(breaks=["P/New"], ok=["P/A"]), rep(ok=["P/A"]))
-    if v["verdict"] != "already-broken" or v["gate_fail"] or v["already_broken"][0]["baseline"] != "absent":
-        failures.append(f"edge absent-at-baseline: {v!r}")
+    if v["verdict"] != "unjudged" or v["gate_fail"] or v["broke"] or v["already_broken"] \
+       or [r["type"] for r in v["unjudged"]] != ["P/New"] or "absent" not in v["unjudged"][0]["reason"]:
+        failures.append(f"row5 absent-at-baseline must be unjudged: {v!r}")
+    # …and it stays its own row beside a genuine already-broken type (verdict word = already-broken,
+    # the absent type is NOT in already_broken)
+    v = judge(rep(breaks=["P/New", "P/Old"], ok=["P/A"]), rep(ok=["P/A"], breaks=["P/Old"]))
+    if v["verdict"] != "already-broken" or v["gate_fail"] or [r["type"] for r in v["already_broken"]] != ["P/Old"] \
+       or [r["type"] for r in v["unjudged"]] != ["P/New"]:
+        failures.append(f"row5b absent beside already-broken: {v!r}")
+    # …and beside a genuine BROKE type the leg is still red for THAT type only
+    v = judge(rep(breaks=["P/New", "P/A"], ok=["P/B"]), rep(ok=["P/A", "P/B"]))
+    if v["verdict"] != "broke" or not v["gate_fail"] or [r["type"] for r in v["broke"]] != ["P/A"] \
+       or [r["type"] for r in v["unjudged"]] != ["P/New"]:
+        failures.append(f"row5c absent beside broke: {v!r}")
+    # per-TYPE, never per-satellite: a satellite whose baseline report is all-red still yields BROKE
+    # for the one type that compiled there
+    v = judge(rep(breaks=["P/A", "P/B"]), rep(ok=["P/A"], breaks=["P/B"]))
+    if v["verdict"] != "broke" or [r["type"] for r in v["broke"]] != ["P/A"] or [r["type"] for r in v["already_broken"]] != ["P/B"]:
+        failures.append(f"per-type granularity: {v!r}")
     # edge: fingerprint drift on the new image counts as a new-image failure; stale allow is advisory only
     v = judge(rep(drift=["P/A"], stale=["P/S"], ok=["P/B", "P/S"]), rep(ok=["P/A", "P/B", "P/S"]))
     if v["verdict"] != "broke" or [r["type"] for r in v["broke"]] != ["P/A"] or v["stale_allow"] != ["P/S"]:
@@ -250,7 +283,8 @@ def _self_test() -> int:
         print("✗ compat-verdict self-test FAILED:\n  " + "\n  ".join(failures))
         return 1
     print("✓ compat-verdict: broke (red) · already-broken (green, advisory) · compatible · no-baseline (green, "
-          "unjudged) — all four rows, both directions, absent-at-baseline, drift, stale-allow and known-debt edges, CLI exit codes")
+          "unjudged) · type-absent-from-baseline ⇒ unjudged, never BROKE (row 5) — all rows both directions, per-type "
+          "granularity, drift, stale-allow and known-debt edges, CLI exit codes")
     return 0
 
 

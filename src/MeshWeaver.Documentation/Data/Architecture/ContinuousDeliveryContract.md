@@ -691,12 +691,22 @@ control that makes the red attributable (maintainer pushback, 2026-09-12: *"why 
 compatibility?"* — one compile cannot say which side moved). `gate` records `mw-plugin-test:main`'s
 digest and `3.0.0-ci.<run>` tag before `promote` moves the pointer; `satellite-compat-image` verifies
 GHCR holds that digest and re-uploads the four module bundles the run that built it packed; each leg
-compiles against both sets and `compat-verdict.py` classifies per NodeType: compiled at the baseline
-and not now → **this build broke it**, the only red; failed at the baseline too (or absent there) →
-already broken, satellite side, green with an advisory (its own daily run and ci-main-red issue own
-it); no baseline → a **refusal to judge**, green with an advisory, new-image failures listed
-*unjudged* — an unestablished baseline never reads as "core broke it" nor as "fine". Both digests
-are in every verdict. Measured on that lane, a compile costs ~2 min on an unbilled `ubuntu-latest`
+compiles against both sets and `compat-verdict.py` classifies **per NodeType**: compiled at the
+baseline and not now → **this build broke it**, the only red; failed at the baseline too → already
+broken, satellite side, green with an advisory (its own daily run and ci-main-red issue own it);
+*absent* from the baseline report (newer than the set the fleet is on) → **unjudged**, its own row,
+green with an advisory — only previous-compiled-ok → new-fails licenses the word "broke", and
+absence licenses neither "broke" nor "already broken"; no baseline at all → a **refusal to judge**,
+green with an advisory, new-image failures listed *unjudged* — an unestablished baseline never reads
+as "core broke it" nor as "fine". Both digests are in every verdict. **The baseline compile uses the
+baseline run's module bundles** (the four Plugins-packed modules, fetched from the run whose number
+the baseline's `3.0.0-ci.<run>` tag names), never this run's, although this run's are already at
+hand: the modules are Plugins content that moves between sets, and compiling the previous image with
+this run's bundles would make a Plugins-side move between the two compiles fail the baseline reading
+too and be filed as "already broken" (or fail it spuriously where the new bundle needs new core
+surface) — attributing a Plugins move to the satellite, or hiding a core break behind it. A future
+"we already have this run's bundles, why download the old ones" optimisation would break exactly
+that attribution. Measured on that lane, a compile costs ~2 min on an unbilled `ubuntu-latest`
 runner, two per leg. The semantics are *red but not blocking*, and both halves are the point: it
 does not gate `promote`, `notify-platform-update` or `plugins-bake` (the set is published and every
 instance gates itself; a satellite's compile must never hold a veto over the platform's delivery —

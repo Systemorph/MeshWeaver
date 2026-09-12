@@ -2621,11 +2621,22 @@ jobs:
   #     against the set the fleet is ON (`gate` records mw-plugin-test:main's digest and version
   #     pre-promote; satellite-compat-image verifies GHCR holds it and re-uploads the four module
   #     bundles the run that built it packed). compat-verdict.py then classifies per NodeType:
-  #     compiled at the baseline, not now → BROKE (the only red); failed at the baseline too, or
-  #     absent there → already broken, satellite side (green, advisory — its own daily run and
-  #     ci-main-red issue own it); no baseline → a refusal to judge (green, advisory, new-image
-  #     failures listed UNJUDGED). So the c88cd5d5c hazard — core reddened by a satellite's own
+  #     compiled at the baseline, not now → BROKE (the only red); failed at the baseline too →
+  #     already broken, satellite side (green, advisory — its own daily run and ci-main-red issue
+  #     own it); ABSENT at the baseline (newer than the set the fleet is on) → UNJUDGED, its own
+  #     row (green, advisory: nothing licenses "broke" and nothing licenses "already broken"); no
+  #     baseline → a refusal to judge (green, advisory, new-image failures listed UNJUDGED). Per
+  #     TYPE, never per satellite. So the c88cd5d5c hazard — core reddened by a satellite's own
   #     broken commit — is classified out, not tolerated. Both digests are in every verdict.
+  #   * 🚨 THE BASELINE COMPILES AGAINST THE BASELINE RUN'S MODULE BUNDLES (located by the run
+  #     number in the baseline's 3.0.0-ci.<run> tag), NOT THIS RUN'S — even though this run's are
+  #     already at hand. The four modules (AI, Markdown.Collaboration, Maps, Payments.Stripe) are
+  #     Plugins content packed per build; a Plugins-side move between the two sets (a type renamed
+  #     in MeshWeaver.AI, say) would, with this run's bundles under the OLD image, fail the baseline
+  #     reading too and be filed as "already broken" — misattributing a Plugins move as satellite
+  #     debt, or, with new bundles that need new core surface, as a false baseline failure. "We
+  #     already have this run's bundles, why download the old ones" is the optimisation this
+  #     paragraph exists to refuse: it would break the attribution the whole control is for.
   #
   # Budget: ubuntu-latest in a public repository — unbilled. Five parallel legs of ~2 min per
   # compile, two compiles each (~4–5 min a leg), add ≤ ~5 min of wall time beside `plugins-bake`
@@ -3268,15 +3279,23 @@ jobs:
               broke)
                 red=$((red + 1)); redlist="${redlist:+$redlist, }$sat"
                 list=$(jq -r --arg bt '`' '[.broke[].type] | map($bt + . + $bt) | join(", ")' "$f")
-                echo "| $sat | \`${csha:-?}\` | 🔴 **THIS BUILD BROKE IT** | $types | ${list:-?} | $images |" >> "$GITHUB_STEP_SUMMARY"
+                absent=$(jq -r --arg bt '`' '[.unjudged[].type] | map($bt + . + $bt) | join(", ")' "$f")
+                echo "| $sat | \`${csha:-?}\` | 🔴 **THIS BUILD BROKE IT** | $types | ${list:-?}${absent:+; unjudged (no per-type baseline): $absent} | $images |" >> "$GITHUB_STEP_SUMMARY"
                 echo "compatibility: $sat@${csha:-?} — BROKEN BY THIS BUILD ($VERSION): ${list:-?}"
                 jq -r '.broke[] | "    \(.type): \(.error)"' "$f" ;;
               already-broken)
                 advisory="${advisory:+$advisory; }$sat"
                 list=$(jq -r --arg bt '`' '[.already_broken[].type] | map($bt + . + $bt) | join(", ")' "$f")
-                echo "| $sat | \`${csha:-?}\` | 🟡 already broken (satellite side, advisory) | $types | ${list:-?} | $images |" >> "$GITHUB_STEP_SUMMARY"
-                echo "compatibility: $sat@${csha:-?} — ALREADY BROKEN on the baseline too (satellite side; its own daily run / ci-main-red issue own it): ${list:-?}"
+                absent=$(jq -r --arg bt '`' '[.unjudged[].type] | map($bt + . + $bt) | join(", ")' "$f")
+                echo "| $sat | \`${csha:-?}\` | 🟡 already broken (satellite side, advisory) | $types | ${list:-?}${absent:+; unjudged (no per-type baseline): $absent} | $images |" >> "$GITHUB_STEP_SUMMARY"
+                echo "compatibility: $sat@${csha:-?} — ALREADY BROKEN on the baseline too (satellite side; its own daily run / ci-main-red issue own it): ${list:-?}${absent:+; unjudged, no per-type baseline: $absent}"
                 jq -r '.already_broken[] | "    \(.type) (baseline: \(.baseline)): \(.error)"' "$f" ;;
+              unjudged)
+                advisory="${advisory:+$advisory; }$sat (unjudged types)"
+                list=$(jq -r --arg bt '`' '[.unjudged[].type] | map($bt + . + $bt) | join(", ")' "$f")
+                echo "| $sat | \`${csha:-?}\` | 🟡 unjudged (no per-type baseline — newer than the set the fleet is on) | $types | ${list:-?} | $images |" >> "$GITHUB_STEP_SUMMARY"
+                echo "compatibility: $sat@${csha:-?} — UNJUDGED: these types fail on the new image and are absent from the baseline report, so neither 'broke' nor 'already broken' is licensed: ${list:-?}"
+                jq -r '.unjudged[] | "    \(.type): \(.error)"' "$f" ;;
               no-baseline)
                 advisory="${advisory:+$advisory; }$sat (no baseline)"
                 reason=$(jq -r '.images.baseline_reason // .baseline_reason // "?"' "$f")
