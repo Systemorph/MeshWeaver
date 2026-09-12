@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -43,6 +44,83 @@ public enum BundleAdoptionKind
     /// registry serving the wrong bytes under a sealed digest is an integrity failure, never a
     /// transient one.</summary>
     ArtifactRefused,
+
+    /// <summary>
+    /// 🚨 The bundle arrived, was accepted for this lane, and DECLARES that it has no NodeType
+    /// assemblies to adopt — a module-only or content-only package. <b>Not a miss</b>: nothing was
+    /// meant to be served here and nothing is compiled instead.
+    ///
+    /// <para>Appended rather than folded into <see cref="NoAssemblies"/> because the two are the
+    /// same observation with opposite meanings, and collapsing them is the exact conflation this
+    /// enum exists to prevent: "this package has no NodeTypes" and "this package's NodeTypes failed
+    /// to arrive" are DIFFERENT sentences, and reporting the first as the second makes a healthy
+    /// portal read Degraded for ever. Measured 2026-09-12 on memex.systemorph.com: 13 of 25
+    /// attempts — <c>AI</c>, <c>Anthropic</c>, <c>Maps</c>, <c>Chat</c>, <c>Mcp</c>, … , every one
+    /// of them a module package whose module landed correctly through
+    /// <see cref="ModuleLandingService"/> — were counted as misses on that wording (#3768).</para>
+    ///
+    /// <para>🚨 It is decided from a POSITIVE DECLARATION in the manifest (a module, or content),
+    /// never from the absence of assemblies. A bundle that declares nothing at all is genuinely
+    /// empty and stays <see cref="NoAssemblies"/> — loud — because "the producer shipped an empty
+    /// archive" is a real defect that an inference from emptiness would silence.</para>
+    /// </summary>
+    NothingToAdopt,
+}
+
+/// <summary>
+/// How to read a bundle that carried no NodeType assemblies (#3768).
+/// </summary>
+public static class BundleOffering
+{
+    /// <summary>
+    /// Classifies a bundle whose assembly list is EMPTY — the one observation that means two
+    /// opposite things.
+    ///
+    /// <para>🚨 The answer comes from what the manifest DECLARES, never from what it lacks. A
+    /// package that says it ships a module, or content, has no NodeTypes to offer and is complete
+    /// as delivered (<see cref="BundleAdoptionKind.NothingToAdopt"/>). A package that declares
+    /// nothing — no module, no content, and no unresolved types either — is an empty archive, which
+    /// is a producer defect, and it stays <see cref="BundleAdoptionKind.NoAssemblies"/> so it stays
+    /// loud. Inferring the benign reading from emptiness would silence exactly that case.</para>
+    ///
+    /// <para>Two things dominate every declaration, and both are misses:</para>
+    /// <list type="number">
+    /// <item>unresolved producer <c>Misses</c> — the bake could not resolve types it was asked for,
+    /// so the bundle is short whatever else it carries;</item>
+    /// <item>🚨 a non-empty <c>Assemblies</c> list. The manifest DECLARED NodeType assemblies and
+    /// none came out, which is a torn bundle, not a module-only one.
+    /// <see cref="BundleReader.Read(System.IO.Stream, System.Collections.Generic.IReadOnlySet{string})"/>
+    /// skips a declared assembly whose archive entry is absent (<c>if (dll is null) continue;</c>)
+    /// — silently, and without recording a miss. A MIXED package (content + NodeTypes + a module)
+    /// whose assembly entries went missing therefore arrives here with zero payloads, a positive
+    /// <c>Module</c> declaration and no <c>Misses</c>, and reading that as "nothing to adopt" would
+    /// hide a genuinely missing NodeType — from <c>Modules:RequirePrebuilt</c> above all, which
+    /// exists to refuse exactly that. Found in review on #4079.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="manifest">The bundle's manifest, or null from an unreadable bundle.</param>
+    public static BundleAdoptionKind ClassifyEmpty(BundleReader.Manifest? manifest)
+    {
+        if (manifest?.Misses is { Count: > 0 })
+            return BundleAdoptionKind.NoAssemblies;
+
+        // The manifest promised NodeType bytes. Zero of them arrived. That is a miss however the
+        // package describes the rest of itself.
+        if (manifest?.Assemblies is { Count: > 0 })
+            return BundleAdoptionKind.NoAssemblies;
+
+        var declaresModule = manifest?.Module?.AssemblyName is { Length: > 0 };
+        var declaresContent = manifest?.Content is { Count: > 0 };
+        return declaresModule || declaresContent
+            ? BundleAdoptionKind.NothingToAdopt
+            : BundleAdoptionKind.NoAssemblies;
+    }
+
+    /// <summary>What an empty-but-complete bundle offered instead of NodeTypes, for the log.</summary>
+    public static string OfferingOf(BundleReader.Manifest? manifest) =>
+        manifest?.Module?.AssemblyName is { Length: > 0 } name
+            ? $"module '{name}'"
+            : "content only";
 }
 
 /// <summary>
@@ -66,8 +144,16 @@ public sealed record BundleAdoptionOutcome(
     /// Whether this attempt left content to be COMPILED here that the distribution lane was meant
     /// to serve. Adopting fewer assemblies than were offered counts — a partial adoption is a
     /// partial miss, and rounding it to "adopted" is how a regression hides inside a success.
+    ///
+    /// <para>🚨 <see cref="BundleAdoptionKind.NothingToAdopt"/> is NOT a miss, and it is the one
+    /// exception that has to be stated rather than inferred: a module-only or content-only package
+    /// offers no NodeType assembly, so there is nothing the lane was "meant to serve" and nothing
+    /// compiles here in its place. Counting it left 13 of 25 attempts on memex.systemorph.com
+    /// reading as misses on 2026-09-12 while every one of them had landed correctly.</para>
     /// </summary>
-    public bool IsMiss => Kind != BundleAdoptionKind.Adopted || Adopted < Offered;
+    public bool IsMiss =>
+        Kind is not (BundleAdoptionKind.Adopted or BundleAdoptionKind.NothingToAdopt)
+        || Adopted < Offered;
 
     /// <summary>One line, for a log or a health payload.</summary>
     public string Describe() => Kind switch
@@ -76,6 +162,9 @@ public sealed record BundleAdoptionOutcome(
             $"{PluginId}: adopted {Adopted}/{Offered}",
         BundleAdoptionKind.Adopted =>
             $"{PluginId}: adopted only {Adopted}/{Offered} — the rest compile here",
+        BundleAdoptionKind.NothingToAdopt =>
+            $"{PluginId}: no NodeTypes to adopt"
+            + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
         _ => $"{PluginId}: {Kind}"
              + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
     };
@@ -146,10 +235,19 @@ public sealed class BundleAdoptionLedger
 
         var misses = all.Where(o => o.IsMiss).ToArray();
         var adopted = all.Sum(o => o.Adopted);
+        // 🚨 The attempts that offered nothing are NAMED in the denominator rather than silently
+        // dropped from it. "25 attempts, 25 adopted, no misses" over a population where 13 carried
+        // no NodeTypes invites the reader to conclude 25 packages were served; saying how many had
+        // nothing to serve is what makes the remaining number readable.
+        var nothing = all.Count(o => o.Kind is BundleAdoptionKind.NothingToAdopt);
+        var nothingSuffix = nothing == 0
+            ? string.Empty
+            : $" ({nothing} carried no NodeTypes to adopt)";
         if (misses.Length == 0)
-            return $"{all.Count} adoption attempt(s), {adopted} assembly/assemblies adopted, no misses";
+            return $"{all.Count} adoption attempt(s), {adopted} assembly/assemblies adopted, "
+                + $"no misses{nothingSuffix}";
 
-        return $"{all.Count} adoption attempt(s), {adopted} assembly/assemblies adopted, "
+        return $"{all.Count} adoption attempt(s), {adopted} assembly/assemblies adopted{nothingSuffix}, "
             + $"{misses.Length} MISS(es) — content the registry was meant to serve is compiled "
             + "here instead: "
             + string.Join("; ", misses.Take(Math.Max(1, maxNamed)).Select(m => m.Describe()))
