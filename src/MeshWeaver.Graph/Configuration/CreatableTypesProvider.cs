@@ -27,9 +27,9 @@ namespace MeshWeaver.Graph.Configuration;
 ///   <item>NodeType MeshNodes returned by the query (dynamic NodeTypes
 ///     persisted as <c>nodeType:NodeType</c> rows + static NodeTypes
 ///     surfaced by <see cref="IStaticNodeProvider"/>).</item>
-///   <item>Static <c>MeshConfiguration</c> node entries with
-///     <c>NodeType = "NodeType"</c> — for AddMeshNodes registrations
-///     that aren't persisted (built-in types like Markdown, Thread).</item>
+///   <item>Static <see cref="IStaticNodeProvider"/> entries that have not opted out of
+///     <see cref="MeshContexts.Create"/> — the AddMeshNodes registrations that are never
+///     persisted (Markdown, Group, Role, Redirect, UiContribution, HomeTab, …).</item>
 ///   <item>Explicit <c>CreatableTypes</c> JSON on the parent NodeType
 ///     definition (read from
 ///     <see cref="NodeTypeDefinition.CreatableTypes"/>).</item>
@@ -150,19 +150,33 @@ internal sealed class CreatableTypesProvider(
 
     private static string[] BuildQueries(string? nodePath, string? currentType)
     {
+        // 🚨 `context:create` on EVERY query, because this IS the create menu. A NodeType that
+        // opted out of creation (Release, Build, ModuleBuild, Partition — `ExcludeFromContext:
+        // ["create"]`) must not be offered, and the opt-out is only honoured when the query
+        // names the context it is for. Without it the provider offered four types the Create
+        // form has always withheld.
+        const string CreateContext = "context:" + MeshContexts.Create;
+
         if (string.IsNullOrEmpty(nodePath))
         {
             // Root listing: no namespace bound. Surface every NodeType
             // definition so the create UI can offer the full menu — a catalog, mesh-wide by
             // nature, and it says so (#3202 — fan-out is opt-in).
-            return [MeshWideQuery.OfType("NodeType")];
+            return [MeshWideQuery.Declare($"nodeType:NodeType {CreateContext}")];
         }
 
         // Q1: NodeTypes along the ancestor chain of <myself> — picks up
         // types defined under any namespace in the path's hierarchy.
+        //
+        // 🚨 There is deliberately NO root-namespace leg (`namespace: nodeType:NodeType`)
+        // here, even though the Create form used to run one: `namespace:` with an empty value
+        // leaves ParsedQuery.Path empty, which is exactly the shape the Postgres planner
+        // REFUSES as unanchored (#3202) — so on a partitioned portal that leg has never
+        // returned a row. Root-level built-ins reach the menu through the static bucket in
+        // BuildInfos, which is where they actually live.
         var list = new List<string>(2)
         {
-            $"nodeType:NodeType scope:selfAndAncestors namespace:{nodePath}",
+            $"nodeType:NodeType scope:selfAndAncestors namespace:{nodePath} {CreateContext}",
         };
         // Q2 (when applicable): NodeTypes under the parent's NodeType so
         // an instance can offer the children its type defines (e.g. an
@@ -170,7 +184,7 @@ internal sealed class CreatableTypesProvider(
         if (!string.IsNullOrEmpty(currentType)
             && !string.Equals(currentType, MeshNode.NodeTypePath, StringComparison.Ordinal))
         {
-            list.Add($"namespace:{currentType} nodeType:NodeType");
+            list.Add($"namespace:{currentType} nodeType:NodeType {CreateContext}");
         }
         return list.ToArray();
     }
@@ -227,14 +241,22 @@ internal sealed class CreatableTypesProvider(
             result.Add(BuildInfoFromMeshNode(typeNode, options));
         }
 
-        // 2. Static IStaticNodeProvider-registered NodeType MeshNodes that aren't
-        //    persisted (don't show up in the query). Filter on
-        //    NodeType == MeshNode.NodeTypePath to grab only NodeType
-        //    definitions, not arbitrary static nodes.
+        // 2. Static IStaticNodeProvider-registered nodes that aren't persisted (so they never
+        //    show up in the query above).
+        //
+        //    🚨 THE FILTER IS THE CREATE-CONTEXT OPT-OUT, never `NodeType == "NodeType"`.
+        //    A built-in type registration is `AddMeshNodes(new MeshNode("Group") {
+        //    HubConfiguration = … })` — the PATH is the type name and there is no self-typing
+        //    stamp at all. Measured on a running mesh (#4040): filtering on
+        //    `NodeType == MeshNode.NodeTypePath` kept 7 of 42 and silently dropped Markdown,
+        //    Group, Role, Redirect, UiContribution, HomeTab, License and WhatsNew — every one
+        //    of them a type the Create form has always offered. Shrinking the create menu is
+        //    the same class of invisible failure as never reading CreatableTypes at all, so
+        //    this bucket applies exactly the rule the form applied: everything the host
+        //    registered, minus what opted out of `context:create`.
         foreach (var typeNode in serviceProvider.EnumerateStaticNodes())
         {
-            if (!string.Equals(typeNode.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
-                continue;
+            if (typeNode.IsExcludedFromContext(MeshContexts.Create)) continue;
             if (!Allowed(typeNode.Path)) continue;
             if (!added.Add(typeNode.Path)) continue;
             result.Add(BuildInfoFromMeshNode(typeNode, options));
@@ -269,10 +291,13 @@ internal sealed class CreatableTypesProvider(
             }
         }
 
-        // Order ascending — globals carry a high Order (e.g. 1000/1001) so they
-        // sort to the end of the create menu; OrderBy is stable so types with
-        // an equal Order keep their discovery sequence.
-        return result.OrderBy(x => x.Order).ToList();
+        // Order ascending — globals carry a high Order (e.g. 1000/1001) so they sort to the end
+        // of the create menu; within one Order the list is alphabetical, which is how the
+        // Create form has always presented its fixed items.
+        return result
+            .OrderBy(x => x.Order)
+            .ThenBy(x => x.DisplayName ?? x.NodeTypePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static CreatableTypeInfo BuildInfoFromMeshNode(MeshNode node, System.Text.Json.JsonSerializerOptions options)
