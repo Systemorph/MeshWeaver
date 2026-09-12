@@ -325,6 +325,120 @@ case "$_ps_out" in *"pull_secret_verify=true"*) bad "a dry-run pull-secret never
 unset _ps_out _ps_rc _ps_dir _ps_log _ns_line _sec_line
 
 echo
+echo "── hosting-registry-register: issue the instance key once, prove it, never show it ──"
+# MeshWeaver.Plugins#1720 — hosting-kv-ensure REQUIRES <prefix>PluginCatalog-RegistryToken and
+# nothing issued it: runbook step 2 was a hand curl + az. The registry stub answers
+# /api/instances/register and /api/instances/self; a recorded-argv az stub answers the vault. The
+# decisions asserted: present-and-accepted → nothing issued; absent → registered, stored through
+# --file, proven; every refusal before a second registration; no key in any output or argv.
+RR_CURL="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/registry" && pwd)"
+RR_AZ="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/registry-register" && pwd)"
+rr() {  # rr <mode> <vault values> [env…] -- <args…>
+  local mode="$1" values="$2"; shift 2
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _rr_reg="$(mktemp -d)"; _rr_kv="$(mktemp -d)"
+  printf '%s' "$mode" > "$_rr_reg/mode"; : > "$_rr_reg/keys"; : > "$_rr_reg/log"
+  _rr_out="$(env "${envs[@]}" PATH="$RR_CURL:$RR_AZ:$PATH" HOSTING_REG_STATE="$_rr_reg" HOSTING_RRAZ_STATE="$_rr_kv" HOSTING_RRAZ_VALUES="$values" \
+    hosting-registry-register "$@" 2>&1)"; _rr_rc=$?
+  _rr_reglog="$(cat "$_rr_reg/log" 2>/dev/null || true)"; _rr_azlog="$(cat "$_rr_kv/az.log" 2>/dev/null || true)"
+}
+rr_done() { rm -rf "$_rr_reg" "$_rr_kv"; }
+RR_ARGS=(--registry-url https://registry.test --instance-id acme --home-url https://acme.meshweaver.cloud --vault Systemorph --object acme-PluginCatalog-RegistryToken)
+
+# Absent → registered on the free plan, stored, proven.
+rr normal "" -- "${RR_ARGS[@]}"
+[ "$_rr_rc" -eq 0 ] && ok "registry-register issues a key for an instance whose vault object is ABSENT" || bad "registry-register issues a key" "exited ${_rr_rc}: ${_rr_out}"
+case "$_rr_reglog" in *"REGISTER acme boot=empty"*) ok "…by open registration (empty bootstrap key)" ;; *) bad "open registration" "registry saw: ${_rr_reglog}" ;; esac
+[ "$(cat "$_rr_kv/set.acme-PluginCatalog-RegistryToken" 2>/dev/null)" = "mwi_fake-registered-key-NEVER-PRINTED-acme" ] && ok "…the returned mwi_ key is stored under the object, byte-for-byte" || bad "key stored" "vault got: $(cat "$_rr_kv/set.acme-PluginCatalog-RegistryToken" 2>/dev/null)"
+case "$_rr_out" in *NEVER-PRINTED*|*mwi_*) bad "registry-register never prints the key" "it did: ${_rr_out}" ;; *) ok "registry-register never prints the key" ;; esac
+case "$_rr_azlog" in *NEVER-PRINTED*|*mwi_*) bad "…and never puts it on an az command line" "az saw: ${_rr_azlog}" ;; *) ok "…and never puts it on an az command line" ;; esac
+case "$_rr_reglog" in *"GET /api/instances/self current"*) ok "…and PROVES the stored key authenticates before it reports" ;; *) bad "proof" "registry saw: ${_rr_reglog}" ;; esac
+case "$_rr_out" in *"::hosting:: registry_registration=registered"*"::hosting:: registry_instance=acme"*"::hosting:: registry_plan=free"*"::hosting:: registry_key_hash="*) ok "the run reports registered / instance / plan / key hash" ;; *) bad "registration facts" "said: ${_rr_out}" ;; esac
+case "$_rr_out" in *"::hosting:: key_hash="*) bad "…and never the rotation's key_hash fact (the control plane would adopt it as a rotation)" "said: ${_rr_out}" ;; *) ok "…and never the rotation's key_hash fact" ;; esac
+rr_done
+
+# Present and accepted → nothing issued, nothing written.
+_rr_pre="$(mktemp -d)"
+rr normal "acme-PluginCatalog-RegistryToken=mwi_fake-registered-key-NEVER-PRINTED-acme" -- "${RR_ARGS[@]}"
+rr_done
+rr_present() {  # a registry that already knows the vault's key as acme's current key
+  _rr_reg="$(mktemp -d)"; _rr_kv="$(mktemp -d)"; printf normal > "$_rr_reg/mode"; : > "$_rr_reg/log"
+  printf '%s acme current\n' "$(printf '%s' "mwi_fake-registered-key-NEVER-PRINTED-acme" | sha256sum | cut -c1-64)" > "$_rr_reg/keys"
+  _rr_out="$(env "$@" PATH="$RR_CURL:$RR_AZ:$PATH" HOSTING_REG_STATE="$_rr_reg" HOSTING_RRAZ_STATE="$_rr_kv" HOSTING_RRAZ_VALUES="acme-PluginCatalog-RegistryToken=mwi_fake-registered-key-NEVER-PRINTED-acme" \
+    hosting-registry-register "${RR_ARGS[@]}" 2>&1)"; _rr_rc=$?
+  _rr_reglog="$(cat "$_rr_reg/log")"; _rr_azlog="$(cat "$_rr_kv/az.log" 2>/dev/null || true)"
+}
+rr_present
+[ "$_rr_rc" -eq 0 ] && ok "a PRESENT, accepted key is left alone (a re-provision is idempotent)" || bad "present key kept" "exited ${_rr_rc}: ${_rr_out}"
+case "$_rr_reglog" in *REGISTER*) bad "…nothing is registered again" "registry saw: ${_rr_reglog}" ;; *) ok "…nothing is registered again" ;; esac
+case "$_rr_azlog" in *"secret set"*) bad "…and nothing is written" "az saw: ${_rr_azlog}" ;; *) ok "…and nothing is written" ;; esac
+case "$_rr_out" in *"::hosting:: registry_registration=present"*"registry_instance=acme"*) ok "…reported as present" ;; *) bad "present fact" "said: ${_rr_out}" ;; esac
+case "$_rr_out" in *NEVER-PRINTED*|*mwi_*) bad "…without printing the held key" "it did: ${_rr_out}" ;; *) ok "…without printing the held key" ;; esac
+rr_done
+
+# Present but the registry rejects it → refused, object KEPT, hand fix named.
+rr absent "acme-PluginCatalog-RegistryToken=mwi_stale-NEVER-PRINTED" -- "${RR_ARGS[@]}"
+[ "$_rr_rc" -ne 0 ] && ok "a present key the registry rejects is a REFUSAL, never a re-registration" || bad "rejected present key refuses" "exited 0: ${_rr_out}"
+case "$_rr_out" in *"does not accept"*"re-issue"*"az keyvault secret set --vault-name Systemorph --name acme-PluginCatalog-RegistryToken --file"*) ok "…naming the re-issue path and the hand command" ;; *) bad "names the fix" "said: ${_rr_out}" ;; esac
+case "$_rr_reglog" in *REGISTER*) bad "…and registers nothing" "registry saw: ${_rr_reglog}" ;; *) ok "…and registers nothing" ;; esac
+case "$_rr_azlog" in *"secret set"*) bad "…and keeps the object" "az saw: ${_rr_azlog}" ;; *) ok "…and keeps the object" ;; esac
+rr_done
+
+# Present but belongs to ANOTHER instance → refused.
+_rr_reg="$(mktemp -d)"; _rr_kv="$(mktemp -d)"; printf normal > "$_rr_reg/mode"; : > "$_rr_reg/log"
+printf '%s other current\n' "$(printf '%s' "mwi_other-NEVER-PRINTED" | sha256sum | cut -c1-64)" > "$_rr_reg/keys"
+_rr_out="$(env PATH="$RR_CURL:$RR_AZ:$PATH" HOSTING_REG_STATE="$_rr_reg" HOSTING_RRAZ_STATE="$_rr_kv" HOSTING_RRAZ_VALUES="acme-PluginCatalog-RegistryToken=mwi_other-NEVER-PRINTED" hosting-registry-register "${RR_ARGS[@]}" 2>&1)"; _rr_rc=$?
+[ "$_rr_rc" -ne 0 ] && ok "a present key of ANOTHER instance refuses" || bad "other instance's key refuses" "exited 0: ${_rr_out}"
+case "$_rr_out" in *"holds the key of instance 'other'"*) ok "…naming whose it is" ;; *) bad "names the owner" "said: ${_rr_out}" ;; esac
+rr_done
+
+# Absent, but the id is taken → 409 → refused with the re-issue path; nothing written.
+_rr_reg="$(mktemp -d)"; _rr_kv="$(mktemp -d)"; printf normal > "$_rr_reg/mode"; : > "$_rr_reg/log"
+printf '%s acme current\n' "$(printf '%s' "mwi_lost-NEVER-PRINTED" | sha256sum | cut -c1-64)" > "$_rr_reg/keys"
+_rr_out="$(env PATH="$RR_CURL:$RR_AZ:$PATH" HOSTING_REG_STATE="$_rr_reg" HOSTING_RRAZ_STATE="$_rr_kv" HOSTING_RRAZ_VALUES="" hosting-registry-register "${RR_ARGS[@]}" 2>&1)"; _rr_rc=$?
+[ "$_rr_rc" -ne 0 ] && ok "an absent object for an id the registry already holds refuses (409)" || bad "409 refuses" "exited 0: ${_rr_out}"
+case "$_rr_out" in *"already registered"*"re-issue"*) ok "…naming the re-issue path — a lost key is re-issued, never a second registration" ;; *) bad "409 message" "said: ${_rr_out}" ;; esac
+[ ! -f "$_rr_kv/set.acme-PluginCatalog-RegistryToken" ] && ok "…and nothing is written" || bad "409 writes nothing" "it wrote"
+rr_done
+
+# Closed registration without a bootstrap key → refused naming --bootstrap-secret.
+rr closed "" -- "${RR_ARGS[@]}"
+[ "$_rr_rc" -ne 0 ] && ok "closed open-registration refuses" || bad "closed refuses" "exited 0: ${_rr_out}"
+case "$_rr_out" in *"--bootstrap-secret"*) ok "…naming --bootstrap-secret as the way in" ;; *) bad "names bootstrap" "said: ${_rr_out}" ;; esac
+rr_done
+# …and with a bootstrap key read from the vault: accepted, never printed, never in argv.
+_rr_reg="$(mktemp -d)"; _rr_kv="$(mktemp -d)"; printf closed > "$_rr_reg/mode"; : > "$_rr_reg/keys"; : > "$_rr_reg/log"; printf 'mwr_admin-boot-NEVER-PRINTED' > "$_rr_reg/bootstrap"
+_rr_out="$(env PATH="$RR_CURL:$RR_AZ:$PATH" HOSTING_REG_STATE="$_rr_reg" HOSTING_RRAZ_STATE="$_rr_kv" HOSTING_RRAZ_VALUES="fleet-Registry-BootstrapKey=mwr_admin-boot-NEVER-PRINTED" hosting-registry-register "${RR_ARGS[@]}" --bootstrap-secret fleet-Registry-BootstrapKey 2>&1)"; _rr_rc=$?
+_rr_reglog="$(cat "$_rr_reg/log")"; _rr_azlog="$(cat "$_rr_kv/az.log")"
+[ "$_rr_rc" -eq 0 ] && ok "a bootstrap key from the vault registers on a closed registry" || bad "bootstrap registers" "exited ${_rr_rc}: ${_rr_out}"
+case "$_rr_reglog" in *"REGISTER acme boot=present"*) ok "…presented in the body" ;; *) bad "bootstrap presented" "registry saw: ${_rr_reglog}" ;; esac
+case "${_rr_out}${_rr_azlog}" in *mwr_*) bad "the bootstrap key never appears in output or argv" "seen: ${_rr_out} ${_rr_azlog}" ;; *) ok "the bootstrap key never appears in output or argv" ;; esac
+rr_done
+
+# A registry that predates the surface, and one that does not answer.
+rr old "" -- "${RR_ARGS[@]}"
+[ "$_rr_rc" -ne 0 ] && ok "a registry without the registration surface refuses (404)" || bad "404 refuses" "exited 0"
+rr_done
+
+refuses_hard "registry-register needs --registry-url" "missing required flag --registry-url" hosting-registry-register --instance-id a --home-url https://a.test --vault V --object o
+refuses_hard "registry-register needs --object"       "missing required flag --object"       hosting-registry-register --registry-url https://r.test --instance-id acme --home-url https://a.test --vault V
+refuses_hard "registry-register refuses a non-https registry" "is not an https base URL"    hosting-registry-register --registry-url http://r.test --instance-id acme --home-url https://a.test --vault V --object o
+refuses_hard "registry-register refuses a home URL with a path" "is not an https base URL"  hosting-registry-register --registry-url https://r.test --instance-id acme --home-url 'https://a.test/$(id)' --vault V --object o
+refuses_hard "registry-register refuses an id the registry would 400" "is not a registry instance id" hosting-registry-register --registry-url https://r.test --instance-id 'Acme' --home-url https://a.test --vault V --object o
+refuses_hard "registry-register refuses a double hyphen"  "is not a registry instance id"   hosting-registry-register --registry-url https://r.test --instance-id 'ac--me' --home-url https://a.test --vault V --object o
+refuses_hard "registry-register refuses an object with a metacharacter" "is not a plain name" hosting-registry-register --registry-url https://r.test --instance-id acme --home-url https://a.test --vault V --object 'o;id'
+
+# Dry run: reads and registers nothing, reports dry-run.
+rr normal "" HOSTING_DRY_RUN=true -- "${RR_ARGS[@]}"
+[ "$_rr_rc" -eq 0 ] && ok "a dry-run registry-register succeeds" || bad "dry run" "exited ${_rr_rc}: ${_rr_out}"
+case "$_rr_reglog" in *REGISTER*) bad "a dry run registers nothing" "registry saw: ${_rr_reglog}" ;; *) ok "a dry run registers nothing" ;; esac
+case "$_rr_out" in *"::hosting:: registry_registration=dry-run"*) ok "…and reports dry-run, never registered" ;; *) bad "dry-run fact" "said: ${_rr_out}" ;; esac
+rr_done
+rm -rf "$_rr_pre"
+unset _rr_out _rr_rc _rr_reglog _rr_azlog _rr_reg _rr_kv _rr_pre
+
+echo
 echo "── the ::hosting:: contract the mesh parses ──────────────────────"
 emits "dry-run backup announces the object" "::hosting:: object=arch-1" \
   env HOSTING_DRY_RUN=true hosting-backup --database d --server s --store-uri https://x/y/z --object arch-1
