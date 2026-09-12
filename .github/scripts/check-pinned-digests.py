@@ -619,9 +619,28 @@ def read_purge_schedules(repo_root: Path) -> tuple[list[tuple[str, str]], str | 
         if schedule:
             tasks.append((task.get("name", "?"), str(schedule)))
     if not tasks:
+        # 🚨 AN ABSENCE IS ACCEPTABLE ONLY WHEN IT IS DECLARED — the same rule the instance roster
+        # follows. "No enabled purge" has three causes and they are not the same verdict: the
+        # record went stale, retention silently stopped, or a person deliberately paused it. The
+        # first two must stay RED; the third is a fact, and on 2026-09-12 it became the true one
+        # (Roland paused `purge-old-images` while protection was incomplete, Memex#219). Without
+        # this branch, recording that truth would redden every pull request in the repository —
+        # which is how a record gets left saying `Enabled` about a task that is not.
+        pause = doc.get("pause") or {}
+        missing = [k for k in ("inForce", "since", "reason", "reEnableWhen") if not pause.get(k)]
+        if pause.get("inForce") is True and not missing:
+            return [], None
+        if pause:
+            return [], (
+                f"{RETENTION_RECORD} records no ENABLED purge task AND its `pause` declaration is "
+                f"incomplete (missing or empty: {', '.join(missing) or 'inForce is not true'}). A "
+                "pause that does not say why, since when, and what re-enables it is indistinguishable "
+                "from a record nobody updated."
+            )
         return [], (
-            f"{RETENTION_RECORD} records no ENABLED purge task with a schedule. Either the record "
-            "is stale or retention stopped; both are worth a red rather than a silent pass."
+            f"{RETENTION_RECORD} records no ENABLED purge task with a schedule and declares no "
+            "`pause`. Either the record is stale or retention stopped; both are worth a red rather "
+            "than a silent pass. A DELIBERATE pause is declared in the record's `pause` block."
         )
     return tasks, None
 
@@ -1170,23 +1189,83 @@ def self_test_schedule(repo_root: Path) -> list[str]:
     if error or purge_error:
         failures.append(f"falsification arm has no input: {error or purge_error}")
     else:
-        if ordering_problems(["0 23 * * *"], purges) == []:
+        # 🚨 THE COMPARATOR IS DRIVEN ON A FIXTURE, NOT ON THE LIVE RECORD. It used to be driven on
+        # `purges`, and on 2026-09-12 that silently went VACUOUS: Roland paused `purge-old-images`
+        # (Memex#219), the record now declares that pause, `purges` is legitimately EMPTY, and
+        # `ordering_problems(anything, [])` compares nothing and returns no problem — so all four
+        # arms below would have passed while proving nothing. The self-test caught it, which is the
+        # only reason it is not shipped that way. A comparator must stay proven on a day when its
+        # subject is switched off.
+        fixture = [("fixture-purge", "0 3 * * *")]
+        if ordering_problems(["0 23 * * *"], fixture) == []:
             failures.append(
                 "SABOTAGE UNDETECTED: a lock scheduled at 23:00 — after every purge — was accepted"
             )
-        if ordering_problems(["0 0 30 2 *"], purges) == []:
+        if ordering_problems(["0 0 30 2 *"], fixture) == []:
             failures.append(
                 "SABOTAGE UNDETECTED: a lock schedule that never fires was accepted"
             )
-        if ordering_problems(lock_crons, purges) != []:
+        if ordering_problems(lock_crons, fixture) != []:
             failures.append("the shipped pair was rejected by the very check that accepted it above")
         # …and the multi-occurrence case is ACCEPTED, so the gate does not cry wolf on a schedule
         # that fires twice and satisfies the protection through its earlier run.
-        if ordering_problems(["0 1,23 * * *"], purges) != []:
+        if ordering_problems(["0 1,23 * * *"], fixture) != []:
             failures.append(
                 "FALSE POSITIVE: a lock firing at 01:00 AND 23:00 was rejected, though its 01:00 "
                 "run precedes every purge"
             )
+        # …and THEN the shipped record, whichever of its two states it is in. Both are asserted, so
+        # neither can become the silent one.
+        if purges:
+            if ordering_problems(lock_crons, purges) != []:
+                failures.append(
+                    "the SHIPPED schedules no longer order: the lock does not fire before every "
+                    f"enabled purge ({', '.join(n for n, _ in purges)})")
+        else:
+            record = json.loads((repo_root / RETENTION_RECORD).read_text(encoding="utf-8"))
+            pause = record.get("pause") or {}
+            if pause.get("inForce") is not True:
+                failures.append(
+                    "the record lists no enabled purge and `read_purge_schedules` accepted it "
+                    "anyway without an in-force `pause` — an undeclared absence must stay RED")
+            for key in ("since", "reason", "reEnableWhen"):
+                if not pause.get(key):
+                    failures.append(
+                        f"the purge pause is in force and declares no `{key}`. A pause that does "
+                        "not say why, since when and what re-enables it is a record nobody updated")
+
+    # 🚨 AND THE REFUSAL ITSELF, driven against fixtures rather than against the shipped record.
+    # The arms above assert what the RECORD says; they cannot see whether `read_purge_schedules`
+    # would still refuse an UNDECLARED absence, because the shipped record declares one. Making the
+    # function accept anything left this self-test green until this arm existed.
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as _scratch:
+        _root = Path(_scratch)
+        (_root / RETENTION_RECORD).parent.mkdir(parents=True, exist_ok=True)
+
+        def _purges_for(document: dict):
+            (_root / RETENTION_RECORD).write_text(json.dumps(document), encoding="utf-8")
+            return read_purge_schedules(_root)
+
+        _no_pause = {"tasks": [{"name": "p", "status": "Disabled", "schedule": "0 3 * * *"}]}
+        if not _purges_for(_no_pause)[1]:
+            failures.append(
+                "SABOTAGE UNDETECTED: no enabled purge and NO `pause` declaration was accepted — "
+                "a stale record and a silently stopped retention would both read as fine")
+        _partial = dict(_no_pause, pause={"inForce": True, "since": "2026-09-12"})
+        if not _purges_for(_partial)[1]:
+            failures.append(
+                "SABOTAGE UNDETECTED: a `pause` with no `reason`/`reEnableWhen` was accepted — a "
+                "pause that explains nothing is a record nobody updated")
+        _complete = dict(_no_pause, pause={"inForce": True, "since": "2026-09-12",
+                                           "reason": "r", "reEnableWhen": "w"})
+        _tasks, _err = _purges_for(_complete)
+        if _err or _tasks:
+            failures.append(
+                f"a COMPLETE pause declaration was not accepted as a stated absence: {_err}")
+        _enabled = {"tasks": [{"name": "p", "status": "Enabled", "schedule": "0 3 * * *"}]}
+        if _purges_for(_enabled)[0] != [("p", "0 3 * * *")]:
+            failures.append("an ENABLED purge task was not read back from the record")
 
     # A missing lock workflow is a DELETED protection, and must not read as an absent subject.
     missing_root = Path(__file__).resolve().parent / "__no_such_repo_root__"

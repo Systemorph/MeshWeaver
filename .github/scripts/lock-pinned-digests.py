@@ -1638,7 +1638,19 @@ def retention_windows(root: str) -> tuple[list[str], str]:
             keep = (re.search(r"--keep (\S+)", step) or [None, "none"])[1]
             lines.append(f"{task.get('schedule', '?')}  {filters}  --ago {ago} --keep {keep}")
     if not lines:
-        return [], "no ENABLED purge step is recorded"
+        # 🚨 "NO ENABLED PURGE" IS A FACT WHEN IT IS DECLARED AND A DEFECT WHEN IT IS NOT — the same
+        # rule the instance roster follows. On 2026-09-12 the true cause became the third one: the
+        # purge was deliberately PAUSED while protection was incomplete (Memex#219), so the window
+        # this run is racing is currently none. That is the good news, and printing it as a problem
+        # would teach the reader to ignore the line.
+        pause = manifest.get("pause") or {}
+        if pause.get("inForce") is True and pause.get("since") and pause.get("reEnableWhen"):
+            return ([f"PAUSED since {pause['since']} — no purge step runs; this protection is not "
+                     "racing a clock.",
+                     f"re-enable when: {pause['reEnableWhen']}"], "")
+        return [], ("no ENABLED purge step is recorded and the record declares no in-force `pause` "
+                    "with a `since` and a `reEnableWhen` — so this is a stale record or a silently "
+                    "stopped retention, not a stated one")
     return lines, ""
 
 
@@ -2416,10 +2428,15 @@ def self_test() -> int:
     # ── ARM 24c: the report states the WINDOW it is racing, and cannot state it from nothing ────
     windows, problem = retention_windows(str(HERE.parent.parent))
     check(windows and not problem,
-          f"ARM 24c: the enabled purge windows could not be read from this repository's own "
-          f"retention record: {problem}")
-    check(any("--ago" in line for line in windows),
-          f"ARM 24c: a window was reported without the `--ago` that defines it: {windows}")
+          f"ARM 24c: this repository's own retention record yielded no statement of the window: "
+          f"{problem}")
+    # Whichever state the record is in, it must SAY which — a window with the `--ago` that defines
+    # it, or a declared pause naming what re-enables the task. Never an empty list.
+    check(any("--ago" in line for line in windows)
+          or (any("PAUSED since" in line for line in windows)
+              and any("re-enable when:" in line for line in windows)),
+          f"ARM 24c: the record stated neither an `--ago` window nor a declared pause with its "
+          f"re-enable condition: {windows}")
     with tempfile.TemporaryDirectory() as scratch:
         empty, problem = retention_windows(scratch)
         check(not empty and problem,

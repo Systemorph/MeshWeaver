@@ -13,6 +13,15 @@ an instance of that sentence, and the four issues filed against it — [#3438](h
 (the parent), #3858 (a complete and fresh inventory), #3859 (interlock cleanup with protection), and
 #3860 (the full artifact set) — are four views of one mechanism rather than four pieces of work.
 
+> 🚨 **STATUS, 2026-09-12: the purge is PAUSED and there is no live clock.** Roland ordered it
+> stopped while protection was incomplete, and `purge-old-images` was disabled (`az acr task list`
+> → `status: Disabled`; Memex#219). **Quote no deletion date while that holds.** The pause is the
+> MITIGATION and this mechanism is the FIX, so **this is the precondition for safely turning the
+> task back on, not a race against a deadline.** A disabled task still reports an `Enabled` TIMER
+> TRIGGER at `0 3 * * *` — read the task's `status`, not the trigger's. The condition for
+> re-enabling is recorded in `.github/acr-retention/tasks.json` under `pause.reEnableWhen`, and the
+> protection report prints it in place of a window.
+
 It has cost, so far: a public brand site 503 for ~11 h (Memex#122), three satellite repositories'
 CI dead simultaneously (2026-09-05T15:29Z, #3438), a migration Job in `ImagePullBackOff` 639 times
 unalerted (Memex#219), and every MeshWeaver.Plugins run blocked at preflight (2026-09-07).
@@ -203,11 +212,13 @@ the manifest's creation and not a pull time.
 | publication rate, mean over the 7 complete days before | **193.1 tags/day** |
 | …so the 10-tag keep window is consumed in | **1.2 h** |
 | oldest tag in the repository | **exactly 7 days** |
-| eligible at a run right now | 49 |
-| deleted at a run right now | 39, none version-shaped |
+| eligible at a run, were one to happen | 49 |
+| deleted at such a run | 39, none version-shaped |
 
 The last two rows are the ones that matter: **the repository is already in steady state at a hard
 seven-day horizon.** `--ago 7d` is the entire policy; `--keep` is noise at this publication rate.
+Every figure here describes what the task does *when enabled* — it is disabled as this is written,
+which is why the horizon is a property of the policy rather than a countdown.
 
 ### The worked case, and why it is one run rather than two
 
@@ -222,7 +233,7 @@ line within **2m46s** of each other:
 18:08:48  3.0.0-ci.8372                   → the index
 ```
 
-so the **same** 03:00 run strips the children's tags in `purgeTags`, then re-lists manifests, finds
+so a **single** run strips the children's tags in `purgeTags`, then re-lists manifests, finds
 the children untagged and past the cutoff — and skips the locked parent index before the walk that
 would have ignore-listed them. What survives is a locked index pointing at two manifests that no
 longer exist.

@@ -52,6 +52,10 @@ installation never reported at all, or when its newest report is more than a day
 describing what an instance ran last week protects that, and leaves what it is running today
 unnamed by anybody.
 
+The cleanup this protects against is **paused** while the protection is being completed, so none of
+this is a race against a clock — it is what has to be true before the cleanup can safely be switched
+back on.
+
 ## Why not simply keep things for longer
 
 Because that moves the cliff rather than removing it. A longer window, a larger keep count, a retry
