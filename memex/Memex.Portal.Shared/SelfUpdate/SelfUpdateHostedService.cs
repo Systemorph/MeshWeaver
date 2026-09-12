@@ -45,6 +45,7 @@ public class SelfUpdateHostedService : IHostedService
     private readonly SelfUpdateOptions _options;
     private readonly ILogger<SelfUpdateHostedService>? _logger;
     private readonly IIoPool _http;
+    private readonly IIoPool _fileSystem;
     private IDisposable? _subscription;
 
     /// <summary>
@@ -88,6 +89,10 @@ public class SelfUpdateHostedService : IHostedService
         // The ACR list + the k8s PATCH are outbound HTTP → the Http resource class. Falls back to the
         // stateless unbounded pool when no registry is wired (tests).
         _http = registry?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        // The one file read this poller makes — the activation record's plan-tier marker for the
+        // patcher's module (#4097) — goes through the FileSystem resource class, never inline on
+        // the hosted-service startup thread: the module root can be a slow shared volume.
+        _fileSystem = registry?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -101,6 +106,18 @@ public class SelfUpdateHostedService : IHostedService
             ShippedReleaseSeed.InstalledPlatformVersion, _options.Registry, _options.PortalRepository,
             UsesOciListing ? "an OCI Distribution registry (the mirror, instance-key auth)" : "an Azure Container Registry",
             _updater.CanPatch, _options.RetryInterval);
+
+        // 🚨 #4097 — canPatch=False used to be the whole story, and it pointed at
+        // Modules:Assemblies. When the patcher's package was refused by the instance's PLAN, the
+        // startup log now says so — the tier it needs and the plan the instance is on — as the
+        // next [SelfUpdate] line, read off the activation record on the FileSystem pool so the
+        // hosted-service startup thread never waits on the module volume.
+        if (!_updater.CanPatch)
+            CannotPatchReason()
+                .Subscribe(
+                    reason => _logger?.LogInformation("[SelfUpdate] canPatch=False{Reason}", reason),
+                    ex => _logger?.LogWarning(ex,
+                        "[SelfUpdate] could not read why this install cannot patch — the activation record was unreadable"));
 
         // 🚨 EVENT-DRIVEN WITH A SAFETY NET, and the event source is deliberately OUTSIDE the
         // policy stream.
@@ -340,14 +357,25 @@ public class SelfUpdateHostedService : IHostedService
                 });
         });
 
+    /// <summary>Why this install cannot patch, as the qualifier after <c>canPatch=False</c> (#4097):
+    /// the plan-tier sentence when the patcher's package was refused by the instance's plan, else
+    /// the standing hint. One file read on the FileSystem pool; emits once.</summary>
+    private IObservable<string> CannotPatchReason()
+    {
+        var configuration = _hub.ServiceProvider.GetService<IConfiguration>();
+        return _fileSystem
+            .InvokeBlocking(_ => UnavailableUpdateMechanics.PatcherTierRefusal(configuration))
+            .Select(UnavailableUpdateMechanics.DescribeCannotPatch);
+    }
+
     /// <summary>The restart itself: detect-only says so; the floor defers; otherwise the updater rolls
     /// the running image, or reports that it cannot.</summary>
     private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform)
     {
         var installed = ShippedReleaseSeed.InstalledPlatformVersion;
         if (!_updater.CanPatch)
-            return Observable.Return(SelfUpdateVerdict.RestartUnavailable(
-                platform, installed, "this install does not self-patch (detect-and-notify)"));
+            return CannotPatchReason().Select(reason => SelfUpdateVerdict.RestartUnavailable(
+                platform, installed, "this install does not self-patch" + reason));
 
         // The same floor read Apply makes, and skipped for the same reason when the floor is off:
         // LastRolledAtAsync is a Kubernetes GET whose answer cannot change a decision the floor

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # push-bundle-publication.sh --registry <host> --source <name> --identity <id> --dir <publication dir>
-#                            [--tag-run <run id>] [--release <version>]
+#                            [--tag-run <run id>] [--release <version>] [--skip-if-published]
 #                            [--registry-config <docker config.json>] [--plain-http] [--oras <binary>]
 #
 # Publishes ONE sealed publication — the directory publish-bake-bundles.sh writes for one source
@@ -41,18 +41,32 @@
 # grammar cannot spell (or the reserved `releases`), a file name the config blob cannot carry.
 # A refusal exits 1 before the first push; a failure mid-way exits 1 with the tag unmoved.
 #
+# With --skip-if-published the registry gets the SAME sealed-skip the share targets have
+# (publish-bake-bundles.sh: content × framework): when `plugins/<source>:<identity>` already
+# resolves AND its sidecar config's `sourceCommit` equals this publication's source-commit.txt,
+# nothing is pushed — the tag already names a complete publication of this content, and a second
+# compilation of the same commit would only add a full set of blobs the registry never garbage-
+# collects. The release identity (--release) is still recorded, exactly as the share's release
+# marker is written on every run. 🚨 The skip needs POSITIVE proof — a resolvable tag, a readable
+# index and sidecar config, an equal commit; anything else (a tag that is absent, an unreadable
+# index, a different commit) PUSHES, because pushing is idempotent and never leaves the registry
+# worse, while a wrong skip would freeze the tag on a publication this run was asked to replace.
+#
 # Prints facts the caller can record (register-publication): `bundle-publication: index=<digest>
 # bundles=<n> …` and one `bundle-publication: bundle=<package> digest=<digest> module=<yes|no>` per
 # bundle; also `index_digest` and `bundle_count` into $GITHUB_OUTPUT when set.
 #
-# Standalone: not wired into a lane. Behaviour tests: .github/scripts/test-bundle-registry.py.
+# Callers: main-cd.yml (`publish-bake`, the platform's own content, and `plugins-bake` through the
+# reusable lane) and node-repo-publish-bake.yml (every satellite), after the share seal succeeds,
+# on the directory publish-bake-bundles.sh materialises (BAKE_PUBLICATION_DIR). Behaviour tests:
+# .github/scripts/test-bundle-registry.py (chart-gate's `Bundle registry scripts (executed)`).
 set -euo pipefail
 
 usage() {
   sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
-REGISTRY=""; SOURCE=""; IDENTITY=""; DIR=""; TAG_RUN=""; RELEASE=""; REGISTRY_CONFIG=""; PLAIN_HTTP=0
+REGISTRY=""; SOURCE=""; IDENTITY=""; DIR=""; TAG_RUN=""; RELEASE=""; REGISTRY_CONFIG=""; PLAIN_HTTP=0; SKIP_IF_PUBLISHED=0
 ORAS="${ORAS:-oras}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -62,6 +76,7 @@ while [ $# -gt 0 ]; do
     --dir) DIR="${2:-}"; shift 2 ;;
     --tag-run) TAG_RUN="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
+    --skip-if-published) SKIP_IF_PUBLISHED=1; shift ;;
     --registry-config) REGISTRY_CONFIG="${2:-}"; shift 2 ;;
     --plain-http) PLAIN_HTTP=1; shift ;;
     --oras) ORAS="${2:-}"; shift 2 ;;
@@ -194,7 +209,78 @@ json_escape() {
   printf '%s' "$1"
 }
 
+# ---- the release's identity (optional) — written on EVERY run, the skip below included ----------
+# The share's `_releases/<version>` marker is written outside its sealed-skip for the same reason
+# (publish-bake-bundles.sh): the version → identity mapping must land on the run that arms the
+# release, and that run is usually one whose bundles are already published.
+publish_release_identity() {
+  [ -n "$RELEASE" ] || return 0
+  printf '{"identity":"%s","version":"%s"}' "$(json_escape "$IDENTITY")" "$(json_escape "$RELEASE")" > "$WORK/release.json"
+  local release_digest
+  release_digest=$("$ORAS" push "${OFLAGS[@]}" "$REGISTRY/plugins/releases:$RELEASE" \
+      --artifact-type application/vnd.meshweaver.release.v1+json \
+      --config "$WORK/release.json:application/vnd.meshweaver.release.v1+json" \
+      --annotation "io.meshweaver.identity=$IDENTITY" --annotation "$CREATED" \
+      --format 'go-template={{.digest}}')
+  case "$release_digest" in sha256:*) ;; *) fail "push of plugins/releases:$RELEASE answered '$release_digest', not a digest" ;; esac
+  echo "bundle-publication: release=$RELEASE identity=$IDENTITY digest=$release_digest repository=plugins/releases"
+}
+
+record_outputs() { # <index digest> <bundle count>
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    {
+      echo "index_digest=$1"
+      echo "bundle_count=$2"
+    } >> "$GITHUB_OUTPUT"
+  fi
+}
+
 echo "── publishing $SOURCE ($SOURCE_LC) for identity $IDENTITY from $DIR to $PUB_REPO: ${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), ${#SIDECARS[@]} sidecar(s)"
+
+# ---- 0. the registry's sealed-skip (--skip-if-published) ---------------------------------------
+# The tag names ONE publication (the index digest IS the generation); its sidecar manifest is the
+# index entry annotated `io.meshweaver.role=sidecars`, and that manifest's config blob carries
+# `sourceCommit` — both written by this very script, in the shapes read below. Every read must
+# succeed and agree for the skip to fire; a failed read is stated and falls through to the push.
+if [ "$SKIP_IF_PUBLISHED" -eq 1 ]; then
+  local_commit=$(read_fact source-commit.txt)
+  case "$local_commit" in
+    ''|unknown) fail "--skip-if-published needs a recorded source commit in $DIR/source-commit.txt (found '${local_commit:-<none>}') — without a content identity the skip could freeze the tag on a stale publication" ;;
+  esac
+  existing=""
+  : > "$WORK/fetch.err"
+  if existing=$("$ORAS" resolve "${OFLAGS[@]}" "$PUB_REPO:$IDENTITY" 2>"$WORK/resolve.err"); then
+    case "$existing" in sha256:*) ;; *) fail "resolve of $PUB_REPO:$IDENTITY answered '$existing', not a digest" ;; esac
+    published_commit=""
+    if "$ORAS" manifest fetch "${OFLAGS[@]}" "$PUB_REPO@$existing" > "$WORK/existing-index.json" 2>"$WORK/fetch.err"; then
+      existing_sidecar=$(tr -d '\n' < "$WORK/existing-index.json" \
+        | sed -n 's/.*"digest":"\(sha256:[0-9a-f]\{64\}\)","size":[0-9]\{1,\},"artifactType":"application\/vnd\.meshweaver\.publication\.v1+json","annotations":{"io\.meshweaver\.role":"sidecars"}.*/\1/p')
+      if [ -n "$existing_sidecar" ] \
+          && "$ORAS" manifest fetch-config "${OFLAGS[@]}" "$PUB_REPO@$existing_sidecar" > "$WORK/existing-config.json" 2>"$WORK/fetch.err"; then
+        published_commit=$(tr -d '\n' < "$WORK/existing-config.json" | sed -n 's/.*"sourceCommit":"\([^"]*\)".*/\1/p')
+      fi
+    fi
+    if [ -n "$published_commit" ] && [ "$published_commit" = "$local_commit" ]; then
+      echo "::notice::$PUB_REPO:$IDENTITY already names a complete publication of THIS content ($existing, source $published_commit) — already published; skipping the push. The registry, like the shares, seals one publication per content × framework identity."
+      publish_release_identity
+      echo "bundle-publication: index=$existing bundles=${#BUNDLES[@]} tag=$IDENTITY registry=$REGISTRY source=$SOURCE repository=plugins/$SOURCE_LC skipped=already-published"
+      record_outputs "$existing" "${#BUNDLES[@]}"
+      exit 0
+    fi
+    if [ -z "$published_commit" ]; then
+      echo "$PUB_REPO:$IDENTITY resolves to $existing but its source commit could not be read ($(tr '\n' ' ' < "$WORK/fetch.err")) — publishing, since a push is idempotent and a skip without proof is not"
+    else
+      echo "$PUB_REPO:$IDENTITY names a publication from source '$published_commit' but this one is from '$local_commit' — republishing (the tag moves last; the previous generation stays resident by digest)"
+    fi
+  else
+    if grep -q ': not found$' "$WORK/resolve.err"; then
+      echo "$PUB_REPO:$IDENTITY is not published yet (tag absent) — publishing"
+    else
+      cat "$WORK/resolve.err" >&2
+      echo "$PUB_REPO:$IDENTITY could not be resolved (see above) — publishing anyway; if the registry is refusing this credential the push below fails with the real reason"
+    fi
+  fi
+fi
 
 # ---- 1. the bundles ----------------------------------------------------------------------------
 BUNDLE_FACTS=()
@@ -281,21 +367,8 @@ resolved=$("$ORAS" resolve "${OFLAGS[@]}" "$PUB_REPO:$IDENTITY")
 [ "$resolved" = "$index_digest" ] || fail "after tagging, $PUB_REPO:$IDENTITY resolves to $resolved, not to the index $index_digest just pushed"
 
 # ---- the release's identity (optional) --------------------------------------------------------
-if [ -n "$RELEASE" ]; then
-  printf '{"identity":"%s","version":"%s"}' "$(json_escape "$IDENTITY")" "$(json_escape "$RELEASE")" > "$WORK/release.json"
-  release_digest=$("$ORAS" push "${OFLAGS[@]}" "$REGISTRY/plugins/releases:$RELEASE" \
-      --artifact-type application/vnd.meshweaver.release.v1+json \
-      --config "$WORK/release.json:application/vnd.meshweaver.release.v1+json" \
-      --annotation "io.meshweaver.identity=$IDENTITY" --annotation "$CREATED" \
-      --format 'go-template={{.digest}}')
-  echo "bundle-publication: release=$RELEASE identity=$IDENTITY digest=$release_digest repository=plugins/releases"
-fi
+publish_release_identity
 
 echo "bundle-publication: index=$index_digest bundles=${#BUNDLES[@]} tag=$IDENTITY${TAG_RUN:+ run-tag=$IDENTITY-$TAG_RUN} registry=$REGISTRY source=$SOURCE repository=plugins/$SOURCE_LC"
 echo "::notice::published plugins/$SOURCE_LC:$IDENTITY = $index_digest (${#BUNDLES[@]} bundle(s), ${#MODULES[@]} module(s), ${#SIDECARS[@]} sidecar(s)) to $REGISTRY"
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  {
-    echo "index_digest=$index_digest"
-    echo "bundle_count=${#BUNDLES[@]}"
-  } >> "$GITHUB_OUTPUT"
-fi
+record_outputs "$index_digest" "${#BUNDLES[@]}"
