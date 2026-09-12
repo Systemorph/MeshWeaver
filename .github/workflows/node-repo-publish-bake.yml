@@ -1625,8 +1625,20 @@ jobs:
           # for it yet — Doc/Architecture/PluginBundlesInTheRegistry → Publishing says what is
           # still to be added. An empty value here is RED: publish-bake pushed the publication
           # before this job ran, so a record without its digest is a lane whose output wiring broke.
-          [ -n "${INDEX_DIGEST:-}" ] || { echo "::error::publish-bake reported no fleet-registry index digest (bundle_index_digest) although it published — the registry push step's output did not reach this job; the record below would name a publication the registry cannot be asked about."; exit 1; }
-          echo "fleet registry: $BUNDLE_REGISTRY/plugins/$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')@$INDEX_DIGEST (identity ${IDENTITY:-?}) — not yet a field of the bundle-publication record"
+          # Conditional on the fleet-registry push having been attempted: if we pushed to the fleet
+          # registry we must have its index digest; a repo not publishing there has none to demand.
+          # BUNDLE_REGISTRY is the right key, measured by content (2026-09-12): the push step
+          # (`registry`, publish-bake) runs on `steps.scope.outputs.scope != 'none'` — the SAME
+          # condition as the share publish whose `published` output is this job's `if:` — and pushes
+          # to `--registry "$BUNDLE_REGISTRY"`, the identical `inputs.bundle-registry` read here, which
+          # publish-bake's unconditional preflight refuses when empty. So on the lane a push happened
+          # iff this job runs, with this value non-empty: no path pushes with the assertion disabled.
+          # The guard closes only for a caller that never entered the lane's preflight — the harness in
+          # PluginPublicationProvenanceTest, which executes this step's shell without a registry.
+          if [ -n "${BUNDLE_REGISTRY:-}" ]; then
+            [ -n "${INDEX_DIGEST:-}" ] || { echo "::error::publish-bake reported no fleet-registry index digest (bundle_index_digest) although it published — the registry push step's output did not reach this job; the record below would name a publication the registry cannot be asked about."; exit 1; }
+            echo "fleet registry: $BUNDLE_REGISTRY/plugins/$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')@$INDEX_DIGEST (identity ${IDENTITY:-?}) — not yet a field of the bundle-publication record"
+          fi
           missing=()
           [ -n "${URL:-}" ]    || missing+=("webhook-url (input) — the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds (core CD: vars.PLATFORM_WEBHOOK_URL)")
           [ -n "${SECRET:-}" ] || missing+=("webhook-secret (secret) — the shared HMAC, byte-identical to the instance's Hosting:PlatformWebhookSecret (core CD: secrets.PLATFORM_WEBHOOK_SECRET)")
@@ -1665,7 +1677,7 @@ jobs:
               {
                 echo "### 📣 Publication registered with memex (HTTP $code)"
                 echo "- source: \`$SOURCE\`  identity: \`${IDENTITY:-?}\`  image: \`$IMAGE\`  platform: \`$PLATFORM_IMAGE\`"
-                echo "- fleet registry index: \`$BUNDLE_REGISTRY/plugins/$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')@$INDEX_DIGEST\` (printed; not yet a field of the record)"
+                [ -z "${BUNDLE_REGISTRY:-}" ] || echo "- fleet registry index: \`$BUNDLE_REGISTRY/plugins/$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')@$INDEX_DIGEST\` (printed; not yet a field of the record)"
                 echo "memex STORED the record. Whether it dispatched meshweaver-upstream-published is read on memex and on the dependents, never here."
                 verdict=$(tr -d '\n' < "$RESP" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
                 echo "- signature: **${verdict:-(the answer carried no verdict)}** — judged in the next step."
