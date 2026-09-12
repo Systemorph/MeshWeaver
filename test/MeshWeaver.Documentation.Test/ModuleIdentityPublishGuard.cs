@@ -184,7 +184,12 @@ public class ModuleIdentityPublishGuard
         // code, the inspection's tick and the value in the artifact are three different claims,
         // and only the third is what a consumer compares against.
         var receipt = pack[pack.IndexOf("name: Drop the receipt", StringComparison.Ordinal)..];
-        Assert.Contains("BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}",
+        // ONE map of module -> bundle path (`bundles.paths`), the same the hand-over and the staging
+        // read; each module's path is read out of it as `BUNDLE` inside its own loop iteration
+        // (batched legs, 2026-09-12).
+        Assert.Contains("BUNDLES: ${{ steps.bundles.outputs.paths }}",
+            receipt, StringComparison.Ordinal);
+        Assert.Contains("BUNDLE=\"$(jq -r --arg m \"$MODULE\" '.[$m] // empty' <<< \"$BUNDLES\")\"",
             receipt, StringComparison.Ordinal);
         Assert.Contains("unzip -p \"$BUNDLE\" meshweaver/manifest.json", receipt, StringComparison.Ordinal);
         Assert.Contains("jq -r '.frameworkMvid // \"\"' | tr -d '[:space:]'", receipt, StringComparison.Ordinal);

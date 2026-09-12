@@ -73,6 +73,32 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 > ledger's reuse leg and the `docker cp` fallback when `prepare`'s `platform-refs-<digest>` cache
 > entry has been evicted — fail RED naming the missing tool; neither skips.
 
+**Batched legs (2026-09-12).** GitHub bills every job rounded *up* to a whole minute, and most legs
+of this lane were shorter than the unit they were billed in — measured 2026-09-05..12 on
+MeshWeaver.Plugins: 4,975 sampled `Module bundles / Module bundle` legs at a **median of 1.1 min**
+(p90 8.4), 1,385 `Module bundles` parent legs at 1.1 min, 2,935 `Module tests` legs at 4.0 min (p90
+8.2); whole-minute rounding on the sub-minute legs was ≈12 % of Plugins' bill (~4,700 billed
+minutes a day) and 25–40 % in Crm / Reinsurance / SocialMedia. So `pack` and `tests` now expand
+**one leg per batch** of `batch-size` modules (default 6, hard cap 10) — `select` cuts the
+selection deterministically (sorted by module name, striped over ⌈n/N⌉ legs so an alphabetical
+family such as `MeshWeaver.AI.*` is spread rather than stacked; ≤N modules is one leg, a
+single-module repository is unchanged) with `.github/scripts/module-pack-batch.py`, and the same
+script keeps one state record per module inside the leg. **A batch is a runner-sharing device,
+not a coupling**: every module still builds, packs, uploads its own `module-bundle-<module>`
+(kept as a per-module name — the ledger records it and every caller's `module-artifacts`
+pattern globs it — through unrolled upload slots), runs its own suite, and on a publishing call
+POSTs its own bundle right after its own suite; a phase that fails for one module marks *that*
+module failed in that phase, every later phase skips it, the sibling modules complete and
+publish, and the leg's last step prints one status line per module and reds the leg over any
+failure — so `verify` still reads `pack: failure` and still accounts every module by its own
+receipt (a failed module drops none). Receipts, built markers, staged publications and test
+evidence are one artifact per batch with one file per module, which every consumer already reads
+through `<kind>-<lane>-*` + merge-multiple keyed on the `module` inside each file. No required
+context moves; the fleet's protected-job matchers read the caller's job name (`Module bundles`),
+which is untouched. Arithmetic for Plugins at N=6: the ~40 sub-minute pack legs of a full run go
+from ~40 billed minutes to ~7 (each batch ≈ 6 × 1.1 min of work ≈ 7 min, rounded once), and the
+per-leg checkout + SDK install is paid 7 times instead of 40.
+
 ### Where a module's own suite runs — and why `publish` decides
 
 A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last
