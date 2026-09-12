@@ -1,7 +1,7 @@
 ---
 Name: Reading CI Signals
 Category: Architecture
-Description: What a check's colour actually means — why a SKIPPED required context counts as satisfied while a never-reported one blocks forever, why a red on a non-required check does not block, and the i18n mirror that reds every downstream PR until it lands.
+Description: What a check's colour actually means — why a SKIPPED required context counts as satisfied while a never-reported one blocks forever, why a red on a non-required check does not block, the i18n mirror that reds every downstream PR until it lands, and the shape most of these share: a narrow instrument answering correctly while the reader generalises it into a claim it never measured.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
 ---
 
@@ -119,6 +119,66 @@ A **dynamic matrix cannot be a required context** — the shard names change. Re
 **collector** job that `needs:` every shard and fails if any did not succeed (core does this with
 `Consolidate test results`). Requiring shard names by hand orphans a required context the moment the
 shard count changes, and it then waits forever.
+
+## 🚨 A narrow instrument does not answer a wide question — and it is RIGHT while you misread it
+
+Most rules on this page are instances of one shape, and it is worth naming because the instances
+keep arriving in new costumes. **In every case below the instrument was working correctly.** There
+was no bug to find, no error to notice, and no amount of care would have helped: the *reading* was
+wrong, not the measurement. That is exactly why this class needs a control rather than diligence.
+
+Five measured in one session (2026-09-12, while triaging #890 and #2543), by **two different
+readers**. This is not one person's blind spot:
+
+| the instrument | what it actually answers | what it was read as | what falsified it |
+|---|---|---|---|
+| `pendingWork=0` on **one** `[STALE-CALLBACK]` record | the pool's depth at that instant, for that correlation | *"the pool is idle"* — a live starved-pool hypothesis declared dead | max `pendingWork` in the **same log** is 606; across the 15 jobs, **2,501** |
+| a `GATE FAILED — tests:` filter | how many failures matched **that stage** | *"8 occurrences"* | all 15 carry the same 120 s bound and the same `CreateOrUpdateNodeRequest@portal/nodeops` stall trail — **15**; the filter set the count, not the phenomenon |
+| `gh api … 2>/dev/null` across eight repos | whatever survived a **discarded** stderr | *"0 issues, 0 PRs — every repo clean"* | every call was being refused `403`; a total refusal read as a clean sweep |
+| `gh api rate_limit` → `core: 5000/5000` | the **PRIMARY** quota | *"not rate limited"* | the refusals were the **SECONDARY** limit, which that endpoint does not report |
+| `gh api /apps/<slug>` permissions | what the App **declared** | *"the App can write issues and workflows"* | the **installation** carries `contents`, `metadata`, `pull_requests` only — a token minted from it can do neither |
+
+### The test to apply before you publish a claim
+
+**Name the question the instrument actually answers, then say why that is the same as the question
+you asked.** Where the two differ, either widen the instrument or narrow the claim. Both are cheap.
+Publishing the gap is not — each row above was repaired only after someone else re-measured.
+
+### The tell, per family
+
+- **A spot value standing in for a distribution.** State the **maximum and the count**, never the
+  sample you happened to read. One record describes a moment; a hypothesis about a process needs the
+  shape of the whole series.
+- **A filtered count standing in for an occurrence count.** State the **filter** beside the number.
+  *"8 matched `tests:`"* and *"8 occurred"* are different sentences, and only the first is a
+  measurement.
+- **A suppressed error standing in for a measurement.** `2>/dev/null` turns a refusal into a zero.
+  **Check the exit code**, or do not suppress. A zero that cannot distinguish *"none"* from *"could
+  not ask"* is not a result.
+- **A healthy meter standing in for the thing that actually refused.** Read the **refusal**, not the
+  meter. `5000/5000 remaining` while every call is refused is the documented signature of the
+  secondary limit — the meter is honest and answering a different question.
+- **A declaration standing in for an effective capability.** An App's own page lists what it *asked
+  for*; the **installation** lists what it was *granted*. Measured 2026-09-12: `meshweaver-cloud`
+  declares `contents, emails, issues, metadata, pull_requests, workflows`, and its installation on
+  this org carries `contents, metadata, pull_requests` — so `issues`, `workflows` and `emails` are
+  declared and absent. Read `orgs/<org>/installations`, not `/apps/<slug>`. This one is not a CI
+  instrument at all, which is the point: the shape is about how an answer is read, not about CI.
+
+### Why a control catches this and care does not
+
+A broken instrument announces itself: an exception, a mismatch, a number that cannot be right. A
+narrow one does none of that — it returns a true value, promptly, in the expected shape. The only
+thing that separates *"what I measured"* from *"what I claimed"* is an artefact that would have come
+out differently had the claim been false, so the discipline is the same one this repository applies
+to gates: **an assertion that cannot fail is not an assertion.** Before a number becomes a verdict,
+say aloud what reading would have refuted it, and go and look for that reading.
+
+Two neighbouring pages carry the same lesson from other directions:
+[Adoption and the Sweep Count Different Things](/Doc/Architecture/AdoptionAndTheSweepCountDifferentThings)
+(two instruments, neither wrong, neither a census) and
+[The Release Gate's Denominator](/Doc/Architecture/ReleaseGateDenominator) (a rate is meaningless
+until you state what it is over).
 
 ## The same trap in the tools you write to watch CI
 
