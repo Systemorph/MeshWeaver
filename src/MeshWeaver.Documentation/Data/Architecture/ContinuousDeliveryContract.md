@@ -705,6 +705,7 @@ register release and publish event"*) is three sentences:**
    of an identity + digest already on record is the same sealed bytes, **not an event**. The
    subscribers' CI receives it, resolves both images from the payload, builds and publishes for that
    identity — and ends by calling memex (1).
+   🚨 No longer true since 2026-09-12 (phase 1) for the platform event: `meshweaver-framework-released` is broadcast only while `Hosting:PlatformBuilds:BroadcastFrameworkReleases` is `true` (default off, Plugins#1707) and no satellite lists the type; a node repo follows the platform by its daily `schedule` against the newest SEALED set. `meshweaver-upstream-published` is unchanged. See `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins).
 
    🚨 **Why the audience is a rule and not a list (2026-09-07, MeshWeaver.Plugins#1484).** Until that
    day a publication was fanned out to the RELEASE audience. Crm published → memex woke Crm and
@@ -791,6 +792,7 @@ unverifiable, and the POST still answers 2xx. The close condition for the mechan
 observed on the SATELLITES — a `repository_dispatch` run whose payload carries `source: memex`, plus
 the pin-bump PR — and in the control instance's log: `[PlatformBuilds] release broadcast for
 <version>: N subscriber(s) dispatched.` Never a green tick in CD.
+🚨 No longer the close condition since 2026-09-12 (phase 1): with the broadcast off by default the watcher logs the build fact as *consumed* and dispatches nobody; the mechanism's close condition is that log line, and the platform build is validated by the satellites' next daily runs. See `Hosting/BuildAndReleaseProcess`.
 
 Provisioning state (2026-08-17): the satellites' **publish** credentials ARE provisioned. The Azure
 managed identity `github-actions-bake` (in the cluster's resource group) holds *Storage File Data
