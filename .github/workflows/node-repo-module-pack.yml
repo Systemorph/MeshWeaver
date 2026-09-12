@@ -788,6 +788,11 @@ jobs:
     name: Select the affected bundles
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The helper is lane orchestration, while the workflow below is the exact definition GitHub
+      # loaded for this job. Keep both absolute so a later `cd` cannot silently change either.
+      MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
+      EXECUTING_WORKFLOW: ${{ github.workspace }}/lane-definition/.github/workflows/node-repo-module-pack.yml
     outputs:
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
       # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
@@ -927,7 +932,32 @@ jobs:
         with:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
-          path: meshweaver
+          path: build-logic
+      # A reusable workflow's `github` context belongs to its CALLER. The job context is the
+      # identity of the reusable workflow that actually defines this job. Read the whole context
+      # here because actionlint 1.7.7 predates the workflow_* members and rejects direct property
+      # syntax; the runtime fields are then validated before they can become checkout inputs.
+      - name: Resolve the exact reusable workflow that defines this job
+        id: workflow
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          repository="$(jq -r '.workflow_repository // empty' <<< "$JOB_CONTEXT")"
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CONTEXT")"
+          [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is absent or invalid ('$repository')"; exit 1; }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is absent or invalid ('$sha')"; exit 1; }
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      # The next step also verifies HEAD against the resolved job.workflow_sha before trusting the
+      # file as structural evidence, so neither build-logic-ref nor a moving @main can substitute.
+      - name: Check out the exact reusable workflow that defines this job
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.workflow.outputs.repository }}
+          ref: ${{ steps.workflow.outputs.sha }}
+          path: lane-definition
+          sparse-checkout: .github/workflows
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -937,20 +967,23 @@ jobs:
       - name: The selection can say no (self-test)
         env:
           BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
+          JOB_WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
         run: |
           set -euo pipefail
           if [ -n "$BUILD_LOGIC_REF" ]; then
             [[ "$BUILD_LOGIC_REF" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::build-logic-ref must be an immutable SHA'; exit 1; }
           fi
-          python3 meshweaver/.github/scripts/node-repo-scope.py --self-test
+          actual_workflow_sha="$(git -C lane-definition rev-parse HEAD)"
+          [ "$actual_workflow_sha" = "$JOB_WORKFLOW_SHA" ] || { echo "::error::the workflow-definition checkout resolved '$actual_workflow_sha', but GitHub says this job is defined by '$JOB_WORKFLOW_SHA'"; exit 1; }
+          python3 build-logic/.github/scripts/node-repo-scope.py --self-test
           if [ -n "$BUILD_LOGIC_REF" ]; then
-            python3 meshweaver/.github/scripts/node-repo-publication-base.py --self-test
-            python3 meshweaver/.github/scripts/node-repo-publication-reuse.py --self-test
+            python3 build-logic/.github/scripts/node-repo-publication-base.py --self-test
+            python3 build-logic/.github/scripts/node-repo-publication-reuse.py --self-test
           fi
-          python3 meshweaver/.github/scripts/node-repo-pack-verify.py --self-test
-          python3 meshweaver/.github/scripts/module-build-key.py --self-test
-          python3 meshweaver/.github/scripts/module-build-ledger.py --self-test
-          python3 meshweaver/.github/scripts/module-pack-batch.py --self-test
+          python3 build-logic/.github/scripts/node-repo-pack-verify.py --self-test
+          python3 build-logic/.github/scripts/module-build-key.py --self-test
+          python3 build-logic/.github/scripts/module-build-ledger.py --self-test
+          python3 "$MODULE_PACK_BATCH" --self-test --workflow "$EXECUTING_WORKFLOW"
       - name: Decide which module bundles this diff can reach
         id: scope
         env:
@@ -979,7 +1012,7 @@ jobs:
           if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
             publication_args=(--publication-base "$PUBLICATION_BASE")
           fi
-          python3 meshweaver/.github/scripts/node-repo-scope.py \
+          python3 build-logic/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \
             "${publication_args[@]}" > "$RUNNER_TEMP/scope.json"
@@ -1034,14 +1067,14 @@ jobs:
                 exit 0
               fi
               echo "module build ledger: REQUIRED — keying $COUNT selected module(s) against $MW_LEDGER_URL"
-              python3 meshweaver/.github/scripts/module-build-key.py --root repo \
+              python3 build-logic/.github/scripts/module-build-key.py --root repo \
                 --modules "@$RUNNER_TEMP/selection.json" \
                 --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
                 > "$RUNNER_TEMP/keys.json"
               # Waits at most 40 of this job's 45 minutes on a live holder; a holder still busy then is
               # built anyway (a duplicate build, flagged), never a red. Exit 1 ONLY for a key the same
               # inputs already compiled RED elsewhere — that is a verdict, not the ledger's outage.
-              python3 meshweaver/.github/scripts/module-build-ledger.py decide \
+              python3 build-logic/.github/scripts/module-build-ledger.py decide \
                 --keys "@$RUNNER_TEMP/keys.json" --matrix "@$RUNNER_TEMP/selection.json" \
                 --publish "$PUBLISH" --lane "$MW_LEDGER_LANE" --wait-max 2400 --poll 30 \
                 --out-matrix "$RUNNER_TEMP/matrix.out.json" --out-build "$RUNNER_TEMP/build.out.json"
@@ -1069,7 +1102,7 @@ jobs:
             echo "build=$BUILD" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          python3 meshweaver/.github/scripts/node-repo-publication-reuse.py \
+          python3 build-logic/.github/scripts/node-repo-publication-reuse.py \
             --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE"
 
       # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
@@ -1113,10 +1146,10 @@ jobs:
         run: |
           set -euo pipefail
           echo "pack legs:"
-          python3 meshweaver/.github/scripts/module-pack-batch.py chunk \
+          python3 "$MODULE_PACK_BATCH" chunk \
             --modules "@$RUNNER_TEMP/final.json" --size "$BATCH_SIZE" --github-output "$GITHUB_OUTPUT"
           echo "tests legs:"
-          python3 meshweaver/.github/scripts/module-pack-batch.py chunk \
+          python3 "$MODULE_PACK_BATCH" chunk \
             --modules "@$RUNNER_TEMP/suites.json" --size "$BATCH_SIZE" --github-output "$GITHUB_OUTPUT" --prefix test-
           {
             echo "### Batched legs"

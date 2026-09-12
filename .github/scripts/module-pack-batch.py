@@ -43,7 +43,7 @@ and the ledger, upstream in `select`), never talks to the registry or the ledger
 never hides a failure — `fail` prints a `::error` naming the module and the phase, and `verdict`
 refuses to exit 0 over one.
 
-    python3 module-pack-batch.py --self-test
+    python3 module-pack-batch.py --self-test --workflow node-repo-module-pack.yml
     python3 module-pack-batch.py chunk --modules @selection.json --size 6 --github-output "$GITHUB_OUTPUT"
     python3 module-pack-batch.py --state S init --batch @batch.json
     python3 module-pack-batch.py --state S list --ok --where decision=build
@@ -396,11 +396,12 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
 
     The two refs deliberately move independently. The 2026-09-12 batching rollout put this helper
     in a new lane while `pack` and `tests` still invoked it from the older platform checkout; every
-    module-test batch then failed before its first suite. This reads the real workflow beside this
-    script, rather than a copied fixture, so the self-test run by every caller catches that split.
+    module-test batch then failed before its first suite. The caller passes the exact reusable
+    workflow identified by `job.workflow_sha`, so this checks the YAML GitHub loaded rather than a
+    copy beside either independently moving checkout.
     """
     problems: list[str] = []
-    boundaries = {"pack": "tests", "tests": "verify"}
+    boundaries = {"select": "prepare", "pack": "tests", "tests": "verify"}
     for job, next_job in boundaries.items():
         start_marker = f"\n  {job}:\n"
         end_marker = f"\n  {next_job}:\n"
@@ -422,10 +423,11 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
             and "repository: Systemorph/MeshWeaver" in step
             and "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}" in step
             and "path: build-logic" in step
-            and "sparse-checkout: .github/scripts" in step
+            and (job == "select" or "sparse-checkout: .github/scripts" in step)
         ]
-        if len(platform_checkouts) != 1:
-            problems.append(f"{job} needs exactly one platform-ref checkout at meshweaver")
+        expected_platform = 0 if job == "select" else 1
+        if len(platform_checkouts) != expected_platform:
+            problems.append(f"{job} needs exactly {expected_platform} platform-ref checkout(s) at meshweaver")
         if len(logic_checkouts) != 1:
             problems.append(f"{job} needs exactly one build-logic-ref checkout at build-logic")
         declaration = ("MODULE_PACK_BATCH: ${{ github.workspace }}"
@@ -434,11 +436,44 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
             problems.append(f"{job} must declare its batching helper exactly once from build-logic")
         if "meshweaver/.github/scripts/module-pack-batch.py" in block:
             problems.append(f"{job} invokes the batching helper from platform-ref")
-        if block.count('"$MODULE_PACK_BATCH"') < 2:
+        required_calls = 3 if job == "select" else 2
+        if block.count('"$MODULE_PACK_BATCH"') < required_calls:
             problems.append(f"{job} does not drive its batch through MODULE_PACK_BATCH")
+        if job == "select":
+            workflow_checkouts = [
+                step for step in steps
+                if "uses: actions/checkout@" in step
+                and "repository: ${{ steps.workflow.outputs.repository }}" in step
+                and "ref: ${{ steps.workflow.outputs.sha }}" in step
+                and "path: lane-definition" in step
+                and "sparse-checkout: .github/workflows" in step
+            ]
+            if len(workflow_checkouts) != 1:
+                problems.append("select must check out the exact job.workflow_sha at lane-definition")
+            if block.count("JOB_CONTEXT: ${{ toJSON(job) }}") != 1:
+                problems.append("select must resolve the reusable workflow from the job context")
+            if ".workflow_repository // empty" not in block or ".workflow_sha // empty" not in block:
+                problems.append("select must read both reusable-workflow identity fields")
+            if ('echo "repository=$repository" >> "$GITHUB_OUTPUT"' not in block
+                    or 'echo "sha=$sha" >> "$GITHUB_OUTPUT"' not in block):
+                problems.append("select must expose the validated job workflow identity to checkout")
+            executing = ("EXECUTING_WORKFLOW: ${{ github.workspace }}"
+                         "/lane-definition/.github/workflows/node-repo-module-pack.yml")
+            if block.count(executing) != 1:
+                problems.append("select must name the exact checked-out reusable workflow once")
+            if block.count("JOB_WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}") != 1:
+                problems.append("select must pass job.workflow_sha to its checkout verification")
+            if "git -C lane-definition rev-parse HEAD" not in block:
+                problems.append("select must verify the workflow checkout resolved job.workflow_sha")
+            exact_self_test = ('python3 "$MODULE_PACK_BATCH" --self-test '
+                               '--workflow "$EXECUTING_WORKFLOW"')
+            if block.count(exact_self_test) != 1:
+                problems.append("select must self-test the exact workflow that defines the job")
+            if "meshweaver/.github/scripts/" in block:
+                problems.append("select invokes lane orchestration from the platform checkout")
     return problems
 
-def self_test() -> int:
+def self_test(workflow_path: Path | None = None) -> int:
     import subprocess
 
     failures: list[str] = []
@@ -452,13 +487,19 @@ def self_test() -> int:
         return {"package": m.split(".")[-1], "module": m, "project": f"src/{m}/{m}.csproj", **kw}
 
     print("== workflow: orchestration ref and platform ref stay separate")
-    workflow_path = Path(__file__).resolve().parents[1] / "workflows" / "node-repo-module-pack.yml"
+    # Older pinned reusable workflows call `--self-test` without `--workflow`; retain that fallback
+    # while current lanes pass the exact `job.workflow_sha` checkout explicitly. Dropping the
+    # fallback would make an old lane fetch a new helper and fail before it could migrate.
+    workflow_path = workflow_path or (
+        Path(__file__).resolve().parents[1] / "workflows" / "node-repo-module-pack.yml"
+    )
     if not workflow_path.is_file():
-        check("the real reusable workflow is present beside the helper", False, str(workflow_path))
+        check("the reusable workflow to inspect is present", False, str(workflow_path))
     else:
         workflow = workflow_path.read_text(encoding="utf-8")
         problems = workflow_script_ownership_problems(workflow)
-        check("pack and tests fetch this helper from build-logic-ref", not problems, "; ".join(problems))
+        check("select, pack and tests keep workflow, tooling and platform refs distinct",
+              not problems, "; ".join(problems))
         wrong_ref = workflow.replace(
             "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}\n          path: build-logic",
             "ref: ${{ inputs.platform-ref }}\n          path: build-logic",
@@ -466,12 +507,19 @@ def self_test() -> int:
         )
         check("the ownership guard catches a helper checkout moved onto platform-ref",
               bool(workflow_script_ownership_problems(wrong_ref)))
+        wrong_workflow_ref = workflow.replace(
+            "ref: ${{ steps.workflow.outputs.sha }}\n          path: lane-definition",
+            "ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}\n          path: lane-definition",
+            1,
+        )
+        check("the ownership guard catches executing-workflow evidence moved onto another ref",
+              bool(workflow_script_ownership_problems(wrong_workflow_ref)))
         wrong_path = workflow.replace(
-            'python3 "$MODULE_PACK_BATCH"',
+            'python3 "$MODULE_PACK_BATCH" --self-test --workflow "$EXECUTING_WORKFLOW"',
             "python3 meshweaver/.github/scripts/module-pack-batch.py",
             1,
         )
-        check("the ownership guard catches a leg invoking the platform checkout",
+        check("the ownership guard catches select invoking the platform checkout",
               bool(workflow_script_ownership_problems(wrong_path)))
 
     print("== chunk: deterministic, sorted, ≤N is one leg, singleton unchanged")
@@ -610,6 +658,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--state", help="the leg's state file (every subcommand but chunk)")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--workflow", type=Path,
+                    help="reusable workflow YAML to inspect during --self-test")
     sub = ap.add_subparsers(dest="cmd")
 
     c = sub.add_parser("chunk", help="split a selection into batches of ≤N")
@@ -656,7 +706,9 @@ def main(argv: list[str] | None = None) -> int:
 
     a = ap.parse_args(argv)
     if a.self_test:
-        return self_test()
+        return self_test(a.workflow)
+    if a.workflow:
+        die("--workflow is only valid with --self-test")
     if not a.cmd:
         ap.print_help()
         return 2

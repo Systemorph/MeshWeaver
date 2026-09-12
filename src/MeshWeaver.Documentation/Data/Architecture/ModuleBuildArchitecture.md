@@ -138,8 +138,10 @@ The batching helper is **lane orchestration**, so `pack` and `tests` fetch it at
 `build-logic-ref` (falling back to `platform-ref` only for callers that do not separate the two).
 Their `meshweaver/` checkout stays at `platform-ref`, because that tree is the framework source and
 reference set the module compiles and tests against. The distinction is executable: the helper's
-self-test reads the real reusable workflow and requires both checkouts in both jobs. This closes the
-2026-09-12 rollout failure in MeshWeaver.Plugins run 34706516117: the reusable workflow already
+self-test reads the exact reusable workflow identified by GitHub's `job.workflow_repository` and
+`job.workflow_sha`, verifies that checkout resolved the stated SHA, and requires the `select`,
+`pack`, and `tests` jobs to keep workflow, tooling, and platform identities separate. This closes
+the 2026-09-12 rollout failure in MeshWeaver.Plugins run 34706516117: the reusable workflow already
 contained batched legs, while the released platform pin `4764a607…` predated
 `module-pack-batch.py`; all seven test batches therefore stopped before running a suite. A new lane
 helper must always move on the tooling axis, independently of the platform it verifies.
