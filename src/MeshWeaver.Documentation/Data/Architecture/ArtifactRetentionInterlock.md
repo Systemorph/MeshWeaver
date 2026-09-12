@@ -225,6 +225,26 @@ A `sampledAt` in the **future** is an unknown age, not a fresh one: a negative a
 trivially, so one skewed clock would make every report that producer files permanently fresh —
 protecting a single identity for ever while the installation moves on.
 
+### 🚨 What this refuses on day one, and the one-off it is asking for
+
+Measured 2026-09-12 on the control instance: three `Hosting/Deployment` records — `memex`,
+`memex-cloud` and `pearl` — all `Active`, none declaring retirement. `pearl` **has never been
+installed**, so it files no report, so it is an expected consumer that cannot be accounted for and
+the prebuilt-bundle pass refuses.
+
+That refusal is the mechanism working, not a defect: "is `pearl` a consumer?" is exactly the question
+retention must answer before it deletes anything, and until now it was answered by silence. It costs
+nothing operationally today — the chart disarms bundle deletion by default
+(`PreWarm:PrebuiltBundleRetention:Delete=false`, see
+[PrebuiltBundleRetention](/Doc/Architecture/PrebuiltBundleRetention)) — so what it does is surface
+the question rather than wedge a live sweep.
+
+**The one-off it asks for is one field**, and it is a record write in the private deployments repo
+rather than anything this repository can do: give `pearl`'s record `retired: true` or a `retiredAt`
+stamp with the reason, or install it. The registry lane already carries the same declaration in
+`.github/acr-retention/instances.json`, with the reason and the issue; the two are deliberately
+separate files because they are two different stores, and neither infers the other's answer.
+
 ## What is still the maintainer's, and is not code
 
 1. **`purge-old-images` carries `memex-portal-ai` on its 7-day step** — the image both production
@@ -239,6 +259,8 @@ protecting a single identity for ever while the installation moves on.
 3. **The `latest`-tag question.** A moving tag is named by no file and is outside this model. Four
    of five filtered repositories have no `:latest`; the survivor survives by being quiet.
 4. **The `Container Registry Repository Writer` grant** is what lets the lane write at all.
+5. **`pearl`'s Deployment record needs its retirement declared, or `pearl` needs installing** — see
+   above. One field, in the deployments repo.
 
 Until (2) lands, what this mechanism buys is that the exposure is **visible instead of silent**: a
 run states its denominator, and an incomplete one refuses rather than quietly protecting less.
