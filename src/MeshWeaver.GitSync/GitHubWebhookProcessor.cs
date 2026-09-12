@@ -67,6 +67,12 @@ public sealed class GitHubWebhookProcessor
     private readonly ILogger? logger;
     private readonly IReadOnlyList<GitHubContentWorkflow> contentWorkflows;
 
+    /// <summary>The seal-hold reason last WRITTEN onto each sync config, so a hold that persists
+    /// across deliveries of the same commit is recorded once and a hold at a NEW commit is recorded
+    /// again. Instance state on a mesh-scoped singleton — never static (AGENTS.md).</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> recordedSealHolds =
+        new(StringComparer.Ordinal);
+
     /// <summary>Initializes a new instance of the <see cref="GitHubWebhookProcessor"/> class.</summary>
     /// <param name="hub">The hub this processor issues its reads and writes from.</param>
     /// <param name="meshService">Mesh query surface for the sync-config fan-out.</param>
@@ -367,6 +373,7 @@ public sealed class GitHubWebhookProcessor
                     {
                         held++;
                         skipped.Add($"{node.Path} ({hold.HoldReason})");
+                        RecordSealHold(node, cfg, hold.HoldReason);
                         continue;
                     }
                     if (ToPushTarget(node) is not { } pushTarget)
@@ -398,6 +405,70 @@ public sealed class GitHubWebhookProcessor
 
                 return targets;
             });
+
+    /// <summary>
+    /// 🚨 <b>A source the seal HELD must say so ON ITS OWN NODE — a hold that exists only as a log
+    /// line is indistinguishable from a source that is simply up to date</b>
+    /// (Systemorph/MeshWeaver#4063).
+    ///
+    /// <para><b>Measured, 2026-09-12 04:0xZ, on BOTH production portals.</b>
+    /// <c>Hosting/_GitSync</c> read <c>lastSyncOutcome: Imported</c>, <c>lastSyncCommitSha ==
+    /// lastAttemptedCommitSha == 24c2d024</c>, <c>lastAttemptWasFinal: true</c> — the exact
+    /// signature of a SETTLED source — while <c>Hosting/v1.17.1</c> and <c>v1.18.0</c> had been
+    /// tagged by a green <c>main</c> run nine hours earlier and the space had never seen them. Every
+    /// green build in between reached <see cref="MatchingBuildTargets"/>, was held by
+    /// <see cref="SealedSyncGate"/>, and left NOTHING behind: the record said "final", the note was
+    /// empty, and the only trace was a Warning in a log an operator must already suspect something
+    /// to go looking in. Two sessions read "settled" off that node before the activity list gave the
+    /// hold away.</para>
+    ///
+    /// <para>So the hold is written where the outcome is, through the same
+    /// <see cref="GitHubSyncService.RecordHold"/> the boot-time reconciler already uses — which also
+    /// CLEARS the attempt pair, so a hold never leaves a #3945 "already attempted, final at this
+    /// commit" licence standing for the delivery that follows it. Nothing else moves: not the
+    /// baseline commit, not the sync horizon.</para>
+    ///
+    /// <para><b>Said once per REASON, not once per delivery.</b> A repository's green builds arrive
+    /// at its CI cadence — a re-run, a <c>schedule</c> probe and a <c>repository_dispatch</c>
+    /// re-verification all carry the same head sha — and the reason string names that sha, so an
+    /// unchanged hold writes nothing and a hold at a NEW commit writes once. Same rule, same
+    /// instance-state shape as <c>SealedPublicationSyncReconciler.RecordHold</c>; the dictionary is
+    /// an instance field on a mesh-scoped singleton, never static.</para>
+    ///
+    /// <para>Best-effort by construction: a failed record is logged and swallowed. The delivery has
+    /// already decided not to import, GitHub is answered 200 either way, and turning a missing note
+    /// into a non-2xx would trade an invisible hold for a redelivery storm.</para>
+    /// </summary>
+    /// <param name="node">The sync-config node the gate held.</param>
+    /// <param name="config">Its content, or null when it could not be read.</param>
+    /// <param name="reason">The gate's hold reason — the exact string the log line carries.</param>
+    private void RecordSealHold(MeshNode node, GitHubSyncConfig? config, string? reason)
+    {
+        if (reason is not { Length: > 0 } || ToPushTarget(node) is not { } target)
+            return;
+        // Already said, and unchanged: neither the node nor the operator learns anything from a
+        // second write of the same sentence.
+        if (recordedSealHolds.TryGetValue(node.Path, out var previous)
+            && string.Equals(previous, reason, StringComparison.Ordinal))
+            return;
+        recordedSealHolds[node.Path] = reason;
+        if (config is not null
+            && string.Equals(config.LastSyncNote, reason, StringComparison.Ordinal)
+            && string.Equals(config.LastSyncOutcome, GitHubSyncService.HeldOutcome, StringComparison.Ordinal))
+            return;
+        if (hub.ServiceProvider.GetService<GitHubSyncService>() is not { } sync)
+            return;
+        // RunAsSystem, never Observable.Using(ImpersonateAsSystem) — #1790; and the webhook request
+        // is anonymous, so there is no ambient identity that could write {space}/_GitSync.
+        hub.ServiceProvider.GetService<AccessService>()
+            .RunAsSystem(() => sync.RecordHold(target.SpacePath, target.SourceId, reason))
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "Green build: {Space} was held by the publication seal, and recording that hold "
+                    + "on its sync config failed — the node still reads as settled.",
+                    target.SpacePath));
+    }
 
     /// <summary>
     /// Why a config that DOES target this repo is not being updated, or <c>null</c> when it is.

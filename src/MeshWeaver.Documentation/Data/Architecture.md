@@ -161,6 +161,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Declarative export and import](DeclarativeImportExport)
 - [Syncing a Space with GitHub](GitHubSync)
 - [What a Green Build Costs a Synced Space](GitSyncTriggerCost) — one field decided whether a delivery was free or a full clone, and it is deliberately frozen while an import does not converge; the second, weaker pointer that makes a settled source free again, and why the skip needs the verdict to be FINAL and not merely recorded
+- [When a Publication Seal Stops Advancing](PublicationSealStarvation) — a Space converges on a green build only while the publication sealed for THIS instance's framework identity keeps reaching the built commit; when the instance's identity and the lane that publishes for it drift apart that condition stops being satisfiable, and until the hold was recorded on the node a held source was byte-identical to a settled one
 - [The Import Marker Records Convergence](ImportMarkerRecordsConvergence)
 - [Instance Sync — bi-directional space replication between MeshWeaver instances](InstanceSync)
 - [Managing Partition Sync (Admin Guide)](PartitionSyncGuide)
