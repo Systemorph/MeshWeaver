@@ -65,10 +65,16 @@ public class PlatformNeverDependsOnPluginsGuard
                 "publishes portal-ai + memex-migration from plugins-repo/src, keys the image set on the "
                 + "core/plugins PAIR (#2622), packs+bakes the Plugins module bundles for that identity, "
                 + "and — since 2026-09-12, the counterweight to the satellites' once-a-day rebuild — "
-                + "points the reusable compile gate at each satellite's main in `satellite-compat`: a "
-                + "read-and-compile after `promote` that blocks nothing and builds nothing into an "
-                + "image, RED so a break is known within the hour rather than at 03:00 (its register "
-                + "is pinned by PlatformBakeLaneGuard)"),
+                + "points the reusable compile gate at each satellite's main in `satellite-compat`. "
+                + "This guard's hazard (commit c88cd5d5c, 2026-09-01) is an edge by which 'core's own "
+                + "build or release can be broken by a repository it should not know about': a core "
+                + "PR verdict behind a sibling checkout, or plugin source entering core's build. "
+                + "satellite-compat is neither: it is on no pull request, it builds nothing into an "
+                + "image or seal, it runs after `promote` with nothing waiting on it, and it checks out "
+                + "read-only content at each satellite's main, recording the sha it judged. It CAN turn "
+                + "a core CD run red on a satellite's state — which is the decision (a break known "
+                + "within the hour rather than at 03:00), not a side effect. Its register is pinned by "
+                + "PlatformBakeLaneGuard to exactly the five satellites, inside that job only"),
             new KeyValuePair<string, string>("edge-images.yml",
                 "the manual edge channel — same two projects"),
         ]);

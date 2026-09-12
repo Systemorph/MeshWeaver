@@ -236,6 +236,11 @@ def write_report(path: Path, verdict: dict, result: dict, *, gate_fail: bool, sc
     no file, and the consumer treats "no report" as "not measured" rather than as clean."""
     first = lambda n: (result.get(n, (None, []))[1] or ["(no CS error captured)"])[0]
     payload = {
+        # WHAT was judged, so the verdict is a fact about one tree and not "the satellite":
+        # the lane sets these to the checked-out repository and the commit it resolved. A ref
+        # like `main` moves; the sha in the report is what the verdict is about.
+        "content": {"repository": os.environ.get("MW_CONTENT_REPOSITORY", ""),
+                    "sha": os.environ.get("MW_CONTENT_SHA", "")},
         "gate_fail": bool(gate_fail),
         "scope": "full" if scope is None else list(scope),
         "types": len(result),
@@ -1090,6 +1095,14 @@ def _self_test() -> int:
             failures.append(f"  report: known_debt/clean counts wrong: {got!r}")
         if got.get("scope") != "full" or got.get("types") != 3:
             failures.append(f"  report: scope/types wrong: {got.get('scope')!r}/{got.get('types')!r}")
+        os.environ["MW_CONTENT_REPOSITORY"] = "Systemorph/Fixture"; os.environ["MW_CONTENT_SHA"] = "abc1234"
+        try:
+            write_report(rep, v, result, gate_fail=True, scope=None, elapsed=1)
+            got = json.loads(rep.read_text(encoding="utf-8"))
+            if got.get("content") != {"repository": "Systemorph/Fixture", "sha": "abc1234"}:
+                failures.append(f"  report: content repository/sha not recorded: {got.get('content')!r}")
+        finally:
+            del os.environ["MW_CONTENT_REPOSITORY"]; del os.environ["MW_CONTENT_SHA"]
         green = {"Pkg/Fine": ("ok", [])}
         write_report(rep, evaluate_gate(green, {}, {"Pkg/Fine": frozenset()}), green,
                      gate_fail=False, scope=["Pkg"], elapsed=1)
@@ -1107,7 +1120,7 @@ def _self_test() -> int:
     print("✓ --modules scope: a subset selects only its packages, an unknown id and an empty list "
           "are refused, the ratchet judges the unit's allow entries only")
     print("✓ --report: the JSON verdict carries gate_fail in both colours, every new break with its "
-          "first error, the known-debt list and the scope")
+          "first error, the known-debt list, the scope, and the content repository + sha it judged")
     return 0
 
 

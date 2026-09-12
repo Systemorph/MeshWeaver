@@ -128,10 +128,19 @@ public class CdImageVersionsShareOneSourceGuard
     /// unresolved — is the regression.</para>
     ///
     /// <para>🚨 <b>The one register this rule does not govern, and why it is still read here.</b>
-    /// <c>satellite-compat</c> (2026-09-12) points the reusable compile gate at each satellite's
-    /// <c>main</c>. Those checkouts are not members of the image set — nothing they contain is
-    /// built into an image or sealed beside one — so there is no set identity for their ref to
-    /// keep consistent, and pinning them to the plugins sha would be a category error (it is a
+    /// The rule's own hazard (commit ce16aa65c, 2026-09-01): <i>"A plugins merge landing mid-run
+    /// therefore produces an image built from a commit the pair tag does not name — the tag
+    /// asserting a provenance that was never true — and, the half that actually breaks hosts, a
+    /// portal image and the module bundles sealed beside it from DIFFERENT trees. There is no image
+    /// that can serve a mixed set of module builds."</i> Both halves are about SET MEMBERS: a tree
+    /// whose bytes enter the image or the seal, and a tag that asserts which tree that was.</para>
+    ///
+    /// <para><c>satellite-compat</c> (2026-09-12) points the reusable compile gate at each
+    /// satellite's <c>main</c>. Those checkouts are not members of the image set — nothing they
+    /// contain is built into an image or sealed beside one, and no tag names them — so there is no
+    /// provenance for a mid-run merge to falsify; a merge landing between two legs merely means two
+    /// satellites were measured at their own respective tips, each of which the leg RECORDS as a sha
+    /// in its verdict artifact. Pinning them to the plugins sha would be a category error (a
     /// different repository). The detector still SEES them (it must, or it is blind to a satellite
     /// that a future job promotes into a build input); what excuses them is a POSITIVE assertion
     /// in <see cref="TheSatelliteCompatRegister_IsAMeasurementNotAnImageInput"/>, not a blind spot.</para>

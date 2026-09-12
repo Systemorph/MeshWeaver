@@ -684,7 +684,7 @@ once a day rather than on every platform build — which took away the only per-
 core merge did not break them. This job is the counterweight: after `promote`, one leg per satellite
 in parallel runs the same reusable compile gate the satellites run on their own pull requests
 (`node-repo-compile-check.yml`, pointed at the satellite's `main` through the read-only fleet-reader
-App) against the tester **this run** promoted — pulled from its GHCR mirror at the digest
+App, recording the sha it resolved in the leg's verdict) against the tester **this run** promoted — pulled from its GHCR mirror at the digest
 `satellite-compat-image` asserts equal to ACR's — plus the module bundles **this run** packed, the
 same bytes `plugins-bake` seals. Measured on that lane, a leg costs ~2 min on an unbilled
 `ubuntu-latest` runner. The semantics are *red but not blocking*, and both halves are the point: it

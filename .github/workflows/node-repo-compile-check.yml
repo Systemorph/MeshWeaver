@@ -220,6 +220,12 @@ jobs:
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
           path: repo
+      # 🚨 The CONTENT commit, resolved once and recorded in the verdict. `content-ref` may be a
+      # branch (the platform passes each satellite's `main`); the verdict is a fact about ONE tree,
+      # so it names the sha — never "main", which has moved by the time anyone reads it.
+      - name: Resolve the content commit
+        id: content
+        run: echo "sha=$(git -C repo rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -396,6 +402,8 @@ jobs:
           MW_REPO_ROOT: ${{ github.workspace }}/repo
           MW_ALLOW_FILE: ${{ github.workspace }}/repo/scripts/compile-check.allow
           VERDICT_ARTIFACT: ${{ inputs.verdict-artifact }}
+          MW_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+          MW_CONTENT_SHA: ${{ steps.content.outputs.sha }}
         # --refs points at the assemblies unpacked from the platform image — a FLAT directory;
         # compile-check.py globs it recursively, dedupes by filename, and compiles each
         # NodeType's resolved source-set. The script is the PLATFORM's, fetched above.

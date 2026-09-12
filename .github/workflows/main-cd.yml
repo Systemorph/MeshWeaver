@@ -2643,6 +2643,11 @@ jobs:
             repository: Systemorph/MeshWeaver.Crm
           - satellite: MeshWeaver.Reinsurance
             repository: Systemorph/MeshWeaver.Reinsurance
+          # Education runs no compile-check on its own PRs and carries no allow file, so its leg
+          # judges the whole tree with nothing grandfathered. MEASURED before it was listed, not
+          # predicted (2026-09-12, main 7c106210b, the lane's exact script path against tester
+          # sha256:1ad82ff0… + this set's four bundles): 13 NodeTypes, 13 clean, 0 debt, 7 s —
+          # and the same harness reds by name on a planted break, so the green is a reading.
           - satellite: MeshWeaver.Education
             repository: Systemorph/MeshWeaver.Education
           - satellite: MeshWeaver.Manufacturing
@@ -2656,7 +2661,7 @@ jobs:
       # The satellite's own default branch — what its daily run would bake. Deliberately NOT a sha
       # this run resolved: the satellites are not part of the image set, so there is no set identity
       # to keep consistent (contrast the Plugins checkouts, pinned to gate's plugins_sha), and each
-      # leg checks out exactly once.
+      # leg checks out exactly once and RECORDS the sha it judged in its verdict artifact.
       content-ref: main
       platform-ref: ${{ needs.gate.outputs.sha }}
       test-image: ${{ needs.satellite-compat-image.outputs.image }}:${{ needs.plugin-test-image.outputs.version }}
@@ -3116,30 +3121,31 @@ jobs:
           {
             echo "### 🧩 Compatibility — every satellite's NodeTypes against \`${VERSION}\` (satellite-compat=${COMPAT_RESULT})"
             echo ""
-            echo "| Satellite | Verdict | NodeTypes | Breaks | Known debt |"
-            echo "|---|---|---:|---|---:|"
+            echo "| Satellite | Content | Verdict | NodeTypes | Breaks | Known debt |"
+            echo "|---|---|---|---:|---|---:|"
           } >> "$GITHUB_STEP_SUMMARY"
           red=0; unmeasured=0
           for sat in $SATELLITES; do
             f="$VERDICTS/satellite-compat-$sat/compile-check-verdict.json"
             if [ ! -f "$f" ]; then
               unmeasured=$((unmeasured + 1))
-              echo "| $sat | ⚪ NOT MEASURED — no verdict artifact | | | |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| $sat | | ⚪ NOT MEASURED — no verdict artifact | | | |" >> "$GITHUB_STEP_SUMMARY"
               echo "compatibility: $sat — NOT MEASURED (no verdict artifact; read that leg)"
               continue
             fi
             fail=$(jq -r '.gate_fail' "$f")
+            csha=$(jq -r '.content.sha // "" | .[0:9]' "$f")
             types=$(jq -r '.types' "$f")
             debt=$(jq -r '.known_debt | length' "$f")
             breaks=$(jq -r --arg bt '`' '([.new_breaks[].type] + [.fp_drift[].type] + [.stale_allow[] | . + " (compiles now — remove from allow)"]) | map($bt + . + $bt) | join(", ")' "$f")
             if [ "$fail" = "true" ]; then
               red=$((red + 1))
-              echo "| $sat | ❌ RED | $types | ${breaks:-?} | $debt |" >> "$GITHUB_STEP_SUMMARY"
-              echo "compatibility: $sat — RED against $VERSION: ${breaks:-?}"
+              echo "| $sat | \`${csha:-?}\` | ❌ RED | $types | ${breaks:-?} | $debt |" >> "$GITHUB_STEP_SUMMARY"
+              echo "compatibility: $sat@${csha:-?} — RED against $VERSION: ${breaks:-?}"
               jq -r '(.new_breaks + .fp_drift)[] | "    \(.type): \(.error)"' "$f"
             else
-              echo "| $sat | ✅ compiles | $types | — | $debt |" >> "$GITHUB_STEP_SUMMARY"
-              echo "compatibility: $sat — compiles against $VERSION ($types NodeType(s), $debt known-debt)"
+              echo "| $sat | \`${csha:-?}\` | ✅ compiles | $types | — | $debt |" >> "$GITHUB_STEP_SUMMARY"
+              echo "compatibility: $sat@${csha:-?} — compiles against $VERSION ($types NodeType(s), $debt known-debt)"
             fi
           done
           case "$COMPAT_RESULT" in
@@ -3250,8 +3256,9 @@ jobs:
             [ -f "$f" ] || continue
             sat=$(basename "$(dirname "$f")"); sat="${sat#satellite-compat-}"
             [ "$(jq -r '.gate_fail' "$f")" = "true" ] || continue
+            csha=$(jq -r '.content.sha // "" | .[0:9]' "$f")
             first=$(jq -r --arg bt "$bt" '(.new_breaks + .fp_drift + [.stale_allow[] | {type: ., error: "compiles now — remove it from scripts/compile-check.allow"}]) | .[:3] | map($bt + .type + $bt + " — " + .error) | join("; ")' "$f")
-            compat=$(printf '%s\n* **%s** does not compile against %s%s%s: %s' "$compat" "$sat" "$bt" "${VERSION:-this set}" "$bt" "${first:-(see the leg)}")
+            compat=$(printf '%s\n* **%s** (main @ %s%s%s) does not compile against %s%s%s: %s' "$compat" "$sat" "$bt" "${csha:-?}" "$bt" "$bt" "${VERSION:-this set}" "$bt" "${first:-(see the leg)}")
           done
           if [ -n "$compat" ]; then
             compat=$(printf '\n\n**Compatibility** (satellite-compat=%s) — the set IS published and every instance gates itself; what is red is the measurement that a satellite still compiles against it. The fix lands in the SATELLITE (its NodeTypes, or its allow-file ratchet), or in core if the platform broke a surface it should not have — the daily rebuild will not repair it on its own. Triage: the control instance, from the failing types below.%s' "$COMPAT_RESULT" "$compat")

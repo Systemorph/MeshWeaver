@@ -250,13 +250,33 @@ public class PlatformBakeLaneGuard
     ///
     /// <para>What this guard still refuses: the samples trees (no deployment embeds them), and any
     /// checkout that is not <c>Systemorph/MeshWeaver.Plugins</c> — with ONE further, enumerated
-    /// exception. The plugins checkout is the deliberate cross-repo BUILD input. The second
-    /// decision arrived 2026-09-12 (maintainer: the fleet rebuilds once a day, so every core build
-    /// must still MEASURE compatibility): the <c>satellite-compat</c> job points the reusable
-    /// compile gate at each satellite's content. That is a read-and-compile, never a build input —
-    /// nothing it checks out reaches an image, and it runs after <c>promote</c> and blocks nothing.
-    /// Its register is asserted POSITIVELY below: exactly the five satellites, and only inside that
-    /// job. A sixth repository, or a satellite named anywhere else in the file, is a new decision.</para>
+    /// exception, and the original rule's reason is quoted here so the exception can be judged
+    /// against it rather than against its wording.</para>
+    ///
+    /// <para><b>The original (commit 410538457, 2026-08-26, PR #2445):</b> <i>"the set of
+    /// checked-out repositories in main-cd is exactly ["Systemorph/MeshWeaver.Plugins"]. Present,
+    /// and the only one. A third would be a new decision rather than an extension of this one."</i>
+    /// The HAZARD it closed is named in the same message: the ADOPT model — <i>"plugins arriving
+    /// pre-built from a bundle their own lane published"</i> — i.e. the #1814 bake-identity class,
+    /// <i>"nothing can be built against a framework other than the one shipping"</i>. A checkout is
+    /// dangerous there because what it feeds BECOMES the set: bytes from a tree the identity does not
+    /// name, published under an identity they were not built for.</para>
+    ///
+    /// <para><b>The exception (2026-09-12, maintainer: the fleet rebuilds once a day, so every core
+    /// build must still MEASURE compatibility):</b> <c>satellite-compat</c> points the reusable
+    /// compile gate at each satellite's content. It is OUTSIDE the hazard on every axis the original
+    /// names: the checkout is read-only content at <c>content-ref: main</c>, resolved to a sha that
+    /// the leg records in its verdict artifact; it is compiled into a throwaway <c>check.csproj</c>
+    /// against the set this run ALREADY promoted; nothing from it enters an image, a bundle or a
+    /// seal; no version is derived from it; it runs after <c>promote</c> and nothing waits for it;
+    /// and nothing downstream consumes the verdict. It cannot put bytes under the wrong identity
+    /// because it publishes no bytes. What it CAN do is make a core CD run red on a satellite's
+    /// state — which is the decision, not a side effect.</para>
+    ///
+    /// <para>So the register is asserted POSITIVELY below rather than the rule relaxed: exactly the
+    /// five satellites, only inside that job, and OUTSIDE it the only repository is still Plugins.
+    /// A sixth repository, a satellite named by another job, or a matrix that lost one is a new
+    /// decision and fails here by name.</para>
     /// </summary>
     [Fact]
     public void PlatformBake_CompilesOnlyWhatTheImageEmbeds()
