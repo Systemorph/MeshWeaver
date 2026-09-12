@@ -104,6 +104,46 @@ public record PluginGrant
             && ranks.CoversInstance(ranks.Narrower(instancePlan, e.Tier), packageTier));
 
     /// <summary>
+    /// 🚨 The typed PLAN-TIER refusal (#4097): the plan the decision was taken at when this grant
+    /// REACHES <paramref name="packageId"/> from <paramref name="sourceName"/> — some entry matches
+    /// the pair and is within its term at <paramref name="now"/> — and yet no entry covers the
+    /// package's <paramref name="packageTier"/> under the instance's plan. Null when the package is
+    /// allowed, and null just the same when NO entry reaches it: a package outside the instance's
+    /// granted sources must stay indistinguishable from absence (the enumeration defence), and only
+    /// a package the grant already reaches may be named as "refused by plan".
+    ///
+    /// <para>The plan returned is the one <see cref="Allows(string,string,string?,PlanTierRanks,string?,DateTimeOffset)"/>
+    /// decided with — the instance's plan narrowed by the reaching entry's cap
+    /// (<see cref="PlanTierRanks.Narrower"/>), the baseline when the record carries none — so the
+    /// sentence built from it names the plan that actually refused. With several reaching entries
+    /// the WIDEST effective plan is reported: that is the closest the instance came.</para>
+    /// </summary>
+    public string? TierRefusal(
+        string sourceName, string packageId, string? packageTier, PlanTierRanks ranks,
+        string? instancePlan, DateTimeOffset now)
+    {
+        if (IsRevoked || Allows(sourceName, packageId, packageTier, ranks, instancePlan, now))
+            return null;
+        string? widest = null;
+        foreach (var entry in Entries)
+        {
+            if (!entry.Matches(sourceName, packageId) || !entry.IsValidAt(now))
+                continue;
+            // The plan the entry DECIDED with, in the ladder's own words: Narrower reads an
+            // unknown plan or cap as the baseline, and so must the sentence — "this instance is
+            // on gold" for a cap the ladder does not know would name a plan that is neither the
+            // instance's nor an upgrade target.
+            var canonical = PlanTierRanks.Canonical(ranks.Narrower(instancePlan, entry.Tier));
+            var plan = canonical.Length > 0 && (ranks.RankOf(canonical) is not null || ranks.IsAllAccess(canonical))
+                ? canonical
+                : PlanTierRanks.BaselinePlan;
+            if (widest is null || (ranks.RankOf(plan) ?? PlanTierRanks.BaselineRank) > (ranks.RankOf(widest) ?? PlanTierRanks.BaselineRank))
+                widest = plan;
+        }
+        return widest;
+    }
+
+    /// <summary>
     /// <see cref="Allows(string,string,string?,PlanTierRanks,string?,DateTimeOffset)"/> for a
     /// caller that knows no instance plan — decided at the BASELINE, so a plan-less entry covers
     /// free and untiered packages and nothing above. Kept for the surfaces that carry no instance
