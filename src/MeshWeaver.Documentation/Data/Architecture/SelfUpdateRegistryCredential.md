@@ -29,7 +29,18 @@ So, in `OciTagLister.ResolveCredential` — **selecting** the credential:
 Both rows need TWO explicit statements. A declaration alone grants nothing (there is still no key for
 that host); a key alone grants nothing (nothing says that registry trusts that portal).
 
-## 🚨 This IS a trust expansion — say so
+## 🚨 Measured: with the target check removed, the instance key reaches an arbitrary host — twice
+
+Not an argument, a measurement. Delete the bare-host requirement, point `SelfUpdate:Registry` at
+`instance:mwi_…@evil.example.test`, declare any validator this installation holds a key for, and the
+test fixture's attacker host receives **two credentials**: the Basic credential at the token realm it
+names, then the Bearer on the listing. `OciRegistryClient` builds `https://{registry}/` for a value
+with no scheme, so that string is a *valid* URI whose host is `evil.example.test`.
+
+**That is why the bare-host requirement is not negotiable, and why it is host-EQUALITY rather than
+"parses to a host".** Everything below explains the shape; this is the reason it exists.
+
+## This IS a trust expansion — say so
 
 **Before this change, the instance key could reach only a host that had a plugin registry configured
 on it. After it, the key can reach ANY host, provided some configured plugin registry is declared to
@@ -163,8 +174,28 @@ while writing these, and both produced a confident pass:
   behave like a **hostile registry** — it challenges, serves `/v2/token`, and records whatever
   secret it is handed. That is what turns "no credential was seen" from a tautology into a test.
 
-So each negative here was checked by deleting the guard, rebuilding for real, and confirming it goes
-red for the *right* reason.
+### The vacuity audit — ask "could this assertion FAIL?", not "does it assert the right property"
+
+A vacuous negative is a **class**, and its mechanism is now known: *a fake that refuses early can
+never observe what it was built to catch.* So every negative here was audited against that one
+question, by deleting the guard it protects, stripping the test to the assertion under audit, and
+measuring what it reported. **Two of the five shared the shape**, and the hostile-host fixture fixed
+both:
+
+| negative | guard deleted ⇒ the assertion reports | was it vacuous? |
+|---|---|---|
+| no plugin registry on that host | **2 credentials** at `other.example.test` | **YES** — an unknown host was 404'd before any credential could be observed. Same shape as the userinfo one; fixed by the same change |
+| the same registry, nothing declared | **3 credentials** | no — the target is a host the fake serves, so the challenge always happened |
+| a declared validator holding no key | **3 credentials** | no — same reason |
+| a target carrying userinfo | **2 credentials** at `evil.example.test` | **YES** — the case that started this audit |
+| a URL-form target | **4 requests** under the `HostOf`-without-equality simplification | no — and it is precisely what blocks that simplification |
+
+The two non-fake negatives cannot take this shape at all: the validator-host test asserts values
+returned by a pure function with no fake in the path, and the refused-key test drives a host the fake
+*does* serve and asserts that an exception is thrown, which an empty-list regression could not
+satisfy.
+
+**The same audit is owed across the wider suite; it is not part of this change.**
 
 ## See also
 
