@@ -83,6 +83,31 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 > `platform-refs-<digest>` cache entry has been evicted — fail RED naming the missing tool; neither
 > skips.
 
+> 📅 **2026-09-12, later — `pack` needs neither Docker nor a registry (Memex#316).** The first
+> self-hosted pack leg (MeshWeaver.SocialMedia run 34696706383, runner
+> `aks-silos-g5hdc-runner-pmhpw`) died exactly at that "fallback": `platform-refs-sha256:ddefa9b0…
+> missed the cache and this runner … has no Docker daemon to pull meshweaver.azurecr.io/memex-portal-ai
+> with` — while `prepare` had HIT the same key six minutes earlier (175 MB). Not an eviction:
+> **actions/cache versions an entry by the path STRING**, and `${{ runner.temp }}` is
+> `/home/runner/work/_temp` on GitHub-hosted but `/home/runner/_work/_temp` under ARC, so every
+> self-hosted leg missed by construction and every miss put Docker and ACR on the path. Maintainer
+> decision: the leg "should not" need Docker and "should not need acr at all", and runners keep
+> the platform installed until the platform updates. So `pack` now takes the pinned image's
+> `/app` from, in order: **(1)** the runner's platform mount `/opt/platform/<digest>/`, real only
+> when its `.complete` marker holds the digest (an Azure Files volume the runner pods carry,
+> refreshed once per sealed set — a directory test, read in place, never a registry call);
+> **(2)** the run artifact `platform-refs-<lane>` — `prepare` tars the very `/app` it `docker cp`'d
+> (gzip, because the runner image has no `zstd`; 1521 files / 542 MB → 216 MB, proven byte- and
+> mode-identical on `sha256:ddefa9b0…`) and uploads it with retention 1 day, guaranteed within the
+> run as no cache is; **(3)** neither ⇒ RED naming the mount path, the artifact and `prepare` as
+> the job that should have produced it. The job summary states which source was taken. The cache
+> restore, the `docker create`/`cp` fallback, `azure/login`, the ACR login and the `acr-*` secrets
+> are gone from `pack` — by content, no `docker`, `azure` or `acr` token remains in `pack` or
+> `tests`; the per-digest cache lives in `prepare` alone, where it saves the registry pull on a
+> hosted runner whose path string never moves. `tests` never consumed an image. The gate lane's
+> tester image is #4095's file and still `docker pull`s on `aks-silos-dind`; a pre-pulled-on-node
+> → pull → RED ladder of the same shape is noted there, not done here.
+
 ### Where a module's own suite runs — and why `publish` decides
 
 A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last
