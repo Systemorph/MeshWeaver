@@ -57,29 +57,77 @@ name: Node repo gate (reusable)
 #       stage-repo-app-id: ${{ secrets.MESHWEAVER_APP_ID }}
 #       stage-repo-app-private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
 #
-# ──────── `runner` — declared, and REFUSED for anything but ubuntu-latest (2026-09-12) ────────
-# node-repo-module-pack.yml grew a `runner` input the same day, so a caller can move its heavy
-# legs onto the Systemorph org's self-hosted `aks-silos` scale set (ARC gha-runner-scale-set on
-# the AKS silos pool, ephemeral, min 0 / max 8; proven on Memex run 34681270793). This lane
-# declares the SAME input so a caller sees one contract — and honours it NOWHERE, on purpose. The
-# gate shard's contract is `docker run` of the tester image (above), and the aks-silos runners
-# have NO DOCKER: measured 2026-09-12 in Systemorph/Memex
-# `deployments/aks/ci-runners/arc-runner-scale-set-values.yaml` — no `containerMode:` at all
-# (neither `dind` nor `kubernetes`), one `runner` container from
-# `ghcr.io/actions/actions-runner:2.337.0`, no dind sidecar, no socket mount. That image carries
-# the docker CLI and no daemon. A shard moved there would die at `docker login`, every run.
+# ──────── `runner` — honoured by the gate shards (2026-09-12, afternoon) ────────
+# The morning of 2026-09-12 (#4090) this lane declared `runner` for parity with
+# node-repo-module-pack.yml and REFUSED any value but `ubuntu-latest` in `plan`, because a gate
+# shard is `docker login/pull/run` of the tester image and the org's self-hosted `aks-silos` scale
+# set had no Docker daemon. That stopped being true the same afternoon: the org now runs a SECOND,
+# Docker-capable scale set, and the maintainer's word is "bring them in our infra." The facts, all
+# measured, from Systemorph/Memex `deployments/aks/ci-runners/` (README, "The Docker-capable scale
+# set") and Memex run 34694129111:
 #
-# So `plan` REFUSES any value but `ubuntu-latest`, red and by name. A declared input that is
-# silently ignored would let a caller believe its shards moved while they did not — "skipped reads
-# as passed", the shape this file forbids everywhere else. The day the scale set gains a daemon
-# (`containerMode: dind`, or a Kubernetes-mode runner with a daemon sidecar) the change is: drop
-# the refusal in `plan`, put `runs-on: ${{ inputs.runner }}` on `gate`, and — only if a shard ever
-# runs setup-dotnet, which today it does not (the tester runs INSIDE the container, the runner
-# needs no SDK) — `DOTNET_INSTALL_DIR: /home/runner/.dotnet` at job level, because that image is
-# non-root (uid 1001) and ships neither .NET nor Node. Also worth knowing before that day: the
-# runner pod is LIMITED to 2 vCPU / 6 GiB (the node is 16 / 62), and a shard is ~60 serial package
-# installs against a live mesh. Callers: wire this from its OWN repository variable, never the
-# module-pack one — `vars.MW_RUNNER_GATE`, unset today — so a per-family opt-in stays per family.
+#   * `runs-on: aks-silos-dind` — ARC gha-runner-scale-set 0.14.2, `containerMode: dind`, helm
+#     release `aks-silos-dind` in namespace `arc-runners-dind`, ephemeral, min 0 / max 6, on its
+#     own pool (spot `cidind`, falling back to the regular CI pool `cibuild`) — never on a node
+#     with a portal, because the daemon is a PRIVILEGED `docker:dind` sidecar the runner reaches
+#     over DOCKER_HOST. `docker run --rm hello-world` → "Hello from Docker!", Docker Engine 29.8.0
+#     (client 29.7.2). Scale-from-zero: job created → started in 157 s (the first job on a fresh
+#     node also pays the dind image pull).
+#   * The runner container is `ghcr.io/actions/actions-runner:2.337.0`: NON-ROOT (`runner`,
+#     uid 1001, passwordless sudo), no .NET, no Node, NO `gh`, NO `az` (measured with
+#     `docker run … command -v` on 2026-09-12). What it has that this job uses: bash, git, curl,
+#     jq, python3, unzip, tar, sha256sum, mawk. `dotnet --version → 10.0.401` came from
+#     setup-dotnet under `DOTNET_INSTALL_DIR=/home/runner/.dotnet`.
+#   * Sizes: the runner container is limited to 6 CPU / 20 GiB (request 2 / 8 GiB); the tester's
+#     `docker run` executes in the dind SIDECAR's cgroup, whose limit is 6 CPU / 16 GiB (request
+#     1 / 4 GiB, the namespace LimitRange) — beside a GitHub-hosted ubuntu-latest's 4 vCPU / 16 GiB.
+#     The node behind it is a D16s_v5: 16 vCPU / 62 GiB "visible" (nproc/free show the node, not
+#     the cgroup).
+#
+# What moved in this file, and what did not:
+#
+#   * `gate` — the shard job — honours `runs-on: ${{ inputs.runner }}`. `plan` and `verify` stay
+#     on `ubuntu-latest` whatever the input says: seconds of orchestration, no Docker, and
+#     `verify` is the required context.
+#   * The refusal in `plan` is GONE. In its place the shard's FIRST step asserts that `docker info`
+#     succeeds and fails RED naming the runner and the label when it does not: a runner without a
+#     daemon was the one thing that made the refusal right, and it is now asserted where it would
+#     bite — on every shard, before `docker login` — instead of inferred from a label. The step
+#     runs on ubuntu-latest too (Docker is part of that image, so it is a sub-second proof that the
+#     check itself fires); a check that only ran on the non-default label would never be seen
+#     working before the day it mattered.
+#   * Job-level `DOTNET_INSTALL_DIR: /home/runner/.dotnet` whenever `runner` is not
+#     `ubuntu-latest` — the #4090 rule for every job that honours the input: the runner is
+#     non-root and setup-dotnet cannot write /usr/share/dotnet there. EMPTY on ubuntu-latest, which
+#     setup-dotnet reads as unset (`process.env['DOTNET_INSTALL_DIR'] ? … : default`), so the
+#     default path is untouched. No step of the shard runs setup-dotnet today (the tester runs
+#     INSIDE the container, on the portal image's own `dotnet`), and the scale set's pod template
+#     sets the same variable — the job-level line keeps the rule uniform across the honouring jobs
+#     of both lanes and holds for the first step that ever does.
+#   * The two fetches of a lane script (`compose-gate-host.sh`, `compose-sealed-modules.sh`) used
+#     `gh api …contents…`, and the runner image has no `gh`. They now `curl` the SAME endpoint at
+#     the SAME ref with `github.token` (`Accept: application/vnd.github.raw+json`), on every
+#     runner — same bytes, no CLI, and the `#!` check on what arrived is unchanged.
+#   * The `az storage` read of an upstream seed — taken only when `upstream-seed` is set and
+#     `registry-url` is NOT — asserts `az` by name in its preflight, red before `azure/login`
+#     would fail on a missing CLI three commands later. Every current caller reads over
+#     `registry-url`; on ubuntu-latest `az` is present and the assertion is silent.
+#   * Not exercised by the proof run, exercised by the first opted-in shard: the bind mounts of
+#     $RUNNER_TEMP and $GITHUB_WORKSPACE into the tester container. They rely on the chart mounting
+#     the runner's `_work` volume into the dind sidecar at the same path (what `containerMode: dind`
+#     is for) and on the tester running as uid 1001 (`--user`) inside it; a `chmod 777` on the
+#     directories the container writes is already there.
+#
+# A caller opts in PER REPOSITORY behind a repository variable — its OWN, never the module-pack
+# lane's `vars.MW_RUNNER_HEAVY`, so one job family moves at a time and the move is one edit to
+# revert:
+#
+#     with:
+#       runner: ${{ vars.MW_RUNNER_GATE || 'ubuntu-latest' }}
+#
+# Unset, the variable resolves to `ubuntu-latest` and this lane behaves byte-for-byte as before
+# this input existed. Doc: Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to end",
+# the 2026-09-12 note).
 
 on:
   workflow_call:
@@ -326,12 +374,15 @@ on:
         default: false
       runner:
         description: >-
-          The `runs-on` label the gate shards WOULD run on — declared for parity with
-          node-repo-module-pack.yml's input of the same name, and honoured by NO job here today:
-          a shard is a `docker run` of the tester image, and the self-hosted `aks-silos` scale set
-          has no Docker daemon (measured 2026-09-12; see the header). `plan` fails RED on any value
-          but `ubuntu-latest`, so a caller can never believe its shards moved when they did not.
-          Leave it unset; move the module-pack lane's legs instead.
+          The `runs-on` label for the gate SHARDS (`gate`) and nothing else — `plan` and `verify`
+          stay on `ubuntu-latest`. `ubuntu-latest` (the default) is exactly today's behaviour.
+          `aks-silos-dind` is the Systemorph org's Docker-capable self-hosted scale set (a
+          privileged dind sidecar; non-root runner, no `gh`, no `az`, no preinstalled .NET; see
+          "`runner` — honoured by the gate shards" in the header). The shard's first step asserts
+          the runner HAS a Docker daemon and fails RED naming it otherwise — `aks-silos` (no
+          daemon) is such a red, not a silent ignore. Wire it from a repository variable of its
+          own (`vars.MW_RUNNER_GATE`, falling back to `ubuntu-latest` when unset — the header
+          shows the expression) so the move is one edit to revert.
         required: false
         type: string
         default: ubuntu-latest
@@ -386,17 +437,6 @@ jobs:
       run_all: ${{ steps.affected.outputs.run_all }}
       nothing-to-gate: ${{ steps.plan.outputs.nothing_to_gate }}
     steps:
-      # 🚨 The `runner` input is declared and NOT honoured — see the header. An unreadable or
-      # unsupported value is RED here, before anything is planned, so "my shards moved" can never
-      # be believed of a run whose shards stayed. This is an assertion on a caller's CONFIG, not a
-      # skip: nothing downstream is conditional on it.
-      - name: The gate's shards run on GitHub-hosted runners (the `runner` input)
-        env:
-          RUNNER_LABEL: ${{ inputs.runner }}
-        run: |
-          set -euo pipefail
-          [ "$RUNNER_LABEL" = ubuntu-latest ] || { echo "::error::runner is '$RUNNER_LABEL', and this lane honours no other value: a gate shard is a 'docker run' of the tester image, and the self-hosted aks-silos scale set has no Docker daemon (measured 2026-09-12 — header of node-repo-gate.yml). Leave the input unset here; move only node-repo-module-pack.yml's legs."; exit 1; }
-          echo "gate shards: ubuntu-latest — the only value this lane honours (runner='$RUNNER_LABEL')"
       - uses: actions/checkout@v7
         with:
           # The affected computation diffs against the PR base — it needs the base commits.
@@ -477,12 +517,37 @@ jobs:
       fail-fast: false
       matrix:
         shard: ${{ fromJson(needs.plan.outputs.matrix) }}
-    runs-on: ubuntu-latest
+    # `runner` — THE job that honours it; see "`runner` — honoured by the gate shards" in the header.
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 30
+    env:
+      # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
+      # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
+      # No step here runs setup-dotnet today; the line is the rule, uniform with module-pack.
+      DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
     permissions:
       contents: read
       id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
     steps:
+      # 🚨 FIRST, before checkout: this job's contract is `docker login/pull/run` of the tester
+      # image, so a runner without a daemon cannot gate — and until 2026-09-12 that was the reason
+      # `plan` refused every label but ubuntu-latest. The assertion replaces the refusal: it holds
+      # on the label that has a daemon (`aks-silos-dind`, a dind sidecar over DOCKER_HOST) and goes
+      # RED naming the runner on one that does not (`aks-silos`, or any label nobody measured). It
+      # runs on ubuntu-latest too — there it is a sub-second proof that the check fires, which a
+      # step conditioned on the non-default label could never give until the day it mattered.
+      # Not an input-shaped `if:`: nothing is skipped on the value, it is asserted against.
+      - name: This runner has a Docker daemon (the `runner` input)
+        env:
+          RUNNER_LABEL: ${{ inputs.runner }}
+        run: |
+          set -euo pipefail
+          if ! docker info >/dev/null 2>&1; then
+            echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') has no reachable Docker daemon, and a gate shard is a 'docker run' of the tester image — it cannot gate here. The Docker-capable self-hosted label is 'aks-silos-dind' (a dind sidecar); 'aks-silos' has the CLI and no daemon. Set the caller's runner variable to 'aks-silos-dind' or unset it (ubuntu-latest)."
+            docker info 2>&1 | tail -5 || true
+            exit 1
+          fi
+          echo "runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL'): Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?') at ${DOCKER_HOST:-the default socket}"
       - uses: actions/checkout@v7
       - name: Log in to the image registry
         env:
@@ -600,6 +665,7 @@ jobs:
           TARGETS: ${{ inputs.bake-publish-targets }}
           REGISTRY_URL: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
+          RUNNER_LABEL: ${{ inputs.runner }}
         run: |
           set -euo pipefail
           missing=()
@@ -610,6 +676,10 @@ jobs:
             [ -n "${AZURE_TENANT_ID:-}" ]       || missing+=("azure-tenant-id (secret)")
             [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("azure-subscription-id (secret)")
             [ -n "${TARGETS:-}" ]               || missing+=("bake-publish-targets (input) — the storage target to read the upstream publication from")
+            # Without registry-url the seed is read with `az storage` after `azure/login`, and the
+            # self-hosted runner image ships no `az` (header, "`runner` — honoured by the gate
+            # shards"). Named here, not three commands later as a missing binary.
+            command -v az >/dev/null 2>&1 || missing+=("az CLI — runner '${RUNNER_NAME:-?}' (runs-on '${RUNNER_LABEL}') has none, and without registry-url the seed is read from the storage share with 'az storage'. Pass registry-url (HTTPS + instance key, no az), or keep the gate on ubuntu-latest (the lane's 'runner' input)")
           fi
           if [ "${#missing[@]}" -gt 0 ]; then
             for m in "${missing[@]}"; do echo "::error::upstream-seed is set but missing: ${m}"; done
@@ -716,7 +786,12 @@ jobs:
           set -euo pipefail
           SCRIPT="${RUNNER_TEMP:-/tmp}/compose-gate-host.sh"
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — compose-gate-host.sh has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-gate-host.sh?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+          # curl, not `gh api`: the self-hosted runner image ships no `gh` (header). Same endpoint,
+          # same ref, same token; the raw media type returns the bytes without a base64 round-trip.
+          curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-gate-host.sh?ref=${SCRIPTS_REF}" \
             || { echo "::error::could not fetch compose-gate-host.sh at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-gate-host.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           chmod +x "$SCRIPT"
@@ -1013,7 +1088,12 @@ jobs:
               # so a fetch keyed on it silently read main while claiming a pin.
               SCRIPT="${RUNNER_TEMP:-/tmp}/compose-sealed-modules.sh"
               [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the compose script has no ref to be fetched at"; exit 1; }
-              gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+              # curl, not `gh api`: the self-hosted runner image ships no `gh` (header) — same
+              # endpoint, same ref, same token, raw media type.
+              curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
+                -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${SCRIPTS_REF}" \
                 || { echo "::error::could not fetch compose-sealed-modules.sh at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
               head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
               chmod +x "$SCRIPT"
