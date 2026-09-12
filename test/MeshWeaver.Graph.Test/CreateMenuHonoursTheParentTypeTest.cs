@@ -388,7 +388,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
                 // opt-out lives on the persisted node, not in the static registry, so it is only
                 // visible to a read.
                 TypeNode(types, "Internal", new NodeTypeDefinition { Configuration = "config => config" })
-                    with { ExcludeFromContext = new HashSet<string> { MeshContexts.Create } },
+                    with { ExcludeFromContext = ImmutableHashSet.Create(MeshContexts.Create) },
             ],
         });
 

@@ -214,16 +214,19 @@ internal sealed class CreatableTypesProvider(
     /// a <c>path:a|b|c</c> alternation names no first segment and would fan out over every schema
     /// (#3202).</para>
     /// </summary>
-    private IObservable<ImmutableDictionary<string, MeshNode>> ResolveDeclaredTypeNodes(
+    private IObservable<ImmutableDictionary<string, MeshNode?>> ResolveDeclaredTypeNodes(
         IMeshQueryCore? meshQueryCore, NodeTypeDefinition? parentDef)
     {
-        var empty = ImmutableDictionary<string, MeshNode>.Empty
+        var empty = ImmutableDictionary<string, MeshNode?>.Empty
             .WithComparers(StringComparer.OrdinalIgnoreCase);
-        if (meshQueryCore is null)
-            return Observable.Return(empty);
 
+        // 🚨 The globals are probed only when they will be USED. A parent with
+        // IncludeGlobalTypes = false never displays them, and BuildInfos drops them either way —
+        // probing them anyway would spend a query and a 15 s timeout budget per global path on
+        // every render of a sealed parent's Create form.
+        var includeGlobal = parentDef?.IncludeGlobalTypes ?? true;
         var declared = (parentDef?.CreatableTypes ?? [])
-            .Concat(meshConfiguration.GlobalCreatableTypes)
+            .Concat(includeGlobal ? meshConfiguration.GlobalCreatableTypes : [])
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             // A static registration carries its own ExcludeFromContext in memory — no read needed,
@@ -233,20 +236,31 @@ internal sealed class CreatableTypesProvider(
         if (declared.Length == 0)
             return Observable.Return(empty);
 
+        // No query core at all is a CONFIGURATION fact, not a failure: a host without one has no
+        // persisted nodes, so a declared path that is not static provably does not exist and the
+        // forgiving synthesis is the right answer. Recorded as CONFIRMED ABSENT, never as unknown.
+        if (meshQueryCore is null)
+            return Observable.Return(
+                declared.Aggregate(empty, (acc, path) => acc.SetItem(path, null)));
+
         var lookups = declared.Select(path => meshQueryCore
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{path} nodeType:NodeType"),
                 hub.JsonSerializerOptions)
             .Take(1)
-            // Same deadlock guard as QueryTypeNodes: a query that never emits its Initial frame
-            // must not hold the Aggregate below open for ever.
-            .Timeout(TimeSpan.FromSeconds(15), Observable.Empty<QueryResultChange<MeshNode>>())
-            .Catch<QueryResultChange<MeshNode>, Exception>(
-                _ => Observable.Empty<QueryResultChange<MeshNode>>()));
+            .Select(change => (path, node: change.Items.FirstOrDefault(), probed: true))
+            // 🚨 A PROBE THAT DID NOT COMPLETE IS NOT AN ANSWER. Folding a timeout or a fault into
+            // the same "no row" the successful empty query produces would make a transient read
+            // failure OFFER the very type this read exists to withhold — the opt-out would hold
+            // when storage is healthy and lapse exactly when it is not. `probed: false` keeps the
+            // two apart and BuildInfoFromConfig fails closed on it.
+            .Timeout(TimeSpan.FromSeconds(15),
+                Observable.Return((path, node: (MeshNode?)null, probed: false)))
+            .Catch<(string path, MeshNode? node, bool probed), Exception>(
+                _ => Observable.Return((path, node: (MeshNode?)null, probed: false))));
 
         return Observable.Merge(lookups)
-            .SelectMany(change => change.Items)
-            .Aggregate(empty, (acc, node) => acc.SetItem(node.Path, node));
+            .Aggregate(empty, (acc, x) => x.probed ? acc.SetItem(x.path, x.node) : acc);
     }
 
     /// <summary>
@@ -275,7 +289,7 @@ internal sealed class CreatableTypesProvider(
 
     private static IReadOnlyList<CreatableTypeInfo> BuildInfos(
         IReadOnlyList<MeshNode> queryNodes,
-        ImmutableDictionary<string, MeshNode> declaredNodes,
+        ImmutableDictionary<string, MeshNode?> declaredNodes,
         MeshConfiguration meshConfiguration,
         IServiceProvider serviceProvider,
         string? currentType,
@@ -399,22 +413,34 @@ internal sealed class CreatableTypesProvider(
     /// would be a hole in the one rule this provider exists to apply. The opt-out is read from the
     /// static registry, which is where every platform type that declares one lives.</para>
     /// </summary>
-    private static CreatableTypeInfo? BuildInfoFromConfig(
+    internal static CreatableTypeInfo? BuildInfoFromConfig(
         string typePath,
-        ImmutableDictionary<string, MeshNode> declaredNodes,
+        ImmutableDictionary<string, MeshNode?> declaredNodes,
         MeshConfiguration meshConfiguration,
         IServiceProvider serviceProvider,
         System.Text.Json.JsonSerializerOptions options)
     {
-        // Static first (no read), then the node the declared-path lookup found. A path neither
-        // holds is one the mesh does not have — synthesised below, deliberately: a declaration may
-        // name a type an import has not landed yet.
-        var node = serviceProvider.FindStaticNode(typePath)
-                   ?? declaredNodes.GetValueOrDefault(typePath);
-        if (node is not null)
-            return IsExcludedFromCreate(node, meshConfiguration)
+        // 1. Static registration — resolved with no read at all.
+        var staticNode = serviceProvider.FindStaticNode(typePath);
+        if (staticNode is not null)
+            return IsExcludedFromCreate(staticNode, meshConfiguration)
                 ? null
-                : BuildInfoFromMeshNode(node, options);
+                : BuildInfoFromMeshNode(staticNode, options);
+
+        // 2. 🚨 THREE OUTCOMES, NOT TWO. A key PRESENT means the probe completed and its answer
+        //    stands; a key ABSENT means the probe did not complete, which is UNKNOWN — and
+        //    unknown fails CLOSED. Treating unknown as "no such node" would synthesise the entry
+        //    and offer a type whose opt-out simply could not be read, which is the failure this
+        //    lookup was added to prevent, arriving only under load.
+        if (!declaredNodes.TryGetValue(typePath, out var probed))
+            return null;
+        if (probed is not null)
+            return IsExcludedFromCreate(probed, meshConfiguration)
+                ? null
+                : BuildInfoFromMeshNode(probed, options);
+
+        // 3. Confirmed absent: the declaration names a type the mesh does not have yet. Offering
+        //    it is deliberate — a declaration may precede the import that lands the type.
         return new CreatableTypeInfo(
             NodeTypePath: typePath,
             DisplayName: GetLastSegment(typePath),
