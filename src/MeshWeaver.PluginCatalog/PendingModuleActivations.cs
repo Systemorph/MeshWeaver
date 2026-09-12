@@ -99,6 +99,28 @@ public sealed record ModuleActivationReport(
     /// </summary>
     public ImmutableList<ModuleFallback> Fallbacks { get; init; } = [];
 
+    /// <summary>
+    /// 🚨 #4083 — the modules whose LAST LANDING WAS REFUSED here: the bytes could not bind on
+    /// this platform (a higher assembly version than the platform provides, a missing type), so
+    /// nothing landed and the previous generation — or nothing — keeps serving. Before this row
+    /// the only trace was a warning in a pod log. Derived from the per-module refusal marker
+    /// (<see cref="ModuleActivationSidecar.RefusedLanding"/>), which the refusing landing writes
+    /// and the next landing that lands anything clears. Init-only, for the same
+    /// binary-compatibility reason as the rows above.
+    /// </summary>
+    public ImmutableList<ModuleRefusal> Refused { get; init; } = [];
+
+    /// <summary>Whether anything was refused at landing.</summary>
+    public bool HasRefused => !IsUndetermined && !Refused.IsEmpty;
+
+    /// <summary>The refusal row for the module the install record at <paramref name="packagePath"/>
+    /// asked to land, or null.</summary>
+    public ModuleRefusal? RefusalForPackage(string? packagePath) =>
+        IsUndetermined || string.IsNullOrWhiteSpace(packagePath)
+            ? null
+            : Refused.FirstOrDefault(r => string.Equals(
+                r.PackagePath, packagePath, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>True when the state is KNOWN and a module runs its previous generation.</summary>
     public bool HasFallbacks => !IsUndetermined && !Fallbacks.IsEmpty;
 
@@ -185,7 +207,8 @@ public sealed record ModuleActivationReport(
               + (HasDeferred ? "; " + DescribeDeferred(Deferred) : string.Empty)
               + (HasQuarantined ? "; " + DescribeQuarantined(Quarantined) : string.Empty)
               + (HasFallbacks ? "; " + DescribeFallbacks(Fallbacks) : string.Empty)
-              + (HasFloorAdvisories ? "; " + DescribeFloorAdvisories(FloorAdvisories) : string.Empty);
+              + (HasFloorAdvisories ? "; " + DescribeFloorAdvisories(FloorAdvisories) : string.Empty)
+              + (HasRefused ? "; " + DescribeRefused(Refused) : string.Empty);
 
     /// <summary>
     /// One human-readable line naming the modules that run their PREVIOUS generation (#3649) or
@@ -213,6 +236,20 @@ public sealed record ModuleActivationReport(
             + "and working, behind the set; no restart changes that, a build that loads here does: "
             + string.Join("; ", rows.Take(Math.Max(1, maxNamed)))
             + (rows.Length > maxNamed ? $"; …(+{rows.Length - maxNamed})" : string.Empty);
+    }
+
+    /// <summary>The refusal sentence for operators (#4083): each module by name with its status
+    /// line — <c>MeshWeaver.AI (1.9.0): held: references YamlDotNet 18.1.0.0, platform provides
+    /// 16.3.0.0</c>.</summary>
+    public static string DescribeRefused(IReadOnlyCollection<ModuleRefusal> refused, int maxNamed = 10)
+    {
+        var named = refused.Take(maxNamed)
+            .Select(r => $"{r.Name}{(string.IsNullOrWhiteSpace(r.Version) ? "" : $" ({r.Version})")}: {r.Reason}");
+        return $"{refused.Count} module(s) REFUSED at landing — nothing of them landed, the previous "
+               + "generation (if any) keeps serving, and a restart changes nothing; they install when "
+               + "this platform updates: "
+               + string.Join("; ", named)
+               + (refused.Count > maxNamed ? $" … +{refused.Count - maxNamed}" : string.Empty);
     }
 
     /// <summary>
@@ -289,6 +326,19 @@ public sealed record ModuleActivationReport(
             + (names.Length > maxNamed ? $", …(+{names.Length - maxNamed})" : string.Empty);
     }
 }
+
+/// <summary>One module whose last landing was refused here (#4083) — the row the package card
+/// and <c>/health</c> render from the refusal marker.</summary>
+/// <param name="Name">The module's assembly simple name.</param>
+/// <param name="PackagePath">The mesh path of the install record that asked, when recorded.</param>
+/// <param name="Version">The refused package version, when known.</param>
+/// <param name="Reason">The status line: <c>held: references YamlDotNet 18.1.0.0, platform provides 16.3.0.0</c>.</param>
+/// <param name="RefusedAt">When.</param>
+/// <param name="Needs">What it needs, as data for a localized line (<c>YamlDotNet 18.1.0.0</c>), or null.</param>
+/// <param name="Provides">What this platform provides (<c>16.3.0.0</c>), or null for a type refusal.</param>
+public sealed record ModuleRefusal(
+    string Name, string? PackagePath, string? Version, string Reason, DateTimeOffset RefusedAt,
+    string? Needs, string? Provides);
 
 /// <summary>
 /// One module's declared-floor ADVISORY (#3648): what its author claimed about the platform it
@@ -597,6 +647,12 @@ public sealed class PendingModuleActivations(string moduleRoot)
             Quarantined = quarantined,
             Fallbacks = fallbackRows.ToImmutable(),
             FloorAdvisories = floorAdvisories,
+            // #4083 — every module whose last landing was refused, from its own marker; a refused
+            // first install has no entry, so the markers are the denominator here, not the list.
+            Refused = [.. ModuleActivationSidecar.ReadRefusals(ModuleRootPath)
+                .Select(pair => new ModuleRefusal(
+                    pair.Key, pair.Value.PackagePath, pair.Value.Version, pair.Value.Reason,
+                    pair.Value.RefusedAt, pair.Value.Needs, pair.Value.Provides))],
             MeshModuleSet = ModuleSetStore.Describe(sets)
                 + (setNotes.Count > 0 ? " — " + string.Join("; ", setNotes) : string.Empty),
         };

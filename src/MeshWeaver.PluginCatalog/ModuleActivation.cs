@@ -360,6 +360,109 @@ public static class ModuleActivationSidecar
         }
     }
 
+    // ── the refused-landing marker (#4083) ──────────────────────────────────
+
+    /// <summary>
+    /// 🚨 What a LANDING refused, and why — the marker that makes a refusal visible where a person
+    /// looks (#4083). A refusal at landing writes no generation and no entry (that is the point:
+    /// the previous generation keeps serving), so before this marker the only trace of "module X
+    /// was not installed because its bytes cannot bind here" was one warning line in a pod log.
+    /// The marker is the landing path's counterpart of <see cref="UnloadableGeneration"/> (which
+    /// only boots write): written by the landing that refused, cleared by the next landing of the
+    /// same module that lands anything, and by uninstall.
+    /// </summary>
+    /// <param name="Version">The package version whose bytes were refused, when known.</param>
+    /// <param name="PackagePath">The mesh path of the install record that asked, when recorded —
+    /// what the package card matches on.</param>
+    /// <param name="Reason">The status-line sentence, e.g. <c>held: references YamlDotNet
+    /// 18.1.0.0, platform provides 16.3.0.0</c> (<c>ModuleLinkVerdict.HoldSummary</c>).</param>
+    /// <param name="RefusedAt">When the landing refused it.</param>
+    /// <param name="Needs">What the module needs, as data for a localized line
+    /// (<c>YamlDotNet 18.1.0.0</c>); null when not measured that way.</param>
+    /// <param name="Provides">What this platform provides for it (<c>16.3.0.0</c>); null for a
+    /// refusal that is not a binding conflict.</param>
+    public sealed record RefusedLanding(
+        string? Version, string? PackagePath, string Reason, DateTimeOffset RefusedAt,
+        string? Needs = null, string? Provides = null);
+
+    /// <summary>The per-module refusal marker's file suffix inside <see cref="EntriesDirectoryName"/>
+    /// — like <see cref="UnloadableMarkerSuffix"/>, deliberately not <c>.json</c>.</summary>
+    public const string RefusedMarkerSuffix = ".refused";
+
+    /// <summary>The marker file recording that the last landing of a module was REFUSED here:
+    /// <c>modules/activation.d/&lt;Name&gt;.refused</c>.</summary>
+    public static string RefusedMarkerPath(string baseDirectory, string moduleName) =>
+        Path.Combine(EntriesDirectory(baseDirectory), moduleName + RefusedMarkerSuffix);
+
+    /// <summary>Records that a landing of <paramref name="moduleName"/> was refused — an atomic
+    /// replace of that module's own marker. Idempotent.</summary>
+    public static void SetRefused(string baseDirectory, string moduleName, RefusedLanding refusal)
+    {
+        ValidateModuleName(moduleName);
+        ArgumentNullException.ThrowIfNull(refusal);
+        Directory.CreateDirectory(EntriesDirectory(baseDirectory));
+        WriteAtomic(RefusedMarkerPath(baseDirectory, moduleName), JsonSerializer.Serialize(refusal, Json));
+    }
+
+    /// <summary>Removes the module's refusal marker — a later landing landed something, or the
+    /// module was uninstalled. Tolerant of an absent file and a read-only volume.</summary>
+    public static void ClearRefused(string baseDirectory, string moduleName)
+    {
+        ValidateModuleName(moduleName);
+        try
+        {
+            File.Delete(RefusedMarkerPath(baseDirectory, moduleName));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Another replica clearing the same marker, or a read-only volume.
+        }
+    }
+
+    /// <summary>The module's refusal marker, or null when there is none or it cannot be read.</summary>
+    public static RefusedLanding? ReadRefused(string baseDirectory, string moduleName)
+    {
+        if (string.IsNullOrWhiteSpace(moduleName))
+            return null;
+        try
+        {
+            var text = TryReadAllText(RefusedMarkerPath(baseDirectory, moduleName));
+            return text is null ? null : JsonSerializer.Deserialize<RefusedLanding>(text, Json);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Every refusal marker under the deployment, module name → marker, sorted by name.
+    /// A refused FIRST install has no activation entry at all, so the report enumerates the
+    /// markers rather than the entries.</summary>
+    public static ImmutableSortedDictionary<string, RefusedLanding> ReadRefusals(string baseDirectory)
+    {
+        var builder = ImmutableSortedDictionary.CreateBuilder<string, RefusedLanding>(StringComparer.OrdinalIgnoreCase);
+        var directory = EntriesDirectory(baseDirectory);
+        if (!Directory.Exists(directory))
+            return builder.ToImmutable();
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(directory, "*" + RefusedMarkerSuffix).ToArray();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return builder.ToImmutable();
+        }
+        foreach (var file in files)
+        {
+            var name = Path.GetFileName(file);
+            name = name[..^RefusedMarkerSuffix.Length];
+            if (ReadRefused(baseDirectory, name) is { } refusal)
+                builder[name] = refusal;
+        }
+        return builder.ToImmutable();
+    }
+
     /// <summary>Attaches the marker's identity to <paramref name="entry"/> when — and only when —
     /// the marker measured the generation the entry currently heads.</summary>
     private static ModuleActivationEntry WithUnloadableMarker(string baseDirectory, ModuleActivationEntry entry)

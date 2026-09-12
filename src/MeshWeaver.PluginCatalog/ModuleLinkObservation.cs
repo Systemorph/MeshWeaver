@@ -54,7 +54,9 @@ public static class ModuleLinkObservation
                 continue;
             var verdict = ModulePlatformLink.Check(package.LandedModulePath, surface);
             links[package.Name] = verdict;
-            if (verdict.State != ModuleLinkState.Linkable)
+            // Anything but a clean Linkable is worth a line — a hard verdict, an unknown, or a
+            // Linkable that carries roll-forward version drift (#4083, reported and never a hold).
+            if (verdict.State != ModuleLinkState.Linkable || !verdict.Advisories.IsDefaultOrEmpty)
                 logger?.LogInformation(
                     "[ReleaseGate] {Package}: landed module {Module} against the published surface "
                     + "of {Identity}: {Report}",

@@ -57,14 +57,68 @@ public class ModulePlatformSurfaceJsonTest
         Assert.Contains(typeof(MeshNode).FullName!, declaredTypes);
         Assert.Contains(typeof(ModulePlatformSurface).FullName!, declaredTypes);
 
-        // The shape is the documented one, and nothing else.
+        // The shape is the documented one, and nothing else: identity, assemblies, and — since
+        // #4083 — the identities SIBLING, keyed by the same names.
         using var document = JsonDocument.Parse(json);
         Assert.Equal(Identity, document.RootElement.GetProperty("identity").GetString());
         var assemblies = document.RootElement.GetProperty("assemblies");
         Assert.Equal(JsonValueKind.Object, assemblies.ValueKind);
-        Assert.Equal(2, document.RootElement.EnumerateObject().Count());
+        var identities = document.RootElement.GetProperty("identities");
+        Assert.Equal(JsonValueKind.Object, identities.ValueKind);
+        Assert.Equal(3, document.RootElement.EnumerateObject().Count());
         Assert.True(assemblies.EnumerateObject().Count() > 10,
             "a surface of the running process names more than a handful of assemblies");
+        Assert.All(identities.EnumerateObject(),
+            entry => Assert.True(assemblies.TryGetProperty(entry.Name, out _),
+                $"identities names '{entry.Name}', which assemblies does not list"));
+    }
+
+    /// <summary>
+    /// 🚨 The VERSION half of the document (#4083): per assembly, the manifest version and public
+    /// key token the loader binds by, round-tripped exactly — the contract assembly's version is
+    /// the line's pinned <c>3.0.0.0</c>, and the document's identity of it equals the live one.
+    /// Both YamlDotNet majors carry the same type names; only this section can refuse the bind.
+    /// </summary>
+    [Fact]
+    public void ToJson_ThenFromJson_CarriesEveryAssemblysVersionAndPublicKeyToken()
+    {
+        var live = ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory);
+        var declared = ModulePlatformSurface.FromJson(live.ToJson(Identity));
+
+        var liveIdentity = live.IdentityOf(ContractAssembly);
+        var declaredIdentity = declared.IdentityOf(ContractAssembly);
+        Assert.NotNull(liveIdentity);
+        Assert.Equal(typeof(MeshNode).Assembly.GetName().Version, liveIdentity.Version);
+        Assert.Equal(liveIdentity, declaredIdentity);
+
+        // A strong-named framework assembly round-trips its token too.
+        var corelib = typeof(object).Assembly.GetName().Name!;
+        Assert.True(live.Carries(corelib));
+        Assert.Equal(PlatformAssemblyIdentity.Of(typeof(object).Assembly.GetName()), declared.IdentityOf(corelib));
+        Assert.NotNull(declared.IdentityOf(corelib)!.PublicKeyToken);
+
+        // And an assembly the document lists no identity for is UNKNOWN, not zero.
+        Assert.Null(declared.IdentityOf("MeshWeaver.NoSuchAssembly"));
+    }
+
+    /// <summary>A document from before #4083 — no <c>identities</c> — still reads, with every
+    /// identity unknown; a malformed section is refused like any other shape defect.</summary>
+    [Fact]
+    public void ADocumentWithoutIdentities_Reads_WithEveryIdentityUnknown()
+    {
+        var legacy = ModulePlatformSurface.FromJson(
+            """{"identity":"x","assemblies":{"MeshWeaver.Something":["MeshWeaver.Something.Thing"]}}""");
+        Assert.True(legacy.Carries("MeshWeaver.Something"));
+        Assert.Null(legacy.IdentityOf("MeshWeaver.Something"));
+
+        var versioned = ModulePlatformSurface.FromJson(
+            """{"identity":"x","assemblies":{"YamlDotNet":["YamlDotNet.Serialization.Deserializer"]},"identities":{"YamlDotNet":{"version":"16.3.0.0","publicKeyToken":"ec19458f3c15af5e"}}}""");
+        Assert.Equal(new PlatformAssemblyIdentity(new Version(16, 3, 0, 0), "ec19458f3c15af5e"), versioned.IdentityOf("YamlDotNet"));
+
+        Assert.ThrowsAny<JsonException>(() => ModulePlatformSurface.FromJson(
+            """{"identity":"x","assemblies":{"A":["A.T"]},"identities":[]}"""));
+        Assert.ThrowsAny<JsonException>(() => ModulePlatformSurface.FromJson(
+            """{"identity":"x","assemblies":{"A":["A.T"]},"identities":{"A":{"version":"not-a-version"}}}"""));
     }
 
     /// <summary>

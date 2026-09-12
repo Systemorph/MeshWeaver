@@ -89,7 +89,8 @@ public sealed record IncompatibleModule(string Entry, string Name, string Error,
     /// and removes the shape entirely.</para>
     /// </summary>
     /// <param name="entry">The raw entry or resolved path that was going to be installed.</param>
-    /// <param name="verdict">The refusal — <see cref="ModuleLinkState.Unlinkable"/> or
+    /// <param name="verdict">The refusal — <see cref="ModuleLinkState.Unlinkable"/>,
+    /// <see cref="ModuleLinkState.BindingConflict"/> or
     /// <see cref="ModuleLinkState.Indeterminate"/>.</param>
     public static IncompatibleModule FromLinkRefusal(string entry, ModuleLinkVerdict verdict)
     {
@@ -98,7 +99,10 @@ public sealed record IncompatibleModule(string Entry, string Name, string Error,
             entry,
             Path.GetFileNameWithoutExtension(entry) is { Length: > 0 } name ? name : verdict.Module,
             verdict.Report(),
-            verdict.MissingTypes.IsDefaultOrEmpty ? null : verdict.MissingTypes[0])
+            // The first thing the loader would refuse: an assembly that cannot bind comes before
+            // any type in it (#4083), then the first missing type.
+            !verdict.BindingConflicts.IsDefaultOrEmpty ? verdict.BindingConflicts[0]
+            : verdict.MissingTypes.IsDefaultOrEmpty ? null : verdict.MissingTypes[0])
         {
             RefusedBeforeLoad = true,
         };

@@ -568,10 +568,15 @@ public class ModulePlatformLinkTest : IDisposable
     // ───────────────────────────────────────────────────────────── harness
 
     /// <summary>Different assembly versions and additive APIs do not remove a referenced type.
-    /// Exercise the real metadata probe with separately compiled contracts in both directions.</summary>
+    /// Exercise the real metadata probe with separately compiled contracts. 🚨 ONE direction since
+    /// #4083: a module built against a LOWER version than the platform runs rolls forward (the
+    /// skew is an advisory); built against a HIGHER one, the loader refuses the bind whatever the
+    /// API looks like — <c>ModuleLinkVersionTest</c> measures that on the loader itself, and
+    /// <see cref="AModuleBuiltAgainstAHigherPlatformVersion_CannotBind_WhateverTheApi"/> below is
+    /// the arm this theory used to assert as Linkable.</summary>
     [Theory]
     [InlineData("1.0.0.0", "9.0.0.0")]
-    [InlineData("9.0.0.0", "1.0.0.0")]
+    [InlineData("1.0.0.0", "1.0.0.0")]
     public void CompatibleApiAcrossPlatformVersions_IsLinkable(string builtVersion, string runningVersion)
     {
         const string contractName = "MeshWeaver.Test.VersionedContract";
@@ -601,6 +606,44 @@ public class ModulePlatformLinkTest : IDisposable
         Assert.True(verdict.CheckedTypeReferences > 0);
         Assert.Contains(contractName, verdict.CheckedAssemblies);
         Assert.Empty(verdict.MissingTypes);
+    }
+
+    /// <summary>
+    /// 🚨 #4083 narrows the 2026-09-09 rule: an API-compatible platform copy at a LOWER manifest
+    /// version than the module was bound to is not something the loader will bind — every type is
+    /// present, and the bind is still <c>FileLoadException</c>. The verdict names the assembly and
+    /// both versions; <c>MayLoad</c> is false.
+    /// </summary>
+    [Fact]
+    public void AModuleBuiltAgainstAHigherPlatformVersion_CannotBind_WhateverTheApi()
+    {
+        const string contractName = "MeshWeaver.Test.VersionedContract";
+        const string moduleName = "MeshWeaver.Test.VersionAheadPack";
+        var builtContract = Emit(contractName, """
+            [assembly: System.Reflection.AssemblyVersion("9.0.0.0")]
+            namespace MeshWeaver.Test;
+            public class StableApi { public int Answer() => 1; }
+            """);
+        var module = Emit(moduleName, """
+            public class View {
+                public int Render(MeshWeaver.Test.StableApi api) => api.Answer();
+            }
+            """, extra: MetadataReference.CreateFromImage(builtContract));
+        var runningContract = Emit(contractName, """
+            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+            namespace MeshWeaver.Test;
+            public class StableApi { public int Answer() => 42; public string Extra() => "new"; }
+            """);
+
+        var verdict = ModulePlatformLink.Check(module, moduleName, new HashSet<string> { moduleName },
+            ModulePlatformSurface.OfFiles([Write(contractName, runningContract)]));
+
+        Assert.Equal(ModuleLinkState.BindingConflict, verdict.State);
+        Assert.False(verdict.MayLoad);
+        Assert.Empty(verdict.MissingTypes);
+        var conflict = Assert.Single(verdict.BindingConflicts);
+        Assert.Contains(contractName + " 9.0.0.0", conflict, StringComparison.Ordinal);
+        Assert.Contains("1.0.0.0", conflict, StringComparison.Ordinal);
     }
 
     /// <summary>The same version can contain incompatible bytes. Version equality must never

@@ -267,9 +267,32 @@ public static class PrebuiltAdoptionPolicy
             case ModuleLinkState.Linkable:
                 return decision with
                 {
-                    Reason = decision.Reason + $"; {link.CheckedTypeReferences} platform type reference(s) resolve",
+                    Reason = decision.Reason + $"; {link.CheckedTypeReferences} platform type reference(s) resolve"
+                             + (link.Advisories.IsDefaultOrEmpty
+                                 ? ""
+                                 : "; version skew that rolls forward, advisory: " + string.Join("; ", link.Advisories)),
                     LinkCheckRequired = false,
                 };
+            case ModuleLinkState.BindingConflict:
+            {
+                // The FileLoadException shape (#4083): a hard verdict like Unlinkable — the
+                // assembly never binds on this platform, whatever its types look like.
+                var conflicts = link.BindingConflicts.IsDefaultOrEmpty
+                    ? "(none named)"
+                    : string.Join(", ", link.BindingConflicts.Take(5))
+                      + (link.BindingConflicts.Length > 5 ? $" … +{link.BindingConflicts.Length - 5}" : "");
+                return live.RequirePrebuilt
+                    ? new AdoptionDecision(AdoptionVerdict.Refuse,
+                        $"{link.Module} references assembly versions this deployment does not carry "
+                        + $"({conflicts}) — the platform's copy binds and never rolls back — and this "
+                        + $"mesh does not compile module content "
+                        + $"({PrebuiltAssemblySeeder.RequirePrebuiltConfigKey}): rebake the package for "
+                        + $"framework {live.FrameworkIdentity}", LinkCheckRequired: false)
+                    : new AdoptionDecision(AdoptionVerdict.CompileInstead,
+                        $"{link.Module} references assembly versions this deployment does not carry "
+                        + $"({conflicts}) — the platform's copy binds and never rolls back; the live "
+                        + "source compiles instead", LinkCheckRequired: false);
+            }
             case ModuleLinkState.Unlinkable:
             {
                 var missing = link.MissingTypes.IsDefaultOrEmpty
