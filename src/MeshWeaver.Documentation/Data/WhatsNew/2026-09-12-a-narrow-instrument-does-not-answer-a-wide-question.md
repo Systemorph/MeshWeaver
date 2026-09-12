@@ -17,7 +17,8 @@ claim the instrument was never measuring.** There is no bug to find and no error
 measurement is right and the reading is wrong, which is precisely why care does not catch this class
 and a control does.
 
-Four cases measured in one session, while triaging two long-running issues:
+Five cases were measured in one session, while triaging two long-running issues. Four are CI
+instruments; the fifth deliberately is not, because the shape is about how an answer is read:
 
 - `pendingWork=0` on **one** stale-callback record, read as *"the pool is idle"* — which killed a
   live hypothesis. Maximum `pendingWork` in the same log is 606, and 2,501 across the run set.
@@ -27,6 +28,8 @@ Four cases measured in one session, while triaging two long-running issues:
   fact being refused and the discarded stderr was the only place that said so.
 - A quota endpoint reporting `5000/5000 remaining` while every call was refused — an honest meter,
   answering about the primary limit when the refusals were the secondary one.
+- A GitHub App's **declared** permissions read as what a token can do. The App declares `issues` and
+  `workflows`; the installation that mints the token carries neither.
 
 The section gives the test to apply before a number becomes a verdict — *name the question the
 instrument actually answers, then say why that is the same as the question you asked* — plus the
