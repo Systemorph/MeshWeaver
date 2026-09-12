@@ -74,6 +74,9 @@ public record PartitionAccessPolicy
     /// When true, GRANTS Read to ALL users at this scope and below — a public-read
     /// override with precedence over the role-based grant computation (it is ORed in
     /// AFTER the per-user roles ∩ cap, so a user needs no role at this scope to read).
+    /// A deeper policy with <c>Read = false</c> suppresses this inherited grant; a
+    /// <c>PublicRead = true</c> at that deeper scope grants Read there again. At the
+    /// same scope, PublicRead retains precedence over the Read cap.
     /// This is the policy-driven way to publish a read-only catalog (e.g. the built-in
     /// Agent / Model / Documentation namespaces): the owning static node provider seeds
     /// one <c>_Policy</c> with <c>PublicRead = true</c> and the whole subtree becomes

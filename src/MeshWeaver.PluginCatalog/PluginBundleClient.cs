@@ -156,7 +156,20 @@ public sealed class PluginBundleClient
     public IObservable<BundleIndex> FetchIndex() =>
         _httpPool.Invoke(async ct =>
         {
-            using var request = Request(HttpMethod.Get, $"{_registryUrl}{RoutePrefix}/index.json");
+            // 🚨 The index is asked IN THIS INSTANCE'S LANE, exactly as the download route has been
+            // asked since #1751 — and until #3768 it was not, which is what made the download
+            // route's lane-awareness unreachable. The registry answered with its OWN bake identity,
+            // <see cref="Adopt"/> compared that once and declined the whole index, and no package
+            // was ever requested. Measured twice on the fleet's own portals (2026-09-09 and
+            // 2026-09-11, a different identity pair each time): 25 attempts, 0 adopted, 25
+            // FrameworkDeclined, while the publication sealed for the consumer's identity sat on
+            // the share the registry mounts. A registry that holds nothing for this lane still
+            // answers with its own identity, so the decline — and its cost argument — is unchanged
+            // in exactly the case it is right.
+            var url = $"{_registryUrl}{RoutePrefix}/index.json"
+                      + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
+                      + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
+            using var request = Request(HttpMethod.Get, url);
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -264,6 +277,24 @@ public sealed class PluginBundleClient
         if (_requirePrebuilt)
             return Observable.Throw<int>(new PrebuiltRequiredException(RequiredMessage(
                 pluginId, kind.ToString(), reason)));
+        return Observable.Return(0);
+    }
+
+    /// <summary>
+    /// Records an attempt that had nothing to adopt and was RIGHT to have nothing — a module-only
+    /// or content-only package (#3768).
+    ///
+    /// <para>🚨 Unlike <see cref="Miss"/> this never throws on a require-prebuilt mesh, and the
+    /// difference is the point rather than an omission. <c>Modules:RequirePrebuilt</c> forbids a
+    /// SILENT FALLBACK TO COMPILING; a package that declares no NodeTypes compiles nothing here, so
+    /// there is no fallback to forbid. Routing it through <see cref="Miss"/> made such a mesh throw
+    /// <see cref="PrebuiltRequiredException"/> for a package that was delivered exactly as
+    /// published — failing the install of a correct package on a correctness flag.</para>
+    /// </summary>
+    private IObservable<int> Nothing(string pluginId, string? reason)
+    {
+        _ledger?.Record(new BundleAdoptionOutcome(
+            pluginId, BundleAdoptionKind.NothingToAdopt, _registryUrl, Reason: reason));
         return Observable.Return(0);
     }
 
@@ -671,6 +702,32 @@ public sealed class PluginBundleClient
 
                 if (assemblies.Count == 0)
                 {
+                    // 🚨 "The bundle has no NodeTypes" and "the bundle's NodeTypes failed to
+                    // arrive" are the same observation with opposite meanings, and they were the
+                    // same return value until #3768: a module-only package (AI, Anthropic, Maps,
+                    // Chat, Mcp, …) always resolves to zero assemblies, its module lands correctly
+                    // through the separate ModuleLandingService path, and it was still recorded as
+                    // "content the registry was meant to serve is compiled here instead". On
+                    // memex.systemorph.com that was 13 of 25 attempts, holding bundle_adoption at
+                    // Degraded permanently on a portal with nothing wrong with it — and this is the
+                    // instrument three open delivery issues are triaged with.
+                    //
+                    // 🚨 The distinction is drawn from a POSITIVE DECLARATION in the manifest — the
+                    // package says it ships a module, or content — never from the absence of
+                    // assemblies. Inferring "no assemblies ⇒ nothing was expected" would silence
+                    // the real defect of a producer shipping an empty archive, which is exactly the
+                    // fail-closed direction this enum was split up to preserve. A bundle that
+                    // declares nothing at all stays NoAssemblies, and stays a miss.
+                    if (BundleOffering.ClassifyEmpty(manifest)
+                        is BundleAdoptionKind.NothingToAdopt)
+                    {
+                        var offering = BundleOffering.OfferingOf(manifest);
+                        _logger?.LogInformation(
+                            "Bundle for {Plugin} declares no NodeTypes ({Offering}) — nothing to "
+                            + "adopt, and nothing is compiled here in its place", pluginId, offering);
+                        return Nothing(pluginId, $"the package ships {offering}, no NodeTypes");
+                    }
+
                     _logger?.LogInformation(
                         "Bundle for {Plugin} carried no assemblies — {Consequence}", pluginId,
                         MissConsequence("compiling instead"));
@@ -688,7 +745,10 @@ public sealed class PluginBundleClient
                         // that shows up anywhere: the adoption still succeeds, the node still reads
                         // compilationStatus Ok with matching compiledSources, and last week's code
                         // runs against today's data.
-                        a.SourceFingerprint))
+                        a.SourceFingerprint,
+                        // #3583 — the module's released SemVer, for the compatibility rule the
+                        // owner applies when the source later moves past these bytes.
+                        manifest.Version))
                     .Concat()
                     .Count(adopted => adopted)
                     .Do(count =>

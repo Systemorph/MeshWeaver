@@ -42,6 +42,49 @@ loki:
     size: 30Gi
     storageClassName: default
 
+  # Retention is age-based: the compactor deletes logs older than 30 days. The
+  # 24-hour index period from this chart is required by boltdb-shipper retention.
+  # Its working directory and WAL are both below the persistent /data mount.
+  #
+  # 4. THE INGESTER WAL. The PVC above preserves FLUSHED chunks; everything still in the ingester's
+  #    memory dies with the process, and that is a real loss and not a rounding error. On
+  #    2026-09-09 (#3773) loki-0 was drained with its node at 01:09Z and every namespace's history
+  #    restarted from that moment — the lines lost were the two portal pods' shutdown at 01:05:01Z,
+  #    which is precisely what the incident being investigated (#3772) needed. A read at 01:08Z had
+  #    them; the same query at 01:11Z returned nothing.
+  #
+  #    `flush_on_shutdown` is the half that matters for a DRAIN specifically: it turns a graceful
+  #    termination into a flush instead of a loss. The WAL covers the ungraceful case.
+  #
+  # 🚨 A DRAIN OF loki-0 IS A READ-IT-NOW WINDOW, still. The WAL narrows the loss, it does not
+  #    remove the gap: loki-0 sits on the system pool (`nodeSelector: agentpool: system`) and is
+  #    drained with its node like anything else, and while it is restarting Promtail is buffering
+  #    in memory with no WAL of its own (see the promtail section — this chart cannot give it one).
+  #    If you are reading an incident and see loki-0 restart, pull what you need BEFORE it does.
+  #
+  # 🚨 THESE KEYS ARE VERIFIED, NOT ASSUMED — and the verification is a gate, not a note.
+  #    The promtail section below documents a key that is set-able and inert, found by hand once
+  #    and written down. That is not good enough for keys the next outage depends on, so
+  #    `check-observability-values.sh` runs in CI on every pull request: it renders THIS file
+  #    against the PINNED chart and fails RED if a key here reaches nothing, is overridden, or
+  #    produces a config the Loki binary rejects. Measured 2026-09-09: all three keys below do
+  #    arrive in the rendered `loki.yaml`, and `loki -verify-config` accepts the result.
+  #
+  #    🚨 Do not read that gate's render check as covering the Loki keys on its own — it cannot.
+  #    This chart merges `loki.config` through VERBATIM, so a typo'd `ingestor:` reaches the
+  #    render intact and the render check passes it. The Loki binary is what rejects it
+  #    (`field ingestor not found in type loki.ConfigWrapper`), which is why that half exists.
+  config:
+    compactor:
+      retention_enabled: true
+    limits_config:
+      retention_period: 720h
+    ingester:
+      wal:
+        enabled: true
+        dir: /data/loki/wal
+        flush_on_shutdown: true
+
 promtail:
   # Deliberately NO nodeSelector: Promtail is a DaemonSet and must run on EVERY node, including the
   # silos pool, or those nodes' logs are never shipped. Only the QoS class changes.

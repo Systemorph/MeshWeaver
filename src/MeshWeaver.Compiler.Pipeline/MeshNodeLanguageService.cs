@@ -196,25 +196,99 @@ internal sealed class MeshNodeLanguageService : IMeshLanguageService
                 _ => Observable.Return<IReadOnlyList<CompletionEntry>>(Array.Empty<CompletionEntry>()),
             });
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 The EDITOR's overload, and it deliberately degrades to an empty list when nothing was
+    /// checked — Monaco's contract is "no diagnostics means no squiggles", and painting squiggles
+    /// computed under the wrong language rules is worse than painting none. It is DERIVED from
+    /// <see cref="CheckSpeculativeOutcome"/> rather than written twice, so the two can never
+    /// disagree about what a given path produces: the only difference is that this one drops the
+    /// status. Anything rendering a VERDICT must call the outcome overload (#3888).
+    /// </remarks>
     public IObservable<IReadOnlyList<DiagnosticInfo>> CheckSpeculative(
         string nodeTypePath, string sourcePath, string proposedCode)
-        => ResolveNode(nodeTypePath)
-            .SelectMany(node => Environment(node, nodeTypePath) switch
-            {
-                CompletionEnvironment.NodeType => compilationService.GetCompilationInputsAsync(node!)
-                    .SelectMany(inputs => inputs is null
-                        ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
-                        : _ioPool.Run(ct =>
-                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))),
-                // A non-NodeType owner that EXISTS → a standalone script Code node: diagnose in
-                // the script environment so lesson cells get live squiggles too (this used to
-                // fall through to a compilation that parses a cell as REGULAR C#, reporting the
-                // spurious "top-level statements must be in an executable" on every cell).
-                CompletionEnvironment.Script => _ioPool.Run(ct => GetScriptDiagnosticsAsync(proposedCode, ct)),
-                // Owner unresolvable → no honest environment to diagnose in; stay silent rather
-                // than paint squiggles computed under the wrong language rules.
-                _ => Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>()),
-            });
+        => CheckSpeculativeOutcome(nodeTypePath, sourcePath, proposedCode)
+            .Select(outcome => outcome.Diagnostics);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 Reads <see cref="ResolveNodeOutcome"/>, not <see cref="ResolveNode"/>. The distinction was
+    /// never missing from the framework — the read underneath already separates Present / Absent /
+    /// Unavailable — it was discarded here, and discarding it is what made an unresolvable NodeType
+    /// answer byte-identically to a clean one, which <c>lsp_check_node</c> then rendered as
+    /// <c>{"ok":true,"diagnostics":[]}</c> for source that was not C# at all (#3888). Same shape,
+    /// same fix, as <see cref="GetDiagnostics"/> under #1592/#1618.
+    /// </remarks>
+    public IObservable<NodeDiagnosticsOutcome> CheckSpeculativeOutcome(
+        string nodeTypePath, string sourcePath, string proposedCode)
+        => ResolveNodeOutcome(nodeTypePath)
+            .SelectMany(outcome => outcome.Node is { } node
+                ? SpeculativeFor(node, nodeTypePath, sourcePath, proposedCode)
+                : Observable.Return(NothingWasChecked(outcome)));
+
+    /// <summary>
+    /// The no-answer mapping: what a read that produced no node means for a pre-flight VERDICT.
+    /// Extracted so a test can drive it over every <see cref="NodeReadStatus"/> directly — the
+    /// wedged-owner arm cannot be arranged on demand against a live mesh, and an arm no control can
+    /// reach is exactly how a regression putting it back on <see cref="NodeDiagnosticsStatus.Compiled"/>
+    /// would leave the suite green. Same idiom as <see cref="CanReuseWorkspace"/>: the WHOLE
+    /// decision, not a fragment of it.
+    ///
+    /// <para>🚨 The invariant is not "Absent here and Unavailable there" — it is that <b>no</b>
+    /// status reachable with a null node may produce <see cref="NodeDiagnosticsStatus.Compiled"/>,
+    /// including a status added later. That is what
+    /// <c>NoReadThatProducedNoNodeMayReadAsCompiled</c> pins, over the live enum.</para>
+    /// </summary>
+    /// <param name="outcome">The read that produced no node.</param>
+    internal static NodeDiagnosticsOutcome NothingWasChecked(NodeReadOutcome outcome)
+        => outcome.Status switch
+        {
+            // Genuinely not there, its delete is in flight, or a read validator HID it — a filtered
+            // node is invisible to the reader by contract, which is how #3888's live case (a
+            // NodeType in a partition the caller held no grant on) reached this arm. Either way the
+            // proposed source was never compiled against anything.
+            NodeReadStatus.Absent or NodeReadStatus.DeleteInProgress => NodeDiagnosticsOutcome.Absent,
+            // 🚨 The owner did not answer inside the budget, the read faulted, or the payload could
+            // not be materialised. Precisely when a pre-flight most needs to refuse, and precisely
+            // where it used to be most confidently green. `Present` cannot honestly land here (the
+            // caller took the other branch on a non-null node), and if it ever did — a Present
+            // outcome with no node is a contradiction — Unavailable is the fail-closed reading.
+            //
+            // 🚨 A DELIVERY-level RLS denial does NOT arrive here: GetMeshNodeOutcome rides a raw
+            // GetDataRequest whose NACK surfaces as OnError (DeliveryFailureException), which the
+            // tool boundary converts into the same {ok:false} shape (#2554). Two different routes,
+            // both refusing; neither may read as clean.
+            _ => NodeDiagnosticsOutcome.Unavailable(outcome.Failure),
+        };
+
+    // The speculative half, given an already-resolved node. Environment() cannot answer Unknown
+    // for a non-null node, so the two arms below are the whole space.
+    private IObservable<NodeDiagnosticsOutcome> SpeculativeFor(
+        MeshNode node, string nodeTypePath, string sourcePath, string proposedCode)
+        => Environment(node, nodeTypePath) switch
+        {
+            CompletionEnvironment.NodeType => compilationService.GetCompilationInputsAsync(node)
+                .SelectMany(inputs => inputs is null
+                    // 🚨 The honest reading of a nullable contract, and NOT reachable today — said
+                    // plainly rather than pinned by a test that could never fail. Reaching it needs
+                    // GetCompilationInputsAsync to answer null, which it does for exactly one shape
+                    // (a node whose NodeType is unset), and such a node is classified as Script
+                    // above, so it never gets here. #3888 listed this as one of two silent branches
+                    // and could not say which produced the live observation; it can only have been
+                    // the unresolvable-owner one. The arm stays because mapping a null to Compiled
+                    // is precisely the defect — if the nullable contract ever gains a second cause,
+                    // this says "nothing was compiled" rather than inventing a clean bill.
+                    ? Observable.Return(NodeDiagnosticsOutcome.NotCompilable)
+                    : _ioPool.Run(ct =>
+                            speculativeCompilation.GetDiagnosticsAsync(inputs, sourcePath, proposedCode, ct))
+                        .Select(NodeDiagnosticsOutcome.Compiled)),
+            // A non-NodeType owner that EXISTS → a standalone script Code node: diagnose in
+            // the script environment so lesson cells get live squiggles too (this used to
+            // fall through to a compilation that parses a cell as REGULAR C#, reporting the
+            // spurious "top-level statements must be in an executable" on every cell).
+            _ => _ioPool.Run(ct => GetScriptDiagnosticsAsync(proposedCode, ct))
+                .Select(NodeDiagnosticsOutcome.Compiled),
+        };
 
     /// <summary>Which language environment a Code node's text belongs to.</summary>
     private enum CompletionEnvironment

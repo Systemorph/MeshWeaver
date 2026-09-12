@@ -282,9 +282,10 @@ inbound adds the subscription block. The client secret comes from Key Vault in p
 | `Email:SubscriptionClientState` | shared secret echoed on each inbound notification (webhook validation) |
 | — | the model the triage agent runs on is DATA, not config: label one model node `"tier": "chat"` ([Model Tiers](/Doc/AI/ModelTiers)). The deprecated `ModelTier:Light` key still works. |
 
-Deploy parameters (`Memex.Deploy.AppHost` → `MemexOptions`) map 1:1: `email-enabled`, `email-mailbox-address`,
-`email-tenant-id`, `email-client-id`, `email-inbound-enabled`, `email-webhook-base-url`,
-`email-subscription-client-state`, plus the KV mapping for the secret.
+Deploy parameters (`Memex.Deploy.AppHost` → the Deployment record's `email` block, `WithEmail(…)`) map 1:1: `email-enabled`, `email-mailbox-address`,
+`email-tenant-id`, `email-client-id`, `email-inbound-enabled`, `email-webhook-base-url`; the client secret and
+`email-subscription-client-state` are secrets (`WithSecret` under Aspire, the record's `keyVaultSecrets` map on AKS) —
+[ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire).
 
 > **Graph permissions:** the shared-mailbox app registration needs the **application** permissions
 > `Mail.Send` and `Mail.ReadWrite` with tenant-admin consent, and a real licensed/shared mailbox it may

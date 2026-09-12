@@ -114,6 +114,27 @@ public sealed record NodeTypeBakeReport(
     public static NodeTypeBakeReport Empty(string frameworkVersion) =>
         new(ImmutableList<NodeTypeBakeEntry>.Empty, frameworkVersion);
 
+    /// <summary>
+    /// 🚨 <b>WHAT POPULATION THIS REPORT IS ABOUT — the half that was missing when two counters were
+    /// read as contradicting each other</b> (#3703).
+    ///
+    /// <para>How many <see cref="Entries"/> were classified from a definition THIS PROCESS wrote (a
+    /// prebuilt adoption) rather than from the mesh-wide enumeration snapshot, because the snapshot's
+    /// node version proves it predates that write. Zero on every steady-state boot.</para>
+    ///
+    /// <para><b>Why the report has to say this at all.</b> A bake report is NOT a census of the
+    /// assembly store, and reading it as one is the mistake #3703 was filed as. Every number here is
+    /// a statement about RECORDS: the store is consulted exactly once per type, at the version the
+    /// record names, so a record the reader has not caught up with makes the store unreachable for
+    /// that type no matter what bytes are on the share. The adoption pass's own summary — "78
+    /// prebuilt assembly(ies) … are backed by the assembly store" — counts BUNDLE ENTRIES whose
+    /// bytes are on the share. The two lines have different units, different populations and
+    /// different sources, and on memex's 2026-09-08 00:31 cold boot they printed 78 and 5 ten
+    /// seconds apart with nothing wrong on the share. Whenever this is non-zero, the sweep is saying
+    /// out loud that its input was behind.</para>
+    /// </summary>
+    public int ClassifiedFromLocalAdoption { get; init; }
+
     /// <summary>Every type is <see cref="BakeState.Baked"/> — the share is fully warm for this image.</summary>
     public bool IsComplete => Entries.All(e => !e.NeedsBake);
 
@@ -137,7 +158,14 @@ public sealed record NodeTypeBakeReport(
     public ImmutableList<NodeTypeBakeEntry> GateRelevant =>
         Entries.Where(e => e.NeedsBake && e.WasHealthy).ToImmutableList();
 
-    /// <summary>One-line summary for logs and the health-check payload.</summary>
+    /// <summary>
+    /// One-line summary for logs and the health-check payload.
+    ///
+    /// <para>🚨 Every count here is over RECORDS, not over the store — see
+    /// <see cref="ClassifiedFromLocalAdoption"/>, which is appended whenever the enumeration
+    /// snapshot was behind this process's own adoptions, so the line can never again be read as a
+    /// store census that disagrees with the adoption pass's.</para>
+    /// </summary>
     public string Summary =>
         $"framework={FrameworkVersion[..Math.Min(8, FrameworkVersion.Length)]} "
         + $"total={Entries.Count} baked={Entries.Count(e => !e.NeedsBake)} pending={Pending.Count}"
@@ -145,7 +173,10 @@ public sealed record NodeTypeBakeReport(
             .GroupBy(e => e.State)
             .Where(g => g.Key is not BakeState.Baked)
             .OrderBy(g => g.Key)
-            .Select(g => $" {g.Key.ToString().ToLowerInvariant()}={g.Count()}"));
+            .Select(g => $" {g.Key.ToString().ToLowerInvariant()}={g.Count()}"))
+        + (ClassifiedFromLocalAdoption > 0
+            ? $" fromlocaladoption={ClassifiedFromLocalAdoption}"
+            : string.Empty);
 }
 
 /// <summary>

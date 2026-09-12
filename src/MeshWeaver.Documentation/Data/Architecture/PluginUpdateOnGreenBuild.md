@@ -33,30 +33,45 @@ per installed module:  ModuleVersion changed?
 
 ## 🚨 Which green runs count as a publish signal
 
-`workflow_run` fires for far more than a repo's content CI, so the webhook applies **two independent
+`workflow_run` fires for far more than a repo's content CI, so the webhook applies **three independent
 guards** before a delivery becomes a `BuildCompletion` (`GitHubWebhookProcessor.ProcessWorkflowRun`):
 
 1. **The trigger must be on the allow-list** — `push`, `repository_dispatch`, `schedule`,
-   `workflow_dispatch`. Each of those means *a build of the default branch's own tree*.
+   `workflow_dispatch`. This says how the workflow started, not what it checked.
 2. **`head_branch` must BE the repository's default branch.**
+3. **The stable workflow file path must BE the repository's content CI** —
+   `.github/workflows/ci.yml` for every node/content repository, and the platform's established
+   `.github/workflows/dotnet-test.yml` exception.
 
-Both fail closed: an unknown trigger is refused, and a payload whose branch cannot be read records
-nothing.
+An arbitrary repository whose content CI lives elsewhere declares one repository-level override
+under `GitHub:ContentWorkflows:Repositories` — `{ Repository: "owner/repo", Path:
+".github/workflows/content.yml" }`. It is deployment policy, not a field copied into every Space:
+all Spaces targeting one repository must trust the same evidence. Repository identity matching is
+case-insensitive; the Git workflow path is deliberately case-sensitive.
+
+All three fail closed: an unknown trigger, an unreadable branch/path, or a different green workflow
+records nothing. The path is the declaration: display names may change; moving the content CI away
+from the conventional path removes the automatic publish signal. Core pins its path in the policy
+test; every node repository's shared validation lane checks `.github/workflows/ci.yml` from inside
+the content workflow itself. A rename therefore fails that run red rather than silently freezing
+GitSync or falling back to an unrelated green run.
 
 | Trigger | Admitted | Why |
 |---|---|---|
-| `push` | ✅ | The branch moved and its CI ran — the original case. |
-| `repository_dispatch` | ✅ | GitHub only ever runs a dispatched workflow from the **default branch**, and `head_sha` is that branch's tip. This is how a platform release re-verifies every satellite repo: no commit to push, same tree, a genuine green verdict on it. |
-| `schedule` | ✅ | Same — a cron run only ever exists on the default branch. |
+| `push` | ✅ | Eligible when it is the content-CI workflow: the branch moved and its CI ran. |
+| `repository_dispatch` | ✅ | Eligible when it is the content CI. This is how a platform release re-verifies every satellite repo: no commit to push, same tree, a genuine green verdict on it. |
+| `schedule` | ✅ | Eligible when it is the content CI's cron. An unrelated scheduled probe or PR updater is rejected by guard 3. |
 | `workflow_dispatch` | ✅ | May target any ref, so guard 2 does the discriminating. On the default branch it is a manual re-verification of that tree, and the only recovery lever when a merge burst cancelled the push-triggered run. |
 | `pull_request` / `pull_request_target` | ❌ | Green **unmerged** code. Note both can report `head_branch=main`, so guard 1 — not guard 2 — is what rejects them. |
 | `dynamic` | ❌ | GitHub's Copilot reviewer. Completes green on the default branch and is not a build at all. |
 | `merge_group` | ❌ | A merge-queue run's `head_branch` is the temporary `gh-readonly-queue/{base}/pr-{n}-{sha}` ref, so guard 2 already rejects it. Listing it would be unreachable. |
 | anything else | ❌ | Fail closed. An allow-list means the next trigger GitHub invents does not publish by accident. |
 
-**Widening the list cannot cause churn.** A sync source already sitting on the built sha is skipped
-("already at this commit"), so a scheduled or dispatched re-verification of an unchanged default
-branch triggers no import at all.
+🚨 Trigger and branch were once the whole decision. That admitted a successful scheduled PR updater
+that compiled nothing: it wrote more than twenty `BuildCompletion` records for a Reinsurance commit
+whose actual content CI was red. Core had the same risk in the other direction: a green push-triggered
+Chart Gate could authorize a tree whose `MeshWeaver Build and Test` run failed. Workflow identity is
+therefore not an optimization; it is the evidence that makes the record true (#3978).
 
 ### 🚨 The single-value test that dropped real signals (2026-09-02)
 
@@ -69,8 +84,9 @@ behind a merged main — with the webhook armed, every delivery answering 200 OK
 reporting a problem. A dropped publish signal has no symptom except content that quietly stops
 arriving; there is no scheduled poll behind it to paper over the gap, by design.
 
-The decision table above is pinned by `GreenBuildPublishSignalTest`, in both directions — a test that
-only listed the admitted triggers would go green against a gate that admits everything.
+The decision table above is pinned by `GreenBuildPublishSignalTest`, in both directions and across
+all three guards — a test that only listed the admitted triggers would go green against a gate that
+admits everything.
 
 ## 🚨 Two inputs, one decision — and which one your installation has
 
@@ -229,6 +245,56 @@ to reconcile. The change is that a catalog open now *is* a reconcile when one is
 line had always claimed and the code had never done. (The safety net above reads the feed too, and a
 successful read from it drains a pending registry through this same path — one pass, not two.)
 
+### 🚨 A package the registry does NOT offer is recorded as NOT DELIVERED (Plugins#1584)
+
+Both lanes above iterate **the packages the registry serves** and intersect them with this
+installation's install records. That is right for everything the registry carries — and it means a
+package installed *here* that the registry does **not** carry is neither "up to date" nor "failed".
+It is *absent from both loops*, and absence used to produce no log line, no ledger entry and no card
+state anywhere.
+
+The shape that made this expensive, measured on memex 2026-09-10:
+
+| What was true | What every surface said |
+|---|---|
+| The registry answered its feed with **45 manifests**; `Mail` was not among them | — |
+| `Mail/index.json` declares `tier: personal`; the instance's catalog grant covers the baseline plan, so the registry declined it (`the registry … does not offer a package 'Mail' to this instance`) | — |
+| The package's **content** kept arriving through the instance's own git source, and the install record advanced to `1.5.0` an hour earlier | *installed, version 1.5.0, up to date* |
+| The loaded assembly `MeshWeaver.Mail.MicrosoftGraph` was written **eleven days** earlier | *no module activation pending* — and correctly so: nothing had landed, so nothing was waiting on a restart |
+
+A feature that ships as a module change in such a package therefore cannot reach the deployment by
+merge + roll + restart. Only content moves. An Executive Assistant thread asked for the Teams tools
+that shipped in that module's 1.5 and had none.
+
+**The mechanism fix is to make the absence an answer.** After the content and module lanes, a full
+feed pass lists this installation's install records once and records, on the same ledger entry, the
+installed packages that declare a `module` and which *this registry did not offer*
+(`RegistryReconcileEntry.UndeliveredModules`, one `UndeliveredModule` per package carrying the
+module name and the content identity the record claims). One Warning line names them and points at
+the ledger; `ModuleDelivery.NotDeliveredByAnyRegistry` intersects the entries so a surface can say
+*not delivered* honestly on an installation with several registries — a package one registry serves
+is delivered, whatever the others carry.
+
+Three properties are load-bearing:
+
+- **Absence is evidence only after a SUCCESSFUL, COMPLETE read.** The lane runs from
+  `ReconcileFromFeed`, i.e. the boot pass, a drained deferral or the safety net — never from the
+  per-package broadcast drain, whose "packages" is the one package the registry named and which
+  would call every other installed module undelivered.
+- **`null` is not an empty list.** A listing that fails records *not determined*, not *none*: an
+  inventory that could not be read is not an empty inventory, and reading the first as the second is
+  a gate that never ran painted the colour of one that passed.
+- **It is not an entitlement verdict, and not a fault.** A consumer cannot tell "your grant does not
+  cover this" from "this registry never carried it", and nothing here is broken — the package is
+  simply not delivered from this registry. The remedy is the registry operator's: grant the
+  instance the plan, tier the package differently, or point the installation at a registry that
+  carries it.
+
+What this deliberately does **not** do: fall back to the image's `modules/` seed or to an in-mesh
+compile when the registry has no bundle. That changes what an installation *runs* and belongs with
+the adoption policy ([Module Adoption Policy](/Doc/Architecture/ModuleAdoptionPolicy)), not with
+the reconcile's bookkeeping; the honest first step is that the state stops being invisible.
+
 ## Why a node and not a call
 
 The producer is `MeshWeaver.GitSync` (it owns webhook signature verification, payload parsing and
@@ -269,6 +335,48 @@ stops the Update button and the automatic path from ever disagreeing about what 
 The file-level diff is available with **no extra fetch**: the installed side is already persisted on
 the install record (`InstalledFiles`, written by `WriteInstalledRecord`), and the candidate side
 rides in on the catalog entry (`ManifestFiles`, kept when the source parses `manifest.lock`).
+
+### 🚨 A manifest-less package advertises its SNAPSHOT REF — so the ref must be content-derived (#3880)
+
+The comparison above needs a `moduleVersion`, and a package that ships no `manifest.lock` has none.
+Both the card and the install then fall back to `PackageManifest.Version`, which
+`NodeRepoPackageSource.ListPackages` takes from the snapshot's `CommitSha`:
+
+> no `manifest.lock` ⇒ the source's **snapshot ref** *is* the module's content identity
+
+For a repo fetched over git that ref is a real commit sha, so content identity comes for free. A
+**mounted working tree** has no commit to read — the local checkout a `memex-local` self-registry
+serves, and the tree a `LocalCheckout` source reconciles on every boot — so
+`PackageSources.LocalDirectoryFetch` synthesises the ref, and whatever it hashes *is* that identity.
+
+It hashed each file's relative path and its `FileInfo.Length`. Any edit preserving the byte count —
+`ABC` → `DEF` in a Markdown page, a PNG swapped for another of the same size — left the advertised
+version identical, so the catalog card read "up to date" and the boot reconcile short-circuited.
+The portal quietly stopped mirroring the tree it exists to mirror. Nothing was logged, because from
+every consumer's point of view "nothing changed" was correctly derived from the evidence it was
+given.
+
+The fingerprint now hashes the bytes the snapshot actually returns (`RepoFile.Bytes` — already read
+to build the payload, so there is no second filesystem read), keeping the `local-<sha>` ref format,
+the dot-directory skip and the declared-release-version precedence.
+
+Verified by reverting the fix under `LocalSourceContentVersionTest` (2026-09-10): with the
+length-only hash restored, both the Markdown and the PNG case fail with
+
+```text
+Did not expect value to be "local-26ab574df588" because a mounted source version must
+identify its content, including equal-length edits.
+```
+
+and both pass with the content hash, while the unchanged-tree and `.git`-only controls hold either
+way — so the test discriminates rather than merely passing.
+
+**The general rule: a fingerprint that gates adoption is computed over the bytes it certifies, never
+over metadata that merely correlates with them.** Length and mtime are both preserved by an ordinary
+edit, so neither is evidence of equal content. It is the same reason
+[`PartitionSourceFingerprint`](/Doc/Architecture/StaticRepoImport) hashes serialised node content for
+an unversioned partition instead of a version number, and why `ModuleLandingService.GenerationIdOf`
+appends each file's bytes and not only its length.
 
 ## 🚨 Reminder by default; unattended on opt-in — seeded per deployment
 
@@ -405,7 +513,7 @@ registered with it. An installation that configures none of this is reached by t
 
 | Symptom | Cause |
 |---|---|
-| Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success` — only completed+successful runs are recorded; or the run's **trigger is not on the allow-list** (`push`, `repository_dispatch`, `schedule`, `workflow_dispatch` record; `pull_request`, `dynamic` and anything unknown do not — see *Which green runs count as a publish signal* above); or the run was **not on the repository's default branch** — a green PR-branch build is unmerged code and is deliberately never recorded (fail-closed: a payload with no readable branch records nothing either). |
+| Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success`; or its **workflow path is not the content-CI convention** (`.github/workflows/ci.yml`, with core at `.github/workflows/dotnet-test.yml`); or the run's **trigger is not on the allow-list** (`push`, `repository_dispatch`, `schedule`, `workflow_dispatch` are eligible; `pull_request`, `dynamic` and anything unknown are not — see *Which green runs count as a publish signal* above); or the run was **not on the repository's default branch**. Every leg fails closed: a payload with no readable workflow path or branch records nothing. |
 | A module never updates, and the log says it "has no module content identity" | The module's `manifest.lock` is missing or unparseable, so there is no `ModuleVersion` to compare and "has it changed" is unanswerable. A missing hash is the **absence of evidence**, not evidence of a change: treating it as changed would re-install the module on every green build of the repo *and* on every pod start, which is acting on the event rather than the content. It is refused, loudly, and the catalog card's manual **Update** stays available. Fix the module's CI to emit the sidecar. |
 | Nothing happens on a green build, **and the log says the delivery "matched NONE of the N sync config(s)"** | No `_GitSync` targets that repository — usually because the repository was **renamed** and the configs still store its old name. The matcher falls back to GitHub's canonical `full_name` (which follows the rename redirect) and repoints the config when it finds one, so this line surviving means the lookup could not be made either: the repository is unreachable with the config creator's credential, or the hook really is installed on a repository this mesh does not sync. The Warning names both sides — the incoming repository and everything it was compared against. |
 | A green build produced nothing, and the log says the fact is **NOT recorded AND the sync did not run** | The `Admin/_Build/{owner}.{repo}` write failed. GitHub was answered 200, so there is no redelivery. The payload is kept at `Admin/_MissedBuild/{owner}.{repo}` (#3374) — read it with `MissedBuildFact.WatchQuery`, and compare it against the current build record to see whether a later green run of the SAME workflow has already superseded it. If a second Warning says the miss could not be recorded either, the log line is the only witness and the fact must be replayed from GitHub. |

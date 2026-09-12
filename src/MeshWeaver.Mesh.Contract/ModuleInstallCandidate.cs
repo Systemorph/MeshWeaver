@@ -105,6 +105,34 @@ public sealed record FallbackModule(string Name, string Entry, string PreviousEn
     public bool RunsImageBaseline { get; init; }
 
     /// <summary>
+    /// True when the generation named by <see cref="Entry"/> never entered the process because the
+    /// default load context ALREADY HELD an assembly of that name, and
+    /// <see cref="PreviousEntry"/> is the copy it handed back instead (MeshWeaver#3911).
+    ///
+    /// <para>🚨 <b>This arm exists because nothing could previously observe it.</b>
+    /// <c>Assembly.LoadFrom</c> against a copy of an assembly the default context already holds
+    /// returns THAT copy — same instance, its own location, no exception and no diagnostic (only a
+    /// copy carrying DIFFERENT bytes throws, and that path already falls back). A module the image
+    /// ships as a <c>MeshModuleClosure</c> seed under <c>modules/&lt;name&gt;/</c> and the registry
+    /// lands again under <c>modules/&lt;name&gt;@&lt;generation&gt;/</c> is exactly that shape, so
+    /// the loader recorded the generation it ASKED for while the process ran the one it got.</para>
+    ///
+    /// <para>🚨 <b>And unlike the other two arms this one is about the PROCESS, not the bytes.</b>
+    /// The head generation is not claimed to be unloadable — nothing measured it — so the reason
+    /// says what actually happened and nothing more. It clears the same way the others do: on a
+    /// boot that reaches this generation first. Which of two paths a boot reaches first is not
+    /// something a status surface may promise, so this is still never "restart required".</para>
+    ///
+    /// <para>🚨 <b>It is therefore set ONLY when the HEAD's own load was substituted</b>, never on
+    /// a fallback whose head was measured and refused and whose REPLACEMENT was then substituted.
+    /// There the head's verdict is real and its unloadable marker must still be written; the
+    /// substitution decides only which copy <see cref="PreviousEntry"/> names. Confusing the two
+    /// would make a refused build look unexamined and stop the reconcile from ever ruling it out —
+    /// which is the mirror image of the mistake this flag exists to prevent.</para>
+    /// </summary>
+    public bool RunsAlreadyLoadedCopy { get; init; }
+
+    /// <summary>
     /// The stand-in "generation" recorded for a module that runs the image-shipped baseline —
     /// what <see cref="PreviousGeneration"/> answers, what the module-set adoption writes as the
     /// running generation, and what every status surface prints. Not a directory name by
@@ -128,11 +156,14 @@ public sealed record FallbackModule(string Name, string Entry, string PreviousEn
     /// re-logged as a Warning once the logging pipeline is up.
     /// </summary>
     public string Report() =>
-        RunsImageBaseline
-            ? $"'{Name}' runs the image-shipped baseline ({PreviousEntry}) because "
-              + $"{Label(Version, Generation)} cannot load here: {Reason}"
-            : $"'{Name}' runs its previous generation {Label(PreviousVersion, PreviousGeneration)} because "
-              + $"{Label(Version, Generation)} cannot load here: {Reason}";
+        RunsAlreadyLoadedCopy
+            ? $"'{Name}' runs the copy already loaded here ({PreviousEntry}) — "
+              + $"{Label(Version, Generation)} was requested and never entered the process: {Reason}"
+            : RunsImageBaseline
+                ? $"'{Name}' runs the image-shipped baseline ({PreviousEntry}) because "
+                  + $"{Label(Version, Generation)} cannot load here: {Reason}"
+                : $"'{Name}' runs its previous generation {Label(PreviousVersion, PreviousGeneration)} because "
+                  + $"{Label(Version, Generation)} cannot load here: {Reason}";
 
     /// <summary>
     /// The status-row sentence — "runs v1.2.3 (gen A); v1.3.0 (gen B) landed but does not load
@@ -141,10 +172,13 @@ public sealed record FallbackModule(string Name, string Entry, string PreviousEn
     /// card never read two different stories about one module.
     /// </summary>
     public string Describe() =>
-        (RunsImageBaseline
-            ? "runs the image-shipped baseline"
-            : $"runs {Label(PreviousVersion, PreviousGeneration)}")
-        + $"; {Label(Version, Generation)} landed but does not load here: {Reason}";
+        RunsAlreadyLoadedCopy
+            ? $"runs {Label(PreviousVersion, PreviousGeneration)}, the copy already loaded here; "
+              + $"{Label(Version, Generation)} was requested and never entered the process: {Reason}"
+            : (RunsImageBaseline
+                ? "runs the image-shipped baseline"
+                : $"runs {Label(PreviousVersion, PreviousGeneration)}")
+              + $"; {Label(Version, Generation)} landed but does not load here: {Reason}";
 
     private static string Label(string? version, string generation) =>
         string.IsNullOrWhiteSpace(version) ? $"({generation})" : $"v{version} ({generation})";

@@ -39,6 +39,7 @@ import tempfile
 from pathlib import Path
 
 WORKFLOW = ".github/workflows/main-cd.yml"
+MODULE_PACK_WORKFLOW = ".github/workflows/node-repo-module-pack.yml"
 STEP_ID = "release"
 DECIDE_STEP_ID = "decide"
 VERDICT_STEP_ID = "verdict"
@@ -351,6 +352,25 @@ def run_decide_cases(root, case) -> None:
         case(f"an OLDER run still publishing this sha defers the {reason} path (#3376)",
              rc == 0 and "publish=false" in outputs and older in log and "bake_only=true" not in outputs,
              f"rc={rc} out={outputs!r} log={log}")
+    # Exercise the REAL jq discriminator, not a pre-computed stub answer. GitHub reports a run held
+    # behind a concurrency group as `pending`; that exact status escaped the old queued/in_progress
+    # enumeration and let the scheduled reconcile duplicate the same commit's delivery.
+    pending = {
+        "id": 999,
+        "name": "Continuous Delivery (main)",
+        "status": "pending",
+        "html_url": "https://example.invalid/actions/runs/999",
+    }
+    rc, log, outputs = run_step(
+        body,
+        {**reconcile, "REASON": "reconcile", "COMPLETE": "false"},
+        None,
+        runs=[pending],
+    )
+    case("a PENDING older delivery defers the reconcile instead of duplicating it",
+         rc == 0 and "publish=false" in outputs and pending["html_url"] in log,
+         f"rc={rc} out={outputs!r} log={log}")
+
     # And the probe must be inert when nothing is in flight: the same inputs with an empty answer
     # publish exactly as they did before the probe existed. Without this, "defers" would also
     # pass if the step deferred unconditionally.
@@ -425,7 +445,7 @@ def run_verdict_cases(root, case) -> None:
     case("a green, incomplete main with NOTHING in flight is still RED",
          rc != 0 and "Delivery is stuck" in log, f"rc={rc} log={log}")
     case("...and the red now carries the negative finding that makes it a measurement",
-         "NO run of this workflow is queued or in progress" in log, f"log={log}")
+         "NO non-completed run of this workflow" in log, f"log={log}")
     case("...and it claims no deferral",
          "deferred_to=" not in outputs, f"out={outputs!r}")
 
@@ -478,6 +498,14 @@ def run_verdict_cases(root, case) -> None:
                                 runs=[me, wf_run(34069402974, "queued", "2026-09-07T01:05:00Z")])
     case("a QUEUED run counts as a live publication, and is reported as queued",
          rc == 0 and "queued" in log, f"rc={rc} log={log}")
+
+    # A run held behind a concurrency group is `pending`, not `queued`. This is the exact state
+    # that escaped both the decision and verdict probes on 2026-09-10.
+    rc, log, outputs = run_step(body, shape, None,
+                                runs=[me, wf_run(34069402974, "pending", "2026-09-10T17:07:55Z")])
+    case("a PENDING run counts as a live publication, and is reported as pending",
+         rc == 0 and "pending" in log and "deferred_status=pending" in outputs,
+         f"rc={rc} out={outputs!r} log={log}")
 
     # A NEWER live run counts too. The gate's #3376 probe looks only at OLDER runs because it has
     # to break a deferral tie; this step decides nothing, so any live run falsifies "nobody is
@@ -605,6 +633,66 @@ def run_heal_cases(root, case) -> None:
     case("...and the heal comment is still written, so the delivery record survives",
          "gh issue comment 3176" in joined, f"calls={calls}")
 
+def plugin_module_build_problems(workflow_text: str) -> list[str]:
+    """The platform bake must have one compiler for every module it composes (#3732)."""
+    import yaml
+
+    doc = yaml.safe_load(workflow_text)
+    job = (doc.get("jobs") or {}).get("plugins-modules") or {}
+    inputs = job.get("with") or {}
+    raw = inputs.get("modules")
+    if not raw:
+        return ["plugins-modules has no module catalog"]
+    try:
+        entries = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        return [f"plugins-modules module catalog is not valid JSON: {exc}"]
+    if not entries:
+        return ["plugins-modules module catalog is empty"]
+    problems = []
+    accepts = []
+    for entry in entries:
+        module = entry.get("module") or "<unnamed>"
+        if entry.get("build") != "container":
+            problems.append(f"{module} does not use the shared container workspace")
+            continue
+        accept = entry.get("accept") or ""
+        accepts.append(accept)
+        if "targets" not in accept.split():
+            problems.append(f"{module} does not reuse the shared workspace targets")
+    if len(set(accepts)) > 1:
+        problems.append("plugins-modules container entries do not share one accept contract")
+    for name in ("platform-image", "platform-image-digest", "tester-image", "tester-image-digest"):
+        if not inputs.get(name):
+            problems.append(f"plugins-modules does not pass {name} to the container workspace")
+    if inputs.get("acr-login") != "oidc":
+        problems.append("plugins-modules does not select its available OIDC registry login")
+    secrets = job.get("secrets") or {}
+    for name in ("azure-client-id", "azure-tenant-id", "azure-subscription-id"):
+        if not secrets.get(name):
+            problems.append(f"plugins-modules does not pass {name}")
+    if (job.get("permissions") or {}).get("id-token") != "write":
+        problems.append("plugins-modules does not grant id-token: write for OIDC")
+    return problems
+
+
+def module_pack_permission_problems(workflow_text: str) -> list[str]:
+    """OIDC is selected by the caller, so the called jobs must inherit its permission map."""
+    import yaml
+
+    doc = yaml.safe_load(workflow_text)
+    problems = []
+    if "permissions" in doc:
+        problems.append("the called workflow declares permissions instead of inheriting its caller")
+    for name in ("prepare", "build-workspace", "pack"):
+        job = (doc.get("jobs") or {}).get(name) or {}
+        if "permissions" in job:
+            problems.append(
+                f"{name} declares permissions instead of inheriting the caller's login mode"
+            )
+    return problems
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -635,6 +723,58 @@ def main() -> int:
         if not ok:
             print(f"        {detail}")
             failures.append(name)
+
+    workflow_text = (root / WORKFLOW).read_text()
+    module_problems = plugin_module_build_problems(workflow_text)
+    case("every plugin module composed by CD reuses one container workspace",
+         not module_problems, "; ".join(module_problems))
+    mutated_workflow = workflow_text.replace('"build": "container"', '"build": "sdk"', 1)
+    mutation_problems = plugin_module_build_problems(mutated_workflow)
+    case("the plugin-module workspace guard fails when one entry leaves that workspace",
+         bool(mutation_problems), "the mutation passed having changed one producer")
+    divergent_accept = workflow_text.replace(
+        '"accept": "targets"', '"accept": "targets embedded-resource:build-output"', 1)
+    accept_problems = plugin_module_build_problems(divergent_accept)
+    case("the plugin-module workspace guard fails when one entry changes the accept contract",
+         any("one accept contract" in problem for problem in accept_problems),
+         "the mutation passed with divergent global-build acknowledgments")
+    missing_targets = workflow_text.replace(
+        '"accept": "targets"', '"accept": "embedded-resource:build-output"', 1)
+    targets_problems = plugin_module_build_problems(missing_targets)
+    case("the plugin-module workspace guard still requires target reuse",
+         any("workspace targets" in problem for problem in targets_problems),
+         "the mutation passed without the target-reuse contract")
+    missing_digest = workflow_text.replace(
+        "      platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}\n", "", 1)
+    digest_problems = plugin_module_build_problems(missing_digest)
+    case("the plugin-module workspace guard fails when its image pin is absent",
+         any("platform-image-digest" in problem for problem in digest_problems),
+         "the mutation passed without a platform image digest")
+
+    module_pack_text = (root / MODULE_PACK_WORKFLOW).read_text()
+    permission_problems = module_pack_permission_problems(module_pack_text)
+    case("the reusable module jobs inherit the caller's basic-or-OIDC permission map",
+         not permission_problems, "; ".join(permission_problems))
+    narrowed_module_pack = module_pack_text.replace(
+        "    timeout-minutes: 45\n    # Deliberately inherit the caller's token permissions.",
+        "    timeout-minutes: 45\n    permissions:\n      contents: read\n      id-token: write\n"
+        "    # Deliberately inherit the caller's token permissions.",
+        1,
+    )
+    narrowed_problems = module_pack_permission_problems(narrowed_module_pack)
+    case("the permission guard catches a called job that tries to elevate basic callers",
+         any(problem.startswith("prepare declares permissions") for problem in narrowed_problems),
+         "the mutation passed with id-token: write inside the called workflow")
+    workflow_narrowed_module_pack = module_pack_text.replace(
+        "jobs:\n",
+        "permissions:\n  contents: read\n  id-token: write\njobs:\n",
+        1,
+    )
+    workflow_narrowed_problems = module_pack_permission_problems(workflow_narrowed_module_pack)
+    case("the permission guard catches a workflow-level attempt to elevate basic callers",
+         any(problem.startswith("the called workflow declares permissions")
+             for problem in workflow_narrowed_problems),
+         "the mutation passed with workflow-level id-token: write")
 
     base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA}
 

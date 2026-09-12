@@ -173,9 +173,9 @@ regardless — use it to deliberately discard local changes back to the reposito
 > Two-way generalizes this to *every* server-side edit (no explicit claim needed) as long as it
 > post-dates the last sync.
 
-### The three clocks on a sync source — and why they disagree on purpose
+### The four facts on a sync source — and why they disagree on purpose
 
-A sync source records **three separate facts**, and reading any one of them as the answer to
+A sync source records **four separate facts**, and reading any one of them as the answer to
 another's question is how an investigation goes wrong. They are deliberately independent:
 
 | Field | The question it answers | When it moves |
@@ -183,6 +183,7 @@ another's question is how an investigation goes wrong. They are deliberately ind
 | `lastSyncAttemptAt` + `lastSyncOutcome` | *When did a sync last RUN here, and what did it conclude?* | **Every** conclusion — an import, a no-op, one that preserved server-side edits, one that landed nothing. |
 | `lastSyncCommitSha` | *Which repo commit has this Space already got?* | Whenever the mesh genuinely reached that commit — **including** a no-op update, so a repo commit touching no node files does not leave the Space forever "behind". |
 | `lastSyncedAt` | *When were mesh and repo last RECONCILED?* — the two-way **conflict horizon** | Only on an import that really reconciled: **not** on a fingerprint-matched no-op, **not** when server-newer nodes were preserved, **not** when something failed to land. |
+| `lastAttemptedCommitSha` + `lastAttemptWasFinal` | *Have we already LOOKED at exactly these bytes, and could looking again change the answer?* | On every import conclusion; **cleared** by an export and by a hold. This is the pair that makes a green build free for a source that cannot converge — see [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost). |
 
 The horizon is the one with teeth. Everything newer than it counts as a pending server-side change
 and is protected from overwrite and from the prune, so advancing it past uncommitted work disarms
@@ -198,6 +199,12 @@ sync"**.
 > the only way to date one was to compare node timestamps against image tags in a container
 > registry. `lastSyncAttemptAt` is that fact, and the settings tab now shows the three separately
 > instead of printing the horizon under the words *"Last synced"*.
+
+> 🚨 **And a frozen `lastSyncAttemptAt` is not necessarily a dead webhook.** A source whose last
+> attempt reached a FINAL verdict at a commit is deliberately skipped for every later delivery of
+> that same commit, so its recency stamp stops moving until the repository produces a new one.
+> The settings tab says so in as many words — *"this commit has a final verdict — the next new
+> commit re-attempts"* — precisely so the stopped clock cannot be read as a stopped delivery.
 
 Note that a node's own `lastModified` is **not** a substitute: `stream.Update` does not re-stamp
 it, so a node can be rewritten without its modification time moving.
@@ -481,5 +488,7 @@ All GitHub HTTP and serialization run through the controlled I/O pool — see
 
 - [DataSyncSetup.md](/Doc/Architecture/DataSyncSetup) — the import-source model (platform content synced from a repo at a release tag).
 - [StaticRepoImport.md](/Doc/Architecture/StaticRepoImport) — the import mechanism reused here (fingerprint, activity lock, upsert, prune).
+- [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost) — what one webhook delivery costs, the single field that makes it free, and why a source that never converges re-clones its repository on every green build.
+- [When a Publication Seal Stops Advancing](/Doc/Architecture/PublicationSealStarvation) — why a green build can authorize an import that never happens, how to tell a HELD source from a settled one, and what a portal whose framework identity has stopped being published for looks like.
 - [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling) — why every GitHub HTTP call runs in the I/O pool.
 - [AccessControl.md](/Doc/Architecture/AccessControl) — credential encryption + the master key.

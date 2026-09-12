@@ -1,5 +1,12 @@
 # MeshWeaver.Compiler
 
+Runtime compatibility follows the APIs actually used, not equality with a platform version or
+commit. See [Module Adoption Policy](../MeshWeaver.Documentation/Data/Architecture/ModuleAdoptionPolicy.md).
+The identities below are compilation/cache provenance: a changed key can require recompilation
+without making the source or feature incompatible. Compile source against the current reference
+set; diagnose missing types, incompatible members or other concrete compile errors. Do not turn
+cache identity equality into a platform hold or a version gate for compiled plugins.
+
 The MeshWeaver NodeType compile toolchain, factored out of `MeshWeaver.Graph` (issue #1707) so
 the framework build identity's full-MVID rule pins a small, low-churn assembly.
 

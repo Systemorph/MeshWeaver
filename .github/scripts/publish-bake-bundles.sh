@@ -1280,6 +1280,29 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication under $LIVE ($SENTINEL present) — surface unchanged, bake already published; skipping."
       return 0
     fi
+    # 🚨 NEVER SEAL BACKWARDS (per-module deploy, maintainer 2026-09-11). A repo on per-module deploy
+    # never cancels a push run on its trunk, so two runs can reach this point in either order. When
+    # the sealed commit is NEWER than this bake's and contains it, republishing would move every
+    # instance's sources BACKWARDS (SealedSyncGate holds a repository's sources at the sealed commit)
+    # until the next seal. bake-scope.sh asks this when the bake is narrowed; this is the write-time
+    # repeat, because a newer run can seal while this one is still baking. `ahead` = the sealed
+    # commit is ahead of this one. A comparison that cannot be made keeps today's behaviour
+    # (republish) and SAYS so — it never skips on a guess.
+    if [ -n "$published_sha" ] && [ "$published_sha" != "unknown" ]; then
+      order=""
+      if [ -n "${GH_TOKEN:-}" ] && [ -n "${BAKE_CONTENT_REPOSITORY:-}" ]; then
+        # The refusal's own words go to the log: an unorderable pair must say WHY it was unorderable.
+        if ! order=$(gh api "repos/$BAKE_CONTENT_REPOSITORY/compare/$SOURCE_SHA...$published_sha" --jq .status 2>"$SENTINEL_LOCAL_DIR/compare.err"); then
+          echo "::warning::the compare API refused to order $SOURCE_SHA against $published_sha: $(tail -c 400 "$SENTINEL_LOCAL_DIR/compare.err" | tr '\n' ' ')"
+          order=""
+        fi
+      fi
+      if [ "$order" = "ahead" ]; then
+        echo "::notice::$ACCOUNT/$SHARE: the sealed publication under $LIVE is from $published_sha, which is NEWER than this bake's $SOURCE_SHA and contains it — a later run sealed first. Not sealing backwards; skipping."
+        return 0
+      fi
+      [ -n "$order" ] || echo "::warning::could not order the sealed $published_sha against this bake's $SOURCE_SHA (no GH_TOKEN / BAKE_CONTENT_REPOSITORY, or the compare API refused) — republishing as before."
+    fi
     resealing=true
     echo "sealed publication under $LIVE is from source '${published_sha:-<unrecorded>}' but this bake is from '$SOURCE_SHA' — republishing."
   fi

@@ -103,10 +103,21 @@ A shadowed secret is the worst version of this: the shadowed copy is inert, and 
 in use sits in plaintext on the Deployment spec, in no committed source, readable by anything that
 can `get deploy`.
 
-That is live on `memex` today (MeshWeaver#3201): `PluginCatalog__RegistryToken` exists both in
-`secret/memex-portal-secrets` and as an inline entry, and **the two values differ** — so the portal
-authenticates to the plugin registry with the plaintext copy while the secret's copy goes unused. It
-also means the obvious cleanup is wrong: deleting the inline entry does not restore the status quo.
+That was live on `memex` as measured 2026-09-03 (MeshWeaver#3201): `PluginCatalog__RegistryToken`
+existed both in `secret/memex-portal-secrets` and as an inline entry, and **the two values differed**
+— so the portal authenticated to the plugin registry with the plaintext copy while the secret's copy
+went unused. It also meant the obvious cleanup was wrong: deleting the inline entry did not restore
+the status quo.
+
+🚨 **The divergence half of that is CLOSED; the shadow half is not.** Re-measured in-cluster
+2026-09-08T01:03Z: both portals now have a Key Vault-synced copy
+(`memex-portal-keyvault` / `memexcloud-portal-keyvault`), and on each one the inline value and the
+vault copy are **EQUAL** — `Systemorph/Memex#180` promoted each instance's *in-use* token verbatim
+rather than picking a winner, so removing the inline entry is now a no-op in value terms. What
+remains is the plaintext inline entry itself, on both pod specs, still outranking every `envFrom`.
+Nothing in a repository can remove it; since 2026-09-11 a `Reconcile` can, from the record's
+`retiredBy` — see [DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Step 2 is a
+`Reconcile`"*.
 
 ### A credential shadow can be two PRINCIPALS, not two values
 
@@ -200,7 +211,8 @@ today**. Agreeing is not safe: it means the next change to the chart will silent
 effect. Disagreeing means somebody is already reading a setting no pod uses.
 
 > Fixing a `SHADOWS` or `COLLIDES` takes **both** steps, in order: put the intended value in the
-> chart, *then* delete the inline entry (`kubectl set env deploy/… KEY-`). Either step alone leaves
+> chart, *then* delete the inline entry (mark it `retiredBy` on the record and run `Reconcile`; the
+> break-glass form is `kubectl set env deploy/… KEY-`). Either step alone leaves
 > the pod on the inline value — so a plan that reads "add these to the chart and the drift clears"
 > leaves the cluster exactly where it was.
 
@@ -380,6 +392,14 @@ the run's own log; the owned/never-owned split and the value probes are read-onl
 | 5 | **Cluster-only, never owned** | **22** | live-edited settings the chart had no key for until MeshWeaver#3199 — AI providers, `LogWatch__*`, `Speech__*`, `Commerce__BaseUrl`, `Features__Ai__Clis__*`, `Portal__ReactAppUrl` | put them on the `Hosting/Deployment` record — `Systemorph/Memex#148` |
 | 6 | **Committed, never deployed** | **5** | memex-cloud's overlay carries `PreWarm__{BatchBake,BuildProtocol,DynamicTypes,GateReadiness}: "true"` and `probes.startup.failureThreshold: 1080`; live runs the shipped defaults | a deploy, not a cleanup — this is `deploy-drift`'s class surfacing here |
 | 7 | **Ruled inert** | **2** | the memex liveness/readiness `initialDelaySeconds` — see above; the chart is authoritative | nothing; do not "fix" it |
+
+🚨 **Group 2 has moved since this snapshot and the row is no longer current.** *"neither portal has
+a Key Vault entry at all"* stopped being true on 2026-09-06 for `memex` and by 2026-09-08 for
+`memex-cloud`: `Systemorph/Memex#180` declared a chart-owned `keyVaultSecrets` class on both, and
+re-measured 2026-09-08T01:03Z the inline value and the vault copy are **EQUAL** on each portal. The
+table stays as it was measured; read this line with it. The remaining act — delete the inline entry
+— has no repository half; since 2026-09-11 it is a `Reconcile` over the record's `retiredBy`
+([DeploymentEnvLayers](/Doc/Architecture/DeploymentEnvLayers) → *"Step 2 is a `Reconcile`"*).
 
 Zero `COLLIDES` and zero `CHART-ONLY` — as on 2026-09-03, which is the only other run since #3168
 introduced those two classes, so "consecutive" is a two-run claim and nothing more. The `EMAIL__*`

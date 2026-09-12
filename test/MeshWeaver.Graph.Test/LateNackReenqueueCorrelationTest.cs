@@ -20,38 +20,15 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// 🚨 #3477: after <c>LATE_NACK_REENQUEUE</c> the trail went dark. The late registry mints a FRESH
-/// <c>requestId</c> per attempt, so the re-enqueued write registered under an id unrelated to the
-/// one that produced it — and "the re-enqueue never left the cache hub", "it never activated the
-/// owner" and "it activated and never answered" were indistinguishable in the log. A write that was
-/// NACKed, re-enqueued and then neither applied nor answered is the write-loss class the sibling
-/// test exists to refuse, and it could not be attributed.
+/// Pins #3477's correlation chain through the real late-verdict callback. Every attempt
+/// registers a fresh request id, while the logical write keeps its original correlation id.
 ///
-/// <para>The fix threads ONE correlation id, minted at the caller's entry and passed unchanged into
-/// every re-attempt. This test pins that inheritance: the re-attempt's own <c>BEGIN</c> must carry
-/// the SAME <c>corr=</c> as the <c>LATE_NACK_REENQUEUE</c> that caused it.</para>
-///
-/// <para>🚨 It deliberately asserts on the RE-ENQUEUE, not on the write landing: everything it
-/// needs has already happened by the time the re-enqueue is logged, and it stays silent about
-/// landing, which is the open defect rather than this one.</para>
-///
-/// <para>🚨 An earlier revision of this comment claimed this test was "deterministic where the
-/// sibling is not". THAT WAS FALSE, and measurement said so: on queue-build 34089526911 the
-/// sibling passed in the same shard, on the same host, while this test wedged for 90 s and was
-/// killed. The cause was this test's own log capture awaiting a live Subject — see
-/// <c>CapturingLoggerProvider.FirstMatching</c>. Asserting on a log line rather than on storage
-/// buys determinism only if OBSERVING the line cannot perturb what produced it; here it did.</para>
-///
-/// <para>🚨 WHAT THIS TEST DOES NOT COVER, stated so a green suite is not read as more than it
-/// checked. It pins that the re-enqueue line CARRIES a correlation id. It does NOT pin that the
-/// re-attempt INHERITS the same one — that assertion needs the re-attempt's own <c>BEGIN</c>, which
-/// is <c>LogDebug</c> (one per write, on the hot path) and is dropped by the harness's log filter
-/// before any provider sees it. Two attempts to raise that filter for one category did not reach the
-/// factory the hub resolves; the honest options were to promote a hot-path line to Information so a
-/// test could see it — forbidden, <c>src/</c> levels are committed contract — or to say so here.
-/// The inheritance is therefore guaranteed only by the two re-enqueue call sites passing
-/// <c>correlationId: corr</c>, which the compiler checks and no test does. That gap is real and is
-/// recorded on #3477 rather than left for someone to discover.</para>
+/// The original test disposed an owner whose parked merge released on shutdown, then required
+/// a late NACK log. That setup also permits a successful ACK, and an armed registry entry does
+/// not imply the fast response wait expired: it is registered before the patch is posted.
+/// This test observes the response-timeout transition, delivers an explicit late NACK through
+/// the registry's existing verdict seam, and checks the child attempt and caller to completion.
+/// Owner-disposal verdict delivery itself is covered by LateNackReenqueueTest.
 /// </summary>
 public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -71,7 +48,6 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
                 // src/ log levels are committed contract and are never edited to make a test pass.
                 .Configure<LoggerFilterOptions>(o =>
                 {
-                    o.MinLevel = LogLevel.Debug;
                     o.Rules.Add(new LoggerFilterRule(
                         providerName: null,
                         categoryName: "MeshWeaver.Mesh.MeshNodeStreamHandle",
@@ -79,7 +55,18 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
                         filter: null));
                 }));
 
-    [Fact(Timeout = 90_000)]
+    // 240_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a constant, so
+    // the property cannot be written here. The value must still DOMINATE it — 216 s at the CI
+    // factor (Convergence 108 s x OuterMargin 2) — or the xunit kill pre-empts the inner wait and
+    // the failure cannot say what it was waiting for.
+    //
+    // 🚨 It was 90_000, and EVERY wait below is TestTimeouts.Convergence, which is 108 s on a
+    // runner. So on CI this test could never report which wait failed — the xunit kill always won.
+    // That is not a hypothetical: core merge-queue run 34332482683 (2026-09-09, shard 4) failed it
+    // as a bare "Test execution timed out after 90000 milliseconds", no assertion and no named
+    // wait, and #3477 has been unable to attribute that sighting since. An outer bound below the
+    // inner one is the exact defect TestTimeouts exists to prevent.
+    [Fact(Timeout = 240_000)]
     public async Task AReenqueuedAttemptInheritsTheCorrelationIdOfTheNackThatCausedIt()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -94,20 +81,31 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
             .Where(n => n is not null)
-            .FirstAsync().Timeout(10.Seconds()).Await(ct);
+            .FirstAsync().Timeout(TestTimeouts.Quick).Await(ct);
 
         var nodeHub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         Assert.NotNull(nodeHub);
 
-        // Park the owner's merge executor — the same gating pattern the sibling test uses, and the
-        // only way to force a verdict that arrives after the caller's response bound. No hand-woven
-        // gate: the turn→test signal is an AsyncSubject the parked turn completes, and the release
-        // travels back INTO the parked turn, so it is a volatile int under a bounded SpinUntil,
-        // written in a `finally` so a failing assertion cannot strand the executor.
+        // Prove Debug reaches THIS capture through the exact factory UpdateRemote resolves.
+        // The ordinary test-file logger may independently filter Debug; its output is not the
+        // evidence that this provider is attached and can observe the transition below.
+        Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var cacheHub = Mesh.GetHostedHub(new Address("cache", Mesh.Address.Id), HostedHubCreation.Never);
+        Assert.NotNull(cacheHub);
+        var logger = cacheHub!.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("MeshWeaver.Mesh.MeshNodeStreamHandle");
+        Assert.True(logger.IsEnabled(LogLevel.Debug));
+        var captureProbe = $"correlation-capture-{Guid.NewGuid():N}";
+        logger.LogDebug("{CaptureProbe}", captureProbe);
+        Assert.True(captured.Contains(captureProbe), "the effective cache logger must reach the capture");
+
+        // Keep the real merge pending until the fast waiter times out and the controlled
+        // late verdict has spawned its child. The producer-to-test signal is replayed;
+        // the bounded worker release is always written in finally.
         var primary = nodeHub!.GetWorkspace().DataContext
             .GetDataSourceForType(typeof(MeshNode))!
             .GetStreamForPartition(null)!;
-        var gateEntered = new AsyncSubject<Unit>();
+        using var gateEntered = new AsyncSubject<Unit>();
         var releaseGate = 0;
         var owner = nodeHub!;
         primary.Update((Func<EntityStore?, ChangeItem<EntityStore>?>)(_ =>
@@ -122,43 +120,70 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
 
         try
         {
-            await gateEntered.Should().Within(10.Seconds()).Emit(
+            await gateEntered.Should().Within(TestTimeouts.Quick).Emit(
                 "the gated turn must be running before the cross-hub write");
 
             captured.Clear();
 
-            // The production cross-hub mirror path. Subscribe rather than await — awaiting a
-            // verdict the parked owner cannot give is what would hang.
+            // Capture the caller's terminal as well as its value. It must be the chained
+            // re-attempt's verdict, not a successful-looking optimistic snapshot.
             var workspace = Mesh.GetWorkspace();
+            using var caller = new AsyncSubject<MeshNode>();
             using var writeSub = workspace.GetMeshNodeStream(path)
                 .Update(n => n with { Name = "corr-probe" })
-                .Subscribe(_ => { }, _ => { });
+                .Subscribe(caller);
+            var target = Regex.Escape(path);
+            var registration = await captured.FirstMatching(
+                    $@"LATE_VERDICT_REGISTERED .*target={target} attempt=0 corr=(?<corr>\S+) requestId=(?<request>\S+)",
+                    TestTimeouts.Convergence)
+                .Await(ct);
+            var corr = registration.Groups["corr"].Value;
+            var requestId = registration.Groups["request"].Value;
 
-            // Fence on the patch being in flight — the ARMED late watch is that fact, and it is
-            // the same fact the disposal NACK will land on. Never a delay.
+            // This path has exactly one attempt until we supply the NACK. Unlike ArmedCount,
+            // RESPONSE_TIMEOUT proves its fast waiter has handed off to the late callback.
+            // The merge remains parked, so neither an ACK nor an actual NACK can win the race.
+            await captured.FirstMatching(
+                    $@"RESPONSE_TIMEOUT .*target={target} — owner busy;",
+                    TestTimeouts.Convergence)
+                .Await(ct);
             var registry = Mesh.ServiceProvider.GetRequiredService<LatePatchResponseRegistry>();
+            Assert.Contains(requestId, registry.ArmedRequestIds);
+            Assert.True(registry.Dispatch(requestId, new PatchDataResponse(false, 0)
+            {
+                NodeError = new MeshNodeError(MeshNodeErrorCode.OwnerDisposing, path,
+                    "Controlled late verdict for correlation inheritance."),
+            }), "the exact armed request must consume the controlled late verdict");
+
+            var nack = await captured.FirstMatching(
+                    $@"LATE_NACK_REENQUEUE .*target={target} attempt=1 code=OwnerDisposing corr=(?<corr>\S+)",
+                    TestTimeouts.Convergence)
+                .Await(ct);
+            var child = await captured.FirstMatching(
+                    $@"LATE_VERDICT_REGISTERED .*target={target} attempt=1 corr=(?<corr>\S+) requestId=(?<request>\S+)",
+                    TestTimeouts.Convergence)
+                .Await(ct);
+            Assert.False(string.IsNullOrWhiteSpace(corr));
+            Assert.Equal(corr, nack.Groups["corr"].Value);
+            Assert.Equal(corr, child.Groups["corr"].Value);
+            var childRequestId = child.Groups["request"].Value;
+            Assert.NotEqual(requestId, childRequestId);
+            // Registration is logged immediately before insertion. Fence on the child
+            // actually being armed, while no accepted merge can yet complete it.
             await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-                .Where(_ => registry.ArmedCount > 0)
+                .Where(_ => registry.ArmedRequestIds.Contains(childRequestId))
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
-            // Fence: the patch handler has provably run on the owner before the dispose below.
-            await RequestHub.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(path)))
-                .Should().Within(10.Seconds()).Emit();
-
-            // Dispose the owner AFTER the caller's response bound expired, so its OwnerDisposing
-            // NACK is necessarily LATE — which is the arm that re-enqueues.
-            nodeHub!.Dispose();
-
-            var reenqueue = await captured.FirstMatching(
-                @"LATE_NACK_REENQUEUE .*corr=(?<corr>[^\s]+)", TestTimeouts.Convergence);
-            var corr = reenqueue.Groups["corr"].Value;
-
-            // 🚨 WHAT THIS PINS: the re-enqueue line carries a correlation id at all. Before #3477
-            // it carried none, so the write became unfollowable at exactly the point it was handed
-            // to a fresh attempt. If the field is dropped or renamed, this goes red.
-            Assert.False(string.IsNullOrWhiteSpace(corr),
-                "LATE_NACK_REENQUEUE must carry the corr that makes the re-attempt followable");
-            Assert.DoesNotContain(" ", corr);
+            // Both accepted patches use the same idempotent assignment. Releasing the real
+            // executor lets the re-attempt finish; its terminal must reach the original caller.
+            Volatile.Write(ref releaseGate, 1);
+            var terminal = await caller.Timeout(TestTimeouts.Convergence).Await(ct);
+            Assert.Equal("corr-probe", terminal.Name);
+            var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
+                .Where(n => n is not null && n.Name == "corr-probe")
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            Assert.Equal("corr-probe", persisted!.Name);
         }
         finally
         {
@@ -176,6 +201,7 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
         public ILogger CreateLogger(string categoryName) => new Sink(this, categoryName);
         public void Dispose() { }
         public void Clear() => lines.Clear();
+        public bool Contains(string line) => lines.Contains(line);
 
         // 🚨 Enqueue ONLY. There is deliberately no Subject here — see FirstMatching.
         private void Add(string line) => lines.Enqueue(line);

@@ -63,6 +63,17 @@ public static class ServedModuleBytes
     /// The build the assemblies in this bundle say they need for one module: the single
     /// <c>mvid:</c> id their dependency records agree on, or a named
     /// <see cref="RecordedModuleId.Disagreement"/> when they do not.
+    ///
+    /// <para>🚨 <b>A <c>min:</c> FLOOR entry contributes nothing here, deliberately (#3934), and
+    /// that is not a reader that stopped seeing its input.</b> This selection exists to serve the
+    /// EXACT build a record names, because naming another one used to decline every NodeType in the
+    /// bundle. A floor names no build — anything at or above it serves — so there is nothing to
+    /// select by, and "no id recorded" is the honest answer: the shelf's bytes are served, exactly
+    /// as for a bundle that predates records. The consumer's own floor check is then what decides,
+    /// and it declines with a sentence naming both versions if the shelf really is behind. What is
+    /// lost is only the DIVERGENCE report for floor-shaped records; extending the selection to
+    /// "the newest sealed build at or above the floor" is the registry-resolves-compatibility model
+    /// recorded on #3934 and is not built.</para>
     /// </summary>
     /// <param name="dependencyRecords">Each served assembly's <c>CompiledDependencies</c> record
     /// (null entries — an assembly recorded before records existed — simply contribute nothing).</param>

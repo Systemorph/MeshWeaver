@@ -40,6 +40,8 @@ internal class MeshNodeCompilationService(
 {
     private readonly IAssemblyStore _assemblyStore = assemblyStore ?? NullAssemblyStore.Instance;
     private readonly CompilationCacheOptions _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
+    private readonly Action<CSharpCompilation, Exception>? _captureEmitFailure =
+        EmitReferenceCaptureScheduler.ForCi(hub);
 
     // Compile pool for the bare-async leaf (CompilationInputs assembly): a plain
     // Observable.FromAsync deadlocks under a blocking subscriber because SubscribeOn
@@ -216,11 +218,11 @@ internal class MeshNodeCompilationService(
     /// millisecond, the five <c>@@</c> targets of <c>FutuRe/LocalAnalysis/Source/ExternalDependencies</c>
     /// in file order).</para>
     ///
-    /// <para>The scope must be established at SUBSCRIBE time, not at composition time — hence
-    /// <c>Observable.Using</c>, whose resource factory runs inside the subscribe call that posts
-    /// the <c>GetDataRequest</c>. Wrapping each read individually (rather than the whole chain)
-    /// is deliberate: a chained read — the include fallback below — is subscribed from the FIRST
-    /// read's emission, i.e. on another thread again, so an outer scope would not cover it.</para>
+    /// <para>The scope must be established at SUBSCRIBE time and closed on that same flow.
+    /// <c>RunAsSystem</c> covers the cold read and restores the caller on return and on every
+    /// downstream notification. <c>Observable.Using</c> can dispose on the response thread and
+    /// leave the subscriber elevated. Wrapping each read individually is deliberate: the include
+    /// fallback starts from the FIRST read's emission, so it needs its own system scope.</para>
     ///
     /// <para>This is the explicit infrastructure opt-in AGENTS.md sanctions
     /// (<c>ImpersonateAsSystem</c>), NOT the "silently stamp hub-self as principal" fallback that
@@ -231,9 +233,8 @@ internal class MeshNodeCompilationService(
         string path, ReadTimeoutBehavior onTimeout)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Using(
-            () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-            _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), onTimeout));
+        return accessService.RunAsSystem(
+            () => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), onTimeout));
     }
 
     /// <summary>
@@ -288,12 +289,18 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// One compile attempt's outcome: the assembly path (null on failure), the CONTENT KEY digest
-    /// of the input that produced it (null when no compile ran — a disk-cache hit; the dependency
-    /// record then simply carries no content key), the <see cref="ActivityLog"/>, and — the point
+    /// of the input that produced it, the <see cref="ActivityLog"/>, and — the point
     /// of carrying it — the ONE source snapshot the attempt was taken against. Every downstream
     /// stage (<see cref="DiscoverSourceVersionSnapshot"/>, <see cref="BuildFailureDiagnostics"/>)
     /// reuses <c>Sources</c> instead of re-discovering; see
     /// <see cref="GetAssemblyLocationWithLog"/>.
+    ///
+    /// <para>🚨 The digest is present on BOTH ways of reaching bytes (#3892): a fresh emit takes it
+    /// three statements before Roslyn, and a disk-cache hit RESTORES the producing compile's own
+    /// from beside the assembly (<see cref="GeneratedInputDigestFile"/>). It used to be null on the
+    /// hit, which made the stamped dependency record — a PRODUCER artifact that ships inside
+    /// bundles — carry the reserved <c>!input</c> guard or not depending on whether this machine's
+    /// cache was warm. Null now means only "this attempt produced no assembly".</para>
     /// </summary>
     private readonly record struct CompileAttempt(
         string? Path, string? InputDigest, ActivityLog Log, IReadOnlyList<MeshNode> Sources);
@@ -420,32 +427,58 @@ internal class MeshNodeCompilationService(
                         ? node.LastModified
                         : maxSourceLastModified;
 
+                    IObservable<CompileAttempt> CompileSnapshot() =>
+                        CompileCore(node, ntDef, selfPath, log, sources)
+                            .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources));
+
                     if (cacheService.IsDiskCacheEnabled)
                     {
                         var cachedDllPath = cacheService.TryGetLatestCachedDllPath(nodeName, effectiveLastModified);
-                        if (cachedDllPath is not null)
+                        // 🚨 THE CONTENT KEY SURVIVES THE CACHE HIT (#3892). No compile runs here,
+                        // so the digest is RESTORED from beside the bytes rather than recomputed:
+                        // it is the digest of the compile that actually produced them, which is the
+                        // only thing this path is entitled to claim (a recomputed one would fold
+                        // THIS process's compiler and generator identities into a key describing
+                        // someone else's emit). TryGetLatestCachedDllPath already refused an
+                        // artifact without one, so a null here is a race — the directory went away
+                        // under us — and falls through to a fresh compile, which is the right
+                        // answer for bytes that are no longer there.
+                        var cachedInputDigest = cachedDllPath is null
+                            ? null
+                            : GeneratedInputDigestFile.TryRead(cachedDllPath, logger);
+                        if (cachedDllPath is not null && cachedInputDigest is not null)
                         {
-                            logger.LogDebug(
-                                "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
-                                node.Path, cachedDllPath, effectiveLastModified);
-                            return Observable.Return(new CompileAttempt(
-                                cachedDllPath,
-                                // No compile ran, so there is no generated input to key on.
-                                null,
-                                AppendInfo(log,
-                                        $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).",
-                                        "activity.compile.cacheHit",
-                                        ("path", cachedDllPath),
-                                        ("lastModified", effectiveLastModified.ToString("O")))
-                                    .FinishByOutcome((int)hub.Version),
-                                sources));
+                            // A source edit can land AFTER the producing snapshot but BEFORE its
+                            // DLL finishes writing. A newer DLL timestamp therefore cannot prove
+                            // that these sources were compiled. Compare the existing producing
+                            // digest with this exact snapshot's generated input before reusing it;
+                            // never stamp today's digest onto unverified earlier bytes.
+                            return RegenerateCapturedInputDigest(node, ntDef, selfPath, sources)
+                                .SelectMany(currentInputDigest =>
+                                {
+                                    if (!string.Equals(cachedInputDigest, currentInputDigest, StringComparison.Ordinal))
+                                        return CompileSnapshot();
+
+                                    logger.LogDebug(
+                                        "Using cached assembly for {NodePath} at {DllPath} (effectiveLastModified={EffectiveLastModified})",
+                                        node.Path, cachedDllPath, effectiveLastModified);
+                                    return Observable.Return(new CompileAttempt(
+                                        cachedDllPath,
+                                        cachedInputDigest,
+                                        AppendInfo(log,
+                                                $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).",
+                                                "activity.compile.cacheHit",
+                                                ("path", cachedDllPath),
+                                                ("lastModified", effectiveLastModified.ToString("O")))
+                                            .FinishByOutcome((int)hub.Version),
+                                        sources));
+                                });
                         }
                     }
 
                     // Hand the snapshot down as the override — CompileCore then short-circuits
                     // its own SnapshotSources to this authoritative point-in-time set.
-                    return CompileCore(node, ntDef, selfPath, log, sources)
-                        .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources));
+                    return CompileSnapshot();
                 });
         });
     }
@@ -953,6 +986,37 @@ internal class MeshNodeCompilationService(
                         string.Join(", ", matchedCodePaths),
                         "activity.compile.discoveryMatched",
                         ("count", matchedCodePaths.Count), ("paths", string.Join(", ", matchedCodePaths)));
+
+                    // 🚨 …AND WHICH DECLARED QUERY MATCHED NOTHING (#3903). The line above is a
+                    // count over the UNION, so a type that draws on a shared library reports a
+                    // healthy-looking N while the query for its own Source subtree matched zero —
+                    // and Roslyn, handed a set short of what the type declares, then emits
+                    // completely genuine-looking CS0246/CS1061 about symbols nobody lost. That is
+                    // the same phantom-diagnostic failure SourceSnapshot exists to prevent (#1218),
+                    // reaching the compile through the one door it does not watch, and it is the
+                    // reader — not the compiler — who pays: on memex.meshweaver.cloud the three
+                    // unresolved names were hunted through module surfaces that never carried them.
+                    // Warning, not Info: this is the diagnosis, and it belongs above the noise.
+                    var unmatched = SourceCoverage.UnmatchedSourceQueries(
+                        ntDef?.Sources, selfPath, matchedCodePaths);
+                    if (unmatched is { Count: > 0 })
+                    {
+                        var declared = ntDef?.Sources is { Count: > 0 } s
+                            ? s.Count
+                            : CodeQueryResolver.DefaultSources.Count;
+                        // The query strings are the mesh query LANGUAGE, not prose — they ride as
+                        // written, exactly like activity.compile.sourceQuery above.
+                        var queries = string.Join(", ", unmatched);
+                        discoveryLog = AppendWarning(discoveryLog,
+                            $"{unmatched.Count} of {declared} DECLARED source quer(ies) for "
+                            + $"'{selfPath}' matched NO nodes: {queries}. The compile below runs "
+                            + "against a source set SHORT of what this NodeType declares — an "
+                            + "unresolved type or extension method is far more likely to be an "
+                            + "absent source NODE than an absent module.",
+                            "activity.compile.declaredQueryMatchedNone",
+                            ("count", unmatched.Count), ("declared", declared),
+                            ("path", selfPath), ("queries", queries));
+                    }
                 }
 
                 // 🚨 Compile on the ThreadPool via Task.Run, never inline and never the IoPool.
@@ -1211,7 +1275,10 @@ internal class MeshNodeCompilationService(
                 .SelectMany(snapshot => BoundLeg(
                     _ => OnThreadPool(() =>
                         CompileResultFromAssembly(
-                            node, assemblyLocation, log, snapshot, attempt.InputDigest)),
+                            node, assemblyLocation, log, snapshot, attempt.InputDigest,
+                            // This IS the publish: the emit that produced assemblyLocation just
+                            // finished, so its context supersedes the older generations (#4013).
+                            publishesTheBuild: true)),
                     _cacheOptions.AssemblyLoadTimeout, "assembly-load", node.Path))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
                 // finished it, but CompileResultFromAssembly's downstream steps
@@ -1541,13 +1608,30 @@ internal class MeshNodeCompilationService(
     }
 
     /// <param name="generatedInputDigest">The stage-1 CONTENT KEY digest of the compile that
-    /// produced these bytes (#1707 slice 4), or null when no compile ran in this process — a
-    /// disk-cache hit or the assembly-hydration shortcut. Null simply leaves the record without a
-    /// content key; the toolchain entry still governs.</param>
+    /// produced these bytes (#1707 slice 4). A fresh emit takes it inline; a disk-cache hit
+    /// RESTORES it from beside the bytes (<see cref="GeneratedInputDigestFile"/>, #3892), so the
+    /// record this method stamps is the same either way — which matters because the record is a
+    /// PRODUCER artifact that travels into published bundles.
+    /// <para>It is still null on the ASSEMBLY-HYDRATION shortcut
+    /// (<see cref="GetConfigurationsFromExistingAssembly"/>), which loads bytes an
+    /// <c>IAssemblyStore</c> handed over with no local provenance. That path is a READER: its
+    /// result supplies a hub configuration and is never stamped onto a NodeType (it also carries
+    /// no <c>CompiledSources</c>, which is why stamping it would be catastrophic and nothing
+    /// does). Null simply leaves the record without a content key; the toolchain entry still
+    /// governs.</para></param>
+    /// <param name="publishesTheBuild">🚨 True on the POST-EMIT path only — the compile that just
+    /// produced <paramref name="assemblyLocation"/>, i.e. the one moment a new generation of this
+    /// NodeType exists and the older ones are genuinely superseded. False on the
+    /// assembly-HYDRATION shortcut (<see cref="GetConfigurationsFromExistingAssembly"/>), which is
+    /// a READER of bytes an <c>IAssemblyStore</c> handed over. Reads must not re-order generations:
+    /// a hydration scan that superseded a concurrently published rebuild is half of the
+    /// ping-pong #4013 reports (the other half being the rebuild's own scan superseding the
+    /// hydration's). See <c>ICompilationCacheService.PublishLoadContextForPath</c>.</param>
     private NodeCompilationResult? CompileResultFromAssembly(
         MeshNode node, string assemblyLocation, ActivityLog log,
         ImmutableDictionary<string, long> compiledSources,
-        string? generatedInputDigest = null)
+        string? generatedInputDigest = null,
+        bool publishesTheBuild = false)
     {
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -1579,7 +1663,8 @@ internal class MeshNodeCompilationService(
                     nodeName,
                     assemblyLocation.StartsWith("memory://", StringComparison.Ordinal)
                         ? null
-                        : assemblyLocation);
+                        : assemblyLocation,
+                    publishesTheBuild);
                 var context = pinned.Context;
                 var assembly = context.LoadNodeAssembly();
                 if (assembly == null)
@@ -1812,12 +1897,25 @@ internal class MeshNodeCompilationService(
     internal IObservable<string?> RegenerateGeneratedInputDigest(MeshNode node)
     {
         var ntDef = node.ContentAs<NodeTypeDefinition>(JsonOptions);
+        return ntDef is null
+            ? Observable.Return<string?>(null)
+            : RegenerateCapturedInputDigest(node, ntDef, node.Path, sourcesOverride: null);
+    }
+
+    // The cache check supplies the snapshot already captured by this compile. Re-evaluation
+    // retains its existing discovery path; both callers use the same shaping and digest logic.
+    private IObservable<string?> RegenerateCapturedInputDigest(
+        MeshNode node, NodeTypeDefinition? ntDef, string selfPath,
+        IReadOnlyList<MeshNode>? sourcesOverride)
+    {
+        // An absent/unresolved definition is not an empty configuration. The cache cannot
+        // establish input equality until the definition itself is known; compile as before.
         if (ntDef is null)
             return Observable.Return<string?>(null);
 
         var assemblyName = $"DynamicNode_{cacheService.SanitizeNodeName(node.Path)}";
         return BoundLeg(
-                _ => SnapshotSources(ntDef, node.Path, sourcesOverride: null)
+                _ => SnapshotSources(ntDef, selfPath, sourcesOverride)
                     .Select(matches =>
                         NodeCompileShaping.CollectCompileSources(matches, node.Path, logger).Sources)
                     .SelectMany(codeFiles => ResolveIncludesForCodeFiles(codeFiles, node.Path))
@@ -1839,8 +1937,8 @@ internal class MeshNodeCompilationService(
             {
                 logger.LogInformation(ex,
                     "Re-evaluation for {NodePath}: the compile input could not be regenerated, so "
-                    + "the content key has no live counterpart — the build is judged by the "
-                    + "metadata-only rule, exactly as before", node.Path);
+                    + "the content key has no live counterpart — no input equality is established",
+                    node.Path);
                 return Observable.Return<string?>(null);
             });
     }
@@ -1953,8 +2051,22 @@ internal class MeshNodeCompilationService(
             var emitted = default(EmittedArtifact);
             actualPath = EmitPipeline.EmitToDiskWithRetry(
                 cacheService.CacheDirectory, nodeName, EmitPipeline.DiskEmitAttempts, logger,
-                releaseDir => emitted = EmitPipeline.EmitCompilationToDirectory(
-                    compilation, nodeName, node.Path, releaseDir, ct));
+                stagingDir =>
+                {
+                    emitted = EmitPipeline.EmitCompilationToDirectory(
+                        compilation, nodeName, node.Path, stagingDir, [], ct, _captureEmitFailure);
+                    // 🚨 The CONTENT KEY's stage-1 digest, recorded BESIDE the bytes it describes
+                    // (#3892) — written into the STAGING directory, so the atomic rename that
+                    // publishes the assembly publishes its provenance with it and a concurrent
+                    // reader can never see one without the other. A write fault propagates:
+                    // EmitToDiskWithRetry discards the staging directory and the compile fails,
+                    // which is the same verdict a lost DLL write gets. An artifact whose
+                    // provenance cannot be recorded is not published — that is what keeps the
+                    // dependency record identical whether these bytes are used now or restored
+                    // from the cache an hour later.
+                    GeneratedInputDigestFile.Write(stagingDir, nodeName, generatedInputDigest);
+                    return emitted;
+                });
             warnings = emitted.Warnings;
         }
         else

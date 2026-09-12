@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -326,8 +327,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// this rather than against the absence of a log line, because "it did not error" and "it did
     /// not suppress the write the form is about to make" are different claims.</para>
     /// </summary>
-    internal bool IsStormWindowOpen(string path) =>
-        _negative.TryGetValue(path, out var negative) && negative.OpenUntil > DateTimeOffset.UtcNow;
+    internal bool IsStormWindowOpen(string path)
+    {
+        if (!_negative.TryGetValue(path, out var negative))
+            return false;
+        if (IsCurrentNegative(path, negative))
+            return negative.OpenUntil > DateTimeOffset.UtcNow;
+        _negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, negative));
+        return false;
+    }
 
     // 🚨 STORM BREAKER / negative cache. A read whose owner answers NotFound /
     // DeliveryFailure (the node does not exist) caches that FAILURE here with an
@@ -356,6 +364,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // StormFailThreshold logs ONE "[STORM-BREAKER] suppressing" warning so the storm is
     // visible in Grafana/Loki without the per-failure log flood.
     private readonly ConcurrentDictionary<string, NegativeEntry> _negative = new();
+    // A read/write that can conclude "missing" claims the path BEFORE it opens its owner
+    // round-trip. ResetFailureState invalidates the current claim, so a NotFound already in
+    // flight cannot re-arm _negative after the authoritative change event has cleared it.
+    // Successful/transient probes remove their claim; a missing result keeps it only for the
+    // lifetime of the negative entry, so this registry has the same bounded cardinality as the
+    // in-flight probes + _negative rather than growing once per path ever seen (#3954).
+    internal sealed class NegativeProbeClaim(int priorFailCount)
+    {
+        private int invalidated;
+        public int PriorFailCount { get; } = priorFailCount;
+        public bool IsValid => Volatile.Read(ref invalidated) == 0;
+        public void Invalidate() => Interlocked.Exchange(ref invalidated, 1);
+    }
+    private readonly ConcurrentDictionary<string, NegativeProbeClaim> _negativeClaims = new();
     // Reprobing: set true by the FIRST read past OpenUntil — that read drops the stale errored
     // entry and lets a fresh probe hydrate. Subsequent reads while that probe is IN FLIGHT must
     // NOT re-evict it (repeatedly tearing a still-hydrating entry down before it can resolve is a
@@ -363,7 +385,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // a fresh window; FailCount is carried across the reprobe so a genuinely-missing node still
     // backs off further when the fresh probe re-errors.
     private sealed record NegativeEntry(Exception Error, int FailCount, DateTimeOffset OpenUntil,
-        bool Reprobing = false);
+        bool Reprobing = false, NegativeProbeClaim? Claim = null);
     private static readonly TimeSpan StormBaseCooldown = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StormMaxCooldown = TimeSpan.FromMinutes(5);
     private const int StormFailThreshold = 5;
@@ -439,41 +461,126 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // with multi-write contention are thread/inbox nodes whose single-digit-
     // per-second write rate is far below the round-trip ceiling.
     //
-    // Storage: `MemoryCache` with 10-minute sliding expiration. The queue
-    // is reusable per path but unbounded retention would leak Subjects for
-    // every node ever written. Sliding expiry tears down the Subject (and
-    // its Concat subscription) for paths quiet for 10 minutes — a fresh
-    // write recreates a fresh queue, no behaviour change for the caller.
-    // Eviction callback completes the Subject so the Concat chain unwinds.
-    private readonly MemoryCache _updateQueues = new(new MemoryCacheOptions
-    {
-        // No size limit — we trim by time, not count.
-    });
-
+    // Publish one Lazy per path atomically, exactly like _streams. MemoryCache.GetOrCreate
+    // returns EACH racing factory's candidate, so Lazy alone did not prevent two live queues.
+    // The existing idle sweep retires only queues with no accepted work, after ten quiet minutes.
+    private readonly ConcurrentDictionary<string, Lazy<UpdateQueueEntry>> _updateQueues = new();
     private static readonly TimeSpan UpdateQueueSlidingExpiration = TimeSpan.FromMinutes(10);
 
-    // 🚨 The state the LAST write on a path left the node in AS ACKNOWLEDGED BY THE OWNER, held only
-    // until the next write on that path consumes it (issues #2305 / #2291). It exists because the
-    // queue above advances on a write's local terminal, NOT on the owner's echo — so the successor's
-    // mirror can still be showing the node as it was BEFORE its predecessor's patch. Diffing against
-    // that ships a base this mirror itself superseded, and the owner three-way-merges it as a conflict
-    // that never happened: the leaf is refused and the writer's newer value is silently dropped while
-    // its non-conflicting siblings land. (An agent round's response cell kept "Generating response..."
-    // in Text while Status went Completed and Summary carried the answer — one write, two verdicts.)
-    //
-    // 🚨 ACKNOWLEDGED, not merely computed — see MeshNodeStreamHandle's onLocalState. A base taken
-    // from a write that never landed is self-perpetuating: it mints no version, so nothing corrects
-    // it, and the next write diffs its own unlanded value into an empty patch and skips silently.
-    //
-    // ONE-SHOT by construction: the dispatch below TryRemoves it, so a stale entry can influence at
-    // most the single next write, and MeshNodeStreamHandle.PatchBaseSource ignores it the moment the
-    // mirror carries a newer Version — which the owner mints on EVERY applied change, from any
-    // writer. Bounded like the queues: the per-path eviction callback drops it, and so does Dispose.
-    private readonly ConcurrentDictionary<string, MeshNode> _pendingSelfWrites = new();
+    internal sealed class UpdateQueueEntry(ILogger logger)
+    {
+        // State-only lock, like the read Entry's subscriber pin: never held while dispatching,
+        // subscribing, disposing or notifying a result. Concat still serializes the actual writes.
+        private readonly object gate = new();
+        private readonly HashSet<ReplaySubject<MeshNode>> pendingResults = [];
+        private int slots;
+        private long lastActiveAt = Environment.TickCount64;
+        private bool retired;
+        private MeshNode? pendingSelfWrite;
 
-    private sealed record UpdateQueueEntry(Subject<UpdateRequest> Subject, IDisposable ConcatSubscription);
+        internal Subject<UpdateRequest> Subject { get; } = new();
+        internal SingleAssignmentDisposable Subscription { get; } = new();
+        internal CompositeDisposable Inflight { get; } = new();
+        internal bool HasObservers => Subject.HasObservers;
+        internal bool IsLive { get { lock (gate) return !retired; } }
 
-    private readonly record struct UpdateRequest(
+        internal bool TryEnqueue(UpdateRequest request)
+        {
+            bool observeResult;
+            lock (gate)
+            {
+                if (retired) return false;
+                slots++;
+                lastActiveAt = Environment.TickCount64;
+                observeResult = pendingResults.Add(request.Result);
+            }
+            // The result and the queue slot settle independently (an optimistic result may precede
+            // the owner ACK). Pin BOTH; the same result also pins the existing delayed conflict retry.
+            if (observeResult)
+                request.Result.Subscribe(_ => { }, _ => ReleaseResult(request.Result),
+                    () => ReleaseResult(request.Result));
+            Subject.OnNext(request);
+            return true;
+        }
+
+        private void ReleaseResult(ReplaySubject<MeshNode> result)
+        {
+            lock (gate)
+            {
+                pendingResults.Remove(result);
+                lastActiveAt = Environment.TickCount64;
+            }
+        }
+
+        internal void ReleaseSlot()
+        {
+            lock (gate)
+            {
+                slots--;
+                lastActiveAt = Environment.TickCount64;
+            }
+        }
+
+        internal bool TryMarkIdleRetired(TimeSpan idleWindow)
+        {
+            lock (gate)
+            {
+                if (retired || slots != 0 || pendingResults.Count != 0
+                    || Environment.TickCount64 - lastActiveAt < idleWindow.TotalMilliseconds)
+                    return false;
+                retired = true;
+                return true;
+            }
+        }
+
+        // A base belongs only to this queue's successor. A late ACK from a retired queue must
+        // neither seed a new queue nor erase that new queue's own handoff on eviction.
+        internal MeshNode? TakePendingSelfWrite()
+        {
+            lock (gate)
+            {
+                var value = pendingSelfWrite;
+                pendingSelfWrite = null;
+                return value;
+            }
+        }
+
+        internal void SetPendingSelfWrite(MeshNode node)
+        {
+            lock (gate)
+                if (!retired) pendingSelfWrite = node;
+        }
+
+        internal void Stop(Exception error)
+        {
+            ReplaySubject<MeshNode>[] results;
+            lock (gate)
+            {
+                retired = true;
+                pendingSelfWrite = null;
+                results = pendingResults.ToArray();
+                pendingResults.Clear();
+            }
+            // Disposal is idempotent. First stop dispatch and in-flight writes, then terminate
+            // every accepted caller, including requests still buffered inside Concat.
+            DisposeOwned(Subscription);
+            DisposeOwned(Inflight);
+            Subject.OnCompleted();
+            foreach (var result in results)
+            {
+                try { result.OnError(error); }
+                catch (Exception ex) { logger.LogError(ex, "Update queue result observer threw during teardown"); }
+            }
+        }
+
+        private void DisposeOwned(IDisposable disposable)
+        {
+            try { disposable.Dispose(); }
+            catch (Exception ex) { logger.LogError(ex, "Update queue subscription threw during teardown"); }
+        }
+    }
+
+    internal readonly record struct UpdateRequest(
         Func<MeshNode, MeshNode> Update,
         ReplaySubject<MeshNode> Result,
         string Path,
@@ -730,7 +837,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     internal void ResetFailureState(string path)
     {
-        if (_negative.TryRemove(path, out var cleared))
+        var invalidatedClaim = InvalidateNegativeProbe(path);
+        if (TryRemoveNegativeGeneration(path, invalidatedClaim, out var cleared))
         {
             // One line when a genuinely-suppressed storm is lifted (mirrors the
             // single "[STORM-BREAKER] suppressing" warning); routine clears stay at Debug.
@@ -777,6 +885,56 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     }
 
     /// <summary>
+    /// 🚨 <b>The one place that can say "this one never recovered" (#3645).</b> Emits one
+    /// <see cref="MeshNodeContentUnresolvedException"/>-bearing record per node type this replica
+    /// degraded and STILL cannot type, at the end of the cache's life.
+    ///
+    /// <para><b>Why here and not at the read.</b> The per-read warning
+    /// (<see cref="MeshNodeContentDegradedException"/>) is emitted at an instant that cannot know
+    /// whether the type registers a moment later — which is the ordinary boot race #2952 re-types
+    /// live readers for. So it describes an EVENT and cannot answer the question the CI gate and
+    /// <c>/health</c> both ask, which is about a STATE. The registry keeps the events;
+    /// <c>Unresolved</c> re-asks the mesh-wide content-type registry about each one, by both routes
+    /// <c>TryRecoverForNodeType</c> takes, and only what is still unresolvable reaches this log.
+    /// A boot that read before its compile landed therefore produces nothing here.</para>
+    ///
+    /// <para>🚨 It runs FIRST in <see cref="Dispose"/>, before any teardown: the registry is a
+    /// plain mesh-scoped record store, but the logger and the service provider are not guaranteed
+    /// alive further down, and a verdict nobody can emit is the failure mode this whole gate exists
+    /// to prevent (#3625). Everything is wrapped: a teardown must never fault on its own
+    /// diagnostics.</para>
+    ///
+    /// <para>Level is <c>Warning</c>, which with a non-null exception is exactly the sink's
+    /// predicate (<c>exception is not null &amp;&amp; logLevel &gt;= Warning</c>) — reaching the
+    /// trace log is a property of the CALL, not of the wording.</para>
+    /// </summary>
+    private void ReportUnresolvedContentTypes()
+    {
+        try
+        {
+            if (degradations is null || degradations.IsEmpty)
+                return;
+            foreach (var degradation in degradations.Unresolved(contentTypeRegistry))
+                logger.LogWarning(
+                    new MeshNodeContentUnresolvedException(
+                        degradation.NodeType, degradation.Discriminator, degradation.Count,
+                        degradation.LastPath, degradation.Seam),
+                    // 🚨 The gate's phrase stays CONTIGUOUS in one literal — see the same note on
+                    // MeshNodeContentUnresolvedException's message. The guard greps this file line
+                    // by line, so a split phrase retires the coupling silently.
+                    "MeshNodeStreamCache: content for nodeType {NodeType} "
+                    + "was NEVER resolvable on this replica — {Count} read(s) degraded and the type "
+                    + "had still not registered when the mesh ended (last {Path}). This is not the "
+                    + "transient boot race: the registry was re-asked just now and answered no.",
+                    degradation.NodeType, degradation.Count, degradation.LastPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error reporting unresolved content types");
+        }
+    }
+
+    /// <summary>
     /// Releases every subscription and rooted subject the cache holds. Fires
     /// when the silo/mesh goes down (cacheHub disposal) and on DI container
     /// teardown (IDisposable). Idempotent via the <see cref="_disposed"/> guard.
@@ -785,6 +943,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     {
         if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0)
             return; // already torn down by the other disposal path
+
+        // 0a. THE VERDICT, before anything is torn down (#3645). Everything recorded that is
+        //     still unresolvable NOW never recovered, and this is the last moment anyone can say
+        //     so — see ReportUnresolvedContentTypes.
+        ReportUnresolvedContentTypes();
 
         // 0. Idle sweep FIRST — no new sweep pass may start once teardown begins
         //    (an in-flight pass is harmless: entry teardown is idempotent and the
@@ -846,21 +1009,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         _queries = System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry>.Empty;
         _optionsWrappedQueries.Clear();
 
-        // 2. Per-path update queues: Clear() fires every entry's
-        //    post-eviction callback (ConcatSubscription.Dispose +
-        //    Subject.OnCompleted) so the serial-update Concat pipelines stop
-        //    keeping owner response-subjects rooted; Dispose() then stops the
-        //    MemoryCache's expiration-scan timer (which otherwise pins this
-        //    singleton — and through it meshHub/cacheHub — past mesh disposal).
-        try { _updateQueues.Clear(); }
-        catch (Exception ex)
+        // 2. Update queues — explicitly retire every materialized owner. An initializer that
+        // overlaps this snapshot checks _disposed before handing its queue to a caller.
+        foreach (var (path, lazy) in _updateQueues)
         {
-            logger.LogDebug(ex, "MeshNodeStreamCache: error clearing update queues");
-        }
-        try { _updateQueues.Dispose(); }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "MeshNodeStreamCache: error disposing update-queue cache");
+            if (lazy.IsValueCreated)
+                lazy.Value.Stop(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
+            _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, lazy));
         }
 
         // 3. Permission probe cache — drop the cached (path,user,context)⇒Permission
@@ -879,12 +1034,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
         // 5. Storm-breaker negative cache — drop the cached failure windows so
         //    nothing roots the disposed mesh's exceptions/identities.
+        foreach (var claim in _negativeClaims.Values)
+            claim.Invalidate();
+        _negativeClaims.Clear();
         _negative.Clear();
         _transientStreaks.Clear();
 
-        // 6. Pending per-path write bases. The queue eviction callbacks above already drop the ones
-        //    whose queue still existed; this covers a path whose queue had expired first.
-        _pendingSelfWrites.Clear();
+
     }
 
     /// <summary>
@@ -913,8 +1069,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     private Entry CreateEntry(string p)
     {
+        logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
+        var negativeClaim = BeginNegativeProbe(p);
+        try
         {
-            logger.LogDebug("MeshNodeStreamCache: opening shared stream for {Path}", p);
             // 🚨 Bypass the cache when opening our OWN upstream — otherwise
             // GetMeshNodeStream(workspace, path) auto-redirects back into the
             // cache and we'd recurse forever waiting for ourselves. Use the
@@ -1027,14 +1185,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 {
                     if (node is not null)
                     {
-                        _negative.TryRemove(p, out _);
+                        TryRemoveNegativeGeneration(p, negativeClaim, out _);
+                        CompleteNegativeProbe(p, negativeClaim);
                         _transientStreaks.TryRemove(p, out _);
                     }
                 },
                 ex =>
                 {
                     entry.MarkFaulted();
-                    if (IsMissingNodeFailure(ex)) RecordNegative(p, ex);
+                    if (IsMissingNodeFailure(ex))
+                    {
+                        if (!TryRecordNegative(p, ex, negativeClaim))
+                            CompleteNegativeProbe(p, negativeClaim);
+                    }
                     // Everything that is NOT a genuine missing node stays out of the negative
                     // cache (the node exists — see IsTransientOwnerFailure), but a STREAK of
                     // failures is the poisoned-activation loop; record it so re-probes back off
@@ -1053,10 +1216,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     // first TransientGraceFailures faults of ANY class, then bounds a persistent
                     // one at ≤ TransientMaxCooldown. A successful read or a change-feed
                     // invalidation clears it immediately, exactly as before.
-                    else RecordTransient(p, ex);
-                });
+                    else
+                    {
+                        CompleteNegativeProbe(p, negativeClaim);
+                        RecordTransient(p, ex);
+                    }
+                },
+                () => CompleteNegativeProbe(p, negativeClaim));
             disposal.Add(bookkeeping);
+            disposal.Add(System.Reactive.Disposables.Disposable.Create(
+                () => CompleteNegativeProbeUnlessRetained(p, negativeClaim)));
             return entry;
+        }
+        catch
+        {
+            CompleteNegativeProbe(p, negativeClaim);
+            throw;
         }
     }
 
@@ -1136,6 +1311,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         {
             foreach (var (path, lazy) in _streams)
                 TryReleaseUnwatched(path, lazy, readStreamIdleExpiration, "idle");
+            foreach (var path in _updateQueues.Keys)
+                TryReleaseUpdateQueue(path, UpdateQueueSlidingExpiration);
         }
         catch (Exception ex)
         {
@@ -1322,24 +1499,214 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// history (a compile-error era's worth of consecutive activation failures)
     /// deterministically instead of waiting out real backoff windows.
     /// </summary>
-    internal void RecordNegative(string path, Exception error)
+    internal void RecordNegative(string path, Exception error) =>
+        TryRecordNegative(path, error, claim: null);
+
+    /// <summary>
+    /// Production negative-cache admission. A claimed result is accepted only while the exact
+    /// claim captured before its owner round-trip is still current. The post-write re-check closes
+    /// the other interleaving: invalidation can land between the first check and the dictionary
+    /// write, in which case the pair-exact removal retracts the stale entry. Readers also validate
+    /// the claim, so even that short-lived entry can never fast-fail a caller (#3954).
+    /// </summary>
+    private bool TryRecordNegative(string path, Exception error, NegativeProbeClaim? claim) =>
+        TryRecordNegative(path, error, claim, afterClaimCheck: null);
+
+    /// <summary>Test seam for the one CAS interleaving that cannot be held from outside the
+    /// dictionary: <paramref name="afterClaimCheck"/> runs after the final claim check and after
+    /// the expected dictionary pair was captured, immediately before publication.</summary>
+    internal bool TryRecordNegativeForTest(
+        string path,
+        Exception error,
+        NegativeProbeClaim claim,
+        Action afterClaimCheck) =>
+        TryRecordNegative(path, error, claim, afterClaimCheck);
+
+    /// <summary>The write-side admission stays a named seam so its independent use of the claim
+    /// protocol is pinned without having to substitute a mesh owner.</summary>
+    private bool TryRecordWriteNegative(string path, Exception error, NegativeProbeClaim claim) =>
+        IsMissingNodeFailure(error) && TryRecordNegative(path, error, claim);
+
+    internal bool TryRecordWriteNegativeForTest(
+        string path, Exception error, NegativeProbeClaim claim) =>
+        TryRecordWriteNegative(path, error, claim);
+
+    private bool TryRecordNegative(
+        string path,
+        Exception error,
+        NegativeProbeClaim? claim,
+        Action? afterClaimCheck)
     {
-        var priorFails = _negative.TryGetValue(path, out var existing) ? existing.FailCount : 0;
-        var failCount = priorFails + 1;
-        // 2^(n-1) capped at 20 shifts (~12 days) before the Min — StormMaxCooldown
-        // is the real ceiling; the cap just keeps the intermediate from overflowing.
-        var backoffTicks = Math.Min(
-            StormBaseCooldown.Ticks * (1L << Math.Min(failCount - 1, 20)),
-            StormMaxCooldown.Ticks);
-        _negative[path] = new NegativeEntry(error, failCount, DateTimeOffset.UtcNow + TimeSpan.FromTicks(backoffTicks));
-        if (failCount == StormFailThreshold)
-            logger.LogWarning(
-                "[STORM-BREAKER] Suppressing re-probe of '{Path}' after {FailCount} consecutive access failures: {Error}. "
-                + "Reads AND writes fast-fail until the backoff window elapses. A point node-access to a node that does "
-                + "not exist is a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath); "
-                + "bring a new node into being with CreateNode, not Update.",
-                path, failCount, error.Message);
+        while (true)
+        {
+            if (claim is not null && !ClaimStillHeld(path, claim))
+                return false;
+
+            var hasExisting = _negative.TryGetValue(path, out var existing);
+            if (hasExisting && existing!.Claim is not null
+                && !ReferenceEquals(existing.Claim, claim))
+            {
+                // A stale claimed entry is dead state and may be removed pair-exact. A CURRENT
+                // different claim means this caller is stale (or is the claim-less test seam) and
+                // must never overwrite the current probe's verdict.
+                if (!IsCurrentNegative(path, existing))
+                {
+                    _negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, existing));
+                    continue;
+                }
+                return false;
+            }
+
+            var priorFails = Math.Max(hasExisting ? existing!.FailCount : 0, claim?.PriorFailCount ?? 0);
+            var failCount = priorFails + 1;
+            // 2^(n-1) capped at 20 shifts (~12 days) before the Min — StormMaxCooldown
+            // is the real ceiling; the cap just keeps the intermediate from overflowing.
+            var backoffTicks = Math.Min(
+                StormBaseCooldown.Ticks * (1L << Math.Min(failCount - 1, 20)),
+                StormMaxCooldown.Ticks);
+            var recorded = new NegativeEntry(
+                error,
+                failCount,
+                DateTimeOffset.UtcNow + TimeSpan.FromTicks(backoffTicks),
+                Claim: claim);
+
+            if (claim is not null && !ClaimStillHeld(path, claim))
+                return false;
+
+            // Test-only rendezvous; production always passes null. It holds the exact race:
+            // another probe can replace this claim and publish between validation and CAS.
+            afterClaimCheck?.Invoke();
+            afterClaimCheck = null;
+
+            var published = hasExisting
+                ? _negative.TryUpdate(path, recorded, existing!)
+                : _negative.TryAdd(path, recorded);
+            if (!published)
+                continue;
+
+            if (claim is not null && !ClaimStillHeld(path, claim))
+            {
+                _negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, recorded));
+                return false;
+            }
+            if (failCount == StormFailThreshold)
+                logger.LogWarning(
+                    "[STORM-BREAKER] Suppressing re-probe of '{Path}' after {FailCount} consecutive access failures: {Error}. "
+                    + "Reads AND writes fast-fail until the backoff window elapses. A point node-access to a node that does "
+                    + "not exist is a defect — read optional nodes via GetQuery (empty-on-absent), not GetMeshNodeStream(exactPath); "
+                    + "bring a new node into being with CreateNode, not Update.",
+                    path, failCount, error.Message);
+            return true;
+        }
     }
+
+    internal NegativeProbeClaim BeginNegativeProbe(string path)
+    {
+        while (true)
+        {
+            if (!_negativeClaims.TryGetValue(path, out var current))
+            {
+                // Claim-less entries exist only through the internal deterministic test seam.
+                // Preserve their grown backoff when a real re-probe follows one.
+                var prior = _negative.TryGetValue(path, out var unclaimed)
+                    && unclaimed.Claim is null
+                    ? unclaimed.FailCount
+                    : 0;
+                var claim = new NegativeProbeClaim(prior);
+                if (_negativeClaims.TryAdd(path, claim))
+                    return claim;
+                continue;
+            }
+            var priorFailCount = _negative.TryGetValue(path, out var existing)
+                                 && ReferenceEquals(existing.Claim, current)
+                ? existing.FailCount
+                : 0;
+            var replacement = new NegativeProbeClaim(priorFailCount);
+            if (!_negativeClaims.TryUpdate(path, replacement, current))
+                continue;
+            current.Invalidate();
+            return replacement;
+        }
+    }
+
+    private bool ClaimStillHeld(string path, NegativeProbeClaim claim) =>
+        claim.IsValid
+        && _negativeClaims.TryGetValue(path, out var current)
+        && ReferenceEquals(current, claim);
+
+    private bool IsCurrentNegative(string path, NegativeEntry negative) =>
+        negative.Claim is null || ClaimStillHeld(path, negative.Claim);
+
+    private void CompleteNegativeProbe(string path, NegativeProbeClaim claim)
+    {
+        if (_negativeClaims.TryRemove(new KeyValuePair<string, NegativeProbeClaim>(path, claim)))
+            claim.Invalidate();
+    }
+
+    private void CompleteNegativeProbeUnlessRetained(string path, NegativeProbeClaim claim)
+    {
+        if (_negative.TryGetValue(path, out var negative)
+            && ReferenceEquals(negative.Claim, claim)
+            && ClaimStillHeld(path, claim))
+            return;
+        CompleteNegativeProbe(path, claim);
+    }
+
+    internal NegativeProbeClaim? InvalidateNegativeProbe(string path)
+    {
+        if (!_negativeClaims.TryGetValue(path, out var claim))
+            return null;
+        claim.Invalidate();
+        _negativeClaims.TryRemove(new KeyValuePair<string, NegativeProbeClaim>(path, claim));
+        return claim;
+    }
+
+    private bool TryRemoveNegativeGeneration(
+        string path,
+        NegativeProbeClaim? invalidatedClaim,
+        out NegativeEntry removed)
+    {
+        while (_negative.TryGetValue(path, out var candidate))
+        {
+            // A claimed entry from a replacement probe began after this invalidation. Never let a
+            // path-only clear erase that newer genuine miss and its backoff (#3954 review).
+            if (candidate.Claim is not null
+                && !ReferenceEquals(candidate.Claim, invalidatedClaim))
+            {
+                if (IsCurrentNegative(path, candidate))
+                {
+                    removed = null!;
+                    return false;
+                }
+                // It belongs to an already-invalidated generation. Removing that dead pair is
+                // safe and prevents an explicit clear from leaving stale state merely because
+                // its claim had already been detached by another terminal path.
+                if (_negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, candidate)))
+                {
+                    removed = candidate;
+                    return true;
+                }
+                continue;
+            }
+            if (_negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, candidate)))
+            {
+                removed = candidate;
+                return true;
+            }
+        }
+        removed = null!;
+        return false;
+    }
+
+    internal bool TryRemoveNegativeGenerationForTest(string path, NegativeProbeClaim? invalidatedClaim) =>
+        TryRemoveNegativeGeneration(path, invalidatedClaim, out _);
+
+    internal Exception? CurrentNegativeErrorForTest(string path) =>
+        _negative.TryGetValue(path, out var negative) && IsCurrentNegative(path, negative)
+            ? negative.Error
+            : null;
+
+    internal bool HasNegativeProbeClaimForTest(string path) => _negativeClaims.ContainsKey(path);
 
     /// <summary>
     /// Records an owner fault that is NOT a genuine missing node — the transient class
@@ -1598,9 +1965,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         //      identical exception while the backoff grew. See EvictFaultedEntry (#1202).
         if (_negative.TryGetValue(path, out var neg))
         {
-            if (neg.OpenUntil > DateTimeOffset.UtcNow)
+            if (!IsCurrentNegative(path, neg))
+                _negative.TryRemove(new KeyValuePair<string, NegativeEntry>(path, neg));
+            else if (neg.OpenUntil > DateTimeOffset.UtcNow)
                 return Observable.Throw<MeshNode>(neg.Error);
-            if (!neg.Reprobing && _negative.TryUpdate(path, neg with { Reprobing = true }, neg))
+            else if (!neg.Reprobing && _negative.TryUpdate(path, neg with { Reprobing = true }, neg))
                 EvictFaultedEntry(path, "storm-breaker");
         }
 
@@ -1784,17 +2153,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // patches that the RFC 7396 owner-side merge cannot resolve (lists
         // collapse to the last writer). Serializing per path makes each
         // lambda observe its predecessor's effect.
-        // DISPOSED-CACHE GUARD (write side): a late write after this cache's Dispose() — the
-        // canonical case is an agent round whose ThreadExecution.PushToResponseMessage is still
-        // streaming when its mesh's cacheHub tore down (State captured by TeardownStragglerCapturer:
-        // UpdateRaw → _updateQueues.TryGetValue → MemoryCache.CheckDisposed) — must NOT touch the
-        // disposed _updateQueues MemoryCache, whose TryGetValue throws a synchronous
-        // ObjectDisposedException on the caller's ThreadPool continuation. Unobserved, that reaches
-        // AppDomain.UnhandledException and xUnit escalates it to a "Catastrophic failure" that reds
-        // an otherwise-green shard. Dispose() sets _disposed=1 BEFORE it disposes _updateQueues, so
-        // this flag check (same Volatile idiom as ReleaseIdleReadStreams) fully covers the straggler.
-        // Return the same graceful Observable.Throw terminal the negative-cache breaker below uses —
-        // observed by the caller's Subscribe (a benign teardown write), never an unobserved throw.
+        // Late writes surface an observable terminal, including a Dispose racing admission.
         if (System.Threading.Volatile.Read(ref _disposed) != 0)
             return Observable.Throw<MeshNode>(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
 
@@ -1804,17 +2163,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // path can never storm the mesh from either direction. Only a real CreateNode brings a
         // non-existent node into being — an Update can't.
         if (_negative.TryGetValue(path, out var negWrite)
+            && IsCurrentNegative(path, negWrite)
             && negWrite.OpenUntil > DateTimeOffset.UtcNow
             && IsMissingNodeFailure(negWrite.Error))
             return Observable.Throw<MeshNode>(negWrite.Error);
 
-        var queue = GetOrCreateUpdateQueue(path);
         var result = new ReplaySubject<MeshNode>();
         var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
         logger.LogDebug(
             "[UpdateQueue] ENQUEUE path={Path} seq={Seq} enteredAt={EnteredAt}",
             path, seq, DateTimeOffset.UtcNow);
-        queue.OnNext(new UpdateRequest(
+        EnqueueUpdate(new UpdateRequest(
             update, result, path, seq, DateTimeOffset.UtcNow, FullNode: null, Caller: CaptureCaller()));
         return result;
     }
@@ -1849,85 +2208,75 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private long _updateSeq;
 
     /// <summary>
-    /// Returns the per-path Subject that the serial-Update Concat consumes.
-    /// Backed by <see cref="MemoryCache"/> with sliding expiration so paths
-    /// that go quiet release their Subject + Concat subscription. A fresh
-    /// write after eviction transparently recreates the queue — eviction is
-    /// invisible to callers.
-    ///
-    /// 🚨 The cached VALUE is a <see cref="Lazy{T}"/>, not the Subject
-    /// directly, because <c>MemoryCacheExtensions.GetOrCreate</c>
-    /// is NOT atomic — the factory can run more than once under contention,
-    /// and only ONE result wins per key. Losers would orphan a Subject +
-    /// Concat subscription that never gets evicted (their eviction
-    /// callback is never registered with the cache). Wrapping in
-    /// <c>Lazy&lt;T&gt;(ThreadSafety.ExecutionAndPublication)</c> ensures
-    /// the heavy work (new Subject, build observable, Subscribe) runs at
-    /// most once per key even when multiple GetOrCreate calls race. Same
-    /// pattern as <see cref="_streams"/>'s <c>Lazy&lt;Entry&gt;</c>.
+    /// Atomically publishes one queue owner per path. Only the stored Lazy is initialized;
+    /// losing candidates have no subscription to orphan or dispose. The optional internal seam
+    /// lets the regression force two cold factories to overlap before either candidate is stored.
     /// </summary>
-    private Subject<UpdateRequest> GetOrCreateUpdateQueue(string path) =>
-        _updateQueues.GetOrCreate(path, entry =>
+    internal UpdateQueueEntry GetOrCreateUpdateQueue(string path, Action? beforePublication = null)
+    {
+        while (true)
         {
-            entry.SlidingExpiration = UpdateQueueSlidingExpiration;
-            var lazy = new Lazy<UpdateQueueEntry>(() =>
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            var lazy = _updateQueues.GetOrAdd(path, key =>
             {
-                var subject = new Subject<UpdateRequest>();
-                // 🚨 onError is mandatory. Per-request failures route to req.Result
-                // (Materialize() below shields the Concat), so a fault HERE means the
-                // queue plumbing itself died — the Subject then has no consumer and
-                // every later write for this path would enqueue into the void with the
-                // caller hanging on its result. Surface loudly and evict the dead
-                // entry so the next write builds a fresh queue (the same lifecycle as
-                // sliding-expiry eviction — no timer, no resubscribe of the faulted
-                // pipeline; the fault itself stays visible in the log).
-                var sub = BuildUpdateQueueObservable(path, subject).Subscribe(
-                    _ => { },
-                    ex =>
-                    {
-                        logger.LogError(ex,
-                            "[UpdateQueue] queue pipeline FAULTED path={Path} — evicting dead queue",
-                            path);
-                        // DISPOSED-CACHE GUARD (fault side): this callback fires asynchronously,
-                        // so a straggling pipeline can fault AFTER Dispose() — MemoryCache.Dispose
-                        // never runs eviction callbacks, so the Concat subscription outlives the
-                        // cache and its late fault lands here. Touching the disposed MemoryCache
-                        // throws a synchronous ObjectDisposedException INSIDE OnError, which is
-                        // unobserved → AppDomain.UnhandledException → xUnit "catastrophic failure"
-                        // on an otherwise-green shard (CI: MeshWeaver.AI.Test MASKED exit=2 on
-                        // e0faf867b). Same Volatile idiom as the UpdateRaw write-side guard above;
-                        // the narrow catch covers the read-flag-then-Dispose race — inside OnError
-                        // nothing may throw, and evicting an already-disposed cache is a no-op by
-                        // definition (the fault stays visible via the LogError above).
-                        if (System.Threading.Volatile.Read(ref _disposed) == 0)
-                        {
-                            try { _updateQueues.Remove(path); }
-                            catch (ObjectDisposedException) { /* teardown won the race */ }
-                        }
-                    });
-                return new UpdateQueueEntry(subject, sub);
-            }, LazyThreadSafetyMode.ExecutionAndPublication);
-            // Eviction (sliding-expiry timeout, manual Remove, or process
-            // shutdown) tears down the long-lived Concat subscription and
-            // completes the Subject — otherwise the Concat keeps response-
-            // subjects rooted forever. Only fires if the Lazy was actually
-            // materialised; an unrealised Lazy has no subscription to leak.
-            entry.RegisterPostEvictionCallback((key, value, reason, state) =>
-            {
-                logger.LogDebug(
-                    "[UpdateQueue] EVICTED path={Path} reason={Reason}",
-                    key, reason);
-                // The pending base outlives nothing: a path with no queue has no successor to hand it to.
-                if (key is string evictedPath)
-                    _pendingSelfWrites.TryRemove(evictedPath, out _);
-                if (value is Lazy<UpdateQueueEntry> { IsValueCreated: true } lz)
-                {
-                    try { lz.Value.ConcatSubscription.Dispose(); } catch { /* best-effort */ }
-                    try { lz.Value.Subject.OnCompleted(); } catch { /* best-effort */ }
-                }
+                Lazy<UpdateQueueEntry>? candidate = null;
+                candidate = new Lazy<UpdateQueueEntry>(() => CreateUpdateQueue(key, candidate!),
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+                beforePublication?.Invoke();
+                return candidate;
             });
-            return lazy;
-        })!.Value.Subject;
+            var queue = lazy.Value;
+            // Dispose can see an unpublished/uninitialized candidate. The initializer owns that
+            // race: stop its materialized queue rather than leave it beyond the teardown snapshot.
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                queue.Stop(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
+                _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, lazy));
+                throw new ObjectDisposedException(nameof(MeshNodeStreamCache));
+            }
+            if (queue.IsLive) return queue;
+            _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, lazy));
+        }
+    }
+
+    private UpdateQueueEntry CreateUpdateQueue(string path, Lazy<UpdateQueueEntry> owner)
+    {
+        var queue = new UpdateQueueEntry(logger);
+        queue.Subscription.Disposable = BuildUpdateQueueObservable(path, queue).Subscribe(
+            _ => { },
+            ex =>
+            {
+                logger.LogError(ex, "[UpdateQueue] queue pipeline FAULTED path={Path} — evicting dead queue", path);
+                queue.Stop(ex);
+                _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, owner));
+            });
+        return queue;
+    }
+
+    private void EnqueueUpdate(UpdateRequest request)
+    {
+        try
+        {
+            // A stale reference can lose admission to retirement; only UNACCEPTED work re-resolves
+            // the owner, like GetEntry's pin-or-recreate loop. Accepted work is never replayed here.
+            while (!GetOrCreateUpdateQueue(request.Path).TryEnqueue(request)) { }
+        }
+        catch (ObjectDisposedException ex)
+        {
+            request.Result.OnError(ex);
+        }
+    }
+
+    internal bool TryReleaseUpdateQueue(string path, TimeSpan idleWindow)
+    {
+        if (!_updateQueues.TryGetValue(path, out var lazy) || !lazy.IsValueCreated
+            || !lazy.Value.TryMarkIdleRetired(idleWindow))
+            return false;
+        lazy.Value.Stop(new ObjectDisposedException("Idle update queue"));
+        _updateQueues.TryRemove(new KeyValuePair<string, Lazy<UpdateQueueEntry>>(path, lazy));
+        logger.LogDebug("[UpdateQueue] EVICTED path={Path} reason=Idle", path);
+        return true;
+    }
 
     /// <summary>
     /// Builds the per-path Concat pipeline that processes <see cref="UpdateRequest"/>s
@@ -1948,7 +2297,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// state older than write N's, shipped that as its base, and the owner refused the conflicting
     /// leaves of a write that nothing was concurrent with (#2305 / #2291). The invariant is now
     /// DELIVERED rather than asserted: the predecessor's locally-computed node is handed to the
-    /// successor via <see cref="_pendingSelfWrites"/>, and <c>MeshNodeStreamHandle.PatchBaseSource</c>
+    /// successor via <see cref="UpdateQueueEntry.TakePendingSelfWrite"/>, and <c>MeshNodeStreamHandle.PatchBaseSource</c>
     /// prefers it only while the mirror carries nothing newer.</para>
     ///
     /// <para>🚨 …and the SLOT is released by that hand-off, not by LOCAL_EMIT (#2346). For a busy
@@ -1957,8 +2306,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// loaded runs where it matters. The caller still gets its terminal at LOCAL_EMIT; only the next
     /// QUEUED write waits.</para>
     /// </summary>
-    private IObservable<MeshNode> BuildUpdateQueueObservable(string path, Subject<UpdateRequest> subject) =>
-        subject
+    private IObservable<MeshNode> BuildUpdateQueueObservable(string path, UpdateQueueEntry queue) =>
+        queue.Subject
             .Select(req => Observable.Defer<MeshNode>(() =>
             {
                 var waitedToStart = (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds;
@@ -1981,11 +2330,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 using var callerScope = req.Caller is not null && accessService is not null
                     ? accessService.SwitchAccessContext(req.Caller)
                     : null;
+                var negativeClaim = BeginNegativeProbe(path);
 
-                // 🚨 Consume the predecessor's locally-computed state — see _pendingSelfWrites. Taken
+                // 🚨 Consume the predecessor's locally-computed state from this queue owner. Taken
                 // (and REMOVED) here rather than read in place so it can only ever inform the single
                 // next write: if this one produces no local emit, the write after it reads the mirror.
-                _pendingSelfWrites.TryRemove(path, out var pendingSelfWrite);
+                var pendingSelfWrite = queue.TakePendingSelfWrite();
 
                 // 🚨 THE QUEUE'S ADVANCE SIGNAL — issue #2346, and the residual half of #2305 / #2291.
                 //
@@ -2037,7 +2387,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             // re-enqueued attempt, a late terminal NACK). Release the slot; the
                             // successor re-reads the mirror, which is correct for those cases.
                             if (local is not null)
-                                _pendingSelfWrites[path] = local;
+                                queue.SetPendingSelfWrite(local);
                             SettleHandoff();
                         });
 
@@ -2054,13 +2404,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // it never accumulates.
                 var inflight = new System.Reactive.Disposables.SingleAssignmentDisposable();
                 _inflightWrites[inflight] = 0;
+                queue.Inflight.Add(inflight);
                 var sawLocalEmit = false;
+                var keepNegativeClaim = 0;
                 void Settle()
                 {
+                    if (Volatile.Read(ref keepNegativeClaim) == 0)
+                        CompleteNegativeProbe(path, negativeClaim);
                     _inflightWrites.TryRemove(inflight, out _);
+                    queue.Inflight.Remove(inflight);
                     try { inflight.Dispose(); } catch { /* best-effort */ }
                 }
-                inflight.Disposable = update.Subscribe(
+                inflight.Disposable = update.Finally(Settle).Subscribe(
                     node =>
                     {
                         logger.LogDebug(
@@ -2068,7 +2423,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             path, req.Seq, (DateTimeOffset.UtcNow - req.EnteredAt).TotalMilliseconds);
                         // A successful write proves the owner is live ⇒ clear any storm-breaker
                         // window so reads/writes re-probe normally.
-                        _negative.TryRemove(path, out _);
+                        var invalidatedClaim = InvalidateNegativeProbe(path);
+                        TryRemoveNegativeGeneration(path, invalidatedClaim, out _);
                         // Write activity refreshes the read entry's idle window — GetEntry
                         // pinned it at write START; touching again on each terminal keeps
                         // an in-flight write's upstream out of the idle sweep's reach.
@@ -2088,8 +2444,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         // instead of re-enqueueing doomed PatchDataRequests against a hub that can't
                         // activate. Only missing-node failures record (not RLS denial / transient),
                         // so a legitimately-existing node is never falsely suppressed.
-                        if (IsMissingNodeFailure(ex))
-                            RecordNegative(path, ex);
+                        if (TryRecordWriteNegative(path, ex, negativeClaim))
+                            Volatile.Write(ref keepNegativeClaim, 1);
                         entry.Touch();
                         // 🚨 A Conflict NACK is the owner PRESCRIBING the remedy: "re-read and
                         // re-apply". This queue re-invokes the caller's mutation on the CURRENT
@@ -2106,14 +2462,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                                 path, req.Seq, retry.Attempt, MaxConflictRetries);
                             SettleHandoff();
                             Settle();
-                            Observable.Timer(ConflictRetryDelay).Subscribe(_ =>
+                            var retryTimer = new SingleAssignmentDisposable();
+                            queue.Inflight.Add(retryTimer);
+                            retryTimer.Disposable = Observable.Timer(ConflictRetryDelay)
+                                .Finally(() => queue.Inflight.Remove(retryTimer))
+                                .Subscribe(_ =>
                             {
                                 try
                                 {
-                                    if (System.Threading.Volatile.Read(ref _disposed) != 0)
+                                    // The unresolved result pins this owner throughout the delay.
+                                    // A retired owner's already-failed write must never reappear on
+                                    // a replacement queue after its caller has received a terminal.
+                                    if (System.Threading.Volatile.Read(ref _disposed) != 0
+                                        || !queue.TryEnqueue(retry))
                                         req.Result.OnError(ex);
-                                    else
-                                        GetOrCreateUpdateQueue(path).OnNext(retry);
                                 }
                                 catch (Exception requeueEx)
                                 {
@@ -2171,7 +2533,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     }))
                     .Take(1)
                     .SelectMany(_ => Observable.Empty<MeshNode>());
-            }))
+            }).Finally(queue.ReleaseSlot))
             .Concat();
 
     /// <summary>
@@ -2241,18 +2603,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private IObservable<MeshNode> OverwriteRaw(string path, MeshNode node)
     {
         // Disposed-cache guard — see UpdateRaw. A late overwrite after Dispose() must not hit the
-        // disposed _updateQueues MemoryCache; return a graceful observed terminal, never a throw.
+        // retired queue owner; return a graceful observed terminal, never a throw.
         if (System.Threading.Volatile.Read(ref _disposed) != 0)
             return Observable.Throw<MeshNode>(new ObjectDisposedException(nameof(MeshNodeStreamCache)));
 
-        var queue = GetOrCreateUpdateQueue(path);
         var result = new ReplaySubject<MeshNode>();
         var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
         logger.LogDebug(
             "[UpdateQueue] ENQUEUE-OVERWRITE path={Path} seq={Seq} enteredAt={EnteredAt}",
             path, seq, DateTimeOffset.UtcNow);
         // Update func is a placeholder (never invoked — the FullNode branch is taken).
-        queue.OnNext(new UpdateRequest(
+        EnqueueUpdate(new UpdateRequest(
             static n => n, result, path, seq, DateTimeOffset.UtcNow, node, CaptureCaller()));
         return result;
     }
@@ -2313,7 +2674,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // to fire at all. The job log is not an equivalent sink: it carries only the output
                 // of tests that FAILED, and a degradation is overwhelmingly logged under a test
                 // that passes. Reaching the sink is a property of the CALL, not of the wording.
-                degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetStream");
+                degradations?.Record(
+                    node.NodeType, node.Path, "MeshNodeStreamCache.GetStream", Discriminator(degraded));
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
@@ -2327,6 +2689,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         }
         return node;
     }
+
+    /// <summary>The stored <c>$type</c> of a degraded element, or <c>null</c> when it carries
+    /// none. Read ONCE at the degradation, so <c>ContentDegradationRegistry.Unresolved</c> can
+    /// re-ask the content-type registry by NAME later without keeping the document (#3645).
+    /// Content without a <c>$type</c> stays legal by design (ContentDiscriminatorValidator), so a
+    /// null here is an ordinary state, not a fault.</summary>
+    private static string? Discriminator(JsonElement content) =>
+        content.ValueKind == JsonValueKind.Object
+        && content.TryGetProperty("$type", out var type)
+        && type.ValueKind == JsonValueKind.String
+            ? type.GetString()
+            : null;
 
     // Truncated raw JSON for diagnostics — bad-data warnings include the offending
     // content so the corrupt row is identifiable in Loki without flooding the log.
@@ -2816,7 +3190,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // 🚨 Carries the exception for the same reason the GetStream seam does — see there.
                 // A record with no exception object cannot reach the trace log, which is the only
                 // sink the untyped-content shard gate scans (#3625).
-                degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
+                degradations?.Record(
+                    node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", Discriminator(degraded));
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, TruncateRawText(rawText)),
@@ -2840,6 +3215,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             // never match it either. Keying the gate on the exception TYPE rather than on prose is
             // what closes that third blind spot; `ex` rides along as the inner exception, so the
             // deserialization stack is still in the record.
+            // No parsed element here — the parse is what failed — so the NodeType is the only key
+            // Unresolved() can re-ask under, which is the exact route it prefers anyway.
             degradations?.Record(node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery");
             logger.LogWarning(
                 new MeshNodeContentDegradedException(
@@ -2864,7 +3241,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// </summary>
     public void Invalidate(string path)
     {
-        _negative.TryRemove(path, out _);
+        var invalidatedClaim = InvalidateNegativeProbe(path);
+        TryRemoveNegativeGeneration(path, invalidatedClaim, out _);
         if (_streams.TryRemove(path, out var lazyEntry))
         {
             // Dispose the upstream SubscribeRequest so it doesn't dangle in

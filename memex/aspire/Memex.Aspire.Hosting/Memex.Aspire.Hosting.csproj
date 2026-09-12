@@ -14,11 +14,31 @@
     <Description>Aspire hosting integration for the MeshWeaver Memex portal. builder.AddMemex() wires Postgres (pgvector) + a one-shot DB migration + the portal from published GHCR images; publish to Docker Compose, Kubernetes/Helm, or Azure Container Apps with the standard Aspire publishers.</Description>
     <Authors>Systemorph</Authors>
     <PackageTags>aspire;hosting;meshweaver;memex;mesh</PackageTags>
+    <!-- The Deployment record assembly rides INSIDE this package (lib/net10.0/) rather than as a
+         package of its own — the maintainer retired every NuGet id but two on 2026-09-07
+         (Doc/Architecture/NuGetPackageRetirement), and a customer AppHost needs exactly one
+         reference to build a record. PrivateAssets=all keeps it out of the nuspec's dependency
+         list; the target below copies the built dll into the package output.
+         publish-packages.yml asserts the dll is in the nupkg before pushing. -->
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);PackContractAssembly</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
+
+  <!-- Runs in pack's inner per-TFM call, which does not resolve references by itself — without
+       DependsOnTargets the item is empty and the package silently ships without the record
+       assembly (measured 2026-09-08: nupkg with lib/ holding only Memex.Aspire.Hosting.*). -->
+  <Target Name="PackContractAssembly" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)"
+                            Condition="'%(ReferenceCopyLocalPaths.Filename)' == 'MeshWeaver.Deployment.Contract' and ('%(ReferenceCopyLocalPaths.Extension)' == '.dll' or '%(ReferenceCopyLocalPaths.Extension)' == '.xml')" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting" />
     <PackageReference Include="Aspire.Hosting.PostgreSQL" />
+    <!-- The Deployment record — the ONE input this adapter and the Helm chart both render from.
+         A zero-MeshWeaver-dependency assembly bundled INTO this package (see PackContractAssembly). -->
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Deployment.Contract\MeshWeaver.Deployment.Contract.csproj" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>

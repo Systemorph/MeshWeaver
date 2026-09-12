@@ -119,8 +119,24 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.FailedBuildInputs"/>.</summary>
     public string? FailedBuildInputs { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.FailedSourceQueries"/> — the declared source
+    /// queries that matched NOTHING when the standing failure was recorded (#3903). Mirrored for
+    /// the same reason as the token beside it, and with the same three-shape contract: <c>null</c>
+    /// is NOT DETERMINED, an empty list is "checked, every declared query matched".</summary>
+    public System.Collections.Immutable.ImmutableList<string>? FailedSourceQueries { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.AdoptedSourceFingerprint"/>.</summary>
     public string? AdoptedSourceFingerprint { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.CurrentModuleVersion"/> — the module version of
+    /// the source this mesh HOLDS. Mirrored for the same reason as the pair beside it.</summary>
+    public string? CurrentModuleVersion { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.AdoptedModuleVersion"/>. Mirrored for the same
+    /// reason as the fingerprint beside it: the sync seams MASK it, so a member missing here is
+    /// dropped on the satellite without anything saying so — which is exactly what
+    /// <c>StateMembers_AreExactlyTheMaskedOperationalMembers</c> refuses.</summary>
+    public string? AdoptedModuleVersion { get; init; }
 
     /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>.</summary>
     public string? CurrentSourceFingerprint { get; init; }
@@ -160,7 +176,10 @@ public record NodeTypeCompileState
                 RequestedSourceStampAt = definition.RequestedSourceStampAt,
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
                 FailedBuildInputs = definition.FailedBuildInputs,
+                FailedSourceQueries = definition.FailedSourceQueries,
                 AdoptedSourceFingerprint = definition.AdoptedSourceFingerprint,
+                AdoptedModuleVersion = definition.AdoptedModuleVersion,
+                CurrentModuleVersion = definition.CurrentModuleVersion,
                 CurrentSourceFingerprint = definition.CurrentSourceFingerprint,
                 BuildProvenance = definition.BuildProvenance,
             };
@@ -178,7 +197,10 @@ public record NodeTypeCompileState
         && CompiledSources is null && CurrentSourceVersions is null
         && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
-        && AdoptedSourceFingerprint is null && CurrentSourceFingerprint is null
+        && FailedSourceQueries is null
+        && AdoptedSourceFingerprint is null && AdoptedModuleVersion is null
+        && CurrentModuleVersion is null
+        && CurrentSourceFingerprint is null
         && BuildProvenance is Mesh.Services.BuildProvenance.Compiled;
 }
 

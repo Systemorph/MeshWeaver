@@ -123,10 +123,26 @@ jobs:
           # Order matters: a route verdict outranks a content verdict, because a wedged route makes
           # every content answer meaningless. Only when the control proves the route discriminates
           # does a 404 on the platform asset mean what it says.
-          if [ "$route_bad" -ge 2 ] || [ "$neg_wrong" -ge 2 ]; then
-            echo "::error::content route unhealthy on ${PORTAL} — $route_bad/3 non-200/404 on $pos," \
-                 "and the impossible path $neg failed to answer 404 in $neg_wrong/3 samples." \
-                 "A route that does not discriminate present from absent is the wedge this probe watches for."
+          # 🚨 NAME ONLY THE CONDITION THAT FIRED. The message used to state BOTH counters every
+          # time, so a perfectly healthy control printed "the impossible path … failed to answer 404
+          # in 0/3 samples" — which reads as "0 of 3 answered 404", the exact OPPOSITE of what it
+          # measured. MeshWeaver#3931 was filed on that sentence and spent a whole hypothesis on a
+          # path resolution that had never stalled. A counter is only evidence when the branch it
+          # belongs to is the branch that failed.
+          if [ "$neg_wrong" -ge 2 ]; then
+            echo "::error::content route NOT DISCRIMINATING on ${PORTAL} — the impossible path $neg" \
+                 "answered something other than 404 in $neg_wrong of 3 samples (the platform asset" \
+                 "was neither 200 nor 404 in $route_bad of 3). A route that cannot tell present from" \
+                 "absent is the wedge this probe watches for."
+            exit 1
+          fi
+          if [ "$route_bad" -ge 2 ]; then
+            echo "::error::content route unhealthy on ${PORTAL} — $route_bad of 3 samples on $pos" \
+                 "were neither 200 nor 404, while the impossible path $neg CORRECTLY answered 404 in" \
+                 "$((3 - neg_wrong)) of 3. The route discriminates, so this is that asset's own read" \
+                 "failing. A ~10 s 503 here is Doc/Architecture/ContentRoute503 — read the TARGET" \
+                 "clause of the HubUnreachableException before anything else: a cold per-node hub" \
+                 "start-up (Cause C) wears Cause A's reader-side signature exactly."
             exit 1
           fi
           if [ "$pos_absent" -ge 2 ]; then

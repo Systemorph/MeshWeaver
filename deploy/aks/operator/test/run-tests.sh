@@ -60,6 +60,24 @@ emits() {
   case "$out" in *"$line"*) ok "$what" ;; *) bad "$what" "no '${line}' in: ${out}" ;; esac
 }
 
+# ── hosting::do keeps the DATA channel clean ────────────────────────────────────────────────────
+# A wrapped mutation can feed a pipe (hosting-deploy: `hosting::do kubectl create namespace …
+# -o yaml | kubectl apply -f -`). Its narration must therefore never share stdout with the
+# command's output. Measured 2026-09-08 on memex: the narration became line 1 of the manifest and
+# kubectl refused it ("yaml: line 2: mapping values are not allowed in this context"), stopping the
+# Reconcile at step 1/3 — and a Provision at the same line. Asserted BYTE-FOR-BYTE, not "contains":
+# a leading narration line would still contain the manifest.
+_manifest=$'apiVersion: v1\nkind: Namespace'
+_piped="$(bash -c 'source "$1"; hosting::do printf "%s\n" "$2"' _ "$BIN/_common.sh" "$_manifest" 2>/dev/null)"
+if [ "$_piped" = "$_manifest" ]; then ok "hosting::do narrates on stderr — a piped consumer gets only the command's stdout"
+else bad "hosting::do narrates on stderr — a piped consumer gets only the command's stdout" "stdout carried: ${_piped}"; fi
+_dry="$(HOSTING_DRY_RUN=true bash -c 'source "$1"; hosting::do printf "%s\n" "$2"' _ "$BIN/_common.sh" "$_manifest" 2>/dev/null)"
+if [ -z "$_dry" ]; then ok "hosting::do under DRY-RUN writes nothing to stdout either"
+else bad "hosting::do under DRY-RUN writes nothing to stdout either" "stdout carried: ${_dry}"; fi
+_narrated="$(bash -c 'source "$1"; hosting::do true' _ "$BIN/_common.sh" 2>&1 >/dev/null)"
+case "$_narrated" in *"+ true"*) ok "hosting::do still narrates the command (on stderr)" ;;
+  *) bad "hosting::do still narrates the command (on stderr)" "stderr was: ${_narrated}" ;; esac
+
 # Assert a command did NOT stop at a specific guard. It may still fail for want of az/kubectl —
 # what matters is that the named refusal is not the reason, i.e. execution got past that guard.
 not_refused_by_guard() {
@@ -77,6 +95,25 @@ refuses "kv-ensure needs --vault"          "missing required flag --vault"      
 refuses "kv-purge needs --vault"           "missing required flag --vault"      hosting-kv-purge --namespace n
 refuses "kv-rotate needs --vault"          "missing required flag --vault"      hosting-kv-rotate --namespace n
 refuses "kv-rotate needs --namespace"      "missing required flag --namespace"  hosting-kv-rotate --vault V
+# MeshWeaver#2802 — a rotation that does not know WHICH registry holds the instance is the defect;
+# an older plan that does not pass it stops here, before anything is read, minted or stored.
+refuses_hard "kv-rotate needs --registry-url" "missing required flag --registry-url" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s
+refuses_hard "kv-rotate needs --instance-id"  "missing required flag --instance-id" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s --registry-url https://registry.test
+refuses_hard "kv-rotate refuses a registry URL that is not https" "is not an https base URL" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s --registry-url http://registry.test --instance-id memex
+refuses_hard "kv-rotate refuses a registry URL carrying a path"   "is not an https base URL" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s --registry-url 'https://registry.test/$(id)' --instance-id memex
+refuses_hard "kv-rotate object with a metacharacter"               "is not a plain name" \
+  hosting-kv-rotate --vault V --namespace n --synced-secret s --object 'o;id' --registry-url https://registry.test --instance-id memex
+refuses "registry-key needs a verb"               "first argument must be 'commit' or 'revoke'" hosting-registry-key
+refuses "registry-key commit needs --instance-id" "missing required flag --instance-id" \
+  hosting-registry-key commit --registry-url https://registry.test --namespace n --synced-secret s
+refuses "registry-key revoke needs --live-secret" "missing required flag --live-secret" \
+  hosting-registry-key revoke --registry-url https://registry.test --namespace n --secret s --key k
+refuses_hard "registry-key refuses a registry URL that is not https" "is not an https base URL" \
+  hosting-registry-key commit --registry-url http://registry.test --namespace n --synced-secret s --instance-id memex
 refuses "pv-purge needs --namespace"       "missing required flag --namespace"  hosting-pv-purge
 refuses "pv-purge rejects unknown flags"   "unknown argument"                   hosting-pv-purge --namespace n --nope 1
 refuses "pv-resize needs --namespace"      "missing required flag --namespace"  hosting-pv-resize --claim c --size 1Gi
@@ -144,7 +181,8 @@ echo "── the rotated key never leaves the process ────────�
 # A dry run reaches the point where a real run would hold the minted key and reports what it WOULD
 # do — exactly the window in which a careless `echo` or a `set -x` would leak it. `mwi_` is the
 # scheme prefix (InstanceKeys.Generate), so its presence anywhere in the output is the leak.
-_rot_out="$(env HOSTING_DRY_RUN=true hosting-kv-rotate --vault V --namespace n --prefix memex- --synced-secret s 2>&1 || true)"
+_rot_out="$(env HOSTING_DRY_RUN=true hosting-kv-rotate --vault V --namespace n --prefix memex- --synced-secret s \
+  --registry-url https://registry.test --instance-id memex 2>&1 || true)"
 case "$_rot_out" in
   *mwi_*) bad "kv-rotate never prints the minted key" "a 'mwi_' token appeared in its output: ${_rot_out}" ;;
   *)      ok  "kv-rotate never prints the minted key" ;;
@@ -217,16 +255,25 @@ if grep -v '^  <stdin>' "$_ps_log" | grep -q 'mwi_'; then
 else
   ok "pull-secret never puts the key on a command line"
 fi
-# Ordering: the namespace is ensured (create --dry-run | apply) BEFORE the Secret is applied.
-_ns_line="$(grep -n 'kubectl create namespace acme --dry-run=client' "$_ps_log" | head -1 | cut -d: -f1)"
+# Ordering: the namespace is ensured (read, then created — the stub answers NotFound) BEFORE the
+# Secret is applied.
+_ns_line="$(grep -n '^kubectl create namespace acme$' "$_ps_log" | head -1 | cut -d: -f1)"
 _sec_line="$(grep -n 'kubectl -n acme create secret generic registry-pull' "$_ps_log" | head -1 | cut -d: -f1)"
 if [ -n "$_ns_line" ] && [ -n "$_sec_line" ] && [ "$_ns_line" -lt "$_sec_line" ]; then
-  ok "pull-secret ensures the namespace before it applies the Secret"
+  ok "pull-secret creates an absent namespace before it applies the Secret"
 else
-  bad "pull-secret ensures the namespace before it applies the Secret" "namespace at line '${_ns_line}', secret at '${_sec_line}' in: $(cat "$_ps_log")"
+  bad "pull-secret creates an absent namespace before it applies the Secret" "create at line '${_ns_line}', secret at '${_sec_line}' in: $(cat "$_ps_log")"
 fi
-grep -q 'kubectl apply -f -' "$_ps_log" && ok "the namespace manifest is APPLIED, not only rendered" \
-  || bad "the namespace manifest is APPLIED" "no 'kubectl apply -f -' in: $(cat "$_ps_log")"
+# 🚨 ENSURE IS NEVER `create --dry-run=client -o yaml | kubectl apply -f -`. apply PATCHES an
+# existing namespace and the ClusterRole grants namespaces no patch — measured 2026-09-09 on memex,
+# Deployments/memex-reconcile-20260909-pv-capacity, the first run to reach the line after #3757:
+# `namespaces "memex" is forbidden: … cannot patch resource "namespaces"`. The only apply in the
+# log is the Secret's.
+if grep '^  <stdin>' "$_ps_log" | grep -q 'kind: Namespace'; then
+  bad "pull-secret never APPLIES a namespace manifest" "$(grep '^  <stdin>' "$_ps_log" | grep 'kind: Namespace')"
+else
+  ok "pull-secret never APPLIES a namespace manifest (apply = patch, which the role does not grant)"
+fi
 # Content: the applied Secret is a dockerconfigjson for the registry, with the default username.
 if [ -f "$_ps_dir/applied-secret.yaml" ] \
    && grep -q '^type: kubernetes.io/dockerconfigjson' "$_ps_dir/applied-secret.yaml" \
@@ -239,6 +286,21 @@ case "$_ps_out" in *"::hosting:: pull_secret=registry-pull"*) ok "pull-secret re
   *) bad "pull-secret reports the Secret name" "said: ${_ps_out}" ;; esac
 case "$_ps_out" in *"::hosting:: pull_secret_verify=true"*) ok "pull-secret reports verified=true only after reading the Secret back" ;;
   *) bad "pull-secret reports verified=true" "said: ${_ps_out}" ;; esac
+rm -rf "$_ps_dir"
+
+# An EXISTING namespace (the Reconcile / Roll case — every instance after its first Provision):
+# read, left alone, and the Secret still applied into it.
+_ps_dir="$(mktemp -d)"; _ps_log="$_ps_dir/calls.log"; : > "$_ps_log"
+_ps_out="$(env PATH="$PS_STUBS:$PATH" HOSTING_PULL_SECRET_STUB_LOG="$_ps_log" HOSTING_PULL_SECRET_STUB_DIR="$_ps_dir" HOSTING_PULL_SECRET_STUB_NS_EXISTS=1 \
+  hosting-pull-secret --namespace acme --registry cr.meshweaver.cloud --vault Systemorph --secret acme-PluginCatalog-RegistryToken --name registry-pull 2>&1)"; _ps_rc=$?
+[ "$_ps_rc" -eq 0 ] && ok "pull-secret succeeds when the namespace already exists" || bad "pull-secret succeeds when the namespace already exists" "exited ${_ps_rc}: ${_ps_out}"
+if grep -q '^kubectl get namespace acme' "$_ps_log" && ! grep -q '^kubectl create namespace' "$_ps_log" && ! { grep '^  <stdin>' "$_ps_log" | grep -q 'kind: Namespace'; }; then
+  ok "an existing namespace is read and left alone — no create, no apply"
+else
+  bad "an existing namespace is read and left alone" "$(cat "$_ps_log")"
+fi
+grep -q 'kubectl -n acme create secret generic registry-pull' "$_ps_log" && ok "…and the Secret is still applied into it" \
+  || bad "the Secret is still applied into an existing namespace" "$(cat "$_ps_log")"
 rm -rf "$_ps_dir"
 
 # The refusals a stubbed estate can reach: an absent vault object, and a pre-existing Secret of
@@ -311,6 +373,55 @@ out="$(env HOSTING_DRY_RUN=true HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d \
 [ ! -e "$guard" ] && ok "a dry run runs no step" || bad "a dry run runs no step" "the step executed"
 case "$out" in *"DRY-RUN would run"*) ok "a dry run narrates what it would do" ;;
   *) bad "a dry run narrates" "said: ${out}" ;; esac
+
+# ── run.sh signs in to Azure through Workload Identity, once, before the first step ─────────────
+# Measured 2026-09-09 01:33Z: the first Provision through the lane died at step 1/14 with az's own
+# "Please run 'az login'" — the webhook projects a token and sets the AZURE_* variables, but the CLI
+# never reads them by itself. The stub records argv, which is how the test proves the token is
+# handed to az as an argument and appears nowhere in run.sh's OUTPUT (a `+ az login …` narration
+# would print it — az is deliberately not wrapped in hosting::do).
+RUN_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/run" && pwd)"
+_rl_dir="$(mktemp -d)"; _rl_log="$_rl_dir/calls.log"; : > "$_rl_log"
+printf 'eyJ0b2tlbi1zZW50aW5lbC1ORVZFUi1QUklOVEVEIjp0cnVlfQ' > "$_rl_dir/token"
+_rl_out="$(env PATH="$RUN_STUBS:$PATH" HOSTING_RUN_STUB_LOG="$_rl_log" \
+  AZURE_FEDERATED_TOKEN_FILE="$_rl_dir/token" AZURE_CLIENT_ID=11111111-2222-3333-4444-555555555555 AZURE_TENANT_ID=tenant-t \
+  HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan "First	echo one >> ${_rl_dir}/steps")" "$BIN/run.sh" 2>&1)"; _rl_rc=$?
+[ "$_rl_rc" -eq 0 ] && ok "run.sh succeeds with a workload-identity token" || bad "run.sh succeeds with a workload-identity token" "exited ${_rl_rc}: ${_rl_out}"
+if grep -q '^az login --service-principal --username 11111111-2222-3333-4444-555555555555 --tenant tenant-t --federated-token eyJ0b2tlbi1zZW50aW5lbC1ORVZFUi1QUklOVEVEIjp0cnVlfQ --allow-no-subscriptions' "$_rl_log"; then
+  ok "run.sh signs in as the identity with the projected token"
+else
+  bad "run.sh signs in as the identity with the projected token" "$(cat "$_rl_log")"
+fi
+case "$_rl_out" in *eyJ0b2tlbi1zZW50aW5lbC1ORVZFUi1QUklOVEVEIjp0cnVlfQ*) bad "the federated token never appears in the run's output" "it did: ${_rl_out}" ;;
+  *) ok "the federated token never appears in the run's output" ;; esac
+case "$_rl_out" in *"::hosting:: az_login=true"*) ok "the sign-in is reported to the mesh (az_login=true)" ;;
+  *) bad "the sign-in is reported (az_login=true)" "said: ${_rl_out}" ;; esac
+# Order: the sign-in precedes the first step's marker in the output.
+_rl_login_pos="$(printf '%s' "$_rl_out" | grep -n 'azure     signed in' | head -1 | cut -d: -f1)"
+_rl_step_pos="$(printf '%s' "$_rl_out" | grep -n '::hosting:: step=First' | head -1 | cut -d: -f1)"
+if [ -n "$_rl_login_pos" ] && [ -n "$_rl_step_pos" ] && [ "$_rl_login_pos" -lt "$_rl_step_pos" ]; then
+  ok "the sign-in happens before the first step"
+else
+  bad "the sign-in happens before the first step" "login at '${_rl_login_pos}', step at '${_rl_step_pos}'"
+fi
+# A federation mismatch is a refusal that names the subject/issuer to check, before any step runs.
+: > "$_rl_log"; rm -f "$_rl_dir/steps"
+refuses_hard "a failed sign-in stops the run before any step" "federated credential on the operator identity" \
+  env PATH="$RUN_STUBS:$PATH" HOSTING_RUN_STUB_LOG="$_rl_log" HOSTING_RUN_STUB_LOGIN_FAIL=1 \
+  AZURE_FEDERATED_TOKEN_FILE="$_rl_dir/token" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t \
+  HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan "First	echo one >> ${_rl_dir}/steps")" "$BIN/run.sh"
+[ ! -e "$_rl_dir/steps" ] && ok "…and the first step never ran" || bad "the first step never ran after a failed sign-in" "it did"
+# A token file that is set but unreadable, and a missing tenant, are named.
+refuses "a token variable without the file is named" "is not readable" \
+  env PATH="$RUN_STUBS:$PATH" HOSTING_RUN_STUB_LOG="$_rl_log" AZURE_FEDERATED_TOKEN_FILE="$_rl_dir/nope" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t \
+  HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan 'First	echo one')" "$BIN/run.sh"
+refuses "a missing tenant id is named" "AZURE_TENANT_ID" \
+  env -u AZURE_TENANT_ID PATH="$RUN_STUBS:$PATH" HOSTING_RUN_STUB_LOG="$_rl_log" AZURE_FEDERATED_TOKEN_FILE="$_rl_dir/token" AZURE_CLIENT_ID=c \
+  HOSTING_ACTION=provision HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan 'First	echo one')" "$BIN/run.sh"
+# No token at all (a kubectl+helm-only run): not a refusal, but said, and reported as az_login=false.
+emits "without a token the run says so and reports az_login=false" "::hosting:: az_login=false" \
+  env -u AZURE_FEDERATED_TOKEN_FILE HOSTING_ACTION=reconcile HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan 'First	echo one')" "$BIN/run.sh"
+rm -rf "$_rl_dir"
 
 echo
 echo "── hosting-pv-resize: capacity is a record property ──────────────"
@@ -393,6 +504,438 @@ pv_resize grows 128Gi HOSTING_DRY_RUN=true
 case "$_pv_log" in *"patch pvc"*) bad "a dry run writes nothing" "kubectl saw: ${_pv_log}" ;; *) ok "a dry run writes nothing" ;; esac
 case "$_pv_out" in *"DRY-RUN would run"*"patch pvc"*) ok "…and narrates the patch it would write" ;;
   *) bad "a dry run narrates the patch" "said: ${_pv_out}" ;; esac
+
+echo
+echo "── hosting-inline-env-retire: a retired shadow leaves, onto the same value only ──"
+# The stub answers the Deployment, Secret and ConfigMap reads from a per-scenario fixture (falling
+# back to fixtures/inline-env/base) and RECORDS the patch, so the decisions — refuse mid-rollout,
+# refuse a sole source, refuse a shadow the pod would not read, refuse DIFFER, remove from EVERY
+# container in one guarded patch, read it back — are asserted without a cluster. Every fixture value
+# is an obviously fake placeholder, and the no-leak arms prove none of them is ever printed, patched
+# or passed in an argv. What is NOT proven here: that the API server honours a JSON-patch `test` op
+# on resourceVersion — that is Kubernetes' contract, and the first real run is what shows it.
+#
+# 🚨 EVERY invocation below — the argument refusals included — runs with the stub FIRST on PATH. A
+# laptop running this suite may carry a real kubectl with a live context, and a guard that failed to
+# stop would otherwise read (or patch) whatever cluster that context names.
+IE_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/inline-env" && pwd)"
+IE_FIXTURES="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/inline-env" && pwd)"
+IE_TOKEN="PluginCatalog__RegistryToken=memex-portal-keyvault"
+_ie_args_state="$(mktemp -d)"
+IE_ENV=(env "PATH=$IE_STUBS:$PATH" "HOSTING_IE_FIXTURE=$IE_FIXTURES/base" "HOSTING_IE_BASE=$IE_FIXTURES/base" "HOSTING_IE_STATE=$_ie_args_state")
+ie() {  # ie <scenario> "<KEY=source> [KEY=source…]" [env…] — sets $_ie_out $_ie_rc $_ie_log $_ie_patch
+  local scenario="$1" pairs="$2" pair
+  shift 2
+  local retire=()
+  for pair in $pairs; do retire+=(--retire "$pair"); done
+  _ie_state="$(mktemp -d)"
+  _ie_out="$(env "$@" PATH="$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$scenario" HOSTING_IE_BASE="$IE_FIXTURES/base" \
+    HOSTING_IE_STATE="$_ie_state" hosting-inline-env-retire --namespace memex "${retire[@]}" 2>&1)"; _ie_rc=$?
+  _ie_log="$(cat "$_ie_state/log" 2>/dev/null || true)"
+  _ie_patch="$(cat "$_ie_state/patch" 2>/dev/null || true)"
+  rm -rf "$_ie_state"
+}
+ie_no_patch() {  # the run wrote nothing to the Deployment
+  case "$_ie_log" in *" patch deployment "*) bad "$1" "kubectl saw a patch: ${_ie_log}" ;; *) ok "$1" ;; esac
+}
+ie_no_value() {  # no fixture value in the output, the patch or any argv kubectl saw
+  case "${_ie_out}${_ie_patch}${_ie_log}" in
+    *fake-inline-registry-token*|*fake-chart-secret-token*|*fake-rotated-registry-token*|*registry.example.invalid*)
+      bad "$1" "a value appeared — out: ${_ie_out} patch: ${_ie_patch}" ;;
+    *) ok "$1" ;;
+  esac
+}
+
+refuses "inline-env-retire needs --namespace"     "missing required flag --namespace" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --retire "$IE_TOKEN"
+refuses "inline-env-retire needs a --retire"      "missing required flag --retire" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex
+refuses "inline-env-retire rejects unknown flags" "unknown argument" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire "$IE_TOKEN" --nope 1
+refuses "inline-env-retire needs KEY=<source>"    "is not KEY=<shadowed source>" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire PluginCatalog__RegistryToken
+refuses "inline-env-retire refuses a blank shadow — that entry is the sole source" "SOLE source" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire PluginCatalog__RegistryToken=
+refuses "inline-env-retire refuses a key named twice" "named twice" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire "$IE_TOKEN" --retire "$IE_TOKEN"
+refuses_hard "inline-env-retire key with a metacharacter"    "is not a plain environment-variable name" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire 'K;kubectl delete deploy --all=s'
+refuses_hard "inline-env-retire shadow with a metacharacter" "is not a plain name" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace memex --retire 'PluginCatalog__RegistryToken=s;rm -rf /'
+refuses_hard "inline-env-retire namespace with a metacharacter" "is not a plain name" \
+  "${IE_ENV[@]}" hosting-inline-env-retire --namespace 'memex; kubectl delete ns memex' --retire "$IE_TOKEN"
+case "$(cat "$_ie_args_state/log" 2>/dev/null)" in
+  "") ok "…and no argument refusal ever reached kubectl" ;;
+  *)  bad "no argument refusal reaches kubectl" "kubectl saw: $(cat "$_ie_args_state/log")" ;;
+esac
+rm -rf "$_ie_args_state"
+
+ie base "$IE_TOKEN"
+[ "$_ie_rc" -eq 0 ] && ok "a retired credential EQUAL to the source it shadows is removed" \
+  || bad "a retired credential EQUAL to the source it shadows is removed" "exited ${_ie_rc}: ${_ie_out}"
+case "$_ie_out" in *"PluginCatalog__RegistryToken  EQUAL (len 31)"*"falls through to secret/memex-portal-keyvault"*)
+    ok "…reporting the verdict and a LENGTH, and naming the source it falls through to" ;;
+  *) bad "the EQUAL verdict is reported with its length" "said: ${_ie_out}" ;; esac
+ie_no_value "…and no value is printed, patched or passed in an argv"
+_ie_all=1
+for _p in 0/env/1 1/env/1 2/env/2; do
+  case "$_ie_patch" in *"{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/${_p}\"}"*) ;; *) _ie_all=0 ;; esac
+done
+[ "$_ie_all" = 1 ] && ok "…from EVERY container that carries it — the portal and both gate sidecars" \
+  || bad "the key is removed from every container that carries it" "patch: ${_ie_patch}"
+[ "$(printf '%s\n' "$_ie_log" | grep -c ' patch deployment ')" = "1" ] && ok "…in ONE patch (one new ReplicaSet, one rollout)" \
+  || bad "the removal is one patch" "kubectl saw: ${_ie_log}"
+case "$_ie_patch" in '[{"op":"test","path":"/metadata/resourceVersion","value":"918273"}'*)
+    ok "…guarded FIRST on the resourceVersion that was measured" ;;
+  *) bad "the patch is guarded on the measured resourceVersion" "patch: ${_ie_patch}" ;; esac
+case "$_ie_patch" in *'{"op":"test","path":"/spec/template/spec/containers/0/env/1/name","value":"PluginCatalog__RegistryToken"},{"op":"remove","path":"/spec/template/spec/containers/0/env/1"}'*)
+    ok "…and each removal on the entry's NAME, immediately before it" ;;
+  *) bad "each removal is guarded on the entry's name" "patch: ${_ie_patch}" ;; esac
+case "$_ie_patch" in *RegistryUrl*|*ClaudeCode*|*DOTNET_*|*MESH_*) bad "only the retired key is touched" "patch: ${_ie_patch}" ;;
+  *) ok "…and nothing but the retired key is touched" ;; esac
+case "$_ie_out" in *"::hosting:: inline_env_retired=1"*) ok "…and the count it reports comes after the read-back" ;;
+  *) bad "the retired count is reported" "said: ${_ie_out}" ;; esac
+
+# 🚨 The refusals — every one BEFORE any write.
+ie differ "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "a shadow that DIFFERS is refused — removing the entry would change the value the portal reads" \
+  || bad "a DIFFER is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"DIFFER (inline 31 bytes, secret/memex-portal-keyvault 39 bytes)"*) ok "…reporting both lengths and the verdict, never a value" ;;
+  *) bad "the DIFFER refusal reports lengths" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+ie_no_value "…and prints no value either"
+
+ie base "PluginCatalog__RegistryToken=memex-portal-secrets"
+[ "$_ie_rc" -ne 0 ] && ok "a record naming a shadow the pod would NOT fall through to is refused" \
+  || bad "a wrong recorded shadow is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"would fall through to secret/memex-portal-keyvault"*) ok "…naming the source that actually wins (the LAST envFrom that carries the key)" ;;
+  *) bad "the wrong-shadow refusal names the winner" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie base "Features__Ai__Clis__ClaudeCode=memex-portal-config"
+[ "$_ie_rc" -ne 0 ] && ok "a SOLE-source entry is refused — removing it would blank the key" \
+  || bad "a sole source is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"SOLE source"*) ok "…saying so" ;; *) bad "the sole-source refusal says so" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie base "PluginCatalog__RegistryUrl=memex-portal-config"
+[ "$_ie_rc" -ne 0 ] && ok "a key the ConfigMap renders EMPTY is refused as DIFFER, not blanked (#3201's RegistryUrl)" \
+  || bad "an empty-rendered key is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"DIFFER (inline 32 bytes, configmap/memex-portal-config 0 bytes)"*) ok "…naming both lengths" ;;
+  *) bad "the empty-rendered refusal names both lengths" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie base "$IE_TOKEN Features__Ai__Clis__ClaudeCode=memex-portal-config"
+[ "$_ie_rc" -ne 0 ] && ok "one refused key refuses the whole run" || bad "one refused key refuses the run" "exited 0: ${_ie_out}"
+ie_no_patch "…so nothing is retired halfway — not even the key that measured EQUAL"
+
+ie rolling "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "a Deployment mid-rollout is refused — the patch would supersede the rollout in flight" \
+  || bad "a mid-rollout Deployment is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"a rollout is in progress"*"1 updated"*) ok "…naming what is not settled" ;;
+  *) bad "the rollout refusal names what is unsettled" "said: ${_ie_out}" ;; esac
+case "$_ie_log" in *"get secret"*) bad "…before any Secret is read" "kubectl saw: ${_ie_log}" ;; *) ok "…before any Secret is read" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie valuefrom "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "a valueFrom reference is refused — it names its own source and is not a shadow" \
+  || bad "a valueFrom entry is refused" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"valueFrom"*) ok "…saying so" ;; *) bad "the valueFrom refusal says so" "said: ${_ie_out}" ;; esac
+ie_no_patch "…and writes nothing"
+
+ie stuck "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "a patch the API accepted but that did not take is a FAILED step, not a pass" \
+  || bad "an ineffective patch fails" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"still carries"*) ok "…naming what is still there (read back)" ;;
+  *) bad "the read-back failure names what is left" "said: ${_ie_out}" ;; esac
+
+ie absent "$IE_TOKEN"
+[ "$_ie_rc" -eq 0 ] && ok "a key no container carries any more is a successful no-op (idempotent plan step)" \
+  || bad "an already-retired key is a no-op" "exited ${_ie_rc}: ${_ie_out}"
+ie_no_patch "…that writes nothing, so it rolls nothing"
+case "$_ie_out" in *"::hosting:: inline_env_retired=0"*"::hosting:: inline_env_absent=1"*) ok "…and says so" ;;
+  *) bad "the no-op says so" "said: ${_ie_out}" ;; esac
+
+# A dry run measures for real, narrates the patch and writes nothing.
+ie base "$IE_TOKEN" HOSTING_DRY_RUN=true
+[ "$_ie_rc" -eq 0 ] && ok "a dry run succeeds" || bad "a dry run succeeds" "exited ${_ie_rc}: ${_ie_out}"
+ie_no_patch "a dry run writes nothing"
+case "$_ie_out" in *"DRY-RUN would run"*"patch deployment"*) ok "…narrates the patch it would write" ;;
+  *) bad "a dry run narrates the patch" "said: ${_ie_out}" ;; esac
+case "$_ie_out" in *"::hosting:: inline_env_retire=dry-run"*) ok "…and never claims a retirement" ;;
+  *) bad "a dry run never claims a retirement" "said: ${_ie_out}" ;; esac
+ie_no_value "…still printing no value"
+
+echo
+echo "── hosting-kv-rotate refuses under an inline shadow ──────────────"
+# MeshWeaver#3201 / Plugins#1593: an inline `env:` entry outranks every envFrom, so a rotation that
+# lands the new key in the vault and the synced Secret leaves the pods presenting the OLD one — and
+# the registry deletes the old key's index entry the moment it adopts the new hash
+# (MeshWeaverInstanceService.AdoptKeyHash → DeleteIndex). A 401 storm behind a green rotation. The
+# rotation therefore measures the Deployment first, and refuses BEFORE anything is minted. Both a
+# kubectl and an az stub lead PATH: the control case really does reach the vault write, and the az
+# stub refuses it without recording the argv that carries the minted key.
+KVR_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-rotate" && pwd)"
+# The stand-in REGISTRY (stubs/registry/curl): the real two-slot rules — current + staged — over a
+# state file of key HASHES. The fixture keys are fake placeholders; the stub never logs one.
+REG_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/registry" && pwd)"
+_sha() { printf '%s' "$1" | sha256sum | cut -c1-64; }
+LIVE_KEY_HASH="$(_sha fake-inline-registry-token-0001)"      # memex-portal-keyvault — what the pods present
+OUTRANKED_HASH="$(_sha fake-chart-secret-token-OUTRANKED)"   # memex-portal-secrets — the third key
+VAULT_KEY_HASH="$(_sha fake-vault-staged-token-0002)"        # a key an earlier rotation put in the vault
+reg_state() {  # reg_state <normal|absent|old> [extra "<hash> <instance> <slot>" lines…] — sets $_reg
+  _reg="$(mktemp -d)"
+  printf '%s\n' "$1" > "$_reg/mode"; shift
+  { printf '%s memex current\n%s crm-old current\n' "$LIVE_KEY_HASH" "$OUTRANKED_HASH"
+    for line in "$@"; do printf '%s\n' "$line"; done; } > "$_reg/keys"
+  : > "$_reg/log"
+}
+kvr() {  # kvr <inline-env scenario> — sets $_kvr_out $_kvr_rc $_kvr_az $_kvr_reg
+  _kvr_state="$(mktemp -d)"
+  reg_state normal
+  _kvr_out="$(env PATH="$REG_STUBS:$KVR_STUBS:$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$1" HOSTING_IE_BASE="$IE_FIXTURES/base" \
+    HOSTING_IE_STATE="$_kvr_state" HOSTING_REG_STATE="$_reg" HOSTING_KV_SYNC_ATTEMPTS=1 HOSTING_KV_SYNC_INTERVAL=0 \
+    hosting-kv-rotate --vault V --prefix memex- --namespace memex --synced-secret memex-portal-keyvault \
+      --registry-url https://registry.test --instance-id memex 2>&1)"; _kvr_rc=$?
+  _kvr_az="$(cat "$_kvr_state/az.log" 2>/dev/null || true)"
+  _kvr_reg="$(cat "$_reg/log" 2>/dev/null || true)"
+  rm -rf "$_kvr_state" "$_reg"
+}
+kvr base
+[ "$_kvr_rc" -ne 0 ] && ok "a rotation with the key set INLINE on the Deployment is refused" \
+  || bad "an inline shadow refuses the rotation" "exited 0: ${_kvr_out}"
+case "$_kvr_out" in *"PluginCatalog__RegistryToken is set INLINE on memex-portal, python-gate, node-gate"*"RetireInlineEnv"*)
+    ok "…naming every container that carries it and the prior step (RetireInlineEnv)" ;;
+  *) bad "the shadow refusal names the containers and the prior step" "said: ${_kvr_out}" ;; esac
+case "$_kvr_out" in *"::hosting::"*) bad "…before anything is reported" "said: ${_kvr_out}" ;;
+  *) ok "…before anything is reported — no key_hash line" ;; esac
+[ -z "$_kvr_reg" ] && ok "…and before the registry is even asked" \
+  || bad "an inline shadow refuses before the registry is asked" "registry saw: ${_kvr_reg}"
+[ -z "$_kvr_az" ] && ok "…and before anything is minted or stored (no az call at all)" \
+  || bad "nothing is stored under a refusal" "az saw: ${_kvr_az}"
+kvr absent
+case "$_kvr_out" in *"set INLINE"*) bad "CONTROL: the same Deployment WITHOUT the inline entry passes the shadow check" "said: ${_kvr_out}" ;;
+  *) ok "CONTROL: the same Deployment WITHOUT the inline entry passes the shadow check" ;; esac
+case "$_kvr_az" in "az keyvault secret"*) ok "…and reaches the vault write (the az stub refuses it, so nothing is stored)" ;;
+  *) bad "the control reaches the vault write" "az saw: '${_kvr_az}', said: ${_kvr_out}" ;; esac
+case "$_kvr_out" in *mwi_*) bad "…without ever printing the minted key" "said: ${_kvr_out}" ;;
+  *) ok "…without ever printing the minted key" ;; esac
+
+echo
+echo "── the rotation asks the REGISTRY before it mints (MeshWeaver#2802) ──"
+# The defect this section pins. The rotation used to mint and STORE the key first and let the control
+# plane adopt its hash afterwards — through whatever IInstanceKeyRegistry the control instance's hub
+# resolved, which is not the registry (the instances live only in memex.meshweaver.cloud's store). The
+# adoption failed AFTER Key Vault held a key nothing accepted, and the Job restarted the pods anyway:
+# the next restart presented a key the registry never adopted. Now the registry is asked first, the
+# vault is written last, and every failure in between leaves the key the pods present authenticating.
+rot() {  # rot <inline-env fixture> [VAR=value …] — a real (non-dry) rotation against the stubs
+  local fixture="$1"; shift
+  _rot_state="$(mktemp -d)"
+  _rot_out="$(env PATH="$REG_STUBS:$KVR_STUBS:$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$fixture" \
+    HOSTING_IE_BASE="$IE_FIXTURES/base" HOSTING_IE_STATE="$_rot_state" HOSTING_REG_STATE="$_reg" \
+    HOSTING_KV_SYNC_ATTEMPTS=1 HOSTING_KV_SYNC_INTERVAL=0 "$@" \
+    hosting-kv-rotate --vault V --object PluginCatalog-RegistryToken --namespace memex \
+      --synced-secret memex-portal-keyvault --registry-url https://registry.test --instance-id memex 2>&1)"; _rot_rc=$?
+  _rot_az="$(cat "$_rot_state/az.log" 2>/dev/null || true)"
+  _rot_reg="$(cat "$_reg/log" 2>/dev/null || true)"
+  rm -rf "$_rot_state"
+}
+never_minted() {  # never_minted <what> — no hash reported, no vault write, nothing staged
+  case "$_rot_out" in *"::hosting:: key_hash="*) bad "$1: no key hash is reported" "said: ${_rot_out}" ;;
+    *) ok "$1: no key hash is reported" ;; esac
+  case "$_rot_az" in *"secret set"*) bad "$1: Key Vault is never written" "az saw: ${_rot_az}" ;;
+    *) ok "$1: Key Vault is never written" ;; esac
+  case "$_rot_reg" in *"/key/stage"*) bad "$1: nothing is staged" "registry saw: ${_rot_reg}" ;;
+    *) ok "$1: nothing is staged" ;; esac
+}
+no_value_printed() {  # no_value_printed <output> <what>
+  case "$1" in *mwi_*|*fake-inline-registry*|*fake-vault-staged*|*fake-chart-secret*|*nobody-holds*)
+      bad "$2" "a key value appeared: $1" ;;
+    *) ok "$2" ;; esac
+}
+holds() {  # holds <what> <line> — the registry's key file carries that exact line
+  if grep -qx "$2" "$_reg/keys"; then ok "$1"; else bad "$1" "keys: $(tr '\n' ';' < "$_reg/keys")"; fi
+}
+lacks() {  # lacks <what> <pattern>
+  if grep -q "$2" "$_reg/keys"; then bad "$1" "keys: $(tr '\n' ';' < "$_reg/keys")"; else ok "$1"; fi
+}
+
+# 🚨 THE CONTROL-INSTANCE CASE: a portal that does not hold the instance answers 401 to its key.
+reg_state absent
+rot absent
+[ "$_rot_rc" -ne 0 ] && ok "a registry that does not hold the instance refuses the rotation" \
+  || bad "a registry that does not hold the instance refuses the rotation" "exited 0: ${_rot_out}"
+case "$_rot_out" in *"does not accept the key"*"Nothing was minted"*) ok "…saying so, and that nothing was minted" ;;
+  *) bad "the no-instance refusal says so" "said: ${_rot_out}" ;; esac
+never_minted "no instance at the registry"
+rm -rf "$_reg"
+
+reg_state old
+rot absent
+case "$_rot_out" in *"older than MeshWeaver#2802"*) ok "a registry without the key surface refuses, naming the roll it needs" ;;
+  *) bad "a registry without the key surface refuses" "said: ${_rot_out}" ;; esac
+never_minted "no key surface"
+rm -rf "$_reg"
+
+reg_state normal
+printf '%s someone-else current\n' "$LIVE_KEY_HASH" > "$_reg/keys"
+rot absent
+case "$_rot_out" in *"belongs to instance 'someone-else'"*) ok "a key of ANOTHER instance refuses, naming it" ;;
+  *) bad "a key of another instance refuses" "said: ${_rot_out}" ;; esac
+never_minted "the wrong instance"
+rm -rf "$_reg"
+
+# CONTROL: a registry that holds the instance — the rotation reaches the vault, in the right order.
+reg_state normal
+rot absent
+case "$_rot_reg" in *"GET /api/instances/self current"*"POST /api/instances/self/key/stage current"*"GET /api/instances/self staged"*)
+    ok "CONTROL: asks the registry, stages the hash with the current key, proves the new key — in that order" ;;
+  *) bad "the registry is asked, then staged, then the new key proven" "registry saw: ${_rot_reg}" ;; esac
+case "$_rot_out" in *"::hosting:: key_hash="*"::hosting:: key_staged=1"*) ok "…reports the hash and that it is staged" ;;
+  *) bad "the staged hash is reported" "said: ${_rot_out}" ;; esac
+case "$_rot_az" in *"az keyvault secret set"*) ok "…and only then reaches the vault write (refused by the stub)" ;;
+  *) bad "the vault write comes after the proof" "az saw: ${_rot_az}" ;; esac
+case "$_rot_out" in *"Key Vault is unchanged"*) ok "…whose failure says Key Vault is unchanged" ;;
+  *) bad "a failed vault write states the vault's state" "said: ${_rot_out}" ;; esac
+holds "…while the key the pods present still authenticates" "${LIVE_KEY_HASH} memex current"
+if grep -q ' memex staged$' "$_reg/keys"; then ok "…beside the staged one"; else bad "the new key is staged" "keys: $(cat "$_reg/keys")"; fi
+no_value_printed "$_rot_out" "…and no key value is ever printed"
+rm -rf "$_reg"
+
+# The vault IS written but the Secret never catches up: nothing is retired, and it says so.
+reg_state normal
+rot absent HOSTING_AZ_ACCEPT_SET=1
+case "$_rot_out" in *"Key Vault now holds the NEW key"*"has NOT been retired"*"pods were NOT restarted"*)
+    ok "a sync that never arrives fails naming the vault, the registry and the pods' state" ;;
+  *) bad "a failed sync states what it left behind" "said: ${_rot_out}" ;; esac
+case "$_rot_out" in *"kv_rotated=1"*) bad "…and never claims the rotation" "said: ${_rot_out}" ;;
+  *) ok "…and never claims the rotation" ;; esac
+holds "…with the previous key still authenticating" "${LIVE_KEY_HASH} memex current"
+rm -rf "$_reg"
+
+# A rotation already in flight whose key is IN THE VAULT is RESUMED — never replaced.
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+rot absent HOSTING_KV_VAULT_VALUE=fake-vault-staged-token-0002
+case "$_rot_out" in *"::hosting:: key_resumed=1"*) ok "a key an earlier rotation left in the vault is RESUMED" ;;
+  *) bad "an in-flight rotation is resumed" "said: ${_rot_out}" ;; esac
+case "$_rot_out" in *"step=Mint a new instance key"*) bad "…without minting another" "said: ${_rot_out}" ;;
+  *) ok "…without minting another" ;; esac
+case "$_rot_az" in *"secret set"*) bad "…or writing the vault" "az saw: ${_rot_az}" ;; *) ok "…or writing the vault" ;; esac
+holds "…leaving the staged key the vault holds staged" "${VAULT_KEY_HASH} memex staged"
+rm -rf "$_reg"
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+rot rotated HOSTING_KV_VAULT_VALUE=fake-vault-staged-token-0002
+[ "$_rot_rc" -eq 0 ] && ok "…and once the Secret carries it, the resume completes for the restart and commit to finish" \
+  || bad "a resumed rotation whose Secret caught up completes" "exited ${_rot_rc}: ${_rot_out}"
+rm -rf "$_reg"
+
+reg_state normal "$(_sha nobody-holds-this) memex staged"
+rot absent HOSTING_KV_VAULT_VALUE=fake-vault-staged-token-0002
+case "$_rot_out" in *"nobody holds it"*) ok "a staged key in neither the vault nor the Secret is replaced by a new stage" ;;
+  *) bad "an orphaned staged key is replaced" "said: ${_rot_out}" ;; esac
+lacks "…and stops authenticating" "^$(_sha nobody-holds-this) "
+rm -rf "$_reg"
+
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+rot absent
+case "$_rot_out" in *"could not be read"*) ok "a staged key with an unreadable vault refuses rather than guessing" ;;
+  *) bad "an unreadable vault refuses" "said: ${_rot_out}" ;; esac
+never_minted "an unreadable vault"
+rm -rf "$_reg"
+
+echo
+echo "── hosting-registry-key commit: retire the old key only when the new one is proven ──"
+regkey() {  # regkey <inline-env fixture> <args…> — sets $_rk_out $_rk_rc $_rk_reg
+  local fixture="$1" rk_state; shift
+  rk_state="$(mktemp -d)"
+  _rk_out="$(env PATH="$REG_STUBS:$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$fixture" HOSTING_IE_BASE="$IE_FIXTURES/base" \
+    HOSTING_IE_STATE="$rk_state" HOSTING_REG_STATE="$_reg" hosting-registry-key "$@" 2>&1)"; _rk_rc=$?
+  _rk_reg="$(cat "$_reg/log" 2>/dev/null || true)"
+  rm -rf "$rk_state"
+}
+COMMIT=(commit --registry-url https://registry.test --instance-id memex --namespace memex --synced-secret memex-portal-keyvault)
+
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+regkey rotated "${COMMIT[@]}"
+[ "$_rk_rc" -eq 0 ] && ok "a Secret carrying the staged key commits it" || bad "the staged key commits" "exited ${_rk_rc}: ${_rk_out}"
+case "$_rk_out" in *"::hosting:: key_committed=1"*) ok "…and says so" ;; *) bad "a commit is reported" "said: ${_rk_out}" ;; esac
+holds "…the new key is now current" "${VAULT_KEY_HASH} memex current"
+lacks "…and the previous key no longer authenticates" "^${LIVE_KEY_HASH} "
+no_value_printed "$_rk_out" "…printing no key"
+rm -rf "$_reg"
+
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+regkey absent "${COMMIT[@]}"
+case "$_rk_out" in *"still carries the PREVIOUS key"*"Nothing was retired"*) ok "a Secret still carrying the previous key refuses the commit" ;;
+  *) bad "a commit refuses when the new key never reached the Secret" "said: ${_rk_out}" ;; esac
+case "$_rk_reg" in *"/key/commit"*) bad "…without asking the registry to commit" "registry saw: ${_rk_reg}" ;;
+  *) ok "…without asking the registry to commit" ;; esac
+holds "…so the key the pods present still authenticates" "${LIVE_KEY_HASH} memex current"
+holds "…and the staged one too" "${VAULT_KEY_HASH} memex staged"
+rm -rf "$_reg"
+
+reg_state normal
+regkey absent "${COMMIT[@]}"
+case "$_rk_out" in *"::hosting:: key_committed=already"*) ok "a commit with nothing staged is an idempotent repeat" ;;
+  *) bad "a repeated commit is idempotent" "said: ${_rk_out}" ;; esac
+rm -rf "$_reg"
+
+reg_state absent
+regkey absent "${COMMIT[@]}"
+[ "$_rk_rc" -ne 0 ] && ok "a registry that rejects the pods' key fails the commit" || bad "a rejected key fails the commit" "exited 0: ${_rk_out}"
+rm -rf "$_reg"
+
+echo
+echo "── hosting-registry-key revoke: a key stops authenticating, nobody reads its value ──"
+REVOKE=(revoke --registry-url https://registry.test --namespace memex --secret memex-portal-secrets
+  --key PluginCatalog__RegistryToken --live-secret memex-portal-keyvault)
+
+reg_state normal
+regkey absent "${REVOKE[@]}"
+[ "$_rk_rc" -eq 0 ] && ok "the outranked key in the chart Secret is revoked" || bad "the outranked key is revoked" "exited ${_rk_rc}: ${_rk_out}"
+case "$_rk_out" in *"::hosting:: revoked_instance=crm-old"*"::hosting:: key_revoked=1"*) ok "…naming the instance it belonged to" ;;
+  *) bad "a revocation names the instance" "said: ${_rk_out}" ;; esac
+lacks "…and the registry no longer accepts it" "^${OUTRANKED_HASH} "
+holds "…while the key the pods present still authenticates" "${LIVE_KEY_HASH} memex current"
+case "$_rk_reg" in *"POST /api/instances/self/key/revoke current"*"GET /api/instances/self none"*) ok "…proven by reading it back as refused" ;;
+  *) bad "a revocation is read back" "registry saw: ${_rk_reg}" ;; esac
+no_value_printed "$_rk_out" "…printing no key"
+rm -rf "$_reg"
+
+reg_state normal
+regkey absent revoke --registry-url https://registry.test --namespace memex --secret memex-portal-keyvault \
+  --key PluginCatalog__RegistryToken --live-secret memex-portal-keyvault
+case "$_rk_out" in *"SAME key"*"ROTATED"*) ok "revoking the key the pods present is refused — it is rotated, never revoked" ;;
+  *) bad "the live key is never revoked" "said: ${_rk_out}" ;; esac
+[ -z "$_rk_reg" ] && ok "…before the registry is asked" || bad "the live-key refusal asks nothing" "registry saw: ${_rk_reg}"
+holds "…so it still authenticates" "${LIVE_KEY_HASH} memex current"
+rm -rf "$_reg"
+
+# 🚨 An inline env: entry for the key means the pods present a value no Secret here describes:
+# both verbs refuse before the registry is asked (Copilot review on Plugins#1683).
+reg_state normal
+regkey base "${REVOKE[@]}"
+case "$_rk_out" in *"set INLINE on memex-portal, python-gate, node-gate"*"Nothing was changed"*)
+    ok "a revocation under an inline shadow of the live key is refused, naming every container" ;;
+  *) bad "a revocation under an inline shadow is refused" "said: ${_rk_out}" ;; esac
+[ -z "$_rk_reg" ] && ok "…before the registry is asked" || bad "the inline refusal asks nothing" "registry saw: ${_rk_reg}"
+holds "…so the outranked key still authenticates" "${OUTRANKED_HASH} crm-old current"
+rm -rf "$_reg"
+reg_state normal "${VAULT_KEY_HASH} memex staged"
+regkey base "${COMMIT[@]}"
+case "$_rk_out" in *"set INLINE"*"would retire the key the pods actually present"*)
+    ok "a commit under an inline shadow is refused" ;;
+  *) bad "a commit under an inline shadow is refused" "said: ${_rk_out}" ;; esac
+holds "…retiring nothing" "${LIVE_KEY_HASH} memex current"
+rm -rf "$_reg"
+
+reg_state normal
+grep -v ' crm-old ' "$_reg/keys" > "$_reg/keys.new"; mv "$_reg/keys.new" "$_reg/keys"
+regkey absent "${REVOKE[@]}"
+case "$_rk_out" in *"::hosting:: key_revoked=already"*) ok "a key the registry already refuses is reported revoked, idempotently" ;;
+  *) bad "revoking a dead key is idempotent" "said: ${_rk_out}" ;; esac
+rm -rf "$_reg"
 
 echo
 echo "── hosting-audit: what lives only on the cluster ─────────────────"
@@ -487,6 +1030,178 @@ fi
 emits "a dry run still audits (read-only)" "::hosting:: audit_verdict=clean" \
   env HOSTING_DRY_RUN=true PATH="$STUBS:$PATH" HOSTING_AUDIT_FIXTURE="$FIXTURES/clean" \
   hosting-audit --namespace memex --release memex
+
+# ── hosting-deploy adopts what the RECORD renders and the cluster already holds ─────────────────
+# Measured 2026-09-09 01:20Z on memex: the first Reconcile to reach helm failed with
+#   UPGRADE FAILED: … SecretProviderClass "memex-kv" … exists and cannot be imported into the
+#   current release: invalid ownership metadata
+# because that object was hand-applied before any release and only the record renders it. The
+# stubs play a three-resource estate — one absent, one owned, one live without ownership — and
+# record every call in order, so the assertions are about WHAT was stamped and WHEN.
+echo
+echo "── hosting-deploy: adoption before helm ─────────────────────────"
+DP_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/deploy" && pwd)"
+DP_FIXTURES="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/deploy" && pwd)"
+_dp_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_dp_dir/"; _dp_log="$_dp_dir/calls.log"; : > "$_dp_log"
+_dp_vals="$_dp_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_dp_vals"
+_dp_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_dp_dir" HOSTING_DEPLOY_STUB_LOG="$_dp_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_dp_vals" --image cr.example.test/memex-portal-ai:1 2>&1; }
+_dp_out="$(_dp_run)"; _dp_rc=$?
+[ "$_dp_rc" -eq 0 ] && ok "deploy succeeds against the stubbed estate" || bad "deploy succeeds against the stubbed estate" "exited ${_dp_rc}: ${_dp_out}"
+case "$_dp_out" in *"::hosting:: adopted=1"*) ok "exactly the unowned live resource is adopted (adopted=1)" ;;
+  *) bad "exactly the unowned live resource is adopted" "said: ${_dp_out}" ;; esac
+case "$_dp_out" in *"adoption  1 adopted, 1 already owned, 1 to be created"*) ok "the three outcomes are counted and logged" ;;
+  *) bad "the three outcomes are counted and logged" "said: ${_dp_out}" ;; esac
+_spc='secretproviderclass.secrets-store.csi.x-k8s.io/memex-kv'
+if grep -q "^kubectl -n memex annotate --overwrite ${_spc} meta.helm.sh/release-name=memex meta.helm.sh/release-namespace=memex" "$_dp_log" \
+   && grep -q "^kubectl -n memex label --overwrite ${_spc} app.kubernetes.io/managed-by=Helm" "$_dp_log"; then
+  ok "the unowned SecretProviderClass gets this release's ownership annotations and label"
+else
+  bad "the unowned SecretProviderClass gets ownership" "$(cat "$_dp_log")"
+fi
+grep -q 'annotate --overwrite configmap/\|annotate --overwrite deployment.apps/' "$_dp_log" \
+  && bad "an owned or absent resource is never touched" "$(grep 'annotate' "$_dp_log")" \
+  || ok "an owned or absent resource is never touched"
+_adopt_line="$(grep -n "annotate --overwrite ${_spc}" "$_dp_log" | head -1 | cut -d: -f1)"
+_helm_line="$(grep -n '^helm upgrade memex' "$_dp_log" | head -1 | cut -d: -f1)"
+if [ -n "$_adopt_line" ] && [ -n "$_helm_line" ] && [ "$_adopt_line" -lt "$_helm_line" ]; then
+  ok "adoption happens BEFORE helm upgrade"
+else
+  bad "adoption happens BEFORE helm upgrade" "adopt at '${_adopt_line}', helm at '${_helm_line}' in: $(cat "$_dp_log")"
+fi
+# Idempotent: the stub rewrote the live object with its ownership; a second run adopts nothing.
+: > "$_dp_log"; _dp_out="$(_dp_run)"
+case "$_dp_out" in *"::hosting:: adopted=0"*) ok "a second run adopts nothing (the estate is now owned)" ;;
+  *) bad "a second run adopts nothing" "said: ${_dp_out}" ;; esac
+# 🚨 Never a takeover: an object owned by ANOTHER release is a refusal, and helm is never reached.
+jq '.metadata.labels["app.kubernetes.io/managed-by"]="Helm" | .metadata.annotations["meta.helm.sh/release-name"]="other" | .metadata.annotations["meta.helm.sh/release-namespace"]="memex"' \
+  "$DP_FIXTURES/live/secretproviderclass.secrets-store.csi.x-k8s.io_memex-kv.json" > "$_dp_dir/live/secretproviderclass.secrets-store.csi.x-k8s.io_memex-kv.json"
+: > "$_dp_log"; _dp_out="$(_dp_run)"; _dp_rc=$?
+if [ "$_dp_rc" -ne 0 ] && printf '%s' "$_dp_out" | grep -q "owned by release 'other'" && ! grep -q '^helm upgrade' "$_dp_log"; then
+  ok "an object owned by another release is refused, and helm never runs"
+else
+  bad "an object owned by another release is refused" "rc=${_dp_rc} out: ${_dp_out} log: $(cat "$_dp_log")"
+fi
+rm -rf "$_dp_dir"
+
+# ── hosting-deploy APPLIES; it never waits, and never rolls back a good upgrade ─────────────────
+# 🚨 Measured 2026-09-09 02:35-02:51Z on memex (#3782). `--atomic --wait --timeout 15m` DESTROYED a
+# correct upgrade: revision 44 had landed with the record's full render and was inside its own
+# startup gate (the record budgets 10800s for it) when helm's fixed fifteen minutes expired, and
+# --atomic reverted it to revision 43. Slow and broken are indistinguishable to a timer; only
+# something watching the rollout can tell them apart. helm now applies and the CALLER observes,
+# which is why the applied revision has to come back out.
+#
+# These cases are that decision, pinned. The first is written against the ARGUMENT LIST rather than
+# an outcome on purpose: `--atomic` reappearing is a silent regression that no stubbed run can
+# fail on, because a stub always "succeeds" — the flag itself is the defect.
+echo
+echo "── hosting-deploy: applies without waiting, reports the revision ─"
+_ap_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_ap_dir/"; _ap_log="$_ap_dir/calls.log"; : > "$_ap_log"
+_ap_vals="$_ap_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_ap_vals"
+_ap_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_ap_dir" HOSTING_DEPLOY_STUB_LOG="$_ap_log" "$@" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_ap_vals" --image cr.example.test/memex-portal-ai:1 2>&1; }
+_ap_out="$(_ap_run env)"; _ap_rc=$?
+_ap_upgrade="$(grep '^helm upgrade' "$_ap_log" | head -1)"
+if [ "$_ap_rc" -eq 0 ] && [ -n "$_ap_upgrade" ] \
+   && ! printf '%s' "$_ap_upgrade" | grep -q -- '--atomic' \
+   && ! printf '%s' "$_ap_upgrade" | grep -q -- '--wait' \
+   && ! printf '%s' "$_ap_upgrade" | grep -q -- '--timeout'; then
+  ok "helm upgrade carries no --atomic, no --wait and no --timeout"
+else
+  bad "helm upgrade carries no --atomic/--wait/--timeout" "rc=${_ap_rc} upgrade line: '${_ap_upgrade}' out: ${_ap_out}"
+fi
+case "$_ap_out" in *"::hosting:: helm_revision=42"*) ok "the applied revision is reported for the caller to observe" ;;
+  *) bad "the applied revision is reported" "said: ${_ap_out}" ;; esac
+# The revision is READ BACK from helm, not guessed — and read AFTER the apply, or it names the
+# revision the upgrade replaced.
+_ap_up_line="$(grep -n '^helm upgrade' "$_ap_log" | head -1 | cut -d: -f1)"
+_ap_st_line="$(grep -n '^helm status' "$_ap_log" | tail -1 | cut -d: -f1)"
+if [ -n "$_ap_up_line" ] && [ -n "$_ap_st_line" ] && [ "$_ap_st_line" -gt "$_ap_up_line" ]; then
+  ok "the revision is read back AFTER the apply, never guessed"
+else
+  bad "the revision is read back after the apply" "upgrade at '${_ap_up_line}', status at '${_ap_st_line}' in: $(cat "$_ap_log")"
+fi
+# Success here means APPLIED, not rolled out — and it must say so, or a caller reads a tick as a
+# finished rollout, which is precisely what #3782 asks never to report.
+case "$_ap_out" in *"NOT yet rolled out"*) ok "the log states the rollout has NOT happened yet" ;;
+  *) bad "the log states the rollout has not happened yet" "said: ${_ap_out}" ;; esac
+
+# A FAILED upgrade must not claim a rollback that no longer happens, and must name the way forward.
+: > "$_ap_log"
+_ap_out="$(_ap_run env HOSTING_DEPLOY_STUB_UPGRADE_FAILS=true)"; _ap_rc=$?
+if [ "$_ap_rc" -ne 0 ] && printf '%s' "$_ap_out" | grep -q 'was NOT rolled back' \
+   && printf '%s' "$_ap_out" | grep -q 'helm history' \
+   && ! printf '%s' "$_ap_out" | grep -q 'rolled back by --atomic'; then
+  ok "a failed upgrade says it was NOT rolled back and names helm history"
+else
+  bad "a failed upgrade reports honestly" "rc=${_ap_rc} out: ${_ap_out}"
+fi
+
+# 🚨 An apply whose revision cannot be read is a REFUSAL, not a quiet success. Without this the
+# script would report a release the caller has no handle on, and "observed" would degrade back to
+# "assumed" — the exact regression this change exists to prevent.
+printf '{"name":"memex","info":{"status":"deployed"}}\n' > "$_ap_dir/status.json"; : > "$_ap_log"
+_ap_out="$(_ap_run env)"; _ap_rc=$?
+if [ "$_ap_rc" -ne 0 ] && printf '%s' "$_ap_out" | grep -q 'returned no revision'; then
+  ok "an apply with no readable revision is refused, not reported as done"
+else
+  bad "an apply with no readable revision is refused" "rc=${_ap_rc} out: ${_ap_out}"
+fi
+rm -rf "$_ap_dir"
+
+# ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
+# Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`
+# and its --atomic rollback erred too. The preflight asks `kubectl auth can-i` per rendered kind
+# and names every denial in ONE refusal, with helm never reached.
+echo
+echo "── hosting-deploy: writable-kinds preflight and release state ───"
+_pf_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_pf_dir/"; _pf_log="$_pf_dir/calls.log"; : > "$_pf_log"
+_pf_vals="$_pf_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_pf_vals"
+printf 'create secretproviderclass.secrets-store.csi.x-k8s.io\npatch deployment.apps\n' > "$_pf_dir/denied.txt"
+_pf_out="$(env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_pf_dir" HOSTING_DEPLOY_STUB_LOG="$_pf_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_pf_vals" --image cr.example.test/memex-portal-ai:1 2>&1)"; _pf_rc=$?
+if [ "$_pf_rc" -ne 0 ] && printf '%s' "$_pf_out" | grep -q 'denied:.*create:secretproviderclass.secrets-store.csi.x-k8s.io' \
+   && printf '%s' "$_pf_out" | grep -q 'denied:.*patch:deployment.apps' && ! grep -q '^helm upgrade' "$_pf_log"; then
+  ok "every denied verb:kind is named in ONE refusal, and helm never runs"
+else
+  bad "denied kinds are named before helm" "rc=${_pf_rc} out: ${_pf_out} log: $(cat "$_pf_log")"
+fi
+# A release helm cannot upgrade (pending-*) is refused by name before helm.
+rm -f "$_pf_dir/denied.txt"; printf '{"name":"memex","info":{"status":"pending-upgrade"},"version":41}\n' > "$_pf_dir/status.json"; : > "$_pf_log"
+_pf_out="$(env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_pf_dir" HOSTING_DEPLOY_STUB_LOG="$_pf_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_pf_vals" --image cr.example.test/memex-portal-ai:1 2>&1)"; _pf_rc=$?
+if [ "$_pf_rc" -ne 0 ] && printf '%s' "$_pf_out" | grep -q "is 'pending-upgrade'" && ! grep -q '^helm upgrade' "$_pf_log"; then
+  ok "a pending-* release is refused by name, and helm never runs"
+else
+  bad "a pending-* release is refused by name" "rc=${_pf_rc} out: ${_pf_out}"
+fi
+rm -rf "$_pf_dir"
+
+# ── every kind the CHART renders is writable by the operator's ClusterRole ─────────────────────
+# core #3774 rendered a PodDisruptionBudget; the role could only read them; the next Reconcile of
+# memex failed inside helm. A chart change that renders a new kind lands with its grant, or this
+# case is red naming the kind and the rule.
+ck_out="$(bash "$(dirname -- "${BASH_SOURCE[0]}")/check-chart-kinds-granted.sh" 2>&1)"; ck_rc=$?
+if [ "$ck_rc" -eq 0 ]; then
+  ok "every kind the chart renders is writable by operator-rbac.yaml ($(printf '%s' "$ck_out" | tail -1 | sed 's/^check-chart-kinds-granted: //'))"
+else
+  bad "every kind the chart renders is writable by operator-rbac.yaml" "$ck_out"
+fi
+
+# ── every kubectl verb+resource in bin/ is GRANTED by the operator's ClusterRole ─────────────────
+# The manifest lives three directories away from the scripts and is reviewed separately; twice a
+# script reached main without its grant (storageclasses for pv-resize — failed the first Reconcile
+# through the fixed operator on memex, 2026-09-09, step 1/6 Forbidden; persistentvolumes for
+# pv-purge — never granted). The check names the script, the verb, the resource and the rule to
+# add. Its manifest input is REQUIRED: absent (as in an image without deploy/aks/manifests) it
+# exits 2 and this case is red, never skipped — mount the manifests dir and set HOSTING_RBAC_MANIFEST.
+rbac_out="$(bash "$(dirname -- "${BASH_SOURCE[0]}")/check-rbac-coverage.sh" 2>&1)"; rbac_rc=$?
+if [ "$rbac_rc" -eq 0 ]; then
+  ok "every kubectl verb+resource in bin/ is granted by operator-rbac.yaml ($(printf '%s' "$rbac_out" | tail -1 | sed 's/^check-rbac-coverage: //'))"
+else
+  bad "every kubectl verb+resource in bin/ is granted by operator-rbac.yaml" "$rbac_out"
+fi
 
 echo
 echo "─────────────────────────────────────────────────────────────────"

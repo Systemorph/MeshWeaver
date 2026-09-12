@@ -14,6 +14,23 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
+/// How a source directory's <c>_current</c> pointer resolved (MeshWeaver#3461) — the answer every
+/// reader takes, plus the reason it fell back, which retention needs and readers discard.
+/// </summary>
+/// <param name="Directory">The directory that holds the publication which applies: the generation
+/// the pointer names, or the source directory itself. Never null, never outside the source
+/// directory — this is the value <see cref="ShippedPrebuiltBundles.PublicationDirectoryOf"/> returns.</param>
+/// <param name="Named">The name the pointer carried, or null when there is no pointer or it was
+/// blank. Set even when the name was REFUSED, so a diagnostic can quote what a publisher wrote.</param>
+/// <param name="Fault">Why the pointer did not resolve to a generation on disk, or null. Null with
+/// a null <paramref name="Named"/> is the flat layout — the normal state today, not a fault.</param>
+public readonly record struct PublicationPointer(string Directory, string? Named, string? Fault)
+{
+    /// <summary>True when the pointer resolved to a generation subdirectory of the source.</summary>
+    public bool IsGeneration => Fault is null && Named is not null;
+}
+
+/// <summary>
 /// Adopts the prebuilt-assembly bundles the IMAGE ITSELF ships (issue #1660 WS1): at boot, before
 /// the dynamic-NodeType sweep decides what to build, every <c>*.zip</c> under the image's
 /// <c>prebuilt/</c> directory is read with <c>BundleReader</c> and seeded through
@@ -69,6 +86,42 @@ public static class ShippedPrebuiltBundles
     public const string CompletionSentinelFileName = "_complete";
 
     /// <summary>
+    /// 🚨 THE seal read, in ONE place (#3876): the sentinel's lines, or <c>null</c> when the
+    /// sentinel is not there AT THE OPEN. Every reader of
+    /// <see cref="CompletionSentinelFileName"/> goes through here —
+    /// <see cref="CompletePublishedBundlesOf"/> in this file, and the three catalogue readings
+    /// (<c>PublishedBundleCatalogue.SealedPublicationOf</c>, <c>CompletePublicationOf</c> and
+    /// <c>DeclaredBundlesOf</c>, which delegate to this method).
+    ///
+    /// <para><b>Why the existence check cannot lead.</b> The publisher UNSEALS before it
+    /// republishes and re-seals LAST (<c>publish-bake-bundles.sh</c>), and retention deletes a
+    /// sentinel before removing an identity — so a seal observed by <c>File.Exists</c> can be gone
+    /// by the time the read opens it. <c>File.Exists</c> followed by <c>File.ReadAllLines</c>
+    /// therefore throws <see cref="FileNotFoundException"/> (or
+    /// <see cref="DirectoryNotFoundException"/>, which is what a removed parent throws) for a
+    /// condition every one of these readers already has a correct answer for. Only the OPEN can
+    /// decide whether a seal is readable.</para>
+    ///
+    /// <para>🚨 <b>Only ABSENCE is classified.</b> A seal that is present but unreadable — locked,
+    /// denied, a short read — is NOT an absent seal, and must keep surfacing: answering "torn" for
+    /// it would let a permanent fault wear the self-healing "come back in a moment" costume.</para>
+    /// </summary>
+    /// <param name="sentinel">The full path of the sentinel file.</param>
+    /// <param name="readLines">The read to perform. Tests inject one that removes the seal AT the
+    /// open, which is the only way to exercise the race deterministically.</param>
+    public static string[]? ReadSealLines(string sentinel, Func<string, string[]>? readLines = null)
+    {
+        try
+        {
+            return (readLines ?? File.ReadAllLines)(sentinel);
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 🚨 The publication POINTER of a source directory (must match the <c>POINTER</c> in
     /// <c>.github/scripts/publish-bake-bundles.sh</c>): one line naming the SUBDIRECTORY that
     /// holds the publication which currently applies.
@@ -122,13 +175,35 @@ public static class ShippedPrebuiltBundles
     /// <param name="logger">Diagnostics. A REFUSED pointer is a warning — it means a publisher
     /// wrote something this reader will not follow, which is worth seeing.</param>
     public static string PublicationDirectoryOf(string sourceDirectory, ILogger? logger = null)
+        => ResolvePublicationPointer(sourceDirectory, logger).Directory;
+
+    /// <summary>
+    /// The SAME resolution <see cref="PublicationDirectoryOf"/> performs, with the reason it fell
+    /// back kept instead of discarded.
+    ///
+    /// <para>🚨 <b>It exists so retention and the readers can never disagree about which
+    /// generation applies.</b> A sweep that decides a generation is unreferenced is deciding it is
+    /// unreachable, and "unreachable" is defined by exactly these rules — so re-deriving them
+    /// beside the sweep would be two implementations of one contract, drifting silently, with the
+    /// failure landing as a DELETED publication that readers were still resolving. Every reader
+    /// calls <see cref="PublicationDirectoryOf"/>, which is this method with
+    /// <see cref="PublicationPointer.Directory"/> taken and the rest dropped.</para>
+    ///
+    /// <para>🚨 A non-null <see cref="PublicationPointer.Fault"/> means <b>a publisher wrote a
+    /// pointer this reader will not follow</b> — which is NOT the same as "there is no pointer".
+    /// Retention treats it as an unreadable publication inventory and protects every generation of
+    /// the source: an inventory that could not be read licenses no deletion.</para>
+    /// </summary>
+    /// <param name="sourceDirectory">A <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;</c> directory.</param>
+    /// <param name="logger">Diagnostics — the same lines <see cref="PublicationDirectoryOf"/> has always logged.</param>
+    public static PublicationPointer ResolvePublicationPointer(string sourceDirectory, ILogger? logger = null)
     {
         var pointer = Path.Combine(sourceDirectory, PublicationPointerFileName);
         string? named;
         try
         {
             if (!File.Exists(pointer))
-                return sourceDirectory;
+                return new PublicationPointer(sourceDirectory, null, null);
             named = File.ReadAllLines(pointer)
                 .Select(l => l.Trim())
                 .FirstOrDefault(l => l.Length > 0);
@@ -142,11 +217,14 @@ public static class ShippedPrebuiltBundles
                 "ShippedPrebuiltBundles: {Pointer} could not be read — reading {SourceDirectory} "
                 + "as its own publication directory; a pointer being replaced reads this way, and "
                 + "the next read resolves it", pointer, sourceDirectory);
-            return sourceDirectory;
+            return new PublicationPointer(sourceDirectory, null,
+                $"the pointer could not be read ({ex.GetType().Name}: {ex.Message})");
         }
 
         if (string.IsNullOrEmpty(named))
-            return sourceDirectory;
+            // An EMPTY pointer is the mid-write reading of a pointer being replaced, so it is a
+            // fault for retention's purposes too: which generation applies is unknown right now.
+            return new PublicationPointer(sourceDirectory, null, "the pointer is empty");
 
         if (named is "." or ".."
             || named != Path.GetFileName(named)
@@ -158,7 +236,8 @@ public static class ShippedPrebuiltBundles
                 + "directory name — a publication pointer may only address a subdirectory of its "
                 + "own source directory. Reading {SourceDirectory} as its own publication "
                 + "directory instead", pointer, named, sourceDirectory);
-            return sourceDirectory;
+            return new PublicationPointer(sourceDirectory, named,
+                $"the pointer names '{named}', which is not a single directory name");
         }
 
         var generation = Path.Combine(sourceDirectory, named);
@@ -169,9 +248,10 @@ public static class ShippedPrebuiltBundles
                 + "disk — reading {SourceDirectory} as its own publication directory instead. A "
                 + "generation the pointer names must outlive the pointer",
                 pointer, named, sourceDirectory);
-            return sourceDirectory;
+            return new PublicationPointer(sourceDirectory, named,
+                $"the pointer names generation '{named}', which is not on disk");
         }
-        return generation;
+        return new PublicationPointer(generation, named, null);
     }
 
     /// <summary>The conventional location — <c>prebuilt/</c> beside the app binaries, which is
@@ -386,8 +466,15 @@ public static class ShippedPrebuiltBundles
     /// before the sentinel) or a listed-but-missing bundle (torn beyond the seal) skips that
     /// WHOLE source, loudly, and the sweep compiles instead. Runs inside the seeding pool's
     /// blocking leg.
+    ///
+    /// <para>🚨 Skipping one source is the whole point: a seal that is absent — including one the
+    /// publisher removes WHILE this pass reads it (#3876) — must never abandon the other sources
+    /// under the same identity. The read goes through <see cref="ReadSealLines"/>, which classifies
+    /// absence at the open and lets every other I/O failure surface.</para>
     /// </summary>
-    private static List<string> CompletePublishedBundlesOf(string identityDirectory, ILogger? logger)
+    /// <param name="readLines">Test seam: the seal read to perform. Production passes none.</param>
+    internal static List<string> CompletePublishedBundlesOf(
+        string identityDirectory, ILogger? logger, Func<string, string[]>? readLines = null)
     {
         var bundles = new List<string>();
         foreach (var source in Directory
@@ -401,16 +488,39 @@ public static class ShippedPrebuiltBundles
             // migration is a silent wrong answer rather than a missing one.
             var sourceDir = PublicationDirectoryOf(source, logger);
             var sentinel = Path.Combine(sourceDir, CompletionSentinelFileName);
-            if (!File.Exists(sentinel))
+            // 🚨 #3876: the OPEN decides absence, never a preceding File.Exists. The publisher
+            // unseals before it republishes (several times an hour during a release) and retention
+            // unseals before it removes an identity, so an existence check here observed a seal
+            // that the read then failed to open — and the FileNotFoundException travelled to
+            // SeedBundles' outer Catch, which abandons the WHOLE identity's adoption pass. One
+            // source being replaced mid-boot made every OTHER sealed source on that identity
+            // recompile too. An absent seal is a fact this loop already answers correctly: skip
+            // THIS source, loudly, and seed the rest.
+            var seal = ReadSealLines(sentinel, readLines);
+            if (seal is null)
             {
-                logger?.LogWarning(
-                    "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
-                    + "publication is incomplete (it died before the seal); NOT seeding it, the "
-                    + "sweep compiles instead and the next CI publish re-publishes the source",
-                    sourceDir, CompletionSentinelFileName);
+                // Say WHICH absence: a publication directory that is GONE is a different fact from
+                // one that is present and unsealed, and only the second is worth a re-publish. Two
+                // literal templates rather than one chosen at runtime — a template that varies is
+                // not greppable in Loki and is invisible to the logging analyzers.
+                if (Directory.Exists(sourceDir))
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
+                        + "publication is incomplete (it died before the seal, or it is being "
+                        + "replaced right now: the publisher removes the seal first and restores it "
+                        + "last); NOT seeding it, the sweep compiles instead and the next CI publish "
+                        + "re-publishes the source",
+                        sourceDir, CompletionSentinelFileName);
+                else
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: {SourceDirectory} is gone — its publication "
+                        + "directory disappeared while this pass was reading it (retention, or a "
+                        + "replace that moved the generation); NOT seeding it, the sweep compiles "
+                        + "instead and the next pass reads whatever is published then",
+                        sourceDir);
                 continue;
             }
-            var listed = File.ReadAllLines(sentinel)
+            var listed = seal
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .OrderBy(l => l, StringComparer.Ordinal)
@@ -841,12 +951,24 @@ public static class ShippedPrebuiltBundles
                                     .Aggregate(default(SeedTally), (total, one) => total + one)
                                     .Do(tally =>
                                     {
+                                        // 🚨 THE UNITS ARE BUNDLE ENTRIES (#3703). This counts
+                                        // ASSEMBLIES whose bytes are on the store — two bundles may
+                                        // legitimately name the same NodeType — and it says nothing
+                                        // about how many NodeTypes a later reader will find current,
+                                        // because that reader judges each type from its RECORD. The
+                                        // two were read as one population on memex's 2026-09-08
+                                        // 00:31 boot ("78 adopted" against the sweep's "baked=5"),
+                                        // so the line now names its own denominator.
                                         logger?.LogInformation(
                                             "ShippedPrebuiltBundles: {Covered} prebuilt assembly(ies) from "
                                             + "{Bundles} shipped bundle(s) under {Directory} are backed by "
                                             + "the assembly store — {Adopted} adopted now, {Current} already "
                                             + "current and skipped WITHOUT activating their NodeType hubs — "
-                                            + "in {Elapsed}",
+                                            + "in {Elapsed}. Counted in ASSEMBLIES (bundle entries — two "
+                                            + "bundles may name one NodeType); the bake sweep's counts are "
+                                            + "over NODETYPES judged from their records, so the two are not "
+                                            + "the same population and a difference between them is not a "
+                                            + "disagreement (#3703)",
                                             tally.Covered, bundles.Count, dir, tally.Adopted,
                                             tally.AlreadyCurrent, DateTimeOffset.UtcNow - startedAt);
                                         // 🚨 A mount that backed NOTHING needs its reason at the SAME level as
@@ -1031,7 +1153,8 @@ public static class ShippedPrebuiltBundles
                             .SelectMany(payload => SeedPayloads(
                                 mesh, bundlePath, manifest.FrameworkMvid,
                                 payload.Assemblies, alreadyCurrent, logger, onCovered,
-                                decision, context, ClosureOf(manifest), FileNamesOf(manifest)));
+                                decision, context, ClosureOf(manifest), FileNamesOf(manifest),
+                                manifest.Version));
                     });
             })
             .Catch<SeedTally, Exception>(ex =>
@@ -1142,7 +1265,8 @@ public static class ShippedPrebuiltBundles
         AdoptionDecision? decision = null,
         AdoptionContext? context = null,
         ImmutableHashSet<string>? closure = null,
-        ImmutableDictionary<string, string>? fileNames = null)
+        ImmutableDictionary<string, string>? fileNames = null,
+        string? moduleVersion = null)
         => assemblies
             .Select(a => Observable.Defer(() =>
                 {
@@ -1186,7 +1310,9 @@ public static class ShippedPrebuiltBundles
                             tolerant
                                 ? PrebuiltAdoptionPolicy.LiveStampOf(a.Dependencies, context!.LiveDependencyIdOf, context.LiveToolchainId)
                                 : a.Dependencies,
-                            a.SourceFingerprint)
+                            a.SourceFingerprint,
+                            // #3583 — the manifest's released SemVer, for the owner's compatibility rule.
+                            moduleVersion)
                         .Take(1)
                         .Timeout(SeedBudget)
                         .Do(outcome =>
@@ -1196,7 +1322,8 @@ public static class ShippedPrebuiltBundles
                                 or PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesUnservable)
                                 context?.OnDeclined?.Invoke(a.NodePath);
                         })
-                        .Select(outcome => outcome == PrebuiltAssemblySeeder.SeedOutcome.Adopted);
+                        .Select(outcome => outcome is PrebuiltAssemblySeeder.SeedOutcome.Adopted
+                            or PrebuiltAssemblySeeder.SeedOutcome.AdoptedStale);
                 })
                 .Do(adopted =>
                 {

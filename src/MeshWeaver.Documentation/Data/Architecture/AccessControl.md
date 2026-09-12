@@ -209,6 +209,19 @@ hub.IsGlobalAdmin(userId)    // explicit user
 
 Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeType.GetGlobalAdminTabAsync` (Global Administration tab), `UserProfile`.
 
+### The two type-scoped exceptions: a Space the platform itself owns
+
+"Not a data superuser" holds for every partition a **person** owns — there is always somebody to ask for a grant. It has no answer for a partition **nobody** can own: a Space with a ONE-WAY `_GitSync` is **system-owned** (`AccessAssignmentGuard.IsSystemOwned`) — the repo rewrites it on every sync, `IsForbiddenOnSystemOwned` refuses every Admin/Editor grant on it and `SystemOwnedAccessRetractionHandler` retracts the ones that predate the sync. Measured on memex.meshweaver.cloud 2026-09-12: `MeshWeaver/_GitSync`, created by the platform in a Space owned by `system-security`, re-imported the whole core repository on every green build (Memex#237), and the platform admin got `Not found` on `get` and *"Delete permission denied for 'MeshWeaver/_GitSync'"* on `delete` — no human could remove it through any API.
+
+So two node types carry an `INodeTypeAccessRule` whose non-admin leg is the ordinary fold and whose second leg is `hub.IsGlobalAdmin(userId)` — the same OR `GitHubActivityExtensions.TriggerAuthorizedAsSystem` already applies to every sync trigger ("triggering a sync is a platform action"):
+
+| Node type | Platform admin may | Still on the fold | Where |
+|---|---|---|---|
+| `GitHubSyncConfig` (`{space}/_GitSync`) | **Read, Delete** — always, on every Space | Create, Update | `GitHubSyncConfigAccessRule` (MeshWeaver.GitSync) |
+| `Space` (the ROOT node only) | **Read** — only while the Space is system-owned | Update, Delete, and every child node | `SpaceAccessRule.ReadAccess` (MeshWeaver.Graph) |
+
+The fold itself is untouched — `GetEffectivePermissions` still answers `None` for the admin on both paths, which is what `SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest` pins: the widening comes from the rule, consulted by all three seams (`RlsNodeValidator`, the `[RequiresPermission]` delivery gate, the delete pre-flight) through `NodeTypeAccessRuleGate`, so an ordinary viewer's check is byte-for-byte what it was. A sync config carries the repo, branch and last-sync state — never a credential; that is the separate `GitHubCredential` node in the owner's own partition. Deleting the **Space** of a system-owned partition is deliberately NOT widened: a paid plugin's Space is system-owned too, and its `_Access` entitlement grants would go with it.
+
 ### Where the grant comes from (db-init)
 
 - **Config-driven** — `Auth:GlobalAdmins: [ "rbuergi", … ]` → `GlobalAdminSeed` seeds a static `Admin/_Access/{user}_Access` grant at boot. A fresh DB with the config set comes up with each listed user already a platform admin.
@@ -856,7 +869,8 @@ every evaluation:
 
 `PartitionAccessPolicy { Api = false }` is therefore meaningful in its own right: **"readable in a
 browser, not reachable through the API."** The public grant is ORed in *after* the cap so the page
-stays readable; the capability it confers is *not*, so the API surface closes.
+stays readable; the capability it confers is *not*, so the API surface closes. An inherited public
+grant is still subject to a deeper `Read = false` policy, as described below.
 
 ## 🚨 Why the mint-time role snapshot existed — and why trusting it was the bug
 
@@ -1094,8 +1108,26 @@ verdict cache expires.
 
 ## Where a build principal is admitted
 
-Only the **prebuilt-publication routes** (`/api/plugins/bundles/prebuilt/…`), requiring
-`fetch:<source>`. A build is not an installation: it has no instance record, no plan and no
+The **prebuilt-publication routes** (`/api/plugins/bundles/prebuilt/…`) require
+`fetch:<source>`. The release-input routes (`GET /api/plugins/roll-target`,
+`GET /api/plugins/is-updatable`, and `GET /api/plugins/combo`) also admit a build explicitly
+granted `verify:combo`. `POST /api/plugins/combo-verification` accepts that build's off-portal
+verification result and records it through `UpdatePolicyNodeType.RecordVerification`. It accepts
+a `ComboVerification`, never a mesh path or a policy patch. The existing policy, including `None`,
+is preserved, and success is returned only after the node carries the recorded verdict.
+
+This is a system identity for the build process, not a user or a global-admin token. The grant
+is local to the portal whose configured OIDC audience the token must match. Provision
+`Admin/_BuildPrincipal/systemorph--meshweaver` for `Systemorph/MeshWeaver`, binding its immutable
+repository and owner IDs. Permit `verify` only for `workflow_run` and `workflow_dispatch`, both
+restricted to `refs/heads/main`; grant only `verify:combo`. This gives pull requests and other
+repositories no compatibility-check rights. Revocation applies on the next request.
+
+The verifier runs outside production; its grant does not install modules, apply an update, read
+arbitrary user content, edit access grants, or change update policy. Authentication outages still
+return 503, distinct from a refused credential.
+
+A build is not an installation: it has no instance record, no plan and no
 `PluginGrant`, so every other bundle route — which decides per package against exactly those — keeps
 refusing it with the same 401 as before. The narrowing is expressed once, in the group filter, so a
 route added later is refused by default rather than by remembering to.
@@ -1181,6 +1213,52 @@ The predicate above used to carry a third term — `public_read_node_type OR …
 - **The shape was unsafe regardless of the type list.** Being an unconditional `OR` in front of the node fold, it short-circuited the longest-prefix resolution — i.e. it overrode DENY rows, which is precisely where store/course paywall gating lives. And `PermissionEvaluator` has no node-type-keyed term, so the SQL and evaluator paths would have diverged.
 
 **Declare public read with a mechanism both read paths honour instead:** a `PartitionAccessPolicy` `_Policy` node with `PublicRead = true` (issue #603 — projected as allow-`Read` rows for `Public`/`Anonymous` that *participate in* the prefix fold, so a deeper deny still wins), or a [`NodeTypeGate`](#type-declared-subtree-gates-nodetypegate) (issue #701) for a type that opens a short, explicitly listed set of surfaces on its own subtree.
+
+### Public policy grants and deeper read caps
+
+`PublicRead` follows scope order. At each scope, the evaluator first applies that policy's cap to
+the inherited public grant, then adds the scope's own public grant. This preserves the PostgreSQL
+projection's existing order: policy caps are projected first, public grants replace them at the
+same prefix, and a more specific prefix wins when reading a descendant.
+
+| Policies on the path | Read decision for a viewer without a role |
+|---|---|
+| Parent `PublicRead = true`; ordinary child | Allow |
+| Parent `PublicRead = true`; child `Read = false` | Deny at the child and below |
+| Same scope `PublicRead = true` and `Read = false` | Allow |
+| Parent public; child read cap; grandchild `PublicRead = true` | Allow at the grandchild and below |
+| `Read = true` alone | No grant |
+
+`BreaksInheritance` resets inherited roles and their caps; it does not make a child's explicit
+read cap ineffective against a public ancestor. Role denies continue to remove roles, while
+`PublicRead` remains a separate grant. This rule does not change the additive `NodeTypeGate`
+contract or the separate `Api` capability cap.
+
+**Regression evidence (2026-09-11).** On core baseline
+`3e731d947244b51b19f4c78b1114fc4273a9a840`, `PublicReadPolicyScopeTest` executed 14 cases against a
+real monolith mesh without the fixture's default Public Admin grant. Four failed: anonymous and
+signed-in reads through a deeper read cap, each with and without `BreaksInheritance`. The other ten
+controls passed. The correction caps the accumulated public grant at each scope before applying
+that scope's own `PublicRead`. Fixtures use invented subjects and scopes; no production records are
+part of the test. After the correction, all 14 cases and the seven existing
+`ApiTokenCapabilityFreshnessTest` cases passed (21 total). Both baseline and corrected builds used
+`dotnet build test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj -c Release -p:CIRun=true -warnaserror`
+and finished with zero warnings and errors. The corrected test selection was
+`FullyQualifiedName~PublicReadPolicyScopeTest|FullyQualifiedName~ApiTokenCapabilityFreshnessTest`.
+Two existing `RoutedApiTokenClampTest` cases also passed. Against the same corrected core, the
+Plugins `MeshWeaver.Security.Test` project at `8ee8a192` built with the same strict flags and passed
+33 existing cases selected by `PartitionAccessPolicyTests`, `StaticNamespacePolicyTests`,
+`NodeTypeGateTests`, `AnonymousGateTests` and `UserPublicReadTest`. These include a signed-in,
+unentitled viewer denied course content, public course surfaces and the entitled control.
+
+The baseline evaluator SHA-256 was
+`472c97c6d7419145178cff0e693bde17cad2e9d17d35ecbfb96bf222e1af3219`; this document's baseline SHA-256
+was `f67ad347c579f8bd483906fe7bcb4276d4fdd5f258491758154ab376ed35ad9b`. The SQL comparison used
+`MeshWeaver.Plugins` commit `39bd2e7ae0c2e1574ce44b26f3ef0b9938d98c04`,
+`PostgreSqlSchemaInitializer.cs` SHA-256
+`49515b4db3ffb27a5f6313577d239781447d10eb14087c1852a7b6d4162df026`. Its bulk and per-user
+projection both apply same-prefix public grants after policy denies. These are source receipts;
+the core regression does not execute PostgreSQL.
 
 ## AI tool call identity
 

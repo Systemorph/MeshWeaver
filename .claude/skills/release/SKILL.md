@@ -48,6 +48,17 @@ and the version mechanics in
 So: **merge to main = build + bake + seal + deploy; tag = promote.** There is no rc line: the
 continuous builds ARE the pre-releases, and `PlatformVersion` always names the next clean release.
 
+> 📅 **2026-09-12 — what a merge to `main` sets in motion downstream, corrected.** (1) `main-cd.yml`
+> has no deploy job: it builds, promotes, bakes, seals and POSTs ONE signed `platform-build` to the
+> control instance, then stops; every portal — memex and memex-cloud included — rolls itself under
+> its `Admin/UpdatePolicy` (pull, never push). (2) That build fact no longer wakes the satellites:
+> the per-build `meshweaver-framework-released` wave is off by default
+> (`Hosting:PlatformBuilds:BroadcastFrameworkReleases`, Plugins#1707) and no satellite lists the
+> event. Each node repo rebuilds against the newest SEALED set on its own pushes and once a day —
+> that daily run is the full run and is what validates a continuous build; a bundle for a new
+> identity therefore arrives with the next daily run, not minutes after the merge. Turning the wave
+> on is a MAJOR-bump procedure. Full reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 🚨 **Self-update takes clean releases by default** (maintainer, 2026-09-08: *"by default we will not
 upgrade as long as no version without `-ci…` is labelled"*). A `-ci.<n>` build is rolled onto only
 under `Continuous` + a `pattern` on `Admin/UpdatePolicy` — a glob over the tag, `3.0.1-ci*` — and
@@ -236,6 +247,10 @@ promoted, a set whose bake is not sealed, and a release with no notes page.
 
 Two mechanisms, both live:
 - **Push (CD):** `main-cd.yml`'s `deploy` matrix rolls `memex` and `memex-cloud` directly.
+  *📅 2026-09-12: no longer — `main-cd.yml` carries no `deploy` job; memex and memex-cloud roll by
+  the pull mechanism below like every other install (their overlays in Systemorph/Memex additionally
+  carry a reviewed `pinnedImageTag` applied by that repo's `helm-release.yml`). See
+  `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).*
 - **Pull (self-update):** `SelfUpdateHostedService` runs on EVERY install. It reads
   `Admin/UpdatePolicy` (default **Stable** — clean tags only, i.e. what `release.yml` promoted),
   lists ACR tags, walks the eligible ones newest-first and takes the first one whose set is SEALED
@@ -259,6 +274,11 @@ az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
 ```
 
 ## Verify a release is healthy (before declaring done)
+
+🚨 **`/api/version` reports the CD run's RESOLVED target commit**, which can differ from the run's
+`head_sha` when two merges land in one queue group (2026-09-09: set 8131 = run head `e1039813e`,
+`/api/version` = `3853374f7`, one second earlier). To name the set a portal runs, match the commit
+against the run's "Resolve the target commit" job output — never against the run head or `main`.
 
 - Migration log shows `Database migration completed. Version: N` AND the portal serves HTTP 200
   (see [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md)).

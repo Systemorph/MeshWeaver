@@ -380,6 +380,10 @@ public class ConfiguredModuleActivationTest
         Assert.Equal(ModuleUpdateAction.SkipUpToDate, Decide(Rebuilt).Action);
 
         // ── 5. The boot loads the new head and CLEARS the marker ───────────────────────────────
+        // 🚨 This boot is handed a FRESH process-local pin of the same generation (ModuleGenerationPin
+        // copies per call), so LoadFrom hands back the copy loaded in step 1 — from a different
+        // path, but the SAME generation leaf, which is why no substitution is reported here
+        // (#3911). Same generation reached twice is routine; a different generation is the finding.
         var (afterwards, _) = Boot(deployment);
         Assert.Empty(afterwards.GetServices<FallbackModule>());
         Assert.Empty(afterwards.GetServices<IncompatibleModule>());
@@ -388,6 +392,169 @@ public class ConfiguredModuleActivationTest
         Assert.Equal(ModuleUpdateAction.SkipUpToDate, Decide(Rebuilt).Action);
         // The ordinary identity rule is back in charge: yet another build still lands.
         Assert.Equal(ModuleUpdateAction.Land, Decide(Loadable).Action);
+    }
+
+    /// <summary>
+    /// 🚨 <b>THE repro of #3911, through the real loader.</b> <c>Assembly.LoadFrom</c> does not
+    /// promise to load the path it is handed: an assembly of that identity already in the default
+    /// load context is returned instead — same instance, its own location, NO exception (measured
+    /// 2026-09-10; only a copy carrying DIFFERENT bytes throws, and that path already falls back).
+    /// So a boot handed a generation whose name is already held runs a generation nobody asked for,
+    /// and before this the loader recorded the one it ASKED for.
+    ///
+    /// <para><b>The live shape.</b> Four modules ship as <c>MeshModuleClosure</c> SEEDS in the
+    /// portal image — MeshWeaver.AI among them — under <c>modules/&lt;name&gt;/</c>, and the registry
+    /// lands the same module again under <c>modules/&lt;name&gt;@&lt;generation&gt;/</c>. Whichever
+    /// path a boot reaches first takes the name for the whole process, and every later reading of
+    /// "which generation is running" — <see cref="InstalledModuleAssembly"/>, the loaded-generation
+    /// map, the per-NodeType dependency record, the module-set adoption — inherited the requested
+    /// answer rather than the real one. The activation report then read the difference as an
+    /// ordinary pending update and promised a restart that cannot clear it, which is what left the
+    /// control instance recycling on 2026-09-10 with nothing in any log naming a cause.</para>
+    ///
+    /// <para><b>The control runs in both directions here.</b> The first arrangement below is a
+    /// deployment whose landed generation is the only copy of its name: the loader is handed the
+    /// generation it then loads, and must report NOTHING. A detector that flagged every load would
+    /// satisfy every assertion in the second half and fail that one.</para>
+    /// </summary>
+    [Fact]
+    public async Task WhenTheLoadContextAlreadyHoldsTheName_TheLoaderSaysWhichGenerationIsRunning()
+    {
+        // ── The negative control: nothing else holds this name, so the loader loads what it asked
+        //    for and says nothing at all. Its own Deployment, because a module simple name can be
+        //    held only once per process and that is the whole subject here.
+        using (var undisturbed = new Deployment())
+        {
+            var landed = await Land(
+                undisturbed, ModuleBuiltAgainstThisPlatform(undisturbed.Module), "1.4.0");
+            var (clean, _) = Boot(undisturbed);
+            Assert.Empty(clean.GetServices<FallbackModule>());
+            Assert.Empty(clean.GetServices<IncompatibleModule>());
+            Assert.Equal(landed, Path.GetFileName(Path.GetDirectoryName(
+                Assert.Single(clean.GetServices<InstalledModuleAssembly>(),
+                        m => string.Equals(
+                            m.Assembly.GetName().Name, undisturbed.Module, StringComparison.Ordinal))
+                    .Assembly.Location)));
+        }
+
+        using var deployment = new Deployment();
+        var (asked, running, services) = await SubstitutedHead(deployment);
+
+        // The module is PRESENT — refusing it would take the module away over a diagnosis.
+        var installed = Assert.Single(services.GetServices<InstalledModuleAssembly>(),
+            m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
+        Assert.Equal(running, Path.GetFileName(Path.GetDirectoryName(installed.Assembly.Location)));
+        Assert.Empty(services.GetServices<IncompatibleModule>());
+
+        // …and the loader now says WHICH generation that is, and which one it is not.
+        var fallback = Assert.Single(services.GetServices<FallbackModule>());
+        Assert.True(fallback.RunsAlreadyLoadedCopy);
+        Assert.False(fallback.RunsImageBaseline,
+            "the image copy was never TRIED — it was already loaded, which is a different fact");
+        Assert.Equal(deployment.Module, fallback.Name);
+        Assert.Equal(asked, fallback.Generation);
+        Assert.Equal(running, fallback.PreviousGeneration);
+        Assert.Equal("1.4.0", fallback.Version);
+        Assert.StartsWith(
+            $"'{deployment.Module}' runs the copy already loaded here (",
+            fallback.Report(), StringComparison.Ordinal);
+        Assert.Contains(
+            "was requested and never entered the process", fallback.Report(), StringComparison.Ordinal);
+        Assert.Contains(
+            "the default load context holds one copy per name",
+            fallback.Report(), StringComparison.Ordinal);
+
+        // 🚨 The adoption records the generation that RUNS, not the one that was asked for.
+        var index = ModuleSetStore.Read(deployment.Root);
+        Assert.Equal(running, index.RunningGenerations[deployment.Module]);
+
+        // 🚨 And the head's bytes were NOT measured, so NOTHING claims they are unloadable — that
+        // verdict would make the update reconcile skip every rebuild of 1.4.0 for good, on the
+        // strength of a test that never ran.
+        Assert.Null(ModuleActivationSidecar.ReadUnloadable(deployment.Root, deployment.Module));
+        Assert.Null(Entry(deployment).UnloadableFrameworkMvid);
+    }
+
+    /// <summary>
+    /// The activation report NAMES the substituted generation and never calls it "restart
+    /// required" (#3911) — a restart resolves the same two paths, and the surface must not promise
+    /// what it cannot deliver. The blind reading at the end is the control: without the loader's
+    /// record the identical state reads as an ordinary pending update, which is precisely the
+    /// false prompt the control instance sat on for an hour with nothing else to go on.
+    /// </summary>
+    [Fact]
+    public async Task TheActivationReport_NamesASubstitutedGeneration_AndNeverCallsItRestartRequired()
+    {
+        using var deployment = new Deployment();
+        var (asked, running, services) = await SubstitutedHead(deployment);
+
+        var fallbacks = services.GetServices<FallbackModule>().ToArray();
+        // What the process actually runs — the generation the loader handed back, not the head.
+        var loaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { deployment.Module };
+        var generations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [deployment.Module] = running,
+        };
+
+        var report = new PendingModuleActivations(deployment.Root) { FallbackModules = fallbacks }
+            .Read(loaded, generations);
+
+        Assert.False(report.IsUndetermined, report.UndeterminedReason);
+        Assert.True(report.HasFallbacks);
+        var row = Assert.Single(report.Fallbacks);
+        Assert.Equal(asked, row.Generation);
+        Assert.Equal(running, row.PreviousGeneration);
+        Assert.Contains(
+            "was requested and never entered the process", row.Reason, StringComparison.Ordinal);
+        Assert.False(report.HasPending,
+            "a restart resolves the same two paths — the surface must not promise one that clears this");
+        Assert.False(report.HasQuarantined, "the module is running");
+
+        // 🚨 The control: strip the loader's record and the SAME state reads as a pending update.
+        var blind = new PendingModuleActivations(deployment.Root).Read(loaded, generations);
+        Assert.True(blind.HasPending,
+            "without the loader's record this is the invisible state #3911 was reported from");
+    }
+
+    /// <summary>
+    /// Arranges the #3911 state through the REAL landing service and the REAL loader, and returns
+    /// (the generation the last boot was ASKED for, the generation it is RUNNING, its services).
+    ///
+    /// <para><b>The production shape, exactly.</b> Four modules ship in the portal image as
+    /// <c>MeshModuleClosure</c> SEEDS — MeshWeaver.AI among them — at <c>modules/&lt;name&gt;/</c>,
+    /// so a self-registry install has a copy even with no registry to serve one; the registry then
+    /// lands the same build again at <c>modules/&lt;name&gt;@&lt;generation&gt;/</c>. Two paths, two
+    /// generation leaves, ONE assembly identity, identical bytes.</para>
+    ///
+    /// <para>It has to be identical bytes: a copy carrying DIFFERENT bytes is refused outright with
+    /// <c>Assembly with same name is already loaded</c> and takes the existing fallback chain, so
+    /// this is the ONLY shape that substitutes silently — which is exactly why nothing was watching
+    /// it.</para>
+    ///
+    /// <para>🚨 The explicit <c>Assembly.LoadFrom</c> of the seed stands in for whatever reaches
+    /// that path first on a portal (a sibling module's closure carries the same DLL; a boot that
+    /// ran before the landing did). It is not a stub — the CLR then does the real thing, and the
+    /// loader below is the real loader.</para>
+    /// </summary>
+    private static async Task<(string Asked, string Running, IServiceProvider Services)> SubstitutedHead(
+        Deployment deployment)
+    {
+        var build = ModuleBuiltAgainstThisPlatform(deployment.Module);
+        var seed = deployment.ShipInImage(build);
+        var running = Path.GetFileName(Path.GetDirectoryName(seed))!;
+        System.Reflection.Assembly.LoadFrom(seed);
+
+        var asked = await Land(deployment, build, "1.4.0");
+        Assert.NotEqual(running, asked);
+        Assert.Equal(asked, Entry(deployment).Directory);
+
+        // The mesh's set activates the landed generation — so the adoption below has something to
+        // be wrong about, which is the point: it must record what RUNS, not what the set names.
+        var proposed = await deployment.Landing.ProposeModuleSet().Timeout(TestTimeouts.Convergence).Await();
+        Assert.Equal(asked, proposed!.Generations[deployment.Module]);
+
+        var (services, _) = Boot(deployment);
+        return (asked, running, services);
     }
 
     /// <summary>

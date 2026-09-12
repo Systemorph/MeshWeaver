@@ -95,6 +95,30 @@ them agree by construction.
 READ — renamed, moved, reformatted onto several lines — leaves the platform unable to know what the
 caller believes, and "cannot verify" has exactly one honest answer: the full set.
 
+## A declared home for dev tools — `devtools/`
+
+`scripts/` is the gates' directory, so a change there is EVERYTHING, and that is right: a gate
+script genuinely changes what a run proves. But it left a script that NO lane runs — a local dev
+loop, a triage helper — with nowhere to live except the gates' directory. Measured on
+MeshWeaver.Plugins run 34618468550 (#1668, 2026-09-11): a one-line edit to
+`scripts/run-node-tests.py`, which no workflow references, selected **52 of 52** compiled projects
+and every module suite — about 89 runner-minutes of portal-host shards and 200 of module tests,
+15:50Z → 18:45Z — while the same diff without that one file selected **1 of 52**.
+
+`devtools` is therefore in `NOOP_DIRS` (2026-09-11). Two choices in that are deliberate:
+
+- **A new name, not `tools/`.** MeshWeaver.Plugins has a `tools/` directory and it is **not**
+  inert there: `src/Directory.Build.targets` and two test projects read it (the Monaco bundle and
+  the Memex template pack). Declaring it a no-op would have under-built them.
+- **The platform declares it first.** No repository in the fleet had a `devtools/` directory, so
+  `check-noop-scope-parity.py` reports the new name as *dormant* in every caller and nothing turns
+  red. A caller then adds `devtools` to its own `scripts/affected-modules.py` literal in the same
+  change that creates the directory, and from that commit the two sets agree about a directory
+  that exists. The reverse order would red that caller's `Validate node repos` for the whole gap.
+
+A file placed under `devtools/` claims that no compiled project, no module content and no gate
+reads it. If that stops being true, the file belongs back in `scripts/`.
+
 ## Both denominators, printed
 
 `selected` answers what is BUILT. A floor-only entry — one the caller's gates compose on every run,
@@ -139,7 +163,7 @@ image digests, and a pin move genuinely invalidates every bundle in the reposito
 Two, and each was made to fail before it was believed.
 
 **`node-repo-scope.py --self-test`** runs unconditionally in the `select` job of every satellite's
-every run, next to the answer it produces, and again in core's own `dotnet-test.yml`. 63 cases.
+every run, next to the answer it produces, and again in core's own `dotnet-test.yml`. 73 cases (2026-09-11).
 The load-bearing ones for this change:
 
 - every name in `NOOP_FILES` narrows to nothing on its own — asserted by iterating the set itself,
@@ -201,3 +225,55 @@ tested 1 before this change and after it.
 moved portal hosts and runs 48 platform suites on every pull request regardless of the diff. That is
 a separate decision, on a job whose suites cover the platform pin rather than this repository's
 modules.
+
+
+## Separate compiled validation from content publication (2026-09-09)
+
+A node-only lesson change does not require rebuilding portal hosts or running unrelated storage,
+AI and Blazor suites. `node-repo-project-scope.py` selects host builds and tests from the caller's
+project graph, linked content and explicit runtime-input prefixes. The caller retains its project
+inventory as policy. A source-scanning guard declares the paths it reads; a linked content folder
+is an input even when it lives outside `src/`. Unknown paths, absent graphs and missing diffs run
+full validation; malformed or missing inventory entries fail. Selection and execution must be
+reconciled by the caller's stable required check.
+
+The module lane accepts an optional `publication-base` on main pushes. Obtain it only from
+`node-repo-publication-base.py`, naming the caller's complete publishing workflow. It reads a
+successful completed **main push**, verifies that commit is an ancestor, and otherwise supplies
+no baseline. Manual runs cannot advance it. A newer failed, cancelled, active or release-follow
+publication forces a full build: its partial writes may have used a different toolchain override,
+which a source diff cannot see. Successful runs record their actual resolved platform ref and
+image digests in `publication-inputs`; a missing or differing receipt also forces a full build.
+The registry's package version and `github.event.before` are not publication evidence.
+
+Selection takes the **union of paths changed by all intervening commits**, not just the net diff.
+A failed run can publish some bundles before it fails; if a later commit reverts that change,
+those bundles must be republished even when HEAD equals the successful baseline. The history union
+retains that repair. A missing baseline or an empty/unreadable history selects everything. A
+workflow/tooling/platform-pin change also selects everything. Release-follow events remain full.
+Floor bundles required by compilation and the sealed bake remain selected; suites run only for
+entries actually affected. `publication-run` pairs the attested baseline with its successful run.
+Unchanged floor entries reuse that run's still-live module artifacts through the existing reuse
+and receipt path. Missing artifacts retain the normal build leg; affected entries never reuse on
+this proof. The module-pack tool is not rebuilt when all selected bundles are reused. The existing receipt verification and supported publication endpoint
+are unchanged. No registry credential or mutable publication ref is introduced.
+
+This is deliberately a conservative first separation. A chronically failing publishing workflow
+forces full builds until a successful publication restores the baseline. The content-addressed module ledger remains the mechanism for coordinating concurrent builds and
+reusing results across arbitrary runs; the caller must provision its credential before enabling
+it. Successful-publication reuse needs only the existing GitHub Actions read permission. Do not substitute the bake's two-module composition
+index for evidence that the whole compiled catalogue was published.
+
+
+`build-logic-ref` opts the module call into these selectors at an immutable core commit, separately
+from `platform-ref` (the framework source against which compiled suites run). A workflow update
+must not silently advance that source pin. Existing callers without the new input keep their
+previous selector and do not invoke the new helpers. The publication-input receipt includes both
+resolved framework source and build-logic pins, as well as the image digests.
+
+The reusable lane accepts the baseline only as a pair: a numeric `publication-run` and a full
+source SHA with `build-logic-ref` enabled. An absent run or malformed pair keeps broad publishing.
+If the compiled-project selector cannot load its scope helper or project graph, it validates the
+entire declared policy; a missing or syntactically invalid helper is covered by its self-test.
+The ledger lane guard verifies that publication reuse receives both ledger outputs and that its
+final build subset feeds the build and postcondition together.

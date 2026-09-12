@@ -4,6 +4,11 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using Memex.Portal.Shared.SelfUpdate;
+using MeshWeaver.Data;
+using MeshWeaver.Hosting.SelfUpdate;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -64,6 +69,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddPluginCatalog()
+            .AddUpdatePolicyType()
             .ConfigureServices(services => services
                 // The audience is the one deployment knob the build-principal leg has, and an
                 // unconfigured one refuses everything — so a test that wants the leg live has to
@@ -354,6 +360,121 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         }
     }
 
+    [Fact(Timeout = 240_000)]
+    public async Task ComboVerification_BuildCanReadAndRecord_WithoutChangingDisabledUpdates()
+    {
+        jwks = () => tokens.Jwks();
+        var principal = VerificationPrincipal();
+        await Grant(principal);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await access.RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateOrUpdateNode(new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
+            {
+                Name = "Update policy", NodeType = UpdatePolicyNodeType.NodeType,
+                State = MeshNodeState.Active,
+                Content = new UpdatePolicyContent { Policy = UpdatePolicyKind.None,
+                    LatestAvailableTag = "3.0.0-ci.123" },
+            })).Timeout(TestTimeouts.Convergence).Await();
+        await using var app = await StartHost(Path.GetTempPath());
+        var token = tokens.Mint(Audience, eventName: "workflow_run");
+        using var combo = await Get(app, ReleaseGateEndpoints.ComboRoute, token);
+        Assert.Equal(HttpStatusCode.OK, combo.StatusCode);
+        Assert.Contains("isComplete", await combo.Content.ReadAsStringAsync());
+
+        var verdict = new ComboVerification
+        {
+            CandidateTag = "3.0.0-ci.123", VerifiedAt = DateTimeOffset.UtcNow,
+            Verdict = ComboVerdictKind.NotVerifiable, Caveats = ["Test could not execute the candidate"],
+        };
+        using var recorded = await PostVerdict(app, token,
+            JsonSerializer.Serialize(verdict, InstanceComboAssembler.Json));
+        Assert.Equal(HttpStatusCode.OK, recorded.StatusCode);
+        Assert.Contains("\"recorded\":true", await recorded.Content.ReadAsStringAsync());
+        var policy = await access.RunAsSystem(() => Mesh.GetWorkspace()
+                .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Select(n => UpdatePolicyNodeType.Parse(n, Mesh.JsonSerializerOptions)))
+            .Where(c => c.VerificationFor(verdict.CandidateTag)?.VerifiedAt == verdict.VerifiedAt)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        Assert.Equal(UpdatePolicyKind.None, policy.Policy);
+        Assert.Equal("3.0.0-ci.123", policy.LatestAvailableTag);
+        Assert.Equal(ComboVerdictKind.NotVerifiable, policy.VerificationFor(verdict.CandidateTag)!.Verdict);
+
+        // Revocation is observed on the very next request, including the write route.
+        await Grant(principal with { RequestedAction = BuildPrincipalActions.Revoke });
+        using var revoked = await PostVerdict(app, token, "{}");
+        Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
+    }
+
+    [Theory(Timeout = 240_000)]
+    [InlineData("scope")]
+    [InlineData("event")]
+    [InlineData("ref")]
+    [InlineData("repository")]
+    [InlineData("repositoryId")]
+    [InlineData("ownerId")]
+    [InlineData("audience")]
+    [InlineData("expired")]
+    public async Task ComboVerification_RefusesAChangedTrustInput(string changed)
+    {
+        jwks = () => tokens.Jwks();
+        var principal = VerificationPrincipal();
+        if (changed == "scope") principal = principal with { Scopes = ["fetch:plugins"] };
+        if (changed == "ownerId") principal = principal with { RepositoryOwnerId = "wrong-owner" };
+        await Grant(principal);
+        var token = tokens.Mint(changed == "audience" ? "https://another.portal.test" : Audience,
+            repository: changed == "repository" ? "Systemorph/AnotherRepo" : Repository,
+            repositoryId: changed == "repositoryId" ? "wrong-id" : "123456789",
+            eventName: changed == "event" ? "pull_request" : "workflow_dispatch",
+            gitRef: changed == "ref" ? "refs/heads/feature" : "refs/heads/main",
+            issuedAt: changed == "expired" ? DateTimeOffset.UtcNow.AddHours(-1) : null);
+        await using var app = await StartHost(Path.GetTempPath());
+        foreach (var route in new[] { ReleaseGateEndpoints.ComboRoute,
+                     ReleaseGateEndpoints.SelectRoute, ReleaseGateEndpoints.Route })
+        {
+            using var denied = await Get(app, route, token);
+            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+        }
+        // Even malformed input must be refused as unauthorized, before the body is touched.
+        using var write = await PostVerdict(app, token, "not JSON");
+        Assert.Equal(HttpStatusCode.Unauthorized, write.StatusCode);
+    }
+
+    [Theory(Timeout = 240_000)]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("not JSON")]
+    [InlineData("{\"candidateTag\":\"3.0.0-ci.1\",\"verifiedAt\":\"2026-09-10T01:00:00Z\",\"verdict\":\"Green\"}")]
+    public async Task ComboVerification_RefusesAnInvalidOrEmptyGreenVerdict(string body)
+    {
+        jwks = () => tokens.Jwks();
+        await Grant(VerificationPrincipal());
+        await using var app = await StartHost(Path.GetTempPath());
+        using var response = await PostVerdict(app,
+            tokens.Mint(Audience, eventName: "workflow_run"), body);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    private static BuildPrincipal VerificationPrincipal() => Principal() with
+    {
+        RepositoryId = "123456789", RepositoryOwnerId = "9999", Scopes = ["verify:combo"],
+        Events = new Dictionary<string, IReadOnlyCollection<string>>
+        {
+            ["workflow_run"] = [BuildVerbs.Verify], ["workflow_dispatch"] = [BuildVerbs.Verify],
+        },
+        EventRefs = new Dictionary<string, IReadOnlyCollection<string>>
+        {
+            ["workflow_run"] = ["refs/heads/main"], ["workflow_dispatch"] = ["refs/heads/main"],
+        },
+    };
+
+    private static async Task<HttpResponseMessage> PostVerdict(WebApplication app, string token, string body)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, ReleaseGateEndpoints.VerificationRoute);
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await app.GetTestClient().SendAsync(request);
+    }
+
     private static void WriteBundle(string path)
     {
         using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
@@ -372,8 +493,10 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         builder.Services.AddSingleton<IMessageHub>(Mesh);
         builder.Services.AddSingleton(new InstanceRegistryAuthenticator(
             Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<InstanceRegistryAuthenticator>>()));
+        builder.Services.AddSingleton(new InstanceComboReader(Mesh));
         var app = builder.Build();
         app.MapPluginBundles();
+        app.MapReleaseGate();
         await app.StartAsync();
         return app;
     }

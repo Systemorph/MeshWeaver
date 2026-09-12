@@ -79,21 +79,22 @@ Key points:
 | `Teams:AppPassword` | the bot app client secret (`MicrosoftAppPassword`) — keep in Key Vault |
 | `Teams:TenantId` | Entra tenant id for a single-tenant bot (optional; multi-tenant when empty) |
 
-Configured through the AppHost fluent API, exactly like email:
+Configured on the Deployment record's advanced rung (portal configuration keys), and the secret
+handed over separately — never on the record:
 
 ```csharp
-builder.AddMemex("memex", o => o
+builder.AddMemex("memex")
     // …
-    .WithTeams(
-        enabled: true,
-        appId: "<bot app id>",
-        appPassword: "<from Key Vault>",
-        tenantId: "<tenant>"));
+    .WithPortalConfig("Teams__Enabled", "true")
+    .WithPortalConfig("Teams__AppId", "<bot app id>")
+    .WithPortalConfig("Teams__TenantId", "<tenant>")
+    .WithSecret("Teams__AppPassword", builder.AddParameter("teams-app-password", secret: true));
 ```
 
 Deploy parameters (`Memex.Deploy.AppHost`): `teams-enabled`, `teams-app-id`, `teams-app-password`,
-`teams-tenant-id` → emitted as `Teams__*`. On AKS the secret comes from Key Vault
-(`teams-apppassword → Teams__AppPassword`), like the email client secret.
+`teams-tenant-id` → emitted as `Teams__*`. On AKS the secret comes from Key Vault through the
+record's `keyVaultSecrets` map (`teams-apppassword → Teams__AppPassword`), like the email client
+secret ([ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire)).
 
 ## Azure setup (one-time, by an admin)
 
@@ -112,6 +113,17 @@ Deploy parameters (`Memex.Deploy.AppHost`): `teams-enabled`, `teams-app-id`, `te
 
 > Until step 5, the bot is completely inert — the code ships with `Teams:Enabled=false`, the endpoint
 > returns `NotFound`, and no reply sender runs.
+
+## What the bot does NOT do
+
+The bot **reads nothing on a user's behalf**: it cannot list a user's teams, enumerate channels,
+read channel history or chats, or post as a user. Its outbound credential is an app-only Bot
+Framework connector token, valid only for conversations the bot is part of. Reading or sending a
+user's Teams content is a different integration — delegated Graph scopes on the Executive
+Assistant's consent link plus tools on its plugin — and a team the user reaches as a **guest**
+(another company's tenant) is not reachable on a home-tenant token at all. An agent that answers
+"I have no Teams access" is describing this accurately; the engineering notes live with the
+repository's `/teams` skill.
 
 ## Notifications over Teams
 

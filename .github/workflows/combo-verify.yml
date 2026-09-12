@@ -84,8 +84,8 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
-          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+          FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
           COMBO_VERIFY_INSTANCES: ${{ vars.COMBO_VERIFY_INSTANCES }}
           COMBO_VERIFY_SOURCES: ${{ vars.COMBO_VERIFY_SOURCES }}
           COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
@@ -96,8 +96,8 @@ jobs:
           [ -n "${AZURE_CLIENT_ID:-}" ]       || missing+=("secrets.AZURE_CLIENT_ID          OIDC app registration for azure/login (already provisioned for main-cd)")
           [ -n "${AZURE_TENANT_ID:-}" ]       || missing+=("secrets.AZURE_TENANT_ID          the Systemorph AAD tenant (already provisioned for main-cd)")
           [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID    the subscription holding ACR meshweaver (already provisioned for main-cd)")
-          [ -n "${MESHWEAVER_APP_ID:-}" ]     || missing+=("secrets.MESHWEAVER_APP_ID        the org App whose installation token reads the module repositories (already provisioned for chart-drift)")
-          [ -n "${MESHWEAVER_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key, PEM (already provisioned for chart-drift)")
+          [ -n "${FLEET_READER_APP_ID:-}" ]     || missing+=("secrets.FLEET_READER_APP_ID        app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), whose installation token reads the module repositories (the pair shared-rules and chart-drift use) — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
+          [ -n "${FLEET_READER_APP_PRIVATE_KEY:-}" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write and is not installed on Memex")
           [ -n "${COMBO_VERIFY_INSTANCES:-}" ] || missing+=("vars.COMBO_VERIFY_INSTANCES      JSON array of the instances to verify: [{\"name\":\"memex\",\"baseUrl\":\"https://memex.systemorph.com\"}, …]")
           [ -n "${COMBO_VERIFY_SOURCES:-}" ]   || missing+=("vars.COMBO_VERIFY_SOURCES        space-separated name=url for --source, e.g. plugins=https://github.com/Systemorph/MeshWeaver.Plugins")
           [ -n "${COMBO_VERIFY_KEYS:-}" ]      || missing+=("secrets.COMBO_VERIFY_KEYS        JSON object {instance name: mwi_… instance-registry key}, one per instance above")
@@ -174,9 +174,13 @@ jobs:
         id: repo-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
           owner: Systemorph
+          # Read-only, STATED rather than inherited: the verifier fetches module sources and writes
+          # nothing to GitHub. The read-only fleet-reader App cannot grant more anyway; this line keeps
+          # a later-widened App from widening this token.
+          permission-contents: read
 
       - name: Build the verifier
         run: dotnet build tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj -c Release

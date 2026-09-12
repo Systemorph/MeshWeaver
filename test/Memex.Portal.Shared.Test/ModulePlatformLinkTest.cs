@@ -4,6 +4,8 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
@@ -150,6 +152,133 @@ public class ModulePlatformLinkTest : IDisposable
         // The bytes ARE on the shelf — consumers fetch them and apply this same measurement
         // against THEIR platform.
         Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+    }
+
+    /// <summary>
+    /// 🚨 #3996 — an older shelf-only upload is retained only when it is a useful fallback.
+    /// A numerically newer fallback that this platform cannot load must not displace the working
+    /// one: fallback ordering is loadability first, version second, just like activation itself.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderUnloadablePublish_DoesNotReplaceTheWorkingFallback()
+    {
+        const string name = "MeshWeaver.Test.OrderedShelf";
+        var oldLoadable = ModuleBuiltAgainstThisPlatform(name);
+        var newestLoadable = ModuleBuiltAgainstThisPlatform(name);
+        var middleUnloadable = ModuleBuiltAgainstAFuturePlatform(name);
+
+        await landing.ShelveModule(
+                name, [(name + ".dll", oldLoadable)], version: "1.5.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        await landing.ShelveModule(
+                name, [(name + ".dll", newestLoadable)], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", middleUnloadable)], version: "1.6.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.True(outcome.ShelfOnly);
+        Assert.True(outcome.Held);
+        Assert.False(outcome.RetainedAsFallback,
+            "a working fallback is never displaced by bytes this platform measured as unloadable");
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("1.5.0", head.PreviousVersion);
+        var fallback = ModuleActivationBoot.PreviousGeneration(head);
+        Assert.NotNull(fallback);
+        Assert.True(ModulePlatformLink.Check(
+            ModuleActivationBoot.LandedDllPath(root, fallback),
+            ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory)).MayLoad);
+    }
+
+    /// <summary>
+    /// 🚨 #3996 — a NEWER head this registry cannot load ITSELF is still the head. The shelf carries
+    /// modules for platforms newer than the registry serving them, and boot runs the fallback when
+    /// the head does not link here (#3649, rule R1), so an older upload that DOES link here takes the
+    /// FALLBACK slot, never the head. Were loadability-here a condition on the head, 1.6.1 would
+    /// become the head, and the first restart after this registry's own platform caught up would load
+    /// 1.6.1 over 1.7.0 — #3996 by another road; with a loadable fallback already recorded, the newer
+    /// generation would not even be kept.
+    /// </summary>
+    [Fact]
+    public async Task ANewerHeadThatDoesNotLinkHere_StaysTheHead_AndTheOlderLoadablePublishBecomesItsFallback()
+    {
+        const string name = "MeshWeaver.Test.WarehousedHead";
+        var first = await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstAFuturePlatform(name))], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        Assert.True(first.Held,
+            "precondition: the 1.7.0 head does NOT link on this platform — without it this proves nothing");
+
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "1.6.1")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.False(outcome.Held, "precondition: 1.6.1 links here");
+        Assert.True(outcome.ShelfOnly,
+            "a newer head that does not link HERE is still the newest landed generation on this shelf");
+        Assert.Equal("1.7.0", outcome.HeadVersion);
+        Assert.True(outcome.RetainedAsFallback);
+        Assert.True(outcome.RestartRequired,
+            "the fallback moved while the head does not load here, so boot runs 1.6.1 at the next restart");
+
+        var list = ModuleActivationSidecar.Read(root);
+        var head = Assert.Single(list.Entries);
+        Assert.Equal("1.7.0", head.Version);
+        Assert.Equal("1.6.1", head.PreviousVersion);
+        Assert.True(list.PendingRestart);
+    }
+
+    /// <summary>
+    /// A version that is not SemVer at all is UNKNOWN, not "older". <c>NuGetVersionComparer</c> reads
+    /// an unparseable part as 0, so without the check a "nightly" label would rank below every real
+    /// version and be shelved for good — a string deciding what the bytes should (rule R2).
+    /// </summary>
+    [Fact]
+    public async Task ANonSemVerVersion_IsUnknown_AndMovesTheHeadAsBefore()
+    {
+        const string name = "MeshWeaver.Test.NightlyLabel";
+        Assert.True(MeshWeaver.Plugin.Packaging.NuGetVersionComparer.Instance.Compare("nightly", "1.7.0") < 0,
+            "precondition: the comparer ranks a non-SemVer label below every real version");
+        await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "nightly")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.False(outcome.ShelfOnly,
+            "a non-SemVer label is no evidence of order — it moves the head as an unversioned upload does");
+        Assert.Equal("nightly", Assert.Single(ModuleActivationSidecar.Read(root).Entries).Version);
+    }
+
+    /// <summary>
+    /// A head that LINKS but that the boot already failed to load is running its fallback, which a
+    /// static link probe cannot see — only the boot's unloadable marker says so. A shelf-only upload
+    /// that moves that fallback therefore changes what the next restart loads, and must say so.
+    /// </summary>
+    [Fact]
+    public async Task AShelfOnlyUploadMovingTheFallback_UnderAHeadTheBootFailedToLoad_RequiresARestart()
+    {
+        const string name = "MeshWeaver.Test.BootFailedHead";
+        await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "1.7.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        var head = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        ModuleActivationSidecar.SetUnloadable(
+            root, name, head.Directory!, "boot-measured", "the boot failed to load it");
+        Assert.NotNull(Assert.Single(ModuleActivationSidecar.Read(root).Entries).UnloadableFrameworkMvid);
+
+        var outcome = await landing.ShelveModule(
+                name, [(name + ".dll", ModuleBuiltAgainstThisPlatform(name))], version: "1.6.1")
+            .Timeout(TestTimeouts.Convergence).Await();
+
+        Assert.True(outcome.ShelfOnly);
+        Assert.True(outcome.RetainedAsFallback);
+        Assert.True(outcome.RestartRequired,
+            "the boot already failed to load the 1.7.0 head, so this process runs its fallback — and "
+            + "the fallback just moved to 1.6.1, which the next restart loads");
     }
 
     /// <summary>
@@ -437,6 +566,139 @@ public class ModulePlatformLinkTest : IDisposable
     }
 
     // ───────────────────────────────────────────────────────────── harness
+
+    /// <summary>Different assembly versions and additive APIs do not remove a referenced type.
+    /// Exercise the real metadata probe with separately compiled contracts in both directions.</summary>
+    [Theory]
+    [InlineData("1.0.0.0", "9.0.0.0")]
+    [InlineData("9.0.0.0", "1.0.0.0")]
+    public void CompatibleApiAcrossPlatformVersions_IsLinkable(string builtVersion, string runningVersion)
+    {
+        const string contractName = "MeshWeaver.Test.VersionedContract";
+        const string moduleName = "MeshWeaver.Test.VersionTolerantPack";
+        var builtContract = Emit(contractName, $$"""
+            [assembly: System.Reflection.AssemblyVersion("{{builtVersion}}")]
+            namespace MeshWeaver.Test;
+            public class StableApi { public int Answer() => 1; }
+            """);
+        var module = Emit(moduleName, """
+            public class View {
+                public int Render(MeshWeaver.Test.StableApi api) => api.Answer();
+            }
+            """, extra: MetadataReference.CreateFromImage(builtContract));
+        var runningContract = Emit(contractName, $$"""
+            [assembly: System.Reflection.AssemblyVersion("{{runningVersion}}")]
+            namespace MeshWeaver.Test;
+            public class StableApi { public int Answer() => 42; public string Extra() => "new"; }
+            public class UnusedAddition { }
+            """);
+
+        var surface = ModulePlatformSurface.OfFiles([Write(contractName, runningContract)]);
+        var verdict = ModulePlatformLink.Check(module, moduleName, new HashSet<string> { moduleName }, surface);
+
+        Assert.Equal(ModuleLinkState.Linkable, verdict.State);
+        Assert.True(verdict.MayLoad, verdict.Report());
+        Assert.True(verdict.CheckedTypeReferences > 0);
+        Assert.Contains(contractName, verdict.CheckedAssemblies);
+        Assert.Empty(verdict.MissingTypes);
+    }
+
+    /// <summary>The same version can contain incompatible bytes. Version equality must never
+    /// replace the type measurement, even when an unrelated type remains in the assembly.</summary>
+    [Fact]
+    public void IdenticalPlatformVersionWithRemovedApi_IsUnlinkable()
+    {
+        const string contractName = "MeshWeaver.Test.SameVersionContract";
+        const string moduleName = "MeshWeaver.Test.RemovedApiPack";
+        var builtContract = Emit(contractName, """
+            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+            namespace MeshWeaver.Test;
+            public class RequiredApi { }
+            """);
+        var module = Emit(moduleName, """
+            public class View { public MeshWeaver.Test.RequiredApi Render() => new(); }
+            """, extra: MetadataReference.CreateFromImage(builtContract));
+        var runningContract = Emit(contractName, """
+            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+            namespace MeshWeaver.Test;
+            public class UnrelatedApi { }
+            """);
+
+        var verdict = ModulePlatformLink.Check(module, moduleName, new HashSet<string> { moduleName },
+            ModulePlatformSurface.OfFiles([Write(contractName, runningContract)]));
+
+        Assert.Equal(ModuleLinkState.Unlinkable, verdict.State);
+        Assert.False(verdict.MayLoad);
+        Assert.Contains(verdict.MissingTypes, missing => missing.Contains("MeshWeaver.Test.RequiredApi", StringComparison.Ordinal));
+        Assert.Contains(contractName, verdict.Report(), StringComparison.Ordinal);
+    }
+
+    /// <summary>Exercise real method binding as well as type metadata. A changed method body or
+    /// added overload keeps the used signature working; removing/changing it fails when invoked.
+    /// The type probe alone deliberately makes no member-compatibility claim.</summary>
+    [Theory]
+    [InlineData("public int Answer() => 42; public int Answer(int extra) => extra;", true)]
+    [InlineData("public long Answer() => 42;", false)]
+    [InlineData("public int Answer(int extra) => extra;", false)]
+    public void MemberCompatibility_IsMeasuredByBindingTheUsedSignature(string runtimeMember, bool compatible)
+    {
+        const string contractName = "MeshWeaver.Test.MemberContract";
+        const string moduleName = "MeshWeaver.Test.MemberConsumer";
+        var builtContract = Emit(contractName,
+            "namespace MeshWeaver.Test; public class Api { public int Answer() => 1; }");
+        var consumer = Emit(moduleName,
+            "public static class View { public static int Render() => new MeshWeaver.Test.Api().Answer(); }",
+            extra: MetadataReference.CreateFromImage(builtContract));
+        var runtimeContract = Emit(contractName,
+            "namespace MeshWeaver.Test; public class Api { " + runtimeMember + " }");
+
+        var typeVerdict = ModulePlatformLink.Check(consumer, moduleName, new HashSet<string> { moduleName },
+            ModulePlatformSurface.OfFiles([Write(contractName, runtimeContract)]));
+        Assert.Equal(ModuleLinkState.Linkable, typeVerdict.State);
+
+        var context = new AssemblyLoadContext("member-contract-" + Guid.NewGuid().ToString("N"), isCollectible: true);
+        try
+        {
+            using var runtime = new MemoryStream(runtimeContract);
+            context.LoadFromStream(runtime);
+            using var module = new MemoryStream(consumer);
+            var render = context.LoadFromStream(module).GetType("View")!.GetMethod("Render")!;
+            if (compatible)
+                Assert.Equal(42, render.Invoke(null, null));
+            else
+            {
+                var error = Assert.Throws<TargetInvocationException>(() => render.Invoke(null, null));
+                var missing = Assert.IsType<MissingMethodException>(error.InnerException);
+                Assert.Contains("Answer", missing.Message, StringComparison.Ordinal);
+            }
+        }
+        finally { context.Unload(); }
+    }
+
+    /// <summary>An incompatible incoming generation must not replace the working activation.
+    /// Run both real landings and verify the previous bytes and activation pointer survive.</summary>
+    [Fact]
+    public async Task MissingApiInUpgrade_PreservesWorkingModuleAndItsBytes()
+    {
+        const string name = "MeshWeaver.Test.ContinuityPack";
+        var good = ModuleBuiltAgainstThisPlatform(name);
+        await landing.LandModule(name, [(name + ".dll", good)], version: "1.0.0")
+            .Timeout(TestTimeouts.Convergence).Await();
+        var before = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        var goodPath = Path.Combine(ModuleLandingService.ModuleDirectoryFor(root, name, before), name + ".dll");
+
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await landing.LandModule(name, [(name + ".dll", ModuleBuiltAgainstAFuturePlatform(name))],
+                    version: "2.0.0", minMeshVersion: "0.0.1")
+                .Timeout(TestTimeouts.Convergence).Await());
+
+        Assert.Contains(FutureType, refusal.Message, StringComparison.Ordinal);
+        var after = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
+        Assert.Equal(before.Directory, after.Directory);
+        Assert.Equal(before.Version, after.Version);
+        Assert.True(after.Enabled);
+        Assert.Equal(good, File.ReadAllBytes(goodPath));
+    }
 
     /// <summary>
     /// A module compiled against a STAND-IN <c>MeshWeaver.Mesh.Contract</c> that carries

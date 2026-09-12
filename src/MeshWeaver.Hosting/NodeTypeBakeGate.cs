@@ -58,6 +58,7 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     private readonly ConcurrentDictionary<string, string> regressions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> unevaluated = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> contentBroken = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> retired = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> retracted = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -231,6 +232,20 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     public IReadOnlyDictionary<string, string> ContentBroken => contentBroken;
 
     /// <summary>
+    /// Types RETIRED by the repository that owns them — either the definition node no longer
+    /// exists (<see cref="PreWarmStatus.Removed"/>: pruned after its instances were migrated,
+    /// possibly while this very sweep ran) or it is held only for its remaining instances
+    /// (<see cref="PreWarmStatus.Retired"/>: <c>NodeTypeDefinition.PendingRetirement</c>). Visible
+    /// for diagnosis, deliberately NOT readiness-blocking: the repository withdrew the type on
+    /// purpose, so its compile status is no longer evidence about an image. Measured
+    /// 2026-09-08 20:31:12Z on memex.systemorph.com: a type pruned 38 s before its compile was
+    /// recorded as <c>CompileError</c> on a "healthy" baseline, refused readiness, and its recovery
+    /// watch — subscribed to a node that no longer existed — could never observe a recovery, so
+    /// the rollout stalled for good.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Retired => retired;
+
+    /// <summary>
     /// Regressions that were RETRACTED because the type has since been observed reaching a usable
     /// build on this image — see <see cref="RetractRegression"/>. Kept (rather than simply
     /// forgotten) so a rollout that recovered by itself still says so in the health payload: a
@@ -307,9 +322,24 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
         // the same deploy-freeze rule as WasHealthyBeforeBake, arriving through content deletion
         // instead of an abandoned Error record. UpstreamContentBroken is the same condition one
         // hop downstream (the depth-1 rule, again).
-        if (outcome.Status is PreWarmStatus.NoSources or PreWarmStatus.UpstreamContentBroken)
+        if (outcome.Status is PreWarmStatus.NoSources
+                              or PreWarmStatus.DeclaredSourcesMissing
+                              or PreWarmStatus.UpstreamContentBroken)
         {
             contentBroken[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
+            return false;
+        }
+
+        // A RETIREMENT is not a regression either. The repository that owns the type stopped
+        // carrying it: the node is gone (Removed — pruned once its instances were migrated, and a
+        // sweep that enumerated it seconds earlier then compiles against nothing), or it is held
+        // only for instances that have not been retyped yet (Retired). No image did that and no
+        // rollout can undo it; gating on it held memex.systemorph.com's rollout on a type whose
+        // node no longer existed (2026-09-08 20:31Z), with a recovery watch that could not observe
+        // a recovery because there was nothing left to recover. See Retired.
+        if (outcome.Status is PreWarmStatus.Retired or PreWarmStatus.Removed)
+        {
+            retired[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
             return false;
         }
 
@@ -365,13 +395,37 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// <param name="reason">Why — recorded in <see cref="Retracted"/> and the health payload.</param>
     /// <returns><c>true</c> if a regression was actually held for this type and has now been removed.</returns>
     public bool RetractRegression(string typePath, string reason)
+        => Withdraw(typePath, reason, retracted);
+
+    /// <summary>
+    /// 🚨 A REGRESSION RECORDED ON A TYPE THAT HAS SINCE BEEN RETIRED IS WITHDRAWN — the counterpart
+    /// of <see cref="RetractRegression"/> for the other way a standing verdict loses its basis.
+    /// The recovery watch subscribes to the condemned type's node; when that node no longer exists
+    /// (the repository pruned the type after its instances were migrated) the watch cannot ever see
+    /// a fresh build, and "a watch that cannot observe a recovery must never be read as one" turned
+    /// into "a rollout that can never proceed" (memex.systemorph.com, 2026-09-08 20:31:12Z). The
+    /// verdict moves to <see cref="Retired"/> — it is not laundered into a recovery — and the
+    /// derived verdicts cascade exactly as for a retraction: a dependent skipped because THIS type
+    /// failed has no evidence left either.
+    ///
+    /// <para>It cannot mask a real regression: the caller establishes that the node is ABSENT
+    /// (a listing that does not return it), never merely unreadable — an existing node whose read
+    /// faults keeps its regression.</para>
+    /// </summary>
+    /// <param name="typePath">The NodeType whose regression is being withdrawn.</param>
+    /// <param name="reason">Why — the evidence that the type was retired.</param>
+    /// <returns><c>true</c> if a regression was actually held for this type and has now been moved.</returns>
+    public bool RetireRegression(string typePath, string reason)
+        => Withdraw(typePath, reason, retired);
+
+    private bool Withdraw(string typePath, string reason, ConcurrentDictionary<string, string> into)
     {
         lock (verdict)
         {
             if (!regressions.TryRemove(typePath, out var was))
                 return false;
 
-            retracted[typePath] = $"{reason} (had been {was})";
+            into[typePath] = $"{reason} (had been {was})";
 
             // 🚨 CASCADE THROUGH THE DERIVED VERDICTS. A dependent skipped as UpstreamFailed was
             // never compiled — its regression's ENTIRE evidence is "my upstream failed". With that
@@ -505,11 +559,17 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     {
         var head = $"{regressions.Count} NodeType(s) regressed on this image: "
             + string.Join(", ", regressions.Keys.OrderBy(k => k, StringComparer.Ordinal));
-        return retracted.IsEmpty
-            ? head
-            : $"{head} ({retracted.Count} further regression(s) retracted after the type rebuilt "
+        var addenda = new List<string>(2);
+        if (!retracted.IsEmpty)
+            addenda.Add($"{retracted.Count} further regression(s) retracted after the type rebuilt "
                 + "on this image — "
-                + string.Join(", ", retracted.Keys.OrderBy(k => k, StringComparer.Ordinal)) + ")";
+                + string.Join(", ", retracted.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!retired.IsEmpty)
+            addenda.Add($"{retired.Count} retired by their repository (not a regression) — "
+                + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        return addenda.Count == 0
+            ? head
+            : $"{head} ({string.Join("; ", addenda)})";
     }
 
     /// <summary>
@@ -521,13 +581,17 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     private string FaultedDetail(string message)
     {
         var head = $"bake NOT PROVEN — the sweep errored before it could verify this image: {message}";
-        var addenda = new List<string>(3);
+        var addenda = new List<string>(4);
         if (!unevaluated.IsEmpty)
             addenda.Add($"{unevaluated.Count} not evaluated — "
                 + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!contentBroken.IsEmpty)
             addenda.Add($"{contentBroken.Count} content-broken, sources missing — "
                 + string.Join(", ", contentBroken.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!retired.IsEmpty)
+            addenda.Add($"{retired.Count} retired by their repository (a pending or completed "
+                + "retirement, not a regression) — "
+                + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!retracted.IsEmpty)
             addenda.Add($"{retracted.Count} regression(s) retracted after the type rebuilt on this "
                 + "image — "
@@ -547,13 +611,17 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// </summary>
     private string CompleteDetail(string message)
     {
-        var addenda = new List<string>(3);
+        var addenda = new List<string>(4);
         if (!unevaluated.IsEmpty)
             addenda.Add($"{unevaluated.Count} not evaluated — "
                 + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!contentBroken.IsEmpty)
             addenda.Add($"{contentBroken.Count} content-broken, sources missing — "
                 + string.Join(", ", contentBroken.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!retired.IsEmpty)
+            addenda.Add($"{retired.Count} retired by their repository (a pending or completed "
+                + "retirement, not a regression) — "
+                + string.Join(", ", retired.Keys.OrderBy(k => k, StringComparer.Ordinal)));
         if (!retracted.IsEmpty)
             addenda.Add($"{retracted.Count} regression(s) retracted after the type rebuilt on this "
                 + "image — "

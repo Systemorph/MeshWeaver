@@ -716,9 +716,10 @@ which is the part that must never drift.
 
 ## Retention: the published store is pruned by REFERENCE, never by age alone
 
-> Maintainer directive, 2026-09-08: *"please also set up a recurring process in memex.systemorph.com
-> to clean up these shares from old releases. typically when final release is out, we can remove all
-> -CI"* — *"let's maybe leave last 10 -CI"*.
+The current policy is the 30-day age window and release/consumer protection contract in
+[Released Artifact Retention](/Doc/Architecture/ReleasedArtifactRetention) (#3842).
+It supersedes the earlier request to keep ten CI builds. Module repositories resolve
+the released platform at run time; retention must not restore platform pins.
 
 Every CI build that publishes a bake adds one `<root>/<identity>/` directory to the store, and until
 this pass nothing ever removed one. Measured 2026-09-08 on memex.systemorph.com through the memex
@@ -729,38 +730,38 @@ silently and reports the failure far from the cause — every runtime NodeType r
 
 ### The rule, stated once for two stores
 
-The same predicate governs this store and the container registry's pinned digests
-([Pinned Image Retention](../PinnedImageRetention), #3438):
+The same required outcome applies to this store and the container registry (#3438):
 
 > **An artifact that anything pins, names, runs or may adopt is kept — regardless of age and
 > regardless of how many newer ones exist. Only an artifact NOTHING references is collected, and an
 > artifact whose references cannot be READ counts as referenced.**
 
-For the registry the references are CI pins; for this store they are the following, each a KEEP,
-ORed together (`PrebuiltBundleStore.Plan`, `MeshWeaver.Hosting`):
+Registry protection must cover advertised last-green sets and their consumers; the
+legacy pin scanner is still a migration component, not that complete inventory. In
+this store the following KEEP rules are ORed (`PrebuiltBundleStore.Plan`, `MeshWeaver.Hosting`):
 
 | # | an identity directory is kept when… | why that is a reference |
 |---|---|---|
 | 1 | it is the framework identity **this process runs** | its own boot and every install-time adoption read it |
-| 2 | a **clean release marker** `_releases/X.Y.Z` names it | a release line stays adoptable forever and is the rollback target |
+| 2 | a **clean release marker** `_releases/X.Y.Z` names it | support has not been established as ended, so official releases stay available |
 | 3 | a NodeType record's **adoption stamp** (`CompiledFrameworkVersion`, written by `PrebuiltAssemblySeeder` and by every local compile) names it | a record was built under it; a re-seed may ask for it again |
-| 4 | it holds, for some source, the **newest sealed publication on the running major line** | exactly what `Modules:VersionStrictness=Family` adopts ([Module Versioning](../ModuleVersioning)) |
-| 5 | a pre-release marker of an **open line** names it and it is among the newest **N** (`KeepNewestPerSource`, default **10**) such identities for some source, by version | the maintainer's "leave the last 10 -CI"; once the clean `X.Y.Z` marker exists the line is CLOSED and this rule keeps none of its `X.Y.Z-ci.<n>` identities |
-| 6 | **no marker names it** and it is among the newest N for some source **by seal time** | nothing can place an unnamed identity on a line, so recency is the only signal it has — such identities are pruned by recency, not by line |
-| 7 | a source under it is **unsealed and younger than the grace** (`UnsealedGrace`, default 2 h) | the publisher writes bundles first and `_complete` last: a young unsealed directory is a seal in flight. A bounded grace is a reference-like signal; an age cutoff on a *sealed* directory would not be, and there is none |
+| 3b | a Deployment reference or registered instance report identifies it, directly or through `_releases/<version>` (`PinnedPlatformReferenceSource`) | running consumers need their adopted version regardless of age; an unresolved version aborts cleanup rather than keeping nothing |
+| 4 | it holds the **newest sealed publication per source for each represented major** | a registry can serve consumers on a different major from its own process; unsealed successors cannot displace this protection |
+| 5 | its newest content write or a release marker naming it is younger than **30 days** (or an explicitly longer `MinimumAge`) | rapid publishing must not delete recent history; this covers sealed and unnamed identities alike |
+| 7 | a source under it is unsealed and younger than `UnsealedGrace` | additional in-flight publication protection; the 30-day floor also applies |
 | 8 | its seal **cannot be read** | unreadable is never unreferenced (the modules GC's #2509 rule) |
 
 Everything else is collected **oldest first, one identity at a time**, each removal logged with the
 bytes reclaimed. The sentinel of every source is deleted before the directory, so a reader that
 lists mid-removal sees "unsealed" and backs off rather than a sealed listing whose bundles are
 vanishing. The `-ci` **markers** of a removed identity — and of an identity already gone for longer
-than the grace — are removed with it, so `_releases/` does not grow forever; a clean release marker
+than the minimum age — are removed with it, so `_releases/` does not grow forever; a clean release marker
 is never removed. The release gates read the same directory
 ([Release Availability Gates](../ReleaseGates)), so a retired `-ci` version simply reads as
 "published no bake" there, which is the truth once its bundles are gone.
 
 **Fail closed, the way `ModuleSetStore.Prune` does.** A store that cannot be listed, or a release
-marker that cannot be read, aborts the pass with nothing collected — which identity an unreadable
+marker that cannot be read, or a consumer version that cannot be resolved, aborts the pass with nothing collected — which identity an unreadable
 marker names is unknown, so no identity can be called unreferenced. The NodeType stamps are read
 from the mesh on every pass (system-scoped, mesh-wide — the pre-warmer's own enumeration); an
 enumeration that cannot be taken aborts that pass too. A removal that fails is counted and the
@@ -784,7 +785,8 @@ blocking filesystem work on the file-system `IIoPool`, never a hub. Then **recur
 | key | default | meaning |
 |---|---|---|
 | `PreWarm:PrebuiltBundleRetention:Delete` | `true` | `false` measures and reports only |
-| `PreWarm:PrebuiltBundleRetention:KeepNewestPerSource` | `10` | rules 5 and 6 |
+| `PreWarm:PrebuiltBundleRetention:MinimumAge` | `30.00:00:00` | may extend the window; values below 30 days cannot shorten it |
+| `PreWarm:PrebuiltBundleRetention:KeepNewestPerSource` | ignored | legacy key retained for compatibility; no count-based cleanup rule |
 | `PreWarm:PrebuiltBundleRetention:UnsealedGrace` | `02:00:00` | rule 7 |
 | `PreWarm:PrebuiltBundleRetention:Interval` | `1.00:00:00` | the recurrence |
 
@@ -813,6 +815,40 @@ workflows the satellites call instead of vendoring. Adoption is **per job**: the
 every repo calls `node-repo-publish-bake` (the lane whose script contract must not drift), while a
 repo whose variant of a gate carries repo-specific machinery (Plugins' Tests-area ratchet,
 Education's course checks) keeps that job vendored until the machinery generalizes.
+
+**`node-repo-ci-failure.yml` (2026-09-12) is the lane that gives a red `main` an audience, and its
+adoption is staged: core is wired now, the six satellites wire it in follow-up PRs once the lane is
+on `main`.** Every satellite runs its full build on `push: [main]` and once a day on `schedule` (the
+per-build platform wave was switched off the same day), and a red run there is attached to no pull
+request, no reviewer and no check list: it updates nothing and pages nobody. Maintainer, 2026-09-12:
+*"put the ci-failure on all repos, in main; triaging is done by systemorph-com; communicate via MCP —
+open a thread with a triage agent; pool such connections by portal."* The caller is two jobs at the
+end of `ci.yml` (`ci-failure` on `failure()`, `ci-green` on `success()`, both `needs:` every gate
+job, both statically unreachable from a pull request; the template is in the lane's header, and each
+satellite's caller is recorded as `pending:` in `.github/lane-caller-grants.yml` until its wiring PR
+lands). In every repository that calls it the lane does the same thing: **one** open issue labelled
+`ci-main-red` with the exact title `ci-main-red: main is red` and a hidden ownership mark in its body
+(`<!-- ci-main-red ledger -->`), whose body is a dated ledger with one entry per red run (run URL,
+sha, trigger, failed jobs with links, platform set); a close inside seven days is *reopened* rather
+than re-filed, so one outage is one story; the run that goes green comments `green again: <run URL>`
+and closes it. **A mechanism may only close an issue it opened:** the ledger owns an issue only when
+it carries the label *and* the title *and* the mark *and* was authored by the Actions bot
+(`github-actions[bot]`, type `Bot` — the one term a human cannot forge, since the other three are
+public fields); anything else is logged and left alone, and the label is deliberately not
+`ci-failure` — that is `main-cd.yml`'s delivery alert, found by label alone, and sharing it would let
+a CD heal close the CI ledger while CI is still red. Each way the lane POSTs a signed event
+(`ci-failure` / `ci-green`, HMAC-SHA256 over the exact body in `X-Hub-Signature-256`, the same shape
+as the build fact) to the control portal's inbox at `vars.CONTROL_WEBHOOK_URL` —
+`https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds` — after validating that the URL is
+https, on `control-webhook-host` (default `memex.systemorph.com`) and under `/api/hooks/`, so a
+signature never travels to an arbitrary host; it then judges the inbox's `"signature"` verdict the
+same three-way way. The issue writes use the caller's `secrets.GITHUB_TOKEN` with `issues: write`
+granted on the caller job, never a GitHub App token (the installation holds no `issues` grant, and an
+issue filed by any other identity would never be owned); the ledger logic is
+`.github/scripts/ci-failure-ledger.py`, fetched at the lane's `scripts-ref` and self-tested at the
+start of every run and in core's `workflow-shell` job. Core's own caller is the same two jobs at the
+end of `dotnet-test.yml`; `main-cd.yml`'s `ci-failure` issue records a different subject (an image
+set that did not publish), is unchanged, and the two never touch each other's issues.
 
 ## 🚨 `node-repo-validate` is not one lane among several — it is where the FLEET-WIDE guards run
 
@@ -1095,6 +1131,13 @@ treat any surviving allowlist or "credentials pending" reference to a satellite'
 as historical.
 
 ### 🚨 Following the release is a POLL in every satellite — and only one repo had it
+
+> 📅 **2026-09-12 — the poll is now the PRIMARY run, not the fallback.** The per-build
+> `meshweaver-framework-released` wave is off by default (`Hosting:PlatformBuilds:BroadcastFrameworkReleases`,
+> Plugins#1707) and no satellite lists the type; each repo's daily `schedule` resolves the newest
+> SEALED set itself (`scripts/resolve-platform.py`, #3842 — not the `:main` tag the table below
+> names) and runs the full bake against it. The four-part shape below remains the reason a satellite
+> carries the poll at all; the cadence rationale is `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
 
 **This is the single defect that makes a fleet boot on an identity nobody baked, and it has been
 rediscovered at least four times. Read this before touching a bake trigger.**

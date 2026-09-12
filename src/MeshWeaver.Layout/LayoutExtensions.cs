@@ -192,6 +192,7 @@ public static class LayoutExtensions
                 typeof(LayoutAreasReference),
                 typeof(GetLayoutAreasRequest),
                 typeof(LayoutAreasResponse),
+                typeof(UserActionAccepted),
                 typeof(DataGridCellClick),
                 // Non-IUiControl content/config records serialised INSIDE control state (so the reflection
                 // sweep above misses them) — they came back untyped on sync hubs and churned the layout:

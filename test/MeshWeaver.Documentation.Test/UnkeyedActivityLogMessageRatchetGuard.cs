@@ -61,7 +61,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     /// carries some; this stops the list as a WHOLE from growing — including by the trick of adding
     /// a new file's line. Lower it whenever you delete or lower an entry.
     /// </summary>
-    private const int TotalBudget = 18;
+    private const int TotalBudget = 17;
 
     /// <summary>Production roots. <c>test/</c> is deliberately out of scope: a test's activity log is
     /// never rendered to a viewer, so keying one would be ceremony.</summary>
@@ -196,6 +196,54 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
             "These activity keys are used in src/ but are in NO catalog, so they render as raw "
             + "tokens. Add them to BOTH strings.en.json and strings.de.json:\n  "
             + string.Join("\n  ", missing));
+    }
+
+    /// <summary>
+    /// 🚨 Closes the blind spot #3917's own fix opened in THIS guard. The upsert handler's refusals
+    /// no longer construct a <c>LogMessage</c> at all — they travel as a <c>LocalizableText</c> and
+    /// are turned into one inside <c>LocalizableText.ToLogMessage</c>, which always chains
+    /// <c>.WithKey</c>. So <see cref="MarkerPattern"/> cannot see a NEW English-only refusal added
+    /// there: <c>LocalizableText.Verbatim("…")</c> would sail straight past it.
+    ///
+    /// <para>Ratcheted per file, on the same rule as the inventory above: the count may FALL, never
+    /// rise. The one allowance in <c>MeshExtensions.cs</c> is the inner <c>CreateNodeResponse.Error</c>
+    /// — the create handler's own words, verbatim upstream text no catalog of ours can carry.</para>
+    /// </summary>
+    [Fact]
+    public void NoNewVerbatimLocalizableTextIsIntroduced()
+    {
+        var root = SourceScan.FindRepoRoot();
+        var budgets = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["src/MeshWeaver.Mesh.Contract/MeshExtensions.cs"] = 1,
+        };
+        var verbatim = new Regex(@"LocalizableText\s*\.\s*Verbatim\s*\(",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        var keyed = new Regex(@"LocalizableText\s*\.\s*Keyed\s*\(",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        var found = SourceScan.SourceFiles(root, ScannedRoots)
+            .Select(f => (File: SourceScan.Relative(root, f), Text: ReadOrEmpty(f)))
+            .Select(x => (x.File, Verbatim: verbatim.Matches(x.Text).Count,
+                Keyed: keyed.Matches(x.Text).Count))
+            .Where(x => x.Verbatim > 0 || x.Keyed > 0)
+            .ToList();
+
+        found.Sum(x => x.Keyed).Should().BeGreaterThan(0,
+            "this ratchet would pass on a tree that had stopped using LocalizableText altogether, "
+            + "which is the regression it exists to catch");
+
+        var offenders = found
+            .Where(x => x.Verbatim > budgets.GetValueOrDefault(x.File, 0))
+            .Select(x => $"  {x.File} ({x.Verbatim} > {budgets.GetValueOrDefault(x.File, 0)} allowed)")
+            .ToArray();
+
+        Assert.True(offenders.Length == 0,
+            "LocalizableText.Verbatim persists ENGLISH onto the node exactly as an unkeyed "
+            + "LogMessage does — it is the spelling this guard's regex cannot see. Use "
+            + "LocalizableText.Keyed with a key in BOTH strings.en.json and strings.de.json, and "
+            + "reserve Verbatim for text this process did not author:\n"
+            + string.Join("\n", offenders));
     }
 
     /// <summary>

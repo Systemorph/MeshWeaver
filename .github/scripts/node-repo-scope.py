@@ -103,7 +103,18 @@ from pathlib import Path
 # drift over-builds the divergent dir out loud instead of silently, and — since 2026-09-08 —
 # instead of switching the whole narrowing off (which is what equality did, on every pull request
 # three satellites ever opened). A literal it cannot READ is still a refusal.
-NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees"}
+#
+# `devtools/` is the DECLARED home for a script no lane runs — a local dev loop, a triage helper.
+# Before it existed such a script could only live in `scripts/`, which is (correctly) the gates'
+# directory and therefore EVERYTHING: measured on MeshWeaver.Plugins run 34618468550 (#1668), a
+# one-line edit to `scripts/run-node-tests.py` — referenced by no workflow — selected 52 of 52
+# compiled projects and every module suite (~89 runner-minutes of portal-host shards + ~200 of
+# module tests); the same diff without it selected 1 of 52. The name is NEW on purpose: `tools/`
+# exists in MeshWeaver.Plugins and is NOT inert there (`src/Directory.Build.targets` and two test
+# projects read it), and a name no repo has yet lands DORMANT in `check-noop-scope-parity.py`
+# everywhere, so the platform can declare it first without reddening any caller. What a file
+# placed there claims: no compiled project, no module content and no gate reads it.
+NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees", "devtools"}
 
 # 🚨 A repo-ROOT path HAS NO TOP-LEVEL DIRECTORY, so NOOP_DIRS above can never reach it: both
 # no-op branches of the classifier are guarded by `"/" in f`, and a single-segment path takes
@@ -328,7 +339,7 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
 
 def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: str | None,
            override: list[str] | None, say, publishing: bool = False,
-           always: frozenset[str] = frozenset()) -> dict:
+           always: frozenset[str] = frozenset(), publication_base: str = "") -> dict:
     all_packages = sorted(node_packages(root))
     universe = [e["module"] for e in entries]
 
@@ -356,11 +367,24 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
             "'Build everything' and 'everything is nothing' cannot both be true, so this is a "
             "broken input (a --root that does not match the checkout?), not a scope.")
 
-    if publishing:
+    # Only an ancestor from a successful publishing run can narrow a main push. Never use
+    # event.before: it loses changes from failed/cancelled runs. Other events retain full scope.
+    publication_diff = False
+    if event == "push" and publication_base:
+        if not re.fullmatch(r"[0-9a-f]{40}", publication_base):
+            return full("publication baseline is not a full commit SHA")
+        ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", publication_base, "HEAD"],
+                                  cwd=root, capture_output=True, timeout=30)
+        if ancestor.returncode != 0:
+            return full("publication baseline is unavailable or not an ancestor of HEAD")
+        publication_diff = True
+        diff_range = f"{publication_base}..HEAD"
+        override = None  # a publishing decision must read the actual tree, never a supplied list
+    if publishing and not publication_diff:
         return full("this run PUBLISHES, and a publishing run is never narrowed — the derived "
                     "version is the change detector on that path, and a diff that misses a unit "
                     "means that unit silently never ships.")
-    if event not in NARROWABLE:
+    if event not in NARROWABLE and not publication_diff:
         return full(FULL_REASONS[lane].get(
             event, f"event '{event}' has no meaningful content diff — running the full set."))
     if not (root / SELECTOR).is_file():
@@ -374,7 +398,15 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
     if override is not None:
         files = [f for f in override if f.strip()]
     else:
-        got = changed_files(root, diff_range or "", say)
+        if publication_diff:
+            # A failed run may have published SOME bundles. Include every intervening change,
+            # even one later reverted, so HEAD repairs those partial publications too.
+            history = subprocess.run(["git", "log", "--format=", "--name-only", "--no-renames",
+                                      "-m", diff_range], cwd=root, capture_output=True,
+                                     text=True, timeout=120)
+            got = sorted(set(history.stdout.splitlines()) - {""}) if history.returncode == 0 else None
+        else:
+            got = changed_files(root, diff_range or "", say)
         if got is None:
             return full(f"git diff --name-only {diff_range} failed (see above) — the changed set "
                         "is unknown, so the full set runs.")
@@ -555,7 +587,7 @@ _STUB_PROJECTS = (
 # 🚨 The stub carries a NOOP_DIRS literal because the real selector does and this script now
 # READS it — a fixture without one would make every case take the drift fallback.
 _STUB_SELECTOR = (
-    'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees"}\n'
+    'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees", "devtools"}\n'
     "import json,sys\n"
     "paths=[l for l in open(sys.argv[sys.argv.index('--changed')+1]).read().splitlines() if l]\n"
     "pk=sorted({p.split('/')[0] for p in paths})\n"
@@ -632,6 +664,36 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         _fixture(root)
+
+        # Real history: a failed intermediate publication followed by a revert still owes
+        # a publish. A net diff would incorrectly select nothing here.
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
+                                  check=True).stdout.strip()
+        git("init", "-q")
+        git("config", "user.name", "Scope Test")
+        git("config", "user.email", "scope@example.test")
+        git("add", ".")
+        git("commit", "-qm", "baseline")
+        base = git("rev-parse", "HEAD")
+        node = root / "Alpha" / "index.json"
+        before = node.read_text()
+        node.write_text(before + "\n")
+        git("commit", "-qam", "intermediate partial publication")
+        node.write_text(before)
+        git("commit", "-qam", "restore original content")
+        result = _run(root, "modules", "push", None,
+                      extra=["--publication-base", base, "--publishing"])
+        check("a reverted partial publication is repaired", result["selected"] == ["Acme.Alpha"])
+        for event in ("schedule", "repository_dispatch", "workflow_dispatch"):
+            result = _run(root, "modules", event, None, extra=["--publication-base", base])
+            check(f"{event} ignores publication baseline", result["scope"] == "full")
+        for invalid in ("short", "f" * 40):
+            result = _run(root, "modules", "push", None, extra=["--publication-base", invalid])
+            check("invalid or unavailable baseline builds full", result["scope"] == "full")
+        result = _run(root, "modules", "push", None,
+                      extra=["--publication-base", git("rev-parse", "HEAD")])
+        check("empty publication range builds full", result["scope"] == "full")
 
         print("FULL-run fallbacks — the bias that makes narrowing safe (both lanes):")
         for lane, n in (("modules", 2),):
@@ -840,7 +902,8 @@ def self_test() -> int:
         selector_path = root / "scripts" / "affected-modules.py"
         # THEIRS is missing `app` — MeshWeaver.SocialMedia's live divergence, measured on run
         # 34122662676, which used to answer `full` on every pull request that repo ever opened.
-        theirs_short = 'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", ".claude", ".worktrees"}\n'
+        theirs_short = ('NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", ".claude", ".worktrees", '
+                        '"devtools"}\n')
         selector_path.write_text(theirs_short + selector_src, encoding="utf-8")
         got = _run(root, "modules", "pull_request", ["docs/guide.md"])
         check("a caller missing one of our NOOP dirs still NARROWS on the ones both agree about",
@@ -853,7 +916,7 @@ def self_test() -> int:
         # THEIRS carries a dir we do not — the other direction, and it must be just as safe.
         selector_path.write_text(
             'NOOP_DIRS = {"legacy", "e2e", "docs", "WhatsNew", "app", ".claude", ".worktrees", '
-            '"vendor"}\n' + selector_src, encoding="utf-8")
+            '"devtools", "vendor"}\n' + selector_src, encoding="utf-8")
         got = _run(root, "modules", "pull_request", ["vendor/lib.js"])
         check("a dir only THEY call inert is still EVERYTHING here (the other direction)",
               got["scope"] == "full" and got["count"] == 2, f"scope={got['scope']}")
@@ -873,6 +936,14 @@ def self_test() -> int:
         got = _run(root, "modules", "pull_request", ["WhatsNew/note.md"])
         check("WhatsNew/ is a NOOP dir — a note-only PR builds NOTHING, not everything",
               got["scope"] == "narrowed" and got["count"] == 0,
+              f"scope={got['scope']} count={got['count']}")
+        got = _run(root, "modules", "pull_request", ["devtools/run-node-tests.py"])
+        check("devtools/ is a NOOP dir — a local dev tool builds NOTHING, not everything",
+              got["scope"] == "narrowed" and got["count"] == 0,
+              f"scope={got['scope']} count={got['count']}")
+        got = _run(root, "modules", "pull_request", ["scripts/run-node-tests.py"])
+        check("…while the same script under scripts/ (the gates) is still EVERYTHING",
+              got["scope"] == "full" and got["count"] == 2,
               f"scope={got['scope']} count={got['count']}")
 
         print("the caller's graphs are load-bearing — every failure of theirs is a FULL run:")
@@ -931,6 +1002,8 @@ def main() -> int:
                    help="the PR base branch — the diff is origin/<base-ref>...HEAD")
     p.add_argument("--changed-list", default=None, dest="changed_list",
                    help="comma-separated changed paths instead of a git diff (tests only)")
+    p.add_argument("--publication-base", default="",
+                   help="successful trunk publication SHA; push only, ancestor-checked")
     p.add_argument("--publishing", action="store_true",
                    help="this run hands its output to a registry or feed — never narrow. The "
                         "publish path's change detector is the derived version, and a diff that "
@@ -964,7 +1037,7 @@ def main() -> int:
     always = frozenset(a.strip() for a in args.always.split(",") if a.strip())
     answer = decide(root, args.lane, entries, args.event,
                     f"origin/{args.base_ref}...HEAD" if args.base_ref else None, changed, say,
-                    publishing=args.publishing, always=always)
+                    publishing=args.publishing, always=always, publication_base=args.publication_base)
 
     # 🚨 A refusal is a BROKEN INPUT, not a scope: exit non-zero so the step fails and the job
     # goes red. Emitting it as an answer is how "build everything, and everything is nothing"

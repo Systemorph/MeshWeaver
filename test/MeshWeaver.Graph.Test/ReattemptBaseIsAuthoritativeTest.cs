@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -55,11 +56,19 @@ public class ReattemptBaseIsAuthoritativeTest
 
     private static MeshNode Update(MeshNode node) => node with { Name = Marker };
 
-    private static bool AlreadyCarriesTheWrite(MeshNode node)
-    {
-        var candidate = Update(node);
-        return ReferenceEquals(candidate, node) || Equals(candidate, node);
-    }
+    /// <summary>
+    /// 🚨 These cases hand <see cref="MeshNodeStreamHandle.ReattemptBaseSource"/> the caller's
+    /// LAMBDA, never a predicate — the seam computes the no-write decision itself
+    /// (<see cref="MeshNodeStreamHandle.PostsNothing"/>), so there is no way for this test to
+    /// supply one rule while the production call site uses another. An earlier version of this file
+    /// injected the predicate and spelled the record comparison out locally, which is exactly how a
+    /// guard covering only ONE of the write path's two no-write exits stayed green (#3477).
+    /// </summary>
+    private static readonly JsonSerializerOptions JsonOptions = new();
+
+    /// <summary>A typed content payload — what a caller's lambda produces, against a mirror that
+    /// holds the same value as untyped JSON.</summary>
+    private sealed record Payload(string Text);
 
     /// <summary>What a subscriber actually observed — all three Rx terminations, separately.</summary>
     private sealed record Observed(IReadOnlyList<MeshNode> Values, Exception? Error, bool Completed);
@@ -97,7 +106,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(Phantom),
             authoritativeBase: Observable.Return<MeshNode?>(OwnerState),
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path,
             onPhantomBase: () => phantomNoted++));
 
@@ -113,6 +123,83 @@ public class ReattemptBaseIsAuthoritativeTest
     }
 
     /// <summary>
+    /// 🚨 THE RESIDUAL #3633 LEFT OPEN — the same phantom, reached through the write path's OTHER
+    /// no-write exit.
+    ///
+    /// <para><c>UpdateRemote</c> decides not to post a patch in TWO places: the record comparison
+    /// (<c>IsRecordNoOp</c>), and — for a lambda whose output is not record-equal — the SERIALISED
+    /// merge patch coming out empty (<c>NO-OP … diff empty after serialisation</c>). Both post
+    /// nothing, both complete the caller as a SUCCESS, both log at Debug. #3633's phantom guard was
+    /// written as the record comparison alone, so a phantom base that fails record equality but
+    /// serialises identically walked past the guard and out through the second exit — into exactly
+    /// the silent loss the guard exists to refuse.</para>
+    ///
+    /// <para><b>Not a contrived pair — it is the cache hub's ordinary shape.</b>
+    /// <c>MeshNode.ContentEquals</c> compares two <c>JsonElement</c>s structurally, but a MIXED
+    /// pair — one <c>JsonElement</c>, one typed — is <c>false</c> by construction, and says so:
+    /// "no JsonSerializerOptions is available here to bridge representations". The mirror
+    /// <c>UpdateRemote</c> reads lives on the cache hub, "whose hub does not know domain types",
+    /// so its content IS a <c>JsonElement</c>; the caller's lambda produces a TYPED content. Every
+    /// such write is not record-equal and serialises identically when the value has not changed —
+    /// which is exactly what the write path's own comment predicts ("a rebuilt-but-identical
+    /// content slips past the record-Equals check above") and why gate 2 exists at all.
+    /// <c>MeshNode.SerializedEquals</c> documents the same three witnesses.</para>
+    ///
+    /// <para><b>Falsified.</b> Narrowing <c>PostsNothing</c> back to the record comparison alone
+    /// (the pre-#3477 predicate) turns this case red on the BEHAVIOUR assertion, measured:
+    /// <c>Expected value to be "initial" … but found "post-nack-4b7556aa5983"</c> — the re-attempt
+    /// diffing against the phantom, which is the loss itself. The first assertion states why the old
+    /// guard cannot see it; the last states why the write path would nevertheless post nothing.</para>
+    /// </summary>
+    [Fact]
+    public void NeverAppliedReattempt_WhoseMirrorCarriesAPhantomThatIsNotRecordEqual_StillRebasesOnTheOwner()
+    {
+        // The cache hub's mirror carries UNTYPED content; the caller's lambda produces a TYPED
+        // value. ContentEquals refuses that mixed pair outright, and the two serialise identically.
+        // 🚨 The mirror's JSON is produced by the SAME serializer the diff uses, so the two sides
+        // are byte-identical under WHATEVER options are supplied — hub options included, with their
+        // naming policy and polymorphic discriminator. A hand-written literal here would pin only
+        // the default options and could disagree with production (which is how the mirror gets its
+        // value in the first place: the owner serialised it with the hub's own options).
+        static JsonElement Mirrored() =>
+            JsonSerializer.SerializeToElement<object>(new Payload("unchanged"), JsonOptions);
+        static MeshNode UpdateRebuildingContent(MeshNode node) =>
+            node with { Name = Marker, Content = new Payload("unchanged") };
+
+        var phantom = new MeshNode(Path) { Name = Marker, Version = 5, Content = Mirrored() };
+        var owned = new MeshNode(Path) { Name = "initial", Version = 4, Content = Mirrored() };
+
+        // The two halves of the gap, stated before the behaviour: gate 1 does not see this base,
+        // and the write path would nevertheless post nothing against it.
+        MeshNodeStreamHandle.IsRecordNoOp(phantom, UpdateRebuildingContent(phantom)).Should().BeFalse(
+            "the pre-#3477 guard was this comparison alone, and it does NOT see this phantom — an "
+            + "untyped mirror value and a typed one are never record-equal, whatever they hold");
+
+        var phantomNoted = 0;
+        var observed = Watch(MeshNodeStreamHandle.ReattemptBaseSource(
+            ownerSaidNeverApplied: true,
+            mirrorBase: Observable.Return(phantom),
+            authoritativeBase: Observable.Return<MeshNode?>(owned),
+            update: UpdateRebuildingContent,
+            jsonOptions: JsonOptions,
+            path: Path,
+            onPhantomBase: () => phantomNoted++));
+
+        observed.Error.Should().BeNull();
+        observed.Values.Should().ContainSingle().Which.Name.Should().Be("initial",
+            "the owner has just stated it does not hold this write, and the mirror base would have "
+            + "produced an empty patch — posting nothing and reporting success for a write that is "
+            + "in no store at all. #3633 closed that exit for a record-equal no-op; this is the "
+            + "same exit one gate later (#3477)");
+        phantomNoted.Should().Be(1, "the swap must be nameable in the log, not invisible");
+        MeshNodeStreamHandle.PostsNothing(phantom, UpdateRebuildingContent(phantom), JsonOptions)
+            .Should().BeTrue(
+                "…and this is WHY: the write path would post NOTHING against this base, because the "
+                + "serialised merge patch is empty. That — not record equality — is the only "
+                + "measure that decides whether a PatchDataRequest is sent");
+    }
+
+    /// <summary>
     /// The other half of the ambiguity, and why the fix cannot be "always fault on an empty diff":
     /// the merge may have committed AND flushed, with only the ACK lost to teardown. Then the write
     /// IS durable, the no-op is correct, and the caller's success is earned. The authoritative read
@@ -125,7 +212,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(Phantom),
             authoritativeBase: Observable.Return<MeshNode?>(new MeshNode(Path) { Name = Marker, Version = 5 }),
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path));
 
         observed.Error.Should().BeNull();
@@ -153,7 +241,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(new MeshNode(Path) { Name = "initial", Version = 4 }),
             authoritativeBase: authoritative,
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path));
 
         observed.Values.Should().ContainSingle().Which.Name.Should().Be("initial");
@@ -182,7 +271,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: false,
             mirrorBase: Observable.Return(Phantom),
             authoritativeBase: authoritative,
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path));
 
         observed.Values.Should().ContainSingle().Which.Name.Should().Be(Marker);
@@ -216,7 +306,8 @@ public class ReattemptBaseIsAuthoritativeTest
             ownerSaidNeverApplied: true,
             mirrorBase: Observable.Return(Phantom),
             authoritativeBase: authoritative,
-            baseAlreadyCarriesTheWrite: AlreadyCarriesTheWrite,
+            update: Update,
+            jsonOptions: JsonOptions,
             path: Path));
 
         observed.Values.Should().BeEmpty("there was no trustworthy state to diff against");

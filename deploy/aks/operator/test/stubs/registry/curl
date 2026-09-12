@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# A stand-in plugin REGISTRY for the key-lifecycle tests (MeshWeaver#2802) — answers the four routes
+# of /api/instances/self* the way the real one does (InstanceKeyRotation, core), from a state
+# directory, so a test can assert the operator's DECISIONS: whether it asked the registry before it
+# minted, whether it stopped before the vault, and what the registry holds after each failure.
+#
+#   $HOSTING_REG_STATE/mode   normal | absent (no instance: every key 401) | old (no surface: 404)
+#   $HOSTING_REG_STATE/keys   one line per accepted key: <sha256 of the key> <instance id> <current|staged>
+#   $HOSTING_REG_STATE/log    one line per call: <METHOD> <path> <slot the presented key matched>
+#
+# 🚨 It reads the bearer the way curl does — from the `-K -` config on STDIN — and logs only the SLOT
+# the key matched, never the key: a stub that wrote keys to disk would be the leak the scripts it
+# tests exist to prevent. Every key in the fixtures is an obviously fake placeholder anyway.
+#
+# 🚨 PURE BASH (plus sed and sha256sum), deliberately: the suite also runs INSIDE the operator image
+# (hosting-operator.yml → "Operator image builds"), an Azure Linux base that ships no awk. The first
+# version of this stub used awk for every lookup, so in the image every lookup came back empty and
+# every key read as unknown — the suite went red there while passing on a developer's machine.
+set -uo pipefail
+state="${HOSTING_REG_STATE:?the registry stub needs HOSTING_REG_STATE}"
+method="GET" out="" body="" url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -X) method="${2:-}"; shift 2 ;;
+    -o) out="${2:-}"; shift 2 ;;
+    --data) body="${2:-}"; shift 2 ;;
+    -K|-w|-H|--max-time) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+bearer="$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p')"
+presented="$(printf '%s' "$bearer" | sha256sum | cut -c1-64)"
+path="/${url#https://*/}"
+mode="$(cat "$state/mode" 2>/dev/null || echo normal)"
+keys="$state/keys"
+touch "$keys"
+
+inst="" slot=""
+while read -r h i s; do
+  if [ "$h" = "$presented" ]; then inst="$i"; slot="$s"; break; fi
+done < "$keys"
+printf '%s %s %s\n' "$method" "$path" "${slot:-none}" >> "$state/log"
+
+answer() { printf '%s' "$2" > "${out:-/dev/null}"; printf '%s' "$1"; exit 0; }
+has_staged() {
+  local h i s
+  while read -r h i s; do
+    if [ "$i" = "$inst" ] && [ "$s" = "staged" ]; then return 0; fi
+  done < "$keys"
+  return 1
+}
+state_json() { printf '{"instanceId":"%s","key":"%s","staged":%s}' "$inst" "$1" "$(has_staged && echo true || echo false)"; }
+# rewrite <predicate>: the key file becomes whatever the predicate prints for each line.
+rewrite() {
+  local h i s tmp
+  tmp="$(mktemp)"
+  while read -r h i s; do
+    [ -n "$h" ] && "$1" "$h" "$i" "$s"
+  done < "$keys" > "$tmp"
+  mv "$tmp" "$keys"
+}
+keep_all_but_staged_of_inst() { if [ "$2" = "$inst" ] && [ "$3" = "staged" ]; then return 0; fi; printf '%s %s %s\n' "$1" "$2" "$3"; }
+promote_presented() {
+  if [ "$2" = "$inst" ] && [ "$3" = "current" ]; then return 0; fi
+  if [ "$1" = "$presented" ]; then printf '%s %s current\n' "$1" "$2"; else printf '%s %s %s\n' "$1" "$2" "$3"; fi
+}
+drop_presented() { if [ "$1" = "$presented" ]; then return 0; fi; printf '%s %s %s\n' "$1" "$2" "$3"; }
+
+case "$mode" in
+  old)    answer 404 '{"error":"no such route"}' ;;
+  absent) answer 401 '{"error":"This registry does not accept the presented instance key"}' ;;
+esac
+[ -n "$slot" ] || answer 401 '{"error":"This registry does not accept the presented instance key"}'
+
+case "$method $path" in
+  "GET /api/instances/self")
+    answer 200 "$(state_json "$slot")" ;;
+  "POST /api/instances/self/key/stage")
+    [ "$slot" = "current" ] || answer 409 '{"error":"the presented key is the STAGED key"}'
+    new="$(printf '%s' "$body" | sed -n 's/.*"keyHash":"\([0-9a-f]\{64\}\)".*/\1/p')"
+    [ -n "$new" ] || answer 400 '{"error":"keyHash must be 64 lowercase hex"}'
+    rewrite keep_all_but_staged_of_inst
+    printf '%s %s staged\n' "$new" "$inst" >> "$keys"
+    answer 200 "$(state_json current)" ;;
+  "POST /api/instances/self/key/commit")
+    if [ "$slot" = "staged" ]; then
+      rewrite promote_presented
+      answer 200 "$(state_json current)"
+    fi
+    has_staged && answer 409 '{"error":"the presented key is the CURRENT key while a new key is staged"}'
+    answer 200 "$(state_json current)" ;;
+  "POST /api/instances/self/key/revoke")
+    rewrite drop_presented
+    answer 200 "$(printf '{"instanceId":"%s","key":"revoked","staged":%s}' "$inst" "$(has_staged && echo true || echo false)")" ;;
+  *)
+    answer 404 '{"error":"no such route"}' ;;
+esac

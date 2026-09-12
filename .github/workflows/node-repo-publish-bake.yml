@@ -296,6 +296,23 @@ on:
         required: false
         type: string
         default: 'main'
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
+          compose scripts and mergers under .github/scripts that the lane itself runs). Distinct from
+          `platform-ref`, which names the PLATFORM the caller builds against (compile references,
+          images, core source). Empty (the default) means "the same as platform-ref" — right for a
+          caller that pins the lane and the platform to one commit. A caller that pins NOTHING
+          (MeshWeaver#3842: the platform resolved at run time to the newest SEALED set, the lane
+          called at `@main`) passes `main` here, because a sealed set is hours behind the lane's own
+          tip: on 2026-09-09 this lane at @main fetched check-abbreviated-shas.py — added at 17:06Z
+          (022ab4a9d) — at a platform-ref cut at 3cda3efde a few hours earlier, and the fetch 404'd
+          (Plugins#1566). `github.job_workflow_sha` cannot stand in for this: it is EMPTY inside a
+          reusable called from another repository (measured 2026-08-30), so the lane's own ref is an
+          input, never inferred.
+        required: false
+        type: string
+        default: ''
       module-artifacts:
         description: >-
           Artifact-name pattern (actions/download-artifact `pattern`) of module bundles UPLOADED
@@ -460,6 +477,8 @@ jobs:
       # Read by dispatch-dependents below: a run that baked NOTHING (already sealed) publishes
       # nothing and therefore wakes nobody.
       published: ${{ steps.publish.outputs.published }}
+      content-sha: ${{ steps.content.outputs.sha }}
+      version: ${{ steps.platform-version.outputs.version }}
       image: ${{ steps.image.outputs.ref }}
       # The portal this bake compiled against — a dependent woken by this publication must bake
       # against the SAME one, so it travels in the dispatch payload (client_payload.platform_image).
@@ -801,11 +820,14 @@ jobs:
       # path: it carries no root index.json, so the tester never treats it as a module (identical
       # reasoning to `cross-repo-stage/`).
       # Unconditional since MeshWeaver#3022: compose-gate-host.sh runs on every bake.
+      # At the lane's SCRIPTS ref (`scripts-ref`, falling back to platform-ref): these are the LANE's
+      # tooling, and an unpinned caller's platform-ref — the newest sealed set — is hours behind the
+      # lane's own tip (MeshWeaver#3842, Plugins#1566).
       - name: Fetch the canonical gate + bake-scope scripts (platform repo)
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
+          ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
           path: mw-platform-gate
           sparse-checkout: .github/scripts
       # ───────────── TWO IMAGES, ONE BUILD: pull, extract, compose (MeshWeaver#3022) ─────────────
@@ -831,6 +853,27 @@ jobs:
           echo "tester_app=$T" >> "$GITHUB_OUTPUT"
           echo "portal_app=$P" >> "$GITHUB_OUTPUT"
           echo "tester /app: $(find "$T" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies; portal /app: $(find "$P" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') assemblies ($(wc -l < "$P/meshweaver-surface.manifest" | tr -d ' ') manifest lines)"
+      # The version travels with the image, including a digest-pinned push or a core CD call.
+      # A workflow event's dispatch-only version is neither present nor authoritative in all cases.
+      # Accepted: exactly the shapes the pipeline mints into MESHWEAVER_PLATFORM_VERSION — clean X.Y.Z,
+      # X.Y.Z-ci.N, X.Y.Z-edge.N (edge-images.yml), and the retired rc line's X.Y.Z-<label>.ci.N /
+      # .edge.N. PlatformReleaseOrder.BuildOrdinal reads the same set. A label no build mints
+      # (3.0.0-alpha, 3.0.0-preview.1, a bare 3.0.0-rc9) carries no build ordinal, so a receiver would
+      # order it as a promotion; it is refused here and again before the POST (same pattern).
+      - name: Read the platform image's own version for the publication record
+        id: platform-version
+        env:
+          PORTAL_REF: ${{ steps.platform.outputs.ref }}
+        run: |
+          set -euo pipefail
+          version=$(docker image inspect "$PORTAL_REF" --format '{{json .Config.Env}}' | jq -er '
+            [.[] | select(startswith("MESHWEAVER_PLATFORM_VERSION=")) | ltrimstr("MESHWEAVER_PLATFORM_VERSION=")]
+            | if length == 1 then .[0] else error("expected one MESHWEAVER_PLATFORM_VERSION") end')
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-([0-9A-Za-z]+\.)?(ci|edge)\.[0-9]+)?$ ]] || {
+            echo "::error::the selected portal image has no valid platform release version; no publication can be announced with unknown provenance."
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       # 🚨 ONE BUILD, asserted — never assumed from "the same tag". The bake is keyed to the
       # PORTAL's identity and executed by the TESTER's toolchain; that is honest only when the two
       # images are one build. The tester's own `framework-identity` verb reads the portal's /app as
@@ -882,18 +925,78 @@ jobs:
           subscription-id: ${{ secrets.azure-subscription-id }}
       # The framework identity BOTH the upstream gate and the scope decision key on is resolved
       # above (steps.identity) — from the PORTAL's /app, unconditionally, since MeshWeaver#3022.
+      # `id:` so test-release-availability-refusals.py can EXTRACT and execute this step rather than
+      # re-implement it — a copy of a workflow step passes while the step itself rots.
       - name: "Gate: every upstream must be published for that identity"
+        id: upstream-gate
         if: inputs.upstream-sources != ''
         env:
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
           UPSTREAMS: ${{ inputs.upstream-sources }}
+          # 🚨 The RESOLVED ref, not the declared input. `steps.platform` resolves it from the wake's
+          # payload or from <platform-image>:<released-version>, and `steps.identity` reads its /app
+          # — so on the dispatch paths `inputs.platform-image` can name a DIFFERENT image from the
+          # one the identity actually came from. Logging the declaration instead of the effective
+          # value is the same defect this whole change is about (Copilot on #4084).
+          PORTAL_REF: ${{ steps.platform.outputs.ref }}
+          # Both repository_dispatch actions land on one event_name and they are NOT the same wait:
+          # `meshweaver-framework-released` carries a NEW platform identity nothing may have baked
+          # for yet, while `meshweaver-upstream-published` carries a set the upstream just sealed.
+          # Measured 2026-09-11/12 on MeshWeaver.Reinsurance: 20 of the 23 gate refusals were the
+          # first kind and 3 the second, so collapsing them loses the distinction that explains the
+          # number.
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
           set -uo pipefail
+          # 🚨 The identity is resolved two steps up, from the PORTAL image — and WHICH portal image
+          # this run got depends entirely on the trigger (a repo PIN on push/pull_request, the wake's
+          # payload on repository_dispatch, a MOVING release tag on schedule). When this gate holds,
+          # "why is it waiting" is a question about that choice, and the three paths want three
+          # different actions. Stating it here makes the log self-contained (MeshWeaver#3583).
+          TRIGGER="event=$GITHUB_EVENT_NAME"
+          [ -z "${EVENT_ACTION:-}" ] || TRIGGER="$TRIGGER action=$EVENT_ACTION"
+          ORIGIN="the portal image '$PORTAL_REF' (the ref this run RESOLVED, whose /app the identity was read from), chosen by this run's trigger ($TRIGGER)"
+          GATE_LOG="$RUNNER_TEMP/upstream-gate.log"
           # shellcheck disable=SC2086
           if mw-platform-gate/.github/scripts/check-release-availability.sh \
-               --identity "${{ steps.identity.outputs.identity }}" $UPSTREAMS; then
+               --identity "${{ steps.identity.outputs.identity }}" \
+               --identity-origin "$ORIGIN" $UPSTREAMS 2>&1 | tee "$GATE_LOG"; then
             echo "every upstream is published for ${{ steps.identity.outputs.identity }} — building."
             exit 0
+          fi
+          # 🚨 The script distinguishes three outcomes; this block used to assert "at least one
+          # upstream has no sealed publication" for ALL of them, which re-collapsed the distinction
+          # one line after the script made it — and said something FALSE on the refusal paths, where
+          # nothing was ever checked. Branch on the classification the script printed (Copilot on
+          # #4084). A refusal is not a wait on an upstream and must not be reported as one.
+          if grep -q "CANNOT RESOLVE" "$GATE_LOG"; then
+            {
+              echo "### ⛔ Could not resolve a framework identity — did NOT build"
+              echo ""
+              echo "The gate could not determine which framework identity to ask about, so **no"
+              echo "upstream was checked** and none is being reported as unpublished. This is a"
+              echo "REFUSAL, not a wait: nothing in \`$UPSTREAMS\` is implicated."
+              echo ""
+              echo "See the step log for which resolution failed. Re-running will not change it."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Could not resolve a framework identity::the gate could not resolve an identity, so nothing was checked and no upstream is implicated. This is a refusal, not a wait on an upstream."
+            exit 1
+          fi
+          if grep -q "CANNOT DETERMINE" "$GATE_LOG"; then
+            {
+              echo "### ⛔ Could not query the artifact store — did NOT build"
+              echo ""
+              echo "An identity was resolved, but one or more availability probes **errored**, so"
+              echo "the gate could not ask its question. Any count of absent sources in the log is a"
+              echo "**floor**, not a verdict — this says nothing about whether \`$UPSTREAMS\`"
+              echo "published."
+              echo ""
+              echo "This is an ACCESS problem, not an upstream one: check \`az login\` / the OIDC"
+              echo "federation, \`BAKE_PUBLISH_TARGETS\`, and the share's reachability. Waiting for"
+              echo "an upstream will not clear it."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Could not query the artifact store::availability could not be determined for framework identity ${{ steps.identity.outputs.identity }} — probes errored. This is a refusal, not a verdict about any upstream; fix access to the artifact store."
+            exit 1
           fi
           {
             echo "### ⛔ Upstreams not ready — did NOT build"
@@ -1051,6 +1154,38 @@ jobs:
           MODULE_COUNT=0
           ASSET_MODULES=0
           ASSET_FILES=0
+          # ───── ONE BUILD PER ASSEMBLY NAME, ACROSS THE WHOLE COMPOSED SET (MeshWeaver#3732) ─────
+          # 🚨 A module-owned `MeshWeaver.*` sibling RIDES every bundle that references it, and some
+          # of those siblings are ANOTHER package's declared module (Doc/Architecture/
+          # ModuleOwnedSiblingsRide). That decision stands, and it rests on exactly ONE invariant:
+          # every copy of a name in the set is the SAME BUILD. `MeshWeaver.*` assemblies bind by a
+          # strictly synchronised AssemblyVersion, so the copies are ONE assembly identity — whichever
+          # this host loads FIRST wins the process, and every NodeType the bake compiles is stamped
+          # `mvid:` of THAT build. A portal that loaded another one declines every one of them at
+          # adoption ("dependency record mismatch — built against mvid:A, live is mvid:B"), falls back
+          # to a local compile, and with two replicas holding two builds ping-pongs between them for
+          # ever while the partition serves the default config and its pages render empty.
+          #
+          # 🚨 NOTHING ASSERTED THAT INVARIANT AT THE PRODUCER. The design page believed re-keying
+          # preserved it — bake-scope.sh and module-build-key.py fold a sibling's SOURCES into every
+          # bundle that carries it — but re-keying only makes those bundles REBUILD, and one
+          # publication is composed from SEVERAL independent compilations (MeshWeaver.Plugins: two
+          # `build-workspace` jobs, one per module-pack lane call, plus a
+          # `dotnet build -p:Version=<module version>` per legacy `sdk` entry). Same sources, three
+          # compilations, three MVIDs — measured on memex 2026-09-10, where ONE pod held
+          # MeshWeaver.Markdown.Collaboration in 15 copies and 3 builds, grouped exactly by which
+          # compilation produced them.
+          #
+          # This step is the first point where every copy is in ONE hand, and it is the point where
+          # the damage is done: what the bake loads becomes the record every consumer must match. So
+          # the assertion lives here, over the composed BYTES, and it is a REFUSAL — a publication
+          # carrying two builds of one name is what ReleaseAvailability later answers
+          # `SealedSetInconsistent` for, i.e. NOTHING ROLLS, for the whole fleet, until it is rebuilt.
+          digest_of() {
+            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+            else shasum -a 256 "$1" | cut -d' ' -f1; fi
+          }
+          DIGESTS="${RUNNER_TEMP:-/tmp}/ext-module-builds"; : > "$DIGESTS"
           for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
             u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
             unzip -o -q "$b" -d "$u"
@@ -1062,6 +1197,19 @@ jobs:
               name=$(basename "$1" .dll)
             fi
             test -f "$u/meshweaver/modules/$name.dll" || { echo "::error::$(basename "$b"): meshweaver/modules/$name.dll is missing from the bundle"; exit 1; }
+            # 🚨 DIGESTED FROM THIS BUNDLE'S OWN UNPACKED FOLDER, BEFORE THE MERGE — never from
+            # /ext afterwards. Two bundles that declare the same `module.assemblyName` land in the
+            # SAME /ext/<name>/ directory and the second `cp -R` OVERWRITES the first, so a scan of
+            # /ext cannot see a collision between an artifact bundle and a registry bundle — which
+            # is precisely the case this lane's own notice calls an accident of glob order
+            # (`*.nupkg` before `*.zip`, so a registry copy silently wins). Reading each bundle's own
+            # folder sees every input copy, and names the BUNDLE each one came from — the same
+            # wording `UpdatePolicy.heldReason` uses when the consumer finds it days later.
+            while IFS= read -r dll; do
+              simple="$(basename "$dll" .dll)"
+              printf '%s %s %s %s\n' "$simple" "$(digest_of "$dll")" "$(basename "$b")" \
+                "$(if [ "$simple" = "$name" ]; then echo declared; else echo riding; fi)" >> "$DIGESTS"
+            done < <(find "$u/meshweaver/modules" -maxdepth 1 -type f \( -name 'MeshWeaver.*.dll' -o -name 'MeshWeaver.dll' \) | sort)
             mkdir -p "$EXT/$name"
             cp -R "$u"/meshweaver/modules/. "$EXT/$name/"
             # 🚨 A module bundle carries its STATIC WEB ASSETS separately from the flat closure,
@@ -1112,6 +1260,25 @@ jobs:
             echo "sealing $name as module package '$pkg'"
           done
           [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
+          # ───── THE VERDICT ON THE SET (MeshWeaver#3732; the reading is collected above) ─────
+          COPIES=$(awk 'END {print NR + 0}' "$DIGESTS")
+          NAMES=$(awk '{print $1}' "$DIGESTS" | sort -u | awk 'END {print NR + 0}')
+          SHARED=$(awk '{c[$1]++} END {n = 0; for (k in c) if (c[k] > 1) n++; print n}' "$DIGESTS")
+          DIVERGED=$(awk '{if (!seen[$1 SUBSEP $2]++) d[$1]++} END {n = 0; for (k in d) if (d[k] > 1) n++; print n}' "$DIGESTS")
+          # 🚨 The DENOMINATOR is printed on every run, green or red. A check pointed at an empty or
+          # wrong directory reports zero copies and refuses nothing while ticking exactly like a clean
+          # measurement, so the count that would expose it is never hidden. Zero is legitimate only
+          # for a repo whose modules carry no `MeshWeaver.*` assembly at all; anywhere else it is the
+          # wrong directory, and it is on the log.
+          echo "module set: $COPIES MeshWeaver.* assembly file(s) across $MODULE_COUNT bundle(s), $NAMES distinct name(s), $SHARED carried by more than one bundle, $DIVERGED carried at more than one BUILD"
+          if [ "$DIVERGED" -ne 0 ]; then
+            while IFS= read -r dupe; do
+              echo "::error::$dupe reaches this mesh as more than one build — the loader keeps whichever it sees first and the loser's bytes are never in memory, so callers compiled against the loser silently run the winner (MeshWeaver#3732). Since MeshWeaver#3934 a dependency record expresses a FLOOR rather than an exact build, so the adoption decline that used to accompany this no longer fires for same-version copies — the loader coin toss is the harm that remains, and it is why a torn publication is refused HERE, at the one place every copy is in one hand."
+              awk -v n="$dupe" '$1 == n {printf "          sealed %s %s %s\n", substr($2, 1, 16), ($4 == "declared" ? "as the declared module of" : "as a sibling riding"), $3}' "$DIGESTS" | sort -u
+            done < <(awk '{if (!seen[$1 SUBSEP $2]++) d[$1]++} END {for (k in d) if (d[k] > 1) print k}' "$DIGESTS" | sort)
+            echo "::error::the composed module set carries $DIVERGED assembly name(s) at more than one build. The bake would stamp every NodeType against whichever copy it loaded first, and every consumer that loaded another would decline them. Build the whole set in ONE compilation, or stop the divergent copy riding — Doc/Architecture/ModuleOwnedSiblingsRide."
+            exit 1
+          fi
           echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s) landed module-relative under /ext/<module>/"
           echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
           echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
@@ -1272,7 +1439,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
+          # The lane's SCRIPTS ref, as for the gate scripts above (MeshWeaver#3842).
+          ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
           path: mw-platform
           sparse-checkout: .github/scripts
       # ───────────── KEEP THE PUBLICATION COMPLETE (the reason the bake used to be full) ─────────────
@@ -1310,6 +1478,10 @@ jobs:
           # it was written for. Same expression as the checkout's `repository:` on purpose: one
           # answer to "whose content is this", used by both.
           BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+          # Read-only: publish-bake-bundles.sh orders the sealed commit against this bake's through
+          # the compare API and refuses to seal BACKWARDS (per-module deploy). A token that cannot
+          # read the content repository just makes the comparison unavailable, and the script says so.
+          GH_TOKEN: ${{ github.token }}
           # flat (the default) or generation — see the `publication-layout` input. At `flat` the
           # script behaves byte-identically to before this input existed.
           BAKE_PUBLICATION_LAYOUT: ${{ inputs.publication-layout }}
@@ -1439,13 +1611,15 @@ jobs:
           IMAGE: ${{ needs.publish-bake.outputs.image }}
           PLATFORM_IMAGE: ${{ needs.publish-bake.outputs.platform }}
           IDENTITY: ${{ needs.publish-bake.outputs.identity }}
-          RELEASED_VERSION: ${{ github.event.client_payload.version }}
+          CONTENT_SHA: ${{ needs.publish-bake.outputs.content-sha }}
+          RELEASED_VERSION: ${{ needs.publish-bake.outputs.version }}
           SELF: ${{ inputs.content-repository || github.repository }}
           UPSTREAMS: ${{ inputs.upstream-sources }}
           BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
           INDEX_DIGEST: ${{ needs.publish-bake.outputs.bundle_index_digest }}
         run: |
           set -euo pipefail
+          RESP="${RESP:-/tmp/resp}"
           # The OCI index the fleet registry names for this publication. PRINTED, not sent: the
           # bundle-publication record (BundlePublication in the Hosting module) carries no field
           # for it yet — Doc/Architecture/PluginBundlesInTheRegistry → Publishing says what is
@@ -1462,11 +1636,13 @@ jobs:
             exit 1
           fi
           [ -n "${PLATFORM_IMAGE:-}" ] || { echo "::error::this bake resolved no platform image, so the record cannot name the identity's portal (MeshWeaver#3022)."; exit 1; }
+          [[ "${CONTENT_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "::error::the published content checkout has no valid commit SHA; refusing to announce the workflow commit as its source."; exit 1; }
+          [[ "${RELEASED_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-([0-9A-Za-z]+\.)?(ci|edge)\.[0-9]+)?$ ]] || { echo "::error::the published bake has no valid platform release version from its selected portal image (got '${RELEASED_VERSION:-}'; expected X.Y.Z, X.Y.Z-ci.N, X.Y.Z-edge.N or a retired X.Y.Z-<label>.ci.N)."; exit 1; }
           digest=""; case "$IMAGE" in *@sha256:*) digest="${IMAGE#*@}" ;; esac
           # The record memex registers: which SOURCE sealed a publication for which IDENTITY, from
-          # which commit, against which tester + portal. `version` is the platform tag the identity
-          # was baked for when this run was itself a release-follow — memex carries it into the
-          # event so dependents resolve the same set by name.
+          # the actual content checkout commit, against which tester + portal. `version` is read
+          # from that portal image's config, not from the calling workflow's event. It describes
+          # the build platform, not a plugin's own manifest.lock SemVer.
           # `upstreams` is the caller's `upstream-sources` — the ONE declaration of "this repo depends
           # on those sources" (the same list the seed asserts sealed publications for). memex keeps
           # it on the source's Hosting/Publication record and routes the wave on it: a publication
@@ -1475,15 +1651,15 @@ jobs:
           # platform release). Before this field the wave went to EVERY registry source, the
           # publisher included — the 2026-09-07 self-feeding dispatch storm (Plugins#1484).
           UPSTREAMS_JSON=$(printf '%s' "${UPSTREAMS:-}" | tr ',;' '  ' | tr -s '[:space:]' '\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | awk '!seen[$0]++' | jq -R . | jq -cs .)
-          BODY=$(jq -cn --arg repo "$SELF" --arg s "$SOURCE" --arg sha "$GITHUB_SHA" --arg id "${IDENTITY:-}" \
+          BODY=$(jq -cn --arg repo "$SELF" --arg s "$SOURCE" --arg sha "$CONTENT_SHA" --arg id "${IDENTITY:-}" \
             --arg i "$IMAGE" --arg d "$digest" --arg pi "$PLATFORM_IMAGE" --arg v "${RELEASED_VERSION:-}" \
             --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --argjson up "$UPSTREAMS_JSON" \
             '{event:"bundle-publication", repo:$repo, source:$s, sha:$sha, identity:$id, image:$i, digest:$d, platformImage:$pi, version:$v, run:$run, upstreams:$up}')
           SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
-          code=$(curl -sS -o /tmp/resp -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+          code=$(curl -sS -o "$RESP" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
             -X POST "$URL" -H 'Content-Type: application/json' \
             -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
-          echo "POST $URL -> $code"; cat /tmp/resp || true
+          echo "POST $URL -> $code"; cat "$RESP" || true
           case "$code" in
             2*)
               {
@@ -1491,7 +1667,7 @@ jobs:
                 echo "- source: \`$SOURCE\`  identity: \`${IDENTITY:-?}\`  image: \`$IMAGE\`  platform: \`$PLATFORM_IMAGE\`"
                 echo "- fleet registry index: \`$BUNDLE_REGISTRY/plugins/$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')@$INDEX_DIGEST\` (printed; not yet a field of the record)"
                 echo "memex STORED the record. Whether it dispatched meshweaver-upstream-published is read on memex and on the dependents, never here."
-                verdict=$(tr -d '\n' < /tmp/resp | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                verdict=$(tr -d '\n' < "$RESP" | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
                 echo "- signature: **${verdict:-(the answer carried no verdict)}** — judged in the next step."
               } >> "$GITHUB_STEP_SUMMARY"
               ;;

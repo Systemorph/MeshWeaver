@@ -83,12 +83,23 @@ public static class NodeTypeOperationalContent
         "adoptedSourceFingerprint",
         "currentSourceFingerprint",
         "buildProvenance",
+        // #3583 — the two module versions the compatibility rule compares. Operational for the
+        // same reason the fingerprints are: an authored adopted version would let a repo file
+        // declare its own build compatible.
+        "adoptedModuleVersion",
+        "currentModuleVersion",
         "compiledFrameworkVersion",
         // #1793 — the inputs the standing FAILURE verdict was formed from. Operational for the
         // same reason compiledFrameworkVersion is, and for one sharper one: an authored token that
         // happened to match this deployment's live inputs would SUPPRESS the one automatic retry a
         // never-compiled failure gets. Stripped on export, preserved from the live node on import.
         "failedBuildInputs",
+        // #3903 — the declared source queries that matched NOTHING when the standing failure was
+        // recorded. Operational for the same reason failedBuildInputs is: it is a measurement of
+        // THIS mesh's content (which nodes a query matches here), so an authored copy would assert
+        // a finding about a partition it was never taken on — and the empty list is the shape that
+        // reads as "checked, all present".
+        "failedSourceQueries",
     };
 
     /// <summary>

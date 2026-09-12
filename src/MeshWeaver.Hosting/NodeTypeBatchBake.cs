@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text;
+using System.Text.Json;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -175,6 +177,36 @@ internal static class NodeTypeBatchBake
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IReadOnlyCollection<string> pendingTypePaths,
         ILogger? logger)
+        => ResolveSources(
+            meshService, accessService, definitions, pendingTypePaths, logger, discovery: null);
+
+    /// <summary>
+    /// As <see cref="ResolveSources(IMeshService, AccessService, IReadOnlyDictionary{string, NodeTypeDefinition}, IReadOnlyCollection{string}, ILogger)"/>,
+    /// additionally PUBLISHING each pass's chunk timing into <paramref name="discovery"/> so
+    /// <c>/health</c> can carry #3704's discriminator instead of leaving it in a log line nobody is
+    /// authorised to read.
+    ///
+    /// <para>🚨 A separate OVERLOAD, deliberately not an extra (even optional) parameter on the
+    /// existing one: adding a parameter REPLACES a method's signature, so every assembly already
+    /// compiled against the 5-argument form calls a method this build no longer has. That is a
+    /// binary break for module bundles built on a previous platform, and the repo's
+    /// <c>Public surface (binary compatibility)</c> gate refuses it — the same trap
+    /// <c>ContentDegradation</c>'s <c>Discriminator</c> property documents.</para>
+    /// </summary>
+    /// <param name="meshService">The mesh service the discovery queries run against.</param>
+    /// <param name="accessService">Access service, for the system-scoped impersonation.</param>
+    /// <param name="definitions">Every type's definition, keyed by type path.</param>
+    /// <param name="pendingTypePaths">The types this batch is discovering sources for.</param>
+    /// <param name="logger">Logger, or <c>null</c>.</param>
+    /// <param name="discovery">Where each pass's timing is published, or <c>null</c> to publish none.</param>
+    /// <returns>Per-type source lists keyed by type path; missing key = no sources resolved.</returns>
+    public static IObservable<ImmutableDictionary<string, IReadOnlyList<MeshNode>>> ResolveSources(
+        IMeshService meshService,
+        AccessService? accessService,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyCollection<string> pendingTypePaths,
+        ILogger? logger,
+        SourceDiscoveryRegistry? discovery)
     {
         // Expand every pending type's Source + Test queries — the SAME union the compiler's own
         // snapshot consumes (NodeSources / SnapshotSources), so the batch compiles the same set.
@@ -232,7 +264,7 @@ internal static class NodeTypeBatchBake
                 {
                     var globalFetch = needsGlobalFetch
                         ? GlobalCodeQueries
-                            .Select(q => RunQuery(meshService, q, logger))
+                            .Select(q => RunQuery(meshService, q, logger, discovery))
                             .Concat()
                             .Aggregate(
                                 ImmutableDictionary<string, MeshNode>.Empty
@@ -246,7 +278,8 @@ internal static class NodeTypeBatchBake
                     var exoticFetch = exoticQueries.Count == 0
                         ? Observable.Return(ImmutableDictionary<string, ImmutableDictionary<string, MeshNode>>.Empty)
                         : exoticQueries
-                            .Select(q => RunQuery(meshService, q, logger).Select(nodes => (Query: q, Nodes: nodes)))
+                            .Select(q => RunQuery(meshService, q, logger, discovery)
+                                .Select(nodes => (Query: q, Nodes: nodes)))
                             .Concat()
                             .ToList()
                             .Select(results => results.ToImmutableDictionary(
@@ -359,7 +392,8 @@ internal static class NodeTypeBatchBake
     /// regression). So a full page is a discovery FAILURE, never a result.</para>
     /// </summary>
     private static IObservable<ImmutableDictionary<string, MeshNode>> RunQuery(
-        IMeshService meshService, string query, ILogger? logger)
+        IMeshService meshService, string query, ILogger? logger,
+        SourceDiscoveryRegistry? discovery)
     {
         // Last `limit:` wins in QueryParser, so appending overrides an author-supplied one. That is
         // intended: a `limit:` inside a NodeType's source query truncates the set the compiler is
@@ -369,30 +403,173 @@ internal static class NodeTypeBatchBake
                 "BatchBake: source query '{Query}' carries its own limit: — discovery overrides it "
                 + "with {Limit}, because a truncated source set compiles WRONG", query, SourceDiscoveryLimit);
         var bounded = $"{query} limit:{SourceDiscoveryLimit}";
-        return Observable
-            // 🚨 .AsSystem() — batch-bake source discovery is framework infrastructure, not a
-            // user-scoped read, and this Defer's subscription does not carry the caller's ambient
-            // identity. Unstamped it would resolve as Anonymous and hand the compiler a silently
-            // TRUNCATED source set, which "compiles WRONG" exactly as the limit: note above warns.
-            // Declared on the request so no scheduler hop can lose it. See
-            // Doc/Architecture/QueryIdentity.
-            .Defer(() => meshService.Query<MeshNode>(new MeshQueryRequest
-            {
-                Query = bounded,
-                Limit = SourceDiscoveryLimit,
-            }.AsSystem()))
-            .Scan(
-                ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
-                NodeCompileShaping.ApplyQueryChange)
-            .Throttle(QueryQuietWindow)
-            .Take(1)
-            .SelectMany(nodes => nodes.Count < SourceDiscoveryLimit
-                ? Observable.Return(nodes)
-                : Observable.Throw<ImmutableDictionary<string, MeshNode>>(
-                    new SourceDiscoveryFailedException(
-                        $"source discovery query '{bounded}' returned {nodes.Count} node(s) — its own "
-                        + $"ceiling of {SourceDiscoveryLimit}, so the source set may be TRUNCATED and "
-                        + "no compile driven from it would be a verdict about the code")));
+        return Observable.Defer(() =>
+        {
+            // Per-SUBSCRIPTION state, created here rather than captured from outside: two
+            // concurrent discoveries of the same query text must not fold their chunk timings
+            // together, and nothing here is static (#3704).
+            var chunks = new ChunkTiming();
+            return Observable
+                // 🚨 .AsSystem() — batch-bake source discovery is framework infrastructure, not a
+                // user-scoped read, and this Defer's subscription does not carry the caller's ambient
+                // identity. Unstamped it would resolve as Anonymous and hand the compiler a silently
+                // TRUNCATED source set, which "compiles WRONG" exactly as the limit: note above warns.
+                // Declared on the request so no scheduler hop can lose it. See
+                // Doc/Architecture/QueryIdentity.
+                .Defer(() => meshService.Query<MeshNode>(new MeshQueryRequest
+                {
+                    Query = bounded,
+                    Limit = SourceDiscoveryLimit,
+                }.AsSystem()))
+                .Do(chunks.Observe)
+                .Scan(
+                    ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
+                    NodeCompileShaping.ApplyQueryChange)
+                .Throttle(QueryQuietWindow)
+                .Take(1)
+                .Do(nodes => chunks.Report(logger, bounded, nodes.Count, QueryQuietWindow, discovery))
+                .SelectMany(nodes => nodes.Count < SourceDiscoveryLimit
+                    ? Observable.Return(nodes)
+                    : Observable.Throw<ImmutableDictionary<string, MeshNode>>(
+                        new SourceDiscoveryFailedException(
+                            $"source discovery query '{bounded}' returned {nodes.Count} node(s) — its own "
+                            + $"ceiling of {SourceDiscoveryLimit}, so the source set may be TRUNCATED and "
+                            + "no compile driven from it would be a verdict about the code")));
+        });
+    }
+
+    /// <summary>
+    /// 🚨 <b>The discriminating measurement #3704 asks for, taken where the fold happens.</b>
+    ///
+    /// <para>On 2026-09-08 00:31:22Z one boot of memex resolved a source-discovery set <b>91 Code
+    /// nodes short</b> (1145 against 1236/1237/1241 on the same portal, three of them on the same
+    /// image), and content grows monotonically across that window — so it was a truncation, not a
+    /// smaller mesh. Two mechanisms could produce it and nothing recorded enough to tell them
+    /// apart:</para>
+    ///
+    /// <list type="number">
+    /// <item><b>The completion rule.</b> <see cref="RunQuery"/> decides a chunked query has
+    /// finished answering from <see cref="QueryQuietWindow"/> of silence, because
+    /// <c>QueryResultChange&lt;T&gt;</c> carries no terminal marker — there is no
+    /// "the initial set is complete" for any reader of that protocol. A chunk gap wider than the
+    /// window silently ends the fold and hands the compiler a short map.</item>
+    /// <item><b>An upstream shortfall</b> — the providers simply returned less, in which case the
+    /// window is innocent and the search moves to what answered.</item>
+    /// </list>
+    ///
+    /// <para><b>What this records, per query and per subscription:</b> how many
+    /// <c>QueryResultChange</c> events were folded, what each contributed, and the LARGEST
+    /// inter-chunk gap. That is the whole discriminator: a largest gap approaching the window
+    /// indicts the completion rule; all-small gaps exonerate it and point upstream. Both readings
+    /// are printed on every pass, so the next short read explains itself instead of being compared
+    /// against neighbouring boots by hand.</para>
+    ///
+    /// <para>🚨 It deliberately does NOT widen the window, add a retry, or change what a short pass
+    /// concludes. #3698 already made a short pass cost the batch rather than a rollout; widening a
+    /// bound to make a symptom rarer while the mechanism is unmeasured is the band-aid this
+    /// repository refuses. The fix waits on this number.</para>
+    ///
+    /// <para>Instance state, created per subscription inside the <c>Defer</c> — never static, and
+    /// the per-chunk counts are an <see cref="System.Collections.Immutable.ImmutableList{T}"/>
+    /// (fully qualified: <c>System.Reactive</c> ships one of the same name, and a bare cref is a
+    /// <c>CS0419</c> under -warnaserror). Timing is
+    /// <see cref="Stopwatch"/> ticks, not <c>DateTime</c>: the quantity is an interval.</para>
+    /// </summary>
+    internal sealed class ChunkTiming
+    {
+        /// <summary>Enough per-chunk counts to see the shape without turning a log line into a
+        /// page. A pass that exceeds it says so and keeps the count and the largest gap, which are
+        /// the two figures the verdict actually rests on.</summary>
+        private const int MaxRecordedCounts = 48;
+
+        private readonly Func<long> clock;
+        private readonly long startedTicks;
+        private long lastTicks;
+        private long largestGapTicks;
+        private int chunks;
+        private int items;
+        private ImmutableList<int> counts = ImmutableList<int>.Empty;
+
+        /// <summary>
+        /// <paramref name="clock"/> is <see cref="Stopwatch.GetTimestamp"/> in production and a
+        /// supplied tick source in a test — the same seam <c>RestartDeferredBy</c> uses for the
+        /// roll floor. It exists so the rule below can be pinned as a TRUTH TABLE rather than by
+        /// sleeping through a real inter-chunk gap: a test that waits out half a second to observe
+        /// a timing verdict measures the runner as much as the rule.
+        /// </summary>
+        /// <param name="clock">Monotonic tick source; defaults to <see cref="Stopwatch"/>.</param>
+        internal ChunkTiming(Func<long>? clock = null)
+        {
+            this.clock = clock ?? Stopwatch.GetTimestamp;
+            startedTicks = this.clock();
+            lastTicks = startedTicks;
+        }
+
+        /// <summary>Folds one change's timing and size. Called from the query's own emission
+        /// sequence, which is serial, so no gate is needed or wanted.</summary>
+        internal void Observe(QueryResultChange<MeshNode> change)
+        {
+            var now = clock();
+            var gap = now - lastTicks;
+            if (chunks > 0 && gap > largestGapTicks)
+                largestGapTicks = gap;
+            lastTicks = now;
+            chunks++;
+            var count = change.Items?.Count ?? 0;
+            items += count;
+            if (counts.Count < MaxRecordedCounts)
+                counts = counts.Add(count);
+        }
+
+        /// <summary>Prints the measurement, and says which way it points.</summary>
+        internal void Report(
+            ILogger? logger, string query, int settled, TimeSpan window,
+            SourceDiscoveryRegistry? discovery = null)
+        {
+            var largestGapMs = Ms(largestGapTicks);
+            var elapsedMs = Ms(clock() - startedTicks);
+            var windowMs = window.TotalMilliseconds;
+            var share = windowMs > 0 ? largestGapMs / windowMs * 100 : 0;
+
+            // 🚨 PUBLISHED BEFORE the logger short-circuit, and deliberately not behind it (#3704).
+            // The measurement's whole problem was that it existed only in a log, on a fleet where
+            // log access is break-glass; making the publication depend on a logger being present
+            // would rebuild that dependency one layer down.
+            discovery?.Record(new SourceDiscoveryPass(
+                query, settled, chunks, items, elapsedMs, largestGapMs, windowMs,
+                DateTimeOffset.UtcNow));
+
+            if (logger is null)
+                return;
+            var shape = counts.Count < chunks
+                ? string.Join(",", counts) + $",… ({chunks - counts.Count} more)"
+                : string.Join(",", counts);
+
+            logger.LogInformation(
+                "BatchBake: source discovery query '{Query}' settled at {Settled} node(s) from "
+                + "{Chunks} change(s) ({Items} item(s) delivered) in {ElapsedMs}ms. Largest "
+                + "inter-chunk gap {GapMs}ms = {Share}% of the {WindowMs}ms completion window. "
+                + "Per-chunk: [{Shape}].",
+                query, settled, chunks, items, elapsedMs,
+                largestGapMs.ToString("F0"), share.ToString("F0"), windowMs.ToString("F0"), shape);
+
+            // 🚨 The line that makes the next short read self-explaining. The threshold picks the
+            // LEVEL only — every number above is printed unconditionally, so a reader never depends
+            // on where it sits. It lives on SourceDiscoveryRegistry so the LOG line and the /health
+            // verdict can never drift apart and disagree about the same pass.
+            if (share >= SourceDiscoveryRegistry.GapShareWarnPercent)
+                logger.LogWarning(
+                    "BatchBake: source discovery query '{Query}' had an inter-chunk gap of {GapMs}ms "
+                    + "against a {WindowMs}ms completion window ({Share}%). A gap WIDER than that "
+                    + "window ends the fold early and hands the compiler a short source map — the "
+                    + "mechanism named in #3704, where one boot resolved 91 Code nodes short. This "
+                    + "pass settled at {Settled} node(s); compare it with the neighbouring boots on "
+                    + "THIS portal before concluding.",
+                    query, largestGapMs.ToString("F0"), windowMs.ToString("F0"),
+                    share.ToString("F0"), settled);
+        }
+
+        private static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
     }
 
     /// <summary>
@@ -525,6 +702,14 @@ internal static class NodeTypeBatchBake
     /// <see cref="NodeTypeCompilationHelpers.ApplyCompileFailure"/> — the shared field-set),
     /// storage-level under System identity. Emits exactly one <see cref="PreWarmOutcome"/> with
     /// the activation path's status vocabulary; never throws.
+    ///
+    /// <para>🚨 <b>It compiles the definition the mesh holds WHEN IT COMPILES</b>, not the one the
+    /// sweep enumerated (see <see cref="CurrentCompileInput"/>). The two differ whenever a module
+    /// update lands during the sweep, and compiling the enumerated one against a source set resolved
+    /// later hands Roslyn a tear of two contents — measured on memex.systemorph.com 2026-09-11, where
+    /// the Hosting 1.15 definition of <c>Hosting/Issue</c> (no <c>shared=</c> entry) was compiled
+    /// over its 1.16 source files and <c>CS0103 'ObservationQueries'</c> held a rollout for ~30
+    /// minutes.</para>
     /// </summary>
     public static IObservable<PreWarmOutcome> BakeOne(
         IMessageHub mesh,
@@ -532,8 +717,310 @@ internal static class NodeTypeBatchBake
         IReadOnlyList<MeshNode> sources,
         TimeSpan budget,
         ILogger? logger)
+        => Observable.Defer(() =>
+        {
+            // 🚨 ONE deadline for the whole type — the re-read, any re-resolution, the compile and
+            // the stamp together. The sweep calls this sequentially with no outer bound, so giving
+            // the compile a second full budget after the re-read would let one slow read double
+            // the documented per-type budget across the whole rollout (#4051 review). Only the time
+            // that is LEFT reaches the compile.
+            var deadline = DateTimeOffset.UtcNow + budget;
+            return CurrentCompileInput(mesh, typeNode, sources, deadline, logger)
+                .SelectMany(input =>
+                {
+                    if (input.Settled is { } settled)
+                        return Observable.Return(settled);
+                    var remaining = deadline - DateTimeOffset.UtcNow;
+                    return remaining > TimeSpan.Zero
+                        ? BakeResolved(mesh, input.Node, input.Sources, remaining, logger)
+                        : Observable.Return(new PreWarmOutcome(typeNode.Path, PreWarmStatus.TimedOut,
+                            "the per-type budget was spent establishing the compile input — not evaluated"));
+                });
+        });
+
+    /// <summary>
+    /// What <see cref="BakeOne"/> compiles: ONE definition and the source set ITS OWN queries select —
+    /// or, in <paramref name="Settled"/>, the outcome that stands INSTEAD of a compile, because the
+    /// type is gone or no input could be vouched for.
+    /// </summary>
+    internal sealed record CompileInput(
+        MeshNode Node, IReadOnlyList<MeshNode> Sources, PreWarmOutcome? Settled = null);
+
+    /// <summary>
+    /// 🚨 <b>The compile input, re-established at the moment of the compile.</b>
+    ///
+    /// <para>The sweep enumerates every definition ONCE, at its start, and the batched discovery
+    /// pass resolves source sets from those enumerated definitions some time later; a sequential
+    /// bake of ~200 types then reaches each type minutes after that. A module update landing inside
+    /// that window moves the definition AND its files, and pairing the enumerated definition with
+    /// the later files is neither the old content nor the new one. On memex.systemorph.com
+    /// (2026-09-11, a pod started 18:50Z) Hosting 1.16 landed between 18:53:04Z and 18:53:55Z: the
+    /// sweep had enumerated <c>Hosting/Issue</c> at v458 — no declared sources — and compiled it
+    /// ~18:55Z over a set that already held the 1.16 <c>FleetWatch</c>, which calls the
+    /// <c>ObservationQueries</c> file the 1.16 definition pulls in through <c>shared=</c>.</para>
+    ///
+    /// <para>So the type's row is read again — through the same storage read the compile stamp uses
+    /// (<see cref="BuildStamp"/>), never a point read through the routing, which on a type a sync
+    /// has just pruned would open the storm-breaker — and the CURRENT row is compiled. The batch's
+    /// pre-resolved set is reused only when BOTH witnesses say it is still the set: the row declares
+    /// the very queries the batch resolved it with, and the row's own source-version record
+    /// (<see cref="NodeTypeDefinition.CurrentSourceVersions"/>, kept by the per-NodeType sources
+    /// watcher) either is absent or names exactly the versions the batch holds. Otherwise the sources
+    /// are resolved again from the current queries (<see cref="ResolveDeclared"/>), and the row is
+    /// read once more afterwards: a definition that moved AGAIN while its sources were being
+    /// resolved is not compiled.</para>
+    ///
+    /// <para>🚨 <b>What this does NOT establish</b>: an atomic snapshot. Neither a row read nor a
+    /// query is a transaction, and the version record lags the files by the watcher's own latency,
+    /// so a source edited in the last instant before the compile can still be compiled at its earlier
+    /// version. That residue is self-healing — <see cref="NodeTypeDefinition.CompiledSources"/>
+    /// records what was compiled, the watcher's newer record then reads dirty, and the type rebuilds
+    /// — and a verdict it produces is the one #1214's recovery watch already exists for.</para>
+    ///
+    /// <para>Every "I don't know" is a NON-verdict, never a compile of a pair nobody can vouch for:
+    /// a re-read that faults or runs out of budget, a row that no longer reads as a
+    /// <see cref="NodeTypeDefinition"/>, a current source set that cannot be established, and a
+    /// definition that moved again are all <see cref="PreWarmStatus.TimedOut"/> ("not evaluated").
+    /// A row absent from storage is confirmed by a LISTING
+    /// (<see cref="DynamicTypePreWarmer.TypeNodeExists"/>) and then reported
+    /// <see cref="PreWarmStatus.Removed"/> WITHOUT a compile or a stamp — the stamp's
+    /// insert-if-absent would otherwise re-create the type its repository just pruned. A listing that
+    /// still names the type (a definition this storage does not hold) compiles the enumerated input,
+    /// exactly as before this re-read existed.</para>
+    /// </summary>
+    internal static IObservable<CompileInput> CurrentCompileInput(
+        IMessageHub mesh,
+        MeshNode enumerated,
+        IReadOnlyList<MeshNode> resolved,
+        DateTimeOffset deadline,
+        ILogger? logger)
+    {
+        var storage = mesh.ServiceProvider.GetService<IStorageAdapter>();
+        var meshService = mesh.ServiceProvider.GetService<IMeshService>();
+        // A host with nothing to re-read from: the input is the enumerated one, exactly as before.
+        if (storage is null || meshService is null)
+            return Observable.Return(new CompileInput(enumerated, resolved));
+
+        var options = mesh.JsonSerializerOptions;
+        var typePath = enumerated.Path;
+        var enumeratedQueries = DeclaredQueries(
+            enumerated.ContentAs<NodeTypeDefinition>(options, logger), typePath);
+
+        CompileInput NotEvaluated(string why) => new(enumerated, [],
+            new PreWarmOutcome(typePath, PreWarmStatus.TimedOut, why + " — not evaluated"));
+
+        return ReadRow(storage, typePath, options, deadline, logger)
+            .SelectMany(row =>
+            {
+                if (row.Fault is { } fault)
+                    return Observable.Return(NotEvaluated(
+                        $"'{typePath}' could not be re-read before its compile "
+                        + $"({fault.GetType().Name}: {fault.Message})"));
+
+                if (row.Stored is null)
+                    return DynamicTypePreWarmer.TypeNodeExists(mesh, typePath, logger)
+                        .Timeout(deadline)
+                        // A listing that cannot answer keeps the type PRESENT — the direction that
+                        // never launders a real verdict (TypeNodeExists' own rule).
+                        .Catch<bool, Exception>(_ => Observable.Return(true))
+                        .Select(exists => exists
+                            ? new CompileInput(enumerated, resolved)
+                            : new CompileInput(enumerated, [], new PreWarmOutcome(
+                                typePath, PreWarmStatus.Removed,
+                                "the NodeType definition no longer exists — pruned during the sweep, so it "
+                                + "was neither compiled nor stamped (a stamp would have re-created it)")));
+
+                if (row.Definition is null)
+                    return Observable.Return(NotEvaluated(
+                        $"'{typePath}' no longer reads as a NodeTypeDefinition"));
+
+                // Typed content, always: the compiler takes the self-definition branch only for a
+                // NodeTypeDefinition, and a row served as raw JSON would otherwise be compiled as an
+                // instance of the meta-type.
+                var current = row.Stored with { Content = row.Definition };
+                var queriesMoved = !DeclaredQueries(row.Definition, typePath).SetEquals(enumeratedQueries);
+                if (!queriesMoved && VersionRecordAgrees(row.Definition, resolved))
+                    return Observable.Return(new CompileInput(current, resolved));
+
+                logger?.LogInformation(
+                    "BatchBake: re-resolving the sources of {TypePath} before its compile — {Why} "
+                    + "(enumerated v{Enumerated}, current v{Current})",
+                    typePath,
+                    queriesMoved
+                        ? "its declared source queries moved since the sweep enumerated it"
+                        : "its own source-version record disagrees with the batch's set",
+                    enumerated.Version, row.Stored.Version);
+
+                return ResolveDeclared(
+                        meshService, mesh.ServiceProvider.GetService<AccessService>(),
+                        row.Definition, typePath, deadline, logger)
+                    .SelectMany(set => ReadRow(storage, typePath, options, deadline, logger)
+                        .Select(again => again is { Stored: { } stored, Definition: { } latest }
+                                         && SameCompileDefinition(latest, row.Definition, typePath, options)
+                            ? new CompileInput(stored with { Content = latest }, set)
+                            : NotEvaluated(
+                                $"'{typePath}' could not be confirmed unchanged after its sources were "
+                                + "resolved (it moved again, or its re-read failed)")))
+                    .Catch<CompileInput, Exception>(ex => Observable.Return(NotEvaluated(
+                        $"the definition of '{typePath}' moved during the bake and the source set its "
+                        + $"current queries select could not be established ({ex.GetType().Name}: {ex.Message})")));
+            });
+    }
+
+    /// <summary>One storage read of a type row: the row, its definition, or why neither is known.</summary>
+    private sealed record Row(MeshNode? Stored, NodeTypeDefinition? Definition, Exception? Fault);
+
+    private static IObservable<Row> ReadRow(
+        IStorageAdapter storage, string typePath, JsonSerializerOptions options,
+        DateTimeOffset deadline, ILogger? logger)
+        => Observable.Defer(() => storage.Read(typePath, options))
+            .Take(1)
+            .Timeout(deadline)
+            .Select(stored => new Row(stored, stored?.ContentAs<NodeTypeDefinition>(options, logger), null))
+            .DefaultIfEmpty(new Row(null, null, null))
+            .Catch<Row, Exception>(ex => Observable.Return(new Row(null, null, ex)));
+
+    /// <summary>
+    /// The expanded Source + Test queries a definition declares — the SAME expansion
+    /// <see cref="ResolveSources(IMeshService, AccessService, IReadOnlyDictionary{string, NodeTypeDefinition}, IReadOnlyCollection{string}, ILogger)"/>
+    /// and the compiler apply, so "the queries moved" means exactly "a different set would be selected".
+    /// </summary>
+    private static ImmutableHashSet<string> DeclaredQueries(NodeTypeDefinition? def, string typePath) =>
+        CodeQueryResolver
+            .ExpandAll(def?.Sources, CodeQueryResolver.DefaultSources, typePath)
+            .Concat(CodeQueryResolver.ExpandAll(def?.Tests, CodeQueryResolver.DefaultTests, typePath))
+            .ToImmutableHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether the row's own source-version record allows the batch's set to stand: absent (no
+    /// witness — nothing contradicts the set, as before), or naming exactly the paths and versions
+    /// the set holds (<see cref="NodeTypeDefinition.SourceVersionOf"/>, the rule both snapshots use).
+    /// </summary>
+    private static bool VersionRecordAgrees(NodeTypeDefinition current, IReadOnlyList<MeshNode> set)
+    {
+        if (current.CurrentSourceVersions is not { } record)
+            return true;
+        var nodes = set.Where(n => !string.IsNullOrEmpty(n.Path)).ToList();
+        return record.Count == nodes.Count
+            && nodes.All(n => record.TryGetValue(n.Path!, out var version)
+                              && version == NodeTypeDefinition.SourceVersionOf(n));
+    }
+
+    /// <summary>
+    /// Whether two definitions hand the compiler the same input: the same source queries, the same
+    /// <see cref="NodeTypeDefinition.Configuration"/> and the same content collections. Stamp fields
+    /// (status, versions, coordinates) move constantly and are deliberately not compared.
+    /// </summary>
+    private static bool SameCompileDefinition(
+        NodeTypeDefinition a, NodeTypeDefinition b, string typePath, JsonSerializerOptions options) =>
+        DeclaredQueries(a, typePath).SetEquals(DeclaredQueries(b, typePath))
+        && string.Equals(a.Configuration, b.Configuration, StringComparison.Ordinal)
+        && string.Equals(
+            JsonSerializer.Serialize(a.ContentCollections, options),
+            JsonSerializer.Serialize(b.ContentCollections, options),
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// One type's source set from its OWN declared queries, each run through <see cref="RunQuery"/>
+    /// (bounded, truncation-checked, System-scoped) — the per-type counterpart of the batch pass,
+    /// held to the same <see cref="DiscoveryUnestablished"/> invariant and to the type's deadline.
+    /// </summary>
+    private static IObservable<IReadOnlyList<MeshNode>> ResolveDeclared(
+        IMeshService meshService,
+        AccessService? accessService,
+        NodeTypeDefinition def,
+        string typePath,
+        DateTimeOffset deadline,
+        ILogger? logger)
+    {
+        var queries = DeclaredQueries(def, typePath).Order(StringComparer.Ordinal).ToList();
+        return accessService.RunAsSystem(
+                () => queries
+                    .Select(q => RunQuery(meshService, q, logger, discovery: null))
+                    .Concat()
+                    .Aggregate(
+                        ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
+                        (all, page) => all.SetItems(page)))
+            .Timeout(deadline)
+            .SelectMany(all => DiscoveryUnestablished(
+                    all.Count, def.Sources is { Count: > 0 }, def.CurrentSourceVersions?.Count)
+                ? Observable.Throw<IReadOnlyList<MeshNode>>(new SourceDiscoveryFailedException(
+                    $"the source queries of '{typePath}' resolved an EMPTY set with no corroborating "
+                    + "empty snapshot"))
+                : Observable.Return<IReadOnlyList<MeshNode>>(all.Values
+                    .OrderBy(n => n.Path, StringComparer.Ordinal)
+                    .ToList()));
+    }
+
+    /// <summary>
+    /// <see cref="BakeOne"/> once its input is settled: the compile, the stamp and the outcome.
+    /// </summary>
+    private static IObservable<PreWarmOutcome> BakeResolved(
+        IMessageHub mesh,
+        MeshNode typeNode,
+        IReadOnlyList<MeshNode> sources,
+        TimeSpan budget,
+        ILogger? logger)
     {
         var typePath = typeNode.Path;
+
+        // 🚨 A COMPILE THAT CANNOT CONVERGE IS NOT ATTEMPTED AGAIN (issue #3903).
+        //
+        // This driver decides what to build from a STORE PROBE, not from the record
+        // (NodeTypeBakeStatus.ClassifyDetailed), and its first branch maps CompilationStatus.Error
+        // to BakeState.PreviouslyBroken ⇒ NeedsBake. That is right for a type broken by an image:
+        // a new image is exactly the input that could fix it, so it earns a fresh attempt on every
+        // boot. It is wrong for the one shape where no image can be the answer — a type whose own
+        // declared source query matches NOTHING on this mesh, so the symbols Roslyn cannot resolve
+        // live in nodes that are not here. Measured on memex.meshweaver.cloud: rbuergi/OperationRequest
+        // burned a full Roslyn compile on every pod boot from 2026-09-06, produced the identical
+        // CS0246/CS1061 every time, and nothing anywhere named the empty query.
+        //
+        // 🚨 THE FIRST ATTEMPT ALWAYS RUNS. The condition requires a STANDING Error — a verdict this
+        // deployment has already measured — so the coverage is never used to assert a failure
+        // nobody observed. A type reaching this state for the first time compiles, fails honestly,
+        // records the diagnosis (NodeTypeDefinition.FailedSourceQueries), and only THEN stops
+        // repeating a measurement whose inputs cannot have moved. That is memoisation of a
+        // deterministic function, not a retry cap: the coverage is recomputed from the LIVE source
+        // set on every boot, so restoring the nodes resumes normal baking with nothing to reset.
+        //
+        // 🚨 TWO INDEPENDENT WITNESSES, and the second is what stops the skip LATCHING (#1216's
+        // rule, applied in the direction that matters here). `IsUnconvergableSourceFailure` reads
+        // the record's CurrentSourceVersions, which the per-NodeType sources watcher maintains —
+        // and on a batch-baking pod that watcher may never have run, so the record alone could keep
+        // saying "missing" long after the nodes came back. THIS bake's own freshly-resolved set is
+        // the live witness. Both must agree before a compile is declined; either one saying the
+        // sources are there compiles, which is the safe direction (a needless compile costs a
+        // compile, a latched skip strands a type).
+        //
+        // Nothing is stamped here on purpose. The record already says Error with the same error and
+        // the same finding; re-writing it would move LastCompileStartedAt and make a compile that
+        // never ran look like one that did.
+        var standing = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions, logger);
+        var standingUnmatched = standing is null
+            ? null
+            : SourceCoverage.UnmatchedSourceQueries(
+                standing.Sources, typePath, sources.Select(s => s.Path).ToList());
+        if (standing is not null
+            && standingUnmatched is { Count: > 0 }
+            && NodeTypeCompilationHelpers.IsUnconvergableSourceFailure(standing, typePath))
+        {
+            // Reported from THIS pass's finding, not from the stamp: a failure recorded before
+            // #3903 carries no stamp at all, and the live answer is the one that is true now.
+            var detail = SourceCoverage.Describe(
+                typePath, standingUnmatched,
+                standing.Sources is { Count: > 0 }
+                    ? standing.Sources.Count
+                    : CodeQueryResolver.DefaultSources.Count);
+            logger?.LogWarning(
+                "BatchBake: {TypePath} NOT ATTEMPTED — its standing compile failure cannot converge. "
+                + "{Detail} No image can change that, so this bake does not repeat it; restoring the "
+                + "source nodes re-drives the compile automatically.",
+                typePath, detail ?? "(a declared source query matched no nodes)");
+            return Observable.Return(new PreWarmOutcome(
+                typePath, PreWarmStatus.DeclaredSourcesMissing, detail));
+        }
+
         // PER-COMPILE cost, appended to the per-type line that already exists — no new log volume.
         // This is the measurement that answers "is compilation what eats the memory?" directly rather
         // than by elimination: one linked bake of 279 types left the pod at 2.5 GB, so the fleet is
@@ -699,12 +1186,44 @@ internal static class NodeTypeBatchBake
                 // which must keep gating (and must keep cascading UpstreamFailed to its dependents).
                 // See ClassifyCompileFailure for the full reasoning; the two paths must agree,
                 // because the status vocabulary may not depend on WHICH driver ran the compile.
+                // …and a type its REPOSITORY HAS RETIRED (held only for its remaining instances,
+                // NodeTypeDefinition.PendingRetirement) is a content verdict before any of that:
+                // its sources were withdrawn on purpose. Same first branch as ClassifyCompileFailure.
+                // …and #3903's sibling of NoSources, one granularity finer: the snapshot is NOT
+                // empty, but a DECLARED source query in it matched nothing — the shape a type that
+                // also draws on a shared library presents when its OWN Source subtree is gone, and
+                // the shape NoSources can never see because it measures the union. Same content-vs-
+                // image reasoning, same second witness (LastCompileSucceededAt: the sources were
+                // LOST, not never present), and measured against the set THIS bake resolved rather
+                // than against a stamp. Ordered after NoSources because a wholly empty set is the
+                // more specific statement.
                 var def = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions);
-                var status = def is not null
+                // Both witnesses, exactly as the NoSources branch below takes them: this bake's own
+                // resolved set AND the type's persisted snapshot. A starved or truncated discovery
+                // pass also reports "matched nothing", and this classification does not gate — so a
+                // discovery bug that could reach it alone would quietly file itself as content
+                // drift. An absent persisted snapshot answers neither way and keeps the gating
+                // verdict.
+                var unmatched = def is null
+                    ? null
+                    : SourceCoverage.UnmatchedSourceQueries(
+                        def.Sources, typePath, sources.Select(s => s.Path).ToList());
+                var unmatchedOnRecord = def is null
+                    ? null
+                    : SourceCoverage.UnmatchedSourceQueries(
+                        def.Sources, typePath, def.CurrentSourceVersions?.Keys.ToList());
+                var status = def?.PendingRetirement is { Length: > 0 }
+                    ? PreWarmStatus.Retired
+                    : def is not null
                         && sources.Count == 0
                         && def.CurrentSourceVersions is { Count: 0 }
                         && def.LastCompileSucceededAt is not null
                     ? PreWarmStatus.NoSources
+                    : def is not null
+                        && unmatched is { Count: > 0 }
+                        && unmatchedOnRecord is { Count: > 0 }
+                        && def.LastCompileSucceededAt is not null
+                    ? PreWarmStatus.DeclaredSourcesMissing
                     : PreWarmStatus.CompileError;
                 return new PreWarmOutcome(
                     typePath, status, NodeTypeCompilationHelpers.SummarizeCompileError(result, error))
@@ -817,7 +1336,8 @@ internal static class NodeTypeBatchBake
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
                             def, result, error, activityPath: null,
-                            mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash))
+                            mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
+                            typeNode.Path))
                     // The batch driver has no Pending→Compiling flip to stamp this at, and the
                     // shared field-set deliberately does not touch it (the activation path owns it
                     // there). Written here so a per-type duration is derivable FROM THE MESH on both

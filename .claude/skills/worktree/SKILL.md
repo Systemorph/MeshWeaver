@@ -1,6 +1,6 @@
 ---
 name: worktree
-description: 'Work in an isolated git worktree and get CI green LOCALLY before pushing. Use at the START of any change to this repo — creating a branch, editing, building, or pushing — and whenever you are about to run a build/test command whose success you intend to believe. Covers the absolute primary-checkout rule (many agent sessions share this repo; mutating the primary clobbers their WIP), the never-git-stash rule, per-repo branch-protection strictness (mergeable is the bar, not merged), the CI flag set that promotes warnings to errors, and the seven commands that have produced a FALSE PASS on this macOS host — no timeout binary, --no-build on an unbuilt project, multi-project dotnet build, piping a build into tail.'
+description: 'Work in an isolated git worktree and get CI green LOCALLY before pushing. Use at the START of any change to this repo — creating a branch, editing, building, or pushing — and whenever you are about to run a build/test command whose success you intend to believe. Covers the absolute primary-checkout rule (many agent sessions share this repo; mutating the primary clobbers their WIP), the never-git-stash rule, per-repo branch-protection strictness (mergeable is the bar, not merged), the CI flag set that promotes warnings to errors, and the eight commands that have produced a FALSE PASS on this macOS host — no timeout binary, --no-build on an unbuilt project, multi-project dotnet build, piping a build into tail, and zsh silently applying a history modifier to an unbraced $ref:path.'
 user-invocable: true
 allowed-tools:
   - Read
@@ -142,6 +142,27 @@ did nothing.
 | **A build that finishes suspiciously fast** | `Build succeeded` in ~2 s | Up-to-date no-op — your edit may not be in it at all | Re-run with `--no-incremental` to prove a real compile happened |
 | **`--no-build` after editing a doc / non-`.cs` asset** | Tests pass, so the edit is fine | `src/MeshWeaver.Documentation/Data/**` ships as `<EmbeddedResource>`; a stale DLL still holds the **old** file, so the test never saw your change. Caught while writing this table — the run predated the edit by 54 s | Rebuild after editing embedded content, and check the DLL's mtime is newer than the file's |
 | **Reading a background task's output file right after launching it** | Plausible contents, so "the wait completed" | You read a stale, empty, or partial file. One session's "29 minutes of sleeps" had actually elapsed **2 minutes** | Compare wall-clock elapsed against the expected duration, not just the contents |
+| **`git cat-file -e "$ref:src/…"`** — the UNBRACED `$ref:path` form, in **zsh** | A confident present/absent verdict about a file on a ref | zsh applies a **history modifier** to unbraced `$var:x`. The path's FIRST CHARACTER picks which one, so the same typo fails in OPPOSITE directions | Always brace BOTH: `"${ref}:${path}"` |
+
+🚨 **The `$ref:path` trap deserves its own paragraph, because it fails in both directions and the
+direction depends on the path.** This host's shell is zsh 5.9, and `"$ref:src/Foo.cs"` is not the
+string you wrote. Measured here, 2026-09-11, with `ref=origin/main`:
+
+| You wrote | zsh expands it to | `git cat-file -e` | You read |
+|---|---|---|---|
+| `"$ref:src/…"` | `origin/main` — `:s` (substitute) **swallowed the whole path** | exit **0** (a commit object exists) | **PRESENT — falsely** |
+| `"$ref:scripts/…"` | same `:s` | exit 0 | **PRESENT — falsely** |
+| `"$ref:test/…"` | `mainest/Foo.cs` — `:t` (tail) | exit 128 | **ABSENT — falsely** |
+| `"$ref:helm/…"` | `originelm/values.yaml` — `:h` (head) | exit 128 | **ABSENT — falsely** |
+| `"$ref:deploy/…"` | unchanged | correct | correct, **by luck** — there is no `:d` modifier |
+| `"${ref}:${path}"` | `origin/main:src/…` | correct | correct, always |
+
+bash expands all six correctly, which is exactly why the shape survives review: it is right
+everywhere except the shell this host actually runs. **`src/` — the prefix a core session reaches
+for most — is the FALSE PRESENT**, and a false present on *"does `main` already carry this?"* means
+skipping work that was never done. Pair it with the other half of that check: gate every `gh api`
+contents fetch on **HTTP status and byte size**, because an abbreviated sha 404s and the empty body
+greps to zero, which reads as absence.
 
 **Capping a run without `timeout`** — `timeout` exists on CI's Linux runners, NOT on this macOS
 host. Locally: start the run in the background, hold the deadline yourself, and finish on the

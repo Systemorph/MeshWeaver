@@ -39,30 +39,41 @@ what THIS tree packs, and one survivor is in another repository — invisible to
 construction. That gap has already cost one wrong unlist: an earlier sweep run from this repository
 could not see the template's project and retired it.
 
-### 🛑 The template is a survivor that cannot ship yet
+### 🛑 The template is a survivor that has not shipped yet
 
 `MeshWeaver.MemexTemplate` last published `3.0.0-rc7`; all seven of its versions read
 `listed: false`, so a versionless `dotnet new install MeshWeaver.MemexTemplate` cannot resolve it.
-One cause was mechanical and is fixed — its pack target never passed the generator the platform
-checkout it requires, so `dotnet pack` on it could not succeed at all. The other is **a product
-decision that is not made**, and it blocks publication. Measured 2026-09-07:
+Two causes, both now cleared, and one piece of wiring that is still not built.
+
+**Cause 1 — mechanical, fixed.** Its pack target never passed the generator the platform checkout
+it requires, so `dotnet pack` on it could not succeed at all.
+
+**Cause 2 — the GUI, decided 2026-09-10.** Measured 2026-09-07:
 
 | Fact | Consequence |
 |---|---|
-| `generate-memex-template.cs` **refuses** to generate without `--with-gui` — the two shipped hosts reference `Memex.Portal.Gui` unconditionally | there is no GUI-less template to publish |
-| `Memex.Portal.Gui` lives **only** in MeshWeaver.Plugins, which is **private**. Core holds zero `.razor` files and no `MeshWeaver.Blazor*` project | publishing the template publishes private source |
-| The published `3.0.0-rc7` package contains **no** `Memex.Portal.Gui` | shipping it now is a NEW exposure, not a restoration |
-| A nupkg cannot be recalled — unlisting hides a version from search but it stays downloadable by exact version for ever | the exposure is irreversible |
+| `generate-memex-template.cs` **refused** to generate without `--with-gui` — the two shipped hosts referenced `Memex.Portal.Gui` unconditionally | there was no GUI-less template to publish |
+| `Memex.Portal.Gui` lives **only** in MeshWeaver.Plugins, which is **private**. Core holds zero `.razor` files and no `MeshWeaver.Blazor*` project | publishing the template WITH it publishes private source |
+| The published `3.0.0-rc7` package contains **no** `Memex.Portal.Gui` | shipping it with the GUI is a NEW exposure, not a restoration |
+| A nupkg cannot be recalled — unlisting hides a version from search but it stays downloadable by exact version for ever | that exposure would be irreversible |
 
-There *is* a standing decision to include the GUI (2026-08-26), but its stated premise — *"the UI
+There *was* a standing decision to include the GUI (2026-08-26), but its stated premise — *"the UI
 is public in core today, the move is what would make it private"* — **expired when the move
-happened.** So `publish-packages.yml` publishes the Aspire integration only, and the template's
-step is **absent rather than written-and-disabled**: a step that exists but never runs is the
-skip-trapdoor this repository forbids, and one that runs would ship the source. Tracked in
-[#3653](https://github.com/Systemorph/MeshWeaver/issues/3653).
+happened.** [#3653](https://github.com/Systemorph/MeshWeaver/issues/3653) was therefore decided the
+other way: **make the GUI optional in the hosts**, landed by
+[MeshWeaver.Plugins#1591](https://github.com/Systemorph/MeshWeaver.Plugins/pull/1591). Both hosts
+reference `Memex.Portal.Gui` from a conditioned ItemGroup and compile without it; the generator
+drops an optional project it is not shipping and refuses by name if the reference is unconditional;
+`dotnet pack` on the template now succeeds with no `--with-gui` and no `Memex.Portal.Gui` in the
+nupkg. **Nothing private ships, and the first row above is history.** The scaffolded solution is a
+headless mesh host — no Blazor shell — which the generated README states rather than promising a UI
+the package cannot contain. Full reasoning: `Hosting/OptionalPortalGui` in MeshWeaver.Plugins.
 
-Either answer unblocks it — publish the GUI source deliberately, or change the hosts so a GUI-less
-template builds. Neither is a packaging decision.
+**What is left is this lane's wiring**, and it is a real task. `publish-packages.yml` publishes the
+Aspire integration only; the template's step is **absent rather than written-and-disabled** (a step
+that exists but never runs is the skip-trapdoor this repository forbids). Building it needs a
+Plugins checkout with a minted App token, `-p:Version=`, `-p:MeshWeaverRoot=`, and an answer to
+which Plugins commit a core tag pairs with — see that workflow's header.
 
 Everything else was a *library*, and a MeshWeaver library package has had no consumer for months:
 in-mesh source compiles against the platform **image**, module bundles carry their own closures, and
@@ -89,31 +100,37 @@ prebuilt image pulled from GHCR. A `PackageReference` a customer adds to their A
 add a driver to a running portal even in principle — so a fan-out of `MeshWeaver.Hosting.<driver>`
 packages would buy nothing and cost a version matrix that must agree with the image tag.
 
-What does work is already in place. `MemexOptions` is the single config surface, and every value on
-it maps 1:1 to a portal config key emitted as container environment:
+What does work is in place. The **Deployment record** (`DeploymentContent`, the assembly
+`MeshWeaver.Deployment.Contract`, bundled INSIDE the Aspire package) is the single config surface —
+the ONE input Aspire and the Helm chart both render from — and every field on it maps to a portal
+config key emitted as container environment:
 
 ```csharp
-builder.AddMemex("memex", o => o
-    .WithBackend("Filesystem")            // → Backend
-    .WithOrleansClustering("AdoNet")      // → Orleans__Clustering
-    .WithEmbeddings(endpoint, key)        // → Embedding__Endpoint / __ApiKey
-    .WithAiProviders(openAI: false));     // → Features__Ai__Providers__OpenAI
+builder.AddMemex("memex")
+    .WithStorageLayout(s => s with { Backend = "Filesystem" })   // → Deployment__Backend
+    .WithOrleansClustering("AdoNet")                             // → Deployment__Orleans__Clustering
+    .WithPluginRepo("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", gitRef: "main")
+    .PreInstall("MeshWeaver.Plugins/Hosting")                    // → PluginCatalog__* (Aspire) / the catalog file (Helm)
+    .WithRequiredModule("MeshWeaver.Hosting.Postgres")           // → Modules__Required__0
+    .WithAi(a => a.Anthropic(models, enabled: false));           // → Features__Ai__Providers__Anthropic
 ```
 
-Driver selection is already done this way — `Backend` picks Filesystem or Azure blob,
-`OrleansClustering` picks Localhost, AdoNet or Azure Tables — as **config strings the image
-interprets at startup**, not as assemblies the customer resolves. Selecting which plugins the image
-loads at startup is the same shape: a value on `MemexOptions`, a config key on the container, and
-the plugin fetched at runtime from the plugin catalog as a module bundle. Adding a startup-time
-capability means **adding an option to the adapter**, never adding a package.
+Driver selection is done this way — the storage layout picks the backend, `OrleansClustering`
+picks Localhost, AdoNet or Azure Tables — as **config strings the image interprets at startup**,
+not as assemblies the customer resolves. Selecting which plugins the image loads at startup is the
+same shape: a field on the record (`pluginRepos`, `preInstall`, `requiredModules`), a config key on
+the container, and the plugin fetched at runtime from the plugin catalog as a module bundle. Adding
+a startup-time capability means **adding a field to the record** (and its fluent method), never
+adding a package. The full surface and the parity table are
+[ConfiguringAnInstanceFromAspire](/Doc/Architecture/ConfiguringAnInstanceFromAspire).
 
-> 🚧 **Open direction, not yet built —
-> [#3646](https://github.com/Systemorph/MeshWeaver/issues/3646).** Two consequences of this ground
-> rule are recorded so they are not rediscovered: the adapter should grow explicit plugin selection
-> (today plugins are configured portal-side, not from the AppHost), and the hand-maintained Helm
-> chart under `deploy/helm/` duplicates keys that `MemexOptions` already owns — it should be
-> **generated** from the same surface rather than kept in parallel. Aspire's own Kubernetes/Helm
-> publisher is the mechanism.
+> ✅ **Settled, 2026-09-08 —
+> [#3646](https://github.com/Systemorph/MeshWeaver/issues/3646).** Plugin selection from the
+> AppHost is the record's `WithPluginRepo` / `PreInstall` / `WithRequiredModule`. Generating the
+> Helm chart from Aspire is **retired**: the duplication was the adapter's own second copy of the
+> record (`MemexOptions`), not the chart, and the chart's operational contract (the migration Job,
+> the Key Vault classes, KEDA, the operator, the registry, the gates) is not expressible in Aspire's
+> publisher. Aspire emits a record, never a chart; the chart is a renderer of the same record.
 
 ---
 

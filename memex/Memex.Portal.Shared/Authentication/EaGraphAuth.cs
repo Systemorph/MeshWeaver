@@ -46,8 +46,10 @@ namespace Memex.Portal.Shared.Authentication;
 /// <c>ContentAs&lt;T&gt;</c>, and there is no shape switch left to have an arm.</para>
 ///
 /// <para><b>Azure setup (one-time):</b> on the sign-in app registration add the <i>delegated</i> scopes
-/// <c>Mail.ReadWrite Mail.Send Calendars.ReadWrite offline_access</c> and the redirect URI
-/// <c>{BaseUrl}/auth/ea/callback</c>. The user's first use triggers the consent screen.</para>
+/// <c>Mail.ReadWrite Mail.Send Calendars.ReadWrite Team.ReadBasic.All Channel.ReadBasic.All
+/// ChannelMessage.Read.All Chat.Read offline_access</c> and the redirect URI
+/// <c>{BaseUrl}/auth/ea/callback</c>. The user's first use triggers the consent screen;
+/// <c>ChannelMessage.Read.All</c> needs a tenant admin's consent once.</para>
 /// </summary>
 public sealed class EaGraphAuth(
     IServiceProvider rootServices,
@@ -56,10 +58,47 @@ public sealed class EaGraphAuth(
     HttpClient http,
     ILogger<EaGraphAuth>? logger = null) : IEaGraphAuth
 {
-    /// <summary>Delegated scopes the EA needs (space-separated, Graph v2 form).</summary>
+    /// <summary>
+    /// Delegated scopes the EA needs (space-separated, Graph v2 form).
+    ///
+    /// <para><b>Teams (read 2026-09-09, send 2026-09-10).</b> <c>Team.ReadBasic.All</c> lists the
+    /// user's teams, <c>Channel.ReadBasic.All</c> a team's channels, <c>ChannelMessage.Read.All</c>
+    /// a channel's messages, <c>Chat.Read</c> the user's chats — the surface the Executive
+    /// Assistant's <c>ListTeams</c> / <c>ListChannels</c> / <c>ReadChannelMessages</c> /
+    /// <c>ListChats</c> / <c>ReadChat</c> tools (MeshWeaver.Plugins) call.
+    /// <c>ChannelMessage.Send</c> and <c>ChatMessage.Send</c> let the same grant POST to a channel
+    /// or a chat as the user — Teams has no draft state, so those posts are immediate and
+    /// irreversible, which is why the plugin hands the posting tools to the model ONLY where the
+    /// deployment says so (<c>Teams:AgentSend=Send</c>, mirroring <c>Email:AgentSend</c>). The
+    /// scope is consented here regardless: consent is per grant, and a user should not have to
+    /// reconnect a second time on the day the deployment turns posting on.</para>
+    ///
+    /// <para><b>Consent.</b> The v2 authorize endpoint consents to whatever <c>scope</c> asks for
+    /// (dynamic consent), so these need not be pre-listed on the app registration — but
+    /// <c>ChannelMessage.Read.All</c> is admin-restricted: a non-admin user sees "Need admin
+    /// approval" until a tenant admin has consented once (Entra → Enterprise applications → the
+    /// sign-in app → Permissions → Grant admin consent). 🚨 <b>Widening this string invalidates
+    /// every stored grant</b>: Entra refuses to redeem a refresh token for scopes the user never
+    /// consented to (400 <c>invalid_grant</c>), so a grant minted under the previous string answers
+    /// nothing until the user reconnects. That is why <see cref="Classify(MeshNode?, IMessageHub)"/>
+    /// compares the stored <see cref="EaCredential.Scopes"/> with THIS string and reports a mismatch
+    /// as <see cref="EaConnection.NotConnected"/> — the one state that hands the user the consent
+    /// link AND makes <c>/auth/ea/connect</c> run the dialog instead of bouncing a "connected" user
+    /// straight back (measured 2026-09-10: the read scopes landed, the user clicked the link, the
+    /// controller saw a stored credential and skipped consent, and every Teams call kept failing on
+    /// the refused refresh).</para>
+    ///
+    /// <para><b>Tenant boundary.</b> A grant is minted by the user's HOME tenant. A team the user
+    /// reaches as a guest of another company's tenant is not visible on it — <c>/me/joinedTeams</c>
+    /// omits guest teams — and no scope here changes that; see the <c>/teams</c> skill.</para>
+    /// </summary>
     public const string Scopes =
         "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send " +
-        "https://graph.microsoft.com/Calendars.ReadWrite offline_access";
+        "https://graph.microsoft.com/Calendars.ReadWrite " +
+        "https://graph.microsoft.com/Team.ReadBasic.All https://graph.microsoft.com/Channel.ReadBasic.All " +
+        "https://graph.microsoft.com/ChannelMessage.Read.All https://graph.microsoft.com/Chat.Read " +
+        "https://graph.microsoft.com/ChannelMessage.Send https://graph.microsoft.com/ChatMessage.Send " +
+        "offline_access";
 
     /// <summary>
     /// How long a single credential-node read may take before the answer becomes
@@ -405,10 +444,25 @@ public sealed class EaGraphAuth(
                 $"the credential node at {node.Path} exists but its content could not be read as an "
                 + $"{nameof(EaCredential)}"));
 
-        return new CredentialRead(node, cred,
-            string.IsNullOrEmpty(cred.RefreshTokenEncrypted)
-                ? EaGraphAccess.NotConnected("the stored credential carries no refresh token")
-                : EaGraphAccess.Connected());
+        if (string.IsNullOrEmpty(cred.RefreshTokenEncrypted))
+            return new CredentialRead(node, cred,
+                EaGraphAccess.NotConnected("the stored credential carries no refresh token"));
+
+        // 🚨 A grant is only as wide as the consent that minted it. When THIS build asks for more
+        // than the stored grant covers, Entra refuses to redeem the refresh token (400
+        // invalid_grant) — so "connected" would be a lie every Teams call disproves, and the
+        // consent controller, trusting it, would bounce the user's reconnect straight back
+        // without ever showing the dialog. NotConnected is the truthful answer: the read
+        // COMPLETED and found a credential that cannot serve this build. The mailbox side of that
+        // grant still works, and the diagnostic says so, so the message is "reconnect once",
+        // never "you never connected". Compared as the exact string the consent stored: the
+        // constant is the only writer, so any difference IS a scope-set change.
+        if (!string.Equals(cred.Scopes, Scopes, StringComparison.Ordinal))
+            return new CredentialRead(node, cred, EaGraphAccess.NotConnected(
+                "the stored grant was consented for an earlier scope set; this build needs more "
+                + "(Teams), so a reconnect is required — the mailbox connection itself is intact"));
+
+        return new CredentialRead(node, cred, EaGraphAccess.Connected());
     }
 
     /// <summary>

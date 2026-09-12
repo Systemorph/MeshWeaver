@@ -77,7 +77,7 @@ route answers **503 after ~10.3 s, per request, for as long as the process lives
 | # | Observation | Reading |
 |---|---|---|
 | 1 | `Content read timed out for DoublePendulum/content/og-card.png` — **33 occurrences in 24 h, every one on a single pod**, zero on the other six replicas and zero in namespace `memex` | Per-pod and persistent. Neither a settle window nor a cluster-wide transport fault can produce that distribution |
-| 2 | Same millisecond: `HubUnreachableException: Reading content collection config from 'DoublePendulum' gave up after 10s … Reader: Hub portal/nodeops-Gpdh… RunLevel=Started Queue(buffer=0,deferred=0,exec=0) … Target: NO LOCAL HUB` | The reader is healthy and idle. Nothing arrived — this is the reply leg, not the request leg |
+| 2 | Same millisecond: `HubUnreachableException: Reading content collection config from 'DoublePendulum' gave up after 10s … Reader: Hub portal/nodeops-Gpdh… RunLevel=Started Queue(buffer=0,deferred=0,exec=0) … Target: NO LOCAL HUB` | The reader is healthy and idle. Nothing arrived — this is the reply leg, not the request leg. 🚨 **The `Target: NO LOCAL HUB` clause carried NO information when this was captured** and must not be read as evidence here: the probe behind it asked the READER's own hosted-hub collection, and a per-node hub is hosted by the MESH hub, so on this seam it printed that verdict for every read alike. Fixed in [#3931](https://github.com/Systemorph/MeshWeaver/issues/3931); rows 3 and 5 are what carry this verdict, and they are independent of it |
 | 3 | `[ROUTE] Directed delivery to pod hub 'portal/nodeops-Gpdh…' was refused: no silo in this cluster is currently serving that hub. Message RawJson (…) **from `AgenticEngineering`** was NOT posted` — logged by **four** different peer pods | The owning per-node hub DID produce the `GetDataResponse`. It had nowhere to go. Exactly the "reply produced, no route home" pair, now on the directed transport |
 | 4 | Onset: the refusals and the content timeouts start in the **same hour**, ~8 h after that pod had started clean and served fine | Lost-after-landing, not never-landed |
 | 5 | `03:12:52Z` — a peer silo logs `I have been told I am dead, so this silo will stop` and restarts | The membership change that re-partitioned the directory, immediately before the onset |
@@ -140,7 +140,7 @@ So the claim is now re-asserted on **every cluster membership change** —
 `IClusterMembershipFeed`, fed on the silo by Orleans' own `ISiloStatusListener`:
 
 ```
-ClaimTriggers()            // immediately, then once per membership change
+ClaimTriggers()            // after Active, then once per membership change
     .Select(_ => ClaimOnce())
     .Switch()              // exactly one claim in flight per address, ever
     .Subscribe(…)
@@ -159,6 +159,77 @@ fast membership churns, so a scale event cannot become a claim storm.
 
 Where no feed is registered — an Orleans client, the Monolith, a bare mesh in a test — membership
 cannot change under the process, so the claim is asserted once, exactly as before.
+
+## Two windows in which the trigger was dropped anyway (#3931)
+
+Re-asserting on the right event is necessary and was not sufficient. The trigger could be lost in two
+places *after* the design above was in, and in both the outcome is indistinguishable from never having
+had re-assertion at all: no claim, no retry, no log line, and nothing left to re-make the mapping
+until the next membership change — the #2938 state this page exists to remove.
+
+> 🚨 **Both are DROPS, not delays.** The grain-side attach count never moves, so "the claim was made
+> and its result went unobserved" is excluded by the instrument itself: the count is published from
+> inside `IPodHubGrain.Attach`.
+
+### Window one — `StartWith` subscribed the feed only after the first claim round had run
+
+`ClaimTriggers` composed the initial assertion as `Changes.StartWith(0L)`. **`StartWith` is a
+`Concat`**: the source is subscribed only once the prefix has been fully *processed*, and processing
+that prefix runs the entire first claim round — `Attach` included — on the subscribing thread.
+`IClusterMembershipFeed.Changes` is hot and deliberately does not replay, so a change arriving in
+that window was dropped **where it was published**: `Subject.OnNext` with no observer is a no-op.
+
+The window is the first claim of a hub's life — i.e. the pod's boot, which is exactly when membership
+moves. #3983 measured 34 placement failures in 65 s across two pods, all inside it.
+
+Measured on System.Reactive 6.1.0 (the pinned version) with the real shape
+(`…ObserveOn(Scheduler.Default).SelectMany(_ => triggers).Select(round).Switch()`) and a round that
+parks inside its subscribe, so the window is observable rather than inferred:
+
+```
+StartWith: ROUND-0-enter -> PUSH-enter -> PUSH-leave -> RELEASE -> ROUND-0-leave -> SUBSCRIBE-feed
+Merge    : SUBSCRIBE-feed -> ROUND-0-enter -> PUSH-enter -> RELEASE -> ROUND-0-leave -> ROUND-42-enter
+```
+
+Under `StartWith` the push completes with the feed still unsubscribed and no round for it ever runs.
+The fix is `Changes.Merge(Observable.Return(InitialClaim))`: `Merge` subscribes its sources
+left-to-right, so the **durable** source is listening before the one-shot initial trigger can start
+any work, and the merge gate then serialises the two — a change arriving mid-round queues behind it
+instead of racing it.
+
+### Window two — the claim/dispose handshake answered a transient condition terminally
+
+The handshake protecting `Attach`/`Detach` ordering was a single token. A round that found the token
+at "someone is already starting an attempt" answered `Observable.Empty` — a **terminal** answer to a
+**transient** condition. A retry round re-subscribes on its backoff timer's thread while a membership
+round arrives on the feed's, so the overlap is ordinary, and it is most likely exactly during churn,
+because churn is what makes a claim bounce in the first place.
+
+It is worse than a dropped trigger: `Switch` has already cancelled the round it overlapped, so the
+membership change **destroyed an in-flight claim and made none of its own**.
+
+The handshake is now a **ledger, not a mutex**. One interlocked word carries "disposal has been
+requested" in bit 0 and the number of rounds currently inside their synchronous attach window in the
+rest. The only reason a round may refuse to claim is disposal; whoever observes "disposed **and** the
+window is empty" owns the release — `Dispose` when it finds the window empty, otherwise the last
+round out — so `Detach` can never overtake an `Attach` that is still being invoked, and concurrent
+rounds are ordinary rather than an error.
+
+### What pins it
+
+`PodHubClaimReassertionTest` carries both directions, and both are deterministic rather than
+probabilistic: the test grain PARKS inside a nominated `Attach` call, so the contention is created
+rather than waited for.
+
+| Test | Direction |
+|---|---|
+| `AMembershipChangeDuringTheInitialClaim_IsStillAsserted` | window one |
+| `AMembershipChangeDuringARetryingClaim_IsStillAsserted` | window two |
+| `AContendedMembershipChange_IsAssertedExactlyOnce` | the opposite failure — one change is one claim |
+
+The third is not decoration. A "fix" that merely re-triggered the round would satisfy both positive
+pins and reintroduce the claim storm `Switch` exists to bound: every attempt makes the owning silo
+log a line, which is the log-storm shape #2426/#2546 exist to remove.
 
 ## The diagnosability that was missing
 
@@ -194,13 +265,15 @@ measurement, and it is stated here rather than glossed. A stronger form (the own
 unreachability directly) has no seam today: the refusal is raised on a silo that does not know who
 the owner is.
 
-The claim's placement during **silo startup** is also not ordered on readiness. `RegisterStream`
-orders its Orleans *stream* subscription on `OrleansStreamingReadiness` (lifecycle stage `Active`)
-and issues the pod-hub claim immediately, unordered — which is why the eagerly-registered
-`mesh/{meshId}` and `cache/{meshId}` hubs burn their whole initial budget in a window where
-prefer-local provably cannot place locally. The membership change that fires when the silo reaches
-`Active` now repairs that, so the fault is closed; the wasted burst and its per-pod startup `Warning`
-remain, and closing *those* is a separate, smaller change.
+The claim's placement during **silo startup** is now ordered on the same
+`OrleansStreamingReadiness` signal as the stream subscription (lifecycle stage `Active`). Before
+#3983/#3984, `RegisterStream` issued the pod-hub claim immediately, unordered. The eagerly-registered
+`mesh/{meshId}` and `cache/{meshId}` hubs therefore called `IPodHubGrain.Attach` before this silo —
+and sometimes before any silo — advertised the grain type. Orleans rejected the invalid placement
+with `Known nodes with grain type: none`; its per-attempt logger produced #3983 while the exhausted
+Polly call produced #3984. The claim now waits for `Active` and then moves off the lifecycle thread
+before touching the grain factory. The membership-change re-assertion remains the repair for a
+mapping lost after startup.
 
 ## Related
 

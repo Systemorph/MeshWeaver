@@ -94,9 +94,17 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
             // 🚨 Red ONLY. A NotVerifiable verdict is not a hold: nothing refused that build, so
             // rendering it as held would tell an operator to go fix an incompatibility that was
             // never diagnosed. The Updates settings tab renders that state on its own terms.
+            //
+            // 🚨 OPERATIVE, not merely recorded (#3812). The line above already draws this
+            // distinction for the other half — "the recorded verdict is the fact; IsHeld is the
+            // poller's note about it" — and a note nothing can refresh is the case it did not
+            // anticipate. With updates switched off the poller evaluates nothing, so the note is
+            // frozen at whatever the last evaluation said and would render "update held" forever,
+            // naming an incompatibility that may have been fixed days ago. A Red verification is
+            // unaffected: that is a recorded FACT about the build, not a note about the poller.
             var blocked = policy.VerificationFor(latest)?.Verdict == ComboVerdictKind.Red;
             return new(
-                policy.IsHeld(latest) || blocked
+                policy.IsHoldOperative(latest) || blocked
                     ? PlatformUpdateAvailability.UpdateHeld
                     : PlatformUpdateAvailability.UpdateAvailable,
                 latest);

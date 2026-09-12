@@ -1,7 +1,7 @@
 ---
 Name: Refusing a Lost User Action
 Category: Architecture
-Description: A click whose stream is gone used to be dropped with a warning that reads like routine data-sync churn, while the action it would have run was perfectly capable of outliving the circuit. Why "deliver it anyway" is not implementable as stated, what a visible refusal is instead, and the one line that separates a person's action from a data frame.
+Description: A user action is refused visibly when its stream is already gone, and an accepted action now holds the sender's ordinary quiesce drain until its owner-side handler acknowledges it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11.5 4.5 7 6 5.5 9 8.5 15 2.5l1.5 1.5z"/><path d="M3 13a9 9 0 1 0 9-9"/><line x1="12" y1="12" x2="12" y2="12.01"/></svg>
 ---
 
@@ -88,7 +88,7 @@ is looking at a page that silently did nothing.
 ## The one line that separates the two classes
 
 ```csharp
-public interface IUserAction
+public interface IUserAction : IRequest<UserActionAccepted>
 {
     string ActionArea { get; }
 }
@@ -131,12 +131,231 @@ rises.
 which on Blazor Server is the container's and identical for every simultaneous viewer. See
 [Localization](/Doc/Architecture/Localization).
 
-## What this deliberately does not fix
+## The ordering fix that followed
 
-- **The ordering that loses the click in the first place.** The per-circuit portal hub released its
-  stream while an inbound user action it had already accepted was still in flight to the owner. Its
-  disposal lives in the Blazor portal (MeshWeaver.Plugins), not here, so draining accepted user
-  actions before releasing subscriptions is a cross-repo change with its own design.
+The visible refusal closed the silent-failure half, but it did not stop an accepted action losing a
+race with circuit teardown. That second half is issue #3986 and is now an acknowledgement protocol:
+
+1. `IUserAction` is an `IRequest<UserActionAccepted>`.
+2. The Blazor sync hub uses `Observe` to register the response callback **before** it posts the
+   click, blur, or dialog dismissal.
+3. The owner-side `LayoutAreaHost` posts `UserActionAccepted` only after its stream-scoped handler
+   has accepted the action.
+4. A circuit close reaches the sync hub's existing **Quiescing** phase and sees that callback as
+   pending. It therefore keeps the stream subscription alive until the receipt lands, then disposes
+   normally.
+
+There is no retry, grace extension, timer, or second disposal gate. The receipt makes the accepted
+action part of the lifecycle mechanism the hub already drains. An action whose stream was genuinely
+gone before it arrived is still refused by the path documented above.
+
+### 🚨 Step 4 was only half true, and the half that was missing is the one that loses the click
+
+A pending callback is drained in **Quiescing**, and Quiescing is a phase of the HUB. So the
+acknowledgement orders ahead of the release only if the release is posted from a point that comes
+*after* Quiescing. It was not.
+
+The release is one line — the `UnsubscribeRequest` that destroys the owner-side `sync/{id}` sub-hub,
+registered in `JsonSynchronizationStream.CreateExternalClient`. It was registered on the **stream**:
+
+```csharp
+reduced.RegisterForDisposal(new AnonymousDisposable(
+    () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner))));
+```
+
+and `SynchronizationStream.Dispose()` disposes its registrants **synchronously, and deliberately
+before `Hub.Dispose()`** — that ordering is [#1613's own fix](../StreamLivenessAndTheHubReference)
+and is correct for what it was for (it is what removes the pending `SubscribeRequest` callback
+promptly). Its cost here is that **the whole disposal ordering runs before the hub has a phase in
+which to wait**. So the two teardown routes behaved differently:
+
+| route | what disposes first | did the receipt order ahead? |
+|---|---|---|
+| the per-circuit portal hub disposes its hosted `sync/{id}` | the HUB — `streamDisposables` run from its `DisposeImpl` in ShutDown | yes, Quiescing came first |
+| the STREAM is disposed directly — a workspace eviction, `ReclaimIfUnheld`, `EvictClientSubscriptions`, a consumer's `.Finally(stream.Dispose)` | the STREAM — synchronously, ahead of `Hub.Dispose()` | **no** |
+
+The second route is not an edge: *released read stream* is one of the three ways into
+`RefuseStreamMessage` this page already names, and it is the one where the person is still sitting
+in front of the page.
+
+**The fix is where the line is registered, not what it does.** It now goes on the stream's hub, so it
+runs from `DisposeImpl` in ShutDown — strictly after Quiescing — on **both** routes:
+
+```csharp
+var release = new AnonymousDisposable(
+    () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner)));
+if (reducedHub is not null) reducedHub.RegisterForDisposal(release);
+else                        reduced.RegisterForDisposal(release);   // no hub left to wait in
+```
+
+Nothing new waits, nothing is delayed "to be safe": the release simply sits behind the drain the hub
+already performs.
+
+### The sender is a surface, not a call shape — `stream.SubmitUserAction(...)`
+
+The ordering above is only armed if the sender registered the callback, which `Post` does not do. So
+the acknowledged send is a named surface — `UserActionSubmission.SubmitUserAction`, an
+`ISynchronizationStream` extension — rather than an `Observe` incantation copied into every view
+that raises a click. It carries the acting user's `AccessContext` (a user action must; the sync hub
+has no identity of its own), owns its own subscription, and hands a refusal to the caller as the
+already-localized `error.userActionNotRun` sentence.
+
+### 🚨 And a second thing the refusal was doing, which nobody had measured
+
+A refusal is a `DeliveryFailure` posted back to the **sender**, and the sender of a click is the
+stream's own `sync/{id}` hub — whose `ConfigureSynchronizationHub` carries a blanket
+`DeliveryFailure` handler that answers `OnError` for anything that is not a transient
+`ShuttingDown`. So a bare `Post` of a click that cannot be delivered does not merely lose the click:
+it **faults the whole synchronization stream**, and every view bound to that mirror dies with it.
+Measured on a real fixture — the stream terminated with
+
+```
+DeliveryFailureException: Your last action (“ProbeArea/Button”) did not run — the view it was
+sent from had already closed. Nothing was changed; please try again.
+```
+
+`DroppedUserActionIsRefusedTest` could not see this: it posts from the client HUB, so its refusal
+never reaches a stream's handler.
+
+🚨 **Registering the callback is not on its own enough, and assuming it was cost one wrong claim.**
+`HandleCallbacks` runs FIRST in the rule chain and then the chain keeps running, so a matched
+response reaches the blanket handler as well — the fault still fired. What the match does leave
+behind is the flag the framework already uses for exactly this: `PostOptions.CallbackDispatched`,
+which `PortalErrorSink` has long consulted so a failure the call site's `OnError` handled is not
+*also* popped as a modal. The sync hub's `DeliveryFailure` handler simply never adopted it. It does
+now, as the same one-line filter:
+
+```csharp
+(_, delivery) => !delivery.Properties.ContainsKey(PostOptions.CallbackDispatched)
+```
+
+An **un-awaited** failure — the subscribe protocol, an RLS denial, a `NotFound` — still faults the
+stream exactly as before. Only a failure somebody is already holding is left to them.
+
+The order in which this was found is worth keeping: the "does not fault" half **passed in a filtered
+run and failed in the full suite**, because the test's fault probe was a bare `Subject` and the fault
+landed before the assertion window opened. A replay-backed subject made the observation honest, and
+the honest observation falsified the claim.
+`ARefusedActionSurfacesToTheCallerWithoutFaultingTheView` pins both halves.
+
+### The measurement
+
+`UserActionOutlivesStreamReleaseTest` asserts both directions against real hubs and a real remote
+stream, with the owner-side `sync/{id}` sub-hub's own `DisposalCompleted` as the instrument:
+
+| test | asserts | goes red on |
+|---|---|---|
+| `AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` | the owner's sub-hub does not die while an action is owed, and does die once it is answered | the defect |
+| `AnOrdinaryReleaseIsPrompt` | a release with nothing owed still reaches the owner | "never release the stream", which would satisfy the first test alone |
+| `AnActionOnALiveStreamStillRuns` | the acknowledged path still INVOKES the action | an ordering guarantee that stopped delivering clicks |
+| `ARefusedActionSurfacesToTheCallerWithoutFaultingTheView` | a refusal reaches the caller as the catalog sentence, and the mirror stays live | a refusal that is swallowed, re-worded, or still faults the stream |
+
+The owed-work window is made deterministic rather than raced: the action names a stream id with no
+`sync/{id}` on the owner, so the owner holds it for `SyncStreamOptions.SyncHubRegistrationGrace`
+(400 ms in the test, well inside the hub's 2 s Quiescing budget) and then refuses — the real
+reaped-sync-hub shape. **Falsified by re-registering the release on the stream and rerunning:
+`AnAcceptedActionHoldsTheReleaseUntilTheOwnerAnswers` fails at 200 ms** — *"Expected the observable
+not to emit … but it emitted ()"* — while the other two stay green.
+
+### The sender half — where it was, and what moving it actually took
+
+The **Blazor senders** live in MeshWeaver.Plugins, and until they moved the ordering above was armed
+but unused: a bare `Post` registers no callback, so Quiescing had nothing to drain and the release
+went straight through.
+
+🚨 **The list below was re-derived against Plugins `main` rather than taken on trust, and the
+denominator is what a reader needs.** The instrument is not `Stream.Hub.Post` — that literal appears
+**nowhere** in the repo except inside one comment. The honest denominator is *every construction of
+a type implementing `IUserAction`* (`ClickedEvent`, `BlurEvent`, `CloseDialogEvent` — and those three
+are the whole set, so the sweep is closed):
+
+```
+grep -rn "new ClickedEvent\|new BlurEvent\|new CloseDialogEvent" \
+     --include='*.cs' --include='*.razor' --include='*.json' .
+```
+
+🚨 **State the denominator with the count, or the count is a claim about nothing.** Measured on
+Plugins `main` 2026-09-11 (merge `05fde510`): **19 constructions repo-wide**, of which **8 in 7
+production view files** — the number the first pass guessed, reached the second time by a search that
+could have contradicted it. The remaining **11** are in `.Test` projects
+(`Markdown.Collaboration.Test` ×4, `Persistence.Test` ×3, `Graph.Views.Test` ×2, `AI.Test` ×1,
+`Todo.Test` ×1): they post from a test or CLIENT hub rather than from a view, so they are not senders
+and are correctly left alone. **Zero outside `src/`** — no in-mesh `Source/*.cs` and no NodeType JSON
+constructs a user action, which is what closes the half of the sweep `dotnet build` cannot see.
+(An earlier revision of this page said *six* test hits. It was counting `.cs` under `src/` with a
+narrower pattern; the number is 11.)
+
+| file | action | how it posted before |
+|---|---|---|
+| `MeshWeaver.Blazor/BlazorView.razor.cs` | `ClickedEvent` — the one every control inherits | `Stream.HubOrNull()` + `AccessContext` |
+| `MeshWeaver.Blazor/Components/FormComponentBase.cs` | `BlurEvent` | `Stream.HubOrNull()`, no context |
+| `MeshWeaver.Blazor/Components/DialogView.razor.cs` | `CloseDialogEvent`, twice (OK and the dismiss path) | `Stream.HubOrNull()`, no context |
+| `MeshWeaver.Blazor.Views/Components/DataGridView.razor.cs` | `ClickedEvent` carrying a `DataGridCellClick` payload | the PORTAL hub, `Stream!`, no context |
+| `MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.cs` | `ClickedEvent` | the PORTAL hub, `Stream!`, no context |
+| `MeshWeaver.Blazor.AppleMaps/AppleMapView.razor.cs` | `ClickedEvent` | the PORTAL hub, `Stream!`, no context |
+| `MeshWeaver.Blazor.OpenStreetMap/OpenStreetMapView.razor.cs` | `ClickedEvent` | the PORTAL hub, `Stream!`, no context |
+
+🚨 **"Each already resolves the hub defensively and already stamps the circuit user's
+`AccessContext`" was wrong, and the last column is why it matters.** Exactly ONE of the eight
+stamped an identity. Four posted from the **portal** hub rather than the stream's, where an ambient
+context happens to be present during an inbound Blazor activity — so moving them to
+`stream.SubmitUserAction` moves the sender to a hub that has no identity of its own, and passing the
+acting user explicitly is not a nicety there but the thing that stops `PostPipeline` failing closed.
+Three of those four are `[JSInvokable]` callbacks, i.e. DEFERRED: `CircuitAccessHandler` has already
+nulled the ambient context by the time the browser calls back, so the live AsyncLocals answer
+nothing and the durable `ICircuitContextAccessor.UserContext` is what has to answer.
+
+The move is therefore `hub.Post(evt, o => …)` → `Stream.SubmitUserAction(evt, ActingUser,
+SurfaceRefusal)`, against two new members on `BlazorView` that every one of the eight shares:
+
+- **`ActingUser`** — `AccessService.Context ?? AccessService.CircuitContext ?? ResolveCircuitUser()`.
+  The live AsyncLocals first (what an inbound activity set), the durable circuit user as the fallback
+  every deferred call site needs.
+- **`SurfaceRefusal(string)`** — reports the already-localized sentence to the circuit's
+  `PortalErrorSink`, verbatim, and logs it. Not `SurfaceError`: that takes an exception, re-words it
+  with a context prefix, and suppresses itself once the view is disposed — and a refusal arriving
+  after the view is gone is precisely the case a person still on the page needs to see. (It is also
+  not `ErrorSink.Report`: `ErrorSink` is `PortalLayoutBase`'s injected field; a leaf view resolves
+  the sink lazily through `Services`, because non-portal hosts such as the MAUI client never register
+  one.)
+
+The `HubOrNull()` guards came OUT rather than being kept: `SubmitUserAction` answers the
+hub-released case (#3321 step 3) itself, with the same catalog sentence, which turns the silent
+`return` those guards performed into the refusal this whole page is about.
+
+🚨 **There was no platform pin to move.** MeshWeaver.Plugins has carried none since #3842 — its
+`platform-ref` job resolves the newest SEALED core set at run time (`scripts/resolve-platform.py`),
+and the repo variable `MW_PLATFORM_REF` is an incident FREEZE, not a pin. The sender half's real
+gate is therefore a core RELEASE: it cannot compile until a sealed set carries this commit.
+
+### The Plugins-side controls
+
+Core's `UserActionOutlivesStreamReleaseTest` owns the ORDERING proof, measured against the
+owner-side sub-hub's `DisposalCompleted`. What Plugins owes is the SENDER's properties, and
+`UserActionSubmissionFromViewsTest` pins them by driving the real `BlazorView.OnClick` — through the
+real Blazor renderer, over a real remote stream whose owner is a real layout area host:
+
+| test | asserts | falsified by |
+|---|---|---|
+| `AClickWhoseStreamWasReleasedTellsThePersonInsteadOfVanishing` | the refusal reaches the circuit's sink as the catalog sentence for the ACTING USER's locale, and the action still did not run | restoring `hub.Post` — the sink emits nothing at all |
+| `AnOwnerRefusalReachesThePersonAndLeavesTheMirrorLive` | an owner NACK becomes a sentence, and the stream does not fault | restoring `hub.Post` — the sink is silent AND the stream terminates with `DeliveryFailureException` |
+| `AnOrdinaryClickStillRunsTheActionAndSurfacesNothing` | POSITIVE: the click still runs, and nothing is put in front of the person | removing the submission — the action never fires |
+| `AReleaseWithNothingOwedStillReachesTheOwnerPromptly` | POSITIVE: the owner-side `sync/{id}` still dies on release | removing the release registration — it never dies |
+
+Each falsification was built and run, and each reddened on its OWN assertion. The tallies are the
+part worth keeping, because they are what separates a control from a duplicate:
+
+| mutant | result |
+|---|---|
+| restore `hub.Post` + the silent `return` (THE DEFECT) | `Failed: 3, Passed: 2` — both locales of the refusal theory and the mirror test red with *"Expected the observable to emit a value within 36s … The observable emitted nothing at all"*; **both positive controls green** |
+| refuse everything, submit nothing | `Failed: 1, Passed: 2` — the refusal theory **passes in both locales** while `AnOrdinaryClickStillRunsTheActionAndSurfacesNothing` reds. This is the lazy "fix" only the positive control can see |
+| drop the release registration ("never release") | `Failed: 1, Passed: 1` — `AReleaseWithNothingOwedStillReachesTheOwnerPromptly` reds, `AnOrdinaryClick…` stays green |
+
+The middle row is the reason (b) exists at all: a submission path that refused every click satisfies
+every defect-direction assertion on this page.
+
+## What this deliberately does not do
+
 - **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an
   event that is genuinely undeliverable is not made deliverable by polling for a stream that is gone,
   and moving the 5-second grace only moves the cliff.
@@ -149,4 +368,6 @@ which on Blazor Server is the container's and identical for every simultaneous v
   NACKed during teardown, which is the rule this change makes one exception to and states.
 - [Stream Liveness and the Hub Reference](../StreamLivenessAndTheHubReference) — how a stream and its
   sub-hub come apart, which is the state this page starts from.
+- [Hub Disposal Model](../HubDisposalModel) — the Quiescing callback drain that now retains accepted
+  user actions until their owner-side receipt lands.
 - [Localization](../Localization) — the catalog and the explicit-locale rule.

@@ -681,14 +681,15 @@ public static class PublishedBundleCatalogue
         var directory = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
         var sentinel = Path.Combine(
             directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-        if (!File.Exists(sentinel))
+        var lines = ReadSealLines(sentinel);
+        if (lines is null)
             return new SealedPublicationReading(
                 null, null,
                 "the publication is being republished right now (no completion sentinel) — the "
                 + "publisher removes it before uploading and restores it last, so this is a "
                 + "transient window, not a missing publication") { Directory = directory };
 
-        var listed = File.ReadAllLines(sentinel)
+        var listed = lines
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
@@ -722,6 +723,17 @@ public static class PublishedBundleCatalogue
     private static IReadOnlyList<string>? CompleteBundlesOf(string sourceDirectory, ILogger? logger)
         => CompletePublicationOf(sourceDirectory, logger).Bundles;
 
+    // The publisher removes the seal before replacing a publication. File.Exists followed by
+    // ReadAllLines races that removal (#3876): only the open can decide whether it is readable.
+    // Other I/O failures must still surface; they do not establish an absent seal.
+    //
+    // 🚨 ONE implementation, in ShippedPrebuiltBundles beside the sentinel's own name — the boot
+    // seeder reads the same file and cannot reference this assembly (MeshWeaver.PluginCatalog
+    // depends on MeshWeaver.Hosting, not the reverse). A second copy here is how the seeder came
+    // to keep the racing File.Exists after the catalogue readers had been fixed.
+    internal static string[]? ReadSealLines(string sentinel, Func<string, string[]>? readLines = null)
+        => ShippedPrebuiltBundles.ReadSealLines(sentinel, readLines);
+
     /// <summary>
     /// The same reading as <see cref="CompleteBundlesOf"/>, plus the directory the bytes are
     /// actually in — the generation this source's pointer names, or the source directory itself
@@ -735,7 +747,8 @@ public static class PublishedBundleCatalogue
         var directory = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
         var sentinel = Path.Combine(
             directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-        if (!File.Exists(sentinel))
+        var lines = ReadSealLines(sentinel);
+        if (lines is null)
         {
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} carries no {Sentinel} — the publication "
@@ -744,7 +757,7 @@ public static class PublishedBundleCatalogue
             return (directory, null);
         }
 
-        var listed = File.ReadAllLines(sentinel)
+        var listed = lines
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
@@ -791,10 +804,7 @@ public static class PublishedBundleCatalogue
         var sentinel = Path.Combine(
             ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory),
             ShippedPrebuiltBundles.CompletionSentinelFileName);
-        if (!File.Exists(sentinel))
-            return null;
-        return File.ReadAllLines(sentinel)
-            .Select(line => line.Trim())
+        return ReadSealLines(sentinel)?.Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
     }
@@ -848,18 +858,70 @@ public static class PublishedBundleCatalogue
     /// <c>publish-bake-bundles.sh</c> does on its next run), or when the index names a bundle
     /// that is absent or not a bare name. It is EMPTY, not null, when the bake composed nothing —
     /// a reader can tell "composed nothing" from "predates module sealing".</para>
+    ///
+    /// <para>🚨 An index that is absent AT THE OPEN having been there a moment ago is the
+    /// republish window, not a publication that predates module sealing, and it sets
+    /// <see cref="ModuleSetReading.PublicationUnavailable"/> so the HTTP readers keep answering
+    /// 503 + <c>Retry-After</c> (or 404 once the identity directory itself is gone) rather than
+    /// telling a satellite gate to give up (#3876).</para>
     /// </summary>
     public static ModuleSetReading SealedModulesOf(string sourceDirectory, ILogger? logger = null)
+        => ReadModuleSet(sourceDirectory, logger, null);
+
+    // Internal for the ModuleIndexRemovedMidRead pin (InternalsVisibleTo): the index has to go away
+    // AT the open, which is the only way to exercise that race deterministically — the same seam,
+    // for the same reason, as ShippedPrebuiltBundles.ReadSealLines' own `readLines` (#3885).
+    //
+    // 🚨 A distinct NAME rather than an overload of SealedModulesOf. An added overload makes every
+    // bare `<see cref="SealedModulesOf"/>` ambiguous — CS0419, an ERROR under the -warnaserror this
+    // repo and every dependent build with, and one no cross-repo gate can see (it is not a removal
+    // and not an interface addition). It reddened this very file on the first build, and a satellite
+    // holding the same bare cref would have found out only when it moved its platform pin.
+    internal static ModuleSetReading ReadModuleSet(
+        string sourceDirectory, ILogger? logger, Func<string, string[]>? readIndex)
     {
         // 🚨 #3461: one resolution, handed back on the reading. `publication` is the directory the
         // bytes are in; the module set is `<publication>/modules`, never `<source>/modules`.
         var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
         if (complete is null)
-            return new(null, "no sealed publication") { Directory = publication };
+            return new(null, "no sealed publication")
+            { Directory = publication, PublicationUnavailable = true };
         var directory = Path.Combine(publication, ModulesDirectoryName);
         var index = Path.Combine(directory, ModulesIndexFileName);
-        if (!File.Exists(index))
+        // 🚨 #3876: the OPEN decides absence here too. `File.Exists(index)` leading an unguarded
+        // `File.ReadAllLines(index)` is the same racing pair the seal readers shed — the publisher
+        // replaces a publication several times an hour during a release and retention removes whole
+        // identity directories, so the index observed by the probe was gone by the time the read
+        // opened it, and the FileNotFoundException (or DirectoryNotFoundException, which is what a
+        // removed parent throws) reached ExceptionHandlerMiddleware as a 500 on the module routes.
+        var lines = ReadSealLines(index, readIndex);
+        if (lines is null)
         {
+            // 🚨 Absent at the open has TWO causes needing OPPOSITE answers, and the SEAL tells
+            // them apart — no second probe of the same file, which is what made the race. The
+            // publisher writes `modules/_index` strictly BEFORE `_complete` and removes `_complete`
+            // FIRST when it replaces or reclaims a publication, so:
+            //   • the seal still reads  ⇒ this publication is intact and simply has no module set:
+            //     it predates module sealing. PERMANENT — the caller must republish the source.
+            //   • the seal has gone too ⇒ the publication is being replaced (or reclaimed) right
+            //     now. TRANSIENT — PublicationUnavailable, which the HTTP readers turn into
+            //     503 + Retry-After while the directory is there and 404 once it is not.
+            // Collapsing the second into the first would tell a satellite gate to give up on a
+            // publication that is ninety seconds from existing.
+            var sentinel = Path.Combine(
+                publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            if (ReadSealLines(sentinel) is null)
+            {
+                logger?.LogInformation(
+                    "ReleaseAvailability: {SourceDirectory} lost its {Modules}/{Index} and its seal "
+                    + "while this read was in flight — the publication is being replaced or "
+                    + "reclaimed right now, which is transient; a consumer re-reads it",
+                    publication, ModulesDirectoryName, ModulesIndexFileName);
+                return new(null,
+                    $"the publication is being replaced right now — its {ModulesDirectoryName}/{ModulesIndexFileName} "
+                    + "and its completion sentinel both went away while this read was in flight")
+                { Directory = publication, PublicationUnavailable = true };
+            }
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} is sealed but carries no {Modules}/{Index} — "
                 + "it predates module sealing, so a consumer cannot compose from it until it is republished",
@@ -869,7 +931,7 @@ public static class PublishedBundleCatalogue
                 + "it predates module sealing; republish the source under a platform that seals module sets")
             { Directory = publication };
         }
-        var listed = File.ReadAllLines(index)
+        var listed = lines
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
@@ -893,6 +955,10 @@ public static class PublishedBundleCatalogue
 /// <c>null</c> with the reason a consumer must not compose from it.</summary>
 public sealed record ModuleSetReading(IReadOnlyList<string>? Modules, string? Refusal)
 {
+    /// <summary>The publication itself is unsealed or torn, rather than a sealed publication
+    /// with no usable module index. HTTP readers preserve the transient publication response.</summary>
+    public bool PublicationUnavailable { get; init; }
+
     /// <summary>
     /// 🚨 The directory the module bundles are actually IN (#3461) — the generation this source's
     /// <c>_current</c> pointer names, or the source directory itself in the flat layout. Compose

@@ -131,6 +131,14 @@ public static class ServiceDefaults
                 metrics.AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
                     .AddMeter("Microsoft.Orleans")
+                    // 🚨 The platform's OWN meter (#3488). Until it existed, every counter any
+                    // investigation used was a runtime built-in standing in for what was actually
+                    // wanted, and answering "how many hubs, of what kind, in what run level" cost
+                    // a heap dump — which suspends the replica past its liveness budget and
+                    // therefore RESTARTS it, destroying the state being measured. A meter nobody
+                    // collects is the same silence one step later, so the name is subscribed here
+                    // rather than left for a deployment to remember.
+                    .AddMeter(MeshWeaver.Messaging.PlatformMetrics.MeterName)
                     .AddRuntimeInstrumentation();
             })
             .WithTracing(tracing =>
@@ -151,6 +159,13 @@ public static class ServiceDefaults
             });
 
         builder.AddOpenTelemetryExporters();
+
+        // 🚨 The OTHER half. Subscribing the meter NAME above only says "collect this if it
+        // exists"; something must construct the instance, and the gauge closes over the root hub.
+        // Both halves live here, in the host that actually collects — deliberately NOT in
+        // MeshHostApplicationBuilder, which would arm a meter inside every mesh in the fleet,
+        // including the several thousand a test run builds, none of which has a collector.
+        builder.Services.AddPlatformMetrics();
 
         return builder;
     }
@@ -206,7 +221,26 @@ public static class ServiceDefaults
             // every write on it failed far from the cause. Degraded below DataVolume:MinimumFreeBytes
             // (1 GiB) on the volume of any configured store root — no probe tag, pulling the pod
             // frees nothing — naming the path, used and total.
-            .AddCheck(DataVolumeFreeSpace.HealthCheckName, new DataVolumeHealthCheck(builder.Configuration));
+            .AddCheck(DataVolumeFreeSpace.HealthCheckName, new DataVolumeHealthCheck(builder.Configuration))
+            // 🚨 The two bake verdicts that existed ONLY in a boot log (#3703, #3704). Both carry
+            // ProbeEndpoints.CensusTag and NO probe tag: a census publishes a NUMBER, so it prints
+            // on ProbeEndpoints.Health whatever its status, and can never restart a pod or take one
+            // out of rotation. Registered UNCONDITIONALLY, deliberately — nodetype_bake is behind
+            // `if (gateBake)` in the image host, which is right for a READINESS gate and would be
+            // exactly wrong here: an instrument that is absent precisely where pre-warming is off
+            // answers nothing about the deployments that most need it.
+            //
+            // #3703: which of this replica's NodeTypes the share already holds, and how many were
+            // classified from a record this process had itself just written — Degraded when there
+            // is no report at all, because a missing measurement may not read as a clean one.
+            .AddCheck<BakeReportHealthCheck>(
+                NodeTypeBakeReportRegistry.HealthCheckName, tags: [ProbeEndpoints.CensusTag])
+            // #3704: the batched source discovery's chunk count and largest inter-chunk gap against
+            // the completion window — the discriminator between "the completion rule ended the fold
+            // early" and "the providers returned less". Healthy when no pass ran (the normal state
+            // of a warm replica) and it still PRINTS, which is the whole point of the census tag.
+            .AddCheck<SourceDiscoveryHealthCheck>(
+                SourceDiscoveryRegistry.HealthCheckName, tags: [ProbeEndpoints.CensusTag]);
 
         return builder;
     }
@@ -216,6 +250,16 @@ public static class ServiceDefaults
     /// so nothing that reads the first word changes — then one line per check that is not
     /// Healthy, naming it and its description. Before this the endpoint answered the bare word
     /// <c>Degraded</c>, and finding WHICH check meant reading pod logs.
+    ///
+    /// <para>🚨 <b>…plus every check tagged <see cref="ProbeEndpoints.CensusTag"/>, Healthy or
+    /// not</b> (#3703, #3704). "Print only what is wrong" is right for a VERDICT and wrong for a
+    /// CENSUS, where the READING is the publication: a census check that answered
+    /// Healthy-and-silent would be byte-identical on the wire to one that was never registered, so
+    /// "I measured nothing" and "I measured, and it was clean" could not be told apart. That is
+    /// precisely the ambiguity that left both issues unanswerable while their numbers sat in a
+    /// boot log. The tag is opt-in and additive: no existing entry's behaviour changes, and the
+    /// aggregate status word is untouched — a clean census stays Healthy and does not paint the
+    /// replica Degraded.</para>
     /// </summary>
     internal static Task WriteHealthWithDetail(HttpContext context, HealthReport report)
     {
@@ -223,7 +267,7 @@ public static class ServiceDefaults
         var lines = new List<string> { report.Status.ToString() };
         foreach (var (name, entry) in report.Entries)
         {
-            if (entry.Status == HealthStatus.Healthy)
+            if (entry.Status == HealthStatus.Healthy && !entry.Tags.Contains(ProbeEndpoints.CensusTag))
                 continue;
             lines.Add($"{name}: {entry.Status}" + (string.IsNullOrEmpty(entry.Description) ? "" : $" — {entry.Description}"));
         }

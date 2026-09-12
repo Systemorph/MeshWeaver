@@ -230,7 +230,7 @@ public static class PackageSources
                     Subdir = subdir ?? "",
                     // The same split FromRepo makes: a URL is fetched, anything else is read off
                     // this host's disk — and is therefore a working tree this portal mirrors.
-                    LocalCheckout = repo is { Length: > 0 } && !IsUrl(repo),
+                    LocalCheckout = IsLocalCheckout(repo),
                     // Both default to FALSE: an instance that configures nothing keeps today's
                     // behaviour exactly (no enumeration, no unattended Space creation). Opting in is
                     // a deliberate deployment decision, made in the same place the source itself is
@@ -293,11 +293,17 @@ public static class PackageSources
                 // Skip dot-directories (.git, .github, …) — infrastructure, not repo content.
                 if (relative.Split('/').Any(seg => seg.StartsWith('.')))
                     continue;
-                var info = new FileInfo(path);
-                hash.Append(relative).Append(':').Append(info.Length).Append(';');
-                files.Add(IsProbablyText(relative)
+                var file = IsProbablyText(relative)
                     ? new RepoFile(relative, File.ReadAllText(path))
-                    : new RepoFile(relative, "", File.ReadAllBytes(path)));
+                    : new RepoFile(relative, "", File.ReadAllBytes(path));
+                // Hash the payload we actually return, not its size or timestamp: equal-length
+                // edits must move the source version too. Reading once also keeps the fingerprint
+                // and the returned snapshot about the same bytes if the checkout changes mid-read.
+                var contentHash = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(file.Bytes));
+                hash.Append(relative.Length).Append(':').Append(relative)
+                    .Append(':').Append(contentHash).Append(';');
+                files.Add(file);
             }
 
             var sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
@@ -337,6 +343,25 @@ public static class PackageSources
     /// </summary>
     private static bool Flag(string? value) =>
         bool.TryParse(value?.Trim(), out var parsed) && parsed;
+
+    /// <summary>
+    /// Whether a configured <c>Repo</c> names a LOCAL CHECKOUT (a mounted node-repo path) rather
+    /// than something to clone — the same split <see cref="ConfiguredPackageSource.LocalCheckout"/>
+    /// is computed from, exposed so consumers do not have to mirror it.
+    ///
+    /// <para>🚨 It is public because the alternative is a second copy that drifts. MeshWeaver.Plugins
+    /// carries its own <c>RegistryPackages.IsMountedPath</c>, written against this private predicate
+    /// and therefore against a rule it cannot see change (Plugins#1563). Two definitions of "is this
+    /// a path or a URL" is exactly the shape the script centralization (Plugins#1426) has been
+    /// removing everywhere else: a mount misread as a URL is polled anonymously and 404s; a URL
+    /// misread as a mount is read off a filesystem path that does not exist.</para>
+    ///
+    /// <para>Null, empty and whitespace answer <see langword="false"/> — an absent repo is not a
+    /// local checkout, and reporting one would make an unconfigured source look mounted.</para>
+    /// Pure.
+    /// </summary>
+    public static bool IsLocalCheckout(string? repo) =>
+        !string.IsNullOrWhiteSpace(repo) && !IsUrl(repo!.Trim());
 
     private static bool IsUrl(string s) =>
         s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)

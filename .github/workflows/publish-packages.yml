@@ -35,31 +35,39 @@ name: Publish the surviving NuGet packages
 # The moment either grows a dependency on a MeshWeaver framework assembly, this lane is wrong and
 # must take its bytes from a sealed set instead.
 #
-# ──────────────────── THE TEMPLATE IS BLOCKED ON A PRODUCT DECISION, NOT ON WIRING ────────────────
-# MeshWeaver.MemexTemplate is a survivor by decision but is NOT published here yet, because
-# publishing it today would publish PRIVATE SOURCE to public nuget.org. Measured 2026-09-07:
+# ──────────────────── THE GUI QUESTION IS ANSWERED; THE WIRING IS NOT BUILT ───────────────────
+# MeshWeaver.MemexTemplate is a survivor by decision and is still NOT published here — but the
+# reason has changed, and the old one no longer holds. What was measured on 2026-09-07:
 #
-#   • generate-memex-template.cs REFUSES to generate without `--with-gui`: the two shipped hosts
-#     reference Memex.Portal.Gui unconditionally, so a template without it cannot build.
+#   • generate-memex-template.cs REFUSED to generate without `--with-gui`: the two shipped hosts
+#     referenced Memex.Portal.Gui unconditionally, so a template without it could not build.
 #   • Memex.Portal.Gui lives ONLY in Systemorph/MeshWeaver.Plugins, which is PRIVATE. Core holds
 #     zero .razor files and no MeshWeaver.Blazor* project — the GUI has fully left the public repo.
-#   • The published 3.0.0-rc7 template contains NO Memex.Portal.Gui, so shipping it now would be a
-#     NEW public exposure, not a restoration of prior behaviour.
+#   • The published 3.0.0-rc7 template contains NO Memex.Portal.Gui, so shipping it WITH the GUI
+#     would be a NEW public exposure, not a restoration of prior behaviour.
 #   • A nupkg cannot be recalled. Unlisting hides a version from search; it stays downloadable by
 #     exact version for ever (verified against this very registry).
 #
-# There IS a standing decision to include the GUI (2026-08-26) but its stated premise — "the UI is
-# public in core today" — has since expired with the move. So the template's publish step is
-# deliberately absent rather than written and disabled: a step that exists but never runs is the
-# skip-trapdoor this repository forbids, and one that runs would ship the source.
+# 🚨 The FIRST bullet is HISTORY: issue #3653 was decided the other way — make the GUI optional in
+# the hosts — and Systemorph/MeshWeaver.Plugins#1591 landed it. Both hosts now reference
+# Memex.Portal.Gui from a CONDITIONED ItemGroup and compile without it, the generator drops an
+# optional project it is not shipping (refusing by name if the reference is unconditional), and
+# `dotnet pack tools/MeshWeaver.MemexTemplate.Pack` succeeds with no `--with-gui` and no
+# Memex.Portal.Gui in the nupkg. So there IS a GUI-less template to publish, and publishing it
+# does not publish the GUI.
 #
-# 🚨 DO NOT add the template here until the GUI question is answered (issue #3653). When it is, the step needs:
-# a Plugins checkout with a MINTED App token (never a stored PAT — the predecessor
+# What is still missing is this lane's own wiring, and it is a real task, not a formality. Adding
+# the step needs: a Plugins checkout with a MINTED App token (never a stored PAT — the predecessor
 # publish-github.yml carried secrets.GH_PAT and is deleted), `-p:Version=X.Y.Z` (that project
 # inherits no props and would otherwise stamp 1.0.0), `-p:MeshWeaverRoot=` (the generator copies
 # two projects and three assets from core and can run in NEITHER repo alone), and an answer to
 # WHICH Plugins commit a core tag pairs with — no pairing artefact exists, so record the resolved
-# sha in the summary at minimum.
+# sha in the summary at minimum. Note also that the scaffolded solution is a HEADLESS mesh host
+# (no Blazor shell), which the generated README states; publishing it is a product call about what
+# `dotnet new meshweaver-memex` should hand a newcomer, not a packaging one.
+#
+# Until that step exists the template's publish is ABSENT rather than written-and-disabled: a step
+# that exists but never runs is the skip-trapdoor this repository forbids.
 #
 # 🛡️ NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"): `preflight` asserts every
 # secret and fails RED naming what to provision; `publish` needs it and runs unconditionally. There
@@ -178,7 +186,7 @@ jobs:
           {
             echo "### Publishing MeshWeaver ${{ steps.version.outputs.version }}"
             echo "- core: \`${GITHUB_SHA}\`"
-            echo "- \`MeshWeaver.MemexTemplate\` is NOT published by this lane — see the header."
+            echo "- \`MeshWeaver.MemexTemplate\` is NOT published by this lane — the step is not built yet; see the header."
           } >> "$GITHUB_STEP_SUMMARY"
 
       # PublicRelease=true is what makes $(Version) the clean $(PlatformVersion) rather than
@@ -206,7 +214,12 @@ jobs:
             || { echo "::error::MeshWeaver.Aspire.Hosting.Memex.$V.nupkg was not produced"; exit 1; }
           count="$(find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' | wc -l | tr -d ' ')"
           [ "$count" -eq 1 ] || { echo "::error::expected exactly 1 package, found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
-          echo "1 package at $V"
+          # The Deployment record assembly is BUNDLED into this package (Memex.Aspire.Hosting.csproj,
+          # PackContractAssembly) — a customer AppHost builds its record from one reference. A nupkg
+          # without it installs, compiles nothing, and cannot be recalled.
+          unzip -l "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" | grep -q 'lib/net10.0/MeshWeaver.Deployment.Contract.dll' \
+            || { echo "::error::MeshWeaver.Deployment.Contract.dll is not inside the nupkg — the PackContractAssembly target in Memex.Aspire.Hosting.csproj no longer bundles it"; exit 1; }
+          echo "1 package at $V, with the Deployment record assembly bundled"
 
       - name: Log in to nuget.org (Trusted Publishing — a short-lived key, nothing stored)
         if: ${{ !inputs.dry-run }}
@@ -279,6 +292,6 @@ jobs:
             echo "### Published to nuget.org"
             echo "- \`MeshWeaver.Aspire.Hosting.Memex\` ${{ steps.version.outputs.version }}"
             echo ""
-            echo "\`MeshWeaver.MemexTemplate\` was NOT published — it is blocked on the GUI"
+            echo "\`MeshWeaver.MemexTemplate\` was NOT published — this lane has no step for it yet (the GUI question is answered; see the header)"
             echo "decision recorded in Doc/Architecture/NuGetPackageRetirement."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -11,6 +11,15 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 **A module is adopted on what this process can LOAD, never on a version string.**
 
+The 2026-09-09 maintainer clarification is explicit: different platform/dependency versions are
+acceptable while the referenced API is compatible; identical versions are insufficient when the
+API is not. `ModulePlatformLinkTest` compiles separate contract assemblies to exercise both
+directions of version skew, additive API changes, and removal of a referenced type without a
+version change. It also verifies that a refused upgrade leaves the installed generation and its
+bytes intact. This probe checks **types**, not member signatures; actual load/install/execution
+checks must cover missing methods or changed constructors. A successful type probe is not a
+claim that those member checks ran.
+
 Until MeshWeaver#3538 the module lane had exactly one platform gate: the module's declared
 `minMeshVersion` FLOOR, compared as SemVer against the running platform's version. That gate is a
 *claim* — a string a module author writes by hand. The module's real requirement is not a version

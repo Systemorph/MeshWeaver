@@ -345,6 +345,8 @@ public static class GraphConfigurationExtensions
 
                 // Register compilation cache service
                 services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
+                // Shared by every compiler hub; capture cascades enqueue at most once per mesh root.
+                services.AddSingleton<EmitReferenceCaptureReservation>();
 
                 // Mesh-scoped Open Graph link-preview reader for the OgCard layout area:
                 // one promise-cached fetch per external URL, replayed to every card render.

@@ -20,24 +20,19 @@ namespace MeshWeaver.Hosting;
 /// </summary>
 public sealed record PrebuiltBundleRetention
 {
-    /// <summary>The shipped default: deletion armed, ten pre-release identities per source and open line.</summary>
+    /// <summary>The shipped default: retain unused continuous artifacts for 30 days.</summary>
     public static readonly PrebuiltBundleRetention Default = new();
 
     /// <summary>
-    /// How many of the newest pre-release (<c>X.Y.Z-ci.&lt;n&gt;</c>) identities to keep per source
-    /// on a line that has no clean release yet — the maintainer's "leave the last 10 -ci"
-    /// (2026-09-08). The same count bounds the unnamed identities (no release marker at all),
-    /// which nothing can place on a line and which are therefore kept by seal time alone.
+    /// Compatibility member for callers compiled against the former count-based policy.
+    /// This value no longer affects retention; cleanup uses <see cref="MinimumAge"/>.
     /// </summary>
     public int KeepNewestPerSource { get; init; } = 10;
 
-    /// <summary>
-    /// How long an UNSEALED source directory (no <see cref="ShippedPrebuiltBundles.CompletionSentinelFileName"/>)
-    /// is presumed to be a seal in flight. The publisher writes the bundles first and the sentinel
-    /// strictly last, so a young unsealed directory is a publication being written; an old one is
-    /// a publish that died. A bounded grace is a reference-like signal — an age cutoff on a SEALED
-    /// directory would not be, and none exists here.
-    /// </summary>
+    /// <summary>The minimum age of unreferenced artifacts before cleanup. Values below 30 days are clamped.</summary>
+    public TimeSpan MinimumAge { get; init; } = TimeSpan.FromDays(30);
+
+    /// <summary>Additional protection for an unsealed publication in flight, beyond the minimum age.</summary>
     public TimeSpan UnsealedGrace { get; init; } = TimeSpan.FromHours(2);
 
     /// <summary>How often the recurring pass runs after the boot pass.</summary>
@@ -81,7 +76,73 @@ public static class PlatformVersionLine
         if (plus >= 0) v = v[..plus];
         return v.Contains('-');
     }
+
+    /// <summary>
+    /// The bare platform version a pin or a report names, in the form the <c>_releases</c> marker
+    /// files are named: an image reference (<c>…/memex-portal-ai:3.0.0-ci.8080@sha256:…</c>) is
+    /// reduced to its tag, and <c>+build</c> metadata is dropped. Null for a blank value.
+    /// </summary>
+    public static string? Normalize(string? versionOrImageTag)
+    {
+        if (string.IsNullOrWhiteSpace(versionOrImageTag))
+            return null;
+        var v = versionOrImageTag.Trim();
+        var at = v.IndexOf('@');
+        if (at >= 0) v = v[..at];
+        var colon = v.LastIndexOf(':');
+        if (colon >= 0) v = v[(colon + 1)..];
+        var plus = v.IndexOf('+');
+        if (plus >= 0) v = v[..plus];
+        return v.Length == 0 ? null : v;
+    }
 }
+
+/// <summary>
+/// One thing outside this process that PINS a platform build and pulls its seal from this store:
+/// a <c>Hosting/Deployment</c> record's <c>pinnedImageTag</c>, or a registered instance's
+/// reported platform version / framework identity. On the registry (memex-cloud) remote
+/// instances fetch their OWN identity's seal over the HTTP prebuilt surface, so such an identity
+/// is referenced however old it is — pearl pinned to <c>3.0.0-ci.8080</c> would otherwise fall
+/// outside the age window and lose its bundle at the next boot.
+/// </summary>
+/// <param name="Origin">Who pins it — the record or instance, for the ledger.</param>
+/// <param name="Version">The pinned platform version or image tag (normalised by <see cref="PlatformVersionLine.Normalize"/>), or null.</param>
+/// <param name="Identity">The framework identity when the origin reports it directly, or null.</param>
+public sealed record PinnedPlatformReference(string Origin, string? Version, string? Identity);
+
+/// <summary>
+/// A provider of <see cref="PinnedPlatformReference"/>s, registered as an enumerable singleton;
+/// the retention pass unions every registered source on every pass. An erroring source aborts
+/// the pass — a reference set that could not be read licenses no deletion.
+/// </summary>
+public delegate IObservable<ImmutableList<PinnedPlatformReference>> PinnedPlatformReferenceSource();
+
+/// <summary>
+/// One GENERATION directory under a source (<c>&lt;identity&gt;/&lt;source&gt;/&lt;publication token&gt;</c>),
+/// as the sweep read it. Empty in the flat layout, which has no generations at all.
+/// </summary>
+/// <param name="Name">The directory name — the publisher's run-unique publication token.</param>
+/// <param name="Directory">Full path.</param>
+/// <param name="IsCurrent">The source's <c>_current</c> pointer names it — the LIVE publication.</param>
+/// <param name="HasSentinel">
+/// The completion sentinel is present at its root — so a publication that DIED mid-upload (a
+/// cancelled run, a network fault) is distinguishable from one that was merely superseded, which is
+/// worth an operator's attention for a different reason.
+/// <para>🚨 It says the sentinel is THERE, deliberately not that the publication is whole: unlike
+/// <see cref="PrebuiltSourceEntry.IsSealed"/> it does not verify that every bundle the sentinel
+/// lists is on disk. Nothing here branches on it — a superseded generation is collected on age
+/// whether it was sealed, torn or abandoned — and verifying it would cost one file read per
+/// generation per pass on a share whose generation count is the very thing being cleaned up.</para>
+/// </param>
+/// <param name="NewestWriteUtc">The newest write under it (any file), or the directory's own stamp when it holds none.</param>
+/// <param name="Bytes">Total bytes under it.</param>
+public sealed record PrebuiltGenerationEntry(
+    string Name,
+    string Directory,
+    bool IsCurrent,
+    bool HasSentinel,
+    DateTimeOffset NewestWriteUtc,
+    long Bytes);
 
 /// <summary>One source directory under an identity, as the sweep read it.</summary>
 /// <param name="Name">The source segment (<c>plugins</c>, <c>education</c>, …).</param>
@@ -90,7 +151,27 @@ public static class PlatformVersionLine
 /// <param name="NewestWriteUtc">The newest write under the source directory (any file).</param>
 /// <param name="ReadFault">Why the seal could not be READ, or null. A source with a read fault PROTECTS its identity.</param>
 public sealed record PrebuiltSourceEntry(
-    string Name, bool IsSealed, DateTimeOffset? SealUtc, DateTimeOffset NewestWriteUtc, string? ReadFault);
+    string Name, bool IsSealed, DateTimeOffset? SealUtc, DateTimeOffset NewestWriteUtc, string? ReadFault)
+{
+    /// <summary>
+    /// Every generation directory under this source, in name order; the plan is what orders them
+    /// for collection. Empty in the flat layout — the normal state today, which is why this is an
+    /// <c>init</c> property rather than a positional parameter: adding one would have changed a
+    /// public constructor's signature for every caller outside this repository.
+    /// </summary>
+    public ImmutableList<PrebuiltGenerationEntry> Generations { get; init; } = ImmutableList<PrebuiltGenerationEntry>.Empty;
+
+    /// <summary>
+    /// Why the <c>_current</c> pointer did not resolve to a generation on disk, or null.
+    ///
+    /// <para>🚨 <b>Non-null PROTECTS every generation of this source.</b> It means a pointer exists
+    /// and this reader will not follow it — unreadable, empty (a pointer mid-replacement),
+    /// refused, or naming a directory that is gone. Which generation applies is then unknown, and
+    /// an inventory that could not be read licenses no deletion. Null with an empty
+    /// <see cref="Generations"/> is the flat layout, not a fault.</para>
+    /// </summary>
+    public string? PointerFault { get; init; }
+}
 
 /// <summary>One framework-identity directory of the store and everything the rules need to judge it.</summary>
 /// <param name="Identity">The directory name — the framework identity (<c>s…</c> / <c>g…</c>).</param>
@@ -150,6 +231,7 @@ public sealed record PrebuiltStoreScan(
 /// <param name="Protected">Why each surviving identity survived, keyed by identity.</param>
 /// <param name="CollectableMarkers">The pre-release markers whose identity goes with this plan, or is already gone.</param>
 /// <param name="AbortReason">Why NOTHING may be collected, or null when the plan is sound.</param>
+/// <param name="UnresolvedPins">Pinned references whose version maps to no <c>_releases</c> marker and that name no identity — they abort cleanup because the consumer inventory is incomplete.</param>
 public sealed record PrebuiltBundleSweepPlan(
     string LiveIdentity,
     string? LivePlatformVersion,
@@ -157,19 +239,35 @@ public sealed record PrebuiltBundleSweepPlan(
     ImmutableList<PrebuiltIdentityEntry> Collectable,
     ImmutableDictionary<string, string> Protected,
     ImmutableList<ReleaseMarkerEntry> CollectableMarkers,
-    string? AbortReason)
+    string? AbortReason,
+    ImmutableList<string> UnresolvedPins)
 {
+    /// <summary>
+    /// Superseded GENERATION directories inside a RETAINED identity that no rule protects, oldest
+    /// first (MeshWeaver#3461). Empty in the flat layout, and empty whenever the plan aborted.
+    ///
+    /// <para>Generations of a COLLECTABLE identity are deliberately NOT here: that identity's
+    /// whole directory goes, and its <see cref="PrebuiltIdentityEntry.Bytes"/> already counts
+    /// them.</para>
+    /// </summary>
+    public ImmutableList<PrebuiltGenerationEntry> CollectableGenerations { get; init; } = ImmutableList<PrebuiltGenerationEntry>.Empty;
+
+    /// <summary>Why each surviving generation survived, keyed by its full directory path.</summary>
+    public ImmutableDictionary<string, string> ProtectedGenerations { get; init; } = ImmutableDictionary<string, string>.Empty;
+
     /// <summary>Total bytes across every identity.</summary>
     public long TotalBytes => Identities.Sum(i => i.Bytes);
 
-    /// <summary>Bytes the plan would reclaim.</summary>
-    public long CollectableBytes => Collectable.Sum(i => i.Bytes);
+    /// <summary>Bytes the plan would reclaim — collectable identities plus superseded generations inside retained ones.</summary>
+    public long CollectableBytes => Collectable.Sum(i => i.Bytes) + CollectableGenerations.Sum(g => g.Bytes);
 
     /// <summary>One line an operator can read.</summary>
     public string Summary =>
         $"{Identities.Count} identity directory(ies) / {Mb(TotalBytes)} — live={LiveIdentity}"
         + $" ({LivePlatformVersion ?? "version unknown"}), collectable={Collectable.Count} / {Mb(CollectableBytes)}"
+        + (CollectableGenerations.IsEmpty ? "" : $", superseded generations={CollectableGenerations.Count}")
         + $", markers to retire={CollectableMarkers.Count}"
+        + (UnresolvedPins.IsEmpty ? "" : $", unresolved consumer references (cleanup blocked): {string.Join(", ", UnresolvedPins)}")
         + (AbortReason is null ? "" : $", ABORTED: {AbortReason}");
 
     internal static string Mb(long bytes) =>
@@ -195,6 +293,9 @@ public sealed record PrebuiltBundleSweepResult(
     int FailedDeletes,
     string? AbortReason)
 {
+    /// <summary>Superseded generation directories actually removed from inside retained identities.</summary>
+    public int DeletedGenerations { get; init; }
+
     /// <summary>One ledger line.</summary>
     public string LedgerLine =>
         $"{AtUtc:O} " + (Plan is null
@@ -203,6 +304,7 @@ public sealed record PrebuiltBundleSweepResult(
                 ? $"ABORTED: {AbortReason} ({Plan.Summary})"
                 : Deleted
                     ? $"removed {DeletedIdentities} identity(ies) / {PrebuiltBundleSweepPlan.Mb(DeletedBytes)}, "
+                      + (DeletedGenerations == 0 ? "" : $"{DeletedGenerations} superseded generation(s), ")
                       + $"{DeletedMarkers} marker(s){(FailedDeletes == 0 ? "" : $", {FailedDeletes} failed")} — {Plan.Summary}"
                     : $"report only — {Plan.Summary}");
 }
@@ -223,19 +325,13 @@ public sealed record PrebuiltBundleSweepResult(
 /// <list type="number">
 /// <item>it is the framework identity <b>this process runs</b>;</item>
 /// <item>a <b>clean release marker</b> (<c>_releases/X.Y.Z</c>, no pre-release label) names it —
-/// a release line stays adoptable forever, and it is the rollback target;</item>
+/// support has not been established as ended, so the release stays available;</item>
 /// <item>a <b>NodeType record's adoption stamp</b> (<c>CompiledFrameworkVersion</c>, written by
 /// <c>PrebuiltAssemblySeeder</c> and by every local compile) names it;</item>
-/// <item>it holds, for some source, the <b>newest sealed publication on the running major line</b> —
+/// <item>it holds, for some source, the <b>newest sealed publication on each represented major line</b> —
 /// exactly what <c>Modules:VersionStrictness=Family</c> adopts at boot;</item>
-/// <item>a pre-release marker of an <b>OPEN line</b> names it (a line with no clean release yet) and
-/// it is among the newest <see cref="PrebuiltBundleRetention.KeepNewestPerSource"/> such identities
-/// for some source, by version — once the clean <c>X.Y.Z</c> marker exists, every
-/// <c>X.Y.Z-ci.&lt;n&gt;</c> identity of that line is unreferenced by this rule (maintainer,
-/// 2026-09-08: <i>"when final release is out, we can remove all -CI … leave last 10"</i>);</item>
-/// <item>no marker names it at all and it is among the newest <see cref="PrebuiltBundleRetention.KeepNewestPerSource"/>
-/// such identities for some source <b>by seal time</b> — nothing can place an unnamed identity on
-/// a line, so recency is the only signal it has;</item>
+/// <item>its newest content write or release marker is younger than
+/// <see cref="PrebuiltBundleRetention.MinimumAge"/> (at least 30 days), regardless of build count;</item>
 /// <item>a source under it is <b>unsealed and younger than <see cref="PrebuiltBundleRetention.UnsealedGrace"/></b>
 /// — a seal in flight;</item>
 /// <item>its seal <b>could not be read</b> — unreadable is never unreferenced.</item>
@@ -243,11 +339,24 @@ public sealed record PrebuiltBundleSweepResult(
 ///
 /// <para>Everything else is collected, oldest first, one identity at a time, each removal logged
 /// with the bytes reclaimed. The pre-release markers of a removed identity (and of an identity
-/// already gone for longer than the grace) are removed with it, so <c>_releases/</c> does not grow
+/// already gone for longer than the age window) are removed with it, so <c>_releases/</c> does not grow
 /// forever; a clean release marker is never removed. A release marker that cannot be read, or a
 /// store that cannot be listed, ABORTS the sweep with nothing collected: a partial picture licenses
-/// no deletion. This sweep is IDENTITY-level; the per-source generation retention that follows a
-/// pointer swap is the publisher's (<c>Doc/Architecture/SealedPublicationGenerations</c>).</para>
+/// no deletion.</para>
+///
+/// <para>🚨 <b>And the same rule one level down, for GENERATIONS</b> (MeshWeaver#3461,
+/// <c>Doc/Architecture/SealedPublicationGenerations</c> → "Retention"). Under the generation
+/// layout a source directory holds one directory per publication plus a <c>_current</c> pointer,
+/// and the identity rules above never reach inside — so under an identity they keep, generations
+/// would accumulate for ever. A generation inside a RETAINED identity is collected when all of
+/// these hold: no <c>_current</c> names it, the pointer that would say so resolved cleanly, its own
+/// seal could be read, and its newest write is older than
+/// <see cref="PrebuiltBundleRetention.MinimumAge"/>. Anything else keeps it. This is safe without a
+/// per-generation consumer inventory because a non-current generation is UNREACHABLE — every read
+/// composes under <c>ShippedPrebuiltBundles.PublicationDirectoryOf</c> and nothing enumerates a
+/// source's subdirectories looking for a publication — and it needs no lease with the publisher
+/// because a publication is protected by AGE from its first byte. The reasoning, and the fact that
+/// this is the precondition on flipping a prefix to the generation layout, is on the page.</para>
 /// </summary>
 public static class PrebuiltBundleStore
 {
@@ -299,31 +408,74 @@ public static class PrebuiltBundleStore
     {
         var bytes = 0L;
         var newestWrite = new DateTimeOffset(Directory.GetLastWriteTimeUtc(identityDirectory), TimeSpan.Zero);
+        // 🚨 ONE recursive walk per identity, and everything below is DERIVED from it — the identity's
+        // bytes and newest write, each source's newest write, and each generation's bytes, newest
+        // write and whether it carries the files that identify a publication. This used to be one
+        // walk of the identity plus one of every source; adding a walk per generation would have made
+        // it 1 + S + G walks and touched every file three times. On the store this sweep exists for
+        // that is not a micro-optimisation: the root is an Azure Files share, every enumeration is a
+        // network round trip, and the very condition being cleaned up is "one more generation per CI
+        // run" — the cost would grow with exactly the thing the sweep is here to remove.
+        var sourceNewest = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var generationTallies = new Dictionary<(string Source, string Name), GenerationTally>();
         foreach (var file in Directory.EnumerateFiles(identityDirectory, "*", SearchOption.AllDirectories))
         {
             var info = new FileInfo(file);
             bytes += info.Length;
             var write = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
             if (write > newestWrite) newestWrite = write;
+
+            var segments = Path.GetRelativePath(identityDirectory, file)
+                .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                    StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length < 2)
+                continue;
+            var source = segments[0];
+            if (!sourceNewest.TryGetValue(source, out var seenSource) || write > seenSource)
+                sourceNewest[source] = write;
+            // <source>/<name>/… — a candidate generation. `<source>/<file>` (the flat copy) has
+            // length 2 and lands nowhere; `<source>/modules/x.nupkg` DOES land here, and is then
+            // dropped by the positive identification below, which is the whole point of that test.
+            if (segments.Length < 3)
+                continue;
+            var key = (source, segments[1]);
+            if (!generationTallies.TryGetValue(key, out var tally))
+                generationTallies[key] = tally = new GenerationTally();
+            tally.Bytes += info.Length;
+            if (write > tally.NewestWrite) tally.NewestWrite = write;
+            if (segments.Length == 3)
+            {
+                var leaf = segments[2];
+                if (string.Equals(leaf, ShippedPrebuiltBundles.CompletionSentinelFileName, StringComparison.Ordinal))
+                    tally.HasSentinel = true;
+                if (string.Equals(leaf, SealedPublicationIndex.SourceCommitMarkerFileName, StringComparison.Ordinal)
+                    || string.Equals(leaf, SealedPublicationIndex.RepositoryMarkerFileName, StringComparison.Ordinal)
+                    || string.Equals(leaf, ShippedPrebuiltBundles.CompletionSentinelFileName, StringComparison.Ordinal))
+                    tally.IsPublication = true;
+            }
         }
 
         var sources = ImmutableList.CreateBuilder<PrebuiltSourceEntry>();
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory).OrderBy(d => d, StringComparer.Ordinal))
         {
             var sourceName = Path.GetFileName(sourceDirectory);
-            var sourceNewest = new DateTimeOffset(Directory.GetLastWriteTimeUtc(sourceDirectory), TimeSpan.Zero);
-            foreach (var file in Directory.EnumerateFiles(sourceDirectory, "*", SearchOption.AllDirectories))
-            {
-                var write = new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
-                if (write > sourceNewest) sourceNewest = write;
-            }
+            var sourceStamp = new DateTimeOffset(Directory.GetLastWriteTimeUtc(sourceDirectory), TimeSpan.Zero);
+            if (sourceNewest.TryGetValue(sourceName, out var newestFile) && newestFile > sourceStamp)
+                sourceStamp = newestFile;
+            var sourceNewestWrite = sourceStamp;
             // 🚨 Composed under the RESOLVED publication directory (#3461): a pointer may name a
-            // generation subdirectory, and the seal lives there, not beside the pointer.
-            var publication = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
+            // generation subdirectory, and the seal lives there, not beside the pointer. The
+            // resolution is the READERS' — ShippedPrebuiltBundles.ResolvePublicationPointer is the
+            // same call PublicationDirectoryOf makes — so what this sweep calls unreachable and
+            // what a portal can reach can never drift apart.
+            var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+            var publication = pointer.Directory;
+            var sourceGenerations = ReadGenerations(sourceDirectory, sourceName, pointer, generationTallies, logger);
             var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
             if (!File.Exists(sentinel))
             {
-                sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewest, null));
+                sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewestWrite, null)
+                    { Generations = sourceGenerations, PointerFault = pointer.Fault });
                 continue;
             }
             try
@@ -333,18 +485,104 @@ public static class PrebuiltBundleStore
                     .Select(l => l.Trim())
                     .Where(l => l.Length > 0)
                     .Any(name => !File.Exists(Path.Combine(publication, name)));
-                sources.Add(new PrebuiltSourceEntry(sourceName, !torn, torn ? null : sealUtc, sourceNewest, null));
+                sources.Add(new PrebuiltSourceEntry(sourceName, !torn, torn ? null : sealUtc, sourceNewestWrite, null)
+                    { Generations = sourceGenerations, PointerFault = pointer.Fault });
             }
             catch (Exception ex)
             {
                 // 🚨 Every read failure, not just IOException — a denied ACL is every bit as much
                 // "I cannot evaluate this seal" as a locked file. It PROTECTS the identity.
-                sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewest, $"{ex.GetType().Name}: {ex.Message}"));
+                sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewestWrite, $"{ex.GetType().Name}: {ex.Message}")
+                    { Generations = sourceGenerations, PointerFault = pointer.Fault });
             }
         }
         return new PrebuiltIdentityEntry(identity, identityDirectory, sources.ToImmutable(), bytes, newestWrite);
     }
 
+    /// <summary>
+    /// Every generation directory under one source, with the one the pointer names marked.
+    ///
+    /// <para>🚨 <b>It performs NO recursive walk of its own.</b> The bytes, the newest write and the
+    /// marker files all come from <paramref name="tallies"/> — the single walk of the identity that
+    /// <see cref="ReadIdentity"/> already had to do. Walking each generation here instead would touch
+    /// every file three times per pass on an Azure Files share, and would grow with the exact thing
+    /// this sweep exists to remove.</para>
+    ///
+    /// <para>🚨 <b>A directory is a generation only on POSITIVE evidence that it is a
+    /// publication</b> — it carries one of the files every publication carries
+    /// (<c>source-commit.txt</c>, <c>repository.txt</c>, the completion sentinel), or the pointer
+    /// names it. It is NOT "every subdirectory that is not one I know about". The difference is the
+    /// whole safety of the sweep: the flat compatibility copy puts the publisher's <c>modules/</c>
+    /// beside the generations during the migration, and any later bookkeeping directory would
+    /// arrive the same way — under an exclusion list, each one is collectable the day it is added
+    /// and nothing says so; under positive identification each one is simply retained, and the
+    /// worst case is bytes that stay.</para>
+    /// </summary>
+    private static ImmutableList<PrebuiltGenerationEntry> ReadGenerations(
+        string sourceDirectory,
+        string sourceName,
+        PublicationPointer pointer,
+        Dictionary<(string Source, string Name), GenerationTally> tallies,
+        ILogger? logger)
+    {
+        List<string> directories;
+        try
+        {
+            directories = Directory.EnumerateDirectories(sourceDirectory)
+                .OrderBy(d => d, StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            // Cannot list ⇒ cannot judge. An empty list collects nothing, which is the answer a
+            // failed listing must give: it must never read as "there are no generations here".
+            logger?.LogWarning(ex,
+                "PrebuiltBundleRetention: could not list the generations under {SourceDirectory} — "
+                + "none of them is collectable this pass", sourceDirectory);
+            return ImmutableList<PrebuiltGenerationEntry>.Empty;
+        }
+
+        var entries = ImmutableList.CreateBuilder<PrebuiltGenerationEntry>();
+        foreach (var directory in directories)
+        {
+            var name = Path.GetFileName(directory);
+            // The underscore convention every layer of this store uses for "never an addressable
+            // name", and then the positive test.
+            if (string.IsNullOrEmpty(name) || name.StartsWith('_') || name.StartsWith('.'))
+                continue;
+            var isCurrent = string.Equals(name, pointer.Named, StringComparison.Ordinal);
+            tallies.TryGetValue((sourceName, name), out var tally);
+            if (!isCurrent && tally?.IsPublication != true)
+                continue;
+
+            // An EMPTY generation directory holds no file the walk could have seen, so its own
+            // stamp is the only reading there is.
+            var newest = tally is null
+                ? new DateTimeOffset(Directory.GetLastWriteTimeUtc(directory), TimeSpan.Zero)
+                : tally.NewestWrite;
+            entries.Add(new PrebuiltGenerationEntry(
+                name, directory, isCurrent,
+                HasSentinel: tally?.HasSentinel ?? false,
+                newest, tally?.Bytes ?? 0L));
+        }
+        return entries.ToImmutable();
+    }
+
+    /// <summary>What the identity's single recursive walk learned about one generation directory.</summary>
+    private sealed class GenerationTally
+    {
+        /// <summary>Total bytes under it.</summary>
+        public long Bytes;
+
+        /// <summary>The newest write under it. Always set — a tally exists only once a file was seen.</summary>
+        public DateTimeOffset NewestWrite = DateTimeOffset.MinValue;
+
+        /// <summary>The completion sentinel is present at its root.</summary>
+        public bool HasSentinel;
+
+        /// <summary>It carries a file only a publication carries — the positive identification.</summary>
+        public bool IsPublication;
+    }
     /// <summary>
     /// Decide what may be collected. Pure — no filesystem, no clock — so the rules are testable
     /// exactly as they are enforced.
@@ -353,6 +591,7 @@ public static class PrebuiltBundleStore
     /// <param name="livePlatformVersion">This process's platform version (build metadata stripped), or null.</param>
     /// <param name="scan">What the store holds.</param>
     /// <param name="stampedIdentities">Every identity a NodeType record's <c>CompiledFrameworkVersion</c> names.</param>
+    /// <param name="pinned">Every platform build a Deployment record pins or a registered instance reports (<see cref="PinnedPlatformReference"/>).</param>
     /// <param name="retention">The knobs.</param>
     /// <param name="nowUtc">The instant the grace is measured against.</param>
     public static PrebuiltBundleSweepPlan Plan(
@@ -360,6 +599,7 @@ public static class PrebuiltBundleStore
         string? livePlatformVersion,
         PrebuiltStoreScan scan,
         ImmutableHashSet<string> stampedIdentities,
+        ImmutableList<PinnedPlatformReference> pinned,
         PrebuiltBundleRetention retention,
         DateTimeOffset nowUtc)
     {
@@ -369,7 +609,8 @@ public static class PrebuiltBundleStore
                 ImmutableList<PrebuiltIdentityEntry>.Empty, ImmutableDictionary<string, string>.Empty,
                 ImmutableList<ReleaseMarkerEntry>.Empty,
                 $"release marker '{unreadable.Version}' could not be read ({unreadable.ReadFault}) — which "
-                + "identity it references is unknown, so no identity can be called unreferenced");
+                + "identity it references is unknown, so no identity can be called unreferenced",
+                ImmutableList<string>.Empty);
 
         // 🚨 The SEALED-PUBLICATION LINEAGE, never the version LABEL (#3542). Retention decides what
         // to DELETE, so a label that sorts above a later run does not merely mis-rank a listing here:
@@ -388,15 +629,6 @@ public static class PrebuiltBundleStore
             .Where(m => !m.IsPrerelease)
             .GroupBy(m => m.Identity!, StringComparer.Ordinal)
             .ToImmutableDictionary(g => g.Key, g => string.Join(", ", g.Select(m => m.Version)), StringComparer.Ordinal);
-        var closedLines = readable.Where(m => !m.IsPrerelease).Select(m => m.Line).Where(l => l is not null)
-            .Select(l => l!).ToImmutableHashSet(StringComparer.Ordinal);
-        var openLines = readable.Where(m => m.IsPrerelease).Select(m => m.Line).Where(l => l is not null && !closedLines.Contains(l))
-            .Select(l => l!).ToImmutableHashSet(StringComparer.Ordinal);
-        var linesOf = readable.Where(m => m.IsPrerelease && m.Line is not null)
-            .GroupBy(m => m.Identity!, StringComparer.Ordinal)
-            .ToImmutableDictionary(g => g.Key, g => g.Select(m => m.Line!).ToImmutableHashSet(StringComparer.Ordinal),
-                StringComparer.Ordinal);
-
         var reasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
         void Keep(string identity, string reason)
         {
@@ -406,8 +638,38 @@ public static class PrebuiltBundleStore
 
         var sources = scan.Identities.SelectMany(i => i.Sources.Where(s => s.IsSealed).Select(s => s.Name))
             .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
-        var liveMajor = PrebuiltAdoptionPolicy.MajorOf(livePlatformVersion);
-        var keep = Math.Max(0, retention.KeepNewestPerSource);
+        var minimumAge = retention.MinimumAge < TimeSpan.FromDays(30)
+            ? TimeSpan.FromDays(30) : retention.MinimumAge;
+
+        // version (marker file name, normalised) → every identity a marker of that version names.
+        var identitiesOfVersion = readable
+            .GroupBy(m => PlatformVersionLine.Normalize(m.Version) ?? m.Version, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.Select(m => m.Identity!).ToImmutableHashSet(StringComparer.Ordinal),
+                StringComparer.Ordinal);
+        var pinnedReasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var unresolvedPins = ImmutableList.CreateBuilder<string>();
+        foreach (var pin in pinned)
+        {
+            // 🚨 A pinned build is referenced HOWEVER OLD: on the registry, the instance that pins it
+            // pulls exactly that identity's seal over the HTTP prebuilt surface, and the newest-N
+            // rule cannot see it. A reported identity is the exact reference; a version reaches its
+            // identity only through the _releases marker — a version no marker names keeps NOTHING,
+            // and the ledger says so, because nothing can say which directory it would have been.
+            var version = PlatformVersionLine.Normalize(pin.Version);
+            if (!string.IsNullOrWhiteSpace(pin.Identity))
+                pinnedReasons.TryAdd(pin.Identity, $"pinned by {pin.Origin}{(version is null ? "" : $" ({version})")}");
+            else if (version is not null && identitiesOfVersion.TryGetValue(version, out var ids))
+                foreach (var id in ids)
+                    pinnedReasons.TryAdd(id, $"pinned by {pin.Origin} at {version} (via its _releases marker)");
+            else
+                unresolvedPins.Add($"{pin.Origin}={version ?? "(no version)"}");
+        }
+
+        if (unresolvedPins.Count > 0)
+            return new PrebuiltBundleSweepPlan(liveIdentity, livePlatformVersion, scan.Identities,
+                [], ImmutableDictionary<string, string>.Empty, [],
+                "consumer references could not be resolved; the protected inventory is incomplete",
+                unresolvedPins.ToImmutable());
 
         foreach (var identity in scan.Identities)
         {
@@ -418,6 +680,8 @@ public static class PrebuiltBundleStore
                     $"its seal could not be read ({identity.Sources.First(s => s.ReadFault is not null).ReadFault}) — unreadable is never unreferenced");
             else if (cleanMarkersOf.TryGetValue(identity.Identity, out var releases))
                 Keep(identity.Identity, $"named by release marker {releases}");
+            else if (pinnedReasons.TryGetValue(identity.Identity, out var pinnedBy))
+                Keep(identity.Identity, pinnedBy);
             else if (stampedIdentities.Contains(identity.Identity))
                 Keep(identity.Identity, "a NodeType record's adoption stamp (CompiledFrameworkVersion) names it");
         }
@@ -428,35 +692,25 @@ public static class PrebuiltBundleStore
                 .Where(i => i.Sources.Any(s => s.IsSealed && string.Equals(s.Name, source, StringComparison.OrdinalIgnoreCase)))
                 .ToList();
 
-            // 4. what Family strictness adopts: the newest sealed publication on the running line.
-            if (liveMajor is { } major)
+            // Preserve the newest sealed publication for every represented major, including
+            // consumers running a different major than this registry process (#3842).
+            foreach (var family in sealedHere
+                         .Where(i => newestVersionOf.ContainsKey(i.Identity))
+                         .GroupBy(i => PrebuiltAdoptionPolicy.MajorOf(newestVersionOf[i.Identity]))
+                         .Where(g => g.Key is not null))
             {
-                var family = sealedHere
-                    .Where(i => newestVersionOf.TryGetValue(i.Identity, out var v) && PrebuiltAdoptionPolicy.MajorOf(v) == major)
-                    .OrderByDescending(i => newestVersionOf[i.Identity], comparer)
-                    .FirstOrDefault();
-                if (family is not null)
-                    Keep(family.Identity,
-                        $"the newest sealed '{source}' publication on platform line {major} ({newestVersionOf[family.Identity]}) — what Family strictness adopts");
+                var latest = family.OrderByDescending(i => newestVersionOf[i.Identity], comparer).First();
+                Keep(latest.Identity,
+                    $"the newest sealed '{source}' publication on platform major {family.Key} ({newestVersionOf[latest.Identity]}) — what Family strictness adopts");
             }
-
-            // 5. the newest N pre-release identities of every OPEN line.
-            foreach (var line in openLines.OrderBy(l => l, StringComparer.Ordinal))
-                foreach (var kept in sealedHere
-                             .Where(i => linesOf.TryGetValue(i.Identity, out var lines) && lines.Contains(line))
-                             .OrderByDescending(i => newestVersionOf[i.Identity], comparer)
-                             .Take(keep))
-                    Keep(kept.Identity,
-                        $"among the newest {keep} sealed '{source}' publications of open line {line} ({newestVersionOf[kept.Identity]})");
-
-            // 6. unnamed identities: recency by seal time is the only signal they have.
-            foreach (var kept in sealedHere
-                         .Where(i => !newestVersionOf.ContainsKey(i.Identity))
-                         .OrderByDescending(i => i.Sources.First(s => s.IsSealed && string.Equals(s.Name, source, StringComparison.OrdinalIgnoreCase)).SealUtc)
-                         .Take(keep))
-                Keep(kept.Identity,
-                    $"no release marker names it; among the newest {keep} sealed '{source}' publications by seal time");
         }
+
+        // An age window applies to sealed, unnamed and abandoned publications alike.
+        // A recent marker is also a publication reference: old bytes can just have been released.
+        foreach (var identity in scan.Identities)
+            if (nowUtc - identity.NewestWriteUtc < minimumAge
+                || readable.Any(m => m.Identity == identity.Identity && nowUtc - m.WrittenUtc < minimumAge))
+                Keep(identity.Identity, $"within the {minimumAge.TotalDays:N0}-day retention window");
 
         // 7. a seal in flight.
         foreach (var identity in scan.Identities)
@@ -471,16 +725,95 @@ public static class PrebuiltBundleStore
         var collectableIdentities = collectable.Select(i => i.Identity).ToImmutableHashSet(StringComparer.Ordinal);
         var present = scan.Identities.Select(i => i.Identity).ToImmutableHashSet(StringComparer.Ordinal);
 
+        var pinnedVersions = pinned
+            .Select(p => PlatformVersionLine.Normalize(p.Version))
+            .Where(v => v is not null)
+            .Select(v => v!)
+            .ToImmutableHashSet(StringComparer.Ordinal);
         var markers = readable
             .Where(m => m.IsPrerelease)
             .Where(m => !string.Equals(m.Identity, liveIdentity, StringComparison.Ordinal))
             .Where(m => livePlatformVersion is null || !string.Equals(m.Version, livePlatformVersion, StringComparison.Ordinal))
+            // A pinned version's marker is the ONLY way its pin reaches an identity — never retired,
+            // even when the directory is absent right now (a republish would need the marker).
+            .Where(m => !pinnedVersions.Contains(PlatformVersionLine.Normalize(m.Version) ?? m.Version)
+                        && !pinnedReasons.ContainsKey(m.Identity!))
             .Where(m => collectableIdentities.Contains(m.Identity!)
-                        || (!present.Contains(m.Identity!) && nowUtc - m.WrittenUtc >= retention.UnsealedGrace))
+                        || (!present.Contains(m.Identity!) && nowUtc - m.WrittenUtc >= minimumAge))
             .ToImmutableList();
 
+        // ══════════════ GENERATIONS INSIDE A RETAINED IDENTITY (MeshWeaver#3461) ══════════════
+        //
+        // 🚨 THE IDENTITY-LEVEL RULES ABOVE NEVER REACH IN HERE, and under the generation layout
+        // that is unbounded growth rather than an omission: the framework identity is
+        // breaking-change-keyed, so an ordinary week of merges re-resolves the SAME s<hash> and
+        // every publish adds one more ~45-file generation under an identity rules 1/4/5 keep for
+        // ever. That is the precondition on flipping a prefix to `generation`
+        // (Doc/Architecture/SealedPublicationGenerations → "Retention"): a share that fills up
+        // TRUNCATES WRITES SILENTLY, which is how memex.systemorph.com reached 3 MiB free on
+        // 2026-09-08 with every runtime recompile landing as `Bad IL format`.
+        //
+        // 🚨 WHY THIS IS SAFE WITHOUT A PER-GENERATION CONSUMER INVENTORY — the one thing that
+        // could make it unsafe, and the reason there does not have to be one. A non-current
+        // generation is UNREACHABLE, not merely unfashionable: every read of a published source
+        // directory in this process composes under
+        // ShippedPrebuiltBundles.PublicationDirectoryOf(source) — the seeder, the same-major
+        // adopted fallback, SealedPublicationIndex, PublishedBundleCatalogue and ServedModuleBytes
+        // alike — and that resolves the pointer or falls back to the source directory itself.
+        // Nothing enumerates the subdirectories of a source looking for a publication. So the set
+        // a consumer inventory would have to protect is exactly {the generation `_current` names}
+        // ∪ {everything young}, and both are protected below by construction. The rules use the
+        // READERS' own resolution (ResolvePublicationPointer) rather than a second copy of it,
+        // because a sweep that decided reachability differently from the readers would delete
+        // bytes a portal was still resolving.
+        //
+        // 🚨 "Publication must establish protection before moving _current" is satisfied by AGE,
+        // not by a lease. A generation is protected from the instant its first byte lands — it is
+        // younger than the window — so a publication in flight can never be collected, and the
+        // publisher needs no claim, no lock and no ordering with this sweep. `UnsealedGrace` is
+        // deliberately not consulted here: it is hours and the window is at least 30 days, so a
+        // branch for it could never fire, and a check that cannot fail is not a check. Nor is
+        // `HasSentinel`: a superseded generation is collected on age whether it was sealed, torn or
+        // abandoned mid-upload — it records WHICH for the operator, and decides nothing.
+        //
+        // 🚨 There is no "it could not be read" rule here, and it is not missing — a generation the
+        // walk could not enter contributes no files, so it is never IDENTIFIED as a publication and
+        // is therefore never a candidate at all. Unreadable still means kept; it simply arrives by
+        // not being enumerated rather than by a branch, which is the stronger of the two.
+        var generationReasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var collectableGenerations = ImmutableList.CreateBuilder<PrebuiltGenerationEntry>();
+        foreach (var identity in scan.Identities)
+        {
+            // An identity being collected takes its generations with it; counting them here too
+            // would double-count the bytes and delete a directory twice.
+            if (!reasons.ContainsKey(identity.Identity))
+                continue;
+            foreach (var source in identity.Sources)
+                foreach (var generation in source.Generations)
+                {
+                    var keep =
+                        generation.IsCurrent
+                            ? $"the {ShippedPrebuiltBundles.PublicationPointerFileName} pointer of '{source.Name}' names it — it is the live publication"
+                        : source.PointerFault is not null
+                            ? $"which generation of '{source.Name}' applies is unknown ({source.PointerFault}) — an inventory that could not be read licenses no deletion"
+                        : nowUtc - generation.NewestWriteUtc < minimumAge
+                            ? $"within the {minimumAge.TotalDays:N0}-day retention window"
+                            : null;
+                    if (keep is not null)
+                        generationReasons[generation.Directory] = keep;
+                    else
+                        collectableGenerations.Add(generation);
+                }
+        }
+
         return new PrebuiltBundleSweepPlan(
-            liveIdentity, livePlatformVersion, scan.Identities, collectable, reasons.ToImmutable(), markers, null);
+            liveIdentity, livePlatformVersion, scan.Identities, collectable, reasons.ToImmutable(), markers, null,
+            unresolvedPins.ToImmutable())
+        {
+            CollectableGenerations = collectableGenerations.ToImmutable().Sort(
+                (a, b) => a.NewestWriteUtc.CompareTo(b.NewestWriteUtc)),
+            ProtectedGenerations = generationReasons.ToImmutable(),
+        };
     }
 
     /// <summary>
@@ -493,11 +826,12 @@ public static class PrebuiltBundleStore
         string liveIdentity,
         string? livePlatformVersion,
         ImmutableHashSet<string> stampedIdentities,
+        ImmutableList<PinnedPlatformReference> pinned,
         PrebuiltBundleRetention retention,
         IIoPool pool,
         ILogger? logger = null)
         => pool.InvokeBlocking(_ =>
-            SweepCore(root, liveIdentity, livePlatformVersion, stampedIdentities, retention, DateTimeOffset.UtcNow, logger));
+            SweepCore(root, liveIdentity, livePlatformVersion, stampedIdentities, pinned, retention, DateTimeOffset.UtcNow, logger));
 
     /// <summary>The sweep itself, with the clock passed in, so the deleting behaviour is exercised at an exact instant.</summary>
     public static PrebuiltBundleSweepResult SweepCore(
@@ -505,6 +839,7 @@ public static class PrebuiltBundleStore
         string liveIdentity,
         string? livePlatformVersion,
         ImmutableHashSet<string> stampedIdentities,
+        ImmutableList<PinnedPlatformReference> pinned,
         PrebuiltBundleRetention retention,
         DateTimeOffset nowUtc,
         ILogger? logger = null,
@@ -533,7 +868,7 @@ public static class PrebuiltBundleStore
             return failed;
         }
 
-        var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, retention, nowUtc);
+        var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, pinned, retention, nowUtc);
         if (plan.AbortReason is not null)
         {
             logger?.LogWarning("PrebuiltBundleRetention: {Summary}. NOTHING collected", plan.Summary);
@@ -545,9 +880,10 @@ public static class PrebuiltBundleStore
         if (!retention.Delete)
         {
             logger?.LogInformation(
-                "PrebuiltBundleRetention: {Summary}. DELETING NOTHING — collection is not armed. Would collect: {Collectable}. Kept: {Kept}",
+                "PrebuiltBundleRetention: {Summary}. DELETING NOTHING — collection is not armed. Would collect: {Collectable}. Would collect generations: {Generations}. Kept: {Kept}",
                 plan.Summary,
                 plan.Collectable.Count == 0 ? "(nothing)" : string.Join(", ", plan.Collectable.Select(i => $"{i.Identity} ({PrebuiltBundleSweepPlan.Mb(i.Bytes)})")),
+                plan.CollectableGenerations.IsEmpty ? "(nothing)" : string.Join(", ", plan.CollectableGenerations.Select(g => $"{g.Directory} ({PrebuiltBundleSweepPlan.Mb(g.Bytes)})")),
                 Describe(plan.Protected));
             var report = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, null);
             AppendLedger(root, report, logger);
@@ -592,6 +928,38 @@ public static class PrebuiltBundleStore
             }
         }
 
+        // Superseded GENERATIONS inside identities the plan KEEPS (#3461). Same discipline as an
+        // identity: unseal first so a reader listing it mid-removal sees "no sentinel" and backs
+        // off to the previous generation, then remove; a failed removal is counted and re-planned
+        // next pass rather than swallowed.
+        var deletedGenerations = 0;
+        foreach (var generation in plan.CollectableGenerations)
+        {
+            try
+            {
+                var sentinel = Path.Combine(generation.Directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+                if (File.Exists(sentinel))
+                    File.Delete(sentinel);
+                delete(generation.Directory);
+                deletedGenerations++;
+                deletedBytes += generation.Bytes;
+                logger?.LogInformation(
+                    "PrebuiltBundleRetention: removed superseded generation {Directory} — {Bytes} reclaimed; "
+                    + "newest write {NewestWriteUtc}, and no {Pointer} named it",
+                    generation.Directory, PrebuiltBundleSweepPlan.Mb(generation.Bytes),
+                    generation.NewestWriteUtc.ToString("O", CultureInfo.InvariantCulture),
+                    ShippedPrebuiltBundles.PublicationPointerFileName);
+                lines.Add($"{nowUtc:O}   removed generation {generation.Directory} {PrebuiltBundleSweepPlan.Mb(generation.Bytes)}");
+            }
+            catch (Exception ex)
+            {
+                failedDeletes++;
+                logger?.LogWarning(ex,
+                    "PrebuiltBundleRetention: could not remove superseded generation {Directory} — it stays, "
+                    + "and the next pass considers it again", generation.Directory);
+            }
+        }
+
         var deletedMarkers = 0;
         foreach (var marker in plan.CollectableMarkers)
         {
@@ -609,12 +977,13 @@ public static class PrebuiltBundleStore
         }
 
         logger?.LogInformation(
-            "PrebuiltBundleRetention: {Summary}. COLLECTED {Identities} identity(ies) reclaiming {Reclaimed}, retired {Markers} marker(s){Failed}. Kept: {Kept}",
-            plan.Summary, deletedIdentities, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers,
+            "PrebuiltBundleRetention: {Summary}. COLLECTED {Identities} identity(ies) and {Generations} superseded generation(s) reclaiming {Reclaimed}, retired {Markers} marker(s){Failed}. Kept: {Kept}",
+            plan.Summary, deletedIdentities, deletedGenerations, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers,
             failedDeletes == 0 ? "" : $" ({failedDeletes} removal(s) failed)",
             Describe(plan.Protected));
 
-        var result = new PrebuiltBundleSweepResult(nowUtc, plan, true, deletedIdentities, deletedBytes, deletedMarkers, failedDeletes, null);
+        var result = new PrebuiltBundleSweepResult(nowUtc, plan, true, deletedIdentities, deletedBytes, deletedMarkers, failedDeletes, null)
+            { DeletedGenerations = deletedGenerations };
         AppendLedger(root, result, logger, lines);
         return result;
     }

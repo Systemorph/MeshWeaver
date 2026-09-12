@@ -65,6 +65,8 @@ healthy and reports almost nothing (memex, 2026-08-10: 42 sync configs, zero ins
 | `platformVersion` | `PlatformBuildInfo.PlatformVersion` — the string Settings ▸ About shows and `Admin/PlatformVersion` records; never a third opinion |
 | `commitSha` | `PlatformBuildInfo.CommitHash` — the core commit the image was built from |
 | `frameworkIdentity` | the live framework identity (`PrebuiltAssemblySeeder.LiveFrameworkMvid`) — the key every prebuilt bundle is filed under ([ModuleVersioning](/Doc/Architecture/ModuleVersioning)) |
+| `adoptedFrameworkIdentities` | distinct `CompiledFrameworkVersion` stamps from the instance's NodeType definitions, including older builds still adopted by modules |
+| `adoptedFrameworkInventoryComplete` | `true` only after the adoption query completes and every returned definition is readable; `false` on failure, absent in legacy reports |
 | `updatePolicy` | the `Admin/UpdatePolicy` node's policy, read as a children listing of the partition (a point read of an absent node trips the routing NotFound and its storm-breaker; a test mesh has no such node) |
 | `sampledAt` | UTC, second precision |
 | `modules[]` | per module: `id`, `origin` (`GitSync` or `Package`), `repository`, `ref`, `subdirectory`, `commitSha`, `lastSyncedAt`, `moduleVersion`. A module recorded under both shapes reports as `GitSync` carrying the install record's version — the receiver's fold keeps exactly that |
@@ -73,6 +75,25 @@ healthy and reports almost nothing (memex, 2026-08-10: 42 sync configs, zero ins
 
 Fields the control instance's inbox does not read yet (`commitSha`, `frameworkIdentity`,
 `updatePolicy`, `reporter`) ride along: an older control instance ignores them, a newer one shows them.
+
+## Retention reads the adopted builds too
+
+The running platform identity is not the whole consumer inventory. A portal running build Y can
+still serve a module adopted from X. The report reads those adoption stamps from the local mesh and
+includes X separately; the control instance's retention reference reader protects both identities.
+The receiver support is in MeshWeaver.Plugins#1564 and must be available before remote reports can
+preserve these fields.
+
+An explicitly complete empty adoption list is valid. An absent, malformed, or explicitly incomplete
+list blocks the retention pass instead of implying that no older build is used. The reporter still
+sends the rest of its inventory on a failed adoption read, with the failure visible in its warnings.
+Legacy reports block cleanup until replaced by a complete report from an upgraded reporter and
+receiver.
+
+These fields describe an individual report, not proof that every fleet member reported or that an
+old report is current. Fleet coverage, freshness, and coordination with active publishers remain
+requirements of the complete retention protocol in #3438 and #3842. No cleanup setting is enabled
+by adding this report contract.
 
 ## Delivery
 

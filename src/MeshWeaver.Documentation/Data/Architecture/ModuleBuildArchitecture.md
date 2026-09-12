@@ -28,8 +28,9 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 1. **select** — which bundles this diff can reach. The selector can say "these" or
    "everything", never "skip"; a workflow/pin change legitimately selects everything, because
    the compiler itself changed. A `src/` change is bounded by the **compile tree**, not treated
-   as "everything", and a superseded `main` run is **cancelled by construction** — see
-   *Superseded runs on `main`* below.
+   as "everything". A `main` push builds the **dependency network** changed since the last
+   successful run and is never cancelled — see *Per-module deploy* below; a repo that has not
+   adopted it cancels a superseded `main` run by construction (*Superseded runs on `main`*).
 2. **prepare, once per run** — everything every job consumes identically is staged here, never
    per module: the platform image as a per-digest zstd tarball in the **actions cache (GitHub's
    blob storage, colocated with the runners)**, the tester-app and platform-refs extractions,
@@ -344,6 +345,7 @@ registry's `PlatformBuildInboxWatcher` from the build fact core CD POSTs into `H
 to the repositories the `Hosting/Deployment` records name as registry sources; `schedule` is the
 fallback. Core dispatches to no repository (maintainer, 2026-09-03: *"core publishes an event and
 finishes"*).
+🚨 No longer true since 2026-09-12 (phase 1): the `schedule` poll is the primary and only per-platform run — `meshweaver-framework-released` is emitted only while `Hosting:PlatformBuilds:BroadcastFrameworkReleases` is `true` (default off, Plugins#1707) and no satellite lists the type; release-follow means the daily run resolving the newest SEALED set. See `Hosting/BuildAndReleaseProcess`.
 
 ### What a satellite passes
 
@@ -365,7 +367,101 @@ grant the CI user the `Admin` role there (`MainNode = "Admin/ModuleBuilds"`), mi
 token, store it as the satellite's `REGISTRY_LEDGER_TOKEN`. `ledger: required` with an empty token
 is RED in `select` — a ledger that silently did not run and one that ran must never look alike.
 
+## 🚨 Per-module deploy — a merge ships its dependency network, and nothing supersedes it
+
+**Maintainer directives, 2026-09-11**, after MeshWeaver.Plugins `main` published NO module for nine
+hours — every merge superseded the run before it reached its publish, the baseline then fell back to
+FULL, the full run was superseded in turn, and the release-follow runs went red on an unrelated
+portal-host test: *"why do deployments depend on a complete main run?!"* · *"each module should
+update individually ⇒ mono-repo"* · *"only flooring"* · *"make sufficient tests"* · *"builds are not
+superseded then, however they must be atomic"* · *"no huge runs ever"* · *"on platform build we will
+do a full run to ensure compatibility … [it] will also be superseded by next platform run"* · *"we
+will only force consistency inside a dependency network, not just all — ever"*.
+
+MeshWeaver.Plugins adopts it first. Every lane default is unchanged, so a repo that has not opted in
+keeps the supersede model in the next section.
+
+### The rules
+
+1. **A push run on the trunk is never cancelled** — not by the concurrency group
+   (`cancel-in-progress` is already false on the default branch) and not by the supersede lane, which
+   a per-module repo does not call (`scripts/check-main-runs-not-cancelled.py` refuses the call).
+   Every merge's run reaches its own verdict.
+2. **A push builds its DEPENDENCY NETWORK, never everything.** The scope is the affected closure —
+   the in-mesh `requires`/dependents walk plus the `ProjectReference` compile tree — over the history
+   union since the newest SUCCESSFUL trunk run (`node-repo-publication-base.py`). Failed, cancelled
+   and in-flight runs after it are walked past, because the union carries every change they held.
+   Only a toolchain change resets to the full set: a run in between that attested a different
+   platform, image or build-logic set may have published with it, which git history cannot show.
+   Unrelated modules are not rebuilt, not retested, not republished.
+3. **A module publishes on its OWN verdict.** The module lane needs only the platform resolution and
+   the scope — no repo-wide validate gate, no portal-host suite, no sibling module's test. Each leg
+   builds, runs the module's own suite, and POSTs one bundle, whole or not at all
+   (content-addressed, keyed `{package}@{version}`). A red sibling leaves this module's publication
+   untouched; a red leg leaves its module at the version it last published.
+4. **Newest wins, per module (`publish-newest-only`).** Runs are no longer cancelled, so two of them
+   can build one module and finish in either order — and the registry keeps what arrives last.
+   Immediately before the POST the leg fetches the trunk tip and asks the same scope script whether
+   a newer commit reaches its module's network. If one does, the leg stands down (receipt
+   `publication: superseded`, naming the tip): that commit's own never-cancelled run builds the
+   module from a tree that contains this one. A module never goes backwards and never waits for an
+   unrelated module.
+5. **The seal never goes backwards.** The same reordering reaches the NodeType bake. A bake whose
+   commit is an ancestor of the commit already sealed answers `scope=none` at decision time
+   (`bake-scope.sh`) and skips at write time (`publish-bake-bundles.sh`, through the compare API):
+   sealing it would move every instance's sources back, since `SealedSyncGate` holds a repository's
+   sources at the sealed commit. The bake is narrowed too (`narrow-by-affected`), so a merge re-bakes
+   only what its diff affects.
+6. **The platform release is the ONE full run.** `repository_dispatch` and the `schedule` poll
+   rebuild and republish everything against the new platform — the compatibility check across the
+   whole catalog. It is the only run that is superseded, and only by the next platform run: the
+   release lane shares one concurrency group, so a newer platform run replaces a queued older one.
+   🚨 No longer true since 2026-09-12 (phase 1): the ONE full run is the satellite's DAILY `schedule`, not a platform release — a platform build triggers nothing in a node repository and is validated by the next day's runs. See `Hosting/BuildAndReleaseProcess`.
+7. **Compatibility is decided by floors.** A bundle states the framework it was built against and its
+   `minMeshVersion`/`requires` ranges, and an instance adopts it only when they hold. Consistency is
+   forced inside a dependency network (rule 2) and never across unrelated modules.
+8. **No job spans more than one atomic unit — and the atomic unit IS the dependency network.**
+   The maintainer, 2026-09-11 ~19:40–19:50Z, typed in the DeepSign session (Claude Code session
+   01R6Cbf8RzXXHJvsjMBYLmjg) and relayed from there verbatim: *"we wanted to disentangle in atomic
+   units"* · *"we must not have any job going across the atomic unit"* · *"(atomic unit == all
+   dependency patterns in repo)"*. A unit is a changed package together with everything that depends on it (rule 2's
+   network). One job covering one whole network is right; a job that covers two UNRELATED networks
+   couples their verdicts — one network's red or flake holds the other, and neither can be skipped on
+   its own. The shape is the module lane's: one leg per affected network, and a receipt-count aggregate
+   (`… / All selected bundles built`) as the one required context. Two items below are therefore
+   violations to remove, not costs to accept: a workspace build spanning unrelated networks, and
+   portal-host shards that mix test projects from unrelated networks.
+
+### What it costs, and what it does not cover
+
+* **Overlap.** A push landing while an earlier run still builds rebuilds that run's network too
+  (rule 2's union). That is the price of never cancelling; rule 4 makes it harmless.
+* **A red newest leg.** When the newest run's leg for a module fails, rule 4 has already stood the
+  older leg down, so the module stays at its previously published version until the fix lands. The
+  red is on the trunk and names the module.
+* **The seal window.** A module built while a platform release is still sealing can be built against
+  the outgoing platform; the release run, and at the latest the daily poll, rebuild it.
+* **One workspace per run — a rule 8 violation when the run spans unrelated networks.** A push touching two unrelated networks still compiles them in one
+  fail-fast workspace, so a compile error in one stops the other's legs in that run. A workspace per
+  network is the next step.
+* **Compiled test projects and the portal-host shards have no content key, and each shard mixes
+  test projects of unrelated networks in one job (rule 8).** A module is skipped
+  when its key is already published, but a `src/` test project has no key and no `Tested` record:
+  `node-repo-project-scope.py` narrows WHICH suites run, and every selected suite re-runs from
+  scratch on every push. Measured on Plugins run 34618468550 (a pull request, 2026-09-11): the four
+  portal-host shards cost 38 + 21 + 19 runner-minutes, plus 11 for a shard cancelled with the run.
+  The next step after a workspace per network: a per-project key in the `module-build-key.py` shape
+  (the project closure's tree hashes + globals + the platform set) and a `Tested` record per test
+  project in the same ledger, so a push re-runs only the projects whose key changed and an unchanged
+  one carries its previous verdict — the rule the modules already follow: re-run only when the atomic
+  unit actually changed. (Raised by the DeepSign session, 2026-09-11.)
+* **An in-flight platform run is not cancelled** by a newer one (rule 6 replaces only a queued one):
+  cancelling it mid-seal is the torn publication of Plugins#826.
+
 ## 🚨 Superseded runs on `main` — cancelled by construction, selected by the compile tree
+
+> **Repos on per-module deploy (above) do not cancel `main` runs at all** — this section is the
+> model for every repo that has not adopted it.
 
 **Maintainer directives, 2026-09-08** (during the memex roll block): *"cancel superseded"*,
 *"superseded means overlapping code"*, *"they are monorepos — walk the dependency tree, find all
@@ -418,6 +514,7 @@ run publishing between a newer run's `select` and its hand-over.
    and the `schedule` poll are never cancelled by this rule and never cancel anything — the #826
    rule, kept intact. Each `main` push keeps its own concurrency group keyed on the commit, so GitHub
    itself cancels nothing; the lane does, explicitly, under the guards above.
+   🚨 No longer true since 2026-09-12 (phase 1), narrowly: the platform-wave half is gone (no `meshweaver-framework-released` dispatch reaches a satellite by default); the never-cancelled rule itself still holds for `schedule` and `meshweaver-upstream-published` — the maintainer's 2026-09-11 decision, enforced by `scripts/check-main-runs-not-cancelled.py`. See `Hosting/BuildAndReleaseProcess`.
 
 The lane cannot pass silently: if it cannot list runs or resolve ancestry it goes **red naming why**
 — no `continue-on-error`, no `if: secret-is-set` (AGENTS.md → *"A gate NEVER tests its own inputs"*).
@@ -836,6 +933,15 @@ expensive says so rather than merely being slow.
 
 ## The release: the pipeline ends by calling memex
 
+> 📅 **2026-09-12 — sentence 3's platform half is off by default.** The control instance still
+> registers every `platform-build` and still publishes `meshweaver-upstream-published` for a bundle
+> publication, but `meshweaver-framework-released` is broadcast only while
+> `Hosting:PlatformBuilds:BroadcastFrameworkReleases` is `true` (Plugins#1707), and the satellites no
+> longer list the type (Plugins#1709 and the five satellite PRs of the same day). A node repository
+> follows the platform by its daily `schedule` against the newest SEALED set — the recommended setup
+> for every repo and every install; the wave is the MAJOR-bump exception. Full reference:
+> `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 **The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
 register release and publish event"*) is three sentences:**
 
@@ -855,6 +961,7 @@ register release and publish event"*) is three sentences:**
    control instance's `Hosting/Deployment` records name as registry sources. The subscribers' CI
    receives it, resolves both images from the version, builds and publishes for that identity — and
    ends by calling memex (1).
+   🚨 No longer true since 2026-09-12 (phase 1) for the platform event: `meshweaver-framework-released` is not published by default and the diagram's `types:` list below no longer includes it in any satellite — only `meshweaver-upstream-published` still wakes a repo. See `Hosting/BuildAndReleaseProcess`.
 
 ```
  pipeline (core CD | a node repo's publish-bake)        memex (control instance)              subscriber CI
@@ -877,6 +984,14 @@ the inbox watcher, registration and broadcast in the Hosting module's `PlatformB
 `PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository` refuses a dispatch SENDER in any workflow
 under `.github/workflows` — there is no ledger — and
 `UpstreamBuildGateGuard.TheLaneEndsByRegisteringWithMemex_AndDispatchesToNobody` pins the lane's call.
+
+📅 *2026-09-12 — landed:* MeshWeaver.Plugins#1241 (merged 2026-09-03) wired the platform half; the
+watcher registers `Hosting/PlatformBuilds/<source>` and handles `event: bundle-publication` (added
+by Plugins#1274, made directed and non-reflexive by #1484/#1485 on 2026-09-07); every satellite
+passes `webhook-url`/`webhook-secret` to the lane (the pins themselves are gone since #3842). NOT
+landed, by decision: core CD's `plugins-bake` stays (maintainer, 2026-08-29: *"plugins is top level
+— built with platform"*) — the second producer is deduplicated by the register's `IsRepeat` rule.
+And since 2026-09-12 the platform broadcast itself is off by default (see the callout above).
 
 **In flight, in this order (the contract is complete only when all have landed):** MeshWeaver.Plugins#1241
 wires the platform half (broadcast + system identity + subscribers from the records) and is
@@ -906,8 +1021,16 @@ producer of the same publication and is removed — a follow-up, not part of thi
 * **Self-hosted runners with a mounted git mirror + warm image store** (MeshWeaver#2926): bare
   mirror volume, `git worktree add` per run at the release ref, worktree deleted at job end.
 
+* **The hand-over waits for the full source verdict** — landed with MeshWeaver#3878. The POST to
+  the live registry moved out of the pack leg (where it fired while the run's sibling suites, the
+  portal-host shards, the NodeType compile-check and the Tests-area gate had not reported) into
+  `node-repo-module-publish.yml`, downstream of the caller's whole validation set. `pack` stages
+  under `publish-mode: staged` and everything a downstream gate consumes stays exactly where it
+  was — see [ModulePublicationGate](../ModulePublicationGate).
+
 See also: [ModuleClosureAccounting](../ModuleClosureAccounting) ·
 [ModuleOwnedSiblingsRide](../ModuleOwnedSiblingsRide) ·
+[ModulePublicationGate](../ModulePublicationGate) ·
 [ModuleVersioning](../ModuleVersioning) ·
 [NodeTypeCompilation](../NodeTypeCompilation) · [PluginBuildContract](../PluginBuildContract) ·
 [BuildProcess](../BuildProcess) · [InMeshBuildAndTest](../InMeshBuildAndTest).

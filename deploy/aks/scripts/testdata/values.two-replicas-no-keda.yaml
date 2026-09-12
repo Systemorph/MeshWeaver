@@ -1,0 +1,42 @@
+# FIXTURE for check-chart-invariants.sh — the memex.systemorph.com shape (MeshWeaver#3772).
+#
+# Two plain replicas, KEDA OFF. memex's helm-release lane (Systemorph/Memex) renders the Key Vault
+# values plus `values.memex.public.yaml` and never `deploy/aks/values.aks.yaml`, so the shared AKS
+# overlay's `keda.enabled: true` is not memex's, and its overlay's `replicas.portal: 2` is the whole
+# HA declaration. Everything else here is only what invariants 2–4 demand of ANY floor above one:
+# AdoNet clustering with a membership connection string, and ReadWriteMany on every claim.
+# Placeholders, no credential.
+replicas:
+  portal: 2
+keda:
+  enabled: false
+config:
+  memex_portal:
+    Deployment__Orleans__Clustering: "AdoNet"
+secrets:
+  memex_portal:
+    ConnectionStrings__memex: "Host=pg.example.test;Database=memex;Username=memex;Password=placeholder"
+    ConnectionStrings__orleans: "Host=pg.example.test;Database=orleans;Username=memex;Password=placeholder"
+  memex_migration:
+    ConnectionStrings__memex: "Host=pg.example.test;Database=memex;Username=memex;Password=placeholder"
+    ConnectionStrings__orleans: "Host=pg.example.test;Database=orleans;Username=memex;Password=placeholder"
+persistence:
+  data:
+    claimName: "memex-data"
+    create: true
+    size: "128Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+  content:
+    claimName: "memex-content"
+    create: true
+    size: "64Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+    mountPath: "/mnt/content"
+  users:
+    claimName: "memex-users"
+    create: true
+    size: "32Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"

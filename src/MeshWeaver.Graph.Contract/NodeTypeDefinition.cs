@@ -341,6 +341,24 @@ public record NodeTypeDefinition
     public string? LastCompilationActivityPath { get; init; }
 
     /// <summary>
+    /// 🚨 <b>The source that owns this type no longer carries it, and the mesh is holding it ONLY
+    /// for its remaining instances.</b> Stamped by a repository-driven import (a git sync, a
+    /// sealed-publication import, a node-repo package update) when the repository has RETIRED the
+    /// type while <c>nodeType:{Type}</c> still matches live nodes — the prune of the definition is
+    /// refused, because a definition that goes away takes its instances' per-node hub with it and
+    /// leaves them reading <c>Unavailable</c> (a client record went dark exactly this way on
+    /// <c>memex.systemorph.com</c>, 2026-09-08). The text names who retired it and which instances
+    /// keep it alive; <c>null</c> for every type its source still carries.
+    ///
+    /// <para>Two readers act on it. The import re-asks the instance question on every later run,
+    /// so the retirement COMPLETES on the first sync after the instances are retyped or deleted —
+    /// nothing else has to remember. And the bake gate reads a compile failure on a stamped type as
+    /// <c>Retired</c>, a content verdict that must not hold a rollout: the repository withdrew the
+    /// type's sources on purpose, so its compile status is no longer evidence about an image.</para>
+    /// </summary>
+    public string? PendingRetirement { get; init; }
+
+    /// <summary>
     /// Path of the latest <c>Release</c> MeshNode at <c>{nodeTypePath}/Release/{version}</c>
     /// — the active compiled artefact for this NodeType. Set by the compile watcher
     /// after a successful compile + Release node creation; preserves the previous value
@@ -602,6 +620,30 @@ public record NodeTypeDefinition
     public Mesh.Services.BuildProvenance BuildProvenance { get; init; }
 
     /// <summary>
+    /// The module's released SemVer the PRODUCER recorded for the adopted bytes — the bundle
+    /// manifest's <c>Version</c>, i.e. <c>manifest.lock</c>'s <c>version</c> at the bake. Written by
+    /// <c>PrebuiltAssemblySeeder.Seed</c> beside <see cref="AdoptedSourceFingerprint"/>; null for
+    /// a locally-compiled build and for a bundle whose producer recorded none.
+    ///
+    /// <para>Compared against <see cref="CurrentModuleVersion"/> by
+    /// <see cref="Mesh.Services.ModuleVersionCompatibility"/> when the fingerprints disagree
+    /// (MeshWeaver#3583): same MAJOR keeps the build serving as
+    /// <see cref="Mesh.Services.BuildProvenance.StaleAdopted"/>, a MAJOR bump refuses it. Survives
+    /// a local compile like the fingerprint does — it describes the last adopted bytes, and the
+    /// NodeType page names it beside the current one while a bundle is awaited.</para>
+    /// </summary>
+    public string? AdoptedModuleVersion { get; init; }
+
+    /// <summary>
+    /// The module version of the source this mesh HOLDS — the partition root's
+    /// <c>content.version</c> (the <c>Store/Plugin</c> root's SemVer, which the tree sync rewrites
+    /// together with the sources), published by the sources watcher in the SAME update as
+    /// <see cref="CurrentSourceFingerprint"/> so a reader never sees one without the other. Null
+    /// when the partition root carries no version (a mesh-authored type, a test partition).
+    /// </summary>
+    public string? CurrentModuleVersion { get; init; }
+
+    /// <summary>
     /// <see cref="DateTime"/> ticks for <c>1601-01-01</c> — the FILETIME epoch, and the value
     /// .NET returns from <c>FileInfo.LastWriteTimeUtc</c> for a file that DOES NOT EXIST
     /// (it does not throw). A node stamped with it has no real modification time.
@@ -816,6 +858,47 @@ public record NodeTypeDefinition
     /// very retry this field exists to enable.</para>
     /// </summary>
     public string? FailedBuildInputs { get; init; }
+
+    /// <summary>
+    /// 🚨 The DECLARED SOURCE QUERIES that matched NOTHING when the standing failure verdict was
+    /// formed — the durable answer to "why does this compile name symbols nobody can find?"
+    /// (issue #3903).
+    ///
+    /// <para><b>The hole it closes.</b> <c>SourceSnapshot</c> already refuses to hand Roslyn a
+    /// source set it could not ESTABLISH, because a short set produces completely genuine-looking
+    /// <c>CS0246</c>/<c>CS1061</c> about code that is fine (#1218). But emptiness was measured on
+    /// the MERGED set — the union of every expanded source and test query — so a type that also
+    /// draws on a shared library keeps a non-empty union even when the query for its OWN sources
+    /// matches nothing. Measured on memex.meshweaver.cloud 2026-09-10:
+    /// <c>rbuergi/OperationRequest</c> had been failing since 2026-09-06 with three unresolved
+    /// symbols that are exactly its own three <c>Source/*</c> nodes — which do not exist in that
+    /// partition — while its snapshot held 41 nodes pulled in by five <c>shared=@Store/…</c>
+    /// entries. Nothing named the empty query, so the reader hunted three symbols through module
+    /// surfaces that never carried them.</para>
+    ///
+    /// <para><b>Three shapes, never two</b> — the <c>NodeDiagnosticsOutcome</c> rule that a status
+    /// meaning "nothing was checked" must not be readable as "checked and clean":</para>
+    /// <list type="bullet">
+    ///   <item><c>null</c> — NOT DETERMINED. No failure verdict stands (a success CLEARS this, like
+    ///     <see cref="FailedBuildInputs"/>), or the coverage could not be computed: no established
+    ///     source snapshot, or not one declared entry the offline evaluator could read. It never
+    ///     means "the declared sources were checked and all matched".</item>
+    ///   <item>EMPTY — determined: every evaluable declared source query matched at least one node,
+    ///     so the failure is about the CODE and the diagnostics mean what they say.</item>
+    ///   <item>NON-EMPTY — these declared entries answered and matched nothing, so the compile ran
+    ///     against a set SHORT of what the type declares.</item>
+    /// </list>
+    ///
+    /// <para><b>What it decides.</b> Nothing on its own — it is the REPORT. The re-drive and the
+    /// bake both recompute the coverage against the LIVE source set rather than trusting this
+    /// stamp, so restoring the missing nodes converges on the next pass without anyone clearing a
+    /// field. Entries are stored AS AUTHORED (the <c>name=</c> prefix included), so a reader can
+    /// find the offending line in <see cref="Sources"/> verbatim.</para>
+    ///
+    /// <para>🚨 Runtime state: never author it into a node file. <c>ShippedNodeTypeStateTest</c>
+    /// bans every member whose name starts <c>Failed</c>, and this is one of them.</para>
+    /// </summary>
+    public System.Collections.Immutable.ImmutableList<string>? FailedSourceQueries { get; init; }
 
     /// <summary>
     /// The build-inputs token the in-flight compile was dispatched for, stamped by the RELEASE

@@ -14,6 +14,15 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > authoring lint. §4 below is rewritten accordingly. The floors themselves moved off the retired rc
 > line the day before (MeshWeaver.Plugins#1447 — 42 packages, plus a gate that refuses a new one).
 
+> 📅 **2026-09-12 — the supply side of a candidate changed cadence.** Candidates still appear at every
+> promoted set (phase C arms `<version>`), but the node repositories no longer rebuild per platform
+> build: the per-build `meshweaver-framework-released` wave is off by default (Plugins#1707) and each
+> repo publishes for the newest SEALED set on its own pushes and once a day. Nothing in this page's
+> selection changes — an install still ranks by lineage and takes the newest sealed set its
+> availability + link gates admit (a sealed set of the same line, `Modules:VersionStrictness`
+> `Family`) — but "no bundle yet for this identity" is now the ordinary state for up to a day, not a
+> fault. Full reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 **A version string is a LABEL a human maintains. The CD run number is the ORDER a machine
 produced. The self-updater must rank candidates by the second, because the first can be wrong —
 and when it is wrong, SemVer makes the mistake permanent.**
@@ -240,7 +249,59 @@ the lowest assembly `MeshWeaver.Hosting`, `MeshWeaver.PluginCatalog` and `Memex.
 reference directly. `PlatformReleaseOrderTest.ThePreReleaseLabelIsTextToSemVer_WhichIsWhyTheFloorNeedsItsOwnPredicate`
 pins the boundary so the floor decision is taken knowingly rather than by reusing the update one.
 
-## 5. What this does NOT fix
+## 5. A trigger whose verdict is a foregone conclusion is not a check
+
+**The rate of a check is a property the install must own.** Everything above is about *what* a check
+selects; this is about *when* one happens, and the two failed in the same direction on
+[#3790](https://github.com/Systemorph/MeshWeaver/issues/3790).
+
+The self-updater is event-driven, which is right: `BuildCompletion` ticks once per publication
+**anywhere in the fleet**, and nothing beats an event for latency. But the rate that carries is the
+fleet's build cadence, not anything about this install — and under `UpdatePolicyKind.None` a check
+can act on none of it. Two places in the code already say so:
+
+- `RunOnce` returns `SelfUpdateVerdict.UpdatesDisabled()` **before it lists a single tag**; and
+- `SelfUpdateVerdict.MayRestartAfter` answers `false` for that outcome, so the module-restart half
+  ([#3650](https://github.com/Systemorph/MeshWeaver/issues/3650)) is not taken either.
+
+So the whole effect of such a check is a log line plus a bookkeeping stamp repeating a sentence the
+node already carries. Measured on memex, 2026-09-09 01:30–06:36Z, policy `None`, two replicas:
+
+| | |
+|---|---|
+| `[SelfUpdate] check (BuildCompletion): updates are disabled …` | **158** in 5 h |
+| `[MergeGuard] refused stale/reordered cross-hub write to 'lastCheckedAt'` | 14 |
+| `[UpdateRemote] OWNER_NACK_REENQUEUE … code=Conflict` | 10 |
+| `[UpdateQueue] FAILED path=Admin/UpdatePolicy … elapsedMs=10015` | 2 |
+| `Admin/UpdatePolicy` version | **62,671** |
+
+Two replicas writing one leaf on the same event is a conflict by construction; at event rate it is a
+sustained one, in the update queue that also carries user writes.
+
+`SelfUpdateHostedService.IsDecisionPoint(trigger, policy)` is the rule, and it is a filter on the
+**trigger**, never on the check:
+
+| trigger | paced by | a decision point under `None`? |
+|---|---|---|
+| `BuildCompletion` | the fleet | **no** |
+| `ModuleSetProposed` | the fleet | **no** |
+| `Startup` | this pod | yes — the record must carry the disabled verdict and when this pod established it |
+| `PolicyChange` | an admin | yes — enabling updates must not wait for a publication |
+| `SafetyNet` | this service | yes — `LastCheckedAt` keeps moving on its own period, so a dead checker still reads as stale |
+
+Under any policy that can act, every trigger is a decision point.
+
+🚨 **This is the opposite of the `Where` that #2553 removed, and they are one line apart.** That one
+dropped *every* check under `None`, so an install an administrator had deliberately pinned and an
+install whose updater was broken both left the record empty — indistinguishable, and memex sat three
+builds behind for seven hours in that state. What #3790 stops is only the **repetition**, at a rate
+nobody here chooses, of an answer already on the node. Because the regression that would undo #2553
+is one enum member away, the rule is pinned as a truth table over every trigger × every policy
+(`SelfUpdateChecksOnlyAtDecisionPointsTest.TheDecisionPointRule`), and the integration half is a
+controlled experiment: the same event, pushed through the same seam, is *not* a check under `None`
+and *is* one under `Continuous`.
+
+## 6. What this does NOT fix
 
 - **The withdrawn tags themselves.** Ordering makes them lose; it does not remove them. Measured
   2026-09-08 (`az acr repository show-tags -n meshweaver --repository memex-portal-ai`): **1403 tags,
@@ -251,11 +312,136 @@ pins the boundary so the floor decision is taken knowingly rather than by reusin
   the same action — the ordering's job is to make the slip HARMLESS while its tags are still there.
   🚨 The `_releases/` markers are the same set of labels and are **not** covered by that deletion;
   retention removes a pre-release marker only when the identity it names is collected.
-- **The policy record losing its own policy** under its bookkeeping writes (issue #3542, proposal 3 —
-  settled by #3619 for the clobber, still open for the `[MergeGuard]` refusals).
+- **The policy record losing its own policy** under its bookkeeping writes (issue #3542, proposal 3).
+  Settled by #3619: the framework's own typed write (`Update<UpdatePolicyContent>`) refuses a record
+  it cannot read instead of persisting defaults over it, and all four bookkeeping writes are pinned
+  with positive controls in `UnreadablePolicyRecordIsNotClobberedTest`. 🚨 The `[MergeGuard] refused
+  stale/reordered cross-hub write` lines that accompanied it were a **rate**, not a write shape, and
+  §5 removes the rate. Two replicas may still write the install-scoped stamp — that is deliberate,
+  it describes "this install checked" rather than "this pod checked" — and a refusal of the older of
+  two is the merge guard being RIGHT, not a defect to remove.
 - **"Installed" is what the pod RUNS.** This reads `ShippedReleaseSeed.InstalledPlatformVersion` —
   the injected `MESHWEAVER_PLATFORM_VERSION`, never the record's `LatestAvailableTag`, which after a
   manual roll-back kept naming a version no pod ran.
+
+## 7. A hold nothing can recompute is HISTORY, not the current verdict
+
+§5's consequence, and the one that bit a reader within a day of it landing.
+
+`HeldTag` / `HeldReason` / `HeldAt` are written **only** by `RecordHold`, which runs only when a
+candidate is actually evaluated. `LastCheckedAt` is written by `RecordCheck` on **every** check. Once
+a check can decline to evaluate — which is exactly what §5 made it do — those two clocks separate,
+and nothing in the record says so.
+
+Measured on `memex`, `get @Admin/UpdatePolicy`, 2026-09-09 10:42Z:
+
+```
+heldAt          : 2026-09-07T22:27:17Z
+heldTag         : 3.0.0-ci.8057
+lastCheckedAt   : 2026-09-09T10:41:24Z          <- 36 h later
+lastCheckVerdict: "updates are disabled on this install (Admin/UpdatePolicy = None);
+                   the registry was not listed."
+```
+
+**A frozen verdict beside a fresh timestamp reads as a current one.** Issue #3706 was filed on that
+record: it quoted three module floors as *"holding every self-update on memex forever"*. Those lines
+were computed at 22:27Z on 09-07; [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648) made
+floors advisory at 00:22Z and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651) reduced
+the hold to measured unloadability at 01:10Z the next morning. **The evidence predated its own fix by
+two hours, and the record could not say so.** Of the eleven lines in that `heldReason`, ten are
+advisories under today's rules; the one real blocker is the two-build inconsistency of #3732.
+
+### The distinction, and where it is drawn
+
+`IsHeld(tag)` answers *"is there a hold record for this tag"*. Both readers used it to answer *"is
+this why the install is not moving right now"*. Those are now different questions, so they are
+different methods:
+
+| | asks | true when |
+|---|---|---|
+| `IsHeld(tag)` | is there a record | `HeldTag == tag` |
+| `IsHoldOperative(tag)` | is it a live verdict | …and a poller is running that would clear it |
+
+- **The Updates tab** renders an operative hold as before, and a frozen one as history — *"this is a
+  record, not a current verdict … nothing has re-checked `{tag}` since «date»"*. The `(held «date»)`
+  suffix is dropped with the live framing, because that phrasing reads as an ongoing state.
+- **`PlatformUpdateStatus.Derive`** stops answering `UpdateHeld` off a note nothing can refresh. A
+  **Red combo verification keeps holding** regardless: that is a recorded fact about the build, not a
+  note about the poller — the distinction the surrounding comment already drew, extended to the case
+  it did not anticipate.
+
+🚨 **The record is deliberately NOT cleared when updates are switched off.** The last real evaluation
+is the only diagnostic an operator has *before* turning updates back on; destroying it to avoid
+showing something stale trades a misleading answer for no answer. Only the framing changes — the
+reason is still quoted in full.
+
+## 8. A record naming a package NOBODY publishes — named, never held
+
+§7 explains why #3706's *evidence* was stale. This is the part of #3706 that was real, and it sat on
+the other side of the same reading: memex's install records still named `Plugins/Agent`,
+`Plugins/Skill` and `Plugins/PlatformUI` after those packages had been withdrawn — Agent and Skill
+**deliberately** (`MeshWeaver.Plugins@7afbd745`, *"remove agents and skill package and serve from the
+main ai package"*; the AI engine's `BuiltInAgentProvider` / `BuiltInSkillProvider` are the live
+master). Nothing publishes them, and nothing ever will again.
+
+The gate's answer was **silence**, and silence was wrong in a way that is easy to mistake for right.
+
+### Not holding was already correct
+
+`ReleaseAvailability.IsUpdatable` did not block on them, and must not: a roll cannot conjure a build
+nobody publishes, so waiting for one waits for ever. That is the shape #3706 is named after, and the
+two fixes that produced it — floors advisory ([#3648]), a missing bake a cost rather than a hold
+([#3651]) — are the right ones. **Saying nothing was the defect.**
+
+The consequence is what makes it worth a section: an operator with a stale install record had *no
+signal at all* from the gate, so the only place the package names appeared was a frozen `heldReason`
+— §7's trap. **The absence of a live diagnosis is what sent a reader to a dead one.** A gate that
+correctly declines to hold still owes an account of what it saw.
+
+### What it says now
+
+A required package is reported as an orphan when three things are true at once:
+
+1. its install record names a **module**,
+2. the module set sealed for the target's framework identity **does not carry** it, and
+3. **no generation of it is landed** on this instance.
+
+Together those mean the instance has never had it and the target does not offer it — an assertion
+about the record, not about the release, so the remedy named is the record:
+
+> `Agent: the install record names module MeshWeaver.Agent, which the module set sealed for framework
+> identity s8055 does not carry, and no generation of it is landed on this instance — so no publisher
+> produces it and no roll can obtain it. Reported, never a hold: holding would wait for ever. If the
+> package is genuinely retired, remove its install record; if it moved, the record must name its new
+> home.`
+
+### The three neighbours it must not swallow
+
+Each is a different absence with a different remedy, and each has a test:
+
+| state | told apart by | remedy |
+|---|---|---|
+| **Orphan** — nobody publishes it | nothing landed, not in the sealed set | fix the **record** |
+| **Landed but unpublished for the target** | something *is* landed | the **link probe** measures the bytes; may legitimately hold |
+| **Content with no bake** | no module to look for | reported as *"would recompile at boot"*; fix the **bake** |
+| **Set unreadable / unobserved** | `SealedModuleSet` null or carrying a `Refusal` | say **nothing** — see below |
+
+🚨 **The fourth row is the one that keeps the other three honest.** A module set that could not be
+read means the module was never *looked for*, and "we did not look" must never be worded as "it does
+not exist" — the conflation [#1754] forbids one severity up. An advisory that fired on an unmeasured
+set would be a confident sentence about evidence nobody gathered, and it would fire hardest exactly
+when the observation infrastructure is broken. Unmeasured stays silent here and is reported by the
+paths that own it.
+
+### The general rule
+
+> A gate that is right not to hold still owes you what it saw. "Did not block" and "found nothing
+> worth mentioning" must not render identically, or the only remaining account of the problem is
+> whatever stale field happens to mention it.
+
+[#1754]: https://github.com/Systemorph/MeshWeaver/issues/1754
+[#3648]: https://github.com/Systemorph/MeshWeaver/issues/3648
+[#3651]: https://github.com/Systemorph/MeshWeaver/issues/3651
 
 ## Where it lives
 
@@ -264,7 +450,8 @@ pins the boundary so the floor decision is taken knowingly rather than by reusin
   (`Newest`), in the lowest assembly all of them reach.
 - `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` — the tag-shape filters, the policy,
   `CheckInstalledTag` and `SelectCandidates`. Pure; no hub, no registry, no Rx.
-- `memex/Memex.Portal.Shared/SelfUpdate/SelfUpdateHostedService.cs` — `RunOnce` / `NothingToRoll`.
+- `memex/Memex.Portal.Shared/SelfUpdate/SelfUpdateHostedService.cs` — `RunOnce` / `NothingToRoll`,
+  and `IsDecisionPoint` (§5).
 - `src/MeshWeaver.Hosting/SealedPublicationIndex.cs` — identity → its newest published version.
 - `src/MeshWeaver.Hosting/ShippedPrebuiltBundles.cs` — which sealed publication a tolerant adoption
   takes (`Modules:VersionStrictness`, [Module Versioning](/Doc/Architecture/ModuleVersioning)).
@@ -275,6 +462,15 @@ pins the boundary so the floor decision is taken knowingly rather than by reusin
   sweep, each in both directions.
 - `test/Memex.Portal.Shared.Test/VersionSelectTest.cs` — the ordering and the three-valued check.
 - `test/Memex.Portal.Shared.Test/SelfUpdateStrandRecoveryTest.cs` — the poller, against a real mesh.
+- `test/Memex.Portal.Shared.Test/SelfUpdateChecksOnlyAtDecisionPointsTest.cs` — §5's truth table,
+  and the same event under two policies.
+- `test/Memex.Portal.Shared.Test/FrozenHoldIsHistoryTest.cs` — §7: both framings on the tab, both
+  answers on the About surface, and the Red-verdict positive control that must keep holding.
+- `src/MeshWeaver.PluginCatalog/ReleaseAvailability.cs` — `ModuleLane`, §8's three conditions and the
+  unmeasured-set guard.
+- `test/Memex.Portal.Shared.Test/OrphanedPackageRecordTest.cs` — §8: the orphan named without
+  holding, the floor advisory that must keep riding beside it, each neighbouring absence kept
+  distinct, and the unreadable-set control that stops the advisory becoming unconditional.
 
 ## Related
 

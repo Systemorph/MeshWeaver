@@ -28,6 +28,15 @@ Ratcheting allowlist (`scripts/compile-check.allow`): the tree carries KNOWN UWD
 debt. An allowlisted type that still fails is reported as known-debt (no gate fail); one that now
 compiles clean FAILS the gate ("remove it — it compiles now") so debt only ever shrinks. A
 NON-allowlisted failure fails the gate — a real regression. Exit non-zero iff any gate-fail.
+
+Scope (`--modules A,B,C`): compile ONLY the NodeTypes of the named packages (top-level folders).
+The compile was always atomic — every type resolves its own declared source set and builds alone —
+but the SELECTION was not: a pull request compiled all 92 NodeTypes of MeshWeaver.Plugins for a
+one-package diff ("we wanted to disentangle in atomic units", maintainer, 2026-09-11). The caller
+(the repo's CI) decides the unit from `affected-modules.py`; this flag is the per-unit mechanism.
+An unknown id and an empty list are both RED — a scoped run that silently compiled nothing would
+render exactly like a green gate. The allow-file ratchet is evaluated over the selected set ONLY:
+an allowlisted type outside the scope was not compiled, so it is neither "now compiles" nor a ghost.
 """
 import argparse
 import glob
@@ -119,6 +128,98 @@ def discover_nodetypes(root: Path):
             if is_nodetype(node):
                 out.append((f, node))
     return out
+
+
+# ── scope: the atomic unit the caller asks for ───────────────────────────────────────────────────
+
+def known_packages(root: Path) -> list:
+    """Every PACKAGE: a top-level folder carrying an `index.json` — the node-repo package
+    convention (`node-repo-scope.py`, `affected-modules.py`), NOT every non-SKIP folder
+    `discover_nodetypes` walks. A checkout also carries `clients/`, `tools/`, `devtools/` … and
+    accepting one of those as "known" would let a caller name a non-package, compile zero
+    NodeTypes and read a green verdict (Copilot on MeshWeaver#4052)."""
+    return sorted(d.name for d in root.iterdir()
+                  if d.is_dir() and d.name not in SKIP and (d / "index.json").is_file())
+
+
+def parse_modules(arg: "str | None", known) -> tuple:
+    """Turn `--modules A,B,C` into (sorted selected ids | None for full, error | None).
+
+    🚨 Two refusals, both on purpose. An EMPTY list (`--modules ''`, `--modules ,`) is not "compile
+    nothing" — a caller whose selection step produced no ids has a broken selector, and a green
+    verdict over zero types is indistinguishable from a green verdict over the unit. An UNKNOWN id
+    is refused by name: the ids come from another script's output, so a typo, a renamed package or
+    a package deleted on the branch under test would otherwise silently narrow the unit to whatever
+    else was in the list."""
+    if arg is None:
+        return None, None
+    ids = [p.strip() for p in arg.split(",")]
+    ids = [p for p in ids if p]
+    if not ids:
+        return None, ("--modules names no package — an empty selection is a broken selector, "
+                      "not 'nothing to compile'. Pass the unit's package ids, or omit the flag "
+                      "for a full run.")
+    known_set = set(known)
+    unknown = sorted(set(ids) - known_set)
+    if unknown:
+        return None, (f"--modules names {len(unknown)} unknown package(s): {', '.join(unknown)} "
+                      f"— not a top-level node repo folder under {ROOT} "
+                      f"(known: {', '.join(known) or '(none)'})")
+    return sorted(set(ids)), None
+
+
+def package_of(name: str) -> str:
+    """The package (top-level folder) a node path or allow-file entry belongs to."""
+    return name.split("/", 1)[0]
+
+
+def in_scope(types, selected) -> list:
+    """The discovered (json_path, node) pairs whose package is selected; all of them for None."""
+    if selected is None:
+        return list(types)
+    sel = set(selected)
+    return [(p, n) for p, n in types if package_of(p.relative_to(ROOT).as_posix()) in sel]
+
+
+def scope_allow(allow: dict, selected) -> dict:
+    """The allow-file entries the ratchet may judge on this run: only those inside the scope.
+
+    An out-of-scope entry was NOT compiled here, so it can be neither reported as "now compiles —
+    remove it" (it was never built) nor as a ghost (its type was never discovered). Judging it
+    would make every narrowed leg red on debt that belongs to another unit."""
+    if selected is None:
+        return dict(allow)
+    sel = set(selected)
+    return {n: fp for n, fp in allow.items() if package_of(n) in sel}
+
+
+def evaluate_gate(result: dict, allow: dict, node_set: dict) -> dict:
+    """The ratchet, as a pure function of (what compiled, what is allowlisted, what was discovered).
+
+    `result`   node-path -> (status, errors) for every type that was compiled on THIS run;
+    `allow`    the allow-file entries ALREADY scoped to this run (see `scope_allow`);
+    `node_set` node-path -> source set for every type discovered on this run."""
+    clean = sorted(n for n, (st, _) in result.items() if st == "ok")
+    unverifiable = sorted(n for n, (st, _) in result.items() if st == "unverifiable")
+    failing = {n for n, (st, _) in result.items() if st == "fail"}
+    allow_names = set(allow)
+    new_breaks = sorted(failing - allow_names)
+    # allowlisted-and-still-failing: split into genuine known-debt (fingerprint matches) vs.
+    # fingerprint-drift (allowlisted, but a NEW/changed error the entry does not cover → gate FAIL).
+    known_debt, fp_drift = [], []
+    for n in sorted(failing & allow_names):
+        cur_fp = failure_fingerprint(result[n][1])
+        exp_fp = allow[n]
+        if exp_fp is not None and cur_fp != exp_fp:
+            fp_drift.append((n, exp_fp, cur_fp))
+        else:
+            known_debt.append(n)
+    stale_allow = sorted(n for n in allow_names if result.get(n, (None,))[0] == "ok")
+    # allowlisted types that vanished from discovery (renamed/removed) — warn, don't gate
+    ghosts = sorted(n for n in allow if n not in node_set)
+    return {"clean": clean, "unverifiable": unverifiable, "failing": sorted(failing),
+            "new_breaks": new_breaks, "known_debt": known_debt, "fp_drift": fp_drift,
+            "stale_allow": stale_allow, "ghosts": ghosts}
 
 
 # ── source resolution (mirror the mesh's three source queries) ─────────────────────────────────────
@@ -421,6 +522,68 @@ def discover_refs(refs_arg):
     # CS0246 'MeshWeaver' could not be found (green locally with an ABSOLUTE --refs, red in CI). The
     # source .cs files are already resolve()d (see collect); do the same for refs.
     return {n: os.path.abspath(p) for n, (p, _) in seen.items()}, search_roots
+
+
+# 🚨 THE MODULE ASSEMBLIES THAT LEFT THE PLATFORM IMAGE. These three are registry-served, so the
+# pinned image's `/app` does NOT carry them any more (MeshWeaver#2276 moved MeshWeaver.AI out,
+# #3175 made Markdown.Collaboration single-producer, and Maps followed). CI tops the reference set
+# up from THIS run's module bundles and then asserts each one is present, because the failure mode
+# is a misdirection: every NodeType binding a missing module fails with CS0246/CS0103 naming the
+# CONTENT, which reads exactly like this repo breaking.
+#
+# Nothing did that locally, so `--image` — documented as "what CI uses and what actually ships" —
+# reported 15 phantom breaks on a pristine checkout of a green `main` (AppleMaps/Gallery,
+# Collaboration/Review, Cornerstone/Pricing, Edu/PromptCell, GoogleMaps/Gallery, Hosting/Backup,
+# Hosting/Deployment, Hosting/FleetConsole, Hosting/InstanceAction, Hosting/InstanceRequest,
+# Hosting/PlatformBuildInbox, MyAi/Panel, OpenStreetMap/Gallery, Providers/ProvidersApp,
+# RolePlay/Story). A gate that is red on green main is a gate people learn to ignore.
+MODULE_REFS_NOT_IN_IMAGE = ("MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration", "MeshWeaver.Maps")
+
+
+def discover_module_refs(search_roots, include_repo_build: bool = True):
+    """Locate the MODULE assemblies that are no longer in the platform image. CI supplies them in
+       the flat `--refs` dir (unpacked from the run's module bundles); locally they come from this
+       repo's own `src/<Module>/bin/{Release,Debug}/net10.0/`, since all three are built HERE.
+       Returns {name.dll: abspath} for whatever was found — the caller decides what a miss means.
+       Prefers Release over Debug, and the newest file within a tier.
+
+       `include_repo_build=False` restricts the search to `search_roots`, so the result is a
+       function of the argument alone — what the self-test needs to prove the guard can fire on a
+       short reference set even on a machine whose src/ HAS been built."""
+    found = {}   # name -> (path, release, mtime)
+
+    def consider(dll, release):
+        n = os.path.basename(dll)
+        if os.path.splitext(n)[0] not in MODULE_REFS_NOT_IN_IMAGE:
+            return
+        try:
+            mt = os.path.getmtime(dll)
+        except OSError:
+            return
+        cur = found.get(n)
+        if cur is None or (release and not cur[1]) or (release == cur[1] and mt > cur[2]):
+            found[n] = (dll, release, mt)
+
+    # This repo's own build output first — the three projects live in src/ here.
+    if include_repo_build:
+        for name in MODULE_REFS_NOT_IN_IMAGE:
+            for cfg in ("Release", "Debug"):
+                for dll in glob.glob(str(ROOT / "src" / name / "bin" / cfg / "net10.0" / f"{name}.dll")):
+                    consider(dll, cfg == "Release")
+    # …then anything the reference roots already carry (CI's flat dir, a sibling checkout's bins).
+    for root in search_roots:
+        if not root:
+            continue
+        root = Path(root)
+        for name in MODULE_REFS_NOT_IN_IMAGE:
+            for dll in glob.glob(str(root / f"{name}.dll")):
+                consider(dll, True)
+            for cfg in ("Release", "Debug"):
+                for dll in glob.glob(str(root / "**" / "bin" / cfg / "net10.0" / f"{name}.dll"),
+                                     recursive=True):
+                    consider(dll, cfg == "Release")
+    # Absolutize — these become <HintPath>s in a csproj that `dotnet build` runs from a TEMP dir.
+    return {n: os.path.abspath(p) for n, (p, _, _) in found.items()}
 
 
 def discover_ai_refs(search_roots):
@@ -755,11 +918,134 @@ def _self_test() -> int:
         if not is_reference_assembly(os.path.join(flat, "System.Text.Json.dll")):
             failures.append("  is_reference_assembly refused the real System.Text.Json.dll")
 
+    # 🚨 THE MODULE-REFS GUARD MUST BE ABLE TO FIRE. Its whole job is to refuse a run whose
+    # reference set is short, so a guard that silently finds nothing to complain about reads
+    # exactly like a complete reference set — the failure this gate exists to stop being
+    # misreported. Assert both directions against a temp tree, with no build output anywhere.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        empty = Path(tmp) / "empty"
+        empty.mkdir()
+        found = discover_module_refs([str(empty)], include_repo_build=False)
+        if found:
+            failures.append(f"  module-refs discovery found {sorted(found)} under an EMPTY root")
+        stocked = Path(tmp) / "refs"
+        stocked.mkdir()
+        for name in MODULE_REFS_NOT_IN_IMAGE:
+            (stocked / f"{name}.dll").write_bytes(b"")
+        # A decoy that is NOT one of the three must never be collected.
+        (stocked / "MeshWeaver.Layout.dll").write_bytes(b"")
+        found = discover_module_refs([str(stocked)], include_repo_build=False)
+        if sorted(found) != sorted(f"{m}.dll" for m in MODULE_REFS_NOT_IN_IMAGE):
+            failures.append(f"  module-refs discovery returned {sorted(found)}, "
+                            f"expected exactly {sorted(f'{m}.dll' for m in MODULE_REFS_NOT_IN_IMAGE)}")
+        # Every name must be absolute — a relative HintPath resolves against dotnet's temp dir and
+        # RAR drops the reference silently (the whole reason discover_refs absolutizes too).
+        if any(not os.path.isabs(v) for v in found.values()):
+            failures.append("  module-refs discovery returned a RELATIVE path")
+
+
+    # 🚨 THE SCOPE MUST SELECT EXACTLY THE UNIT AND REFUSE EVERYTHING ELSE. `--modules` turns
+    # one full run into one leg per atomic unit (Plugins CI, 2026-09-11), and every failure mode
+    # of a narrowing is silent: a leg that compiled nothing, a typo that dropped a package, or a
+    # ratchet that reds the leg on another unit's debt all render as verdicts. Asserted over a
+    # fixture tree with no dotnet — pure selection and gate arithmetic.
+    scope_failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        fixture = Path(tmp)
+        for pkg, ntypes in (("Alpha", ("One", "Two")), ("Beta", ("Three",)), ("Gamma", ())):
+            (fixture / pkg).mkdir()
+            (fixture / pkg / "index.json").write_text('{"content": {"$type": "PluginContent"}}',
+                                                     encoding="utf-8")
+            for t in ntypes:
+                (fixture / pkg / f"{t}.json").write_text(
+                    '{"content": {"$type": "NodeTypeDefinition"}}', encoding="utf-8")
+        (fixture / "scripts").mkdir()          # a SKIP dir is never a package
+        # A non-package folder a checkout carries anyway (clients/, tools/, devtools/): it has no
+        # index.json, so it is not a package even though discovery walks it — and naming it must
+        # be refused, or an empty unit reads as a green verdict.
+        (fixture / "clients").mkdir()
+        (fixture / "clients" / "Stray.json").write_text(
+            '{"content": {"$type": "NodeTypeDefinition"}}', encoding="utf-8")
+        global ROOT
+        saved_root = ROOT
+        ROOT = fixture
+        try:
+            pkgs = known_packages(fixture)
+            if pkgs != ["Alpha", "Beta", "Gamma"]:
+                scope_failures.append(f"  known_packages = {pkgs!r}, expected Alpha/Beta/Gamma")
+            types = discover_nodetypes(fixture)
+            names = lambda ts: sorted(p.relative_to(fixture).as_posix() for p, _ in ts)
+            # a subset selects ONLY those packages
+            sel, err = parse_modules("Beta,Alpha", pkgs)
+            if err or sel != ["Alpha", "Beta"]:
+                scope_failures.append(f"  subset: parse_modules -> ({sel!r}, {err!r})")
+            if names(in_scope(types, ["Alpha"])) != ["Alpha/One.json", "Alpha/Two.json"]:
+                scope_failures.append(f"  subset: in_scope(Alpha) = {names(in_scope(types, ['Alpha']))!r}")
+            if names(in_scope(types, ["Gamma"])) != []:
+                scope_failures.append("  subset: a package with no NodeTypes must select zero, not error")
+            if names(in_scope(types, None)) != names(types):
+                scope_failures.append("  full: in_scope(None) must be every discovered type")
+            # an unknown id is refused BY NAME
+            sel, err = parse_modules("Alpha,Zeta", pkgs)
+            if sel is not None or not err or "Zeta" not in err:
+                scope_failures.append(f"  unknown id: expected a refusal naming Zeta, got ({sel!r}, {err!r})")
+            sel, err = parse_modules("scripts", pkgs)
+            if sel is not None or not err:
+                scope_failures.append("  unknown id: a SKIP dir must not be selectable as a package")
+            sel, err = parse_modules("clients", pkgs)
+            if sel is not None or not err or "clients" not in err:
+                scope_failures.append("  unknown id: a folder with no index.json is not a package, "
+                                      f"even though discovery walks it — got ({sel!r}, {err!r})")
+            # an empty list is refused — never 'compile nothing' silently
+            for empty in ("", ",", " , "):
+                sel, err = parse_modules(empty, pkgs)
+                if sel is not None or not err:
+                    scope_failures.append(f"  empty: {empty!r} must be refused, got ({sel!r}, {err!r})")
+            if parse_modules(None, pkgs) != (None, None):
+                scope_failures.append("  omitted flag must mean a full run")
+            # the ratchet ignores out-of-scope allow entries in BOTH directions
+            allow = {"Alpha/One": "CS0246:1", "Beta/Three": "CS0246:1", "Gamma/Gone": None}
+            scoped = scope_allow(allow, ["Alpha"])
+            if set(scoped) != {"Alpha/One"}:
+                scope_failures.append(f"  scope_allow(Alpha) = {sorted(scoped)!r}, expected Alpha/One only")
+            if scope_allow(allow, None) != allow:
+                scope_failures.append("  scope_allow(None) must keep every entry")
+            # Alpha's leg: Alpha/One now compiles → stale (ratchet reds it); Beta/Three's entry is
+            # outside the scope → neither stale nor ghost; Gamma/Gone → not a ghost here either.
+            result = {"Alpha/One": ("ok", []), "Alpha/Two": ("ok", [])}
+            node_set = {"Alpha/One": frozenset(), "Alpha/Two": frozenset()}
+            v = evaluate_gate(result, scoped, node_set)
+            if v["stale_allow"] != ["Alpha/One"] or v["ghosts"] or v["new_breaks"] or v["known_debt"]:
+                scope_failures.append(f"  ratchet in scope: {v!r}")
+            # Beta's leg, still failing with the pinned fingerprint → known debt, nothing red.
+            v = evaluate_gate({"Beta/Three": ("fail", ["CS0246: x"])}, scope_allow(allow, ["Beta"]),
+                              {"Beta/Three": frozenset()})
+            if v["known_debt"] != ["Beta/Three"] or v["stale_allow"] or v["ghosts"] or v["new_breaks"]:
+                scope_failures.append(f"  ratchet known-debt: {v!r}")
+            # …and a changed error inside an allowlisted type is drift, a new type is a break.
+            v = evaluate_gate({"Beta/Three": ("fail", ["CS0246: x", "CS0103: y"]),
+                               "Beta/Four": ("fail", ["CS0246: z"])},
+                              scope_allow(allow, ["Beta"]), {"Beta/Three": frozenset(), "Beta/Four": frozenset()})
+            if [d[0] for d in v["fp_drift"]] != ["Beta/Three"] or v["new_breaks"] != ["Beta/Four"]:
+                scope_failures.append(f"  ratchet drift/break: {v!r}")
+            # The FULL run still sees the whole allow-file — Gamma/Gone is a ghost there.
+            v = evaluate_gate(result, scope_allow(allow, None), node_set)
+            if v["ghosts"] != ["Beta/Three", "Gamma/Gone"]:
+                scope_failures.append(f"  full-run ghosts: {v['ghosts']!r}")
+        finally:
+            ROOT = saved_root
+    failures.extend(scope_failures)
+
     if failures:
         print("✗ using-directive parser self-test FAILED:")
         print("\n".join(failures))
         return 1
     print(f"✓ using-directive parser: {len(cases)} shape(s) OK")
+    print(f"✓ module-refs guard: detects a short reference set, collects exactly "
+          f"{len(MODULE_REFS_NOT_IN_IMAGE)} registry-served assemblies, absolutized")
+    print("✓ --modules scope: a subset selects only its packages, an unknown id and an empty list "
+          "are refused, the ratchet judges the unit's allow entries only")
     return 0
 
 
@@ -774,10 +1060,26 @@ def main() -> int:
                     help="check the using-directive parser against its known shapes and exit")
     ap.add_argument("--gen-allow", action="store_true",
                     help="regenerate scripts/compile-check.allow from the current failures")
+    ap.add_argument("--modules", metavar="A,B,C",
+                    help="compile ONLY the NodeTypes of these packages (top-level folders) — the "
+                         "atomic unit the caller selected; the allow-file ratchet is judged over "
+                         "them alone. An unknown id or an empty list is RED. Omit for a full run.")
     args = ap.parse_args()
 
     if args.self_test:
         return _self_test()
+
+    # Resolve the scope BEFORE touching the reference set: a broken selection must be refused in
+    # milliseconds and by name, not after an image pull.
+    packages = known_packages(ROOT)
+    selected, scope_error = parse_modules(args.modules, packages)
+    if scope_error:
+        print(f"error: {scope_error}")
+        return 1
+    if selected is None:
+        print(f"scope: full — every NodeType in all {len(packages)} package(s)")
+    else:
+        print(f"scope: {len(selected)} of {len(packages)} package(s) — {', '.join(selected)}")
 
     refs_arg = args.refs
     if args.image:
@@ -805,6 +1107,33 @@ def main() -> int:
     # be found, ai_available stays False and those sets fall back to UNVERIFIABLE (AI-only errors).
     ai_refs = discover_ai_refs(ref_roots)
     refs.update(ai_refs)            # AI names aren't in the core src set, so this never clobbers
+    # 🚨 The registry-served modules the image no longer carries. CI unpacks them from this run's
+    # bundles into the flat --refs dir; locally they come from src/<Module>/bin. Either way they
+    # must be PRESENT, because their absence does not look like an absence — it looks like fifteen
+    # NodeTypes breaking (see MODULE_REFS_NOT_IN_IMAGE). Refuse with the real cause instead.
+    module_refs = discover_module_refs(ref_roots)
+    for name, path in module_refs.items():
+        refs.setdefault(name, path)   # never clobber a copy the reference set already carries
+    missing_modules = [m for m in MODULE_REFS_NOT_IN_IMAGE if f"{m}.dll" not in refs]
+    if missing_modules:
+        print("\nerror: the reference set is missing "
+              f"{len(missing_modules)} module assembl{'y' if len(missing_modules) == 1 else 'ies'} "
+              "that the platform image no longer ships:\n"
+              + "".join(f"    {m}.dll\n" for m in missing_modules)
+              + "  These are registry-served (MeshWeaver#2276 / #3175), so `/app` does not carry\n"
+                "  them and --image alone cannot supply them. Every NodeType that binds one fails\n"
+                "  with CS0246/CS0103 naming the CONTENT — which reads as this repo breaking when\n"
+                "  the real fault is a short reference set. Refusing to report those as breaks.\n"
+                "\n  Build them once, then re-run this command:\n"
+              + "".join(
+                  f"    dotnet build src/{m} -c Release -p:MeshWeaverRoot=$HOME/code/MeshWeaver/\n"
+                  for m in missing_modules)
+              + "  (CI needs none of this: it unpacks the same assemblies from the run's module\n"
+                "  bundles and asserts each one — .github/workflows/ci.yml, 'Compile-check every\n"
+                "  NodeType'.)")
+        return 1
+    print(f"module refs: {len(MODULE_REFS_NOT_IN_IMAGE)} registry-served assembl(ies) present "
+          + ", ".join(sorted(MODULE_REFS_NOT_IN_IMAGE)))
     ai_available = bool(ai_refs)
     ref_xml = "\n".join(
         f'    <Reference Include="{os.path.splitext(n)[0]}"><HintPath>{p}</HintPath></Reference>'
@@ -817,7 +1146,11 @@ def main() -> int:
         print("mode: IMPLEMENTATION frameworks — compiling against the image's own assemblies "
               "(no SDK ref pack), exactly as the mesh compiles a NodeType")
 
-    types = discover_nodetypes(ROOT)
+    all_types = discover_nodetypes(ROOT)
+    types = in_scope(all_types, selected)
+    if selected is not None:
+        print(f"scope: {len(types)} of {len(all_types)} discovered NodeType(s) are in the unit; "
+              f"{len(all_types) - len(types)} outside it are not compiled here")
     # Group by (resolved source set, configuration lambda). The lambda is part of the KEY, not just
     # of the payload: two NodeTypes can share a source set while carrying different lambdas, and one
     # compile can only prove the lambda it actually contains. Types that share BOTH still collapse to
@@ -897,14 +1230,22 @@ def main() -> int:
         result[name] = ("fail", [f"no resolvable source: {reason}"])
         print(f"  [--] {'FAIL':12} {name}    no resolvable source: {reason}")
 
-    allow = read_allow()
+    allow_all = read_allow()
+    allow = scope_allow(allow_all, selected)
+    if selected is not None and len(allow) != len(allow_all):
+        print(f"\nallow: {len(allow)} of {len(allow_all)} entr(ies) are inside the unit; the other "
+              f"{len(allow_all) - len(allow)} belong to packages not compiled here and are not judged")
 
     # ── gate evaluation ──
-    clean = [n for n, (st, _) in result.items() if st == "ok"]
-    unverifiable = [n for n, (st, _) in result.items() if st == "unverifiable"]
     failing = {n for n, (st, _) in result.items() if st == "fail"}
 
     if args.gen_allow:
+        if selected is not None:
+            # A regenerated allow-file describes the WHOLE tree; a scoped run has only seen part
+            # of it and would silently drop every other unit's debt from the ratchet.
+            print("error: --gen-allow needs a full run — it rewrites the allow-file for every "
+                  "package, and a scoped run has not compiled the others. Drop --modules.")
+            return 1
         lines = [
             "# compile-check.allow — the compile-debt backlog (RATCHET: must only ever SHRINK).",
             "#",
@@ -941,19 +1282,10 @@ def main() -> int:
         print(f"\nwrote {ALLOW_FILE.relative_to(ROOT)} with {len(failing)} known-broken type(s).")
         return 0
 
-    allow_names = set(allow)
-    new_breaks = sorted(failing - allow_names)
-    # allowlisted-and-still-failing: split into genuine known-debt (fingerprint matches) vs.
-    # fingerprint-drift (allowlisted, but a NEW/changed error the entry does not cover → gate FAIL).
-    known_debt, fp_drift = [], []
-    for n in sorted(failing & allow_names):
-        cur_fp = failure_fingerprint(result[n][1])
-        exp_fp = allow[n]
-        if exp_fp is not None and cur_fp != exp_fp:
-            fp_drift.append((n, exp_fp, cur_fp))
-        else:
-            known_debt.append(n)
-    stale_allow = sorted(n for n in allow_names if result.get(n, (None,))[0] == "ok")
+    verdict = evaluate_gate(result, allow, node_set)
+    clean, unverifiable = verdict["clean"], verdict["unverifiable"]
+    new_breaks, fp_drift = verdict["new_breaks"], verdict["fp_drift"]
+    known_debt, stale_allow, ghosts = verdict["known_debt"], verdict["stale_allow"], verdict["ghosts"]
 
     print(f"\n── summary ──  {len(clean)} clean · {len(known_debt)} known-debt · "
           f"{len(new_breaks)} NEW break(s) · {len(fp_drift)} fingerprint-drift · "
@@ -993,14 +1325,13 @@ def main() -> int:
         for n in unverifiable:
             print(f"  - {n}")
 
-    # allowlisted types that vanished from discovery (renamed/removed) — warn, don't gate
-    ghosts = sorted(n for n in allow if n not in node_set)
     if ghosts:
         print(f"\n⚠ {len(ghosts)} allowlisted type(s) no longer exist (clean up allow): "
               + ", ".join(ghosts))
 
     if not gate_fail:
-        print(f"\n✓ compile gate GREEN: {len(clean)} clean, {len(known_debt)} known-debt "
+        unit = "full tree" if selected is None else f"unit {', '.join(selected)}"
+        print(f"\n✓ compile gate GREEN ({unit}): {len(clean)} clean, {len(known_debt)} known-debt "
               f"(shrinking), no new breaks.")
     return 1 if gate_fail else 0
 

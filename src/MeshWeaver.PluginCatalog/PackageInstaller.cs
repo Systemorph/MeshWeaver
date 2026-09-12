@@ -105,8 +105,95 @@ public static class PackageInstaller
         // the other, and a licence that asks nothing costs a single null check.
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, logger)
             .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, logger))
-            .SelectMany(_ => InstallCore(
-                hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId));
+            .SelectMany(_ => HoldRootDuringInstall(hub, manifest, InstallCore(
+                hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId)));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The sentence a deferred recycle prints when it names who is holding the root</b>
+    /// (#3510). Pure, so it is pinned without a mesh, and deliberately not an anonymous string
+    /// literal: the whole point of the lease is that a recycle which waits SAYS what it is waiting
+    /// for, and a holder with no name reads to the next person as no holder at all.
+    /// </summary>
+    /// <param name="manifest">The package being installed.</param>
+    /// <returns>The phrase carried on the lease.</returns>
+    internal static string InstallLeaseHolder(PackageManifest manifest) =>
+        $"PackageInstaller: the install of package '{manifest.Id}' is writing under this root";
+
+    /// <summary>
+    /// 🚨 <b>The root an install actually writes under — the ONE definition, because the three
+    /// kinds do not agree and the lease has to name the same partition the writes land in
+    /// (#3510).</b>
+    ///
+    /// <para><b>Why this is not <see cref="TargetPartitionOf"/>.</b> That method answers a
+    /// different question — which partition an install RECORD is about — and its fallback is the
+    /// record id. <see cref="InstallCode"/>'s fallback is the shared <c>type</c> partition, so a
+    /// Code package that declares no <c>targetPartition</c> writes <c>type/&lt;id&gt;</c> while a
+    /// lease keyed on the record id would hold <c>&lt;id&gt;</c> — a lease on a root nothing is
+    /// writing to, leaving the root that IS being written freely recyclable. A lease that names the
+    /// wrong root is worse than no lease: it reads, in the log and in every test, exactly like a
+    /// lease that is working.</para>
+    ///
+    /// <para>Content and node-repo installs both write under
+    /// <c>TargetPartition ?? Id</c> (<see cref="InstallCore"/> refuses a Content package with no
+    /// target outright, so the fallback there is unreachable rather than wrong).</para>
+    /// </summary>
+    /// <param name="manifest">The package being installed.</param>
+    /// <returns>The partition root this install writes under.</returns>
+    internal static string InstallRootOf(PackageManifest manifest) =>
+        !string.IsNullOrWhiteSpace(manifest.TargetPartition)
+            ? manifest.TargetPartition!
+            : manifest.Kind == PackageKind.Code
+                ? CodeDefaultPartition
+                : manifest.Id;
+
+    /// <summary>The partition <see cref="InstallCode"/> writes a Code package's NodeType into when
+    /// the manifest declares no <c>targetPartition</c>. Named once so
+    /// <see cref="InstallRootOf"/> and the install itself cannot drift.</summary>
+    internal const string CodeDefaultPartition = "type";
+
+    /// <summary>
+    /// 🚨 <b>Holds the package's root for exactly as long as the install runs (#3510) — so nothing
+    /// else recycles it out from under the writes in flight beneath it.</b>
+    ///
+    /// <para><b>The defect.</b> The <c>Hosting</c> root's hub was torn down while <c>Hosting</c>'s
+    /// own 145-file install was in flight. Its per-node children went with it, the writes those
+    /// children owed acks for were stranded (<c>ADVANCE_WITHOUT_HANDOFF … the owner never
+    /// acknowledged this write</c>), the <c>nodeops</c> handler that owed its reply to one of those
+    /// acks never replied, and the install ran out the gate's ten-minute bound — six occurrences,
+    /// four lost bake seals. <i>The install is the writer that should own the root's lifetime.</i></para>
+    ///
+    /// <para>🚨 <b>Why the lease is released on EVERY ending, and why that matters more than the
+    /// hold.</b> The hold is taken through <c>Observable.Using</c>, so the handle is disposed on
+    /// OnCompleted, on OnError, <b>and</b> on unsubscribe — the complete set of ways an Rx
+    /// subscription can end. A failed install releases; an install whose caller gives up releases;
+    /// the mesh going down takes the whole registry with it. There is deliberately NO timer that
+    /// force-releases a lease: "defer" has to mean <i>wait for a state that always arrives</i>, and
+    /// a clock would hand the recycle back the very race the lease removes.</para>
+    ///
+    /// <para>🚨 <b>Wrapped OUTSIDE the two gates, not inside.</b> An install refused by
+    /// <see cref="PackageEntitlement"/> or <see cref="LicenseAcceptanceGate"/> writes nothing, so
+    /// it must hold nothing — but because the wrap is around <c>InstallCore</c> only, a refusal
+    /// short-circuits before the resource is ever acquired rather than taking and dropping a
+    /// lease.</para>
+    ///
+    /// <para>🚨 <b>The installer's OWN recycle is not deferred against this lease, and must not
+    /// be.</b> <see cref="SettleRetypedRoot"/> is the holder: its recycle is the install's own
+    /// ordered act, placed between the two <c>RequestReleases</c> waves because the deferred wave's
+    /// compiles read a root that must already be bound to the package's own type (#1732), and it
+    /// WAITS for the root to answer again before the install proceeds. A holder deferring against
+    /// its own lease is a deadlock. What the lease removes is the SECOND, unordered teardown —
+    /// <c>NodeTypeRebindWatcher</c> firing on the placeholder retype this very install performed,
+    /// or any other party recycling the root mid-flight.</para>
+    /// </summary>
+    private static IObservable<InstallResult> HoldRootDuringInstall(
+        IMessageHub hub, PackageManifest manifest, IObservable<InstallResult> install)
+    {
+        var leases = hub.ServiceProvider.GetService<PackageRootInstallLeases>();
+        return leases is null
+            ? install
+            : leases.HoldDuring(
+                InstallRootOf(manifest), InstallLeaseHolder(manifest), install);
     }
 
     private static IObservable<InstallResult> InstallCore(
@@ -1562,11 +1649,84 @@ public static class PackageInstaller
     /// skipped), and it WAITS for the root to answer before the install proceeds. Called only when
     /// the placeholder dance actually ran, i.e. when there is a placeholder binding to replace.</para>
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>Why this install would NOT recycle its root, or <c>null</c> when it should — pure, so
+    /// the rule is pinned without a mesh (#3510).</b>
+    ///
+    /// <para>The recycle exists for exactly one purpose: after the root's in-package NodeType has
+    /// been REBUILT, tear the root down so the hub that comes back binds the package's own
+    /// configuration instead of the fallback. An install that wrote NOTHING rebuilt nothing — the
+    /// two <c>RequestReleases</c> waves this recycle sits between are both gated on
+    /// <c>result.Written &gt; 0</c> for that very reason — so there is nothing to rebind to, and
+    /// the teardown is pure loss.</para>
+    ///
+    /// <para><b>And it is not a theoretical loss.</b> Measured on CD run 34190841613
+    /// (2026-09-08): package <c>Video</c> logged <c>0 written, 21 unchanged</c> and recycled its
+    /// root anyway, and <c>Chess</c> was recycled TWICE per bake. Each teardown killed the
+    /// correlated work in flight beneath the root — its own <c>PluginGating</c> reconcile — which
+    /// the quiesce could not answer and force-cancelled at its 2 s bound, surfacing as
+    /// <c>HubDisposedBeforeResponseException</c>.</para>
+    ///
+    /// <para>🚨 This does NOT fix the case where an install DID write: a recycle that has a job to
+    /// do still tears down a root whose background pipeline is issuing correlated requests, and
+    /// a hub that keeps accepting work while quiescing is its own defect (#3261's family). What
+    /// this removes is the class where the teardown was provably pointless — and it removes it by
+    /// making the recycle agree with the two waves around it, not by widening a bound.</para>
+    /// </summary>
+    /// <param name="rootPath">The retyped root, or null when the placeholder dance did not run.</param>
+    /// <param name="written">How many nodes this install actually wrote.</param>
+    /// <returns>The sentence to log, or <c>null</c> when the recycle should proceed.</returns>
+    internal static string? RecycleDeclineReason(string? rootPath, int written)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath))
+            return null;   // nothing to recycle; the caller returns before logging anything
+        return written > 0
+            ? null
+            : "this install wrote nothing, so its in-package NodeType was not rebuilt (the release "
+              + "waves either side of the recycle are gated on the same condition) and a fresh hub "
+              + "would bind exactly what the current one already has. The teardown would only "
+              + "cancel the work in flight beneath the root.";
+    }
+
+    /// <summary>
+    /// 🚨 <b>What this recycle tells the hub it tears down (#3510).</b> Pure, so the sentence is
+    /// pinned without a mesh — and separate from the installer-side log line because the two are
+    /// read by different people: that one reaches whoever is looking at the install, this one
+    /// reaches whoever is looking at the ROOT's <c>[QUIESCE-START]</c>, or at one of the per-node
+    /// children the cascade takes with it.
+    ///
+    /// <para>The second reader is the one #3510 could not serve. Its trail — <i>"the Hosting root
+    /// was disposed at 23:37:51Z while its own 145-file install was in flight; its per-node
+    /// children went with it, and the writes they owed acks for were stranded"</i> — was assembled
+    /// over six occurrences and four lost bake seals, and attributing it took a full read of THIS
+    /// file plus an ordering argument, because every candidate recycler announces itself at
+    /// Information and none of them announced itself in the victim's log.</para>
+    ///
+    /// <para>Names the install explicitly ("while installing"), because that is the discriminator
+    /// the issue settled on: a root recycling under a reconcile is usually benign, and <i>"the
+    /// discriminator is not the count — it is whether the recycled root is the package currently
+    /// installing"</i>. A reader who greps one line now has that fact.</para>
+    /// </summary>
+    /// <param name="rootPath">The retyped root being recycled.</param>
+    /// <returns>The sentence carried on the <see cref="DisposeRequest"/>.</returns>
+    internal static string RetypedRootRecycleReason(string rootPath) =>
+        $"PackageInstaller.SettleRetypedRoot: recycling the root '{rootPath}' WHILE INSTALLING that "
+        + "package, now that this install has rebuilt its in-package NodeType — the hub re-activates "
+        + "against the package's own configuration instead of the placeholder binding";
+
     private static IObservable<Unit> SettleRetypedRoot(
-        IMessageHub hub, string? rootPath, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
+        IMessageHub hub, string? rootPath, IReadOnlyCollection<MeshNode> nodes, int written,
+        ILogger? logger)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
             return Observable.Return(Unit.Default);
+
+        if (RecycleDeclineReason(rootPath, written) is { } declined)
+        {
+            logger?.LogInformation(
+                "[PackageInstaller] not recycling root {Root}: {Reason}", rootPath, declined);
+            return Observable.Return(Unit.Default);
+        }
 
         return MayPublishIntoRoot(hub, rootPath!, nodes, logger)
             .SelectMany(rebindable =>
@@ -1601,14 +1761,52 @@ public static class PackageInstaller
                 // the next occurrence a read instead of a reconstruction. Information, not Debug:
                 // it is one line per package install, it names a deliberate teardown of a live
                 // hub, and the reader needing it is looking at a failed install, not a trace.
+                // 🚨 The second sentence used to read "Work in flight beneath this root is answered
+                // by the teardown, not abandoned." That is FALSE as written, and it was measured
+                // false: on CD 34190841613 the pending CreateOrUpdateNodeRequest was neither
+                // answered nor NACKed — the quiesce force-cancelled it at its 2 s bound and it
+                // reached its issuer as HubDisposedBeforeResponseException. A diagnostic that
+                // asserts a guarantee the code does not keep is worse than one that says nothing:
+                // it sends the next reader looking for a different cause (#3510).
                 logger?.LogInformation(
                     "[PackageInstaller] recycling root {Root} now that its in-package NodeType has a "
                     + "loadable build — the hub re-activates against the package's own configuration. "
-                    + "Work in flight beneath this root is answered by the teardown, not abandoned.",
+                    + "Work in flight beneath this root is given the quiesce window to finish; "
+                    + "anything still pending at that bound is force-cancelled and surfaces to its "
+                    + "issuer as HubDisposedBeforeResponseException.",
                     rootPath);
+                // 🚨 THIS recycle is NOT deferred against the install's own root lease (#3510),
+                // and that is deliberate: this method IS the lease holder. Its teardown is the
+                // install's own ordered act — it sits between the two RequestReleases waves
+                // because the deferred wave's compiles read a root that must already carry the
+                // package's own binding (#1732), and WaitForRootReady below holds the install
+                // until the address answers again. Deferring a holder against its own lease is a
+                // deadlock. The lease exists to stop the OTHER teardown: NodeTypeRebindWatcher
+                // firing on the placeholder retype this very install performed, which would land
+                // unordered, possibly ON TOP of the fresh activation this method just waited for.
+                // That watcher's subscription dies with the hub this recycle tears down, so its
+                // deferred post is cancelled rather than replayed — one recycle, not two.
+                // 🚨 AND IT DOES NOT WAIT FOR ANOTHER INSTALL'S LEASE EITHER, which is a real hole
+                // and is named here rather than papered over. Two packages can target ONE partition
+                // (`targetPartition`), so install A's recycle here can tear down a root install B is
+                // still writing under. The obvious repair — wait for every holder that is not mine —
+                // is WRONG: B's own SettleRetypedRoot would symmetrically wait for A's lease, and
+                // two installs each holding and each waiting is a mutual deadlock that no timeout
+                // may resolve (raising one would be the band-aid, and dropping one recycle would
+                // re-break #1732). The sound repair is to serialise installs per root, which is a
+                // different change with its own risk and does not belong in a recycle gate. Until
+                // then this is a KNOWN residual, not a covered case.
+                // 🚨 The reason travels WITH the request (#3510). The log line above says why to
+                // whoever reads the INSTALLER's log; the root's own [QUIESCE-START] — and, through
+                // the cascade, every per-node child that goes down with it, which is where #3510's
+                // stranded writes were owed — says why to whoever reads the HUB's. Those were two
+                // different readers on every occurrence of this issue, and only the first was
+                // served.
                 using (accessService?.ImpersonateAsSystem())
                     hub.NodeOperationIssuingHub()
-                        .Post(new DisposeRequest(), o => o.WithTarget(new Address(rootPath!)));
+                        .Post(
+                            new DisposeRequest { Reason = RetypedRootRecycleReason(rootPath!) },
+                            o => o.WithTarget(new Address(rootPath!)));
                 return WaitForRootReady(hub, rootPath!, logger);
             });
     }
@@ -2121,7 +2319,12 @@ public static class PackageInstaller
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Code package '{manifest.Id}' has no nodeTypeConfiguration."));
 
-        var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition) ? "type" : manifest.TargetPartition!;
+        // 🚨 ONE definition of this fallback, shared with InstallRootOf — the install's lease must
+        // name the partition the writes actually land in, and a Code package with no declared
+        // target writes under `type`, not under its own id (#3510).
+        var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition)
+            ? CodeDefaultPartition
+            : manifest.TargetPartition!;
         var nodeTypePath = $"{partition}/{manifest.Id}";
         var sourceFolder = manifest.SourceFolder ?? manifest.Id;
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
@@ -3056,7 +3259,7 @@ public static class PackageInstaller
                     // its rebuild, so the hub that comes back binds the package's own configuration
                     // instead of the fallback — and the install no longer returns while a teardown
                     // it started is still running.
-                    .SelectMany(pruned => SettleRetypedRoot(hub, retypedRoot, nodes, logger)
+                    .SelectMany(pruned => SettleRetypedRoot(hub, retypedRoot, nodes, result.Written, logger)
                         .Select(_ => pruned))
                     // …and ONLY NOW the rest of the package's types. Their compiles read the root
                     // (ValidateCellSurfaceSingleHome → GetMeshNode('<packageRoot>') for every
@@ -3145,7 +3348,7 @@ public static class PackageInstaller
                     .Select(p => p!)
                     .ToImmutableHashSet(StringComparer.Ordinal);
 
-                return PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, options, logger)
+                return PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, manifest.Id, options, logger)
                     .Do(pruned =>
                     {
                         if (pruned.Count > 0)
@@ -3176,54 +3379,77 @@ public static class PackageInstaller
     /// </summary>
     private static IObservable<ImmutableList<string>> PruneRemovedNodes(
         IMessageHub hub, IMeshService? meshService, IStorageAdapter? persistence,
-        IReadOnlyCollection<string> removedNodePaths, JsonSerializerOptions options, ILogger? logger)
+        IReadOnlyCollection<string> removedNodePaths, string retiredBy,
+        JsonSerializerOptions options, ILogger? logger)
     {
         if (meshService is null || removedNodePaths.Count == 0)
             return Observable.Return(ImmutableList<string>.Empty);
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // READ EVERYTHING FIRST, then decide, then delete. The instance probe below has to run over
+        // the candidates BEFORE any of them is deleted — its answer decides which of them may be.
         return removedNodePaths
             .Select(path => (persistence is not null
                     ? persistence.Read(path, options).Take(1)
                     : Observable.Return<MeshNode?>(null))
-                .SelectMany(current =>
-                    current is not null && current.SyncBehavior != SyncBehavior.Include
-                        ? Observable.Return<(string? Deleted, MeshNode? Node)>((null, current))
-                        // Sealed at Subscribe (RunAsSystem), never Observable.Using(ImpersonateAsSystem):
-                        // impersonation is an AsyncLocal store/restore pair, and Using disposes on the
-                        // TERMINATING thread — for a cross-hub delete, the owning hub's response thread,
-                        // not the one that opened the scope — which latches system-security onto whatever
-                        // runs next on the subscribing thread (#1790).
-                        : accessService.RunAsSystem(() => meshService.DeleteNode(path))
-                            .Take(1)
-                            .Select(deleted => (Deleted: deleted ? path : null, Node: current)))
-                .Catch<(string? Deleted, MeshNode? Node), Exception>(ex =>
+                .Select(current => (Path: path, Node: current))
+                .Catch<(string Path, MeshNode? Node), Exception>(ex =>
                 {
-                    logger?.LogWarning(ex, "Pruning removed node {Path} failed.", path);
-                    return Observable.Return<(string? Deleted, MeshNode? Node)>((null, null));
+                    logger?.LogWarning(ex, "Reading removed node {Path} before pruning it failed.", path);
+                    return Observable.Return<(string Path, MeshNode? Node)>((path, null));
                 }))
             .ToObservable().Concat().ToList()
-            .SelectMany(outcomes =>
+            .SelectMany(candidates =>
             {
-                var deleted = outcomes
-                    .Where(o => o.Deleted is not null)
-                    .Select(o => o.Deleted!)
-                    .ToImmutableList();
-                // 🚨 A PRUNED NODETYPE TAKES ITS INSTANCES' RENDERER WITH IT (#2993, hole B). The
-                // prune is intended — "whatever the repo no longer ships is removed from the
-                // installed partition" is this method's whole contract, and the
-                // 2026-08-28 What's New entry says so — but an instance whose type resolves to
-                // nothing has no per-node hub: it reads as Unavailable on a timeout, renders empty,
-                // and never reaches a verdict, with nothing naming the type that went away. So the
-                // deletion is REPORTED rather than blocked. Probed off the nodes this pass actually
-                // read and actually deleted (instances are unaffected by the deletion, so probing
-                // after it is as accurate as probing before), and only for the NodeType definitions
-                // among them — zero queries for the overwhelming majority of installs.
-                var prunedNodes = outcomes
-                    .Where(o => o.Deleted is not null && o.Node is not null)
-                    .Select(o => o.Node!)
+                var readNodes = candidates
+                    .Where(c => c.Node is not null)
+                    .Select(c => c.Node!)
                     .ToArray();
-                return NodeTypeInstanceProbe.ProbeAndReport(hub, prunedNodes, logger)
-                    .Select(_ => deleted);
+                // 🚨 A PRUNED NODETYPE TAKES ITS INSTANCES' RENDERER WITH IT — SO IT IS NOT PRUNED
+                // (#2993 hole B; refused since 2026-09-08, the same rule as the static importer's
+                // prune). "Whatever the repo no longer ships is removed from the installed
+                // partition" stays this method's contract for everything EXCEPT a NodeType that
+                // still has instances: deleting that leaves the instances with no per-node hub —
+                // they read as Unavailable and render empty — and a package update that lands
+                // before the instances were retyped is exactly the stale-delivery shape that took
+                // a client's record dark on memex.systemorph.com. The type is held (stamped
+                // PendingRetirement, named at Warning) and the next update completes the
+                // retirement once the instances are gone. Zero queries for the overwhelming
+                // majority of updates, which remove no NodeType at all.
+                return NodeTypeInstanceProbe.Probe(hub, readNodes, logger).SelectMany(held =>
+                {
+                    var heldPaths = held.Select(h => h.NodeTypePath).ToImmutableList();
+                    NodeTypeInstanceProbe.Report(held, logger);
+                    var keep = NodeTypeInstanceProbe.WithoutHeld(readNodes, heldPaths)
+                        .Select(n => n.Path)
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                    var deletions = candidates
+                        // A node this pass could not read is still deleted by path (the prior
+                        // behaviour): a read failure is not evidence the node is a type.
+                        .Where(c => c.Node is null || keep.Contains(c.Path))
+                        .Select(c => c.Node is { } current && current.SyncBehavior != SyncBehavior.Include
+                            // Read-before-delete: a CLAIMED node is the user's, not the repo's.
+                            ? Observable.Return<string?>(null)
+                            // Sealed at Subscribe (RunAsSystem), never Observable.Using(ImpersonateAsSystem):
+                            // impersonation is an AsyncLocal store/restore pair, and Using disposes on the
+                            // TERMINATING thread — for a cross-hub delete, the owning hub's response thread,
+                            // not the one that opened the scope — which latches system-security onto whatever
+                            // runs next on the subscribing thread (#1790).
+                            : accessService.RunAsSystem(() => meshService.DeleteNode(c.Path))
+                                .Take(1)
+                                .Select(deleted => deleted ? c.Path : null)
+                                .Catch<string?, Exception>(ex =>
+                                {
+                                    logger?.LogWarning(ex, "Pruning removed node {Path} failed.", c.Path);
+                                    return Observable.Return<string?>(null);
+                                }))
+                        .ToObservable().Concat().ToList()
+                        .Select(deleted => deleted
+                            .Where(d => d is not null)
+                            .Select(d => d!)
+                            .ToImmutableList());
+                    return NodeTypeInstanceProbe.Hold(hub, held, retiredBy, logger)
+                        .SelectMany(_ => deletions);
+                });
             });
     }
 
@@ -3267,9 +3493,11 @@ public static class PackageInstaller
         var effectiveLogger = logger;
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, effectiveLogger)
             .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, effectiveLogger))
-            .SelectMany(_ => InstallNodeRepoDeltaCore(
+            // The delta path writes under the SAME root as the full one, so it holds the same lease
+            // (#3510) — an incremental update is no less able to lose its writes to a recycle.
+            .SelectMany(_ => HoldRootDuringInstall(hub, manifest, InstallNodeRepoDeltaCore(
                 hub, manifest, newManifest, changedFiles, removedNodePaths, installedFromRef,
-                effectiveLogger, authorizingUserId));
+                effectiveLogger, authorizingUserId)));
     }
 
     private static IObservable<InstallResult> InstallNodeRepoDeltaCore(
@@ -3339,7 +3567,7 @@ public static class PackageInstaller
         // removedNodePaths is already restricted to previously-installed paths, so a user-ADDED
         // node was never a prune candidate to begin with.
         IObservable<ImmutableList<string>> Prune() =>
-            PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, options, logger);
+            PruneRemovedNodes(hub, meshService, persistence, removedNodePaths, manifest.Id, options, logger);
 
         // 🚨 The declared access is re-asserted BEFORE the delta's writes, not after them (#1758).
         // An UPDATE re-asserts it at all so a package that only just flipped its declaration (or

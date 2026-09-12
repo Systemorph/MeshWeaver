@@ -1,7 +1,7 @@
 ---
 Name: Reading CI Signals
 Category: Architecture
-Description: What a check's colour actually means — why a SKIPPED required context counts as satisfied while a never-reported one blocks forever, why a red on a non-required check does not block, and the i18n mirror that reds every downstream PR until it lands.
+Description: What a check's colour actually means — why a SKIPPED required context counts as satisfied everywhere while a NEVER-REPORTED one blocks forever under classic protection yet merges under a ruleset, why a red on a non-required check does not block, the i18n mirror that reds every downstream PR until it lands, and the shape most of these share: a narrow instrument answering correctly while the reader generalises it into a claim it never measured.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
 ---
 
@@ -119,6 +119,66 @@ A **dynamic matrix cannot be a required context** — the shard names change. Re
 **collector** job that `needs:` every shard and fails if any did not succeed (core does this with
 `Consolidate test results`). Requiring shard names by hand orphans a required context the moment the
 shard count changes, and it then waits forever.
+
+## 🚨 A narrow instrument does not answer a wide question — and it is RIGHT while you misread it
+
+Most rules on this page are instances of one shape, and it is worth naming because the instances
+keep arriving in new costumes. **In every case below the instrument was working correctly.** There
+was no bug to find, no error to notice, and no amount of care would have helped: the *reading* was
+wrong, not the measurement. That is exactly why this class needs a control rather than diligence.
+
+Five were measured in one session (2026-09-12, while triaging #890 and #2543), by **two different
+readers** — so this is not one person's blind spot:
+
+| the instrument | what it actually answers | what it was read as | what falsified it |
+|---|---|---|---|
+| `pendingWork=0` on **one** `[STALE-CALLBACK]` record | the pool's depth at that instant, for that correlation | *"the pool is idle"* — a live starved-pool hypothesis declared dead | max `pendingWork` in the **same log** is 606; across the 15 jobs, **2,501** |
+| a `GATE FAILED — tests:` filter | how many failures matched **that stage** | *"8 occurrences"* | all 15 carry the same 120 s bound and the same `CreateOrUpdateNodeRequest@portal/nodeops` stall trail — **15**; the filter set the count, not the phenomenon |
+| `gh api … 2>/dev/null` across eight repos | whatever survived a **discarded** stderr | *"0 issues, 0 PRs — every repo clean"* | every call was being refused `403`; a total refusal read as a clean sweep |
+| `gh api rate_limit` → `core: 5000/5000` | the **PRIMARY** quota | *"not rate limited"* | the refusals were the **SECONDARY** limit, which that endpoint does not report |
+| `gh api /apps/<slug>` permissions | what the App **declared** | *"the App can write issues and workflows"* | the **installation** carries `contents`, `metadata`, `pull_requests` only — a token minted from it can do neither |
+
+### The test to apply before you publish a claim
+
+**Name the question the instrument actually answers, then say why that is the same as the question
+you asked.** Where the two differ, either widen the instrument or narrow the claim. Both are cheap.
+Publishing the gap is not — each row above was repaired only after someone else re-measured.
+
+### The tell, per family
+
+- **A spot value standing in for a distribution.** State the **maximum and the count**, never the
+  sample you happened to read. One record describes a moment; a hypothesis about a process needs the
+  shape of the whole series.
+- **A filtered count standing in for an occurrence count.** State the **filter** beside the number.
+  *"8 matched `tests:`"* and *"8 occurred"* are different sentences, and only the first is a
+  measurement.
+- **A suppressed error standing in for a measurement.** `2>/dev/null` turns a refusal into a zero.
+  **Check the exit code**, or do not suppress. A zero that cannot distinguish *"none"* from *"could
+  not ask"* is not a result.
+- **A healthy meter standing in for the thing that actually refused.** Read the **refusal**, not the
+  meter. `5000/5000 remaining` while every call is refused is the documented signature of the
+  secondary limit — the meter is honest and answering a different question.
+- **A declaration standing in for an effective capability.** An App's own page lists what it *asked
+  for*; the **installation** lists what it was *granted*. Measured 2026-09-12: `meshweaver-cloud`
+  declares `contents, emails, issues, metadata, pull_requests, workflows`, and its installation on
+  this org carries `contents, metadata, pull_requests` — so `issues`, `workflows` and `emails` are
+  declared and absent. Read `orgs/<org>/installations`, not `/apps/<slug>`. This one is not a CI
+  instrument at all, which is the point: the shape is about how an answer is read, not about CI.
+
+### Why a control catches this and care does not
+
+A broken instrument announces itself: an exception, a mismatch, a number that cannot be right. A
+narrow one does none of that — it returns a true value, promptly, in the expected shape. The only
+thing that separates *"what I measured"* from *"what I claimed"* is an artefact that would have come
+out differently had the claim been false, so the discipline is the same one this repository applies
+to gates: **an assertion that cannot fail is not an assertion.** Before a number becomes a verdict,
+say aloud what reading would have refuted it, and go and look for that reading.
+
+Two neighbouring pages carry the same lesson from other directions:
+[Adoption and the Sweep Count Different Things](/Doc/Architecture/AdoptionAndTheSweepCountDifferentThings)
+(two instruments, neither wrong, neither a census) and
+[The Release Gate's Denominator](/Doc/Architecture/ReleaseGateDenominator) (a rate is meaningless
+until you state what it is over).
 
 ## The same trap in the tools you write to watch CI
 
@@ -468,6 +528,39 @@ this reason (MeshWeaver#3228), with the embedded shellcheck/pyflakes integration
 gate is about structure only; `check-workflow-timeouts.py` and `check-workflow-shell.py` both stay
 green on the defect, which is the measurement that says the new check is not redundant.
 
+### 🚨 A red with ZERO STEPS in ~2 s is an org BUDGET refusal wearing a workflow-defect costume
+
+The shape above has a twin that is not a defect at all, and the two are easy to confuse because both
+produce a red that names nothing. **When the organisation's GitHub Actions spending limit is
+reached, GitHub refuses to START jobs**, and the refusal is dressed as a failure:
+
+| Tell | What you see |
+|---|---|
+| Duration | jobs fail in **~2 seconds** |
+| Steps | the job has **zero steps** — not a failed step, none at all |
+| Matrix | matrix job names appear **unexpanded** (the literal `${{ matrix.… }}`, because nothing evaluated them) |
+| Logs | `GET /actions/jobs/<id>/logs` answers **`BlobNotFound`** — there is no log, because nothing ran |
+| Scope | **several repos at once, in one window**, while a repo whose runs started before the window keeps going green |
+
+**The only place the real reason appears is the job's ANNOTATION**, and nothing in the run's own JSON
+says it:
+
+```bash
+gh api "repos/Systemorph/<repo>/check-runs/<check-run-id>/annotations" \
+  --jq '.[] | "\(.annotation_level): \(.message)"'
+# failure: The job was not started because an Actions budget is preventing further use.
+```
+
+Measured 2026-09-11 across three repos inside one 18-minute window, with core unaffected.
+
+🚨 **Re-running IS the correct action here, once the window has passed** — and that is the one place
+on this page where that is true. Everywhere else a re-run without a code change hides a race
+(AGENTS.md → "NEVER re-run a test unless code under test has changed"). This is not a flake and not a
+race: it is a **refused gate**, a job that never executed, so there is no observation to preserve and
+nothing was measured that a re-run could paper over. The distinction is the same one this whole page
+turns on — *"it did not run"* and *"it ran and failed"* are different claims — so **read the
+annotation before you re-run**, and if it names no budget, treat the red as real.
+
 ### A verdict about an unpinned checkout is a function of wall-clock time
 
 The cross-repo gates check core out with **no `ref:`**. Two people therefore measured the same
@@ -643,7 +736,7 @@ classified before anything was changed. Two node paths, two opposite verdicts:
 | occurrence | verdict |
 |---|---|
 | `Ops/Modules/{deployment}` (`Hosting/ModuleInventory`) | **TRUE POSITIVE — a live defect in `src/`.** `DeploymentReportService` stamped `$type = "ModuleInventoryContent"`, a literal naming **no CLR type in the fleet**, while the real record `DeploymentReport` was registered nowhere. Its own comment said the stamp existed because *"content without the discriminator … materialises as NOTHING"* — and it materialised as nothing anyway. Every instance's self-reported module inventory read back untyped. Fixed: the record is registered and the constant is `nameof(DeploymentReport)`. |
-| `{partition}/Live` (`LateContentTypeRegistrationTest`) | **A true degradation, but NOT the gate's subject.** That test asserts content *stays* untyped when an unrelated type registers; its `$type` is literally `AContentTypeTheMeshNeverCompiled`. The keying is not at fault — the event really happened — but the gate cannot distinguish a degradation that is a test's SUBJECT from one nobody intended. |
+| `{partition}/Live` (`LateContentTypeRegistrationTest`) | **A true degradation, but NOT the gate's subject.** That test asserts content *stays* untyped when an unrelated type registers; its `$type` is literally `AContentTypeTheMeshNeverCompiled`. The keying was not at fault — the event really happened — but the gate could not distinguish a degradation that is a test's SUBJECT from one nobody intended, nor a transient one from a final one. The second half is answered by #3645 (see *TRANSIENT from FINAL* below); the first is still answered by capture-and-assert. |
 
 🚨 **The guard on the true positive was asserting the defect.** `AnInstanceReportsWhatItRunsTest`
 checked `content.GetProperty("$type") == InventoryContentType` — and a `$type` **property** is only
@@ -701,20 +794,48 @@ degradation this test reproduces"*. So the regression is now caught by a **test*
 gate that must first see a whole shard's logs. With the fix in place: 3/3 pass, marker count in the
 shared trace **3 → 0**, `check-untyped-content.sh` **exit 1 → exit 0**.
 
-🚨 **What the gate still cannot tell you: TRANSIENT from FINAL.** `MeshNodeStreamCache` warns at the
-instant of a read, and at that instant it cannot know the type will register moments later — which
-is the normal state during portal boot, before the NodeType compiles land, and is exactly the race
-#2952 fixed by re-typing every live reader when the registration arrives. The sibling seam one layer
-down already says so in its own message: `MeshNodeTypeSource` prints **both** causes — *"(a) the
-NodeType's runtime compile has not registered it YET, which is TRANSIENT … (b) no declaration will
-ever claim this discriminator"* — and it passes **no exception**, so it never reaches the trace file
-and reds nothing. One event, two descriptions, opposite CI consequences: the cache's is a shard
-failure, the type source's is invisible. Two of `LateContentTypeRegistrationTest`'s three cases are
-the transient one, and they degrade *and recover* inside a single test. Telling them apart means
-recording a degradation and reporting only the ones never recovered, which needs a window nothing in
-a process naturally closes — a rework rather than a repair, and deliberately left to its own issue.
-Until then read a gate hit as *"content was unreadable at a read"*, and check the node's
-`compilationStatus` before calling it (b).
+🚨 **TRANSIENT from FINAL — the gate's denominator, answered by #3645.** `MeshNodeStreamCache` warns
+at the instant of a read, and at that instant it cannot know the type will register moments later —
+which is the normal state during portal boot, before the NodeType compiles land, and is exactly the
+race #2952 fixed by re-typing every live reader when the registration arrives. The sibling seam one
+layer down already said so in its own message: `MeshNodeTypeSource` prints **both** causes — *"(a)
+the NodeType's runtime compile has not registered it YET, which is TRANSIENT … (b) no declaration
+will ever claim this discriminator"* — and it passes **no exception**, so it never reaches the trace
+file and reds nothing. One event, two descriptions, opposite CI consequences: the cache's was a
+shard failure, the type source's invisible. Two of `LateContentTypeRegistrationTest`'s three cases
+are the transient one, and they degrade *and recover* inside a single test — so a gate hit meant
+*"content was unreadable at a read"*, never *"content is unreadable"*.
+
+**What closed it was not a window; it was asking again.** The platform already kept the state
+(`ContentDegradationRegistry`, one entry per node type, added for `/health`), and the content-type
+registry already answers *"is this resolvable"* as a pure map lookup by either of the two routes
+`TryRecoverForNodeType` takes. So the verdict is computed by **re-asking at report time**:
+`ContentDegradationRegistry.Unresolved(registry)` drops every entry whose type has since
+registered, and `MeshNodeStreamCache.Dispose` logs one `MeshNodeContentUnresolvedException` per
+entry that survives. `check-untyped-content.sh` keys on **that** type now, not on the per-read
+`MeshNodeContentDegradedException`.
+
+| record | when | meaning | reds a shard? |
+|---|---|---|---|
+| `MeshNodeContentDegradedException` | at each degraded read | *this read was untyped* — an EVENT, possibly the boot race | **no** (since #3645) |
+| `MeshNodeContentUnresolvedException` | once per node type, at cache teardown | *the registry was re-asked and still says no* — a VERDICT | **yes** |
+
+So a boot that reads a runtime-compiled NodeType before its compile lands now produces **no** gate
+hit, while a discriminator nothing will ever claim produces exactly one, naming the node type and
+the discriminator. The per-read records stay in the logs and stay useful: once the verdict names a
+type, they are how you find which reads degraded on it.
+
+🚨 `/health` was wrong the same way and is fixed in the same change: `ContentTypeHealthCheck` fed
+`Snapshot()`, so a replica stayed `Degraded` after a boot race until some later read of that type
+happened to clear the entry — a probe answering about the past. It reads `Unresolved(...)` now.
+
+**Falsified in both directions, as the issue asked.** With `Unresolved` reduced to `Snapshot()`, the
+recovered case is reported and `ARecoveredDegradation_IsNotTheVerdict` fails; with the teardown
+report removed, `AnUnrecoverableDegradation_IsTheVerdict_AndReachesTheSink` fails on *"the teardown
+must REPORT what never resolved"*. `UntypedContentDegradationGate` pins the script's key to
+`nameof(MeshNodeContentUnresolvedException)`, that the emitter constructs it, that the report is
+computed from `Unresolved(`, and that both read seams still emit the per-read record the verdict is
+derived from.
 
 **The instrument that does answer it** is `MessageTrace`
 (`MeshWeaver.Messaging.Hub/MessageService.cs`): `MESHWEAVER_MSG_TRACE=1` makes every delivery write

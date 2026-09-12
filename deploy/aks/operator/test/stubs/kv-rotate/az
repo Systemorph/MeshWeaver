@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# A stand-in `az` for hosting-kv-rotate's tests. It records the SUBCOMMAND only — never the argv,
+# which for `keyvault secret set` carries the freshly minted key — so a test can prove the rotation
+# stopped before the vault write (nothing recorded) or reached it (one `keyvault secret set`).
+#
+#   keyvault secret show  → prints $HOSTING_KV_VAULT_VALUE (a fake key a test planted as "what the
+#                           vault holds"), else refuses like a vault the identity cannot read
+#   keyvault secret set   → succeeds when $HOSTING_AZ_ACCEPT_SET=1, else refuses
+#   anything else         → refuses — there is no vault in a test
+set -uo pipefail
+printf 'az %s %s %s\n' "${1:-}" "${2:-}" "${3:-}" >> "${HOSTING_IE_STATE:?the az stub needs HOSTING_IE_STATE}/az.log"
+case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret show")
+    if [ -n "${HOSTING_KV_VAULT_VALUE:-}" ]; then printf '%s\n' "$HOSTING_KV_VAULT_VALUE"; exit 0; fi ;;
+  "keyvault secret set")
+    [ "${HOSTING_AZ_ACCEPT_SET:-0}" = "1" ] && exit 0 ;;
+esac
+echo "az stub: refusing '${1:-} ${2:-} ${3:-}' — there is no vault in a test" >&2
+exit 1

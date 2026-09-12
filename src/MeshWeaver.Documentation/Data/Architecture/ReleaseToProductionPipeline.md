@@ -30,6 +30,16 @@ green merge on a plugin repo's main
 arrived (A), because the content arrived but the assembly did not (B), or because the whole portal
 predates the fix (C).
 
+> 📅 **2026-09-12 — what a green merge on CORE triggers upstream of these hops, corrected.** Core's
+> CD promotes, bakes, seals and POSTs one signed `platform-build` to the control instance — and that
+> is all: the per-build `meshweaver-framework-released` wave that used to rebuild every node
+> repository on every platform build is off by default
+> (`Hosting:PlatformBuilds:BroadcastFrameworkReleases`, Plugins#1707) and no satellite lists the
+> event. A node repo builds, tests and publishes against the newest SEALED set on its own pushes and
+> once a day; that daily run is the full run and is what validates a platform build. The map from
+> a core push to a self-updated portal, what runs when and on whose minutes, and the known gap in the
+> compatibility assumption (#4083): `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+
 ## (A) Two content channels, one destination
 
 The catalog channel is described in

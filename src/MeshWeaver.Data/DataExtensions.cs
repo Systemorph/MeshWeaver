@@ -3413,7 +3413,10 @@ public static class DataExtensions
         GetDataRequest _)
     {
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+        // 🚨 The SHARED stream, never `GetStream(reference, x => x.ReturnNullWhenNotPresent())`: a
+        // configured reduce is uncached, and every read then minted a permanent `sync/` hub on the
+        // owning node hub (#3432). See IWorkspace.GetNullableStream.
+        var stream = workspace.GetNullableStream(reference);
 
         if (stream == null)
             return Observable.Return(new GetDataResponse(null, 0));
@@ -3781,7 +3784,10 @@ public static class DataExtensions
         WorkspaceReference<TReference> reference)
     {
         var workspace = hub.GetWorkspace();
-        var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+        // 🚨 The SHARED stream, never `GetStream(reference, x => x.ReturnNullWhenNotPresent())`: a
+        // configured reduce is uncached, and every read then minted a permanent `sync/` hub on the
+        // owning node hub (#3432). See IWorkspace.GetNullableStream.
+        var stream = workspace.GetNullableStream(reference);
 
         if (stream == null)
             return Observable.Return(new GetDataResponse(null, 0)
@@ -3925,7 +3931,8 @@ public static class DataExtensions
         var (prefix, remainingPath) = ParseUnifiedPath(path);
         var observable = prefix switch
         {
-            "data" => UpdateDataPath(hub, remainingPath, request.Message.Content, request.Message.ChangedBy),
+            "data" => UpdateDataPath(hub, remainingPath, request.Message.Content,
+                request.Message.ChangedBy, request.AccessContext),
             "content" => UpdateContentPath(hub, remainingPath, request.Message.Content),
             "area" => Observable.Return(UpdateUnifiedReferenceResponse.Fail("Layout area updates are not supported via this API")),
             _ => Observable.Return(UpdateUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}"))
@@ -3942,14 +3949,15 @@ public static class DataExtensions
 
     /// <summary>
     /// Reactive update for a <c>data:</c> path. Content-provider paths write the file
-    /// directly; entity paths issue <see cref="DataChangeRequest"/> and observe the
-    /// <see cref="Activity"/> completion callback (no <see cref="TaskCompletionSource{TResult}"/>).
+    /// directly; entity paths issue <see cref="DataChangeRequest"/> and report success only after
+    /// both the owner commit and the shared read stream's matching frame.
     /// </summary>
     private static IObservable<UpdateUnifiedReferenceResponse> UpdateDataPath(
         IMessageHub hub,
         string? path,
         object content,
-        string? changedBy)
+        string? changedBy,
+        AccessContext? accessContext)
     {
         var (collection, entityId) = ParseDataPath(path);
 
@@ -3976,11 +3984,55 @@ public static class DataExtensions
         // path that addresses no data (UpdateUnifiedReferenceRequest_InvalidPath_ReturnsError).
         // A valid data collection is one a TypeSource projects; content collections
         // were already handled above.
-        var isKnownCollection = dataContext.TypeSources.Values
-            .Any(ts => string.Equals(ts.TypeDefinition.CollectionName, collection, StringComparison.OrdinalIgnoreCase));
-        if (!isKnownCollection)
+        var pathTypeSource = dataContext.TypeSources.Values
+            .FirstOrDefault(ts => string.Equals(ts.TypeDefinition.CollectionName, collection, StringComparison.OrdinalIgnoreCase));
+        if (pathTypeSource is null)
             return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
-                $"Unknown collection '{collection}': no registered data type source or content provider owns this path."));
+                LocalizationCatalog.Get("unifiedData.error.unknownCollection", accessContext?.Locale, collection)));
+
+        var contentCollection = content is EntityDeltaUpdate delta
+            ? delta.Collection
+            : dataContext.GetTypeSource(content.GetType())?.TypeDefinition.CollectionName;
+        if (!string.Equals(pathTypeSource.TypeDefinition.CollectionName, contentCollection,
+                StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                LocalizationCatalog.Get("unifiedData.error.collectionMismatch", accessContext?.Locale,
+                    pathTypeSource.TypeDefinition.CollectionName, contentCollection ?? content.GetType().Name)));
+
+        var contentId = content is EntityDeltaUpdate entityDelta
+            ? StandardReducers.ConvertKeyToProperType(
+                entityDelta.Id, pathTypeSource.TypeDefinition.CollectionName, hub.TypeRegistry)
+            : pathTypeSource.TypeDefinition.GetKey(content);
+        var pathId = entityId is null
+            ? null
+            : StandardReducers.ConvertKeyToProperType(
+                entityId, pathTypeSource.TypeDefinition.CollectionName, hub.TypeRegistry);
+        if (pathId is not null && !Equals(pathId, contentId))
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                LocalizationCatalog.Get("unifiedData.error.entityIdMismatch", accessContext?.Locale,
+                    pathId, contentId)));
+
+        var readId = pathId ?? contentId;
+        if (readId is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                LocalizationCatalog.Get("unifiedData.error.missingEntityId", accessContext?.Locale, collection)));
+
+        var stream = workspace.GetNullableStream(
+            new EntityReference(pathTypeSource.TypeDefinition.CollectionName, readId));
+        if (stream is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                LocalizationCatalog.Get("unifiedData.error.readStreamUnavailable", accessContext?.Locale,
+                    collection, readId)));
+
+        var partition = content is EntityDeltaUpdate partitionedDelta
+            ? partitionedDelta.Partition
+            : (pathTypeSource as IPartitionedTypeSource)?.GetPartition(content);
+        var ownerStream = dataContext.DataSourcesByCollection[pathTypeSource.TypeDefinition.CollectionName]
+            .GetStreamForPartition(partition);
+        if (ownerStream is null)
+            return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                LocalizationCatalog.Get("unifiedData.error.ownerStreamUnavailable", accessContext?.Locale,
+                    collection, readId)));
 
         var changeRequest = new DataChangeRequest
         {
@@ -3988,16 +4040,65 @@ public static class DataExtensions
             ChangedBy = changedBy
         };
 
-        return workspace.RequestChange(changeRequest)
-            .Select(log =>
+        // Warm the exact stream served by GetDataRequest before the owner write. The internal
+        // receipt distinguishes a value-changing write (whose new version is published) from a
+        // true no-op (whose owner-only adopted version is silent), so both branches wait for the
+        // precise version a shared read can actually observe.
+        return stream.Take(1)
+            .Select<ChangeItem<object>, ChangeItem<object>?>(item => item)
+            .DefaultIfEmpty(null)
+            .SelectMany(initial =>
             {
-                var response = new DataChangeResponse(hub.Version, log);
-                return response.Status == DataChangeStatus.Committed
-                    ? UpdateUnifiedReferenceResponse.Ok(response.Version)
-                    : UpdateUnifiedReferenceResponse.Fail(
-                        response.Log.Messages.LastOrDefault()?.Message ?? "Update failed");
+                if (initial is null)
+                    return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                        LocalizationCatalog.Get("unifiedData.error.readStreamEnded", accessContext?.Locale,
+                            collection, readId)));
+
+                var access = hub.ServiceProvider.GetService<AccessService>();
+                return access.RunAs(accessContext, () => workspace.ChangeWithReceipt(changeRequest))
+                    .SelectMany(receipt =>
+                {
+                    var response = new DataChangeResponse(hub.Version, receipt.Log);
+                    if (response.Status != DataChangeStatus.Committed)
+                        return Observable.Return(ToResponse(receipt.Log));
+                    if (receipt.VisibleVersions is not [var visibleVersion])
+                        return Observable.Return(UpdateUnifiedReferenceResponse.Fail(
+                            LocalizationCatalog.Get("unifiedData.error.ownerReceiptUnavailable",
+                                accessContext?.Locale, collection, readId)));
+
+                    return WaitForSharedReadVersion(stream, visibleVersion)
+                        .Select(_ => UpdateUnifiedReferenceResponse.Ok(response.Version))
+                        .DefaultIfEmpty(UpdateUnifiedReferenceResponse.Fail(
+                            LocalizationCatalog.Get("unifiedData.error.readBarrierEnded",
+                                accessContext?.Locale, collection, readId)));
+                });
+
+                UpdateUnifiedReferenceResponse ToResponse(ActivityLog log)
+                {
+                    var response = new DataChangeResponse(hub.Version, log);
+                    if (response.Status == DataChangeStatus.Committed)
+                        return UpdateUnifiedReferenceResponse.Ok(response.Version);
+                    var message = response.Log.Messages.LastOrDefault();
+                    return UpdateUnifiedReferenceResponse.Fail(message is null
+                        ? LocalizationCatalog.Get("unifiedData.error.updateFailed", accessContext?.Locale)
+                        : message.Localize(accessContext?.Locale));
+                }
             });
     }
+
+    /// <summary>
+    /// Waits until a shared read stream has applied the owner's committed version or a newer one.
+    /// The current snapshot is checked inside <see cref="Observable.Defer{TValue}(Func{IObservable{TValue}})"/>
+    /// and the stream itself replays its latest frame, so a frame landing between the check and the
+    /// subscription cannot be missed. A newer version is valid: it represents a later committed
+    /// write, never the stale state that preceded this operation.
+    /// </summary>
+    internal static IObservable<ChangeItem<object>> WaitForSharedReadVersion(
+        ISynchronizationStream<object> stream,
+        long committedVersion) =>
+        Observable.Defer(() => stream.Current is { } current && current.Version >= committedVersion
+            ? Observable.Return(current)
+            : stream.Where(item => item.Version >= committedVersion).Take(1));
 
     /// <summary>
     /// Reactive update for a <c>content:</c> path — parses collection/file and writes via the file provider.
@@ -4073,7 +4174,7 @@ public static class DataExtensions
         var (prefix, remainingPath) = ParseUnifiedPath(path);
         var observable = prefix switch
         {
-            "data" => DeleteDataPath(hub, remainingPath, request.Message.ChangedBy),
+            "data" => DeleteDataPath(hub, remainingPath, request.Message.ChangedBy, request.AccessContext),
             "content" => DeleteContentPath(hub, remainingPath),
             "area" => Observable.Return(DeleteUnifiedReferenceResponse.Fail("Layout area deletion is not supported via this API")),
             _ => Observable.Return(DeleteUnifiedReferenceResponse.Fail($"Unknown prefix: {prefix}"))
@@ -4091,12 +4192,14 @@ public static class DataExtensions
     /// <summary>
     /// Reactive delete for a <c>data:</c> path. Content-provider paths delete the file directly;
     /// entity paths read the entity once via <see cref="System.Reactive.Linq.Observable.Take{TSource}(IObservable{TSource}, int)"/>,
-    /// then issue a <see cref="DataChangeRequest"/> and observe the activity completion callback.
+    /// then issue a <see cref="DataChangeRequest"/> and report success after both the owner commit
+    /// and the shared read stream's absence frame.
     /// </summary>
     private static IObservable<DeleteUnifiedReferenceResponse> DeleteDataPath(
         IMessageHub hub,
         string? path,
-        string? changedBy)
+        string? changedBy,
+        AccessContext? accessContext)
     {
         var (collection, entityId) = ParseDataPath(path);
 
@@ -4119,7 +4222,8 @@ public static class DataExtensions
                 "Entity ID must be specified for data deletion. Collection-level deletion is not supported."));
 
         var entityRef = new EntityReference(collection, entityId);
-        var stream = workspace.GetStream(entityRef, x => x.ReturnNullWhenNotPresent());
+        // Shared stream — see IWorkspace.GetNullableStream (#3432).
+        var stream = workspace.GetNullableStream(entityRef);
         if (stream == null)
             return Observable.Return(DeleteUnifiedReferenceResponse.Fail($"Entity not found: {collection}/{entityId}"));
 
@@ -4127,9 +4231,15 @@ public static class DataExtensions
         return stream
             .Timeout(TimeSpan.FromSeconds(30))
             .Take(1)
+            .Select<ChangeItem<object>, ChangeItem<object>?>(item => item)
+            .DefaultIfEmpty(null)
             .SelectMany(entityValue =>
             {
-                if (entityValue.Value == null)
+                if (entityValue is null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                        LocalizationCatalog.Get("unifiedData.error.readStreamEnded", accessContext?.Locale,
+                            collection, entityId)));
+                if (entityValue.Value is null)
                     return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
                         $"Entity not found: {collection}/{entityId}"));
 
@@ -4139,14 +4249,42 @@ public static class DataExtensions
                     ChangedBy = changedBy
                 };
 
-                return workspace.RequestChange(changeRequest)
-                    .Select(log =>
+                var typeSource = dataContext.GetTypeSource(entityValue.Value.GetType());
+                if (typeSource is null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                        LocalizationCatalog.Get("unifiedData.error.typeSourceUnavailable",
+                            accessContext?.Locale, collection, entityId)));
+                var partition = (typeSource as IPartitionedTypeSource)?.GetPartition(entityValue.Value);
+                var ownerStream = dataContext.DataSourcesByCollection[typeSource.TypeDefinition.CollectionName]
+                    .GetStreamForPartition(partition);
+                if (ownerStream is null)
+                    return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                        LocalizationCatalog.Get("unifiedData.error.ownerStreamUnavailable", accessContext?.Locale,
+                            collection, entityId)));
+
+                var access = hub.ServiceProvider.GetService<AccessService>();
+                return access.RunAs(accessContext, () => workspace.ChangeWithReceipt(changeRequest))
+                    .SelectMany(receipt =>
                     {
-                        var response = new DataChangeResponse(hub.Version, log);
-                        return response.Status == DataChangeStatus.Committed
-                            ? DeleteUnifiedReferenceResponse.Ok()
-                            : DeleteUnifiedReferenceResponse.Fail(
-                                response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed");
+                        var response = new DataChangeResponse(hub.Version, receipt.Log);
+                        if (response.Status != DataChangeStatus.Committed)
+                        {
+                            var message = response.Log.Messages.LastOrDefault();
+                            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                                message is null
+                                    ? LocalizationCatalog.Get("unifiedData.error.deleteFailed", accessContext?.Locale)
+                                    : message.Localize(accessContext?.Locale)));
+                        }
+                        if (receipt.VisibleVersions is not [var visibleVersion])
+                            return Observable.Return(DeleteUnifiedReferenceResponse.Fail(
+                                LocalizationCatalog.Get("unifiedData.error.ownerReceiptUnavailable",
+                                    accessContext?.Locale, collection, entityId)));
+
+                        return WaitForSharedReadVersion(stream, visibleVersion)
+                            .Select(_ => DeleteUnifiedReferenceResponse.Ok())
+                            .DefaultIfEmpty(DeleteUnifiedReferenceResponse.Fail(
+                                LocalizationCatalog.Get("unifiedData.error.readBarrierEnded",
+                                    accessContext?.Locale, collection, entityId)));
                     });
             });
     }

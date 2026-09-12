@@ -213,9 +213,31 @@ def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
 
     if not errors:
         published = sorted(m for m, r in receipts.items() if r.get("published") is True)
-        notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built"
-                     + (f"; {len(published)} published to the registry" if published
-                        else "; nothing published (not a trunk/release run)"))
+        # 🚨 `staged` is a THIRD outcome, and it must not read as either of the other two
+        # (MeshWeaver#3878). Under `publish-mode: staged` the leg POSTed nothing — the bytes went
+        # to the caller's publication lane, which hands over only on a green validation set. Saying
+        # "nothing published" there would be true and misleading; saying "published" would be false.
+        staged = sorted(m for m, r in receipts.items() if r.get("publication") == "staged")
+        # `superseded` is a FOURTH (publish-newest-only, per-module deploy): the leg built and
+        # tested, then stood down because a NEWER trunk commit reaches the module and that commit's
+        # own run publishes it. Named, so "not published here" never reads as "not published".
+        superseded = sorted(m for m, r in receipts.items() if r.get("publication") == "superseded")
+        stood_down = (f"; {len(superseded)} stood down for a newer trunk commit that reaches them "
+                      f"(its own run publishes them): " + ", ".join(superseded)) if superseded else ""
+        if published:
+            notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; "
+                         f"{len(published)} published to the registry{stood_down}")
+        elif superseded and not staged:
+            notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; none published "
+                         f"from this run{stood_down}")
+        elif staged:
+            notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; "
+                         f"{len(staged)} STAGED for the publication lane — nothing has reached the "
+                         "registry yet, and nothing will until every required validation job in "
+                         "the caller's run reports success (MeshWeaver#3878)")
+        else:
+            notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; "
+                         "nothing published (not a trunk/release run)")
     return (1 if errors else 0), errors, notes
 
 
@@ -827,6 +849,19 @@ def self_test() -> int:
         errs, _ = identity_agreement(own_receipts(parsed, "floor-abc123", set(three)))
         check("…and one file mutated to a second identity turns it RED",
               any("DIFFERENT framework identities" in e for e in errs), f"{errs}")
+
+    print("publish-newest-only — a leg that stood down is NAMED, never read as unpublished:")
+    code, errs, nts = verify(["A", "B"], {"A": {"module": "A", "published": True, "publication": "direct"},
+                                         "B": {"module": "B", "published": False, "publication": "superseded"}},
+                             [], "success", True)
+    check("one published + one stood down is green, and the note names the stood-down module",
+          code == 0 and any("1 published" in n and "stood down" in n and "B" in n for n in nts),
+          f"{errs} {nts}")
+    code, errs, nts = verify(["B"], {"B": {"module": "B", "published": False, "publication": "superseded"}},
+                             [], "success", True)
+    check("…and a run whose only leg stood down says so — not 'not a trunk/release run'",
+          code == 0 and any("none published from this run" in n for n in nts)
+          and not any("not a trunk/release run" in n for n in nts), f"{errs} {nts}")
 
     if failures:
         print(f"\n::error title=node-repo-pack-verify self-test failed::{len(failures)} case(s) — "

@@ -30,6 +30,39 @@ namespace MeshWeaver.Plugin.Build;
 /// landed module that relied on it until re-packed. Versions agree while both carry one, because
 /// platform and modules restore from the same central package pins.</para>
 ///
+/// <para>🚨 <b>"Those are the platform" is not one answer — it is one answer PER HOST, and the
+/// hosts disagree (#3221).</b> The rule above rests on <c>MeshWeaver.*</c> meaning "the consumer's
+/// <c>/app</c> carries it". Measured 2026-09-09, two hosts that both load these bundles are built
+/// from DIFFERENT REPOSITORIES and carry different sets:</para>
+///
+/// <list type="bullet">
+/// <item><b>the portal</b> (<c>memex-portal-ai</c>) is built from MeshWeaver.Plugins'
+/// <c>Memex.Portal.*</c>, alongside <c>src/MeshWeaver.Blazor*</c> and
+/// <c>src/MeshWeaver.ContentCollections.Indexing.*</c> — it carries both;</item>
+/// <item><b>the gate tester</b> (<c>mw-plugin-test</c>) is built from core's
+/// <c>tools/MeshWeaver.PluginTester</c>, whose whole closure is seven core projects, none reaching
+/// Blazor — and neither assembly EXISTS in core at all, so it can never carry either.</item>
+/// </list>
+///
+/// <para>MeshWeaver.Plugins' <c>src/platform-shipped.txt</c> — the declared roster feeding
+/// <c>ownedPlatformNames</c> — was measured against the PORTAL (its own comments cite images
+/// ci.7755/ci.7794 and the three <c>Memex.Portal.*</c> closures). It is therefore right for the
+/// portal and wrong for the tester, and no re-measurement of a single image reconciles them: on
+/// 2026-09-04..09 <c>MeshWeaver.AI</c> and <c>MeshWeaver.Markdown.Collaboration</c> both loaded as
+/// <c>IncompatibleModule … CONTRIBUTING NOTHING</c> on the tester, requiring
+/// <c>ContentCollections.Indexing.ChunkPosition</c> and <c>Blazor.BlazorView`2</c> — assemblies this
+/// walk had excluded as "platform". That cascaded to 36 refused package installs and reddened a
+/// satellite's nightly for six consecutive nights.</para>
+///
+/// <para>🚨 <b>Do not "fix" it by deleting those two roster lines.</b> That makes the tester work
+/// and reintroduces on the PORTAL the same-identity duplicate the roster exists to prevent (#3732).
+/// The diamond paragraph above already argues the opposite trade for non-<c>MeshWeaver.*</c>
+/// packages — <i>"shedding a dependency from the platform … would silently break every landed
+/// module that relied on it"</i> — which is precisely what happened here, one assembly-name
+/// convention over. Reconciling the two is a decision between real costs (a per-host roster, or
+/// carrying the assembly and letting <c>/app</c> win as the diamond rule does), not a line edit;
+/// it is tracked on #3221 and #3732.</para>
+///
 /// <para>Shared-framework assemblies (<c>FrameworkReference</c>) never appear as package nodes in
 /// deps.json, so they are excluded by construction.</para>
 ///

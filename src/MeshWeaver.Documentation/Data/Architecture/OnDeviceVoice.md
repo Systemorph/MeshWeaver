@@ -188,6 +188,11 @@ share is mounted on the portal pod, place the unzipped `.mlmodelc` directly in t
 
 ## Where the model (image) lives
 
+🚨 **The Swiss-German model is a CC BY-NC-4.0 derivative on a PRIVATE release, and that decides where it may
+be served from.** Before adding a consumer, a host or a URL for it, read
+[Voice model distribution](../VoiceModelDistribution) — anonymous hosting is refused, and the last move of
+this asset left two consumers broken for a fortnight.
+
 The GGML model is a **runtime artifact, NOT committed to git** (too large). It lives in three places:
 
 | Location | Path | Purpose |

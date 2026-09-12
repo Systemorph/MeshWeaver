@@ -174,7 +174,7 @@ public static class StandardReducers
     /// <summary>
     /// Converts a string key to the proper type based on the TypeDefinition for the collection.
     /// </summary>
-    private static object ConvertKeyToProperType(object id, string collection, ITypeRegistry typeRegistry)
+    internal static object ConvertKeyToProperType(object id, string collection, ITypeRegistry typeRegistry)
     {
         if (id is not string stringId)
             return id;

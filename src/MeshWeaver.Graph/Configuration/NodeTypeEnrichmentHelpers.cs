@@ -545,6 +545,12 @@ internal static class NodeTypeEnrichmentHelpers
                     "EnrichWithNodeType: self-heal Pending flip for {NodeType} faulted",
                     nodeType));
 
+        // 🚨 An in-flight type that still names a build this process can load is BINDABLE, not a
+        // wait: the instance renders on the last-good build now and the stale-assembly watcher
+        // picks up the rebuild when it lands (IsBindableWhileCompiling). The guards are the same
+        // live environment ApplyStreamResult judges HasUsableBuild with, so the wait and the bind
+        // cannot disagree about what "loadable here" means.
+        var guards = NodeTypeCompilationHelpers.GuardsOf(meshHub);
         var settled = typeStream
             .Do(typeNode => logger?.LogInformation(
                 "[COMPILE-TRACE] Slow-path typeStream emission for {NodeType} (instance={InstancePath}): HubConfig={HasHub} Status={Status} Coll={Coll} Path={Path}",
@@ -553,7 +559,7 @@ internal static class NodeTypeEnrichmentHelpers
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.CompilationStatus,
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.LatestAssemblyCollection ?? "(null)",
                 typeNode.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions)?.LatestAssemblyPath ?? "(null)"))
-            .Where(typeNode => IsCompileSettled(typeNode, meshHub.JsonSerializerOptions))
+            .Where(typeNode => IsBindableOrSettled(typeNode, meshHub.JsonSerializerOptions, guards))
             .Take(1);
 
         // 🚨 Fresh-pod wedge fix: DON'T cut short an in-flight compile with a fixed
@@ -574,12 +580,14 @@ internal static class NodeTypeEnrichmentHelpers
                 inFlightGrace: InFlightOverlayGrace,
                 parkedFault: ParkedFaultProbe(meshHub, nodeType))
             .Finally(healSub.Dispose)
-            // An in-flight emission is the grace path, never a settle (every settle
-            // predicate rejects Pending/Compiling): activate the progress overlay now
-            // and let its self-heal recycle the instance when the compile lands.
-            .SelectMany(typeNode => IsCompileInFlight(typeNode, meshHub.JsonSerializerOptions)
+            // An in-flight emission with nothing loadable behind it is the grace path (the
+            // settle predicate rejects it): activate the progress overlay now and let its
+            // self-heal recycle the instance when the compile lands. An in-flight emission that
+            // still names a loadable last-good build is BOUND, exactly like a settled one — see
+            // IsBindableWhileCompiling.
+            .SelectMany(typeNode => RoutesToInFlightOverlay(typeNode, meshHub.JsonSerializerOptions, guards)
                 ? ConfirmInFlightAgainstStorage(meshHub, nodeType, typeNode, node.Path, logger)
-                    .SelectMany(confirmed => IsCompileInFlight(confirmed, meshHub.JsonSerializerOptions)
+                    .SelectMany(confirmed => RoutesToInFlightOverlay(confirmed, meshHub.JsonSerializerOptions, guards)
                         ? WithCompilationInProgressOverlay(node, nodeType, confirmed, meshHub, logger)
                         : ApplyStreamResult(
                             confirmed, node, nodeType, meshConfiguration, compilationService, meshHub, logger))
@@ -922,6 +930,60 @@ internal static class NodeTypeEnrichmentHelpers
     internal static bool IsCompileInFlight(MeshNode? typeNode, System.Text.Json.JsonSerializerOptions options)
         => typeNode?.ContentAs<NodeTypeDefinition>(options) is { } d
             && d.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling;
+
+    /// <summary>
+    /// 🚨 TOLERANCE WHILE A COMPILE IS IN FLIGHT (maintainer directive, 2026-09-12: <i>"it should
+    /// all be tolerant"</i> — a page that rendered a minute ago must not go blank because its type
+    /// is being rebuilt). True when the NodeType is Pending/Compiling AND its record still names a
+    /// build THIS process can load (<see cref="NodeTypeCompilationHelpers.HasUsableBuild(MeshNode, NodeTypeDefinition, NodeTypeCompilationHelpers.BuildGuards?)"/>:
+    /// coordinates present, compiled for the live framework identity, dependency record valid).
+    ///
+    /// <para>An activation that observes this state binds the LAST-GOOD build now — the
+    /// <c>HasUsableBuild</c> branch of <see cref="ApplyStreamResult"/> is evaluated before any
+    /// status branch, and it arms <see cref="WithStaleAssemblySelfHeal"/>, whose watcher fires when
+    /// the rebuild publishes a different usable assembly path. Nothing is frozen: the instance
+    /// serves the previous bytes until the new ones land, then offers (or, on a converging portal,
+    /// takes) the newer build. What used to happen instead — waiting the in-flight grace, then
+    /// painting the compile-progress overlay, then (when the compile ran on another process
+    /// generation and never satisfied this one) the 30 s "did not settle" fallback — is the
+    /// intolerant path, and it blanked every Store/Plugin instance on memex 2026-09-12 while a
+    /// loadable build sat in the store the whole time.</para>
+    ///
+    /// <para>Deliberately NOT true for an in-flight type whose record names no loadable build
+    /// (first compile, framework-stale coordinates, bytes for another identity): there is nothing
+    /// to render on, and the progress overlay stays the honest answer.</para>
+    /// </summary>
+    internal static bool IsBindableWhileCompiling(
+        MeshNode? typeNode,
+        System.Text.Json.JsonSerializerOptions options,
+        NodeTypeCompilationHelpers.BuildGuards? guards)
+        => typeNode?.ContentAs<NodeTypeDefinition>(options) is { } d
+            && d.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling
+            && NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d, guards);
+
+    /// <summary>
+    /// The FIRST-wait settle predicate of <see cref="BuildSlowPath"/>: a settled terminal state
+    /// (<see cref="IsCompileSettled"/>), OR an in-flight state that still carries a loadable
+    /// last-good build (<see cref="IsBindableWhileCompiling"/>). Exposed so the composition is
+    /// pinned by a test on the production function rather than on a copy of it.
+    /// </summary>
+    internal static bool IsBindableOrSettled(
+        MeshNode typeNode,
+        System.Text.Json.JsonSerializerOptions options,
+        NodeTypeCompilationHelpers.BuildGuards? guards)
+        => IsCompileSettled(typeNode, options) || IsBindableWhileCompiling(typeNode, options, guards);
+
+    /// <summary>
+    /// Whether an emission the first wait handed back must be routed to the compile-progress
+    /// overlay (after the storage confirmation) rather than bound: in flight AND nothing loadable
+    /// to bind. The bindable in-flight case goes to <see cref="ApplyStreamResult"/> like a settled
+    /// one — see <see cref="IsBindableWhileCompiling"/>.
+    /// </summary>
+    internal static bool RoutesToInFlightOverlay(
+        MeshNode typeNode,
+        System.Text.Json.JsonSerializerOptions options,
+        NodeTypeCompilationHelpers.BuildGuards? guards)
+        => IsCompileInFlight(typeNode, options) && !IsBindableWhileCompiling(typeNode, options, guards);
 
     /// <summary>
     /// Bounded recursion on the per-NodeType compile self-heal loop. The hot
@@ -1281,41 +1343,48 @@ internal static class NodeTypeEnrichmentHelpers
                         if (recompileAttempts >= MaxRecompileAttempts)
                         {
                             logger?.LogWarning(
-                                "EnrichWithNodeType: latest assembly for {NodeType} still not found in store after {Attempts} recompile attempt(s) (collection={Coll}, version={Version}) — falling back to default config",
+                                "EnrichWithNodeType: latest assembly for {NodeType} still not found in store after {Attempts} recompile attempt(s) (collection={Coll}, version={Version}) — overlaying the assembly-unavailable diagnosis",
                                 nodeType, recompileAttempts, def.LatestAssemblyCollection, compileVersion);
-                            // 🚨 The SECOND sticky class (memex two-pod evidence,
-                            // 2026-07-26): this silent default-config fallback is
-                            // cached for the grain's lifetime exactly like the
-                            // error overlay — an instance on a pod whose local
-                            // store lacks the type's bytes serves only generic
-                            // areas until a manual recycle (and each recycle
-                            // re-rolls placement). Attach the same self-heal
-                            // watcher. The version gate is MANDATORY here, not
-                            // optional: HasUsableBuild is already TRUE in this
-                            // state (only the byte resolution missed), so an
-                            // ungated watcher would fire on the replayed current
-                            // state and hot-loop the recycle. Gated, the instance
-                            // self-recycles once per NodeType write — when the
-                            // compile eventually lands on this pod, re-enrichment
-                            // resolves the bytes and heals.
+                            // 🚨 #3934 CLAUSE 4 — A DIAGNOSIS, NEVER A SILENT DEFAULT.
+                            // This branch used to bind the DEFAULT configuration here: the
+                            // instance activated, served the generic areas, and every area the
+                            // type declares was simply absent. Measured on memex 2026-09-10,
+                            // that is what a reader saw at /Posts/SavThankYou — an HTTP 200
+                            // rendering "Area not found" for Preview, Write and PostCard, while
+                            // the NodeType's own record read compilationStatus: Ok. There is
+                            // nothing in that page, in the node, or in a recycle that names the
+                            // cause, which is why it cost a day.
                             //
-                            // Only wrap when a hub configuration will actually be
-                            // composed (the node's own, or the mesh default the
-                            // factory adds underneath). With NEITHER, the null
-                            // HubConfiguration must survive: routing/grain key
-                            // the fail-fast NACK-fallback hub on it, and that
-                            // hub's DeactivateOnIdle already retries on next
-                            // access — wrapping would swap fail-fast for a bare
-                            // hub that Ignores typed requests (the park class).
-                            var fallback = ApplyEntry(
-                                node, localAssemblyPath: null, hubConfig: null,
-                                nodeType, meshConfiguration);
+                            // The state is EXACTLY the one the pinned-release branch above
+                            // already overlays — a build is recorded, and this process cannot
+                            // resolve its bytes — so it takes the same OverlayCause and the same
+                            // self-heal. It also keeps the fail-fast contract the old comment
+                            // was protecting: WithCompilationErrorOverlay Sets an
+                            // UnhandledMessageNack, so a typed request the missing assembly
+                            // would have handled gets a terminal DeliveryFailure naming this
+                            // NodeType instead of parking — strictly better than the bare
+                            // default config, which Ignores it.
+                            //
+                            // The version gate on the self-heal stays MANDATORY: HasUsableBuild
+                            // is already TRUE in this state (only the byte resolution missed),
+                            // so an ungated watcher would fire on the replayed current state and
+                            // hot-loop the recycle. Gated, the instance self-recycles once per
+                            // NodeType write — when the compile eventually lands on this pod,
+                            // re-enrichment resolves the bytes and heals.
+                            var (storeMissIntro, storeMissCta, storeMissGuidance) =
+                                OverlayCopy(OverlayCause.AssemblyUnavailable);
                             return Observable.Return(
-                                fallback.HubConfiguration is null
-                                && meshConfiguration.DefaultNodeHubConfiguration is null
-                                    ? fallback
-                                    : WithOverlaySelfHeal(
-                                        fallback, meshHub, nodeType, typeNode.Version, logger));
+                                WithOverlaySelfHeal(
+                                    WithCompilationErrorOverlay(node, nodeType,
+                                        $"The compiled assembly for '{nodeType}' is recorded "
+                                        + $"(collection={def.LatestAssemblyCollection}, "
+                                        + $"version={compileVersion}) but could not be resolved in "
+                                        + "this process's assembly store.",
+                                        guidance: storeMissGuidance,
+                                        intro: storeMissIntro,
+                                        callToAction: storeMissCta,
+                                        activityPath: def.LastCompilationActivityPath),
+                                    meshHub, nodeType, typeNode.Version, logger));
                         }
                         return TriggerRecompileAndRetry(
                             node, nodeType, meshConfiguration, compilationService, meshHub,
@@ -1426,31 +1495,87 @@ internal static class NodeTypeEnrichmentHelpers
             && !string.IsNullOrEmpty(def.LatestAssemblyPath)
             && compilationService is not null)
         {
-            if (recompileAttempts >= MaxRecompileAttempts)
+            // 🚨 CONFIRM AGAINST STORAGE BEFORE ASKING FOR A REBUILD (2026-09-12). The node in hand
+            // came off the mesh hub's MIRROR, and the mirror is exactly the reader that goes stale
+            // when the WRITER is another process: during a rolling update two platform generations
+            // serve one mesh for the whole termination grace (30 minutes on memex), each with its
+            // own framework identity, and the per-NodeType hub's owner grain moves between them.
+            // The old generation's compile stamps ITS identity on the record; this generation's
+            // mirror replays that snapshot after the old owner drains and its sync stream goes
+            // silent (#2409's shape, on the bind path) — while STORAGE already holds the build this
+            // generation adopted or compiled. Every activation then took this branch, flipped the
+            // type Pending, waited for a "usable" build the other generation could never produce,
+            // and timed out onto the "did not settle" overlay: every Store/Plugin instance on memex,
+            // for as long as the drain lasted. One authoritative read — the same read
+            // ConfirmInFlightAgainstStorage makes one branch up — is what turns a wait into a bind.
+            // Attempt 0 only: the retry already re-enters with the node the recompile wait handed
+            // back, and asking storage again there would only delay the overlay it has earned.
+            var staleGuards = NodeTypeCompilationHelpers.GuardsOf(meshHub);
+            if (recompileAttempts == 0 && AuthoritativeTypeRead(meshHub, nodeType) is { } reReadStale)
             {
-                logger?.LogWarning(
-                    "EnrichWithNodeType: {NodeType} assembly is compiled against framework {Compiled} but the live framework is {Live}; still ABI-stale after {Attempts} recompile attempt(s) — overlaying recompile prompt",
-                    nodeType, def.CompiledFrameworkVersion ?? "(null)",
-                    NodeTypeCompilationHelpers.FrameworkVersion, recompileAttempts);
-                // Version-gated self-heal: when the operator's recompile lands
-                // (a Version-advancing write with a framework-matching build),
-                // every instance stuck on this prompt recycles itself.
-                var (staleIntro, staleCta, staleGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
-                return Observable.Return(
-                    WithOverlaySelfHeal(
-                        WithCompilationErrorOverlay(node, nodeType,
-                            "Built against a previous framework version",
-                            guidance: staleGuidance,
-                            intro: staleIntro,
-                            callToAction: staleCta,
-                            activityPath: def.LastCompilationActivityPath),
-                        meshHub, nodeType, typeNode.Version, logger));
+                return reReadStale()
+                    .Take(1)
+                    .Timeout(NodeTypeProbeTimeout)
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex,
+                            "EnrichWithNodeType: could not confirm '{NodeType}' against storage before the "
+                            + "framework-stale recompile for '{InstancePath}' — proceeding on the mirror's state",
+                            nodeType, node.Path);
+                        return Observable.Return<MeshNode?>(null);
+                    })
+                    .SelectMany(authoritative =>
+                    {
+                        var chosen = PreferAuthoritative(typeNode, authoritative);
+                        if (!ReferenceEquals(chosen, typeNode)
+                            && chosen.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions) is { } fresh
+                            && NodeTypeCompilationHelpers.HasUsableBuild(chosen, fresh, staleGuards))
+                        {
+                            logger?.LogInformation(
+                                "EnrichWithNodeType: the mesh-hub mirror reported '{NodeType}' compiled for "
+                                + "framework {Compiled} (live {Live}), but storage holds a build for the live "
+                                + "framework (version {Version}, {Path}) — binding it for '{InstancePath}' "
+                                + "instead of requesting a recompile",
+                                nodeType, def.CompiledFrameworkVersion ?? "(null)",
+                                NodeTypeCompilationHelpers.FrameworkVersion, chosen.Version,
+                                fresh.LatestAssemblyPath, node.Path);
+                            return ApplyStreamResult(
+                                chosen, node, nodeType, meshConfiguration, compilationService, meshHub,
+                                logger, recompileAttempts);
+                        }
+                        return RecompileForLiveFramework();
+                    });
             }
-            return TriggerRecompileAndRetry(
-                node, nodeType, meshConfiguration, compilationService, meshHub,
-                logger, recompileAttempts,
-                reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
-                requireUsableBuild: true);
+            return RecompileForLiveFramework();
+
+            IObservable<MeshNode> RecompileForLiveFramework()
+            {
+                if (recompileAttempts >= MaxRecompileAttempts)
+                {
+                    logger?.LogWarning(
+                        "EnrichWithNodeType: {NodeType} assembly is compiled against framework {Compiled} but the live framework is {Live}; still ABI-stale after {Attempts} recompile attempt(s) — overlaying recompile prompt",
+                        nodeType, def.CompiledFrameworkVersion ?? "(null)",
+                        NodeTypeCompilationHelpers.FrameworkVersion, recompileAttempts);
+                    // Version-gated self-heal: when the operator's recompile lands
+                    // (a Version-advancing write with a framework-matching build),
+                    // every instance stuck on this prompt recycles itself.
+                    var (staleIntro, staleCta, staleGuidance) = OverlayCopy(OverlayCause.FrameworkStale);
+                    return Observable.Return(
+                        WithOverlaySelfHeal(
+                            WithCompilationErrorOverlay(node, nodeType,
+                                "Built against a previous framework version",
+                                guidance: staleGuidance,
+                                intro: staleIntro,
+                                callToAction: staleCta,
+                                activityPath: def.LastCompilationActivityPath),
+                            meshHub, nodeType, typeNode.Version, logger));
+                }
+                return TriggerRecompileAndRetry(
+                    node, nodeType, meshConfiguration, compilationService, meshHub,
+                    logger, recompileAttempts,
+                    reason: $"'{nodeType}' assembly compiled against framework '{def.CompiledFrameworkVersion}' but live framework is '{NodeTypeCompilationHelpers.FrameworkVersion}' — ABI-stale, recompiling",
+                    requireUsableBuild: true);
+            }
         }
 
         // 🚨 The compile state could not be DETERMINED (a settle wait or an assembly
@@ -1864,8 +1989,18 @@ internal static class NodeTypeEnrichmentHelpers
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub.Address.ToString(),
                             instanceHub.JsonSerializerOptions,
+                            // 🚨 Named, not anonymous (#3510): a self-posted DisposeRequest reads
+                            // as "a rebind or self-heal recycle" — three posters, one sentence —
+                            // and telling them apart cost that issue six occurrences.
                             recycle: () => instanceHub.Post(
-                                new DisposeRequest(), o => o.WithTarget(instanceHub.Address)),
+                                new DisposeRequest
+                                {
+                                    Reason = "Overlay self-heal: the instance is bound to an "
+                                             + $"overlay of NodeType '{nodeType}' that its own "
+                                             + "watcher found stale, so the hub is recycled to "
+                                             + "re-bind against the current build",
+                                },
+                                o => o.WithTarget(instanceHub.Address)),
                             reportStuck: () => ReportStuckOverlayToAdmins(instanceHub, nodeType, logger),
                             nodeType, typeVersionAtOverlay, logger,
                             guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
@@ -2119,7 +2254,16 @@ internal static class NodeTypeEnrichmentHelpers
                             "Stale-build convergence: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — auto-recycling instance '{InstancePath}' ({ConfigKey}=true)",
                             nodeType, published, boundAssemblyPath, instanceHub.Address,
                             AutoRecycleConfigKey);
-                        instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                        // 🚨 Named (#3510) — see the rebind watcher: the three self-posting
+                        // recyclers were indistinguishable in the victim's own log.
+                        instanceHub.Post(
+                            new DisposeRequest
+                            {
+                                Reason = $"Stale-build convergence ({AutoRecycleConfigKey}=true): "
+                                         + $"NodeType '{nodeType}' published build '{published}', "
+                                         + $"superseding the bound '{boundAssemblyPath}'",
+                            },
+                            o => o.WithTarget(instanceHub.Address));
                         return;
                     }
 

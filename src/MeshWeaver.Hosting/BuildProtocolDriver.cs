@@ -574,8 +574,10 @@ public static class BuildProtocolDriver
     // internal, not private: MeshWeaver.Graph.Test drives this directly to pin the #3117
     // release. Nothing outside the test assembly can see it.
     internal static IObservable<MeshNode> FinishActivity(
-        IMessageHub mesh, string activityPath, ActivityStatus status) =>
-        mesh.GetWorkspace().GetMeshNodeStream(activityPath).Update(node =>
+        IMessageHub mesh, string activityPath, ActivityStatus status)
+    {
+        var releaseMirror = ActivityLogAppender.PrepareMirrorRelease(mesh, activityPath);
+        return mesh.GetWorkspace().GetMeshNodeStream(activityPath).Update(node =>
             {
                 var log = node?.ContentAs<ActivityLog>(mesh.JsonSerializerOptions);
                 if (node is null || log is null || log.Status.IsTerminal()) return node!;
@@ -587,7 +589,8 @@ public static class BuildProtocolDriver
             // emitted. An already-terminal log takes the no-op arm above and is released here too,
             // which is correct: the status IS terminal, whoever wrote it.
             .Do(_ => { },
-                () => ActivityLogAppender.ReleaseMirrorWhenFinal(mesh, activityPath, status));
+                () => releaseMirror(status));
+    }
 
     // ── the follower ────────────────────────────────────────────────────────────────────────────
 
@@ -902,6 +905,7 @@ public static class BuildProtocolDriver
         && outcome.Status is not (PreWarmStatus.TimedOut
             or PreWarmStatus.UpstreamUnevaluated
             or PreWarmStatus.NoSources
+            or PreWarmStatus.DeclaredSourcesMissing
             or PreWarmStatus.UpstreamContentBroken);
 
     private sealed record OpenedChunk(

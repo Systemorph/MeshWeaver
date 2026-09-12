@@ -54,11 +54,11 @@ meshHub.GetHostedHub(
 
 1. **Resolve the Space root** — `source.PartitionRoot` or a synthesized generic `Space` — and fold it into the source node set.
 2. **Provision the partition schema** (`IPartitionStorageProvider.EnsurePartitionProvisioned`, lowercased, idempotent/promise-cached) **before** anything is written — the marker node in step 4 lives at `{P}/_Activity/…`, *inside* the partition schema, so a fresh partition would otherwise fault (42P01 — there is no lazy schema create; see [GhostSchemaInvariantTests]).
-3. **Fingerprint + short-circuit** — `PartitionSourceFingerprint.Compute(nodes + root)`. If a `Succeeded` activity at `{P}/_Activity/import-{fingerprint}` already exists, **stop** (the common case on every boot).
+3. **Fingerprint + short-circuit** — `PartitionSourceFingerprint.Compute(nodes + root)`. A converged `Succeeded` activity at `{P}/_Activity/import-{fingerprint}` may skip only when the current authoritative import manifest matches the source, including its root (the common case on every boot).
 4. **Stamp the marker, then open a fresh attempt** — upsert `{P}/_Activity/import-{fingerprint}` to `Running`. That deterministic node is the durable "version vN imported at T" record — nothing else. It is **not** a lock: a marker left `Running` is deliberately *reclaimed* rather than obeyed, so two replicas booting together can both import. That is safe because every write on the path is an upsert. The run's own log goes to a **fresh** `{P}/_Activity/import-{fingerprint}-{timestamp}-{rand}` node, one per attempt. See *Content-addressed Activity — the marker + the short-circuit* below for why the two roles are split.
 5. **Ensure the Space root** (standard step) via the canonical upsert — creating a `Space` triggers eager schema provisioning + the `Admin/Partition/{P}` routing prime + the admin grant; an existing root is updated. This makes the partition routable, listed in `public.top_level_index`, and gives it a landing page. **Exception — a *claimed* root is left untouched:** if the existing root carries `SyncBehavior != Include` (i.e. an admin set `ExcludeThisAndChildren` = "sync: none"), `EnsureRoot` does **not** re-materialise it. Re-materialising would reset the root's `SyncBehavior` back to `Include` and silently re-enable sync — see *Decoupling a partition (sync: none)* below.
 6. **Upsert every source node** through **`CreateOrUpdateNodeRequest`** — the single canonical verb (the same one `NodeCopyHelper` uses). It **creates** absent nodes and **updates** existing ones (the owner **re-stamps Version**), running the full pipeline: prerender (`MarkdownContent.Parse`), embedding, satellites, access. **Claimed subtrees are skipped** — both a **child** claimed in the snapshot (`SyncBehavior != Include`) and an **entire partition whose root is claimed** (`ExcludeThisAndChildren`). The partition-root claim is read **authoritatively** (`GetMeshNodeStream`), NOT from the eventually-consistent query snapshot, so a *just-set* decouple is honoured before the read-model catches up (the snapshot lags writes — reading the claim from it re-synced the partition and clobbered the admin's edits: a production `Provider/Anthropic` key reset, 2026-06-25). **Each upsert is independently guarded** (per-file `try/catch`): a single node faulting (bad content, a validator reject, a transient owner timeout) logs a `⚠ Failed to import {path}` line **into the import activity** and the import **continues** — the first failure never aborts the rest of the partition. Failures are tallied. 🚨 The writes are **ORDERED, not a flat fan-out**: a NodeType node lands before every instance that names it, and a type's `Source`/`Test` nodes land before the type — see [Import Write Ordering](../ImportWriteOrdering), which also settles what happens to a type that arrives from another partition or repo, and the cycle policy. Without it a repo shipping an instance of a type it introduces was refused `NodeType 'X' is not registered` and the retry re-ran the identical ordering forever (issue #2556: 6,902 refusals in 90 minutes on memex-cloud).
-7. **Prune (per the partition's [sync mode](#per-partition-sync-mode-what-gets-pruned))** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`, claimed subtrees, and — in `Additive` mode — user-added nodes the source never owned), then write the **terminal status atomically** onto the ATTEMPT node via `NodeTypeCompilationActivity.Complete`: **`Succeeded`** when every node imported, **`Warning`** (`"N FAILED (see ⚠ above)"`) when any per-file upsert failed — and **`Warning`** too when a claim refused to let a declared node be CREATED (`🚫 … CANNOT BE CREATED`, naming the paths; see *A claim protects a node from being OVERWRITTEN* below) — so the activity log never shows a green Succeeded while hiding failures, and the `⚠` lines pinpoint exactly which files to investigate. A hard fault in provisioning/root/read still `MarkFailed`s the attempt. The same verdict is then stamped on the **marker** (upsert), because that is what the next boot's short-circuit reads.
+7. **Prune (per the partition's [sync mode](#per-partition-sync-mode-what-gets-pruned))** — delete target nodes absent from the source (except governance `_Policy`/`_Access`/`_Activity`, claimed subtrees, and — in `Additive` mode — user-added nodes the source never owned). 🚨 **A NodeType definition that still has instances is HELD, never pruned** (`NodeTypeInstanceProbe`, since 2026-09-08): it stays with its own `Source/`/`Test/` subtree, is stamped `pendingRetirement`, is named on a ⏸ line, and counts as *preserved* so the run is not converged — the next sync asks again and prunes it once the instances are retyped or deleted ([Dangling NodeTypes](../DanglingNodeTypes) → *hold while instances exist*). Then write the **terminal status atomically** onto the ATTEMPT node via `NodeTypeCompilationActivity.Complete`: **`Succeeded`** when every node imported, **`Warning`** (`"N FAILED (see ⚠ above)"`) when any per-file upsert failed — and **`Warning`** too when a claim refused to let a declared node be CREATED (`🚫 … CANNOT BE CREATED`, naming the paths; see *A claim protects a node from being OVERWRITTEN* below) — so the activity log never shows a green Succeeded while hiding failures, and the `⚠` lines pinpoint exactly which files to investigate. A hard fault in provisioning/root/read still `MarkFailed`s the attempt. The same verdict is then stamped on the **marker** (upsert), because that is what the next boot's short-circuit reads.
 
 All writes run under `AccessService.ImpersonateAsSystem` (re-established at each write's own subscribe, since the System identity must reach the cross-hub write — see [AccessContextPropagation.md](/Doc/Architecture/AccessContextPropagation)). **That includes the queued leg**: `IMeshNodeStreamCache` serialises writes per path through a `Concat`, so every write after the first is subscribed on its predecessor's settle thread — the enqueuer's identity is captured at enqueue and carried onto the request, or the import's own progress write would go out unattributed and be refused by the very partition it is repairing (issue #919).
 
@@ -234,7 +234,7 @@ The import is governed by TWO [Activity](/Doc/Architecture/ActivityControlPlane)
 
 **The marker** — `{Partition}/_Activity/import-{fingerprint}`, id = the fingerprint:
 
-- **A `Succeeded` activity for the fingerprint is the durable "already imported" record** — the boot short-circuit reads it; equal fingerprint ⇒ no work. This is the marker's whole job, and it is why the id must be derived from the content.
+- **A `Succeeded` activity records that this fingerprint was imported previously.** The skip also checks its convergence verdict and the current authoritative import manifest; a historical marker alone does not establish the partition's current source. This is the marker's whole job, and it is why the id must be derived from the content.
 - **Changed source ⇒ new id** ⇒ a fresh import runs. Old `import-{prevHash}` markers remain as a visible import history.
 - It is written **only** through the idempotent upsert (`CreateOrUpdateNodeRequest`), twice per run: `Running` at the start, then the terminal verdict. That verb floors the version on the durable row it just read, so a forked/ghost row is repaired in place rather than silently discarded (#902/#909).
 - 🚨 **It is not a lock, and nothing else serialises replicas.** A marker left `Running` — by a crashed import, or by a rollout briefly running two pods — is *reclaimed*, not obeyed: the guard re-imports on anything that is not `Succeeded`. Obeying it was the old behaviour and it wedged a partition into "AlreadyRunning, 0 nodes" forever (the prod Agent/Harness/Command wedge). So two replicas on the same fingerprint can import concurrently. That is safe **only** because every write on the path is an upsert of byte-identical content — do not add a step here that is not idempotent, and do not treat "the lock protects me" as an available argument.
@@ -252,6 +252,112 @@ The SQL migration (`Memex.Database.Migration`) is a standalone process with **no
 ## Distributed serving (why this matters)
 
 In the **distributed (Orleans/PG) portal, routing does not consult the in-memory `EmbeddedResourceStorageAdapter`** — so a partition that is only served from the embedded overlay 404s / hangs. The static-repo import is what makes built-in partitions (Doc/Agent/Model) **served from the DB** there. The monolith (in-process embedded routing) works either way, so the cutover is gated by `Features:StaticRepoSync:Partitions` (default `["Doc","Agent","Model"]` for the distributed portal; monolith leaves it empty and keeps in-memory serving).
+
+## Returning to a previously imported source
+
+A source can move **B → A → B** during a rollback or a change of sealed publication. The old
+`import-{B}` activity survives the A import because import history is outside the content prune.
+Its success is historical evidence. Before skipping, the importer reads the current
+`import-manifest` authoritatively and compares its content tokens with every requested non-empty
+node path and the root. A mismatch clears any Git-diff scope and evaluates the full source with the existing conflict
+policy. The manifest remains the same path-to-token map; older maps without a root entry receive
+one incremental full pass before they can authorize a skip. The root is always recorded as evaluated:
+`EnsureRoot` runs independently of the child Git-diff scope. Retaining its previous token after a
+scoped root change would incorrectly authorize the previous root's historical marker.
+
+`GitHubSyncService.ReconcileAtCommit` likewise evaluates the whole source, without a Git comparison
+or a per-node manifest shortcut. A recorded B SHA makes the Git diff B..B empty even if the live mesh
+contains A. Reconciliation preserves two-way human edits and claims; it never sets `Force`. A
+subsequent ordinary import of a converged, unchanged source skips with no content writes.
+
+**Measured failure, memex-cloud, 2026-09-10 UTC.** Store imported the new coupon/course-size source
+at 18:55 (`Store/_Activity/9817ab34`, commit `06d8187049f38aa8831a423ed64f32965af424cb`).
+A sealed-source reconciliation then imported `f4570459a34a64c4edd9b17a4a9b59a62a50165e` at
+19:10 (`Store/_Activity/3f12d540`), restoring the previous source and pruning six new nodes.
+At 21:07, attempts `Store/_Activity/a24af2d7` and `Store/_Activity/e348d6d8` targeted the new
+Store-equivalent commit `8ee8a1928d278aa74a162353dfa663ffac44c28c` but explicitly skipped on
+historical marker `Store/_Activity/import-1c252ab2c7141f07`. `_GitSync` recorded that SHA as seen,
+while the actual Plugin source remained at fingerprint `cc84832d2d7d3575` and the new nodes were
+absent. This is a bounded historical observation, not a claim about production after later imports
+or replica turnover.
+
+`ReturningSourceConvergesTest` drives the real GitSync service and monolith importer, substituting
+only the GitHub I/O boundary. Its initial six-case matrix, before the scoped-root follow-up below,
+fails on unchanged core `f1a945d5`: B → A → B returns `Skipped` (including
+a root-only change); both same-SHA reconciliation cases restore the missing node but leave the
+existing source stale; an ordinary import whose recorded SHA is already B skips; and explicit
+reconciliation trusts a matching manifest despite measured live drift. The corrected regression
+also verifies unchanged repeats and a person's two-way edit with its conflict horizon held. These checks do not establish distributed serialization between replicas that are
+concurrently importing different selected publications; durable delivery still requires the intended
+publication and actual final source fingerprints to agree.
+
+**Initial local validation:** those six cases are red on unchanged core `f1a945d5` and green
+with the initial correction. All 19 targeted Hosting/GitSync cases and 51 existing Graph importer cases pass.
+Release builds of the touched projects and test dependencies report zero warnings and errors.
+The regression reads actual node content and checks written/pruned paths; it does not assert only
+on the sync SHA or on a success message. Production acceptance remains a separate release step.
+
+**Scoped-root follow-up:** `ScopedRootChange_CannotLeaveThePreviousRootsMarkerCurrent` fails on
+`7aac375b`: a full B import, followed by A with only `index.json` in the Git diff, writes root A but
+retains B's root token; returning to B skips and leaves the actual root at A. Recording the root's
+current token independently of the child scope corrects this. The test checks actual root content
+and the subsequent ordinary zero-content-write repeat. The new case is red on `7aac375b` and green
+with the correction. This follow-up expands `ReturningSourceConvergesTest` from six to seven
+executed cases; all 20 targeted Hosting/GitSync cases pass on the corrected source. The initial
+six-case and later scoped-root red receipts describe separate validation runs.
+
+**Review controls, 2026-09-11:** a `Versioned` source's revision changes the partition fingerprint;
+the manifest deliberately stores authored-content tokens. The new
+`VersionOnlySourceRevision_DoesNotRewriteIdenticalContentOrTheOwnerClock` case passes on unchanged
+`f1ce3394`: importing identical content at revisions 42 → 43 → 42 → 43 preserves both the content
+and the mesh owner's node version. A source revision alone must not manufacture a content write.
+
+The separate `EmptyPathIgnoredByTheFingerprint_DoesNotInvalidateTheCurrentManifest` case exposes
+a real mismatch on that same baseline: the fingerprint and manifest writer omit empty paths,
+while the returning-source comparison included one. An otherwise unchanged repeat returns
+`ImportedWithContentErrors` instead of `Skipped`. Applying the same non-empty-path filter to the
+comparison keeps those three decisions consistent. Its comparison map and the test fixture's
+source list use immutable collections (correction commit `6dae9421`). All nine cases then pass: the previous seven plus these
+two review controls. The 25 existing conflict-policy, scoped-marker and sync-mode cases also pass.
+Strict Release `Hosting.Test` and `Graph.Test` builds report zero warnings and errors.
+The distinct baseline and corrected receipts are
+`/tmp/core3991-review-results/core3991-review-before.trx` and
+`/tmp/core3991-review-results/core3991-review-final.trx`; the existing controls are in
+`/tmp/core3991-review-results/core3991-review-graph.trx`. The review baseline executes the two new
+controls: the version-only case passes and the empty-path case fails.
+The strict `Documentation.Test` build and 12 release-note, link and embed integrity cases also pass;
+their receipt is `/tmp/core3991-review-results/core3991-review-doc.trx`.
+
+**Removal review:** adding the root to the manifest does not make it a prune candidate. `Run` reads
+existing **descendants**, and `ComputePrunableNodes` filters that existing set; manifest keys only
+narrow ownership in Additive mode. Claims, incomplete-listing refusal, protected local edits, held
+NodeTypes and their source subtrees retain their existing guards. Removing an entire compiled
+source partition still uses the independent `Admin/_SourceOwnedCatalogs` registry. Removing its
+root index file instead restores the standard synthesized root; it does not remove the partition.
+
+A separate pre-existing boundary remains outside this fix: `Run` derives touched partitions solely
+from the current child nodes. If a source removes its **last** child, that list is empty and the
+existing-subtree read is empty, so old children are not presented to the prune. The root-inclusive
+manifest does not introduce that omission or repair it. This is a source-path finding; no new
+runtime test or production claim accompanies it here.
+
+**Integration review, 2026-09-10:** main `89c914b64e6b5ff4c70f36de8604ac84c7c6e29b` changes
+`DataExtensions` and read-visibility tests through #3976; PR #3981 head
+`b7d011dd2cddb5c105e87c77420fc519d2575938` adds the content-workflow admission gate and adjusts
+its webhook fixtures. Neither changes this patch's importer/service/test files. The complete
+importer patch, including the scoped-root correction, applies cleanly to each tree and their clean combined tree
+`58d388500f458e2a51ba38d4314b7a1e83585be0`, checked with a temporary Git index without changing
+any checkout. The two fixes govern different decisions: #3981 determines which CI completion may
+request an import; this fix determines whether the requested source is already present.
+
+After the coordinated release hold is lifted, transplant both importer commits in order onto a
+fresh checkout of the then-current main; do not cherry-pick only `7aac375b` and lose the scoped-root
+correction. Re-read main and the owner's final source first, preserve #3981's workflow-path fields
+in the existing webhook fixtures, and rerun the Hosting/GitSync regression selection, Graph importer
+selection and documentation/reactive guards on the combined tree. A clean patch application is not
+a compiled or tested integration receipt. Ship through the normal core/CD and sealed-publication
+workflow; verify the selected publication plus actual Store source/compiled fingerprints after
+normal reconciliation. No force import or conflict-policy bypass is part of the transplant.
 
 ## 🚨 A CONTENT verdict is final for its fingerprint; a transient failure is not
 
@@ -344,6 +450,7 @@ Shipped and enabled for `Doc` / `Agent` / `Model` on the distributed portal. The
 - A **changed** source re-imports and **increments the Version** of updated nodes (the canonical-upsert guarantee).
 - An import over a **content-NULL row refills its content** (the migration-backfill shadow case).
 - A node **absent from the source is pruned** in `FullReplace`; in `Additive` only a node the source **previously owned** is pruned (a user-added node survives); `UpsertOnly` prunes nothing (`StaticRepoImporterSyncModeTest`).
+- A **NodeType definition that still has instances is held, not pruned** — kept, stamped `pendingRetirement`, counted as preserved (not converged) — and **is pruned by the next import once the instances are gone**; a type with no instances is pruned on the first pass (`ImportDanglingNodeTypeTest`).
 - Re-run with an unchanged source is a **no-op** (fingerprint short-circuit).
 - The import runs on the **dedicated `import/{meshHubId}` hub**, not the root mesh hub — the bulk create/upsert traffic never touches the router (verified end-to-end by `OrleansStaticRepoImportTest` / `OrleansContentImportSyncTest`, which complete only because the import hub is reachable).
 - A **single node failing does not abort the import**; it logs a `⚠` line and the activity ends **`Warning`**, not a green `Succeeded`.

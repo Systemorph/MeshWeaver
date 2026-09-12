@@ -121,6 +121,26 @@ data:
          Empty renders harmlessly: the host skips blank values, and the seeding logs "no published
          bundle root configured" at debug and stays inert. */}}
   PreWarm__PrebuiltBundleRoot: "{{ .Values.config.memex_portal.PreWarm__PrebuiltBundleRoot }}"
+  {{- /* PreWarm__PrebuiltBundleRetention__Delete: ARMS DELETION in the retention sweep over the
+         store the key above mounts (PrebuiltBundleRetentionExtensions.DeleteConfigKey). The scan,
+         the plan and the ledger line happen either way; this key alone decides whether the pass
+         REMOVES anything.
+
+         🚨 THE CODE DEFAULT IS THE OPPOSITE. PrebuiltBundleRetention.Delete is `true`, so until
+         this line existed the sweep ran ARMED on every instance that mounts a bundle root — and
+         the knob to disarm it was UNREACHABLE, because this configmap enumerates keys explicitly
+         (see the PreWarm__PrebuiltBundleRoot note above): a values file, an overlay or a
+         Deployment record's extraPortalConfig setting it reached no container, silently. That is
+         the Memex#53 / #1660 WS3 shape again, this time on a knob whose omission DELETES.
+
+         🚨 What this sweep removes is bytes something is EXECUTING — the framework identity a
+         portal adopted, or the sealed publication a consumer pulls over the HTTP prebuilt
+         surface. It belongs to the AssemblyCache__Retention__Delete class below, never to the
+         armed-by-default Notifications one, and it carries the same rule: read one ledger line,
+         confirm the protected set covers every instance AND every CI gate that pins an older
+         platform build, then arm it. A first run that deletes on unexamined defaults is the one
+         mistake here that cannot be undone. See Doc/Architecture/PrebuiltBundleRetention. */}}
+  PreWarm__PrebuiltBundleRetention__Delete: "{{ .Values.config.memex_portal.PreWarm__PrebuiltBundleRetention__Delete | default "false" }}"
   # ---- Assembly-cache retention -------------------------------------------
   # The bake writes one WHOLE GENERATION of NodeType assemblies per image, because the store
   # keys every file by the MeshWeaver.Graph MVID and a CI build changes it on every publish.
@@ -260,6 +280,19 @@ data:
   # app-relative path; empty = none. Per-install brand assets ship at
   # _content/Memex.Portal.Shared/brand/{systemorph,prod,local}-180.png (or a mesh asset / absolute URL).
   Portal__AppleTouchIcon: "{{ .Values.config.memex_portal.Portal__AppleTouchIcon | default "" }}"
+  # ---- Public web site (Doc/Architecture/PublicWebPresence) — optional -----
+  # SiteName is the brand in <title> separators and og:site_name ("MeshWeaver"); empty = "Memex".
+  # PublicHost names the ONE host search engines rank the site under (www.meshweaver.cloud):
+  # every canonical, og:url and sitemap entry is built on it whichever host served the request,
+  # and a request on any OTHER host is the app host — noindex, robots Disallow: /, and a stranger's
+  # HTML GET for a public page answers 301 to the public host. Empty = single-host, unchanged.
+  # LandingPath is the node a signed-out visitor sees at "/" (the landing Space); empty = the
+  # portal's own welcome route. The public host must ALSO be an ingress rule to this service —
+  # the chart renders one host (ingress.host); the second is the overlay's (memex-cloud:
+  # Memex.Website/k8s/brand-site.yaml).
+  Portal__SiteName: "{{ .Values.config.memex_portal.Portal__SiteName | default "" }}"
+  Portal__PublicHost: "{{ .Values.config.memex_portal.Portal__PublicHost | default "" }}"
+  Portal__LandingPath: "{{ .Values.config.memex_portal.Portal__LandingPath | default "" }}"
 {{- if (.Values.instancesAdmin).clusterRead }}
   # ---- Platform-admin Instances overview (see .Values.instancesAdmin) -------
   # The SAME flag that grants the cluster-read RBAC also enables the Settings tab, so the
@@ -463,6 +496,17 @@ data:
   {{- end }}
   # A TimeSpan: a real default, never "" (the same typed-key rule as SelfUpdate__MinRollInterval).
   Hosting__ReportInterval: "{{ .Values.config.memex_portal.Hosting__ReportInterval | default "01:00:00" }}"
+  # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713) -----------------
+  # The URL of the control instance's signed inbox that the Feedback plugin hands a technical
+  # submission (bug / idea / technical question) to after Submit — for the fleet that is
+  # https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds. Binds Hosting:ControlInbox:Url.
+  # Empty = the hand-over is OFF and a submission stays in the instance's own Inbox (one warning
+  # per technical submission naming both keys). The control instance leaves it empty: it lists
+  # Hosting/PlatformBuilds as a webhook target and delivers into its own inbox. The other half,
+  # Hosting__ControlInbox__Secret, is a SECRET (Key Vault via a SecretProviderClass, envFrom) —
+  # never a key here. Rendered explicitly so an overlay setting it reaches the container
+  # (config-key-coverage): before this line existed the key was consumed by nothing.
+  Hosting__ControlInbox__Url: "{{ .Values.config.memex_portal.Hosting__ControlInbox__Url | default "" }}"
   WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 | default "" }}"
   # 🚨 #3312 — how a target says it is AUTHENTICATED, paired with the slot it authenticates.
   # Names the CONFIGURATION KEY holding that target's shared HMAC (never the secret itself), and
@@ -914,3 +958,11 @@ data:
   # makes the action report itself UNAVAILABLE rather than silently drop a message — so this
   # key is what turns Forward on, and an untemplated key here would ship the feature inert.
   Email__Inbound__ForwardAddress: "{{ .Values.config.memex_portal.Email__Inbound__ForwardAddress | default "" }}"
+  # ---- What the Executive Assistant may SEND on a person's behalf (MeshWeaver.Plugins, Mail
+  # module). Both default to the safe mode in the module itself — DraftOnly for mail, Off for
+  # Teams posting — and ONLY the literal word "Send" opens either gate (a typo, "true", "1"
+  # stay closed). Rendered here so an overlay can turn one on per environment; before this line
+  # existed the key reached no container and the feature shipped inert (config-key-coverage).
+  # Independent of each other: Teams posting does not widen mail sending, nor the reverse.
+  Email__AgentSend: "{{ .Values.config.memex_portal.Email__AgentSend | default "" }}"
+  Teams__AgentSend: "{{ .Values.config.memex_portal.Teams__AgentSend | default "" }}"

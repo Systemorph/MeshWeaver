@@ -1,7 +1,7 @@
 ---
 Name: Controls That Cannot Fail
 Category: Architecture
-Description: A control whose green is guaranteed by construction is not a control. Twelve measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, a git idiom that answers the wrong question, a generator whose failure mode is a success line, and a guard handed an input that could not fail — and the one question that catches them all.
+Description: A control whose green is guaranteed by construction is not a control. Fourteen measured instances — a test, a detector, an identity anchor, a preflight, a watcher, a CD verdict, a git idiom that answers the wrong question, a generator whose failure mode is a success line, a guard handed an input that could not fail, a probe whose defect had already been fixed in its sibling method, and two counters over different populations printed as one measurement — and the one question that catches them all.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/><path d="M12 8v8" opacity="0.25"/></svg>
 ---
 
@@ -50,8 +50,10 @@ instances. The family is larger, and it is worth recognising by shape.
 | **An input the OPERATOR supplies** | `--is-ancestor <commit I chose> <candidate>` where the commit chosen is the branch's own tip | the check is sound; the value handed to it cannot make it print anything but PASS |
 | **An observer that becomes the load** | several sessions polling the same PRs until the shared credential 403s | the watch removes the ability to observe; `/rate_limit` still reports a healthy quota |
 | **A remedy written for reads, applied to a write** | "retry the failed call" after a timeout on `gh pr create` | a lost response is not a lost request; the blind retry creates the second one |
+| **Two counters over different populations** | `78 adopted` beside `baked=5`, ten seconds apart | neither is wrong; the units, denominators and sources differ and nothing says so |
+| **One contract serving two consumers with opposite needs** | `[]` from a speculative compile: *no squiggles* to an editor, *approved* to a tool rendering `{ok}` | the code is right for one caller, so reviewing it on its own terms confirms it |
 
-## Twelve measured instances
+## Fourteen measured instances
 
 The first six were found in a single day, across tests, CI, publication and ops. Instances 7 and 8
 were found **while writing this page** — one by its author, one by the session that supplied instances
@@ -679,6 +681,87 @@ Classify the operation *before* choosing the recovery, and note which of the thr
 about: whether the request was sent, whether it was applied, and whether the operation is safe to
 repeat. Most transport errors answer only the first, and only sometimes.
 
+### 13. The same defect, fixed in one method and left in its sibling — two months apart
+
+The instrument was `lsp_check_node`, the pre-flight the `/code` skill's whole edit loop is built on
+(*"edit a source file in your head → `lsp_check_node` → if diagnostics, fix → repeat → only then
+patch + compile"*). Measured on `memex.systemorph.com`, 2026-09-10:
+
+```
+lsp_check_node  nodeTypePath: @BinaryClickerV2/BinaryToggle
+                proposedCode: "this is definitely not valid C# ###"
+→ {"ok":true,"diagnostics":[]}
+```
+
+That second call **is** the second half of the diagnostic, run by accident: a probe handed a subject
+broken on purpose — text that cannot parse as C# at all — and it still returned clean. The NodeType
+sat in a partition that identity had no read grant on, so nothing was ever compiled; the empty list
+was "I could not look", spelled exactly like "I looked and it is fine".
+
+**What makes this one worth its own instance is not the defect. It is that the defect had already
+been found, understood, written up and fixed — in the method next door.** #1592/#1618 gave
+`GetDiagnostics` a `NodeDiagnosticsOutcome` for precisely this reason, and the type's own XML doc
+says it in bold: *"An empty diagnostic list is not evidence of health."* `CheckSpeculative`, four
+lines away in the same class, kept returning a bare list. Nothing carried the fix across, because
+nothing had named the CLASS the two methods share.
+
+The reason it survived a careful reading is subtler than an oversight, and it is the general lesson:
+
+> **One return type was serving two consumers whose needs are opposite.** The Monaco editor wants
+> silence when the owner cannot be resolved — a squiggle computed under the wrong language rules is
+> worse than no squiggle. The MCP tool renders a **verdict**, where silence reads as *approved*. The
+> code comment said *"stay silent rather than paint squiggles computed under the wrong language
+> rules"*, and it was **right for one caller and wrong for the other** — so reviewing the method on
+> its own terms could only ever confirm it.
+
+The fix is two surfaces rather than one compromise: `CheckSpeculative` (the editor's, silent by
+contract) and `CheckSpeculativeOutcome` (everyone rendering a verdict), the first derived from the
+second so they cannot drift. Full account: [Language Services](/Doc/Architecture/LanguageServices)
+→ *An empty diagnostic list is not evidence of health*.
+
+**Two transferable rules.** When you fix an instrument that cannot fail, ask *which other callers of
+this data have the same shape* — a sibling method, a second tool over the same service, the other
+overload — because the fix travels with the CLASS, not with the call site. And when a "silent on
+error" contract looks correct, ask **whose** contract it is: if two consumers read the same value
+and one of them renders it as a verdict, silence is not a shared default, it is a defect for one of
+them.
+
+### 14. Two counters over different populations, printed as if they were one measurement
+
+Not a control this time, but the same property one step over: an **instrument pair** whose readings
+were not comparable and whose lines did not say so. memex, 2026-09-08, one cold boot, ten seconds
+apart:
+
+```
+00:31:08  ShippedPrebuiltBundles: 78 prebuilt assembly(ies) … are backed by the assembly store
+00:31:18  DynamicTypePreWarmer:   204 of 209 … need building — 5 already on the share.
+```
+
+Filed as *"78 adopted, the sweep's store probe counts 5"*
+([#3703](https://github.com/Systemorph/MeshWeaver/issues/3703)) — which sends the next reader to the
+assembly store, where nothing is wrong. **78 counts BUNDLE ENTRIES whose bytes were written, in
+assemblies. 5 counts NODETYPES whose stored RECORD names a live-framework build and whose bytes
+resolve at the version that record names.** The store is asked exactly one question per type, keyed
+by the record — so the second number is not a census of the share at all, and the phrase *"already
+on the share"* was the whole misreading in four words.
+
+Underneath it sat the defect proper, and it is instance 5's shape: the sweep read a CQRS projection
+that its own process had superseded ten seconds earlier, and **a stale projection and a genuinely
+stale record are the same bytes** — the classification could not tell them apart, and reported
+`frameworkstale=201` with 197 needless compiles behind it.
+
+**Two fixes, and the second is the one this page is about.** The sweep now classifies from the newer
+of the two facts, ordered by `MeshNode.Version` rather than by hope. And every line names its own
+population: the adoption line says it counts assemblies, the sweep line says it is *"NOT a census of
+the assembly store"*, and the report carries `fromlocaladoption=N` so a boot whose input was behind
+says so in the same line that reports the verdict.
+
+> **A number that does not carry its population, its unit and its source is not a measurement, and
+> two of them side by side are an invitation to a false disagreement.** Before you treat two
+> instruments as contradicting each other, make each one state what it counted.
+
+Full account: [Adoption and the Sweep Count Different Things](/Doc/Architecture/AdoptionAndTheSweepCountDifferentThings).
+
 ## What the whole family has in common
 
 Instances 9, 10 and 11 were found on one day, alongside a watcher reading a `startup_failure` (a
@@ -794,4 +877,5 @@ carries its own control arm is that thesis applied to itself.
 - [Cross-Repo Pair Gate](/Doc/Architecture/CrossRepoPairGate) — a gate that sees two of seven break shapes, and says so.
 - [Orleans Test Routing Pattern](/Doc/Architecture/OrleansTestRoutingPattern) — the pod-hub claim, and why reachability cannot stand in for it.
 - [Transitional Allow Entries](/Doc/Architecture/TransitionalAllowEntries) — in force only in the change that adds them, which is why instance 12's hardcoded set expires.
+- [Language Services](/Doc/Architecture/LanguageServices) — instance 13 in full: why one return type could not serve both the editor and the pre-flight tool.
 - [Writing Tests](/Doc/Architecture/WritingTests) — the golden rules these controls are expressed against.

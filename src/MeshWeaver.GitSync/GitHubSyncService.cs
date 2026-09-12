@@ -27,7 +27,7 @@ namespace MeshWeaver.GitSync;
 public sealed class GitHubSyncService
 {
     /// <summary>The fixed node id of a Space's GitHub-sync config satellite (<c>{space}/_GitSync</c>).</summary>
-    public const string ConfigId = "_GitSync";
+    public const string ConfigId = AccessAssignmentGuard.SyncConfigId;
     /// <summary>The <see cref="MeshNode.NodeType"/> of the sync config node.</summary>
     public const string ConfigNodeType = "GitHubSyncConfig";
     /// <summary>The <see cref="MeshNode.NodeType"/> identifying a Space (the unit GitHub sync acts on).</summary>
@@ -142,6 +142,11 @@ public sealed class GitHubSyncService
                         // Record the commit by MERGING only the last-sync fields atop the latest
                         // node content (stream.Update read-modify-write) — never a full-content write,
                         // so a concurrent repo-field edit in the GUI editor is not clobbered.
+                        // 🚨 The attempt pair (#3945) is left to its default — i.e. CLEARED. An
+                        // export advances the conflict horizon, and the horizon is what decides
+                        // which live nodes an import preserves, so any "final at commit X" verdict
+                        // an earlier import recorded is stale the moment this lands: the next green
+                        // build must attempt again rather than skip on it.
                         return repoClient.Push(request).SelectMany(result =>
                             RecordSyncResult(spacePath, CommittedOutcome, result.CommitSha,
                                     advanceHorizon: true, sourceId)
@@ -220,11 +225,14 @@ public sealed class GitHubSyncService
     /// <summary>
     /// Adds a top-level <c>README.md</c> rendered from the Space root's body so the GitHub
     /// repo page shows a landing page. The authoritative root remains <c>index.json</c>;
-    /// import skips <c>README.md</c> so it never becomes a stray node.
+    /// import skips an undeclared display <c>README.md</c> so it never becomes a stray node.
+    /// An authored README already exported as a node takes precedence over generated text.
     /// </summary>
     private IReadOnlyList<RepoFile> AppendReadme(IList<RepoFile> files, IReadOnlyList<MeshNode> nodes, string partition)
     {
         var list = files.ToList();
+        if (list.Any(f => string.Equals(f.Path, "README.md", StringComparison.OrdinalIgnoreCase)))
+            return list;
         var root = nodes.FirstOrDefault(n => string.Equals(n.Path, partition, StringComparison.Ordinal));
         var readme = root is null ? null : BuildReadme(root);
         if (!string.IsNullOrEmpty(readme))
@@ -474,7 +482,21 @@ public sealed class GitHubSyncService
                                 // a fingerprint-matched no-op (#677), never on one that preserved
                                 // server-newer nodes (#675).
                                 advanceHorizon: mayAdvance && !skipped,
-                                sourceId)
+                                sourceId,
+                                // A retirement the import HELD (a NodeType the repository dropped
+                                // while the mesh still has instances) is drift the sync cannot close
+                                // by itself — it is stated on the config, where the settings tab and
+                                // the status surface read it, not only in the activity log.
+                                note: HeldNote(x.Result),
+                                // 🚨 #3945 — the SECOND, weaker pointer, and the whole reason it is
+                                // a second one. "We have already looked at exactly these bytes" is
+                                // not "the mesh holds this commit", and one field answering both is
+                                // what made a source that cannot converge re-clone its entire
+                                // repository on every green build of the source repository. This one
+                                // is stamped whatever the outcome; whether it may LICENCE a skip is
+                                // the flag beside it, never this sha alone.
+                                attemptedCommitSha: x.CommitSha,
+                                attemptWasFinal: x.Result.VerdictIsFinal)
                             .Select(_ => x.Result);
                     });
             });
@@ -507,6 +529,17 @@ public sealed class GitHubSyncService
     /// <para>A "Skipped" (fingerprint-matched no-op) outcome is NOT judged here — it is allowed
     /// through to <c>RecordSyncResult</c> with <c>advanceHorizon: false</c>, which advances the SEEN commit only and deliberately
     /// leaves the conflict horizon alone.</para>
+    ///
+    /// <para>🚨 <b>This is NOT the question "would attempting again change anything" (#3945), and it
+    /// must never be relaxed into it.</b> Holding the baseline is what keeps un-landed content
+    /// reachable; but because <c>GitHubWebhookProcessor.SkipReason</c> also read this same field to
+    /// decide whether a delivery was FREE, holding it made every later green build of the source
+    /// repository pay a full clone — 10/h on core, for as long as the source did not converge. That
+    /// second question now has its own pair of fields
+    /// (<see cref="GitHubSyncConfig.LastAttemptedCommitSha"/> +
+    /// <see cref="GitHubSyncConfig.LastAttemptWasFinal"/>), fed by
+    /// <see cref="StaticRepoImportResult.VerdictIsFinal"/>, so this one can stay exactly as
+    /// conservative as #675 / #677 / #2229 item C need it to be.</para>
     /// </summary>
     /// <param name="result">The import outcome to judge.</param>
     /// <returns><c>true</c> when the mesh is genuinely in sync with the repo at this commit.</returns>
@@ -514,6 +547,24 @@ public sealed class GitHubSyncService
         => result.Preserved == 0
            && result.Failed == 0
            && !string.Equals(result.Outcome, "Failed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The <see cref="GitHubSyncConfig.LastSyncNote"/> an import earns when it HELD a NodeType the
+    /// repository retired while the mesh still holds instances of it
+    /// (<see cref="StaticRepoImportResult.HeldNodeTypePaths"/>) — the in-mesh content the
+    /// repository does not hold, named where an operator looks for the source's state. <c>null</c>
+    /// when nothing was held, which also clears an older note (a note describes the LAST attempt
+    /// only). Pure.
+    /// </summary>
+    /// <param name="result">The import's outcome.</param>
+    internal static string? HeldNote(StaticRepoImportResult result)
+        => result.HeldNodeTypePaths.Count == 0
+            ? null
+            : $"{result.HeldNodeTypePaths.Count} NodeType(s) the repository no longer carries are held "
+              + "for their remaining instances (pending retirement — not pruned): "
+              + string.Join(", ", result.HeldNodeTypePaths)
+              + ". Retype or delete the instances in the mesh, or restore the type in the repository; "
+              + "the next sync completes whichever you chose.";
 
     /// <summary>
     /// Asks GitHub — LIVE, nothing stored — for the configured branch's current HEAD commit,
@@ -595,11 +646,14 @@ public sealed class GitHubSyncService
             // truncated, or a compare error) falls back to a full import — never a silent
             // under-import. This is what stops a routine push from re-materialising the whole
             // partition and storming the live compiler (the memex-cloud outage loop, 2026-07-23).
-            var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true
+            var readmePolicy = ReadmeFilePolicy.From(snapshot);
+            // Reconciliation measures drift in the live mesh, not changes between Git commits.
+            // B..B is empty even when another import replaced the live nodes with A.
+            var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true || policy?.Reconcile == true
                 ? Observable.Return<IReadOnlyList<string>?>(null)
                 : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
             return diff.SelectMany(changedFiles =>
-                ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
+                ParseSnapshot(snapshot, spaceId, ignore, readmePolicy, progress).SelectMany(parsed =>
                 {
                     // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
                     // needs them to tell "the repo dropped this node" from "this node never syncs".
@@ -610,7 +664,8 @@ public sealed class GitHubSyncService
                     // withheld, because a stale extra is recoverable and a silent delete is not.
                     var source = new InMemoryStaticRepoSource(
                         spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs, ignore,
-                        listingIsComplete: snapshot.ListingIsComplete);
+                        listingIsComplete: snapshot.ListingIsComplete,
+                        ownsReadme: readmePolicy.IsPackage);
                     var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
                     if (changedNodePaths is not null)
                         logger?.LogInformation(
@@ -650,7 +705,8 @@ public sealed class GitHubSyncService
         string.IsNullOrEmpty(sha) ? "(none)" : sha.Length <= 8 ? sha : sha[..8];
 
     private IObservable<(MeshNode? Root, IReadOnlyList<MeshNode> Children, IReadOnlyList<StaticContentSync> ContentSyncs)> ParseSnapshot(
-        RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, Action<string, LogLevel>? progress = null)
+        RepoSnapshot snapshot, string spaceId, SyncIgnore ignore, ReadmeFilePolicy readmePolicy,
+        Action<string, LogLevel>? progress = null)
     {
         if (snapshot.Files.Count == 0)
             return Observable.Return(((MeshNode?)null, (IReadOnlyList<MeshNode>)Array.Empty<MeshNode>(),
@@ -675,7 +731,7 @@ public sealed class GitHubSyncService
 
         return classified
             .Where(c => c.Asset is null)
-            .Select(c => ParseFile(c.File, spaceId))
+            .Select(c => ParseFile(c.File, spaceId, readmePolicy.IsDeclaredNode))
             .Merge(8)
             .ToList()
             .Select(list =>
@@ -710,10 +766,11 @@ public sealed class GitHubSyncService
     /// concurrent on one node as well as quadratic. Same defect class as #1341 / #1172.</para>
     /// </summary>
     private IObservable<(MeshNode? Node, bool IsRoot, string? Problem)> ParseFile(
-        RepoFile file, string spaceId)
+        RepoFile file, string spaceId, bool readmeIsNode = false)
     {
-        // The top-level README.md is a GitHub display file emitted on export — never a node.
-        if (string.Equals(file.Path, "README.md", StringComparison.OrdinalIgnoreCase))
+        // A generated repository README is display-only; a package manifest can instead declare
+        // this same file as a real node. Honor that declaration on the Git sync update lane too.
+        if (!readmeIsNode && string.Equals(file.Path, "README.md", StringComparison.OrdinalIgnoreCase))
             return Observable.Return(((MeshNode?)null, false, (string?)null));
 
         var ext = System.IO.Path.GetExtension(file.Path);
@@ -954,7 +1011,7 @@ public sealed class GitHubSyncService
     /// concurrent GUI edit of the repository fields is never clobbered, and re-writing an unchanged
     /// value costs nothing: the write travels as an RFC 7396 merge patch of what actually changed.
     ///
-    /// <para>🚨 <b>The three clocks are separate ON PURPOSE and must stay so.</b> Folding the horizon
+    /// <para>🚨 <b>The clocks are separate ON PURPOSE and must stay so.</b> Folding the horizon
     /// into the recency stamp is the one change that must never be made — it would advance the
     /// horizon on exactly the outcomes that suppress it (a fingerprint-matched no-op, an import that
     /// preserved server-newer nodes, one that landed nothing), moving it past pending uncommitted
@@ -970,9 +1027,18 @@ public sealed class GitHubSyncService
     /// never landed.</param>
     /// <param name="advanceHorizon">Whether this outcome RECONCILED mesh and repo.</param>
     /// <param name="sourceId">The sync source (null = the primary).</param>
+    /// <param name="note">The hold reason / finding to state on the config, or null to clear it.</param>
+    /// <param name="attemptedCommitSha">The commit an IMPORT attempt actually read, or <c>null</c>
+    /// to CLEAR the attempt pair — which every non-import conclusion does, because an export moves
+    /// the conflict horizon (so an earlier verdict at that commit is stale) and a hold means no
+    /// attempt ran at all (#3945).</param>
+    /// <param name="attemptWasFinal">Whether that attempt's verdict is final at that commit
+    /// (<see cref="StaticRepoImportResult.VerdictIsFinal"/>). Meaningless without
+    /// <paramref name="attemptedCommitSha"/>, and written in the same patch as it.</param>
     private IObservable<MeshNode> RecordSyncResult(
         string spacePath, string outcome, string? seenCommitSha, bool advanceHorizon,
-        string? sourceId = null, string? note = null)
+        string? sourceId = null, string? note = null,
+        string? attemptedCommitSha = null, bool attemptWasFinal = false)
     {
         var now = DateTimeOffset.UtcNow;
         return hub.GetWorkspace().GetMeshNodeStream(ConfigPath(spacePath, sourceId)).Update(node =>
@@ -989,6 +1055,17 @@ public sealed class GitHubSyncService
                     // A hold's reason, or cleared by an attempt that ran: the note describes the
                     // LAST attempt only, never an older one.
                     LastSyncNote = note,
+                    // 🚨 #3945 — ALWAYS written, never merged with what was already there. Unlike
+                    // the baseline above (`?? cur.…`, a HIGH-WATER MARK that only ever advances)
+                    // this pair describes the LAST ATTEMPT, so an older value surviving a conclusion
+                    // that set none would licence a skip for an attempt that never happened. The
+                    // RFC 7396 diff a cross-hub `stream.Update` ships emits a key present in the
+                    // stored node and absent from the new content as `null` — an RFC 7396 REMOVE —
+                    // so passing null here genuinely clears the stored value.
+                    LastAttemptedCommitSha = attemptedCommitSha,
+                    // Never true on its own: the flag is only ever read beside the sha, and a true
+                    // with no sha would be a licence attached to no commit.
+                    LastAttemptWasFinal = attemptedCommitSha is { Length: > 0 } && attemptWasFinal,
                 },
             };
         });
@@ -1002,6 +1079,11 @@ public sealed class GitHubSyncService
     /// Records that this source was HELD from advancing, and why — onto the config, so the reason
     /// is visible where the outcome is (2026-09-08: a source held for hours showed only
     /// <c>Skipped</c>). Moves nothing else: not the commit, not the horizon. Cold.
+    ///
+    /// <para>🚨 It also CLEARS the attempt pair (#3945), by leaving it at its default. A hold means
+    /// no import ran, and a seal that has not arrived yet is the archetype of a condition that
+    /// clears without the commit moving — so a hold must never leave a "final at this commit"
+    /// licence standing for the delivery that follows it.</para>
     /// </summary>
     public IObservable<MeshNode> RecordHold(string spacePath, string? sourceId, string reason)
         => RecordSyncResult(spacePath, HeldOutcome, seenCommitSha: null, advanceHorizon: false,

@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -106,8 +107,13 @@ internal static class NodeTypeRebindWatcher
                             var feed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
                             if (feed is null)
                                 return;
+                            // #3510: a recycle of a root an install is writing under waits for the
+                            // install to release it. Resolved from the MESH's provider, which is
+                            // where the single mesh-scoped registry lives.
+                            var leases = meshHub.ServiceProvider
+                                .GetService<PackageRootInstallLeases>();
                             instanceHub.RegisterForDisposal(
-                                Arm(feed, instanceHub, path, boundNodeType, logger));
+                                Arm(feed, instanceHub, path, boundNodeType, logger, leases));
                         }
                         catch (Exception ex)
                         {
@@ -122,16 +128,39 @@ internal static class NodeTypeRebindWatcher
     /// <summary>
     /// Watcher core, split out so the firing contract is testable without building a hub
     /// (exactly as <c>ArmOverlaySelfHeal</c> is). Posts at most ONE self-<see cref="DisposeRequest"/>.
+    ///
+    /// <para>🚨 <b>The post WAITS while an install holds this exact path</b> (#3510). This watcher
+    /// is armed on every instance hub, package roots included, and <see cref="RequiresRebind"/>
+    /// fires on precisely the event the installer's placeholder dance produces — the root's retype.
+    /// So it can, by construction, tear a package root down in the middle of that package's own
+    /// install, stranding the writes the root's per-node children owe acks for. It now defers to
+    /// <see cref="PackageRootInstallLeases"/> and fires on the release instead. <c>Take(1)</c> is
+    /// applied BEFORE the wait, so a flapping writer still cannot turn this into a recycle storm —
+    /// the first qualifying event latches and the rest are never seen.</para>
+    ///
+    /// <para>The wait is scoped to the path itself, never its subtree: an install waits on the
+    /// rebuilds of the NodeTypes BENEATH its root, and deferring the per-type recyclers that serve
+    /// those rebuilds against the install waiting for them would be a deadlock.</para>
     /// </summary>
+    /// <param name="feed">The post-commit mesh change feed.</param>
+    /// <param name="instanceHub">The hub to recycle.</param>
+    /// <param name="path">The node path this hub serves.</param>
+    /// <param name="boundNodeType">The NodeType its configuration was resolved from.</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="leases">The mesh's install-lease registry, or null on a host that registers
+    /// none — in which case no lease can exist and the recycle posts as it always did.</param>
     public static IDisposable Arm(
         IMeshChangeFeed feed,
         IMessageHub instanceHub,
         string path,
         string? boundNodeType,
-        ILogger? logger)
+        ILogger? logger,
+        PackageRootInstallLeases? leases = null)
         => Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
             .Where(change => RequiresRebind(change, path, boundNodeType))
             .Take(1)
+            .SelectMany(change => WaitWhileAnInstallHoldsIt(leases, path, logger)
+                .Select(_ => change))
             .Subscribe(
                 change =>
                 {
@@ -152,7 +181,20 @@ internal static class NodeTypeRebindWatcher
                             "NodeType rebind: node '{Path}' is now typed '{NewNodeType}' but its hub activated on "
                             + "'{BoundNodeType}' — recycling so the next access binds the real type",
                             path, change.NodeType ?? "(none)", boundNodeType ?? "(none)");
-                        instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                        // 🚨 The reason rides along (#3510). This watcher was that issue's LEADING
+                        // hypothesis for six occurrences precisely because a self-posted
+                        // DisposeRequest renders as "requested by itself — a rebind or self-heal
+                        // recycle": one word covering this watcher, the stale-build convergence and
+                        // the overlay self-heal. Naming it here is what turns the next occurrence
+                        // into a read instead of an ordering argument.
+                        instanceHub.Post(
+                            new DisposeRequest
+                            {
+                                Reason = $"NodeType rebind: node '{path}' is now typed "
+                                         + $"'{change.NodeType ?? "(none)"}' but its hub activated on "
+                                         + $"'{boundNodeType ?? "(none)"}'",
+                            },
+                            o => o.WithTarget(instanceHub.Address));
                     }
                     catch (Exception ex)
                     {
@@ -164,6 +206,32 @@ internal static class NodeTypeRebindWatcher
                 ex => logger?.LogWarning(ex,
                     "NodeType rebind watcher for '{Path}' faulted — the hub keeps its activation-time "
                     + "configuration until it is recycled", path));
+
+    /// <summary>
+    /// Emits once no install is writing under <paramref name="path"/> — at once in the ordinary
+    /// case (a retype by an import, a repair migration or a user, with nothing installing), and on
+    /// the install's release when one holds it.
+    ///
+    /// <para>Announced in both directions, for the same reason <c>HubRecycleExtensions</c> does it:
+    /// a recycle that silently waits reads exactly like a recycle that was never asked for, and a
+    /// lease that outlived its install would otherwise be invisible.</para>
+    /// </summary>
+    private static IObservable<Unit> WaitWhileAnInstallHoldsIt(
+        PackageRootInstallLeases? leases, string path, ILogger? logger)
+        => Observable.Defer(() =>
+        {
+            if (leases?.HeldBy(path) is not { } holder)
+                return Observable.Return(Unit.Default);
+            logger?.LogInformation(
+                "NodeType rebind: deferring the recycle of '{Path}' — an install is writing under "
+                + "that root ({Holder}), and recycling it now would strand the writes its per-node "
+                + "children owe acks for (#3510). The recycle runs when the install releases it",
+                path, holder);
+            return leases.WhenReleased(path)
+                .Do(_ => logger?.LogInformation(
+                    "NodeType rebind: the install released '{Path}' — proceeding with the deferred "
+                    + "recycle", path));
+        });
 
     /// <summary>
     /// The firing predicate: a post-commit Created/Updated event for THIS node whose NodeType is

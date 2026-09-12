@@ -70,6 +70,68 @@ distinction is the whole point — before it, all three were `404`:
 | `503` + `Retry-After` | the publication exists and is **being replaced right now** | wait it out; it is self-healing |
 | `412` | the caller pinned a generation and the publication has since moved | **re-read the publication that now applies** |
 
+The seal's file open decides whether it is present (#3876). A separate `File.Exists` observation
+cannot protect a later read: a publisher can remove the seal between those two operations. The
+catalogue's seal readers therefore handle `FileNotFoundException` and `DirectoryNotFoundException`
+at the read and report an absent seal. Other I/O failures still surface. An existing source without
+a seal gets `503` with `Retry-After`; an absent source directory gets `404`. Tests remove the seal
+or its parent at the read operation, after an existence check could have observed it. HTTP tests
+also remove it between the module routes' first and second catalogue reads. A structured
+`ModuleSetReading.PublicationUnavailable` result preserves the transient response on that second
+read, distinct from a sealed publication with no module index. All four routes are exercised.
+
+🚨 **An existence check leading an open is the DEFECT SHAPE, not the `_complete` file.** Fixing the
+seal readers left two more `File.Exists`-then-open pairs on the very same routes, each throwing the
+same unhandled `FileNotFoundException` from a slightly different frame — which is why the incident
+kept recurring after it had twice been "fixed". Both are now closed:
+
+- **The module set's own seal.** `SealedModulesOf` probed `modules/_index` and then read it
+  unguarded. That index is written strictly *before* `_complete`, so the removal that takes one
+  takes the other. An index absent **at the open** is now discriminated by re-reading the seal, and
+  the ordering is what makes that sound: the publisher unseals first and retention unseals before
+  removing an identity, so a seal that *still reads* means the publication is intact and simply has
+  no module set — it **predates module sealing**, permanent, `404`, republish the source — while a
+  seal that has gone too means the publication is **being replaced right now**, which sets
+  `PublicationUnavailable` and rides the existing transient mapping. The two answers are opposite,
+  and collapsing either into the other is the bug.
+- **The serve itself.** `Results.File(path, …)` resolves the path *again* when the result executes,
+  after the handler has returned — so the listing that stat'ed the file present is several steps in
+  the past, and a file removed in between threw out of result execution, past every handler. The
+  open now happens **in the handler**, and the already-open handle is what the response streams:
+  on POSIX the bytes stay readable through a descriptor after the directory entry is gone, so a
+  publication replaced mid-response is served whole from the generation its `ETag` pins rather than
+  merely being reported as torn. The share is opened `FileShare.Delete` so a read in flight never
+  blocks the publisher.
+
+Both route their failure into the **same** discrimination the seal readers use — source directory
+present ⇒ `503` + `Retry-After`, identity directory gone ⇒ `404` — so there is one mapping, not
+three. The probe that decides it is `Directory.Exists`, which is **total**: it returns `false` for
+every failure rather than throwing, so the race where the directory is removed between the failed
+open and the probe answers `404` (the correct answer for a removed identity) and can never produce
+a `500`. In the opposite order — present at the probe, removed after — the caller gets `503` and
+its next read gets `404`; the consumer contract is built to re-read, so that converges.
+
+🚨 **The bytes are served under the SEAL's spelling, never the request's.** The name match is
+case-insensitive and the share is not, so composing the requested name served `store.zip` out of a
+publication that sealed `Store.zip`: an open that fails on Linux for a permanent client mistake,
+which would now wear the transient answer and have that caller retry for ever. The listing verified
+one exact name present; that is the name the response opens.
+
+🚨 **The BOOT SEEDER reads the same seal, and it is the reader with no status to return.**
+`ShippedPrebuiltBundles.CompletePublishedBundlesOf` walks every source under one identity and skips
+an unsealed one deliberately — the sweep compiles it instead. It kept the racing `File.Exists`
+after the catalogue's readers were fixed, and the consequence there is worse than a wrong status:
+the `FileNotFoundException` left the loop and reached `SeedBundles`' outer `Catch`, which abandons
+**the whole identity's adoption pass**. One source being replaced during a boot therefore made every
+*other* sealed source on that identity recompile as well — a publication window costing far more
+than the publication it was in. The seeder now reads through the same operation and skips only the
+source whose seal went away, and its warning says WHICH absence it saw: a publication directory
+that is present but unsealed (it died before the seal, or is being replaced right now) versus one
+that has been removed. Two implementations of one classification is how the divergence happened, so
+there is now exactly one — `ShippedPrebuiltBundles.ReadSealLines`, beside the sentinel's own name,
+which `PublishedBundleCatalogue` delegates to (`MeshWeaver.PluginCatalog` depends on
+`MeshWeaver.Hosting`, so the shared operation can only live on that side).
+
 🚨 **A `404` for a name the index just listed used to be the *only* signal for all of this, and it
 named the wrong thing.** The route re-evaluates the seal on every request, so a `404` on
 `Export.zip` was equally consistent with *some other* bundle having gone absent a moment earlier —
@@ -117,13 +179,14 @@ Every consumer of a sealed publication obeys the same four rules.
 *guaranteed red* on every overlapping publish — a satellite's pin-move PR going red for a defect
 that is not in it. Detecting the move and continuing on the half already fetched is worse still.
 
-### The three consumers
+### The four consumers
 
 | consumer | reads | lives in |
 |---|---|---|
 | `node-repo-gate.yml`, the upstream seed | the bundle index + each bundle | this repo, pinned by each satellite's `uses:` |
 | `.github/scripts/compose-sealed-modules.sh` | the module-set index + each module | this repo, fetched at each satellite's `platform-ref` |
 | `memex build plugin` (`BuildPluginCommand`) | both | `src/MeshWeaver.Cli` |
+| the REGISTRY, on behalf of a consumer one lane ahead of it | one package's bundle, for the CALLER's identity | `memex/Memex.Portal.Shared/Api/PluginBundleEndpoints.cs` |
 
 The `registry_get` backoff is **duplicated on purpose** between the workflow and the script: the
 workflow is pinned by the caller's `uses:` while the script is fetched at `platform-ref`, so a
@@ -143,6 +206,117 @@ dependency record mismatch — built against mvid:…, live is mvid:…
 — which is invisible in CI and surfaces only when a portal boots and renders nothing. That is the
 failure `assert-bake-consumption.sh` exists to catch, and it is why the module lane is pinned even
 though its window is the same size as the bundle lane's.
+
+### The fourth consumer: a portal one image ahead of its registry
+
+The first three read the share directly, over a credential of their own. The fourth reads it
+**server-side, inside the registry**, on behalf of a portal that has none — and it exists because a
+sealed publication is the only thing a registry can hand a consumer whose framework build identity
+is not its own.
+
+**Why a registry cannot answer an off-lane caller from its mesh.** Since #1751 the bundle route
+resolves an off-lane caller's assemblies through each NodeType's `Release` node, which records, per
+`(identity, architecture)`, which assembly-store version holds bytes *proven* built for that lane.
+That rule is right and it stays. What it cannot do is FIND bytes:
+
+- a `ReleaseArtifact` is minted in exactly ONE place — a compile, in this mesh, stamping the
+  compiling process's own `FrameworkVersion` and `ReleaseArchitecture.Live`
+  (`NodeTypeBuildState.TryCreateReleaseNode`). There is no append path and no route by which a
+  portal records an artifact for an identity it does not run;
+- adoption mints none at all: `PrebuiltAssemblySeeder.Seed` writes `LastCompiledVersion` and never a
+  release, which is precisely why the own-lane branch reads `LastCompiledVersion` rather than a
+  release;
+- so the only artifacts that exist for a lane the registry no longer runs were written by a compile
+  **in a pod that has since been replaced** — and an in-portal compile writes
+  `collection: "local"`, which `FileSystemAssemblyStore` defines as *"the bytes live in the local
+  filesystem cache only; cross-silo readers must recompile"*.
+
+Measured on the fleet registry on 2026-09-11: `Store/Plugin` did hold a release naming the
+consumer's identity — `s3e3c8023…`, written 01:11Z — and its artifact was
+`collection: "local", contentPath: "Store_Plugin/v13725-s3e3c802-…dll"`. Resolvable, and
+unreachable. **Off-lane serving out of the mesh is empty by construction, not by accident.**
+
+**What the registry does have** is the publication the producing repo's bake sealed for that
+identity, on the share it already mounts and already serves at
+`…/prebuilt/{identity}/{source}/{bundle}`. `SealedLaneBundles` (in `MeshWeaver.PluginCatalog`) is the
+lookup that lets the PACKAGE route reach it, so the decision stays inside the per-package grant —
+the same reasoning `ServedModuleBytes` records for the module half (#3244): a consumer
+fetching the prebuilt route itself would need a whole-source grant, and a whole-source grant
+deliberately bypasses plan tiering.
+
+### The stamp the index puts on that answer
+
+The index's top-level `frameworkMvid` says **which lane the bundles listed under it resolve for**. It
+used to say something narrower and, since #1751, untrue: *this portal's own bake*. Because
+`PluginBundleClient.Adopt` compares that value ONCE and declines the whole index before requesting
+any package, the download route's lane-awareness and the module half's sealed read were both
+unreachable for exactly the consumer they exist for.
+
+Measured on the fleet's own portals, twice, with a different identity pair each time:
+
+| when | consumer | registry | `bundle_adoption` |
+|---|---|---|---|
+| 2026-09-09 | memex.systemorph.com `s414bfb2…` | memex.meshweaver.cloud `s72c27af…` | 25 attempts, **0 adopted**, 25 `FrameworkDeclined` |
+| 2026-09-11 | memex.systemorph.com `s3e3c802…` | memex.meshweaver.cloud `s01d65c9…` | 25 attempts, **0 adopted**, 25 `FrameworkDeclined` |
+
+Both readings are the whole population of that process's attempts, not a truncation: the ledger's
+capacity is 500 and the payload names ten then counts the rest. The second was taken on portals
+already running #3946, which fixed a *different* decline (a dependency record's module entry) — so
+that fix does not touch this one, and the count did not move.
+
+On 2026-09-11 the registry's share held **561** identity directories, and
+`s3e3c80238a740a8cb895a72b0bfb9cd6` — the consumer's own live identity — was among them with
+`plugins` sealed at 00:33Z. **The bytes were on the registry's own disk while every consumer
+adoption was declined.**
+
+So the rule is now:
+
+1. a caller that states no lane gets this portal's identity, byte for byte as before — which is
+   every already-deployed consumer;
+2. a caller that states its lane and for which this registry **holds a sealed publication** is told
+   THAT lane, and each package is served out of that publication;
+3. a caller that states a lane this registry holds nothing for is told **this portal's own
+   identity** — so it declines and compiles, exactly as before.
+
+🚨 **Rule 3 is not a leftover, it is the point.** Claiming the caller's lane with nothing sealed for
+it would turn one cheap, named `FrameworkDeclined` into N downloads that each resolve nothing — a
+bake gap wearing a serving offer's colours. And nothing in any of this relaxes the adoption gate:
+the archive states the identity it was sealed for, and `PrebuiltAssemblySeeder.DeclineReason`
+(ordinal equality) still decides, first for the archive and then per assembly as it seeds.
+
+Both directions are pinned by `test/Memex.Portal.Shared.Test/PluginBundleSealedLaneTest.cs`, which
+asks the same endpoint with a sealed lane and an unsealed one and asserts the two different answers
+— a change that served everybody would pass only the first.
+
+### Three refusals the lookup carries, and why each is not optional
+
+Reaching the share from the PACKAGE route turns a value that used to be compared into a value that
+selects a directory and a file. Each of the three checks below closes something that the route did
+not previously have, and each has a control that reddens when it is removed.
+
+1. **The identity must be a bare name.** It arrives on a query string and is composed under the
+   published root, so `?identity=../…` would read outside the lane it names. The route answers
+   `400` — the same rule and the same answer the `/prebuilt/{identity}/{source}` segments already
+   applied — and `SealedLaneBundles.IsBareName` restates it at the layer that builds the path, so an
+   entry point added later inherits the check rather than the hole.
+2. **The lookup is scoped to the source the ENTITLEMENT decision resolved.** The grant is a
+   `(source, package)` pair and `PackageOriginAnchor` is the authority on which source carries a
+   package. A lookup that scanned every source directory and took the first matching file name would
+   let a caller granted one source receive another's bytes whenever two sources publish the same
+   package id — a grant boundary crossed inside something shaped like a file search. Only a
+   genuinely unknown binding (no anchor, no stamped record) widens the scan; a named source that
+   matches no directory answers "nothing sealed for you here", and the caller compiles.
+3. **The archive's OWN manifest identity is checked before anything is served**, through
+   `PrebuiltAssemblySeeder.DeclineReason` — the same function the consumer applies to the same
+   bytes. The directory a bundle is filed under is a filing convention; the manifest is the
+   producer's claim, and only the claim may be believed. Without this a mislabelled archive would be
+   restamped with the requested identity on the way out, and the consumer's gate — seeing a manifest
+   that agrees with its own live framework — would adopt bytes baked for another one. That is the
+   single outcome this entire lane exists to prevent.
+
+The read itself runs on the filesystem `IIoPool`, not the request thread: the publication is a
+mounted share and a bundle is the whole weight of a package, so concurrent boot downloads would
+otherwise hold request threads on a slow mount.
 
 ## How many writers, measured
 
@@ -179,6 +353,47 @@ satellite pin land on an identity core CD is still publishing to.
 
 So the fix is publisher-agnostic: it asks *"are the bytes on the shelf the ones I uploaded"*, never
 *"which repo is the other one"*.
+
+### Reproduced a third time, on a different day — 2026-09-10
+
+The two conclusions above are load-bearing enough to be worth an independent re-measurement rather
+than a citation. **2026-09-09 20:00Z → 2026-09-10 18:09Z, 22 hours: 61 bake jobs that ran to a
+terminal conclusion** (33 core CD, 28 satellite), every job log fetched, none expired, **zero
+unreadable identities**.
+
+| | core CD `plugins-bake` | satellite `publish-bake` |
+|---|---|---|
+| executed to `success`/`failure` | 33 | 28 |
+| **sealed a publication** | 16 | 20 |
+| skipped — already published, content × framework | 2 | 7 |
+| published nothing (failed before the publish) | 15 | 1 |
+
+36 distinct sealed publications over **19 distinct prefixes**. And:
+
+- 🚨 **7 of the 19 prefixes were written by BOTH lanes — and in all 7 the two lanes carried
+  DIFFERENT source commits.** So the premise of #3461 holds exactly: the framework identity is a
+  property of the *platform image's* reference surface, it carries no content commit, and `plugins`
+  is a constant, so the two lanes address one directory routinely. When they meet there the
+  content × framework sealed-skip **cannot** fire, because the content differs — each lane genuinely
+  unseals and overwrites the other's publication.
+- 🚨 **Concurrent publications on one prefix: 4. All four SAME-lane. Cross-lane: 0.** That is the
+  same answer as 2026-09-06 and 2026-09-08, from a third day and a differently built measurement —
+  three independent reproductions. All four carried different content, so all four are cases where
+  the #3496 postcondition is the only thing between the two runs and a sealed mix.
+
+The one cross-lane pair that came close is worth writing down because it shows the *mechanism* that
+keeps them apart, which is not luck about timing. On identity `s546f29f9…`, core CD run
+`34430130924` sealed at **03:27:37.327Z**; satellite run `34430082656` reached its own publish at
+**03:30:57Z**, found *"holds a COMPLETE publication of THIS content"* on both shares and skipped.
+They were baking the **same** plugins commit (`3f7686da2…`), because core CD resolves the plugins
+tip at its gate — so the common cross-lane case is redundant work that the skip absorbs, and the
+dangerous case needs the satellite to have moved on, which is the same-lane shape by another road.
+
+**Nothing here changes the design.** A rule about which *repository* owns the prefix would have
+addressed **0 of the 4** contentions measured on this day, as it would have addressed 0 of the ones
+measured on the previous two. What removes them is the layout — a publication written into its own
+directory is disjoint from every other publication whoever wrote it — which is
+[Sealed Publication Generations](/Doc/Architecture/SealedPublicationGenerations).
 
 ## The writer's postcondition
 
@@ -365,9 +580,12 @@ Stated plainly, because a page that only lists what works is how the next sessio
   would keep serving its generation and never see the flat writer's newer publication, a stale serve
   with nothing red anywhere. The writer is behind a per-caller `publication-layout` selector that
   **defaults to `flat`**, so nothing anywhere writes a generation until a caller opts in and
-  **everything on this page still describes what is live**. What remains is each producer's pin
-  reaching the writer, then flipping — `plugins` in ONE change set, because it is the only prefix
-  with two producers.
+  **everything on this page still describes what is live**. **Generation retention — the stated
+  precondition on flipping — has landed too**: the portal's own `PrebuiltBundleStore` sweep now
+  collects a generation no `_current` names, whose pointer resolved cleanly, whose own seal could be
+  read, and that is older than the 30-day window, applying the identity rules' fail-closed discipline
+  one level down. What remains is each producer's pin reaching the writer, then flipping — `plugins`
+  in ONE change set, because it is the only prefix with two producers.
 
   🚨 That page also records what an **OCI registry** does and does not close, since the fleet is
   moving plugin bundles into one: content-addressed blobs make a mix unrepresentable, but a **tag**
@@ -390,7 +608,11 @@ Stated plainly, because a page that only lists what works is how the next sessio
   failures are the two halves of the single mutual supersession above. 🚨 **All 9 overlaps were
   same-lane; zero were cross-lane**, which reproduces the 2026-09-06 finding on a different day and
   is the second independent measurement saying that "one owner per prefix" addresses none of this.
-  The convergence verdict takes that 2 to 1; the layout takes it to 0.
+  The convergence verdict takes that 2 to 1; the layout takes it to 0. **2026-09-10 makes it three**
+  — 4 same-lane contentions, 0 cross-lane, over 61 executed bake jobs; see "Reproduced a third time"
+  above, which also measures the thing the earlier two did not: **every** prefix the two lanes shared
+  that day, they shared carrying *different* content, so the sealed-skip cannot separate them and the
+  premise of #3461 is confirmed rather than narrowed.
 - **The window itself remains.** In this layout it cannot be removed — in-place replacement means
   unsealed time, and the alternative is a layout migration every reader must land first (the portal
   boot seeder, the gate's Azure-direct path, and every pinned satellite workflow copy).
@@ -446,6 +668,41 @@ the pin is removed:
   one-publication postcondition, the digest mismatch, the fail-closed unreadable stamp, and the
   adoption path where an incumbent predates stamping and the check reports — with numbers — that it
   proved nothing.
+
+### In production — and why a retrospective log sweep cannot settle it
+
+The harnesses above prove the three answers in a TestServer. They cannot prove a deployed portal
+stopped throwing, and #3876 stayed open on exactly that bar after its four readers and two route
+opens were fixed. What the portal can and cannot answer, measured 2026-09-11:
+
+- **The durable counter is the incident node, not the log.** `Admin/_LogIncident/<fingerprint>` on
+  the **control instance** (memex.systemorph.com — the same path on memex.meshweaver.cloud answers
+  `Not found`) carries `occurrences`, `firstSeen`, `lastSeen` and the pod names, and it outlives
+  Loki's retention. For `af1ee515fdf60bd1` it read **7 occurrences, last 2026-09-10T02:35:29Z**.
+- 🚨 **The ISSUE is not that counter, and can silently stop tracking it.** The node also carries
+  `occurrencesAtLastComment` plus, when the automation cannot post, `status: "Failed"` and the
+  reason — here `"Resource not accessible by integration"`, stuck at **5** while the count had
+  reached 7. Two recurrences after the issue was filed were never folded into it, so **a quiet
+  issue thread is not a quiet incident**. Read the node, never the thread.
+- **What discriminates a pre-fix occurrence from a live one is the pod's ReplicaSet hash**, not the
+  timestamp. All 7 fall on `77cfc55bfc` and `bf77c847`, while the fixes merged 2026-09-10 00:47Z
+  (#3877), 12:07Z (#3885) and 18:57Z (#3957) — the last occurrence is 1 h 48 m after the first of
+  those and still on the *previous day's* ReplicaSet, so it ran an image predating it. Confirm what
+  a replica carries by FILE/SYMBOL against the commit `/api/version` reports, never by merge
+  ancestry (a queue-merged commit fails `is-ancestor`).
+- 🚨 **`Logs`' `sinceMinutes` is a REQUEST, not a coverage guarantee, and the run never reports the
+  window it actually covered.** `{ "requestedAction": "Logs", "query": "_complete",
+  "sinceMinutes": 2880 }` against `memex-cloud` returned `entryCount: 0` carrying its `logQl` — an
+  answer by the rule in [Operating From The Portal](../OperatingFromThePortal), and still worth
+  nothing here: the positive control, the same query for a string that *does* occur, landed **21
+  lines spanning only 05:29Z–06:24Z**. The zero evidences under an hour rather than the two days
+  asked for, and the known occurrences are simply outside what Loki still holds. **Date the oldest
+  line a positive control returns before reading any `Logs` zero as absence** — against a window a
+  ~90 s republish can hide in, a retrospective sweep cannot settle this at all.
+
+So the verification that remains is a **live** one — a satellite gate reading the route through a
+real mid-replace window, or through a pruned identity, which is permanent and never self-heals —
+and the instrument that records it either way is the incident node's own counter.
 
 Related: [CI Content Bake](../CiContentBake) · [Plugin Build Contract](../PluginBuildContract) ·
 [Bake Identity Mismatch](../BakeIdentityMismatch) · [Module Build Architecture](../ModuleBuildArchitecture)

@@ -111,6 +111,108 @@ public sealed class MessageHub : IMessageHub
     public long Version { get; private set; }
 
     /// <summary>
+    /// 🚨 <b>Who asked for this teardown (#3510).</b> <c>null</c> until a routed
+    /// <see cref="DisposeRequest"/> is honoured, and then the sender that posted it.
+    ///
+    /// <para>The bake wedge of #3510 turned on one unknown the log could not answer: the Hosting
+    /// root was disposed at 23:37:51Z while its own 145-file install was in flight, its per-node
+    /// children went with it, and the writes they owed acks for were stranded — but <i>"who
+    /// disposed the root is not in the log at this level"</i>, so the leading hypothesis (a
+    /// NodeType rebind posting <c>DisposeRequest</c> to the root) stayed a hypothesis. The issue
+    /// asks for exactly this: <i>"[QUIESCE-START] on a root should name who asked"</i>.</para>
+    ///
+    /// <para><b>Why the ShutdownRequest's own sender cannot answer it.</b> <c>Dispose()</c> posts
+    /// that request to ITSELF, so its <c>Sender</c> is always this hub — the question it looks like
+    /// it answers is the one it cannot. The discriminating fact is one frame earlier: whether a
+    /// <c>DisposeRequest</c> arrived over the bus at all, and from where. A direct <c>Dispose()</c>
+    /// (host teardown, an owner tearing down its children, a <c>using</c>) leaves this null, and
+    /// that absence is itself the answer — it rules the message path out.</para>
+    /// </summary>
+    private volatile string? disposeRequestedBy;
+
+    /// <summary>
+    /// WHY, as stated by whoever posted the <see cref="DisposeRequest"/> — <c>null</c> when they
+    /// did not say, which prints as <see cref="DisposeRequest.ReasonNotStated"/> rather than as
+    /// nothing. See <see cref="DisposeRequest.Reason"/> for why the sender alone is not enough.
+    /// </summary>
+    private volatile string? disposeReason;
+
+    /// <summary>
+    /// 🚨 <b>Set when this hub goes down because its OWNER is going down (#3510).</b> A hosted hub
+    /// is torn down by <c>HostedHubsCollection.DisposeHubsReactive</c> calling <c>Dispose()</c> on
+    /// it — a DIRECT dispose, so before this field existed every cascaded child printed
+    /// <see cref="DirectDisposeSource"/>, indistinguishable from a <c>using</c> and from host
+    /// teardown.
+    ///
+    /// <para>That indistinguishability IS #3510's wedge one level down. The issue's trail is
+    /// <i>"the Hosting root was disposed while its own 145-file install was in flight; its per-node
+    /// children went with it, and the writes they owed acks for were stranded"</i> — and the
+    /// stranded writes were owed by those CHILDREN, whose own <c>[QUIESCE-START]</c> lines
+    /// attributed their teardown to nobody. Reading the child told you nothing about the root.</para>
+    /// </summary>
+    private volatile string? cascadeOwner;
+
+    /// <summary>
+    /// The ORIGINATING teardown, propagated unchanged down a cascade, so a leaf hub's line names
+    /// the event that actually started it rather than only its immediate parent. Set together with
+    /// <see cref="cascadeOwner"/>.
+    /// </summary>
+    private volatile string? cascadeOrigin;
+
+    /// <summary>
+    /// What <c>[QUIESCE-START]</c> prints when no routed <see cref="DisposeRequest"/> brought this
+    /// hub down and no owner claimed the cascade — host teardown or a <c>using</c>. Spelled once so
+    /// a log reader and a log QUERY agree on the token.
+    /// </summary>
+    internal const string DirectDisposeSource = "a direct Dispose() (no routed DisposeRequest)";
+
+    /// <summary>WHO — the first half of the <c>[QUIESCE-START]</c> attribution.</summary>
+    private string DisposalRequestedBy =>
+        cascadeOwner is { } owner
+            ? $"a cascade from its owner {owner}"
+            : disposeRequestedBy ?? DirectDisposeSource;
+
+    /// <summary>
+    /// WHY — the second half. Never empty: a poster that said nothing is reported as having said
+    /// nothing (<see cref="DisposeRequest.ReasonNotStated"/>), which is a different statement from
+    /// printing no reason at all.
+    /// </summary>
+    private string DisposalReason =>
+        cascadeOwner is not null
+            ? $"the owner's own teardown — {cascadeOrigin ?? DisposeRequest.ReasonNotStated}"
+            : disposeReason ?? DisposeRequest.ReasonNotStated;
+
+    /// <summary>
+    /// What this hub's hosted children are told when they go down with it. A hub that is itself
+    /// part of a cascade passes the ORIGIN along unchanged, so the chain names the event that
+    /// started it however deep the tree is — and the string cannot grow with depth.
+    /// </summary>
+    internal string DisposalOriginForChildren =>
+        cascadeOrigin
+        ?? $"{Address} was torn down by {disposeRequestedBy ?? DirectDisposeSource}; why: "
+           + (disposeReason ?? DisposeRequest.ReasonNotStated);
+
+    /// <summary>
+    /// Records that this hub is going down because <paramref name="owner"/> is (#3510). Called by
+    /// the owning <see cref="HostedHubsCollection"/> immediately before it disposes this hub.
+    ///
+    /// <para>FIRST CAUSE WINS: a child that had already been asked to recycle by name keeps that
+    /// attribution, because that request is what actually started its teardown — the owner's
+    /// cascade then arrives at a hub already going down. Idempotent, and safe from any thread; the
+    /// fields are only read when the Quiescing phase renders the line.</para>
+    /// </summary>
+    /// <param name="owner">The hub whose teardown is taking this one with it.</param>
+    /// <param name="originatingCause">The originating teardown, from
+    /// <see cref="DisposalOriginForChildren"/>.</param>
+    internal void NoteCascadeFrom(Address owner, string originatingCause)
+    {
+        if (disposeRequestedBy is not null || cascadeOwner is not null)
+            return;
+        cascadeOrigin = originatingCause;
+        cascadeOwner = owner.ToString();
+    }
+
+    /// <summary>
     /// Disposal-health diagnostic: how many <see cref="ShutdownRequest"/> turns this hub
     /// has handled. A healthy disposal handles exactly the three phase requests
     /// (Quiescing → DisposeHostedHubs → ShutDown). A value in the thousands is the
@@ -414,6 +516,10 @@ public sealed class MessageHub : IMessageHub
         InitializeTypes(this);
 
         this.hostedHubs = hostedHubs;
+        // 🚨 #3510: a child torn down with its owner must be able to say so. Installed here, at
+        // construction, because the collection disposes children a phase AFTER this hub's own
+        // attribution is settled — a value captured now would be the empty one.
+        hostedHubs.OwnerDisposalCause = () => DisposalOriginForChildren;
         ServiceProvider = serviceProvider;
         Configuration = configuration;
         unhandledNack = configuration.Get<UnhandledMessageNack>();
@@ -1021,7 +1127,8 @@ public sealed class MessageHub : IMessageHub
         // registration would read as "nothing was ever posted" — the opposite of the truth (#981).
         requestFates.Find(delivery.Id)?.Add(
             "REGISTERED_AFTER_POST (Observe(delivery) overload — earlier stages not recorded)", Address);
-        return RestoreUserContextOnEmission(observable, delivery.AccessContext);
+        return ContinueOffBlockIfDeclared(
+            RestoreUserContextOnEmission(observable, delivery.AccessContext), delivery.Message);
     }
 
     /// <summary>
@@ -1065,11 +1172,13 @@ public sealed class MessageHub : IMessageHub
             requestFates.Find(messageId)?.Add($"POST_THREW {postEx.GetType().Name}: {postEx.Message}", Address);
             throw;
         }
-        return RestoreUserContextOnEmission(
-            WrapWithCancelOnDispose(
-                ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
-                messageId, subject),
-            capturedCtx);
+        return ContinueOffBlockIfDeclared(
+            RestoreUserContextOnEmission(
+                WrapWithCancelOnDispose(
+                    ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                    messageId, subject),
+                capturedCtx),
+            r);
     }
 
     /// <summary>
@@ -1110,11 +1219,13 @@ public sealed class MessageHub : IMessageHub
             }
             return null;
         }
-        return RestoreUserContextOnEmission(
-            WrapWithCancelOnDispose(
-                ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
-                messageId, subject),
-            capturedCtx);
+        return ContinueOffBlockIfDeclared(
+            RestoreUserContextOnEmission(
+                WrapWithCancelOnDispose(
+                    ApplyTimeout(subject, requestType, probeOptions.Target, messageId),
+                    messageId, subject),
+                capturedCtx),
+            r);
     }
 
     private IObservable<IMessageDelivery> ObserveById(string messageId,
@@ -1169,6 +1280,103 @@ public sealed class MessageHub : IMessageHub
     /// hub-impersonation), and any post made from the Subscribe callback inherits the wrong
     /// identity — surfaces as <c>Access denied: user '&lt;cell-hub-path&gt;' lacks ...</c>.
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>The one hop that stops a shared execution hub from serialising the whole mesh
+    /// (#2543)</b> — applied ONLY to requests that declare
+    /// <see cref="IDetachedResponseContinuation"/>.
+    ///
+    /// <para>A response subject is signalled from INSIDE the turn that handled the response, so Rx
+    /// resumes the caller's chain on the responding hub's action block, inside that turn — and the
+    /// turn cannot end until the chain does. On <c>portal/nodeops</c>, the mesh's ONE node-CRUD
+    /// execution hub, that made every node write in the mesh queue behind one create's
+    /// continuation: <c>Queue(buffer=1,…) Executing(CreateNodeResponse, …)</c> for a whole
+    /// budget.</para>
+    ///
+    /// <para>🚨 <b>Why not for every request.</b> Doing it unconditionally was tried and is not
+    /// safe. The action block is not only a serialiser — it is an ERROR BOUNDARY and a DISPOSAL
+    /// FENCE, and an impersonation <c>AsyncLocal</c> is still in scope on it. Hopping every
+    /// continuation off it crashed the test host repeatedly and broke several invariants nobody had
+    /// written down. Narrowing the hop to the requests that demonstrably must not hold a shared hub
+    /// keeps every other request's semantics exactly as they were.</para>
+    ///
+    /// <para>🚨 <b>Order matters:</b> this wraps the OUTSIDE of the identity restore, so
+    /// <c>RestoreUserContextOnEmission</c>'s <c>.Do(SetContext)</c> is what runs first on the
+    /// continuation's thread. Reversed, the chain would resume unauthenticated.</para>
+    ///
+    /// <para>And a continuation that has left the block can no longer be caught by the pump, so it
+    /// is fenced: <see cref="GuardContinuationFaults"/> reports a throw and TERMINATES the sequence
+    /// rather than letting it go unhandled on a scheduler thread and kill the process.</para>
+    /// </summary>
+    /// <param name="source">The response observable, identity already restored.</param>
+    /// <param name="request">The request message, or null when it is not known.</param>
+    private IObservable<IMessageDelivery> ContinueOffBlockIfDeclared(
+        IObservable<IMessageDelivery> source, object? request)
+        => request is IDetachedResponseContinuation
+            ? GuardContinuationFaults(source.ObserveOn(PooledContinuationScheduler.Instance))
+            : source;
+
+    /// <summary>
+    /// The block is an ERROR BOUNDARY, and a continuation that has left it is outside that
+    /// boundary — an exception from a <c>Subscribe</c> callback would otherwise surface unhandled
+    /// on a scheduler thread and take the process down.
+    ///
+    /// <para>🚨 It REPORTS <b>and TERMINATES</b>. A first version only reported, which turned a
+    /// crash into a HANG: the caller's sequence stayed open forever waiting for an emission that
+    /// could never come. Rx's own contract is that a throwing observer ends the subscription, and
+    /// that is what the pump did too — it logged the fault and failed the delivery, so the caller
+    /// got an answer.</para>
+    /// </summary>
+    /// <param name="source">The continuation, already hopped off the block.</param>
+    private IObservable<IMessageDelivery> GuardContinuationFaults(IObservable<IMessageDelivery> source)
+        => Observable.Create<IMessageDelivery>(observer => source.Subscribe(
+            value =>
+            {
+                try
+                {
+                    observer.OnNext(value);
+                }
+                catch (Exception ex)
+                {
+                    ReportContinuationFault(ex);
+                    Guarded(() => observer.OnError(ex));
+                }
+            },
+            error => Guarded(() => observer.OnError(error)),
+            () => Guarded(observer.OnCompleted)));
+
+    /// <summary>Runs one observer callback, routing anything it throws. See
+    /// <see cref="GuardContinuationFaults"/> for why this is the block's boundary and not a
+    /// swallow.</summary>
+    /// <param name="deliver">The observer callback to run.</param>
+    private void Guarded(Action deliver)
+    {
+        try
+        {
+            deliver();
+        }
+        catch (Exception ex)
+        {
+            ReportContinuationFault(ex);
+        }
+    }
+
+    /// <summary>Says what a continuation fault was, at the level its cause deserves.</summary>
+    /// <param name="ex">The fault an observer callback threw.</param>
+    private void ReportContinuationFault(Exception ex)
+    {
+        if (RunLevel >= MessageHubRunLevel.ShutDown)
+            logger.LogDebug(ex,
+                "{Address}: a response continuation raced this hub's teardown — transient. The "
+                + "continuation runs off the action block, so it can outlive the scope it "
+                + "resolves from; the caller's subscription is already going away.", Address);
+        else
+            logger.LogError(ex,
+                "{Address}: a response continuation threw. It runs off the action block, so this "
+                + "did not fault a turn — it would otherwise have gone unhandled on a scheduler "
+                + "thread and killed the process. The throw is in the code that subscribed to "
+                + "hub.Observe(...), not in the hub.", Address);
+    }
+
     private IObservable<IMessageDelivery> RestoreUserContextOnEmission(
         IObservable<IMessageDelivery> source, AccessContext? capturedCtx)
     {
@@ -1231,7 +1439,8 @@ public sealed class MessageHub : IMessageHub
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
             : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
-               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L,
+               DrainsAwaitingScheduler: -1L);
 
         // The discriminator. A hub that was IDLE while waiting genuinely heard nothing: the silence
         // is upstream. A hub that was busy, gated, or holding queued work cannot make that claim —
@@ -2152,30 +2361,61 @@ public sealed class MessageHub : IMessageHub
         // here is a category error, which is precisely what the unguarded fallback below used to do
         // (#3593: 47 sync/* hubs, all at RunLevel=Started with queue depth 1).
         //
-        // What the two counters in the line discriminate:
-        //   drainsInFlight=0 → the scheduled drain never ran. The turn scheduler owes this hub a
-        //                      thread and has not delivered one (a starved pool, a scheduler whose
-        //                      queue is not being serviced, work parked on one thread's local LIFO
-        //                      queue reachable only by stealing).
-        //   drainsInFlight>0 → a drain body IS running and is blocked BEFORE the dequeue — i.e. in
-        //                      the turn gate itself, or in whatever the body does ahead of taking
-        //                      work off the queue.
+        // 🚨 The line used to say "a drain IS scheduled on this hub's TaskScheduler" and then send
+        // the reader to that scheduler — an ASSERTION, not a measurement. Nothing in the snapshot
+        // could tell "the scheduler accepted a drain and never ran it" from "the latch is set and
+        // nothing is outstanding at all", and those have opposite owners. `drainsAwaiting` is that
+        // measurement (#3593): scheduled minus started, read off the pump.
+        //
+        // The three states, in the order the line reports them:
+        //   drainsInFlight > 0   → a drain body IS running and is blocked BEFORE the dequeue — in
+        //                          the turn gate, or in whatever runs ahead of taking work off the
+        //                          queue.
+        //   drainsAwaiting > 0   → the turn scheduler ACCEPTED a drain and has not run it. The
+        //                          cause is outside this hub: a starved pool, work parked on one
+        //                          thread's local LIFO queue, or — for a ROOT GRAIN hub only — an
+        //                          Orleans ActivationTaskScheduler that stopped executing work.
+        //                          🚨 The last one does NOT apply to a hosted hub: hosted hubs are
+        //                          built from a fresh MessageHubConfiguration and inherit no
+        //                          scheduler, which is what WithTaskScheduler's contract asks for.
+        //   drainsAwaiting == 0  → NOTHING is outstanding while the latch is set. That breaks
+        //                          ScheduleDrainOne's invariant and is a defect in the pump itself,
+        //                          not in any scheduler. It is reachable only if a schedule was
+        //                          lost without releasing the latch, which ScheduleDrainOne now
+        //                          refuses to do — so if this branch is ever printed, it is new.
         if (snapshot is { } pumpView && pump is not null
             && pumpView.Draining && pumpView.Buffer > 0 && nothingDequeuedThisBudget)
         {
+            var drainsAwaiting = pumpView.DrainsAwaitingScheduler;
+            var mechanism = pumpView.DrainsInFlight > 0
+                ? "a drain body IS running (drainsInFlight=" + pumpView.DrainsInFlight
+                  + ") and is blocked BEFORE the dequeue — in the turn gate, or in whatever it does "
+                  + "ahead of taking work off the queue"
+                : drainsAwaiting > 0
+                    ? "the turn scheduler ACCEPTED " + drainsAwaiting + " drain(s) and has not run "
+                      + "them (drainsInFlight=0). The stall is in THAT SCHEDULER, not in this hub. "
+                      + "On TaskScheduler.Default (every hosted hub — a hosted hub is built from a "
+                      + "fresh configuration and inherits no scheduler) that is pool starvation or "
+                      + "work parked on one thread's local LIFO queue; on a ROOT GRAIN hub it is the "
+                      + "grain's ActivationTaskScheduler (MessageHubGrain.WithTaskScheduler), where a "
+                      + "wedged or deactivated activation parks every turn this hub will ever take"
+                    : "NOTHING is outstanding (drainsInFlight=0, drainsScheduled==drainsStarted) "
+                      + "while the drain flag is latched. That breaks the pump's own invariant — a "
+                      + "latched flag must mean a drain is running or queued — so this is a defect "
+                      + "in MessageService.ScheduleDrainOne, NOT in any scheduler";
+
             logger.LogError(DisposalPumpNeverDequeued,
                 "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
                 + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}. "
-                + "THE PUMP IS NOT TURNING: the drain flag is latched (a drain is scheduled on this "
-                + "hub's TaskScheduler), drainsInFlight={DrainsInFlight}, and NO turn was dequeued in "
-                + "that window ({Dequeued} dequeued in total since Dispose()). The queued work — the "
+                + "THE PUMP IS NOT TURNING: the drain flag is latched, drainsInFlight={DrainsInFlight}, "
+                + "drainsAwaitingScheduler={DrainsAwaiting}, and NO turn was dequeued in that window "
+                + "({Dequeued} dequeued in total since Dispose()). The queued work — the "
                 + "ShutdownRequest included — has therefore never been handed to a handler, so this "
                 + "stall is in THIS hub's turn scheduling and NOT in a hosted hub or a join. "
-                + "drainsInFlight=0 means the scheduled drain never ran: look at the TaskScheduler "
-                + "that owes this hub a thread. drainsInFlight>0 means a drain body is running and is "
-                + "blocked before the dequeue. Disposal is NOT forced.\n{Diagnostics}",
+                + "MECHANISM: {Mechanism}. Disposal is NOT forced.\n{Diagnostics}",
                 Address, DisposalWatchdogTimeout, lastProgress, RunLevel, pumpView.Buffer,
-                pumpView.DrainsInFlight, dequeued - disposalDequeuedBaseline, DescribeWedge());
+                pumpView.DrainsInFlight, drainsAwaiting, dequeued - disposalDequeuedBaseline,
+                mechanism, DescribeWedge());
             return;
         }
 
@@ -2206,14 +2446,16 @@ public sealed class MessageHub : IMessageHub
         logger.LogError(DisposalStalledUnclassified,
             "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} "
             + "(last progress: {LastProgress}). RunLevel={RunLevel}, queue depth {Depth}, "
-            + "drainsInFlight={DrainsInFlight}, draining={Draining}, {Dequeued} turn(s) dequeued since "
+            + "drainsInFlight={DrainsInFlight}, drainsAwaitingScheduler={DrainsAwaiting}, "
+            + "draining={Draining}, {Dequeued} turn(s) dequeued since "
             + "Dispose(). No turn is on the block, the pump is not holding queued work, and this hub "
             + "has no hosted hubs and no outstanding child-disposal join — so THIS VERDICT DOES NOT "
             + "NAME A CAUSE. What is still outstanding is in the diagnostics below (pending callbacks "
             + "are the usual one: a reply owed from outside this mesh). Disposal is NOT "
             + "forced.\n{Diagnostics}",
             Address, DisposalWatchdogTimeout, lastProgress, RunLevel, snapshot?.Buffer ?? -1,
-            snapshot?.DrainsInFlight ?? -1, snapshot?.Draining ?? false,
+            snapshot?.DrainsInFlight ?? -1, snapshot?.DrainsAwaitingScheduler ?? -1L,
+            snapshot?.Draining ?? false,
             dequeued - disposalDequeuedBaseline, DescribeWedge());
     }
 
@@ -2360,7 +2602,8 @@ public sealed class MessageHub : IMessageHub
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
             : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
-               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L,
+               DrainsAwaitingScheduler: -1L);
         var pending = SnapshotPendingCallbacks();
         var sb = new System.Text.StringBuilder();
         sb.Append("Hub ").Append(Address)
@@ -2402,6 +2645,39 @@ public sealed class MessageHub : IMessageHub
         foreach (var child in hostedHubs.Hubs)
             if (child is MessageHub childMh && childMh.AnyHubQuiescingTimedOut(depth + 1)) return true;
         return false;
+    }
+
+    /// <summary>
+    /// 🚨 <b>Every hub alive under this one, this one included — the population #3432 needed and
+    /// nobody could see without a heap dump (#3488).</b>
+    ///
+    /// <para>Yielded lazily and bounded by <see cref="MaxHostedHubRecursionDepth"/>, exactly like
+    /// the disposal walks beside it: a hosted-hub cycle must cost a truncated answer, never a hung
+    /// scrape. The enumeration is over <c>HostedHubsCollection.Hubs</c>, which is a
+    /// <c>ConcurrentDictionary</c>'s values — safe to walk while hubs are added and removed, and
+    /// the snapshot is deliberately not locked: a metric of a moving population is a sample, and
+    /// pausing the mesh to make it exact would cost more than the number is worth.</para>
+    ///
+    /// <para>Internal: this is instrumentation's read, not a public traversal API. A caller that
+    /// wants to ACT on the tree should use the disposal seams, which are ordered.</para>
+    /// </summary>
+    /// <param name="depth">Recursion depth; callers pass nothing.</param>
+    /// <returns>This hub, then every live descendant.</returns>
+    internal IEnumerable<IMessageHub> LiveHubTree(int depth = 0)
+    {
+        yield return this;
+        if (depth >= MaxHostedHubRecursionDepth)
+            yield break;
+        foreach (var child in hostedHubs.Hubs)
+        {
+            if (child is not MessageHub childHub)
+            {
+                yield return child;
+                continue;
+            }
+            foreach (var descendant in childHub.LiveHubTree(depth + 1))
+                yield return descendant;
+        }
     }
 
     /// <summary>
@@ -2447,7 +2723,8 @@ public sealed class MessageHub : IMessageHub
         var snapshot = (messageService is MessageService ms)
             ? ms.GetQueueSnapshot()
             : (Buffer: -1, Deferred: -1, DrainsInFlight: -1, OpenGates: -1, Draining: false,
-               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L);
+               CurrentMessage: (string?)null, CurrentMessageElapsedMs: 0L,
+               DrainsAwaitingScheduler: -1L);
         sb.Append(indent)
           .Append("Hub ").Append(Address)
           .Append(" RunLevel=").Append(RunLevel)
@@ -2547,8 +2824,10 @@ public sealed class MessageHub : IMessageHub
 
                 var initialPendingSnapshot = SnapshotPendingCallbacks();
                 TryLog(LogLevel.Information,
-                    "[QUIESCE-START] {Address}: {Count} pending callbacks at dispose entry: {Pending}",
-                    Address, initialPendingSnapshot.Length, FormatPendingCallbacks(initialPendingSnapshot));
+                    "[QUIESCE-START] {Address}: requested by {RequestedBy}; why: {Reason}; "
+                    + "{Count} pending callbacks at dispose entry: {Pending}",
+                    Address, DisposalRequestedBy, DisposalReason,
+                    initialPendingSnapshot.Length, FormatPendingCallbacks(initialPendingSnapshot));
 
                 // CRITICAL: do the wait OFF the action block. The action block processes
                 // messages serially (MaxDegreeOfParallelism = 1) — a blocking wait on the
@@ -3198,6 +3477,30 @@ public sealed class MessageHub : IMessageHub
         // (our parent) is going down with us.
         if (!IsShuttingDown)
             AnnounceRecycle();
+
+        // Recorded BEFORE Dispose(), because Dispose() is what logs [QUIESCE-START] (#3510). Set
+        // here rather than at the top of the handler so it means what it says: this request was
+        // honoured, not merely received — the root-mesh refusal above returns without disposing.
+        //
+        // 🚨 SELF-POSTED is called out, not printed as an address. The automatic recycles post to
+        // their OWN hub (NodeTypeRebindWatcher, WithOverlaySelfHeal), so the bare sender would read
+        // "[QUIESCE-START] Hosting: requested by Hosting" — true, useless, and easy to misread as a
+        // routing oddity. The reader's question is which of three things happened, so the line says
+        // which: a recycle this hub asked for, a teardown someone else asked for, or no message at
+        // all. #3510's leading hypothesis is precisely the first, and the installer
+        // (PackageInstaller posting to a package root) is the second.
+        // 🚨 WHO is only half of it. The self-posted reading below is ONE WORD COVERING THREE
+        // STATES — NodeTypeRebindWatcher, the stale-build convergence and WithOverlaySelfHeal all
+        // post to their own hub — and #3510's leading hypothesis was precisely "which of those
+        // was it?". The poster always knew; the request had nowhere to carry it. It does now, and
+        // an omission is reported as an omission rather than as silence.
+        disposeReason = request.Message.Reason;
+        disposeRequestedBy = request.Sender is null
+            ? "an unnamed sender (routed DisposeRequest)"
+            : Equals(request.Sender, Address)
+                ? $"itself — a self-posted DisposeRequest ({request.Sender}), i.e. a rebind or "
+                  + "self-heal recycle"
+                : $"{request.Sender} (routed DisposeRequest)";
 
         Dispose();
         return request.Processed();

@@ -175,11 +175,69 @@ seeded on weaker evidence than that would be an automatic re-runner with a JSON 
 - `dotnet-test.yml`'s *CI's own shell* job runs the steward's `--self-test` on every pull request,
   so a classifier regression cannot merge on a branch that never dequeued anything.
 
+## 🚨 Auto-merge waits on the BASE's protection — so a stacked PR is armed to merge NOW
+
+`--auto` does not mean "merge when this pull request is green". It means "merge when the contexts
+**branch protection requires of the BASE** are satisfied" — and in this fleet protection is
+configured on the default branch and nowhere else. A **stacked** pull request, opened against
+another pull request's feature branch, therefore has a base that is protected by nothing, an EMPTY
+required set, and a condition that is met the instant GitHub first reads it.
+
+**Measured 2026-09-11.** `MeshWeaver.Plugins#1685` was opened against the feature branch of #1681.
+`auto-arm.yml` armed it and GitHub merged it at 21:03:23Z — **61 seconds after it was opened, before
+its own CI had started a single job**. Nothing failed and nothing was bypassed; the stack collapsed
+unreviewed, exactly as configured. `auto-arm.yml` is the fleet's only copy of the arm lane and every
+satellite reaches it through `workflow_call`, so the hole was open in every repository at once.
+
+🚨 **But "the satellites get it for free" is true only where the caller pins `@main`, and one does
+not.** Measured 2026-09-11 over the contents API (never a local clone — satellite checkouts here run
+days stale): all seven callers exist, and six pin `auto-arm.yml@main` — MeshWeaver.Plugins,
+.Reinsurance, .SocialMedia, .Education, .Crm, .Manufacturing — so a core fix lands there on merge.
+**`Systemorph/Memex` pins a SHA** (`@c7fef7a2`, 971 commits behind core's `main` when measured), so
+it picks up nothing until that line moves. The lesson generalises past this fix: before claiming a
+reusable-lane change reaches the fleet, read every caller's `uses:` ref — a fleet-wide fix and a
+six-of-seven fix are indistinguishable from core, and the odd one out is silent, not red.
+
+The lane now reads `github.event.repository.default_branch` off the event — **never a literal
+`main`**, which would be a copy of a fact every repo happens to share today and the exact drift the
+single-copy design exists to end — compares it with `github.event.pull_request.base.ref`, and arms
+only on a match.
+
+🚨 **One self-clearing window, named so it is not misread as the fix failing.** The lane runs on
+`pull_request_target`, and that event runs the workflow file **as it exists on the pull request's
+BASE branch** — not on `main`. So a stacked pull request opened onto a feature branch that was cut
+*before* this fix landed still runs the old, unguarded copy and is still armed immediately. Nothing
+in core can reach that: the branch carries its own copy by the event's definition. It clears as soon
+as the branch is cut from, or catches up with, a `main` that has the fix. If you see a stacked pull
+request merge instantly in the days after this lands, check the age of its base branch before
+concluding the guard is broken.
+
+🚨 **The decision is announced, and the JOB is never what skips.** Moving the base test onto the
+job's `if:` is the tidy-looking version of this fix and deletes the message with it: a skipped job
+renders like a passed one and carries no warning, no summary and no comment, so "the lane declined"
+and "the lane is broken" become the same page. Instead the job runs, a `::warning::` plus a step
+summary name the base, and one idempotent comment says so on the pull request itself. Draft and fork
+stay on the job condition, because for those there is genuinely nothing to say.
+
+**The other lanes were checked and are clean structurally, not by luck** — which is why none is
+exempted by name in the guard: `arm-credential.yml` mints and inspects a token and arms nothing;
+this steward acts only on a `dequeued` event, which cannot occur for a pull request never admitted
+to a queue, and a queue exists only on a branch configured to have one; `release.yml` and
+`node-repo-platform-ref-bump.yml` OPEN pull requests (`--base main`, explicitly) without arming them.
+
+`ArmedMergeMustTriggerMainsPushLanesGuard` holds all three properties: the arming step is governed
+by an `if:` consuming a step output whose producer reads `default_branch` (a condition moved into
+`env:`, or one that consults only the token mint, breaks the chain and fails); no workflow in the
+directory arms without that chain; and the non-default path still warns and still comments.
+
 ## Working with the queue
 
-- **`gh pr merge <n> --auto` enqueues.** With a queue enabled, "auto-merge" means *enqueue when the
-  PR's own required checks are green*. `auto-arm.yml` does this for every non-draft PR, so a green PR
-  lands without anyone pressing anything. Marking a PR **draft** is the opt-out.
+- **`gh pr merge <n> --auto` enqueues — but only onto the default branch.** With a queue enabled,
+  "auto-merge" means *enqueue when the PR's own required checks are green*. `auto-arm.yml` does this
+  for every non-draft PR **whose base is the default branch**; see the section above for why a
+  stacked PR is deliberately left unarmed. Marking a PR **draft** is the opt-out.
+- 🚨 **DISARMING auto-merge does NOT hold a pull request. Converting it to DRAFT does.** This is the
+  single most likely way to believe you have stopped a merge and be wrong — see the section below.
 - **A push to a queued branch ejects it.** GitHub removes the entry (reason `MANUAL`-shaped from the
   steward's point of view: it comments once and takes no action); auto-arm re-arms on the
   `synchronize` event, so the new head re-enters the queue once its own run is green. Do not push to
@@ -193,6 +251,56 @@ seeded on weaker evidence than that would be an automatic re-runner with a JSON 
   the run — the PR needs a fix or, with evidence and an issue, a catalogue entry. Remove the label
   when you re-arm.
 - **Reading the queue:** `gh pr view <n> --json mergeQueueEntry`, or the `status` command above.
+
+## 🚨 Disarming auto-merge is not a hold — DRAFT is the only durable one
+
+**Measured: `MeshWeaver.Plugins#1683` was deliberately disarmed during a merge window and merged
+anyway.** Nothing malfunctioned. `auto-arm.yml` fires on `synchronize` among other events, so **the
+next push re-armed it** — and a pull request being held is exactly a pull request someone is still
+pushing to. A push is what happened to re-arm *that* one; it is not the only thing that would have.
+
+The asymmetry is the whole point, and it is structural rather than a bug to fix:
+
+| act | what it is | how long it lasts |
+|---|---|---|
+| `gh pr merge --disable-auto` | a **state** GitHub owns | until the next event this lane fires on: `synchronize` (a push), `reopened`, or `ready_for_review`. **A push is the common one, not the only one** — reopening a closed PR, or marking a draft ready, re-arms with no push at all. (`opened` cannot apply: a pull request has to exist before it can be disarmed.) |
+| convert to **draft** | a **property of the pull request** the lane reads | until *you* mark it ready; `ready_for_review` is what re-arms |
+
+Read off the merged lane: `types: [opened, reopened, ready_for_review, synchronize]` and a job
+condition of `github.event.pull_request.draft == false`. A draft is never armed no matter how many
+times it is pushed to, and marking it ready arms it immediately — so draft is a **two-sided** hold
+the lane honours on both edges, while a disarm is a one-shot the next event overwrites. (GitHub also
+disables auto-merge when a pull request is converted to draft, so the conversion does both halves in
+one act. That last clause is GitHub's documented behaviour rather than something measured here.)
+
+**So: to hold a pull request, convert it to draft. Never rely on `--disable-auto`** — and if you
+find a PR merged that you thought you had stopped, look for one of this lane's trigger events after
+the disarm before looking for anything else. A push is the first thing to check because it is the
+most frequent, but a reopen or a ready-for-review re-arms just as completely and leaves no new
+commit to notice, which makes those the harder two to spot afterwards.
+
+**#4057 does not change this.** That fix stops the lane arming a pull request whose base is not the
+default branch; for an ordinary pull request onto `main`, re-arming after a disarm is unchanged.
+
+### The option considered and NOT taken
+
+Making the lane refuse to re-arm a pull request a human explicitly disarmed is attractive and is
+**not small**, so it was left alone rather than half-built:
+
+- **Honour a `hold` label.** Needs the label to exist in all eight repositories and a convention
+  nobody has agreed to. It would at least fail *toward* today's behaviour — a missing or misspelled
+  label arms, as now — and the refusal would be visible on the pull request, so it would not be a
+  silent skip. But a fleet-wide convention is a maintainer's call, not a side effect of a CI fix.
+- **Read the timeline for `auto_merge_disabled` and decline to re-arm after it.** This needs no
+  convention and rests on real evidence rather than a marker, which makes it the better design —
+  but it turns a read failure into a policy decision: fail *open* and the hold is not a hold, fail
+  *closed* and one flaky API call silently stops arming the whole repository. That trade-off, and a
+  paginated timeline read, is engineering with a decision in it, not a small patch.
+
+Either way the rule that must survive is the one this document already states: **a decision not to
+arm has to be SAID, on the pull request.** A hold that works by something quietly not happening is
+the same defect as a gate that skips on a missing input — silence and "still running" look
+identical.
 
 ## Related
 

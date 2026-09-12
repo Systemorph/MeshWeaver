@@ -17,6 +17,27 @@ still describes the older mechanism, it says so in a banner that names the imple
 
 ## The three rules
 
+**Maintainer clarification, 2026-09-09: compatibility follows the used API, not a platform pin.**
+Keep a module usable across platform and dependency releases when the contracts it uses remain
+compatible. A different version, build commit or MVID is not evidence of incompatibility. A
+removed type/member, changed required signature or another actual linking/loading failure is.
+Conversely, identical version strings do not make incompatible bytes safe.
+
+This is a runtime contract. Reproducible compiler inputs and content-addressed cache keys record
+what produced an artifact; they must not become an exact-version requirement for running a
+compiled module. A NodeType bake with another build identity is not reused blindly: compile its
+source against the current platform. That cache miss is not a declaration that the feature is
+incompatible. Explicit strict-prebuilt policy remains an operator choice.
+
+The compatibility regression suite must include positive and negative controls: unchanged used
+APIs across different assembly versions, additive APIs/body changes, removal of a referenced API
+even with an unchanged version, incompatible member signatures, and preservation of a working
+generation when an upgrade fails. Exercise real metadata/loader paths; tests that compare version
+strings alone cannot prove these claims. `ModulePlatformLinkTest` covers the type measurement and
+rejected-upgrade continuity. Member compatibility also needs actual loading/execution: the current
+type-level probe cannot establish it. Do not describe a successful type probe as proof that every
+method call is compatible.
+
 | # | Rule | What it replaces |
 |---|---|---|
 | **R1 — continuity** | An installation always runs *some* version of every module it has installed: the newest one that **loads**. If nothing newer ships for the platform it runs, the version it has keeps running. Nothing removes a working module because a newer one exists but cannot load. | A landed generation that does not load leaves the module **absent** (only image-shipped modules had a baseline to fall back to); a shelved landing overwrote the only reference to the loadable generation. |
@@ -55,6 +76,90 @@ tried, the module "contributed nothing", and every skinned control on the portal
 its fallback HTML. The probe was not the gap; the fallback order was, and this section is what
 closes it.
 
+🚨 **This is the CONSUMER half, and it masks the producer's defect rather than removing it.** A
+portal that falls back to the image copy renders correctly while its publication still carries two
+builds of one assembly name, so *"does it render"* is not evidence a bundle is clean. The producer
+half — a module bundle never carrying a `MeshWeaver.*` copy the platform already ships, measured off
+the image rather than declared in a list — is
+[The Platform-Shipped Witness](../PlatformShippedWitness), and it probes the same two locations
+`MeshBuilder.ResolveModulePath` does, on purpose. Two things this fallback cannot reach: a riding
+copy that *does* load shadows the image copy, so the fallback never runs; and the sealed-set
+conflict below still HOLDS the roll for the whole fleet whatever one process does at boot.
+
+## A declined bundle risks stale TYPES, not just a slower boot
+
+The bullets above treat *no adopted bundle* as a cost paid in boot time, because the content then
+compiles in the mesh. Measured on 2026-09-10 (memex.systemorph.com, `3.0.0-ci.8238`, core
+`2287decb`, identity `s546f29f9…`) that is not the whole story: a module whose bundle is declined
+can keep serving **types built from source older than the source the instance has installed**,
+while the package's own install record reads installed, current and up to date.
+
+`MeshWeaver.AI` had gained `ModelDefinition.ReasoningEffort` (Plugins#1556, 09-09 12:41Z) and
+`ThreadMessage.Timing` (Plugins#1552, 11:59Z). The install record carried main's own file hashes —
+`src/MeshWeaver.AI/ModelDefinition.cs` = `89fd0a2264…`, byte-identical to `origin/main`, which
+declares the property — so the *sources* were current. The *types* were not: `get
+@…/schema/ModelDefinition` listed no `reasoningEffort`, and a `patch` setting it wrote a new node
+version with the property silently dropped. The instance's own health said why:
+
+```text
+bundle_adoption: Degraded — 25 adoption attempt(s), 0 assembly/assemblies adopted, 25 MISS(es) —
+content the registry was meant to serve is compiled here instead: AI: FrameworkDeclined
+(built against framework s72c27afab89c1007…, live framework is s546f29f90e235e61…)
+```
+
+The registry's bytes were therefore never in play. What served was the previously resolved build,
+kept alive by the same-MAJOR **stale-but-serving** rule recorded on
+[The Execute-Time Interlock](../ExecuteTimeInterlock) (#3844): a moved source fingerprint is
+deliberately *not* a refusal, so `1.5.0 → 1.5.1` kept the old build. That is why a Store
+`RefreshModules` re-land and two restarts each reloaded the identical generation and changed
+nothing. What finally let fresh types through was a new `{package}@{version}` shelf entry —
+`AI/index.json` 1.5 → 1.6 with **no source change** (Plugins#1586) — for which no previously
+adopted build existed. Two minutes after that merged the instance installed `AI 1.6.0`, and the
+property appeared on the served schema and survived a write.
+
+Three consequences worth carrying:
+
+- **"Installed, current version, sources current" is not "running these types."** The install
+  record describes the *content* lane. Which assembly answers `schema/<Type>` is the *module* lane,
+  and on a declined bundle the two can sit days apart with nothing red anywhere.
+- **Re-landing is not re-building.** `RefreshModules` re-lands content; it does not dislodge an
+  adopted build that the compatibility rule still accepts.
+- **A version bump is a delivery lever.** Where a stale adopted build is serving, moving
+  `{package}@{version}` is the supported way to force a fresh one — and it doubles as the
+  experiment that separates "the shelf holds stale bytes" from "an adopted build is being kept".
+
+🚨 **Do not read stale served types as the registry serving bad bytes.** The two are
+indistinguishable from the consumer: same `[ModuleLoad]` line, same generation directory, same
+mvid, and `[ModuleLoad]` never names the commit a bundle was built from. The discriminator is
+`bundle_adoption` on `/health` — `FrameworkDeclined` means the registry's copy was never adopted,
+so a fix aimed at the shelf would be aimed at bytes this instance never ran.
+
+## The registry shelf: arrival order is not version order (#3996)
+
+R1–R3 describe the consumer. A registry instance is also where producers publish: CI uploads module bundles to it (`POST /api/plugins/bundles/{plugin}` → `ModuleLandingService.ShelveModule`), and since #3461 two lanes publish the same module — core CD's `plugins-bake` at the gate's Plugins commit, and the module repository's own publication. Core CD runs take 40–50 minutes, so the **older** build routinely arrives **last**. Until #3996 every accepted upload moved the registry's activation head. Measured on memex.meshweaver.cloud on 2026-09-11: `MeshWeaver.Mail.MicrosoftGraph` 1.7.0 landed at 02:49Z and 1.6.1 displaced it at 03:00Z; the activation entry read `Version=1.6.1 PreviousVersion=1.7.0`, so the next restart would have silently un-shipped a merged change. `MeshWeaver.AI` showed the same shape that night.
+
+The rule is the consumer's "never roll back unattended", applied to the publish route: **the head is the highest version the shelf holds, never the last upload to arrive.** The order is `NuGetVersionComparer`'s — the comparer `SkipOlder` uses — so a registry's head and its consumers' update decisions cannot disagree about which version is newer.
+
+| The upload, relative to the current head | What happens |
+|---|---|
+| Strictly **older**, and the head's bytes are present | **Shelf-only.** The bytes land, the head does not move, and the publish answers 200 with `shelfOnly: true` and the reason. |
+| **Equal** version | The head **moves**: a rebuild of unchanged source against a newer platform republishes under the same version (Plugins#931). Identical bytes resolve to the same content-addressed generation, so re-publishing them is a no-op. |
+| **Newer** | The head moves; the displaced generation becomes the fallback (#3649). |
+| Pre-release vs stable | SemVer order: `1.7.0` outranks `1.7.0-rc1`, and `3.0.0-ci.3758` outranks `3.0.0-ci.900` (numerically). A pre-release published after its stable is shelf-only. |
+| Either version **unknown**, or not a SemVer version at all | The head moves, as before. An absent or unparseable version is no evidence of order (R2) — and `NuGetVersionComparer` reads an unparseable part as 0, so without this a `nightly` label would rank below every real version. |
+| A newer head whose **entry DLL is gone** | The head moves. A record without bytes is not a version this registry holds, and refusing the one upload that could heal it would turn the rule into a self-sealing outage. A re-publish of the head's **own bytes** (the content address ignores the version label) resolves to the head's own directory instead: the landing restores the files it lost, and the head keeps its label. |
+| A newer head that **does not link on the registry's own platform** | The head **stays**. The shelf warehouses modules for newer platforms, and boot runs the fallback when the head does not load there (R1). Letting an older loadable upload take the head would move the registry onto the older version the moment its own platform caught up — #3996 by another road. |
+
+**What happens to a shelf-only upload's bytes.** It competes for the head's **fallback** slot (`PreviousDirectory`), which the modules GC never reclaims. It takes that slot when the slot is empty or its bytes are gone, when it loads on this platform and the recorded fallback does not, or — at equal loadability — when it ranks higher. Otherwise it is not retained: the publish response says `retainedAsFallback: false`, and the GC reclaims the generation. There is one fallback slot, so a registry holds at most two generations of a module (head and fallback) — the #3649 design, not a new limit. If a shelf-only upload moves the fallback while the head does not load here, the restart flag **is** raised, because boot runs the fallback and a restart genuinely changes what loads.
+
+**Resolvable by version.** The bundle index lists the head and a retained fallback as separate entries at their own versions, newest first, and `GET /api/plugins/bundles/{plugin}/{version}` serves the generation that version names (`ModuleBundleSource.CollectVersion`). The index readers (`PluginBundleClient` and `mw module fetch`) take the first entry for a package, so they still get the head. A consumer that asks for a retained older version by name gets those bytes, never the head's bytes under another label. Versions match by their exact text, as the index advertises them — not by the SemVer comparer, which would make any two non-SemVer labels equal. An older upload whose bytes are identical to the head's is the head's generation: it is not listed under its own label, and its bytes are served as the head's.
+
+**Deliberate rollback.** Re-publishing an older version no longer rolls a registry back: the publish route has no operator, only build jobs, and a build job never intends a rollback. Roll forward instead (publish the fix under a higher version), or uninstall the module on that registry first (`ModuleLandingService.RemoveModule` disables the entry, so the next publish is a first landing). The Store's adopt path (`LandModule`) does not carry this rule; the unattended lane that could reach an older version is already refused by `SkipOlder`.
+
+**A record that already regressed** — the 2026-09-11 memex.meshweaver.cloud state, head `1.6.1` with `1.7.0` as its fallback — is not rewritten by an older or equal upload; the newer generation stays retained as the fallback. It heals on the next publish of `1.7.0` or higher, which the next core CD cycle delivers once its gate carries that version.
+
+**Not covered: two replicas at once.** Landings are serialised within one process. Two replicas landing the same module within the same few seconds each decide against the entry they read before the other wrote, and the later write wins — [#4026](https://github.com/Systemorph/MeshWeaver/issues/4026). The #3996 incident was sequential (eleven minutes apart); what remains is the concurrent case.
+
 ## What the platform roll gates on
 
 The self-updater and the CD post-promote gate select **the newest release on which no installed module is unloadable**. Concretely, per installed package: a build published for the target identity exists (it will be adopted), *or* the landed generation links against the target's surface, *or* neither can be shown — which is reported as *indeterminate*, never as clearance and never as a hold. Declared floors do not enter. A missing content bake does not enter (it is reported as "would compile at boot: …"). The sealed-set consistency check (#3175/#3221) stays: two builds of one platform assembly in one identity is a torn publication, and torn publications are refused whole.
@@ -76,9 +181,9 @@ All four steps are implemented: 1 is [#3661](https://github.com/Systemorph/MeshW
 
 ## What stays exactly as it is
 
-- The **content bake identity rule**: a NodeType assembly adopts only for the identity it was baked against. Wrong bytes are worse than no bytes.
+- The **content bake identity rule**: a NodeType assembly adopts only for the identity it was baked against. Wrong bytes are worse than no bytes. 🚨 The per-type DEPENDENCY RECORD beneath it changed on 2026-09-10 and this rule did not: a module entry is now a FLOOR over the module's version rather than its MVID, so a module REBUILD stops declining a bundle while a genuinely older module still does — [The Dependency Record Floor](../DependencyRecordFloor). That is the same instinct as R2 one layer down (a different build is not evidence of incompatibility), and it relaxes nothing about the framework identity, the toolchain entry or the content key.
 - The **seal**: a publication is real when `_complete` is written last and every listed file exists; a torn publication is refused whole (#3461, #3401).
-- **Never roll back unattended**: an older served version is never adopted over a newer landed one (`SkipOlder`).
+- **Never roll back unattended**: an older served version is never adopted over a newer landed one (`SkipOlder`) — and on a registry, an older *published* version never displaces a newer landed head (#3996, the registry-shelf section above).
 - **Never swap a module in a running process**: a new generation loads at the next restart; the policy makes that restart happen (step 3), it does not make the swap live.
 - **Sources follow the seal** (Plugins#1430, core #3600): a module-bearing repository's sources advance only to the commit sealed for the instance's own identity.
 - **Pack-time floor lint** (`check-module-floors.py`, `check-module-platform-floor.py`): a module built against pin X that declares a floor above X is an authoring error and still fails the pack. The floor is documentation for humans; the runtime does not read it as a gate.

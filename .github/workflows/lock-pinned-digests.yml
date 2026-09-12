@@ -44,7 +44,34 @@ name: Lock pinned image digests
 #     read-back is not a confirmation either. Two `--self-test` arms drive both cases and were
 #     falsified by deleting the read-back.
 #   * It PRINTS THE DENOMINATOR — per axis: repositories scanned, repositories that pin, pin sites
-#     found — and a ZERO on either axis is RED, because both were non-zero when this was written.
+#     found, installations expected and installations that ANSWERED — and an installation that did
+#     not answer makes the run INCOMPLETE, which is a refusal rather than a shorter answer.
+#
+# 🚨 THREE AXES, AND THE THIRD IS LIVE (#3438/#3858/#3860, 2026-09-12). Axes 1 and 2 read COMMITTED
+# files — workflow digest pins and deployment-overlay tag pins — and both are proxies for what is
+# actually being consumed. Axis 3 asks each installation directly, through its own unauthenticated
+# `/api/version`, and protects the closure of the image sets built from the commit it answers.
+# Memex#219's third shape is why: memex-cloud was rolled to `3.0.0-ci.8399` at 06:15Z on 2026-09-12
+# while its committed pin still read `8372`, so that night's lock protected the manifest it was NOT
+# running. The expected installations come from the same overlays axis 2 reads
+# (`Hosting__Deployment` + `ingress.host`); `.github/acr-retention/instances.json` declares the ones
+# that are deliberately not live, with a reason, because silence is unavailability and never
+# retirement.
+#
+# 🚨 IT LOCKS TWO THINGS, AND THEY ARE DIFFERENT OBJECTS. A manifest lock saves the BYTES; a TAG
+# carries its OWN `deleteEnabled` and that is the one `acr purge` reads when it deletes a tag.
+# Measured 2026-09-12: `memex-portal-ai:3.0.0-ci.8372` — the tag both production overlays pin — read
+# `deleteEnabled: true` over a manifest reading `false`, and ZERO of that repository'"'"'s 1,396 tags
+# were locked. The purge would have deleted the reference and left the bytes: `manifest unknown` to
+# the next pull, from a fully protected manifest. Both halves are locked now, delete only.
+#
+# 🚨 THE AXIS-1 ZERO ASSERTION IS GONE, AND WHAT REPLACED IT IS STRONGER. It read "six repositories
+# pinned a digest on 2026-09-06, so zero means the extractor stopped matching" — and on 2026-09-12
+# the scheduled run died on exactly that line, two hours before the purge, because #3842 had moved
+# every satellite to RESOLVING the platform set at run time. An assertion about the FLEET expires;
+# one about the INSTRUMENT does not. `extractor_control()` drives `extract()` over a fixture with two
+# known digest pins on every run, so a broken matcher reds even when the fleet happens to declare
+# pins anyway.
 #
 # 🚨 WHY THE `push` TRIGGER IS REPORT-ONLY. It is not a skip: the script runs in full, prints both
 # denominators, and reds on every blocker — only the `az` WRITE is withheld. A change to the
@@ -78,6 +105,7 @@ on:
       - '.github/scripts/lock-pinned-digests.py'
       - '.github/scripts/check-pin-set-consistency.py'
       - '.github/scripts/check-pinned-digests.py'
+      - '.github/acr-retention/instances.json'
 
 permissions:
   contents: read
@@ -97,15 +125,15 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
-          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+          FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         run: |
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID        OIDC app registration for azure/login. 🚨 LOCKING IS A WRITE: it needs the data action Microsoft.ContainerRegistry/registries/repositories/metadata/write, which is in 'Container Registry Repository Writer' (and Contributor/Owner) and in NEITHER AcrPull NOR AcrPush — measured 2026-09-07, AcrPush is pull/read + push/write and nothing else. If this identity only has the read-only grant the pinned-digest sweep uses, the lock step reds naming the exact 'az role assignment create'")
           [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID        the Systemorph AAD tenant")
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID  the subscription holding meshweaver.azurecr.io")
-          [ -n "$MESHWEAVER_APP_ID" ]     || missing+=("secrets.MESHWEAVER_APP_ID          app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet — it is how the satellites' workflows and the deployment overlays are read")
-          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          [ -n "$FLEET_READER_APP_ID" ]     || missing+=("secrets.FLEET_READER_APP_ID          app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read); its installation IS the fleet whose pins and deployment overlays this job locks — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
+          [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write and is not installed on Memex")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::the pinned-manifest lock job cannot run — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -119,12 +147,17 @@ jobs:
       # So assert the CAPABILITY the job needs — enumerating the installation's repositories —
       # against the real API. That is also the job's fleet list: it is discovered, never committed,
       # so a repository added to the org is protected the day the App reaches it.
+      # 🚨 The READ-ONLY `fleet-reader` App. Discovery makes the App's installation the fleet, so an
+      # App that does not reach a repository does not FAIL here — it silently drops that repository.
+      # Memex's deployment overlays pin the live portals' image tags (AXIS 2), which is why this is
+      # not `meshweaver-cloud`, which Memex is leaving (decided 2026-09-11).
+      # Doc/Architecture/GitHubAppCredentials.
       - name: Mint an installation token for the fleet
         id: fleet-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-contents: read
 
@@ -140,7 +173,7 @@ jobs:
                              --jq '.repositories[].full_name'); then
             echo "::error::the minted installation token could not enumerate its own repositories."
             echo "  /installation/repositories is the endpoint an installation token answers about"
-            echo "  itself, so this is the token, not the network. Confirm the meshweaver-cloud App"
+            echo "  itself, so this is the token, not the network. Confirm the fleet-reader App"
             echo "  is installed on the Systemorph org and holds Contents: Read."
             exit 1
           fi
@@ -148,7 +181,7 @@ jobs:
           if [ "$count" -eq 0 ]; then
             echo "::error::the installation reaches ZERO repositories."
             echo "  Deriving a lock set from an empty fleet protects NOTHING while reporting success."
-            echo "  Add the fleet repositories to the meshweaver-cloud installation."
+            echo "  Add the fleet repositories to the fleet-reader installation."
             exit 1
           fi
           echo "The App reaches $count repository(ies); those are what the job will read."
@@ -158,8 +191,10 @@ jobs:
     needs: [preflight]
     runs-on: ubuntu-latest
     # ~34 repositories × (a workflow listing, a recursive tree, a handful of file reads), plus one
-    # manifest listing per ACR repository (15, ~2,800 manifests on 2026-09-07) and one `az` write
-    # per manifest newly locked. Minutes, not tens of minutes; measured end-to-end well inside this.
+    # manifest listing per ACR repository (15, ~2,800 manifests on 2026-09-07), one tag listing per
+    # repository the fleet references, one HTTPS probe per installation (3, each capped at 25 s) and
+    # one `az` write per manifest or tag newly locked. Minutes, not tens of minutes; measured
+    # end-to-end well inside this.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -169,12 +204,17 @@ jobs:
       # PAT rots exactly as PATs do (chart-drift.yml carried one; HTTP 401 on all nine runs after it
       # was provisioned, so the check never ran once, #1709). This one is minted fresh, expires in an
       # hour, and holds Contents: Read and nothing else.
+      # 🚨 The READ-ONLY `fleet-reader` App. Discovery makes the App's installation the fleet, so an
+      # App that does not reach a repository does not FAIL here — it silently drops that repository.
+      # Memex's deployment overlays pin the live portals' image tags (AXIS 2), which is why this is
+      # not `meshweaver-cloud`, which Memex is leaving (decided 2026-09-11).
+      # Doc/Architecture/GitHubAppCredentials.
       - name: Mint an installation token for the fleet
         id: fleet-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-contents: read
 

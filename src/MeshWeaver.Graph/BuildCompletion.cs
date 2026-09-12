@@ -103,9 +103,27 @@ public record BuildCompletion
     /// so it reads exactly the tree that was proven green.</summary>
     public string HeadSha { get; init; } = "";
 
-    /// <summary>The workflow's display name (e.g. <c>MeshWeaver Build and Test</c>). A repo may run
-    /// several workflows; a consumer that only trusts one filters on this.</summary>
+    /// <summary>The workflow's display name (e.g. <c>MeshWeaver Build and Test</c>). DISPLAY COPY
+    /// ONLY — a display name is mutable and a maintainer may edit it in a one-line diff, so nothing
+    /// may key on it. Measured 2026-09-11: no consumer ever did (the two readers are a log line in
+    /// <c>PluginUpdateWatcher</c> and the identity comparison in <c>MissedBuildFact</c>), which is
+    /// why the stable <see cref="WorkflowPath"/> was added rather than this field being trusted.</summary>
     public string? WorkflowName { get; init; }
+
+    /// <summary>
+    /// The stable Git path of the workflow whose green run produced this record — the identity the
+    /// webhook ADMITTED the run on (#3978), recorded so the record says what proved it rather than
+    /// leaving a reader to infer it from a mutable display name.
+    ///
+    /// <para>🚨 It is also the field that makes "this repository's content CI has never been seen"
+    /// an ANSWERABLE question. Absent, or different from the path the platform expects for the
+    /// repository today, means every publish signal for it is being refused — which is a SILENT
+    /// freeze of every Space that syncs it unless something says so. <c>GitHubWebhookProcessor</c>
+    /// reads exactly this to decide whether a refused green run deserves a Warning or a Debug line.
+    /// A record written before #3978 carries <see langword="null"/> here; the repository's next
+    /// genuine content-CI run fills it in.</para>
+    /// </summary>
+    public string? WorkflowPath { get; init; }
 
     /// <summary>GitHub's numeric run id — the stable handle for fetching logs or artifacts.</summary>
     public long RunId { get; init; }

@@ -124,6 +124,7 @@ public class DroppedUserActionIsRefusedTest : HubTestBase
         new ClickedEvent("a", "s").Should().BeAssignableTo<IUserAction>();
         new BlurEvent("a", "s").Should().BeAssignableTo<IUserAction>();
         new CloseDialogEvent("a", "s", DialogCloseState.OK).Should().BeAssignableTo<IUserAction>();
+        new ClickedEvent("a", "s").Should().BeAssignableTo<IRequest<UserActionAccepted>>();
         ((IUserAction)new ClickedEvent("some/area", "s")).ActionArea.Should().Be("some/area");
         return Task.CompletedTask;
     }

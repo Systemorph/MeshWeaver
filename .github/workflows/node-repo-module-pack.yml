@@ -48,6 +48,39 @@ name: node-repo module pack
 #             || github.event_name == 'schedule' }}
 #     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
 #
+# ────────── WHERE the hand-over happens: `publish-mode` (MeshWeaver#3878) ──────────
+# 🚨 `publish: true` alone still POSTs from inside the matrix leg, and that is the defect #3878
+# names: the leg publishes right after its OWN suite, while a sibling module's suite, the
+# portal-host shards, the NodeType compile-check and the Tests-area gate are still running or have
+# not started. A red twenty minutes later changes nothing about what portals have already adopted.
+# Making this job `needs:` those gates is a CYCLE — they consume its artifacts.
+#
+# `publish-mode: staged` moves only the POST. The leg builds, uploads, tests and stages exactly the
+# bytes it would have published — plus a record naming them by sha256 and stating the framework
+# identity read back OFF them — as `module-publication-<lane>-<module>`. The caller then runs the
+# publication lane in a job wired to its whole validation set:
+#
+#   module-pack:
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-pack.yml@<pin>
+#     with: { publish: <trunk-only>, publish-mode: staged, … }
+#
+#   publish-modules:
+#     if: <the SAME trunk-only condition — and NO status function: this job runs under GitHub's
+#         default all-needs-succeeded rule or not at all>
+#     needs: [<every required validation job>, module-pack]
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-module-publish.yml@<pin>
+#     with:
+#       verdicts: ${{ toJSON(needs) }}
+#       required-jobs: <the same list, by name>
+#       lane:     ${{ needs.module-pack.outputs.lane }}
+#       selected: ${{ needs.module-pack.outputs.selected }}
+#       modules:  ${{ needs.module-pack.outputs.declared }}   # this call's own catalog, never a copy
+#       platform-ref: <the same pin>
+#     secrets: { publish-token: ${{ secrets.PLUGIN_REGISTRY_PUBLISH_TOKEN }} }
+#
+# One publication call per pack call: the lane key, the selection and the declared matrix all
+# belong to ONE call, and artifacts are RUN-WIDE (Plugins#1077).
+#
 # ─────────────────────────── Narrowing (the `select` job) ───────────────────────────
 # 🚨 "in plugins we only re-run concerned modules ⇒ we can estimate the required count and
 # validate it" · "all plugins should only re-build what changed" · "there is always a notion of
@@ -93,7 +126,10 @@ name: node-repo module pack
 #
 #   * `publish: true`  — the suite runs INLINE in `pack`, after the bundle upload and BEFORE the
 #     hand-over. That ordering buys exactly one property, and it is worth its cost here: a failing
-#     suite never publishes, and every installation reads what the registry serves.
+#     suite never publishes, and every installation reads what the registry serves. (Under
+#     `publish-mode: staged` the property is unchanged and stronger: the leg reds, so the caller's
+#     `uses:` job reds, so the publication lane's verdict refuses the whole hand-over — this
+#     module's AND its siblings'.)
 #   * `publish: false` — the hand-over step cannot fire at all (its own `if:` is `inputs.publish
 #     && …`), so the ordering protects nothing. The suite runs in the `tests` job, in PARALLEL
 #     with select → prepare → build-workspace → pack, and the lane finishes when the slower of the
@@ -153,7 +189,8 @@ name: node-repo module pack
 #     the generators the SDK would have supplied). The platform image ships no /app/mw-plugin-test
 #     and the tester image's /app is not the full reference surface, so the build runs the tester
 #     image against the platform image's extracted /app; both pins move together, from one CD wave.
-#   * the `acr-username`/`acr-password` secrets, to pull them.
+#   * registry authentication: the default `basic` mode uses `acr-username`/`acr-password`;
+#     `oidc` uses the three Azure workload-identity secrets. The mode is explicit and validated.
 #   * `accept` for every construct the evaluator refuses. MeshWeaver.Plugins' own
 #     `src/Directory.Build.props` carries a `<Target>` (the AssemblyVersion contract check), so its
 #     entries need at least `"accept": "targets"`.
@@ -260,6 +297,51 @@ on:
           FrameworkDeclined (#2088). See the caller contract at the top of this file.
         type: boolean
         default: false
+      publish-newest-only:
+        description: >-
+          Per-module deploy (MeshWeaver.Plugins, 2026-09-11) — for a caller that NEVER cancels its
+          trunk runs. Two such runs can build the same module and finish in either order, and the
+          registry keeps whatever arrives LAST. With this on, right before the hand-over each leg
+          fetches the trunk tip and asks the same scope script the selection uses whether a newer
+          commit reaches its module's dependency network; if one does, the leg stands down (receipt
+          `publication: superseded`, naming the tip) and that commit's own run publishes a tree
+          containing this one — a module never goes backwards and never waits for an unrelated one.
+          `direct` mode only; refuses a `content-repository` (it reads THIS repository's trunk). Off
+          by default: a caller whose trunk runs supersede each other gets its ordering from that.
+        type: boolean
+        required: false
+        default: false
+      publish-mode:
+        description: >
+          WHERE the live-registry hand-over happens, when `publish` is true. Both values are
+          printed in the log and the job summary on every run, so the two outcomes can never be
+          told apart only by what is missing.
+
+
+          `direct` — the DEFAULT, and what a caller that says nothing inherits: this leg POSTs the
+          bundle to the registry itself, right after its own suite. 🚨 Its cost is the one
+          MeshWeaver#3878 names: a SIBLING module's suite, the portal-host shards, the NodeType
+          compile-check and the Tests-area gate all run beside or after this leg, so the module is
+          already being served to every installation while the run is still deciding whether the
+          source is any good. Making this job `needs:` those gates is a cycle — they consume its
+          artifacts.
+
+
+          `staged` — this leg packs, uploads, tests and STAGES: the bytes it would have POSTed,
+          plus a publication record naming them by sha256 and stating the framework identity read
+          back off them, go up as `module-publication-<lane>-<module>`. Nothing reaches the
+          registry here. The caller then runs `node-repo-module-publish.yml` in a job that
+          `needs:` its whole validation set, and THAT lane hands over — refusing on any dependency
+          that failed, was skipped, was cancelled or is missing. A leg that owes no hand-over
+          (the build ledger already serves its key) stages a record saying so, so "not owed" and
+          "never staged" are distinguishable there.
+
+
+          Any other value — the empty string included — is RED. A flag that cannot be read must
+          never resolve to "publish anyway", and must never resolve to "publish nothing" either.
+        required: false
+        type: string
+        default: direct
       always-modules:
         description: >
           Comma-separated module names (entry assembly names from `modules`) that the caller's
@@ -369,6 +451,14 @@ on:
         type: string
         required: false
         default: ''
+      acr-login:
+        description: >
+          How digest-pinned platform images are pulled. `basic` (default) uses acr-username and
+          acr-password. `oidc` uses azure-client-id, azure-tenant-id and azure-subscription-id.
+          Any other value fails before a build; the workflow never guesses from secret presence.
+        type: string
+        required: false
+        default: basic
       registry-source:
         description: >
           The registry SOURCE these packages belong to ("Plugins", "Education", …) — it stamps the
@@ -412,6 +502,28 @@ on:
         required: false
         type: string
         default: install
+      build-logic-ref:
+        description: >
+          Optional immutable core SHA for selection scripts. Separate from platform-ref, which
+          selects the framework source the tests build. Set it to opt into publication baseline
+          and dependency reuse; existing callers retain their platform-ref selector.
+        required: false
+        type: string
+        default: ''
+      publication-run:
+        description: Successful publishing run paired with publication-base and identical resolved toolchain inputs; permits reusing unchanged gate dependencies.
+        required: false
+        type: string
+        default: ''
+      publication-base:
+        description: >
+          Optional source SHA of a successful main push of the caller's complete publishing
+          workflow. Only push events use it. The selector verifies ancestry and diffs all changes
+          since that publication; a missing/invalid baseline and release-follow events stay full.
+          Never pass github.event.before or a non-publishing workflow's commit.
+        required: false
+        type: string
+        default: ''
       ledger:
         description: >
           The CI MODULE BUILD LEDGER on the registry portal (Doc/Architecture/ModuleBuildArchitecture →
@@ -451,6 +563,15 @@ on:
       acr-password:
         description: Pull credential for platform-image's registry. Required when platform-image-digest is set.
         required: false
+      azure-client-id:
+        description: Azure workload-identity client id. Required when acr-login is oidc.
+        required: false
+      azure-tenant-id:
+        description: Azure workload-identity tenant id. Required when acr-login is oidc.
+        required: false
+      azure-subscription-id:
+        description: Azure subscription id. Required when acr-login is oidc.
+        required: false
       content-app-id:
         description: >-
           App id of a GitHub App with Contents: Read on content-repository. Required whenever
@@ -477,6 +598,29 @@ on:
           bundles built`) still asserts the receipts AND the pack job's result, so a failed suite
           keeps the lane red wherever the lane itself is required.
         value: ${{ jobs.verify.outputs.bundles-built }}
+      lane:
+        description: >
+          THIS call's lane key — the artifact namespace every marker, receipt and staged
+          publication of this call is named with and stamped with. A caller wiring
+          `node-repo-module-publish.yml` (publish-mode: staged) passes it there, so the
+          publication can only ever reach evidence THIS call produced (artifacts are run-wide;
+          Plugins#1077). Empty when `select` did not succeed — and the publication lane refuses an
+          empty lane rather than falling back to a name-only match.
+        value: ${{ jobs.select.outputs.lane }}
+      selected:
+        description: >
+          The module names this call SELECTED, space-separated — the same list `verify` accounts
+          the receipts against. The publication lane requires a staged record for every one of
+          them, so "its leg never staged" cannot read like "there was nothing to stage".
+        value: ${{ jobs.select.outputs.selected }}
+      declared:
+        description: >
+          The module matrix this call was GIVEN (the `modules` input), verbatim. A caller wiring
+          `node-repo-module-publish.yml` passes it as that lane's `modules`, so the publisher sets
+          aside any staged record outside this call's catalog without the caller keeping a SECOND
+          copy of the catalog — a copy drifts, and MeshWeaver.Plugins refuses a second `modules:`
+          list in its ci.yml outright (#3732). MeshWeaver#3878.
+        value: ${{ jobs.select.outputs.declared }}
 
 jobs:
   # ─────────────────────── WHICH BUNDLES THIS DIFF CAN REACH ───────────────────────
@@ -489,10 +633,10 @@ jobs:
     outputs:
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
       # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
-      modules: ${{ steps.ledger.outputs.modules }}
+      modules: ${{ steps.reuse.outputs.modules }}
       # The SUBSET the one-workspace build compiles — every entry the ledger did not hand a reusable
       # bundle for. The postcondition in build-workspace is fed the SAME list.
-      build-modules: ${{ steps.ledger.outputs.build }}
+      build-modules: ${{ steps.reuse.outputs.build }}
       # The SUBSET whose own test suite must RUN in this call — the entries the pack job's plan
       # would answer `need_test=true` for. It is the `tests` job's matrix; see that job for why
       # the suites are a lane of their own on a non-publishing run.
@@ -502,6 +646,9 @@ jobs:
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
       lane: ${{ steps.lane.outputs.id }}
+      # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
+      # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
+      declared: ${{ inputs.modules }}
     steps:
       # ───────────── THIS CALL'S ARTIFACT NAMESPACE — derived, never assumed ─────────────
       # 🚨 ARTIFACTS ARE RUN-WIDE. A repo may invoke this reusable workflow more than once in one
@@ -520,6 +667,33 @@ jobs:
       # construction — there is no input a caller can forget. It is also stamped INTO every
       # marker and receipt this call drops, so the verifier can refuse a foreign lane's evidence
       # even if the names ever collide again.
+      # 🚨 READ THE FLAG FIRST, AND REFUSE AN UNREADABLE ONE. `publish-mode` decides whether this
+      # call's legs POST to the live registry or stage for the downstream publication lane
+      # (MeshWeaver#3878) — and a value neither arm recognises must never fall through to either.
+      # Falling through to `direct` would publish before the source verdict, which is the defect;
+      # falling through to `staged` would publish nothing at all while every step ticked green.
+      - name: Read the publication mode
+        env:
+          MODE: ${{ inputs.publish-mode }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            direct|staged) ;;
+            *) echo "::error::inputs.publish-mode is '$MODE'. The only values are 'direct' (the default — this lane POSTs the bundle itself) and 'staged' (this lane stages the bytes and node-repo-module-publish.yml hands them over after the full source verdict, MeshWeaver#3878). A flag that cannot be read must NEVER resolve to either arm."; exit 1 ;;
+          esac
+          if [ "$PUBLISH" != "true" ]; then
+            echo "publish: false — no hand-over on this run, in either mode (publish-mode: $MODE)."
+          elif [ "$MODE" = "staged" ]; then
+            echo "publish-mode: staged — every leg stages its bundle as module-publication-<lane>-<module>; the registry hears nothing until the caller's node-repo-module-publish.yml job runs on a green validation set."
+          else
+            echo "publish-mode: direct — every leg POSTs its own bundle to the registry, BEFORE the run's sibling suites and gates have reported (MeshWeaver#3878)."
+          fi
+          {
+            echo "### Publication mode"
+            echo
+            echo "\`publish: $PUBLISH\`, \`publish-mode: $MODE\`."
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: This call's lane key
         id: lane
         env:
@@ -585,7 +759,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
+          ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
           path: meshweaver
       - uses: actions/setup-python@v7
         with:
@@ -594,9 +768,18 @@ jobs:
       # falls back. It runs here, on every run, next to the answer it produces — a selector whose
       # self-test is only run by someone remembering to is a selector nobody checks.
       - name: The selection can say no (self-test)
+        env:
+          BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
         run: |
           set -euo pipefail
+          if [ -n "$BUILD_LOGIC_REF" ]; then
+            [[ "$BUILD_LOGIC_REF" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::build-logic-ref must be an immutable SHA'; exit 1; }
+          fi
           python3 meshweaver/.github/scripts/node-repo-scope.py --self-test
+          if [ -n "$BUILD_LOGIC_REF" ]; then
+            python3 meshweaver/.github/scripts/node-repo-publication-base.py --self-test
+            python3 meshweaver/.github/scripts/node-repo-publication-reuse.py --self-test
+          fi
           python3 meshweaver/.github/scripts/node-repo-pack-verify.py --self-test
           python3 meshweaver/.github/scripts/module-build-key.py --self-test
           python3 meshweaver/.github/scripts/module-build-ledger.py --self-test
@@ -605,6 +788,9 @@ jobs:
         env:
           MODULES: ${{ inputs.modules }}
           ALWAYS: ${{ inputs.always-modules }}
+          PUBLICATION_BASE: ${{ inputs.publication-base }}
+          PUBLICATION_RUN: ${{ inputs.publication-run }}
+          BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           # A merge_group run carries no `base_ref`; its base is on the event payload. Dormant
@@ -621,9 +807,14 @@ jobs:
             git -C repo fetch --no-tags origin \
               "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           fi
+          publication_args=()
+          if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+            publication_args=(--publication-base "$PUBLICATION_BASE")
+          fi
           python3 meshweaver/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
-            --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" > "$RUNNER_TEMP/scope.json"
+            --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \
+            "${publication_args[@]}" > "$RUNNER_TEMP/scope.json"
       # ───────────── THE LEDGER: what of this selection is ALREADY BUILT, and who builds the rest ─────────────
       # 🚨 "we should not start the same build multiple times ⇒ coordinate which packages are in
       # progress; track progress through memex … if Plugin X was built against Platform version Y,
@@ -695,6 +886,24 @@ jobs:
               ;;
           esac
 
+      - name: Reuse unchanged dependencies from the successful publication
+        id: reuse
+        env:
+          MATRIX: ${{ steps.ledger.outputs.modules }}
+          BUILD: ${{ steps.ledger.outputs.build }}
+          BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
+          PUBLICATION_RUN: ${{ inputs.publication-run }}
+          PUBLICATION_BASE: ${{ inputs.publication-base }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$BUILD_LOGIC_REF" ]; then
+            echo "modules=$MATRIX" >> "$GITHUB_OUTPUT"
+            echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 meshweaver/.github/scripts/node-repo-publication-reuse.py \
+            --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE"
+
       # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
       # The `tests` job's matrix. The predicate is EXACTLY the one the pack job's `Ledger — this
       # entry's plan` step answers as `need_test`, restated here because a matrix has to be known
@@ -748,6 +957,11 @@ jobs:
     if: needs.select.result == 'success' && needs.select.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Deliberately inherit the caller's token permissions. `basic` callers grant only the reads
+    # they use; the platform CD's `oidc` caller additionally grants `id-token: write`. A called
+    # workflow may maintain or reduce the caller's permissions but cannot elevate them, so naming
+    # `id-token: write` here makes EVERY basic-auth caller fail workflow validation before a job
+    # exists — even though its Azure steps are correctly conditional.
     outputs:
       # The framework identity the PLATFORM host resolves for its /app — what every ledger record
       # and bundle is keyed to (the portal adopts, so the portal's identity is the honest one).
@@ -768,22 +982,24 @@ jobs:
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
       - name: Restore the module-pack tool (per-platform-pin cache)
+        if: needs.select.outputs.build-modules != '[]'
         id: tool-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/pack-tool
           key: pack-tool-${{ inputs.platform-ref }}
       - uses: actions/setup-dotnet@v6
-        if: steps.tool-cache.outputs.cache-hit != 'true'
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true'
         with:
           dotnet-version: "10.0.x"
       - name: Publish the module-pack tool (once for every pack job)
-        if: steps.tool-cache.outputs.cache-hit != 'true'
+        if: needs.select.outputs.build-modules != '[]' && steps.tool-cache.outputs.cache-hit != 'true'
         run: dotnet publish meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o "$RUNNER_TEMP/pack-tool"
       # Lane-scoped like every other artifact this workflow drops: two calls in one run publish
       # the tool from their OWN platform pin, and a run-wide name lets one call's pack jobs pack
       # with the other call's builder.
       - name: Hand the tool to the matrix
+        if: needs.select.outputs.build-modules != '[]'
         uses: actions/upload-artifact@v7
         with:
           name: module-pack-tool-${{ needs.select.outputs.lane }}
@@ -810,6 +1026,34 @@ jobs:
         with:
           path: ${{ runner.temp }}/tester-app
           key: tester-app-${{ inputs.tester-image-digest }}
+      - name: The registry login mode must be explicit
+        env:
+          ACR_LOGIN: ${{ inputs.acr-login }}
+        run: |
+          case "$ACR_LOGIN" in
+            basic|oidc) echo "registry login: $ACR_LOGIN" ;;
+            *) echo "::error::acr-login must be 'basic' or 'oidc', got '$ACR_LOGIN'"; exit 1 ;;
+          esac
+      - name: Azure login for a cold image cache
+        if: >-
+          inputs.acr-login == 'oidc'
+          && inputs.platform-image-digest != ''
+          && (steps.image-cache.outputs.cache-hit != 'true'
+              || steps.refs-cache.outputs.cache-hit != 'true'
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      - name: Log in to ACR with workload identity
+        if: >-
+          inputs.acr-login == 'oidc'
+          && inputs.platform-image-digest != ''
+          && (steps.image-cache.outputs.cache-hit != 'true'
+              || steps.refs-cache.outputs.cache-hit != 'true'
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        run: bash meshweaver/.github/scripts/acr-login.sh
       - name: Fill whichever cache is cold — the run's ONE trip to the registry
         if: >-
           inputs.platform-image-digest != ''
@@ -826,10 +1070,13 @@ jobs:
           TESTER_HIT: ${{ steps.tester-cache.outputs.cache-hit }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
+          ACR_LOGIN: ${{ inputs.acr-login }}
         run: |
           set -euo pipefail
-          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but the acr-username/acr-password secrets are not passed — the cold caches cannot be filled"; exit 1; }
-          echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          if [ "$ACR_LOGIN" = basic ]; then
+            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::acr-login is basic but acr-username/acr-password were not passed — the cold caches cannot be filled"; exit 1; }
+            echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          fi
           case "${IMAGE##*/}" in *:*) NOTAG="${IMAGE%:*}" ;; *) NOTAG="$IMAGE" ;; esac
           pinned="${NOTAG}@${DIGEST}"
           if [ "$IMAGE_HIT" != "true" ] || [ "$REFS_HIT" != "true" ]; then
@@ -961,6 +1208,8 @@ jobs:
     if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
+    # callers must remain able to grant `actions: read` without also granting an identity token.
     steps:
       - name: Resolve the content repository's credential
         id: content-repo
@@ -990,18 +1239,44 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      - name: Check out the ACR login helper
+        if: inputs.acr-login == 'oidc'
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+          sparse-checkout: .github/scripts/acr-login.sh
       - name: Restore the platform image tarball (per-digest cache)
         if: ${{ inputs.platform-image-digest != '' }}
+        id: image-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/platform-image
           key: platform-image-${{ inputs.platform-image-digest }}
       - name: Restore the tester app (per-digest cache)
         if: ${{ inputs.tester-image-digest != '' }}
+        id: tester-cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/tester-app
           key: tester-app-${{ inputs.tester-image-digest }}
+      - name: Azure login for registry fallback
+        if: >-
+          inputs.acr-login == 'oidc'
+          && ((inputs.platform-image-digest != '' && steps.image-cache.outputs.cache-hit != 'true')
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      - name: Log in to ACR with workload identity
+        if: >-
+          inputs.acr-login == 'oidc'
+          && ((inputs.platform-image-digest != '' && steps.image-cache.outputs.cache-hit != 'true')
+              || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
+        run: bash meshweaver/.github/scripts/acr-login.sh
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -1015,6 +1290,7 @@ jobs:
           SUPERSEDED: ${{ inputs.superseded-image-assemblies }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
+          ACR_LOGIN: ${{ inputs.acr-login }}
         run: |
           set -euo pipefail
           mapfile -t projects < <(jq -r '.[] | select(.build == "container") | .project' <<< "$MODULES")
@@ -1047,17 +1323,21 @@ jobs:
             img="$(cat "$RUNNER_TEMP/platform-image/image-id.txt")"
             docker image inspect "$img" >/dev/null 2>&1 || { echo "::error::the cached tarball loaded but image id $img is absent — delete the platform-image-$DIGEST cache entry and rerun"; exit 1; }
           else
-            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image cache MISS and no acr credentials — the image cannot be fetched."; exit 1; }
+            if [ "$ACR_LOGIN" = basic ]; then
+              [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image cache MISS and basic ACR credentials were not passed."; exit 1; }
+              echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+            fi
             echo "platform image: cache MISS for $DIGEST — pulling from ACR (same bytes, only slower)"
-            echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
             docker pull -q --platform linux/amd64 "$pinned"
             img="$pinned"
           fi
           tester_app="$RUNNER_TEMP/tester-app"
           if [ ! -f "$tester_app/mw-plugin-test.dll" ]; then
-            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::tester cache MISS and no acr credentials."; exit 1; }
+            if [ "$ACR_LOGIN" = basic ]; then
+              [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::tester cache MISS and basic ACR credentials were not passed."; exit 1; }
+              echo "$ACR_PASSWORD" | docker login "${TESTER_IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+            fi
             echo "tester-app cache MISS for $TESTER_DIGEST — extracting once"
-            echo "$ACR_PASSWORD" | docker login "${TESTER_IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
             docker pull -q --platform linux/amd64 "$tester_pinned"
             rm -rf "$tester_app"
             tcid=$(docker create --platform linux/amd64 "$tester_pinned")
@@ -1216,6 +1496,8 @@ jobs:
     needs: [select, prepare, build-workspace]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
+    # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
     # a matrix with no vectors, so an empty selection has to express itself as "this job does not
     # run". What makes it safe is that `verify` below runs UNCONDITIONALLY and asserts the pairing
@@ -1427,6 +1709,7 @@ jobs:
         env:
           LEDGER: ${{ inputs.ledger }}
           ENTRY_LEDGER: ${{ toJSON(matrix.entry.ledger) }}
+          ENTRY_REUSE: ${{ toJSON(matrix.entry.reuse) }}
           RUN_TESTS: ${{ matrix.entry.test != false }}
           PUBLISH: ${{ inputs.publish }}
           MODULE: ${{ matrix.entry.module }}
@@ -1436,7 +1719,13 @@ jobs:
         run: |
           set -euo pipefail
           decision=build; key=""; need_test="$RUN_TESTS"; need_publish="$PUBLISH"; art_run=""; art_name=""; sha=""; holder=""
-          if [ "$LEDGER" = "required" ] && [ "$ENTRY_LEDGER" != "null" ] && [ -n "$ENTRY_LEDGER" ]; then
+          if [ "$ENTRY_REUSE" != "null" ] && [ -n "$ENTRY_REUSE" ]; then
+            decision=reuse; need_test=false; need_publish=false
+            art_run=$(jq -er '.runId' <<< "$ENTRY_REUSE")
+            art_name=$(jq -er '.name' <<< "$ENTRY_REUSE")
+            holder=$(jq -er '.source' <<< "$ENTRY_REUSE")
+            echo "plan: REUSE unchanged $MODULE from successful publication $holder — no compile, tests or publish owed"
+          elif [ "$LEDGER" = "required" ] && [ "$ENTRY_LEDGER" != "null" ] && [ -n "$ENTRY_LEDGER" ]; then
             decision=$(jq -r '.decision // "build"' <<< "$ENTRY_LEDGER")
             key=$(jq -r '.key // ""' <<< "$ENTRY_LEDGER")
             if [ "$decision" = "reuse" ]; then
@@ -1473,6 +1762,16 @@ jobs:
         with:
           path: ${{ runner.temp }}/platform-refs
           key: platform-refs-${{ inputs.platform-image-digest }}
+      - name: Azure login for registry fallback
+        if: inputs.acr-login == 'oidc' && inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      - name: Log in to ACR with workload identity
+        if: inputs.acr-login == 'oidc' && inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
+        run: bash meshweaver/.github/scripts/acr-login.sh
       - name: Take the platform from the image (docker cp /app)
         if: inputs.platform-image-digest != '' && steps.platform-cache.outputs.cache-hit != 'true'
         env:
@@ -1480,11 +1779,14 @@ jobs:
           DIGEST: ${{ inputs.platform-image-digest }}
           ACR_USERNAME: ${{ secrets.acr-username }}
           ACR_PASSWORD: ${{ secrets.acr-password }}
+          ACR_LOGIN: ${{ inputs.acr-login }}
         run: |
           set -euo pipefail
           [ -n "$IMAGE" ] || { echo "::error::platform-image-digest is set but platform-image is empty — name the image the digest belongs to"; exit 1; }
-          [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but the acr-username/acr-password secrets are not passed — the image cannot be pulled"; exit 1; }
-          echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          if [ "$ACR_LOGIN" = basic ]; then
+            [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::platform-image-digest is set but basic ACR credentials were not passed — the image cannot be pulled"; exit 1; }
+            echo "$ACR_PASSWORD" | docker login "${IMAGE%%/*}" -u "$ACR_USERNAME" --password-stdin
+          fi
           # 🚨 --platform linux/amd64 ALWAYS: framework identities are per-architecture build (the
           # ci.6469 manifest list resolves to s770d75c… on x64 and sfe27877f… on arm64), and the
           # bundles are sealed under the x64 identity the portals run. A multi-arch digest pulled on
@@ -1706,6 +2008,12 @@ jobs:
               # the image in hand it MEASURES what that host ships instead of reading the repo's
               # declared src/platform-shipped.txt (MeshWeaver#3732).
               own="$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src" ${PLATFORM_APP:+"$PLATFORM_APP"})"
+              # WHICH WITNESS ANSWERED, stated once. 🚨 NOT `${PLATFORM_APP:+measured off $PLATFORM_APP}${PLATFORM_APP:-declared by …}`:
+              # `:-` yields the VALUE when the variable is set, so the measured branch printed the path TWICE
+              # ("measured off /tmp/app/tmp/app") — and that is the branch that matters, because it is the one
+              # that says the answer came from the image rather than from a hand-maintained list.
+              witness="declared by src/platform-shipped.txt"
+              [ -z "${PLATFORM_APP:-}" ] || witness="measured off $PLATFORM_APP"
               while IFS= read -r name; do
                 { [ -n "$name" ] && [ "$name" != "$MODULE" ]; } || continue
                 dir="$ws/$name"
@@ -1723,7 +2031,7 @@ jobs:
                   printf '%s\n%s\n' --with "$name.dll" >> "$packargs"
                   echo "closure: $name.dll RIDES — module-owned (its source is in this repo's src/, so it is nowhere in the image's /app)"
                 else
-                  echo "closure: $name.dll does NOT ride — the platform ships it (${PLATFORM_APP:+measured off $PLATFORM_APP}${PLATFORM_APP:-declared by src/platform-shipped.txt}); bundling it would land a same-identity duplicate beside the host's own copy"
+                  echo "closure: $name.dll does NOT ride — the platform ships it ($witness); bundling it would land a same-identity duplicate beside the host's own copy"
                 fi
               done < "$closure_file"
               # The PRIVATE CLOSURE rides: module-libs.txt is the builder-written provenance —
@@ -1821,7 +2129,7 @@ jobs:
             echo "### \`$MODULE\` — **reused** from run $ART_RUN"
             echo
             echo "- record: $HOLDER"
-            echo "- sha256: \`$actual\` (verified against the ledger)"
+            echo "- sha256: \`$actual\`; source: $HOLDER"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Published ONCE by the prepare job — `dotnet build` here cost 48–79s in EVERY job (measured
@@ -2125,7 +2433,7 @@ jobs:
           VERSION: ${{ steps.identity.outputs.version }}
           # A reused leg has no compiler of its own: the marker says so, and names the run that did.
           COMPILER: ${{ steps.plan.outputs.decision == 'reuse' && 'reused' || steps.build.outputs.compiler }}
-          CLOSURE: ${{ steps.plan.outputs.decision == 'reuse' && format('reused from run {0} ({1}, sha256 verified against the ledger)', steps.plan.outputs.art_run, steps.plan.outputs.art_name) || steps.build.outputs.closure }}
+          CLOSURE: ${{ steps.plan.outputs.decision == 'reuse' && format('reused from run {0} ({1}, published artifact provenance verified)', steps.plan.outputs.art_run, steps.plan.outputs.art_name) || steps.build.outputs.closure }}
           BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}
         run: |
           set -euo pipefail
@@ -2249,6 +2557,54 @@ jobs:
           retention-days: 14
           compression-level: 9
 
+      # ═══════ NEWEST WINS, PER MODULE (`publish-newest-only`, per-module deploy 2026-09-11) ═══════
+      # A caller that never cancels its trunk runs can have two of them build this module at once,
+      # finishing in either order — and the registry keeps whatever arrives LAST. So right before the
+      # hand-over the leg fetches the trunk tip and asks the SAME scope script the selection uses
+      # whether any newer commit reaches this module's dependency network. If one does, this leg does
+      # not publish: that commit's own run (never cancelled) builds the module from a tree containing
+      # this one. Every uncertainty in the scope script answers FULL — "reached" — which stands this
+      # leg down; that is safe because the newer run takes the same fallback and builds the module.
+      # A trunk that cannot be read is RED: "cannot tell" must never publish as "nothing newer".
+      - name: A newer trunk commit reaches this module? (publish-newest-only)
+        id: newer
+        if: ${{ inputs.publish && inputs.publish-newest-only && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' }}
+        env:
+          CONTENT_REPOSITORY: ${{ inputs.content-repository }}
+          TRUNK: ${{ github.event.repository.default_branch }}
+          ENTRY: ${{ toJSON(matrix.entry) }}
+          MODULE: ${{ matrix.entry.module }}
+        run: |
+          set -euo pipefail
+          [ -z "$CONTENT_REPOSITORY" ] || { echo "::error::publish-newest-only reads THIS repository's trunk, but content-repository is '$CONTENT_REPOSITORY' — a lane packing another repository's content cannot say whether a newer commit of it exists. Turn one of the two off."; exit 1; }
+          [ -n "$TRUNK" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
+          git fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
+          mine=$(git rev-parse HEAD)
+          tip=$(git rev-parse "refs/remotes/origin/$TRUNK")
+          newer=false
+          if [ "$tip" = "$mine" ]; then
+            echo "this run's commit $mine IS the trunk tip — nothing newer; publishing $MODULE"
+          else
+            # Two trees, no history needed: both commits are present in this shallow clone.
+            changed=$(git diff --no-renames --name-only "$mine" "$tip" | paste -sd, -)
+            if [ -z "$changed" ]; then
+              echo "the trunk moved to $tip, but its tree equals this run's — nothing newer reaches $MODULE; publishing"
+            else
+              jq -n --argjson e "$ENTRY" '[$e]' > "$RUNNER_TEMP/newer-entry.json"
+              GITHUB_OUTPUT="$RUNNER_TEMP/newer-scope.out" GITHUB_STEP_SUMMARY=/dev/null \
+                python3 meshweaver/.github/scripts/node-repo-scope.py --for modules --root . \
+                  --modules "@$RUNNER_TEMP/newer-entry.json" --event pull_request \
+                  --changed-list "$changed" > "$RUNNER_TEMP/newer-scope.json"
+              if [ "$(jq -r '.count' "$RUNNER_TEMP/newer-scope.json")" != "0" ]; then
+                newer=true
+                echo "::notice title=Stood down for a newer commit::$MODULE is NOT published from $mine — trunk tip $tip reaches its dependency network ($(jq -r '.reason' "$RUNNER_TEMP/newer-scope.json")), and that commit's own run publishes it."
+              else
+                echo "the trunk moved to $tip, but nothing it changed reaches $MODULE's dependency network — publishing"
+              fi
+            fi
+          fi
+          { echo "newer=$newer"; echo "tip=$tip"; } >> "$GITHUB_OUTPUT"
+
       # 🚨 The hand-over. Without it a module that has LEFT the platform repo is packed, versioned,
       # inspected — and reaches nobody, because a registry serves only bytes it holds. A missing
       # token here FAILS the job rather than skipping quietly: "published nothing" and "published
@@ -2256,9 +2612,18 @@ jobs:
       # `need_publish`: the caller's `publish` AND, with the ledger on, "no earlier run published this
       # key" — a key the registry already serves at these bytes is not re-handed (Plugins#889: a push
       # publishes every module whose key has no Published record, and only those).
+      #
+      # 🚨 `publish-mode: direct` ONLY. This is the hand-over MeshWeaver#3878 moves: it fires while
+      # the run's sibling suites, the portal-host shards, the NodeType compile-check and the
+      # Tests-area gate are still running or have not started, so a red twenty minutes later
+      # changes nothing about what portals have already adopted. Under `staged` the two steps below
+      # take these exact bytes to the publication lane instead, and this step does not run — the
+      # two arms are mutually exclusive by construction, and the staged record RECORDS which arm
+      # owned the hand-over, so a bundle whose publication belongs to neither is not possible to
+      # produce quietly.
       - name: Hand the bundle to the registry
         id: publish
-        if: ${{ inputs.publish && steps.plan.outputs.need_publish == 'true' }}
+        if: ${{ inputs.publish && inputs.publish-mode == 'direct' && steps.plan.outputs.need_publish == 'true' && steps.newer.outputs.newer != 'true' }}
         env:
           TOKEN: ${{ secrets.publish-token }}
           REGISTRY: ${{ inputs.registry-url }}
@@ -2320,6 +2685,88 @@ jobs:
           set -euo pipefail
           python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Published
 
+      # ═════════ THE STAGED HAND-OVER — `publish-mode: staged` (MeshWeaver#3878) ═════════
+      # 🚨 The exact COMPLEMENT of the hand-over above, on the same input. Under `staged` this leg
+      # publishes NOTHING: it writes down what it WOULD have published — the bytes, named by their
+      # sha256, and the framework identity read back OFF those bytes — and takes both to the
+      # caller's `node-repo-module-publish.yml` job, which `needs:` the whole validation set. The
+      # registry hears nothing until every sibling suite, the portal-host shards, the compile-check
+      # and the Tests-area gate have reported `success`.
+      #
+      # 🚨 EVERY LEG STAGES, INCLUDING ONE THAT OWES NOTHING. A leg whose key the build ledger
+      # already serves has no hand-over to make — and if it simply staged nothing, "the registry
+      # already has these bytes" and "this leg never got here" would be the same absence at the
+      # publication lane. So it stages a record that SAYS so, with the reason, and the publication
+      # lane accounts for it instead of missing it. Same rule as the receipt below: positive
+      # evidence, never an inference from what is not there.
+      #
+      # 🚨 And NO ledger transition here. A staged artifact is not a `Published` record (#3878,
+      # repair contract 4): the ledger learns of a publication only from the lane that got a 2xx
+      # out of the registry, so a run that stages and then fails validation leaves a key that a
+      # later run will republish rather than one the fleet believes is already served.
+      - name: Stage the bundle for the publication lane
+        id: stage
+        if: ${{ inputs.publish && inputs.publish-mode == 'staged' }}
+        env:
+          LANE: ${{ needs.select.outputs.lane }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          REGISTRY_SOURCE: ${{ inputs.registry-source }}
+          OWED: ${{ steps.plan.outputs.need_publish }}
+          DECISION: ${{ steps.plan.outputs.decision }}
+          HOLDER: ${{ steps.plan.outputs.holder }}
+          LEDGER_KEY: ${{ steps.plan.outputs.key }}
+          # The same expression the receipt and the direct hand-over use: the build leg's packed
+          # bundle, or the artifact the reuse leg downloaded and sha256-verified against the ledger.
+          BUNDLE: ${{ steps.bundle.outputs.path || steps.reused.outputs.path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/staged"
+          [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so this staged publication could not be attributed to this call and the publication lane would refuse it anyway. Failing here, where it is readable."; exit 1; }
+          [ -n "${BUNDLE:-}" ] || { echo "::error::this leg produced no bundle path — neither the build nor the reuse leg recorded one, so there are no bytes to stage for $MODULE and none to read its framework identity off."; exit 1; }
+          # THE IDENTITY, OFF THE BYTES — never from a step output. The packer's exit code, the
+          # inspection's tick and the value inside the artifact are three different claims, and the
+          # publication lane compares this record against the THIRD one before it POSTs.
+          if ! manifest_json="$(unzip -p "$BUNDLE" meshweaver/manifest.json)" || [ -z "$manifest_json" ]; then
+            echo "::error::cannot read meshweaver/manifest.json out of $BUNDLE (see unzip's message above) — refusing to stage bytes whose manifest this lane could not check (#3211)"
+            exit 1
+          fi
+          identity="$(printf '%s' "$manifest_json" | jq -r '.frameworkMvid // ""' | tr -d '[:space:]')"
+          [ -n "$identity" ] || { echo "::error::REFUSING to stage $MODULE@$VERSION — the bundle states no framework identity (manifest .frameworkMvid is $(printf '%s' "$manifest_json" | jq -c '.frameworkMvid')). A registry that shelves a null advertises a null, and every consumer answers 'already landed — the identity could not be checked' on every reconcile, for ever (#3154/#3211). Repack with the platform's MeshWeaver.Compiler.dll as --graph-dll; if these bytes were REUSED, that run packed them before the identity was recorded — rebuild them."; exit 1; }
+          name="$(basename "$BUNDLE")"
+          sha="$(sha256sum "$BUNDLE" | cut -d' ' -f1)"
+          reason=""
+          if [ "$OWED" = "true" ]; then
+            cp "$BUNDLE" "$RUNNER_TEMP/staged/$name"
+            echo "staged $MODULE@$VERSION ($name, sha256 $sha, built against $identity) — the publication lane hands it over once this run's validation is green"
+          else
+            reason="no hand-over owed: the module build ledger already serves this key (decision '$DECISION'${HOLDER:+, holder $HOLDER})"
+            echo "staged $MODULE@$VERSION as NOT OWED — $reason"
+          fi
+          jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" --arg v "$VERSION" \
+                --arg src "$REGISTRY_SOURCE" --arg fid "$identity" --arg n "$name" --arg s "$sha" \
+                --arg r "$reason" --arg lk "$LEDGER_KEY" --arg d "$DECISION" \
+                --argjson owed "$([ "$OWED" = "true" ] && echo true || echo false)" \
+                --argjson size "$(wc -c < "$BUNDLE" | tr -d ' ')" \
+             '{lane:$l, package:$p, module:$m, version:$v, registrySource:$src,
+               frameworkIdentity:$fid, owed:$owed, reason:$r,
+               bundle:{name:$n, sha256:$s, size:$size},
+               ledger:{key:$lk, decision:$d}}' \
+             > "$RUNNER_TEMP/staged/$MODULE.publication.json"
+          cat "$RUNNER_TEMP/staged/$MODULE.publication.json"
+      - name: Upload the staged publication
+        if: ${{ inputs.publish && inputs.publish-mode == 'staged' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-publication-${{ needs.select.outputs.lane }}-${{ matrix.entry.module }}
+          path: ${{ runner.temp }}/staged
+          retention-days: 1
+          # An upload that found nothing means this leg staged nothing while reporting success —
+          # the publication lane would then name a SELECTED module with no record, which is the
+          # right verdict but the wrong place to discover it. Fail here, where the cause is.
+          if-no-files-found: error
+
       # ───────── THE LEDGER'S VERDICT WHEN THIS LEG DID NOT GET HERE — never a reason for red ─────────
       # `failure()`: the phase is read off the step outcomes, so the record says WHERE it failed and the
       # tolerance rule (compile blocks; a test failure blocks from the 2nd attempt; pack/publish never)
@@ -2336,6 +2783,10 @@ jobs:
           INSPECT_OUTCOME: ${{ steps.bundle.outcome }}
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          # A staging failure is a PUBLISH-phase failure: the bytes exist and are tested, and what
+          # did not happen is the hand-over. Recording it as `pack` would tell a later run to
+          # rebuild something that is already built (MeshWeaver#3878).
+          STAGE_OUTCOME: ${{ steps.stage.outcome }}
           MODE: ${{ matrix.entry.build || 'sdk' }}
           MW_LEDGER_URL: ${{ inputs.registry-url }}
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
@@ -2344,12 +2795,12 @@ jobs:
           set -uo pipefail
           phase="pack"
           if   [ "$TESTS_OUTCOME" = "failure" ]; then phase="test"
-          elif [ "$PUBLISH_OUTCOME" = "failure" ]; then phase="publish"
+          elif [ "$PUBLISH_OUTCOME" = "failure" ] || [ "$STAGE_OUTCOME" = "failure" ]; then phase="publish"
           elif [ "$BUILD_OUTCOME" = "failure" ] && [ "$MODE" = "sdk" ]; then phase="compile"
           elif [ "$BUILD_OUTCOME" = "failure" ] || [ "$PACK_OUTCOME" = "failure" ] || [ "$INSPECT_OUTCOME" = "failure" ] || [ "$REUSED_OUTCOME" = "failure" ]; then phase="pack"
           fi
-          printf 'step outcomes — build:%s reused:%s pack:%s inspect:%s tests:%s publish:%s (%s)\n' \
-            "$BUILD_OUTCOME" "$REUSED_OUTCOME" "$PACK_OUTCOME" "$INSPECT_OUTCOME" "$TESTS_OUTCOME" "$PUBLISH_OUTCOME" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/failure.txt"
+          printf 'step outcomes — build:%s reused:%s pack:%s inspect:%s tests:%s publish:%s stage:%s (%s)\n' \
+            "$BUILD_OUTCOME" "$REUSED_OUTCOME" "$PACK_OUTCOME" "$INSPECT_OUTCOME" "$TESTS_OUTCOME" "$PUBLISH_OUTCOME" "$STAGE_OUTCOME" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/failure.txt"
           trx="$RUNNER_TEMP/trx/ledger.trx"
           trxarg=()
           if [ -f "$trx" ]; then trxarg=(--trx "$trx"); fi
@@ -2383,7 +2834,20 @@ jobs:
           MODULE: ${{ matrix.entry.module }}
           VERSION: ${{ steps.identity.outputs.version }}
           COMPILER: ${{ steps.plan.outputs.decision == 'reuse' && 'reused' || steps.build.outputs.compiler }}
-          PUBLISHED: ${{ inputs.publish }}
+          # 🚨 "THIS LEG POSTED THE BUNDLE", not "this call was asked to publish". Under
+          # `publish-mode: staged` nothing reached the registry from here, and a receipt saying
+          # otherwise would make the lane's own report ("N published to the registry") a claim
+          # about something that has not happened yet.
+          PUBLISHED: ${{ inputs.publish && inputs.publish-mode == 'direct' && steps.newer.outputs.newer != 'true' }}
+          # 🚨 WHICH ARM OWNED THIS LEG'S HAND-OVER, written down rather than inferred from an
+          # `if:` nobody can read after the fact — the same discipline as `TESTS` below. `direct`:
+          # this leg POSTed the bundle itself. `staged`: it staged the bytes for the caller's
+          # publication lane, which hands over after the full source verdict (MeshWeaver#3878).
+          # `none`: this call does not publish at all. Two mutually exclusive conditions can BOTH
+          # be false; this is what makes that impossible to do quietly.
+          PUBLICATION: ${{ !inputs.publish && 'none' || (steps.newer.outputs.newer == 'true' && 'superseded' || inputs.publish-mode) }}
+          # publish-newest-only: the trunk tip whose own run publishes this module instead.
+          SUPERSEDED_BY: ${{ steps.newer.outputs.newer == 'true' && steps.newer.outputs.tip || '' }}
           # 🚨 WHICH LANE OWNS THIS MODULE'S SUITE, written down rather than inferred from an `if:`
           # nobody can read after the fact. `none` — the selection says this entry owes no test run
           # (a floor-only entry, or a ledger record that already carries a verdict); `inline` — the
@@ -2405,6 +2869,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/receipts"
           [ -n "$LANE" ]  || { echo "::error::the lane key is empty — the select job did not produce one, so this receipt could not be attributed to this call."; exit 1; }
           [ -n "$TESTS" ] || { echo "::error::this leg recorded no owner for $MODULE's suite — a receipt that cannot say whether the suite ran here, ran in the tests lane, or was not owed leaves 'it ran nowhere' reading as green."; exit 1; }
+          [ -n "$PUBLICATION" ] || { echo "::error::this leg recorded no owner for $MODULE's hand-over — a receipt that cannot say whether the bundle was POSTed here, staged for the publication lane, or not published at all leaves 'it reached the registry from nowhere' reading as green (MeshWeaver#3878)."; exit 1; }
           # ───────── THE FRAMEWORK IDENTITY THIS BUNDLE STATES, ON THE RECEIPT (#3310) ─────────
           # 🚨 THE ONLY EVIDENCE THAT LETS `verify` SEE THE OUTCOME. #3293 and #3306 made the anchor
           # correct and their guards assert the lane's TEXT and the anchor's LOCATION — neither can
@@ -2425,10 +2890,10 @@ jobs:
           echo "$MODULE states framework identity $IDENTITY"
           jq -n --arg l "$LANE" --arg p "$PACKAGE" --arg m "$MODULE" \
                 --arg v "$VERSION" --arg c "$COMPILER" --arg t "$TESTS" \
-                --argjson pub "$PUBLISHED" \
+                --argjson pub "$PUBLISHED" --arg pm "$PUBLICATION" \
                 --arg lk "$LEDGER_KEY" --arg ld "$LEDGER_DECISION" \
-                --arg fid "$IDENTITY" \
-             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, frameworkIdentity:$fid, ledger:{key:$lk, decision:$ld}}' \
+                --arg fid "$IDENTITY" --arg sb "${SUPERSEDED_BY:-}" \
+             '{lane:$l, package:$p, module:$m, version:$v, compiler:$c, tests:$t, published:$pub, publication:$pm, frameworkIdentity:$fid, ledger:{key:$lk, decision:$ld}} + (if $sb == "" then {} else {supersededBy:$sb} end)' \
              > "$RUNNER_TEMP/receipts/$MODULE.json"
           cat "$RUNNER_TEMP/receipts/$MODULE.json"
       - name: Upload the receipt

@@ -30,6 +30,15 @@ namespace MeshWeaver.Documentation.Test;
 ///   change arrived as a side effect of a routine version sweep.</item>
 /// </list>
 ///
+/// <para>🚨 A FOURTH was found on 2026-09-11 and had been live for far longer, because no prefix
+/// could relate its two members: <c>System.Reactive</c> sat at <c>6.1.0</c> while
+/// <c>Microsoft.Reactive.Testing</c> — the same product, same version line — sat at <c>7.0.0</c>.
+/// The testing package depends on <c>System.Reactive &gt;= 7.0.0</c>, so the eight test projects
+/// referencing it resolved Rx 7 while all 19 <c>src/</c> projects resolved Rx 6. Nothing failed:
+/// the suite that gates the platform was simply exercising a different Rx MAJOR from the one the
+/// portals shipped. That is the one skew a test suite must never have, and it is why
+/// <see cref="NamedFamilies"/> exists alongside the prefix list.</para>
+///
 /// <para><b>Why a guard rather than care.</b> Two of the three were caught by a build, but only
 /// after a push — and the third was caught by nothing except a licence gate that had to be read
 /// carefully, because a split family can restore perfectly well and simply bring different
@@ -59,6 +68,23 @@ public class PackageFamiliesMoveTogetherGuard
             + "json-everything family (OSMF-maintenance-fee) that #1231 removed"),
     ];
 
+    /// <summary>
+    /// Families whose members share no common prefix, so the list above cannot express them.
+    /// 🚨 Rx is the reason this second shape exists: <c>System.Reactive</c> and
+    /// <c>Microsoft.Reactive.Testing</c> are one product with one version line and two vendors'
+    /// worth of naming, and the prefix scanner is blind to that by construction.
+    /// </summary>
+    private static readonly (string Name, string[] Ids, string Why)[] NamedFamilies =
+    [
+        ("Rx.NET",
+            ["System.Reactive", "Microsoft.Reactive.Testing"],
+            "Rx.NET: Microsoft.Reactive.Testing depends on System.Reactive AT ITS OWN VERSION, and "
+            + "with CentralPackageTransitivePinningEnabled unset the higher of the two wins — but "
+            + "only in the projects that reference the testing package. A split therefore restores "
+            + "cleanly and silently runs the TEST SUITE on a different Rx major from the one src/ "
+            + "compiles and the portals ship"),
+    ];
+
     private static string PropsPath() =>
         Path.Combine(FindRepoRoot(), "Directory.Packages.props");
 
@@ -76,6 +102,29 @@ public class PackageFamiliesMoveTogetherGuard
         return cut < 0 ? v : v[..cut];
     }
 
+    /// <summary>
+    /// The ONE split-detection routine. Both family shapes call it and so does the negative
+    /// control, so the control exercises the real code path rather than a copy of it — a guard
+    /// tested through a replica of its own logic is not tested at all.
+    /// Returns null when the family agrees, or the rendered offence when it is split.
+    /// </summary>
+    private static string? SplitOffence(
+        string label, IReadOnlyList<(string Id, string Version)> members, string why)
+    {
+        if (members.Count < 2) return null;
+
+        var byBase = members
+            .GroupBy(p => BaseVersion(p.Version), StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .ToList();
+
+        if (byBase.Count == 1) return null;
+
+        var detail = string.Join("\n      ", byBase.Select(g =>
+            $"{g.Key}: {string.Join(", ", g.Select(p => p.Id))}"));
+        return $"{label} is SPLIT across {byBase.Count} base versions — {why}\n      {detail}";
+    }
+
     [Fact]
     public void EveryPinnedFamilyAgreesOnOneBaseVersion()
     {
@@ -85,18 +134,13 @@ public class PackageFamiliesMoveTogetherGuard
         foreach (var (prefix, why) in Families)
         {
             var members = pins.Where(p => p.Id.StartsWith(prefix, StringComparison.Ordinal)).ToList();
-            if (members.Count < 2) continue;
+            if (SplitOffence($"{prefix}*", members, why) is { } offence) offenders.Add(offence);
+        }
 
-            var byBase = members
-                .GroupBy(p => BaseVersion(p.Version), StringComparer.Ordinal)
-                .OrderByDescending(g => g.Count())
-                .ToList();
-
-            if (byBase.Count == 1) continue;
-
-            var detail = string.Join("\n      ", byBase.Select(g =>
-                $"{g.Key}: {string.Join(", ", g.Select(p => p.Id))}"));
-            offenders.Add($"{prefix}* is SPLIT across {byBase.Count} base versions — {why}\n      {detail}");
+        foreach (var (name, ids, why) in NamedFamilies)
+        {
+            var members = pins.Where(p => ids.Contains(p.Id, StringComparer.Ordinal)).ToList();
+            if (SplitOffence(name, members, why) is { } offence) offenders.Add(offence);
         }
 
         Assert.True(offenders.Count == 0,
@@ -123,6 +167,60 @@ public class PackageFamiliesMoveTogetherGuard
                 $"family '{prefix}*' matched {n} pin(s) — a family the guard cannot see is a family "
                 + "it is not policing. Remove the entry or fix the prefix.");
         }
+
+        // A named family is spelled out id by id, so a RENAMED or DROPPED member makes it shrink
+        // silently rather than fail. Every id must still be a pin.
+        foreach (var (name, ids, _) in NamedFamilies)
+        {
+            var missing = ids.Where(id => !pins.Any(p => string.Equals(p.Id, id, StringComparison.Ordinal)))
+                .ToList();
+            Assert.True(missing.Count == 0,
+                $"family '{name}' names {string.Join(", ", missing)}, which is not pinned in "
+                + "Directory.Packages.props. A member the guard cannot see is a member it is not "
+                + "policing — fix the id or drop it from the family.");
+            Assert.True(ids.Length >= 2,
+                $"family '{name}' lists {ids.Length} member(s) — a family of one polices nothing.");
+        }
+    }
+
+    /// <summary>
+    /// 🚨 The negative control. A guard that has never been seen to fail is not a guard, and this
+    /// one's whole point is that it fires on a shape the PREFIX scanner is blind to — which is
+    /// exactly how the Rx split survived: <c>System.Reactive</c> sat at 6.1.0 next to
+    /// <c>Microsoft.Reactive.Testing</c> 7.0.0, no prefix related them, and both repos stayed green
+    /// while the suite ran a different Rx major from the one that shipped.
+    /// </summary>
+    [Fact]
+    public void ANamedFamilySplitIsDetected()
+    {
+        // The family's own declared reason travels with the offence, so the red names the defect
+        // rather than just the versions.
+        var (name, _, why) = NamedFamilies.Single(f => f.Name == "Rx.NET");
+
+        // The exact pairing that was live in this repository until 2026-09-11.
+        var split = new List<(string Id, string Version)>
+        {
+            ("System.Reactive", "6.1.0"),
+            ("Microsoft.Reactive.Testing", "7.0.0"),
+        };
+        var offence = SplitOffence(name, split, why);
+        Assert.NotNull(offence);
+        Assert.Contains("6.1.0", offence);
+        Assert.Contains("7.0.0", offence);
+        Assert.Contains("System.Reactive", offence);
+
+        // The same routine must stay SILENT when the family agrees — otherwise it would "detect"
+        // every family and the red above would mean nothing.
+        Assert.Null(SplitOffence(name,
+            [("System.Reactive", "7.0.0"), ("Microsoft.Reactive.Testing", "7.0.0")], why));
+
+        // …and a one-member family polices nothing, so it must not be reported either.
+        Assert.Null(SplitOffence(name, [("System.Reactive", "7.0.0")], why));
+
+        // Deliberately NOT asserted here: that the LIVE pins agree. That is
+        // EveryPinnedFamilyAgreesOnOneBaseVersion's job, and duplicating it would make one real
+        // split report as two failures — noise that obscures which check actually found it.
+        // (Verified: re-splitting the live pin reds exactly one check, not two.)
     }
 
     /// <summary>The pre-release trim is the whole reason a legitimate preview-only member passes.</summary>

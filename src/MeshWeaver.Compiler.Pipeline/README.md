@@ -1,5 +1,13 @@
 # MeshWeaver.Compiler.Pipeline
 
+Follow the [Module Adoption Policy](../MeshWeaver.Documentation/Data/Architecture/ModuleAdoptionPolicy.md):
+accept compatible APIs across platform/dependency releases. A different NodeType bake identity
+invalidates reuse of that artifact; under the normal policy, compile its source against the
+current platform. It does not by itself make the feature incompatible or require the platform
+to stay on an old version. Preserve the last working module where the loader can fall back, and
+surface actual linking, compilation or loading failures with their dependency evidence. Strict
+prebuilt mode is an explicit exception, not the default compatibility rule.
+
 The **mesh-actor half** of NodeType compilation, factored out of `MeshWeaver.Graph`. It drives the
 pure toolchain in `MeshWeaver.Compiler`:
 

@@ -152,6 +152,75 @@ public class QuiescingHubRefusesNewWorkTest(ITestOutputHelper output) : HubTestB
         fixture.Victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task NewRequestOriginatingDuringQuiesce_IsRefusedBeforeItReachesAnotherHub()
+    {
+        var fixture = await ArrangeQuiescingVictim();
+        var received = new HandlerRan();
+        var targetAddress = new Address("quiescing-outbound-target", "1");
+        fixture.Host.GetHostedHub(targetAddress, c => c
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithTypes(typeof(NewWorkRequest), typeof(NewWorkResponse))
+            .WithHandler<NewWorkRequest>((h, d) =>
+            {
+                received.Record();
+                h.Post(new NewWorkResponse(), o => o.ResponseFor(d));
+                return d.Processed();
+            }));
+
+        try
+        {
+            var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() =>
+                fixture.Victim.Observe(new NewWorkRequest(), o => o.WithTarget(targetAddress))
+                    .FirstAsync().Timeout(TestTimeouts.Convergence)
+                    .Await(TestContext.Current.CancellationToken));
+            failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown);
+            ShutdownNack.IsAnsweredByOwner(failure.Failure.Message, VictimAddress).Should().BeTrue();
+            ShutdownNack.IsAnsweredByOwner(failure.Failure.Message, targetAddress).Should().BeFalse(
+                "the origin refused to start the request; the destination did not refuse it");
+            received.Did.Should().BeFalse(
+                "a draining hub must not start another request whose callback teardown will cancel");
+        }
+        finally
+        {
+            await fixture.ReleaseAndDispose();
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task RequestFromAnotherHub_StillForwardsDuringQuiesce()
+    {
+        var fixture = await ArrangeQuiescingVictim();
+        using var arrived = new AsyncSubject<IMessageDelivery>();
+        var targetAddress = new Address("quiescing-forward-target", "1");
+        fixture.Host.GetHostedHub(targetAddress, c => c
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithTypes(typeof(NewWorkRequest), typeof(NewWorkResponse))
+            .WithHandler<NewWorkRequest>((_, d) =>
+            {
+                arrived.OnNext(d);
+                arrived.OnCompleted();
+                return d.Processed();
+            }));
+
+        try
+        {
+            // Feed the router a third party's envelope: it owes no response callback for it.
+            var delivery = new MessageDelivery<NewWorkRequest>(fixture.Host.Address,
+                targetAddress, new NewWorkRequest(), fixture.Host.JsonSerializerOptions)
+            {
+                AccessContext = new AccessContext { ObjectId = "forwarding-test" }
+            };
+            fixture.Victim.DeliverMessage(delivery);
+            await arrived.Should().Within(TestTimeouts.Convergence).Emit(
+                "quiescing stops new work owned by this hub, but preserves transit traffic");
+        }
+        finally
+        {
+            await fixture.ReleaseAndDispose();
+        }
+    }
+
     private sealed record QuiescingVictim(
         IMessageHub Host,
         IMessageHub Victim,

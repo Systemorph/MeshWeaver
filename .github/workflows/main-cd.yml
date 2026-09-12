@@ -765,7 +765,7 @@ jobs:
           }
 
           # ── ONE COMMIT, ONE IMAGE SET (MeshWeaver#3376) ────────────────────────────────────
-          # On 2026-09-05 core 34c3eecec got two publishing runs: the push-triggered run (#7845)
+          # On 2026-09-05 core 34c3eecec4eaa6590c64852a0b7b873541983269 got two publishing runs: the push-triggered run (#7845)
           # and the hourly reconcile (#7846) both passed this step, because "is the set complete?"
           # was asked while the first build was still in flight — not complete YET, so the second
           # built too. Two `dotnet publish`es of one commit are two different digests: each got
@@ -774,7 +774,7 @@ jobs:
           # The batching window cannot see this either — it compares against the newest PUBLISHED
           # set, and neither had published.
           #
-          # So before any other verdict: is an OLDER run of this workflow on THIS sha still running?
+          # So before any other verdict: is an OLDER run of this workflow on THIS sha still live?
           # Older by run id, deliberately — two runs deciding at the same instant would otherwise
           # each see the other and BOTH defer, and one commit would yield no set at all. The older
           # proceeds, the newer defers, and if the older one dies the next reconcile tick heals
@@ -782,8 +782,14 @@ jobs:
           # The probe FAILS OPEN, and says so: an API error here must not stop a publication that
           # was correct before the probe existed — the worst case is the duplicate set this guards
           # against, and the log names the reason instead of an empty answer.
+          # A workflow held behind a concurrency group reports `pending`, not `queued`. That was
+          # the exact live shape on 2026-09-10: workflow_run 34506317727 was pending behind the
+          # preceding delivery when scheduled reconcile 34508198977 made this decision, so the
+          # two subsequently built the same c3b6fdf image set concurrently. Match the terminal
+          # boundary instead of trying to enumerate GitHub's live vocabulary: every live status
+          # is non-completed, and terminal runs report status=completed plus their conclusion.
           if INFLIGHT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SHA&per_page=30" \
-                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id < $RUN_ID and (.status == \"in_progress\" or .status == \"queued\"))] | .[0] // empty | .html_url"); then
+                          --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id < $RUN_ID and .status != \"completed\")] | .[0] // empty | .html_url"); then
             :
           else
             echo "::warning::the in-flight probe failed (exit $?) — cannot tell whether an older run is publishing $SHORT; proceeding as before MeshWeaver#3376 (a duplicate image set is the worst case)"
@@ -2476,17 +2482,26 @@ jobs:
   # thing this section exists to guarantee, quietly not guaranteed.
   plugins-modules:
     name: "Plugins: pack the module bundles the bake composes"
-    needs: [preflight, gate, promote]
+    needs: [preflight, gate, promote, plugins-bake-image]
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     permissions:
       contents: read
+      id-token: write
     uses: ./.github/workflows/node-repo-module-pack.yml
     with:
       content-repository: Systemorph/MeshWeaver.Plugins
       content-ref: ${{ needs.gate.outputs.plugins_sha }}
       platform-ref: ${{ needs.gate.outputs.sha }}
+      platform-image: meshweaver.azurecr.io/memex-portal-ai
+      platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}
+      tester-image: meshweaver.azurecr.io/mw-plugin-test
+      tester-image-digest: ${{ needs.plugins-bake-image.outputs.digest }}
+      acr-login: oidc
       # The compose set the bake needs — the same set Plugins' own ci.yml passes as
-      # module-artifacts; the rest of the catalog is content, baked below.
+      # module-artifacts; the rest of the catalog is content, baked below. Every entry MUST use
+      # the container workspace: an SDK entry recompiles its transitive siblings separately, so
+      # the bake can receive byte-distinct copies of one assembly from the same source commit.
+      # The consistency gate then correctly refuses the whole publication (#3732).
       #
       # 🚨 THE SET IS "EVERY MODULE THE CONTENT BINDS", not "the two we started with". The bake
       # lane states the rule in its own input description: *"a repo whose NodeType source binds a
@@ -2508,10 +2523,10 @@ jobs:
       # avoid rebuilding these for the seal, but this repo holds no registry credential
       # (Doc/Architecture/ModuleBuildArchitecture → "What the gate still cannot see").
       modules: >-
-        [{"package": "AI", "module": "MeshWeaver.AI", "project": "src/MeshWeaver.AI/MeshWeaver.AI.csproj"},
-         {"package": "Essentials", "module": "MeshWeaver.Markdown.Collaboration", "project": "src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj"},
-         {"package": "Maps", "module": "MeshWeaver.Maps", "project": "src/MeshWeaver.Maps/MeshWeaver.Maps.csproj"},
-         {"package": "Stripe", "module": "MeshWeaver.Payments.Stripe", "project": "src/MeshWeaver.Payments.Stripe/MeshWeaver.Payments.Stripe.csproj"}]
+        [{"package": "AI", "module": "MeshWeaver.AI", "project": "src/MeshWeaver.AI/MeshWeaver.AI.csproj", "build": "container", "accept": "targets"},
+         {"package": "Essentials", "module": "MeshWeaver.Markdown.Collaboration", "project": "src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj", "build": "container", "accept": "targets"},
+         {"package": "Maps", "module": "MeshWeaver.Maps", "project": "src/MeshWeaver.Maps/MeshWeaver.Maps.csproj", "build": "container", "accept": "targets"},
+         {"package": "Stripe", "module": "MeshWeaver.Payments.Stripe", "project": "src/MeshWeaver.Payments.Stripe/MeshWeaver.Payments.Stripe.csproj", "build": "container", "accept": "targets"}]
       # Registry module PACKAGES are content-versioned and published by Plugins' own lane when a
       # package changes; a platform release changes no package content. The bundles packed here
       # are the bake's inputs (artifacts), nothing more.
@@ -2522,6 +2537,9 @@ jobs:
       # with Contents: Read, so it doubles as the content credential; preflight asserts it.
       content-app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
       content-app-private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
   plugins-bake-image:
     name: "Plugins: resolve this run's tester + portal image digests"
@@ -2922,7 +2940,7 @@ jobs:
             # or newer, push lane or reconcile lane — is a fact that falsifies "nobody is publishing
             # it", and all of them count.
             if LIVE=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=50" \
-                        --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and (.status == \"in_progress\" or .status == \"queued\"))]
+                        --jq "[.workflow_runs[] | select(.name == \"$WORKFLOW_NAME\" and .id != $RUN_ID and .status != \"completed\")]
                               | sort_by(.id) | .[0] // empty
                               | \"\(.id) \(.status) \(.run_started_at) \(.html_url)\""); then
               :
@@ -2944,7 +2962,7 @@ jobs:
               echo "   This verdict is suppressed ONLY while a run is observably live on \`$SHORT\`. If that run does not complete the set, the next hourly reconcile finds nothing in flight and this job goes RED — no timer, no retry, nothing to un-stick by hand."
               exit 0
             fi
-            echo "::error::main \`$SHORT\` is GREEN and has an INCOMPLETE image set, this reconcile published nothing, and NO run of this workflow is queued or in progress on \`$SHORT\` — so nobody is publishing it. Delivery is stuck: every self-updating install stays on the previous image. This job exists because that state is otherwise INVISIBLE — the run reports success and every image job simply reads as skipped."
+            echo "::error::main \`$SHORT\` is GREEN and has an INCOMPLETE image set, this reconcile published nothing, and NO non-completed run of this workflow exists on \`$SHORT\` — so nobody is publishing it. Delivery is stuck: every self-updating install stays on the previous image. This job exists because that state is otherwise INVISIBLE — the run reports success and every image job simply reads as skipped."
             exit 1
           fi
 

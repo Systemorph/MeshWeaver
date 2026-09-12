@@ -96,6 +96,20 @@ FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
 - **Nothing here scans dependencies at rest.** Dependabot covers declared packages; a library
   inlined into a NuGet package's static assets (the Monaco bundle) is visible to neither Dependabot
   nor a source build — only to a scan of what is served.
+- 🚨 **And the pin that decides which bundled assets exist lives in a repository that cannot build
+  them.** `BlazorMonaco` is pinned in **core's** `Directory.Packages.props`, **no core project
+  references it** (the Blazor surface is in MeshWeaver.Plugins), and MeshWeaver.Plugins has no
+  `Directory.Packages.props` of its own — its `src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj`
+  carries a **versionless** `<PackageReference Include="BlazorMonaco" />`. So editing one line in
+  core changes what the portal's editor is built from, and core's build and CI are green by
+  construction whatever the new version ships. The satellite's `MonacoBundleGuard` does check the
+  properties the #3378 remedy rests on, but it runs against the core commit the satellite **pins**
+  (`MW_PLATFORM_REF`), so it reacts at the next pin move rather than at the bump — the documented
+  cross-repo lag. The `Satellite package pins (removal declared)` gate covers a pin being REMOVED;
+  a pin being BUMPED was uncovered, and `BlazorMonacoPinGuard`
+  (`test/MeshWeaver.Documentation.Test/`) is that cover: it fails on any change to the pin with the
+  re-verification checklist, and asserts its own premise — that nothing in core references the
+  package — so the guard cannot go quietly wrong if that ever changes.
 - 🚨 **Dropping a `<script>` removes the LOAD, not the ASSET.** Measured on both portals
   2026-09-07, after MeshWeaver.Plugins#1393 stopped `App.razor` loading BlazorMonaco's `min/vs`
   tree, a plain `GET` of
@@ -123,6 +137,220 @@ FAIL-NEW: 0	FAIL-INPROG: 0	WARN-NEW: 9	WARN-INPROG: 0	INFO: 0	IGNORE: 0	PASS: 58
   general rule the other way round too: **a bundle a page stops loading does not leave the origin**,
   so an inventory taken from `App.razor` is not an inventory of what is served.
 
+## Verifying the editor still works — the positive control for the Monaco remedy
+
+🚨 **Removing a vulnerable bundle and breaking the editor is a worse outcome than the finding.**
+Monaco is the portal's code and markdown edit surface, and every measurement in the section above
+stops at the asset boundary: a file answering 200 is not an editor that runs, and no test in either
+repository executes this shell's editor JavaScript. So the remedy needs a **positive** control, and
+it has to run against the bytes the portal actually serves rather than a local build.
+
+**The enabling fact is a side effect of the fix.** BlazorMonaco's AMD loader fetched the editor
+lazily, when an editor was created, which needs a signed-in page — that is why this rule used to be
+authenticated-only. The bundle the portal builds itself is loaded **eagerly by the app shell on
+every page, `/login` included**, so the whole editor is reachable **anonymously**. The positive
+control therefore needs no session, no test account and no OIDC cookie, and can be run against
+production at any time.
+
+Drive a headless browser at the anonymous shell, wait for `window.monacoReady` (the promise
+`App.razor` publishes and `MonacoEditorView` awaits), then exercise the editor through the same
+APIs the Blazor interop uses. The checks that matter, and what each one would catch:
+
+| check | how | what a failure means |
+|---|---|---|
+| the bundle loads | `await window.monacoReady`; `window.monaco` is defined | a 404 or a parse error — the dead-editor case the asset check cannot see |
+| the interop's contract holds | `monaco.editor` / `monaco.languages` / `monaco.Uri` present | BlazorMonaco's `jsInterop.js` drives the editor through these only |
+| values round-trip | `editor.create(...)`, `getValue()`, `setValue()` | the Blazor interop's read/write path |
+| **syntax highlighting** | `monaco.editor.tokenize(src, 'csharp')` returns real token types, and the view carries several distinct `mtk*` classes | grammars are **lazily registered** — tokenize immediately after load returns one null-state token, so poll until it changes or the check is vacuous |
+| **squiggles** | `setModelMarkers` then `getModelMarkers`, and a rendered `.squiggly-error` | the exact API the LSP diagnostics path paints through |
+| **workers answer** | a deliberately invalid JSON model produces a marker | a worker URL the bundle got wrong 404s silently |
+| **DOMPurify sanitises** | a hover whose markdown carries `javascript:` hrefs and `onerror`/`onload` attributes | the rule-10003 exposure itself |
+
+🚨 **The sanitisation check needs its own positive control.** "No `onerror` in the output" is also
+what a renderer that rendered *nothing* produces. Include a benign `**bold**` in the same payload
+and assert it survives as `<strong>`: that distinguishes *sanitised* from *broken*.
+
+```js
+// npm i playwright && npx playwright install chromium — run from a scratch directory, never
+// committed (one-off diagnostics rot; this table and recipe are the durable form).
+import { chromium } from 'playwright';
+const browser = await chromium.launch();
+const page = await browser.newPage();
+const errors = []; const failed = [];
+page.on('pageerror', e => errors.push(e.message));
+page.on('console', m => m.type() === 'error' && errors.push(m.text()));
+page.on('response', r => r.status() >= 400 && failed.push(`${r.url()} ${r.status()}`));
+
+await page.goto('https://memex.meshweaver.cloud/login', { waitUntil: 'load' });
+await page.evaluate(() => window.monacoReady);
+
+console.log(await page.evaluate(async () => {
+  const m = window.monaco, out = {};
+  const src = 'public record Foo(int Bar)\n{\n    // c\n    public string B => "s";\n}\n';
+  const host = document.createElement('div');
+  host.style.cssText = 'width:1000px;height:400px;position:absolute;top:0;left:0';
+  document.body.appendChild(host);
+  const ed = m.editor.create(host, { value: src, language: 'csharp' });
+  out.roundTrip = ed.getValue() === src;
+
+  // the csharp grammar registers lazily — poll, or this assertion is vacuous
+  const t0 = Date.now(); let types = [];
+  while (Date.now() - t0 < 20000 &&
+         (types = [...new Set(m.editor.tokenize(src, 'csharp').flat().map(t => t.type))]).length < 2)
+    await new Promise(r => setTimeout(r, 200));
+  out.tokens = types;
+  await new Promise(r => setTimeout(r, 600));
+  out.colourClasses = new Set([...host.querySelectorAll('.view-line span[class^="mtk"]')]
+    .map(s => s.className)).size;
+
+  m.editor.setModelMarkers(ed.getModel(), 'probe', [{
+    startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 7,
+    message: 'probe', severity: m.MarkerSeverity.Error }]);
+  out.markers = m.editor.getModelMarkers({ owner: 'probe' }).length;
+  out.rendered = host.querySelectorAll('.squiggly-error').length;
+
+  // workers answer: only the JSON worker can mark an invalid JSON model — poll for its marker
+  const jm = m.editor.createModel('{ "a": 1, }', 'json', m.Uri.parse('inmemory://probe/bad.json'));
+  const j0 = Date.now(); let jmk = [];
+  while (Date.now() - j0 < 20000 && (jmk = m.editor.getModelMarkers({ resource: jm.uri })).length === 0)
+    await new Promise(r => setTimeout(r, 100));
+  out.jsonWorker = { ms: Date.now() - j0, messages: jmk.map(x => x.message) };
+
+  m.languages.registerHoverProvider('csharp', { provideHover: () => ({ contents: [{
+    value: '[x](javascript:alert(1))\n\n<img src=x onerror="alert(2)">\n\n'
+         + '<svg onload="alert(3)"></svg>\n\n**bold survives**',
+    supportHtml: true, isTrusted: false }] }) });
+  return out;
+}));
+
+// open the hover with a real mouse move, then read what was rendered
+const at = await page.evaluate(() => { const r = document.querySelector('.view-line')
+  .getBoundingClientRect(); return { x: r.x + 40, y: r.y + r.height / 2 }; });
+await page.mouse.move(at.x, at.y); await page.waitForTimeout(1800);
+console.log(await page.evaluate(() => {
+  const html = document.querySelector('.monaco-hover')?.innerHTML ?? '';
+  return { onerror: /onerror/i.test(html), onload: /onload/i.test(html),
+           jsHref: /href\s*=\s*["']?javascript:/i.test(html),
+           boldSurvived: /<strong>bold survives<\/strong>/.test(html) };
+}));
+console.log({ errors, failed });
+await browser.close();
+```
+
+### 2026-09-11 — run against both portals
+
+`curl` on the served bytes, then the headless run above against
+`https://memex.meshweaver.cloud/login`:
+
+| | memex.meshweaver.cloud | memex.systemorph.com |
+|---|---|---|
+| `/api/version` | `3.0.0+6231c4da` | `3.0.0+45306a33` |
+| `…/MeshWeaver.Blazor/lib/monaco-editor/monaco.js` | 200 · 4,483,269 B · `sha256:8e991296…b039e846` | 200 · 4,483,269 B · **same sha256** |
+| its DOMPurify banners | exactly one: **3.4.14** | exactly one: **3.4.14** |
+| `versions.json` | `monaco-editor 0.56.0 · dompurify 3.4.14 · dompurify-vendored-by-monaco 3.4.8` | identical |
+| `…/BlazorMonaco/…/min/vs/editor.api-CalNCsUg.js` | **404** | **404** |
+| `…/BlazorMonaco/…/min/vs/loader.js` | **404** | **404** |
+| `…/BlazorMonaco/jsInterop.js` | 200 · 41,627 B | 200 · 41,627 B |
+
+🚨 **This table is what the portals SERVED on 2026-09-11, and 3.4.14 is no longer what is
+committed.** MeshWeaver.Plugins#1640 moved the pin to 3.4.15 the same day — see *DOMPurify 3.4.15*
+below for the new bytes — so both portals answer `8e991296…` until the next roll and `51408c8f…`
+after it. Neither reading changes rule 10003: both versions are above the retire.js floor.
+
+🚨 **memex.systemorph.com has now rolled.** On 2026-09-08 it was still on `ci.8059` and still served
+the flagged 3.6 MB chunk; it no longer does. The pre-fix control described in the previous section
+is therefore **expired** — the fleet no longer has a portal on the old side of the filter, and
+reconstructing it now means pulling an old image.
+
+The headless run, against the anonymous shell:
+
+- `window.monacoReady` resolved; **91** languages registered, `csharp` among them.
+- An editor created on a real DOM node; value round-trip and `setValue` both correct.
+- **Syntax highlighting**: the grammar registered after 203 ms, then tokenized to
+  `keyword.public.cs`, `keyword.int.cs`, `keyword.string.cs`, `identifier.cs`, `comment.cs`,
+  `string.quote.cs`, `string.cs`, `delimiter*.cs` — and the rendered view carried **5 distinct
+  `mtk*` colour classes**.
+- **Squiggles**: `setModelMarkers` → `getModelMarkers` round-tripped one `Error` marker, and one
+  `.squiggly-error` was rendered in the view.
+- **Workers**: an invalid JSON model was answered by the JSON worker in **152 ms** (`Trailing comma`).
+- **DOMPurify**: the hover rendered `[x](javascript:alert(1))` as bare text, `<img src=x
+  onerror=…>` as `<img>` with both attributes gone, and dropped `<svg onload=…>` entirely — while
+  `**bold survives**` came through as `<strong>`, so the sanitiser ran rather than the renderer
+  failing. Nothing executed.
+- **Zero** console errors and **zero** failed or 4xx requests across the whole run.
+
+So the editor the portal serves is intact end to end, on the same bytes the scanner reads.
+
+### Running the same check BEFORE the roll, with no portal at all
+
+The recipe above drives a portal, so it can only answer *after* a deploy. On a bundle bump the only
+thing that changed is the bundle, so the same checks run against the freshly built bytes on a static
+file server: stage the built folder under `_content/MeshWeaver.Blazor/lib/monaco-editor/` and
+BlazorMonaco's `jsInterop.js` under `_content/BlazorMonaco/`, put **App.razor's bootstrap block
+copied verbatim** into a bare page with `<base href="/">`, serve it, and point the script at
+`http://127.0.0.1:<port>/`. Copying the bootstrap rather than paraphrasing it is the point — a
+hand-written one tests your bootstrap, not the portal's. Every row of the table is reachable this
+way, workers and hover sanitisation included; the step-by-step is in
+`tools/monaco-editor/README.md` (MeshWeaver.Plugins). What it does **not** cover is delivery — that
+the portal serves these bytes — which is the `curl` half above and only answerable after the roll.
+
+### 2026-09-11 — DOMPurify 3.4.15, verified on the bundle before it shipped
+
+MeshWeaver.Plugins#1640 moved the pinned sanitiser 3.4.14 → **3.4.15** (published 2026-09-06;
+`https://registry.npmjs.org/dompurify/latest` answered HTTP 200 / 6,547 B with `version: 3.4.15`,
+re-measured 2026-09-11). 🚨 **This was freshness, not exposure, and the distinction is worth keeping
+straight**: 3.4.14 was already above the retire.js floor of 3.4.13, so nothing was flagged and no
+scan moved. OSV answers **zero** vulnerabilities for *both* 3.4.14 and 3.4.15
+(`api.osv.dev/v1/query`, HTTP 200), the newest GitHub advisory touching the package is
+`GHSA-55q2-fjhq-7xh7` (`<= 3.4.12`, patched 3.4.13), and 3.4.15's own release notes are hardening —
+clobbering when XML content is involved, edge cases, dependency bumps — with no advisory attached.
+The bump is the standing *use the latest within the minor line* directive, nothing more.
+
+| | before | after |
+|---|---|---|
+| `monaco.js` | 4,483,269 B · `sha256:8e991296…b039e846` | 4,483,398 B · `sha256:51408c8f804b7723b55b9ffb66ec7df202ca7cdfcfc86ffc02a248ef5691dfb4` |
+| banners in it | exactly one: `@license DOMPurify 3.4.14` | exactly one: `@license DOMPurify 3.4.15` |
+| `versions.json` | `monaco-editor 0.56.0 · dompurify 3.4.14 · vendored 3.4.8` | `monaco-editor 0.56.0 · dompurify **3.4.15** · vendored 3.4.8` |
+| the five workers | — | **byte-identical** |
+
+The workers not moving is the check that the swap stayed confined: only
+`esm/vs/base/browser/domSanitize.js` imports the vendored sanitiser and no worker entry point
+reaches it, so a DOMPurify-only bump that moved one would mean something else changed too. Two
+consecutive builds produced the same sha256, so the output is reproducible and a differing hash is a
+real difference.
+
+The full editor check was run against those bytes on the local harness described above, and matched
+the portal run line for line: `window.monacoReady` resolved, **91** languages registered, editor
+created, `getValue`/`setValue` round-tripped, the `csharp` grammar registered after 203 ms and
+tokenized to real types with **5** distinct `mtk*` colour classes rendered, one `Error` marker round-
+tripped through `setModelMarkers`/`getModelMarkers` painting one `.squiggly-error`, the JSON worker
+answered an invalid model in 103 ms (`Trailing comma`), and **zero** console errors and **zero**
+failed or 4xx requests. The hover rendered as
+
+```html
+<div class="rendered-markdown"><p>x</p><img>
+
+<p></p><p><strong>bold survives</strong></p></div>
+```
+
+— `[x](javascript:alert(1))` reduced to its text, `<img src=x onerror=…>` stripped to a bare `<img>`,
+`<svg onload=…>` dropped entirely, nothing executed, **and `**bold survives**` through as
+`<strong>`**. That last clause is the whole point of the check: without it, an empty output would be
+indistinguishable from a renderer that failed.
+
+**Licences now travel with the bytes.** esbuild keeps DOMPurify's `/*! @license … */` banner inline —
+that banner is what retire.js reads, and it carries a permalink pinned to the exact tag — but a
+banner is not a licence text. `build.mjs` now also emits `LICENSE-monaco-editor-MIT.txt`,
+`LICENSE-dompurify-Apache-2.0.txt` and `LICENSE-dompurify-MPL-2.0.txt` beside the output (Monaco is
+MIT; DOMPurify is dual licensed **Apache-2.0 OR MPL-2.0** and ships both). They have to be emitted
+rather than committed by hand: the output directory is wiped on every build.
+
+🚨 **`npm audit` reports a vulnerable `dompurify` in this workspace and it is not the output.** Read
+the path — `node_modules/monaco-editor/node_modules/dompurify` is Monaco's own transitive 3.4.8, the
+copy this build exists to replace. `npm audit fix --force` "fixes" it by downgrading `monaco-editor`
+to 0.53.0. The output's only DOMPurify is the top-level pin, and `build.mjs` fails on any banner but
+that one.
+
 ## Findings by release
 
 ### 3.0.0 — scanned 2026-09-06 against memex.meshweaver.cloud, ZAP 2.17.0
@@ -136,7 +364,7 @@ The full report of this scan — coverage, attack classes exercised, the delta a
 
 | rule | level | run | instances | disposition |
 |---|---|---|---|---|
-| Vulnerable JS Library [10003] — DOMPurify 3.2.7 inside BlazorMonaco's Monaco bundle | Medium | authenticated | 1 | **Fixed and DELIVERED, re-scan still owed**: MeshWeaver#3378 — the portal builds its own Monaco with DOMPurify 3.4.14 (MeshWeaver.Plugins#1393, `tools/monaco-editor`), guarded by `MonacoBundleGuard`. Delivery measured 2026-09-07 on the served bytes, not on the merge: `GET /_content/MeshWeaver.Blazor/lib/monaco-editor/monaco.js` answers 200 / 4,483,269 bytes / `sha256:8e991296e5e49dca83a02afa00a0eca20128a5c530b9996ce00830e6b039e846` on **both** memex.meshweaver.cloud and memex.systemorph.com — byte-identical to the committed bundle on MeshWeaver.Plugins `main` — carrying `/*! @license DOMPurify 3.4.14` (`versions.json`: monaco-editor 0.56.0, dompurify 3.4.14). Corroborated by an anonymous re-scan on 2026-09-07 that provably reached the bundle (10003 PASS over 1330 URLs, 10096 on `monaco.js`); the issue still closes on the AUTHENTICATED re-scan. Residue CLOSED by MeshWeaver#3617 (MeshWeaver.Plugins#1482): the retired `min/vs` tree is no longer published, measured 2026-09-08 on the shipped image (366 files under `_content/BlazorMonaco` → 3; 726 retired endpoints → 0) and on the wire (the flagged `editor.api-CalNCsUg.js` answers **404** on a portal running ≥ `ci.8079`) — see *What the scanner cannot see*. That removes the URL the alert instanced, and with it the only DOMPurify 3.2.7 the origin served; it does NOT by itself settle rule 10003, which is a verdict over every library the signed-in portal loads. |
+| Vulnerable JS Library [10003] — DOMPurify 3.2.7 inside BlazorMonaco's Monaco bundle | Medium | authenticated | 1 | **Fixed and DELIVERED, re-scan still owed**: MeshWeaver#3378 — the portal builds its own Monaco with DOMPurify 3.4.14 (MeshWeaver.Plugins#1393, `tools/monaco-editor`), guarded by `MonacoBundleGuard`. Delivery measured 2026-09-07 on the served bytes, not on the merge: `GET /_content/MeshWeaver.Blazor/lib/monaco-editor/monaco.js` answers 200 / 4,483,269 bytes / `sha256:8e991296e5e49dca83a02afa00a0eca20128a5c530b9996ce00830e6b039e846` on **both** memex.meshweaver.cloud and memex.systemorph.com — byte-identical to the committed bundle on MeshWeaver.Plugins `main` — carrying `/*! @license DOMPurify 3.4.14` (`versions.json`: monaco-editor 0.56.0, dompurify 3.4.14). Corroborated by an anonymous re-scan on 2026-09-07 that provably reached the bundle (10003 PASS over 1330 URLs, 10096 on `monaco.js`); the issue still closes on the AUTHENTICATED re-scan. Residue CLOSED by MeshWeaver#3617 (MeshWeaver.Plugins#1482): the retired `min/vs` tree is no longer published, measured 2026-09-08 on the shipped image (366 files under `_content/BlazorMonaco` → 3; 726 retired endpoints → 0) and on the wire (the flagged `editor.api-CalNCsUg.js` answers **404** on a portal running ≥ `ci.8079`) — see *What the scanner cannot see*. That removes the URL the alert instanced, and with it the only DOMPurify 3.2.7 the origin served; it does NOT by itself settle rule 10003, which is a verdict over every library the signed-in portal loads. 🚨 **A package bump is still not an alternative remedy, re-measured against the live registry 2026-09-11**: the NuGet flat-container index for `blazormonaco` answers HTTP 200 with **3.5.0 still the newest release**, and `blazormonaco.3.5.0.nupkg` (HTTP 200, 4,514,906 B) still carries `min/vs/loader.js` declaring Monaco **0.42.0-dev-20230906** and an `editor.api` banner-stamped **DOMPurify 3.2.7**. Upstream `monaco-editor` is 0.56.0 — the version the portal already builds — and it vendors DOMPurify 3.4.8, below the retire.js floor, so even a hypothetical BlazorMonaco carrying current Monaco would not by itself clear the rule. The pin is now held by `BlazorMonacoPinGuard` (core, `test/MeshWeaver.Documentation.Test/`). 2026-09-11: **both** portals answer **404** on the flagged URL (memex.systemorph.com has rolled), and the editor is verified working end to end — see *Verifying the editor still works*. |
 | Backup File Disclosure [10095] | Medium | public | 21 | **False positive, measured**: every instance is `/static/NodeTypeIcons/Copy (n) of <icon>.svg`, and that route synthesises an icon for ANY name — a nonsense name answers 200 with a 547-byte SVG of its own, while `bot.svg.bak` is 404 — so no file is disclosed; the rule keys on "a variant of the URL also answers 200". Carried: the fallback icon is the feature. |
 | Proxy Disclosure [40025] | Medium | public | systemic | **False positive, measured**: `TRACE` and `OPTIONS` answer 405 (`allow: GET, POST`) with no `Server`/`Via` header; the "Unknown proxy" is ZAP's inference from the refusal. Carried. |
 | CSP: Failure to Define Directive with No Fallback [10055] | Medium | both | 15 / 10 | **Carried by design** — see the row below; `form-action 'self' https:` is declared on every response measured (`/`, `/login`), so the missing directive the rule names is to be re-read on the next scan. |
@@ -216,8 +444,10 @@ executes this shell's editor JavaScript — measured, not assumed: `MonacoBundle
 suites render the component tree without a browser, and the fleet's only Playwright project
 (`clients/portal-next/e2e`) drives the separate Next.js client, which serves no
 `_content/BlazorMonaco` at all. A dead editor caused by a missing static asset would be caught by
-none of them; the last end-to-end verification on record is the manual headless check reported on
-MeshWeaver.Plugins#1393.
+none of them. That remains true of the automated suites — but the manual control is no longer a
+one-off buried in a pull request: *Verifying the editor still works* above carries the recipe and a
+2026-09-11 run of it against both portals, and it needs no session because the fix made the editor
+load on the anonymous shell.
 
 Three method notes, each of which was needed to reach that verdict:
 

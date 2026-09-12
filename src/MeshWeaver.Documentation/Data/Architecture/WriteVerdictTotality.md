@@ -439,18 +439,110 @@ trails, six show `RECEIVED runLevel=Quiescing` at the issuing hub, i.e. the call
 the hub was `Started`), it is not fixed by this page's rule, and it is benign in every occurrence
 measured so far — the requester gets `HubDisposedBeforeResponseException`, which is a real answer.
 
-## The UPSERT lane is the same rule, one lane over — and only half of it is covered (#3510)
+## The UPSERT lane is the same rule, one lane over — and totality is now by CONSTRUCTION (#3510, #3674)
 
-`CreateOrUpdateNodeRequest` has three legs. Its READ leg reaches all of Rx's terminations already
-(#2454, `MeshExtensions`: *"THREE terminal states, not two"*). Its two WRITE legs subscribe with
-`onNext`/`onError` only:
+`CreateOrUpdateNodeRequest` is a **detached-reply** handler: it returns `Processed()` at once and
+owes its `CreateOrUpdateNodeResponse` from chains that outlive the turn. Every one of those chains
+is subject to the rule above, and for the same reason — the delivery trail records
+`HANDLER_ENTER … → HANDLER_EXIT state=Processed`, so a leg that answers nobody leaves a trail that
+looks completed and a caller that waits out its whole budget.
 
-| leg | trail stage | owner disposed under it |
+🚨 **"Covered" was asked of the wrong question, and the answer read as more than it was.** The
+earlier version of this table judged each leg by *"does it survive the owner being disposed under
+it?"* — a real question, pinned by a real test. But the leg that answers "yes" to that can still
+answer NOBODY when its source **completes empty**, which is a different termination reached by a
+different route. **Every leg now handles all three of Rx's terminations** — the read leg and the
+inner create by their own explicit third arm, the other three by composing through
+`DetachedReplyOutcome.Of`, which converts value / fault / empty into exactly one emission so the
+subscriber cannot fail to answer:
+
+| leg | trail stage | its source's empty completion |
 |---|---|---|
-| update — `WriteThroughStream` | `UPSERT_WRITE_THROUGH_STREAM` | **covered.** The owner's `RegisterOwnerDisposingNack` mints `OwnerDisposing`, the writer re-enqueues against the fresh activation, the caller is answered `success=True` (pinned by `UpsertAnswersWhenTheOwnerGoesAwayTest`) |
-| create — `DispatchInnerCreate` | `UPSERT_READ absent → create` | **not covered.** No disposal-NACK registration, no `WriteVerdictBound` equivalent |
+| read — `gatedExisting` | `UPSERT_READ …` | posts a refusal naming the empty read (#2454). 🚨 Never `DefaultIfEmpty(null)`: the value arm reads `null` as "the node does not exist" and would turn a non-answer into a CREATE |
+| no-op probe — `SkipNoOpIfAuthorized` | `UPSERT_READ existing → no-op probe` | falls through to the write path. `GetEffectivePermissions` terminating without emitting is a documented outcome — half of what `HubPermissionExtensions` classifies as `Undetermined`, *"because it FAULTED, or because it terminated without ever emitting (#2742)"* — and against a two-arm `Subscribe` it posted nothing at all |
+| NodeType gate — `ApplyUpdateViaStream` | — | refuses, and says the probe produced no answer rather than "not registered" — a verdict and a non-verdict are not the same answer |
+| update — `WriteThroughStream` | `UPSERT_WRITE_THROUGH_STREAM` | posts a refusal naming the unconfirmed write. Disposal is separately covered: `RegisterOwnerDisposingNack` mints `OwnerDisposing`, the writer re-enqueues against the fresh activation, the caller is answered `success=True` (`UpsertAnswersWhenTheOwnerGoesAwayTest`) |
+| create — `DispatchInnerCreate` | `UPSERT_READ absent → create` | posts a refusal (`UPSERT_CREATE_COMPLETED_EMPTY`), and an `InnerCreateVerdictBound` bounds the no-answer case |
 
-🚨 **This gap is real, and it is NOT what failed the CD seals — measured 2026-09-07 on CD 7976.** The
+🚨 **None of this bounds a source that NEVER terminates.** `DetachedReplyOutcome.Of` is about the
+three terminations Rx *delivers*; the fourth outcome — never emits, never completes, the section
+"The FOURTH outcome" above — reaches no arm at all, and `Of` cannot rescue it, because every
+operator it applies is **notification-driven**: `Take(1)` synthesises a completion but only *after
+a value*, `Catch` substitutes a sequence but only *after a fault*, `DefaultIfEmpty` fires only *on
+a completion*. From a source that has produced nothing, none of them can fire. The one
+**clock**-driven operator is `Timeout`, which is why it — and only it — can terminate a silent
+source; it is separately present where the source can starve:
+`InnerCreateVerdictBound` on the inner create, `NodeOpForwardTimeout` inside the no-op probe.
+Compose `Of` **around** that bound and both properties hold — the timeout supplies liveness, `Of`
+turns whichever termination arrives into an answer. Totality and liveness are different properties;
+this section is about the first.
+
+### #3674: the no-op probe is the one that was actually silent, and it is a RE-INSTALL
+
+[#3674](https://github.com/Systemorph/MeshWeaver/issues/3674) reported a
+`CreateOrUpdateNodeRequest` that reached *"a hub but no handler"*, followed by
+`ADVANCE_WITHOUT_HANDOFF … the owner never acknowledged this write` and a 31-second
+`VERDICT_TIMEOUT` — a write neither applied nor refused. Two of its own readings were later
+falsified in its thread: the `@` suffix in a request-fate entry names the hub that **recorded** the
+stage, not the delivery's target, so two of the three "not mine" verdicts were correct forwards; and
+the 8055-vs-8071 regression framing does not hold, because both commits carry the same code in the
+respect that matters. What survives every re-reading is the **shape** — the caller of a sanctioned
+lifecycle request received no terminal at all.
+
+The instance of that shape reachable with real machinery is the **no-op probe**. A re-install writes
+content identical to what is stored, which is exactly a no-op upsert, which is exactly the branch
+that asks `GetEffectivePermissions(path, requestedBy)` whether the caller could have written anyway.
+An empty completion there used to run neither arm: no `PostOk`, no write path, no log line.
+
+🚨 **That the reported failures took this branch is a FIT, not a measurement.** CD 7950's
+`[FAIL] Chess … idempotence: re-install failed` is an idempotent re-install, and a re-install is a
+no-op upsert — but no capture names the probe, because a leg that logs nothing leaves nothing to
+name it with. The claim this page makes is the narrow one: the branch was silent on an outcome its
+own source is documented to produce, and it is not any more.
+
+**Silence is handed to the write path, never resolved locally.** "No verdict" is not "denied" and
+certainly not "granted"; it is not an answer this optimisation may act on, so the optimisation steps
+aside and the owner stays the single authority on allow/deny — the same thing the probe's FAULT arm
+has always done. Answering "skipped" on an unproven authority would be a success-**without**-write,
+which is the one outcome worse than the silence.
+
+`UpsertAnswersWhenThePermissionProbeIsSilentTest` pins it, and the lever is the framework's own
+`WithPermissionEvaluator` seam narrowed to a single user id — not a mock: the create, the
+access-control pipeline and the cache's own write gate (which probes for the CALLER's identity) all
+run unchanged. Measured on this repo: without the fix the caller emits **nothing at all** for the
+full 36 s bound; with it, answered in 0.7 s.
+
+🚨 **And the reverted run reproduces #3674's reported artefact, not merely its symptom.** The
+capture below is from this repository's own test host with the fix backed out — the same
+`[STALE-CALLBACK] … CreateOrUpdateNodeRequest@portal/nodeops-…` line the issue quotes, and the same
+interleaved `ROUTED onTarget=False state=Forwarded` entries that were read there as *"forwarded by
+every hub, handled by none"*:
+
+```text
+[STALE-CALLBACK] client/…: 1 callback(s) pending > 30000ms:
+  …=CreateOrUpdateNodeRequest@portal/nodeops-…(35000ms)
+  AWAITING → POSTED target=portal/nodeops-… → RECEIVED@client/… → ENQUEUED@client/…
+  → RECEIVED@mesh/… → ENQUEUED@mesh/… → ROUTED onTarget=False state=Forwarded@client/…
+  → RECEIVED@portal/nodeops-… → ENQUEUED@portal/nodeops-…
+  → ROUTED onTarget=False state=Forwarded@mesh/…
+  → ROUTED onTarget=True state=Submitted@portal/nodeops-…
+  → HANDLER_ENTER@portal/nodeops-…
+  → UPSERT_READ existing → no-op probe@portal/nodeops-…
+  → HANDLER_EXIT state=Processed@portal/nodeops-…
+  ⇒ a handler was entered and no reply, completion or fault has been recorded since
+```
+
+**Read the two Forwarded lines against the two extra stages this trail carries.** The forwards are
+correct — `@` names the hub that RECORDED the stage, and both of those hubs correctly declined a
+delivery targeted at `portal/nodeops`. What names the defect is what follows on the target itself:
+`ROUTED onTarget=True`, `HANDLER_ENTER`, the leg's own stage, `HANDLER_EXIT state=Processed` — and
+then nothing. A trail that stops at a leg's stage is a leg that answered nobody, and it is
+distinguishable from a pump that never turned only by whether `HANDLER_ENTER` is present. That
+distinction is the reason each leg records a stage at all.
+
+### The CREATE leg's history, and why closing it did not seal the bakes
+
+🚨 **This gap was real, and it was NOT what failed the CD seals — measured 2026-09-07 on CD 7976.** The
 one stale callback in that run's Hosting window took the **UPDATE** leg
 (`UPSERT_READ existing → update` → `UPSERT_WRITE_THROUGH_STREAM`) and resolved inside 35 s, and the
 eight-minute park that actually ran out the install's 600 s bound had **no pending callback anywhere**
@@ -464,6 +556,15 @@ Measured on core CD 7950: the create leg's trail ends at `HANDLER_EXIT state=Pro
 follows, and the run contains **zero `[CreateOrUpdate]` lines of any kind** — so neither terminal arm
 ever ran. Silence, not a fault. The install then ran out its ten-minute bound with no name for what
 happened.
+
+### A create timeout cannot establish that nothing was written
+
+The inner-create bound guarantees an answer to the upsert caller; it does not establish rollback.
+The create handler persists the row before running post-creation handlers and sending its response.
+A pending post-creation handler can therefore outlive that bound with the row already present.
+The timeout reports an **unknown outcome**, never "NOT applied" or an unconditional safe retry.
+`CreateTimeoutOutcomeTest` pins this with a real stored node and a held post-creation handler,
+letting the production bound expire without altering its duration.
 
 ### 🚨 The recycle is by design, it succeeds, and it is NOT the defect
 

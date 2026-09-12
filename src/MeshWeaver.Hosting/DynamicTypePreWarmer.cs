@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -85,6 +86,32 @@ public enum PreWarmStatus
     /// </summary>
     NoSources,
     /// <summary>
+    /// 🚨 <see cref="NoSources"/> one granularity finer, and the shape <see cref="NoSources"/> can
+    /// never see (issue #3903): the source snapshot is NOT empty, but one of the type's DECLARED
+    /// source queries answered and matched NOTHING — its own <c>Source/</c> subtree is gone while
+    /// the <c>shared=@Lib/Source</c> entries beside it still resolve, so the union stays populated
+    /// and the emptiness that matters is invisible to a count.
+    ///
+    /// <para>The consequence is the phantom-diagnostic failure <c>SourceSnapshot</c> exists to
+    /// prevent, arriving through the one door it does not watch: Roslyn is handed a set that is
+    /// SHORT of what the type declares and emits completely genuine-looking <c>CS0246</c>/
+    /// <c>CS1061</c> about symbols the author never lost. Measured on memex.meshweaver.cloud —
+    /// <c>rbuergi/OperationRequest</c> failed from 2026-09-06 on three symbols that are exactly its
+    /// three absent <c>Source/*</c> nodes, against 41 sources pulled in by five <c>shared=</c>
+    /// entries, and the investigation went looking for them in module surfaces.</para>
+    ///
+    /// <para>A CONTENT verdict, like <see cref="NoSources"/> and for the identical reason: which
+    /// nodes a mesh query matches is a property of the mesh, not of the framework being rolled out,
+    /// so no image caused it and no rollout can fix it. Dependents inherit
+    /// <see cref="UpstreamContentBroken"/>, the gate files it under content-broken, and the batch
+    /// driver stops re-attempting the compile — see
+    /// <c>NodeTypeCompilationHelpers.IsUnconvergableSourceFailure</c> for why that is a
+    /// classification and not a retry cap, and for the second witness
+    /// (<see cref="NodeTypeDefinition.LastCompileSucceededAt"/>) that keeps a type which NEVER
+    /// built — whose failure may be its own configuration — gating exactly as before.</para>
+    /// </summary>
+    DeclaredSourcesMissing,
+    /// <summary>
     /// NOT ATTEMPTED, and content-broken one hop up: a NodeType this one draws sources from is
     /// <see cref="NoSources"/>-broken, so this type cannot build either — for the same
     /// content-not-image reason, which must propagate AS ITSELF rather than as a gating
@@ -93,6 +120,32 @@ public enum PreWarmStatus
     /// worth nothing if the identical condition gates through the dependents.
     /// </summary>
     UpstreamContentBroken,
+    /// <summary>
+    /// The compile settled at Error on a type its REPOSITORY HAS RETIRED — the definition carries
+    /// <see cref="NodeTypeDefinition.PendingRetirement"/>: the source that owns it no longer ships
+    /// it, and the import kept it only because the mesh still holds instances that have not been
+    /// retyped (see <c>NodeTypeInstanceProbe</c>). Its sources were withdrawn on purpose, so
+    /// whether it still compiles is no longer evidence about an image. A CONTENT verdict, like
+    /// <see cref="NoSources"/>: dependents inherit <see cref="UpstreamContentBroken"/>, and the
+    /// gate files it under <c>NodeTypeBakeGateState.Retired</c> without stalling anything.
+    /// </summary>
+    Retired,
+    /// <summary>
+    /// 🚨 The type's definition node NO LONGER EXISTS — it was pruned by its repository (a
+    /// completed retirement), and this sweep, which enumerated it before the prune landed, then
+    /// measured a "failure" against a node that was gone. Measured on memex.systemorph.com
+    /// 2026-09-08: <c>Crm/Mail</c> pruned at 20:29:14Z, its compile failed at 20:29:52Z with
+    /// <c>No node found at 'Crm/Mail'</c>, recorded as a CompileError regression on a healthy
+    /// baseline, and at 20:31:12Z the pod refused readiness on it — with a recovery watch
+    /// subscribed to a node that did not exist, so nothing could ever retract it. A deliberate
+    /// retirement must not hold every rollout on every instance for ever.
+    ///
+    /// <para>Established by a LISTING that came back and did not name the node — never by a
+    /// point read, which on an absent node terminates with a routing NotFound and opens the
+    /// storm-breaker on that path — and never by the shape of the failure message. A faulted
+    /// listing leaves the original verdict standing: absence is asserted, not assumed.</para>
+    /// </summary>
+    Removed,
     /// <summary>The warm subscription faulted (best-effort — the lazy path still works).</summary>
     Faulted
 }
@@ -357,7 +410,9 @@ public static class DynamicTypePreWarmer
                 {
                     // The full nodes (not just their definitions): the batch driver feeds the
                     // compiler the enumerated MeshNode directly — no re-fetch, no activation.
-                    var (nodes, definitions) = DynamicTypesOf(change.Items);
+                    var dynamicTypes = DynamicTypesOf(
+                        change.Items, mesh.JsonSerializerOptions, logger);
+                    var (nodes, definitions) = (dynamicTypes.Nodes, dynamicTypes.Definitions);
 
                     // 🚨 ASK THE SHARE WHAT IS ACTUALLY THERE, before deciding what to build.
                     //
@@ -372,13 +427,31 @@ public static class DynamicTypePreWarmer
                     // which buys three properties at once: a cleared cache re-bakes by itself, an
                     // interrupted bake RESUMES (what already landed comes back Baked), and a second
                     // pod inherits the first pod's work instead of repeating it.
+                    //
+                    // 🚨 #3703 — the enumeration is a PROJECTION, and this process's own prebuilt
+                    // adoptions may already have superseded it. Classify from the newer of the two.
+                    //
+                    // 🚨 The overlay moves DEFINITIONS and deliberately NOT `nodes`. A node carries
+                    // the VERSION the compiler's store upload keys on, and an overlaid definition on
+                    // a snapshot node would pair a fresh record with a stale version — strictly
+                    // worse than either. It costs nothing: an adopted type classifies Baked, so the
+                    // batch driver (which is the only consumer of `nodes`) never reaches it.
+                    var overlay = OverlayThisProcessAdoptions(mesh, definitions, nodes, logger);
+                    var classified = overlay.Definitions;
+
                     var store = ResolveAssemblyStore(mesh);
                     return NodeTypeBakeStatus
-                        .Probe(definitions, store, logger: logger,
+                        .Probe(classified, store, logger: logger,
                             liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
                             liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
+                        .Select(report => report with
+                        {
+                            ClassifiedFromLocalAdoption = overlay.Applied.Count,
+                        })
+                        .Do(report => PublishReport(
+                            mesh, report, NodeTypeBakeReportRegistry.CompilingSweep))
                         .SelectMany(report => BakeOrFollow(
-                            mesh, workspace, accessService, definitions, nodes, store, report,
+                            mesh, workspace, accessService, classified, nodes, store, report,
                             budget, pacing, batchBake, buildProtocol, logger));
                 })
                 // 🚨 NO Catch HERE, AND NO LOG-AND-SWALLOW — DELIBERATELY.
@@ -404,29 +477,70 @@ public static class DynamicTypePreWarmer
     /// (<see cref="ProbeDynamicTypes"/>) so the two can never disagree about WHAT the mesh's
     /// dynamic types are — a drift there would make the adopt-only report describe a different
     /// population than the sweep it replaces.
+    ///
+    /// <para>🚨 <b>The typing is <c>ContentAs</c>, never <c>Content is NodeTypeDefinition</c>, and
+    /// a failure to type is COUNTED</b> (#3703). A query row's <c>Content</c> is deserialised by
+    /// whichever hub served it, so an unresolvable <c>$type</c> degrades to a raw
+    /// <c>JsonElement</c> and a pattern-match on the CLR type silently drops that NodeType from
+    /// this population — out of <c>total</c>, out of <c>baked</c>, out of <c>pending</c>, with
+    /// nothing to grep. That is the same defect this whole issue is about wearing a different hat:
+    /// an instrument that cannot say "I did not check". It can now, via
+    /// <see cref="DynamicTypes.Untyped"/>.</para>
     /// </summary>
-    private static (Dictionary<string, MeshNode> Nodes,
-        Dictionary<string, NodeTypeDefinition?> Definitions) DynamicTypesOf(
-        IEnumerable<MeshNode> items)
+    /// <param name="items">The enumeration snapshot.</param>
+    /// <param name="options">The mesh hub's serializer options — the registry that resolves the
+    /// content's <c>$type</c>.</param>
+    /// <param name="logger">Diagnostics; an unconvertible value is named by node path.</param>
+    internal static DynamicTypes DynamicTypesOf(
+        IEnumerable<MeshNode> items, JsonSerializerOptions options, ILogger? logger)
     {
-        var nodes = items
-            .Where(n => !string.IsNullOrEmpty(n.Path)
-                && n.State == MeshNodeState.Active
-                && n.Content is NodeTypeDefinition d
-                // Only DYNAMIC types have source to compile. Static/framework
-                // NodeTypes ship their assembly with the process — nothing to warm.
-                && HasCompilableSource(d))
-            .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => g.First(),
-                StringComparer.OrdinalIgnoreCase);
-        var definitions = nodes.ToDictionary(
-            kvp => kvp.Key,
-            kvp => (NodeTypeDefinition?)kvp.Value.Content,
-            StringComparer.OrdinalIgnoreCase);
-        return (nodes, definitions);
+        var untyped = ImmutableList.CreateBuilder<string>();
+        var typed = items
+            .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
+            .Select(n => (Node: n, Definition: n.ContentAs<NodeTypeDefinition>(options, logger)))
+            .Where(pair =>
+            {
+                if (pair.Definition is { } d)
+                    // Only DYNAMIC types have source to compile. Static/framework
+                    // NodeTypes ship their assembly with the process — nothing to warm.
+                    return HasCompilableSource(d);
+                if (pair.Node.Content is not null)
+                    untyped.Add(pair.Node.Path!);
+                return false;
+            })
+            .GroupBy(pair => pair.Node.Path!, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var nodes = typed.ToDictionary(
+            g => g.Key, g => g.First().Node, StringComparer.OrdinalIgnoreCase);
+        var definitions = typed.ToDictionary(
+            g => g.Key, g => g.First().Definition, StringComparer.OrdinalIgnoreCase);
+
+        if (untyped.Count > 0)
+            // Warning, not silence: a NodeType this pass could not type is a type NOTHING in the
+            // bake decides anything about, and the whole point of the report is that a number it
+            // prints is a number over a population it can name.
+            logger?.LogWarning(
+                "DynamicTypePreWarmer: {Count} node(s) matched the NodeType enumeration but their "
+                + "content did not resolve to a NodeTypeDefinition on this hub — they are NOT in "
+                + "this report's population and NOTHING decided anything about them (#3703). "
+                + "Unresolved: {Paths}",
+                untyped.Count, string.Join(", ", untyped.Order(StringComparer.OrdinalIgnoreCase)));
+
+        return new DynamicTypes(nodes, definitions, untyped.ToImmutable());
     }
+
+    /// <summary>
+    /// The dynamic NodeTypes an enumeration snapshot yielded, WITH what it could not read.
+    /// </summary>
+    /// <param name="Nodes">The nodes, keyed by path.</param>
+    /// <param name="Definitions">Their definitions, keyed by path.</param>
+    /// <param name="Untyped">Paths whose content this hub could not resolve to a
+    /// <see cref="NodeTypeDefinition"/> — checked by nothing, so named by this.</param>
+    internal sealed record DynamicTypes(
+        Dictionary<string, MeshNode> Nodes,
+        Dictionary<string, NodeTypeDefinition?> Definitions,
+        ImmutableList<string> Untyped);
 
     /// <summary>
     /// 🚨 ASKS, NEVER BUILDS — the adopt-only pass that every boot runs.
@@ -463,12 +577,62 @@ public static class DynamicTypePreWarmer
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
                 .Take(1)
                 .Timeout(EnumerationBudget)
-                .SelectMany(change => NodeTypeBakeStatus.Probe(
-                    DynamicTypesOf(change.Items).Definitions,
-                    ResolveAssemblyStore(mesh),
-                    logger: logger,
-                    liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
-                    liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)));
+                .SelectMany(change =>
+                {
+                    var dynamicTypes = DynamicTypesOf(
+                        change.Items, mesh.JsonSerializerOptions, logger);
+                    var (nodes, definitions) = (dynamicTypes.Nodes, dynamicTypes.Definitions);
+                    var overlay = OverlayThisProcessAdoptions(mesh, definitions, nodes, logger);
+                    return NodeTypeBakeStatus.Probe(
+                            overlay.Definitions,
+                            ResolveAssemblyStore(mesh),
+                            logger: logger,
+                            liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+                            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
+                        .Select(report => report with
+                        {
+                            ClassifiedFromLocalAdoption = overlay.Applied.Count,
+                        })
+                        .Do(report => PublishReport(
+                            mesh, report, NodeTypeBakeReportRegistry.AdoptOnlyProbe));
+                }));
+    }
+
+    /// <summary>
+    /// 🚨 <b>Publishes the report so <c>/health</c> can carry it</b> (#3703).
+    ///
+    /// <para>The report's numbers — and above all
+    /// <see cref="NodeTypeBakeReport.ClassifiedFromLocalAdoption"/>, which says out loud that the
+    /// sweep's input was behind this process's own writes — existed only as a boot LOG line. Log
+    /// access on this fleet is break-glass, so the confirming reading for #3703 could not be taken
+    /// by anyone authorised to take it, and the issue could be neither settled nor closed. Recorded
+    /// here, at both report sites, it is one unauthenticated <c>curl</c> away.</para>
+    ///
+    /// <para>The adoption-stamp count is captured at the SAME instant, because the pair is the
+    /// point: "N assemblies adopted" and "M types whose record and the share agree" are different
+    /// populations in different units, and reading them as a contradiction is what #3703 was filed
+    /// as. Published side by side, they cannot be read that way again.</para>
+    ///
+    /// <para>Best-effort by construction: a host that registered no registry publishes nothing and
+    /// the health check says so in those words. It must never be able to fault the sweep.</para>
+    /// </summary>
+    private static void PublishReport(IMessageHub mesh, NodeTypeBakeReport report, string pass)
+    {
+        var registry = mesh.ServiceProvider.GetService<NodeTypeBakeReportRegistry>();
+        if (registry is null)
+            return;
+        var stamps = mesh.ServiceProvider
+            .GetService<NodeTypeAdoptionRegistry>()?.AdoptedStamps.Count ?? 0;
+        registry.Record(new BakeReportReading(
+            pass,
+            report.FrameworkVersion,
+            report.Entries.Count,
+            report.Entries.Count(e => !e.NeedsBake),
+            report.Pending.Count,
+            report.ClassifiedFromLocalAdoption,
+            stamps,
+            report.Summary,
+            DateTimeOffset.UtcNow));
     }
 
     /// <summary>
@@ -479,6 +643,61 @@ public static class DynamicTypePreWarmer
     /// </summary>
     private static IAssemblyStore ResolveAssemblyStore(IMessageHub mesh) =>
         mesh.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+
+    /// <summary>
+    /// 🚨 <b>THE ENUMERATION IS A PROJECTION, AND THIS PROCESS MAY ALREADY HAVE SUPERSEDED IT</b>
+    /// (#3703).
+    ///
+    /// <para>The sweep decides what to compile from ONE mesh-wide
+    /// <c>Query&lt;MeshNode&gt;(…).Take(1)</c>. That is a CQRS read — eventually consistent, and
+    /// explicitly not the authoritative source for a node's content — while the prebuilt seeding
+    /// pass that runs immediately before it writes each adopted type's record through
+    /// <c>GetMeshNodeStream(path).Update(…)</c>, which IS authoritative. So the sweep can be handed
+    /// records that predate writes made seconds earlier by the same process, and nothing in the
+    /// classification can tell that apart from a genuinely stale record: both are the same
+    /// bytes.</para>
+    ///
+    /// <para><b>What that cost, measured.</b> memex, 2026-09-08 00:31 UTC, one cold boot: the
+    /// seeding pass reported <c>78 adopted now, 0 already current</c>, and ten seconds later the
+    /// sweep reported <c>baked=5 pending=204 frameworkstale=201</c> on the SAME framework identity —
+    /// 197 compiles instead of ~20. The two numbers were never comparable (see
+    /// <see cref="NodeTypeBakeReport.ClassifiedFromLocalAdoption"/>), and the compiles the
+    /// disagreement caused are what put four already-adopted <c>Doc/**</c> types on the compile path
+    /// where a short source-discovery pass could turn them into false regressions (#3663).</para>
+    ///
+    /// <para>The fix is neither a retry nor a wait: it is to classify each type from the NEWER of
+    /// the two facts. <see cref="NodeTypeAdoptionRegistry.OverlayOnto"/> applies the process's own
+    /// stamp only where the snapshot's <see cref="MeshNode.Version"/> proves the snapshot predates
+    /// it, so a record that has since moved on — an owner refusal, a recompile — always wins.</para>
+    /// </summary>
+    private static AdoptionOverlay OverlayThisProcessAdoptions(
+        IMessageHub mesh,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyDictionary<string, MeshNode> nodes,
+        ILogger? logger)
+    {
+        var registry = mesh.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
+        if (registry is null)
+            return new AdoptionOverlay(
+                definitions.ToImmutableDictionary(
+                    kvp => kvp.Key, kvp => kvp.Value, StringComparer.OrdinalIgnoreCase),
+                []);
+
+        var overlay = registry.OverlayOnto(definitions, nodes);
+        // 🚨 SAY IT. An instrument that silently corrected its own input would be the next version
+        // of the defect: the operator reading "197 compiles" needs to know the enumeration was
+        // behind, because a snapshot that is behind for 73 types on a 35-second seeding pass is a
+        // fact about this deployment's read path, not about its content.
+        if (!overlay.Applied.IsEmpty)
+            logger?.LogInformation(
+                "DynamicTypePreWarmer: the NodeType enumeration snapshot PREDATES this process's own "
+                + "prebuilt adoptions for {Count} type(s) — classifying those from the record this "
+                + "process wrote, not from the snapshot (#3703). A snapshot at or below the node "
+                + "version an adoption wrote over cannot contain that write; one above it wins and is "
+                + "used unchanged. Superseded: {Types}",
+                overlay.Applied.Count, string.Join(", ", overlay.Applied));
+        return overlay;
+    }
 
     /// <summary>
     /// 🚨 ONE PROCESS BAKES; the rest SUBSCRIBE TO THE GO.
@@ -611,9 +830,19 @@ public static class DynamicTypePreWarmer
                 + "{Missing} is not registered — falling back to the activation-driven sweep",
                 batchCompiler is null ? "IMeshNodeCompilationService" : "IMeshService");
 
+        // 🚨 THE UNITS ARE NODETYPES AND THE SOURCE IS THE RECORD (#3703). "already on the share"
+        // used to stand where "need no build" now does, and it invited exactly one misreading: that
+        // this number is a census of the assembly store, comparable with the adoption pass's "N
+        // prebuilt assembly(ies) … are backed by the assembly store". It never was. The store is
+        // asked ONE question per type — "bytes at the version this type's RECORD names?" — so this
+        // counts types whose record and the share agree, over the enumeration snapshot, in
+        // NodeTypes; the adoption line counts BUNDLE ENTRIES whose bytes were written, in
+        // assemblies. Two populations, two units, two sources.
         logger?.LogInformation(
             "DynamicTypePreWarmer: {Pending} of {Total} dynamic NodeType(s) need building "
-            + "(sequential, dependency order, {Mode}, perTypeBudget={Budget}) — {Baked} already on the share. "
+            + "(sequential, dependency order, {Mode}, perTypeBudget={Budget}) — {Baked} need no build "
+            + "(record and share agree; this is a count of NodeTypes judged from their records, NOT a "
+            + "census of the assembly store). "
             + "{Report}. Building: {Order}",
             pending.Count, order.Count, useBatch ? "batch direct-compile" : "activation-driven",
             budget, baked.Count, report.Summary,
@@ -744,16 +973,26 @@ public static class DynamicTypePreWarmer
                     return warm
                         .DelaySubscription(
                             i == 0 || batchSources is not null ? TimeSpan.Zero : pacing)
+                        // 🚨 A verdict against a node that NO LONGER EXISTS is not a verdict about
+                        // the image. The definitions were enumerated once, at the start of the
+                        // sweep; a repository sync can prune a retired type at any moment after
+                        // that, and the compile of the pruned type then fails with the routing's
+                        // "No node found" — which is exactly what memex.systemorph.com recorded
+                        // as a gating CompileError on 2026-09-08. Asked only for an image verdict.
+                        .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
                         .Do(o =>
                         {
                             // A timeout is not a verdict — route it to `unevaluated` so its
-                            // dependents inherit "no answer", not "it broke". Deleted sources are
-                            // a CONTENT verdict — dependents inherit content-broken, never gating.
-                            // Everything else that missed a usable build (CompileError, Faulted)
-                            // is an image verdict.
+                            // dependents inherit "no answer", not "it broke". Deleted sources, a
+                            // retired type and a removed type are CONTENT verdicts — dependents
+                            // inherit content-broken, never gating. Everything else that missed a
+                            // usable build (CompileError, Faulted) is an image verdict.
                             if (o.Status is PreWarmStatus.TimedOut)
                                 unevaluated.Add(p);
-                            else if (o.Status is PreWarmStatus.NoSources)
+                            else if (o.Status is PreWarmStatus.NoSources
+                                     or PreWarmStatus.DeclaredSourcesMissing
+                                     or PreWarmStatus.Retired
+                                     or PreWarmStatus.Removed)
                                 contentBroken.Add(p);
                             else if (!o.ReachedUsableBuild)
                                 verdictFailed.Add(p);
@@ -783,7 +1022,13 @@ public static class DynamicTypePreWarmer
         // baked a fleet of empty assemblies with nothing refusing readiness. Whole-batch fallback is
         // the only safe answer: the activation-driven sweep resolves each type's sources itself.
         return NodeTypeBatchBake
-            .ResolveSources(batchMeshService!, accessService, definitions, pending, logger)
+            // 🚨 The registry is the PUBLICATION of #3704's discriminator — the per-pass chunk
+            // count and the largest inter-chunk gap — so /health can carry what only a Loki query
+            // could read before. Resolved, never required: a host without one publishes nothing and
+            // the check says so in those words rather than reading as clean.
+            .ResolveSources(
+                batchMeshService!, accessService, definitions, pending, logger,
+                mesh.ServiceProvider.GetService<SourceDiscoveryRegistry>())
             .Select(index =>
                 (ImmutableDictionary<string, IReadOnlyList<MeshNode>>?)index)
             .Catch<ImmutableDictionary<string, IReadOnlyList<MeshNode>>?, Exception>(ex =>
@@ -1024,10 +1269,112 @@ public static class DynamicTypePreWarmer
     /// a non-empty snapshot and keeps gating — pinned by
     /// <c>ClassifyCompileFailure_MatchedSources_StaysCompileError</c>.</para>
     /// </summary>
-    public static PreWarmStatus ClassifyCompileFailure(NodeTypeDefinition d) =>
-        d.CurrentSourceVersions is { Count: 0 } && d.LastCompileSucceededAt is not null
+    /// <param name="d">The failed type's definition.</param>
+    /// <param name="nodeTypePath">
+    /// The type's path, so the <see cref="PreWarmStatus.DeclaredSourcesMissing"/> question can be
+    /// asked (#3903) — it needs the <c>$self</c> expansion root. 🚨 A <c>null</c> here leaves that
+    /// branch unreachable and the classification falls through to
+    /// <see cref="PreWarmStatus.CompileError"/>, i.e. it keeps GATING. Not being able to ask must
+    /// never buy a type the leniency the answer would have bought it.
+    /// </param>
+    public static PreWarmStatus ClassifyCompileFailure(
+        NodeTypeDefinition d, string? nodeTypePath = null) =>
+        // A type its repository has retired (held for its remaining instances) is a content
+        // verdict before anything else is asked: its sources were withdrawn on purpose.
+        d.PendingRetirement is { Length: > 0 }
+            ? PreWarmStatus.Retired
+        : d.CurrentSourceVersions is { Count: 0 } && d.LastCompileSucceededAt is not null
             ? PreWarmStatus.NoSources
+        // 🚨 #3903 — the same content fact one granularity finer, and the branch that catches
+        // every COMPOSED type the one above cannot. The snapshot is non-empty (a `shared=` group
+        // still resolves) but a DECLARED source query matched nothing, so Roslyn was handed a set
+        // short of what the type declares and its CS0246/CS1061 are about symbols nobody lost.
+        // Guarded by the identical second witness: the sources must have been LOST, not never
+        // present, or a type broken in its own Configuration would stop gating.
+        : d.LastCompileSucceededAt is not null
+          && MeshWeaver.Compiler.SourceCoverage.UnmatchedSourceQueries(
+                 d.Sources, nodeTypePath, d.CurrentSourceVersions?.Keys.ToList())
+             is { Count: > 0 }
+            ? PreWarmStatus.DeclaredSourcesMissing
             : PreWarmStatus.CompileError;
+
+    /// <summary>
+    /// The outcome once the type node's EXISTENCE is known. An image verdict
+    /// (<see cref="PreWarmStatus.CompileError"/> / <see cref="PreWarmStatus.Faulted"/>) measured
+    /// against a node that no longer exists is reclassified <see cref="PreWarmStatus.Removed"/> —
+    /// the repository retired the type while (or before) this sweep ran, and no image caused
+    /// that. Everything else is returned unchanged: an existing node keeps its verdict, and a
+    /// non-verdict (a timeout, a usable build) is not touched. Pure — pinned by
+    /// <c>ARetiredNodeTypeIsNotARegressionTest</c>.
+    /// </summary>
+    /// <param name="outcome">The outcome as measured.</param>
+    /// <param name="nodeExists">Whether a listing still names the type's definition node.</param>
+    public static PreWarmOutcome ReclassifyAbsent(PreWarmOutcome outcome, bool nodeExists) =>
+        nodeExists || !IsImageVerdict(outcome)
+            ? outcome
+            : outcome with
+            {
+                Status = PreWarmStatus.Removed,
+                Detail = "the NodeType definition no longer exists in the mesh — retired by its "
+                    + $"repository, not broken by this image (was {outcome.Status}: "
+                    + $"{outcome.Detail ?? "(no detail)"})",
+            };
+
+    private static bool IsImageVerdict(PreWarmOutcome outcome) =>
+        outcome.Status is PreWarmStatus.CompileError or PreWarmStatus.Faulted;
+
+    /// <summary>
+    /// <see cref="ReclassifyAbsent"/> with the existence question actually asked — only for an
+    /// image verdict, so the overwhelming majority of outcomes cost nothing.
+    /// </summary>
+    private static IObservable<PreWarmOutcome> ReclassifyIfRemoved(
+        IMessageHub mesh, PreWarmOutcome outcome, ILogger? logger)
+    {
+        if (!IsImageVerdict(outcome))
+            return Observable.Return(outcome);
+        return TypeNodeExists(mesh, outcome.TypePath, logger)
+            .Select(exists => ReclassifyAbsent(outcome, exists))
+            .Do(o =>
+            {
+                if (o.Status is PreWarmStatus.Removed)
+                    logger?.LogWarning(
+                        "DynamicTypePreWarmer: {TypePath} → {Status} — the definition node is gone "
+                        + "(pruned by its repository during or before this sweep); the failure "
+                        + "measured against it is not evidence against this image. {Detail}",
+                        o.TypePath, o.Status, o.Detail);
+            });
+    }
+
+    /// <summary>
+    /// Whether the type's definition node still exists — by LISTING (<c>path:</c>, the same
+    /// existence idiom the importer uses for its marker), never by a point read: a point read of
+    /// an absent node terminates with a routing NotFound and opens the storm-breaker on that path.
+    /// System-scoped — a NodeType record may live in a partition this process's viewer cannot
+    /// read, and "cannot see" must not read as "gone".
+    ///
+    /// <para>🚨 A listing that FAULTS answers <c>true</c>: absence is asserted only by a listing that
+    /// came back and did not name the node. The direction matters — a false "gone" would launder
+    /// a real regression, a false "present" merely keeps the verdict that already stood.</para>
+    /// </summary>
+    internal static IObservable<bool> TypeNodeExists(IMessageHub mesh, string typePath, ILogger? logger)
+    {
+        var meshService = mesh.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Return(true);
+        return meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{typePath}").AsSystem())
+            .Take(1)
+            .Select(change => change.Items.Any(n =>
+                string.Equals(n.Path, typePath, StringComparison.OrdinalIgnoreCase)))
+            .Catch<bool, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: could not establish whether NodeType {TypePath} still "
+                    + "exists — treated as present, so its verdict stands unchanged.",
+                    typePath);
+                return Observable.Return(true);
+            });
+    }
 
     /// <summary>
     /// Whether the type's SOURCES MOVED while this compile was running — at least one entry of
@@ -1061,7 +1408,7 @@ public static class DynamicTypePreWarmer
     /// layer can say whether the source set was stable when the verdict was formed.
     /// </summary>
     internal static PreWarmOutcome FromFailedCompile(string typePath, NodeTypeDefinition d) =>
-        new(typePath, ClassifyCompileFailure(d), d.CompilationError)
+        new(typePath, ClassifyCompileFailure(d, typePath), d.CompilationError)
         {
             SourcesMovedDuringCompile = SourcesMovedDuringCompile(d)
         };
@@ -1103,6 +1450,7 @@ public static class DynamicTypePreWarmer
     public static IDisposable WatchForRecovery(
         IMessageHub mesh, NodeTypeBakeGateState gate, string typePath, ILogger? logger)
     {
+        const string RemovedWitness = "the NodeType definition no longer exists";
         var workspace = mesh.GetWorkspace();
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
         // 🚨 #3478 — THE SECOND WITNESS, and the reason gating publication does not break #1214.
@@ -1150,11 +1498,42 @@ public static class DynamicTypePreWarmer
                                     .Where(p => string.Equals(
                                         p, typePath, StringComparison.OrdinalIgnoreCase))
                                     .Select(_ => "this process compiled it successfully"))
-                            .Take(1));
+                            .Take(1))
+                        // 🚨 THE WATCH'S SUBJECT CAN CEASE TO EXIST. A regression recorded on a type
+                        // its repository then prunes (a completed retirement) has lost its subject:
+                        // the node stream terminates with the routing's NotFound, and "a watch that
+                        // cannot observe a recovery must never be read as one" became "a rollout
+                        // that can never proceed" (memex.systemorph.com, 2026-09-08 20:31:12Z, on a
+                        // node pruned two minutes earlier). So a faulted watch asks ONE more
+                        // question — does the node still exist, by listing — and only an absent
+                        // node yields the removal witness; an existing node re-throws, and the
+                        // regression stands exactly as before.
+                        .Catch<string, Exception>(ex => TypeNodeExists(mesh, typePath, logger)
+                            .SelectMany(exists => exists
+                                ? Observable.Throw<string>(ex)
+                                : Observable.Return(RemovedWitness)));
                 })
             .Subscribe(
                 witness =>
                 {
+                    if (string.Equals(witness, RemovedWitness, StringComparison.Ordinal))
+                    {
+                        if (gate.RetireRegression(
+                                typePath,
+                                "the NodeType definition no longer exists — pruned by its repository "
+                                + "(a completed retirement), so there is nothing left for this image "
+                                + "to have broken"))
+                        {
+                            mesh.ServiceProvider.GetService<MeshPublicationGate>()?.Reconsider();
+                            logger?.LogWarning(
+                                "DynamicTypePreWarmer: WITHDRAWING the regression recorded for "
+                                + "{TypePath} — its definition node no longer exists (retired by its "
+                                + "repository), so the earlier failure was measured against nothing "
+                                + "and is not evidence against the image. Gate now: {Detail}",
+                                typePath, gate.Detail);
+                        }
+                        return;
+                    }
                     if (gate.RetractRegression(
                             typePath,
                             $"rebuilt to a usable build on this image after the bake ({witness})"))

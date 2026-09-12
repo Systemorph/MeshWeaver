@@ -57,13 +57,26 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class UntypedContentDegradationGate
 {
-    /// <summary>The exact phrase. Both ends are asserted against THIS constant, so the two can
-    /// never agree with each other while disagreeing with reality.</summary>
-    private const string Phrase = "stayed an untyped JsonElement";
+    /// <summary>The exact phrase the gate greps — the VERDICT's wording (#3645). Both ends are
+    /// asserted against THIS constant, so the two can never agree with each other while
+    /// disagreeing with reality.</summary>
+    private const string Phrase = "was NEVER resolvable on this replica";
+
+    /// <summary>The per-READ diagnostic's phrase. Not what the gate keys on any more — it is the
+    /// transient population — but it must keep being emitted, because it is the record that says
+    /// WHICH read degraded once the verdict names a type that never recovered.</summary>
+    private const string DegradationPhrase = "stayed an untyped JsonElement";
 
     /// <summary>The gate's PRIMARY key, taken from the type itself so a rename cannot leave the
-    /// script grepping for a name nothing constructs.</summary>
-    private static readonly string Marker = nameof(MeshWeaver.Mesh.MeshNodeContentDegradedException);
+    /// script grepping for a name nothing constructs. 🚨 It is the VERDICT type, not the event
+    /// type: a degradation observed at a read cannot know whether the type registers a moment
+    /// later, so keying on it made the gate report the ordinary boot race as a defect (#3645).</summary>
+    private static readonly string Marker = nameof(MeshWeaver.Mesh.MeshNodeContentUnresolvedException);
+
+    /// <summary>The per-READ diagnostic's type. Still required at every seam — it is what makes
+    /// the record reach the trace sink at all, and it is the INPUT the verdict is computed
+    /// from.</summary>
+    private static readonly string DegradationMarker = nameof(MeshWeaver.Mesh.MeshNodeContentDegradedException);
 
     private const string Script = ".github/scripts/check-untyped-content.sh";
     private const string EmittingSource = "src/MeshWeaver.Hosting/MeshNodeStreamCache.cs";
@@ -82,7 +95,7 @@ public class UntypedContentDegradationGate
     /// is the state this whole gate was in before #3625.
     /// </summary>
     [Fact]
-    public void EverySeamAttachesTheMarkerExceptionTheGateKeysOn()
+    public void EveryReadSeamAttachesTheDegradationExceptionTheVerdictIsComputedFrom()
     {
         // 🚨 Count CONSTRUCTIONS in code, not lines that happen to contain a substring (Copilot
         // review). The first version split on newlines and looked for `"new " + Marker`, which is
@@ -94,19 +107,21 @@ public class UntypedContentDegradationGate
         // second failure mode outright; the regex removes the first.
         var source = SourceScan.MaskCommentsAndStrings(Read(EmittingSource));
         var constructions = new Regex(
-                @"\bnew\s+(?:[A-Za-z_][\w]*\s*\.\s*)*" + Regex.Escape(Marker) + @"\s*\(",
+                @"\bnew\s+(?:[A-Za-z_][\w]*\s*\.\s*)*" + Regex.Escape(DegradationMarker) + @"\s*\(",
                 RegexOptions.Compiled)
             .Matches(source).Count;
 
         Assert.True(
             constructions >= 3,
-            $"Only {constructions} construction(s) of {Marker} in {EmittingSource}; expected at least 3 "
+            $"Only {constructions} construction(s) of {DegradationMarker} in {EmittingSource}; expected at least 3 "
             + "(GetStream, GetQuery, and GetQuery's deserialization catch).\n"
             + "A degradation warning WITHOUT this exception cannot reach "
             + "collected-logs/_meshweaver-test-trace.log — the sink takes a record if and only if "
-            + "`exception is not null && logLevel >= Warning` — so the shard gate that scans that "
-            + "directory has nothing to match, and passes having checked nothing. That is exactly "
-            + "how this gate spent its first five days (#3625).");
+            + "`exception is not null && logLevel >= Warning` — so nothing can name WHICH read "
+            + "degraded when the verdict reports a node type that never recovered. That "
+            + "unreachability is exactly how this gate spent its first five days (#3625), and the "
+            + "records are also the registry entries Unresolved() computes the verdict from: no "
+            + "Record at a seam, no verdict from it either.");
     }
 
     /// <summary>
@@ -194,6 +209,50 @@ public class UntypedContentDegradationGate
             + "leaving the script grepping for a name nothing writes any more.");
     }
 
+    /// <summary>
+    /// 🚨 <b>The VERDICT must exist, and be constructed where it is reported (#3645).</b> The gate
+    /// keys on <see cref="Marker"/>; if nothing in the emitting source constructs it, the script
+    /// greps for a name nobody writes and passes every run having matched nothing — which is the
+    /// same silent retirement #3625 was, one type over.
+    /// </summary>
+    [Fact]
+    public void TheVerdictExceptionIsConstructedWhereItIsReported()
+    {
+        var source = SourceScan.MaskCommentsAndStrings(Read(EmittingSource));
+        var constructions = new Regex(
+                @"\bnew\s+(?:[A-Za-z_][\w]*\s*\.\s*)*" + Regex.Escape(Marker) + @"\s*\(",
+                RegexOptions.Compiled)
+            .Matches(source).Count;
+
+        Assert.True(
+            constructions >= 1,
+            $"Nothing in {EmittingSource} constructs {Marker}, which is what {Script} keys on. "
+            + "The gate now reports the VERDICT — a node type still unresolvable when the mesh "
+            + "ended — rather than the per-read event, so with no construction it matches nothing "
+            + "and passes forever. Either restore the teardown report "
+            + "(MeshNodeStreamCache.ReportUnresolvedContentTypes) or retire the gate deliberately.");
+    }
+
+    /// <summary>
+    /// 🚨 The verdict is computed by RE-ASKING the content-type registry, and that is the whole
+    /// difference between this gate and the one it replaced. A report built from the raw snapshot
+    /// would red on every boot race again — silently, because the assertion above would still
+    /// pass.
+    /// </summary>
+    [Fact]
+    public void TheVerdictIsComputedFromTheReAskedSet()
+    {
+        var source = SourceScan.MaskCommentsAndStrings(Read(EmittingSource));
+
+        Assert.True(
+            source.Contains("Unresolved(", StringComparison.Ordinal),
+            $"{EmittingSource} no longer computes its report from "
+            + "ContentDegradationRegistry.Unresolved(...). Reporting Snapshot() instead re-reds "
+            + "every transient boot degradation — the exact defect #3645 fixed — and would do it "
+            + "invisibly, because the marker would still be constructed and the gate would still "
+            + "match.");
+    }
+
     [Fact]
     public void TheSourceStillEmitsThePhraseTheGateGrepsFor()
     {
@@ -205,16 +264,28 @@ public class UntypedContentDegradationGate
             + $"{Script} greps for exactly that phrase, so it now matches NOTHING and passes every "
             + "run having checked nothing — the silent retirement this test exists to prevent.\n"
             + "If the message was reworded, update the phrase in BOTH this test and the script. If "
-            + "the degradation warning was removed entirely, remove the gate deliberately and say "
+            + "the verdict report was removed entirely, remove the gate deliberately and say "
             + "why in the commit — do not leave a gate grepping for a string nobody writes.");
+    }
 
-        // Both read seams — GetStream and GetQuery — must keep reporting. A degradation reachable
-        // through only one of them is still a view that renders empty.
+    /// <summary>
+    /// The per-READ diagnostic still fires at BOTH read seams. It no longer reds a shard on its
+    /// own — that was the defect — but it is the record that names which read degraded, and it is
+    /// the registry entry the verdict is computed from. A seam that falls silent takes its node
+    /// types out of the verdict's denominator entirely.
+    /// </summary>
+    [Fact]
+    public void BothReadSeamsStillEmitTheDegradationPhrase()
+    {
+        var emitted = Read(EmittingSource).Split('\n')
+            .Count(l => l.Contains(DegradationPhrase, StringComparison.Ordinal));
+
         Assert.True(
             emitted >= 2,
-            $"Only {emitted} occurrence(s) of \"{Phrase}\" in {EmittingSource}; expected at least 2 "
-            + "(GetStream and GetQuery). One read seam falling silent means content can degrade "
-            + "down that path with nothing said, which is exactly the state before this gate.");
+            $"Only {emitted} occurrence(s) of \"{DegradationPhrase}\" in {EmittingSource}; expected "
+            + "at least 2 (GetStream and GetQuery). One read seam falling silent means content can "
+            + "degrade down that path with nothing said AND with no registry entry, so the verdict "
+            + "cannot report it either.");
     }
 
     [Fact]

@@ -232,6 +232,51 @@ Two rules follow, and they generalise past these two files:
 - **The marker goes on BOTH copies.** A one-sided note is addressed to the party who does not need
   it. Core's twins now name the guard that enforces them.
 
+### Shape 7 in a memory bound: #4017 and `NodeTypeRecompileAlcLeakTest` (2026-09-11)
+
+Core #4017 (`b128b804d`) changed WHEN a NodeType load context is superseded — only a publish, never
+a read — behind an unchanged `ICompilationCacheService.GetOrCreateLoadContextForPath` signature. The
+pair gate was green and correct to be green: nothing was added or removed. The behaviour it changed
+is asserted in the dependent, by `NodeTypeRecompileAlcLeakTest.RecompilingANodeType_WithALiveInstance_StillReleasesSupersededContexts`
+(Plugins, `Portal hosts (shard 3)`), and Plugins resolves the newest SEALED core set per run — so the
+red arrived when the set carrying #4017 sealed, on every Plugins PR and on Plugins `main`, with no
+Plugins change:
+
+> `Expected 3 to be less than or equal to 2 because a live instance hub legitimately DEFERS an unload, but nothing may make that deferral permanent: …`
+
+**The control that settled causation held the Plugins diff constant and moved only the core set:**
+the same Plugins commit `401fcadb` passed shard 3 at 09:56Z on `3.0.0-ci.8340` and failed it at
+10:09Z on `3.0.0-ci.8345`. Across the 42 shard-3 runs between 05:10Z and 11:32Z the test failed 6 of
+6 on sets 8345/8350/8352 and 0 of 36 on 8323–8340, and #4017 was the only merge between 8340 and
+8345 touching compilation code. The deciding question was then not *who* but *which side is
+wrong*: the assertion was right (the read path had begun keeping a second context over the same
+build), so core was fixed forward and the test kept its bound — see
+[NodeTypeCompilation](../NodeTypeCompilation) → *One build at two paths is ONE generation*.
+
+Two lessons for this shape. **The dependent resolves the SEALED set, so a shape-7 red surfaces at
+seal time, not merge time** — attribute by the set each run's `Resolve the released platform` job
+names, never by the clock. And **a red in the dependent is evidence about core only after the diff
+is held constant** — one commit, two sets.
+
+### A shape-7 suspect that was NOT shape 7: the torn bake input (2026-09-11)
+
+`Hosting/Issue` compiled on core set `3.0.0-ci.8314` and failed with `CS0103 'ObservationQueries'` on a
+new pod of `3.0.0-ci.8372`; the range between them touched source resolution and compile-cache code,
+nothing touched the `shared=` literal, and the obvious reading was shape 7 — behaviour changed behind
+an unchanged signature. It was not. The failing type's own version history showed its definition
+MOVING during the pod's bake (v458 at 18:53:04Z with no declared sources, v462 at 18:53:51Z with the
+`shared=` entry): the bake had compiled the definition it enumerated before a module update over
+the files that landed after it. The deterministic repro fails identically on both ends of the range
+(`45306a33e` and `74d4c8527`), and a fresh pod on the same image baked the type cleanly. Bisecting
+the range would have found nothing.
+
+**The discriminating read before bisecting a shape-7 suspect in a NodeType compile:** read the
+failing type's versions across the failing process's bake window (`get_versions`, then
+`get_version` on each side of the window). If the definition moved while the process was baking,
+the verdict was measured against a moving input, and the image range is the wrong place to look.
+The defect and its fix: [the batch bake compiles the definition the mesh holds when it
+compiles](../NodeTypeCompilation).
+
 ### 🚨 Shape 7 in the by-hand sweep: a `!` on the WRONG receiver hides the site (#3321)
 
 Shape 7 has no gate, so the only control is a **by-hand sweep of the dependents**. This is about how

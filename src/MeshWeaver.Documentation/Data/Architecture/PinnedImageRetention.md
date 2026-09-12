@@ -7,6 +7,16 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Pinned Image Retention
 
+> **Policy superseded by #3842 (2026-09-09).** Module repositories must resolve the
+> released platform at build time, without committed platform pins or staleness gates.
+> This page records the old incident and the protection code still deployed during
+> migration; its statements that every satellite must pin are historical, not guidance
+> to restore pins. The current contract is
+> [Released Artifact Retention](/Doc/Architecture/ReleasedArtifactRetention).
+> Existing locks must not be released merely because de-pinning removes their source
+> declarations. The replacement inventory must first account for published releases,
+> running portals, active builds and supported official releases.
+
 **A container registry's retention policy and a CI pin are two rules about the same bytes, and
 nothing was reconciling them.** On 2026-09-05 the `meshweaver` registry's nightly purge deleted the
 manifests `MeshWeaver.Education`'s `main` pinned. Every run of that repo's `Disposable-mesh gate`
@@ -710,6 +720,7 @@ the whole failure in one sentence.
 
 ## See also
 
+- [ArtifactRetentionInterlock](/Doc/Architecture/ArtifactRetentionInterlock) — the mechanism this page's job became: three axes (the third asks each installation what it is RUNNING), a completeness verdict that refuses rather than protecting less, and the TAG lock this page's manifest lock does not provide
 - [Image Cleanup](../ImageCleanup) — hand-pruning ACR safely, and the live-keeper rule this page extends from deployments to CI pins
 - [Module Versioning](../ModuleVersioning) — what a pin is, and why it is supposed to sit still
 - [Module Build Architecture](../ModuleBuildArchitecture) — pins move as one set, deliberately and rarely

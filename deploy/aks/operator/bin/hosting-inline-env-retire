@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+# hosting-inline-env-retire --namespace <ns> --retire <KEY>=<shadowed source> [--retire …]
+#                           [--deployment memex-portal-deployment] [--container memex-portal]
+#
+# Remove inline `env:` entries from the portal Deployment — the entries a Hosting/Deployment record
+# marks RETIRED (`inlineEnv[].retiredBy`) — and only after proving, in the cluster and immediately
+# before the write, that the pod falls through to the SAME value.
+#
+# 🚨 WHY THIS EXISTS. An inline entry is out-of-band by construction: the chart never renders one,
+# and `helm upgrade` never removes one (three-way merge removes only what helm previously OWNED —
+# Doc/Architecture/ChartDriftSemantics). So a key the record retired stayed on the pod spec for
+# ever, and the only instrument was `set env deploy/<name> <KEY>-` from a laptop — the break-glass
+# write the 2026-09-08 rule retired. MeshWeaver#3201 is the worked example: a plugin-registry
+# credential in plaintext on both production portals' pod specs, shadowing the Key Vault copy, with
+# no API action able to take it off (MeshWeaver.Plugins#1593). This is the cluster half of the
+# Reconcile's `RetireInlineEnv` remedy. WHICH keys, in what order, and the record-side refusals (a
+# sole source, a credential whose equality was never recorded) are the Hosting plugin's RepairPlan,
+# unit-tested without a cluster; this script holds the checks only the cluster can answer.
+#
+# 🚨 THE RECORDED EQUALITY IS A SNAPSHOT, SO IT IS RE-MEASURED HERE. For every key, before anything
+# is written:
+#   * the portal container's envFrom is walked IN ORDER and the LAST source carrying the key is the
+#     fall-through (Kubernetes keeps the last envFrom on a clash). None → the inline entry is the
+#     SOLE source, and removing it would BLANK the key: refused.
+#   * that source must be the one the record names (`--retire KEY=<shadowed source>`). An equality
+#     recorded against a source the pod would not read has measured nothing: refused.
+#   * the inline value and the fall-through value are compared and must be EQUAL. DIFFER: refused.
+# Only LENGTHS and the VERDICT are ever printed. A value never reaches stdout, stderr, a
+# `::hosting::` line, the patch or an argv — the 2026-08-30 exposure came from an audit that
+# selected `.value` while asking "is this stored in the clear?".
+#
+# 🚨 IT REFUSES DURING A ROLLOUT. Removing an entry rewrites the pod template, which starts a new
+# rollout and supersedes the one in flight: the pods serving now would keep the entry, and the new
+# ones would meet whatever is holding the current rollout (MeshWeaver#3201, 2026-09-08: both portals
+# held at the bake gate). A Deployment that is not settled — observedGeneration behind, a replica
+# not updated or not available, or paused — is a refusal before any Secret is read.
+#
+# 🚨 EVERY CONTAINER. The language-gate sidecars carry no `envFrom` and the chart renders exactly
+# MESH_GRPC_URL and MESH_GATE_ADDRESS on them, yet a whole-Deployment `set env` once copied the
+# portal's inline entries — credential included — onto both. A retired key is removed from every
+# container that carries it, in ONE patch (one new ReplicaSet), guarded by JSON-patch `test` ops on
+# the Deployment's resourceVersion and on each entry's NAME: a concurrent edit makes the patch fail
+# instead of removing the wrong entry. One refused key refuses the whole run — nothing is retired
+# halfway.
+#
+# IDEMPOTENT: a key no container carries is reported absent and nothing is written; a run with
+# nothing to remove does not roll the Deployment. The rollout this starts is WAITED FOR by the plan
+# step that follows, and the run ends in the same re-audit and generation check as every Reconcile.
+#
+# Output contract (the ::hosting:: lines):
+#   inline_env_retired=<n>      keys removed from the pod spec — read back, not assumed
+#   inline_env_absent=<n>       retired keys no container carried any more
+#   inline_env_retire=dry-run   a rehearsal: every check ran, nothing was written
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-inline-env-retire"
+
+namespace="" deployment="memex-portal-deployment" container="memex-portal"
+keys=() shadows=()
+while [ $# -gt 0 ]; do
+  flag="$1" value="${2:-}"
+  # Shift the value only when there is one: a trailing flag with no value must reach the
+  # need_flag refusal below, not spin on a `shift 2` that cannot shift.
+  if [ $# -gt 1 ]; then shift 2; else shift; fi
+  case "$flag" in
+    --namespace)  namespace="$value" ;;
+    --deployment) deployment="$value" ;;
+    --container)  container="$value" ;;
+    --retire)
+      [[ "$value" == *=* ]] \
+        || hosting::die "--retire '${value}' is not KEY=<shadowed source> — the record names what every retired entry falls through to"
+      keys+=("${value%%=*}")
+      shadows+=("${value#*=}") ;;
+    *) hosting::die "unknown argument '${flag}'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name deployment "$deployment"
+hosting::safe_name container "$container"
+[ "${#keys[@]}" -gt 0 ] \
+  || hosting::die "missing required flag --retire — name at least one KEY=<shadowed source>: the record's inlineEnv entries that carry retiredBy"
+
+i=0
+while [ "$i" -lt "${#keys[@]}" ]; do
+  k="${keys[$i]}" s="${shadows[$i]}"
+  [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] \
+    || hosting::die "key '${k}' is not a plain environment-variable name — refusing to interpolate it"
+  [ -n "$s" ] \
+    || hosting::die "${k} names no shadowed source — an inline entry with no shadow is the SOLE source of its key, and removing it would BLANK the key; the record must name what it falls through to"
+  hosting::safe_name "shadowed source of ${k}" "$s"
+  j=0
+  while [ "$j" -lt "$i" ]; do
+    [ "${keys[$j]}" != "$k" ] || hosting::die "key '${k}' is named twice — one --retire per key"
+    j=$((j + 1))
+  done
+  i=$((i + 1))
+done
+
+command -v jq >/dev/null 2>&1 \
+  || hosting::die "jq is not installed in this image — the Deployment and its sources are JSON and cannot be measured without it"
+
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+
+# ── the Deployment as it is, and whether it is settled ─────────────────────────────────────────
+dep="$(hosting::read kubectl -n "$namespace" get deployment "$deployment" -o json 2>"$err")" \
+  || hosting::die "could not read deployment/${deployment} in ${namespace} ($(tr -d '\n' < "$err"))"
+
+rollout="$(printf '%s' "$dep" | jq -r '[
+    (.metadata.generation // 0), (.status.observedGeneration // 0), (.spec.replicas // 1),
+    (.status.replicas // 0), (.status.updatedReplicas // 0), (.status.availableReplicas // 0),
+    (.status.unavailableReplicas // 0), (if .spec.paused == true then 1 else 0 end)
+  ] | map(tostring) | join(" ")')" \
+  || hosting::die "could not read the rollout state of deployment/${deployment}"
+read -r gen observed want total updated available unavailable paused <<<"$rollout"
+if [ "$observed" -lt "$gen" ] || [ "$total" -ne "$want" ] || [ "$updated" -ne "$want" ] \
+   || [ "$available" -ne "$want" ] || [ "$unavailable" -ne 0 ] || [ "$paused" -ne 0 ]; then
+  paused_note=""
+  [ "$paused" -eq 0 ] || paused_note=", PAUSED"
+  hosting::die "a rollout is in progress on deployment/${deployment} in ${namespace} (generation ${gen}, observed ${observed}; ${want} desired, ${total} running, ${updated} updated, ${available} available, ${unavailable} unavailable${paused_note}). Removing an env entry rewrites the pod template, which starts a NEW rollout and supersedes this one — the pods serving now keep the entry and the new ones meet whatever is holding this one. Hold until it settles, then re-run. Nothing was changed."
+fi
+hosting::log "rollout   deployment/${deployment} is settled (generation ${gen}, ${available}/${want} available)"
+
+printf '%s' "$dep" | jq -e --arg c "$container" 'any(.spec.template.spec.containers[]; .name == $c)' >/dev/null \
+  || hosting::die "deployment/${deployment} has no container '${container}' — the fall-through is measured on the portal container, so there is nothing to measure against"
+
+# ── helpers that stay inside pipes ──────────────────────────────────────────────────────────────
+# 🚨 These two print a VALUE on stdout, so they are only ever the head of a pipe into wc/sha256sum.
+# Neither result is printed either: a length is, a digest is only compared.
+inline_value() {
+  printf '%s' "$dep" | jq -j --arg c "$container" --arg k "$1" \
+    '[.spec.template.spec.containers[] | select(.name == $c) | .env[]? | select(.name == $k) | (.value // "")] | last // ""'
+}
+shadow_value() {  # kind object-json data-key
+  case "$1" in
+    secret)    printf '%s' "$2" | jq -j --arg k "$3" '.data[$k] // ""' | base64 -d ;;
+    configmap) printf '%s' "$2" | jq -j --arg k "$3" '.data[$k] // ""' ;;
+  esac
+}
+source_json() {  # kind name
+  case "$1" in
+    secret)    hosting::read kubectl -n "$namespace" get secret "$2" -o json ;;
+    configmap) hosting::read kubectl -n "$namespace" get configmap "$2" -o json ;;
+    *)         return 1 ;;
+  esac
+}
+
+# The portal container's envFrom, IN ORDER, as kind|name|prefix|optional. `|` rather than a tab:
+# tab is IFS whitespace, and consecutive tabs would collapse an empty prefix into the next field.
+env_from="$(printf '%s' "$dep" | jq -r --arg c "$container" '
+  .spec.template.spec.containers[] | select(.name == $c) | .envFrom[]? |
+  if .configMapRef then ["configmap", .configMapRef.name, (.prefix // ""), ((.configMapRef.optional // false) | tostring)]
+  elif .secretRef then ["secret", .secretRef.name, (.prefix // ""), ((.secretRef.optional // false) | tostring)]
+  else empty end | join("|")')"
+
+# ── every key is measured before anything is written ───────────────────────────────────────────
+remove=()
+absent=0
+i=0
+while [ "$i" -lt "${#keys[@]}" ]; do
+  key="${keys[$i]}" shadow="${shadows[$i]}"
+  i=$((i + 1))
+
+  carriers="$(printf '%s' "$dep" | jq -r --arg k "$key" \
+    '[.spec.template.spec.containers[] | select(any(.env[]?; .name == $k)) | .name] | join(", ")')"
+  if [ -z "$carriers" ]; then
+    hosting::log "${key}  not set inline on any container — already retired, nothing to remove"
+    absent=$((absent + 1))
+    continue
+  fi
+
+  refs="$(printf '%s' "$dep" | jq -r --arg k "$key" \
+    '[.spec.template.spec.containers[] | .name as $c | .env[]? | select(.name == $k and has("valueFrom")) | $c] | join(", ")')"
+  [ -z "$refs" ] \
+    || hosting::die "${key} is set from a valueFrom reference on ${refs} — this remedy retires plain inline VALUES; a reference names its own source and is not a shadow. Nothing was changed."
+
+  on_portal="$(printf '%s' "$dep" | jq -r --arg c "$container" --arg k "$key" \
+    '[.spec.template.spec.containers[] | select(.name == $c) | .env[]? | select(.name == $k)] | length > 0')"
+  if [ "$on_portal" = "true" ]; then
+    winner_kind="" winner_name="" winner_key=""
+    while IFS='|' read -r kind name prefix optional; do
+      [ -n "$kind" ] || continue
+      hosting::safe_name "envFrom source" "$name"
+      if [ -z "$prefix" ]; then
+        data_key="$key"
+      elif [ "${key#"$prefix"}" != "$key" ]; then
+        data_key="${key#"$prefix"}"
+      else
+        continue
+      fi
+      if ! obj="$(source_json "$kind" "$name" 2>"$err")"; then
+        [ "$optional" = "true" ] && continue
+        hosting::die "could not read ${kind}/${name}, an envFrom source of ${container} ($(tr -d '\n' < "$err")) — the fall-through cannot be measured, so nothing is removed"
+      fi
+      if printf '%s' "$obj" | jq -e --arg k "$data_key" '(.data // {}) | has($k)' >/dev/null; then
+        winner_kind="$kind" winner_name="$name" winner_key="$data_key"
+      fi
+    done <<EOF_SOURCES
+$env_from
+EOF_SOURCES
+    unset obj
+
+    [ -n "$winner_kind" ] \
+      || hosting::die "${key} is the SOLE source of its value: no envFrom source of ${container} carries it, so removing the inline entry would BLANK the key rather than fall back. Give the key a declared home first (a Key Vault class, or the record's configuration), then re-run. Nothing was changed."
+    [ "$winner_name" = "$shadow" ] \
+      || hosting::die "the record says ${key} shadows '${shadow}', but ${container} would fall through to ${winner_kind}/${winner_name} — the LAST envFrom source that carries it. An equality recorded against a source the pod would not read has measured nothing: correct inlineEnv[].shadows on the record and re-run. Nothing was changed."
+
+    obj="$(source_json "$winner_kind" "$winner_name" 2>"$err")" \
+      || hosting::die "lost ${winner_kind}/${winner_name} while measuring ${key} ($(tr -d '\n' < "$err"))"
+    inline_len="$(inline_value "$key" | wc -c | tr -d ' ')"
+    shadow_len="$(shadow_value "$winner_kind" "$obj" "$winner_key" | wc -c | tr -d ' ')"
+    inline_sum="$(inline_value "$key" | sha256sum | cut -c1-64)"
+    shadow_sum="$(shadow_value "$winner_kind" "$obj" "$winner_key" | sha256sum | cut -c1-64)"
+    unset obj
+    if [ "$inline_sum" != "$shadow_sum" ]; then
+      hosting::die "${key}: DIFFER (inline ${inline_len} bytes, ${winner_kind}/${winner_name} ${shadow_len} bytes) — removing the inline entry would change the value the portal reads. Promote the IN-USE value into the declared source first (never the other way round, and never mint a replacement as part of a cleanup), then re-run. Nothing was changed."
+    fi
+    unset inline_sum shadow_sum
+    hosting::log "${key}  EQUAL (len ${inline_len}) — ${container} falls through to ${winner_kind}/${winner_name}"
+  else
+    hosting::log "${key}  not set on ${container} — the portal already reads its declared source"
+  fi
+
+  hosting::log "${key}  inline on: ${carriers}"
+  remove+=("$key")
+done
+
+if [ "${#remove[@]}" -eq 0 ]; then
+  hosting::log "nothing to remove — the Deployment is not rolled"
+  hosting::say inline_env_retired 0
+  hosting::say inline_env_absent "$absent"
+  exit 0
+fi
+
+# ── one guarded patch: names and paths only, never a value ─────────────────────────────────────
+keys_json="$(printf '%s\n' "${remove[@]}" | jq -R . | jq -s -c .)"
+rv="$(printf '%s' "$dep" | jq -r '.metadata.resourceVersion // ""')"
+[ -n "$rv" ] \
+  || hosting::die "deployment/${deployment} reports no resourceVersion — the patch is guarded on it, so it is refused rather than written unguarded"
+# Descending entry index within each container, so an earlier removal never shifts a later path.
+patch="$(printf '%s' "$dep" | jq -c --argjson keys "$keys_json" --arg rv "$rv" '
+  [ .spec.template.spec.containers | to_entries[] | .key as $ci | (.value.env // []) | to_entries[]
+    | select(.value.name as $n | any($keys[]; . == $n))
+    | {ci: $ci, ei: .key, name: .value.name} ]
+  | sort_by(.ci, -.ei)
+  | [{op: "test", path: "/metadata/resourceVersion", value: $rv}]
+    + map({op: "test", path: "/spec/template/spec/containers/\(.ci)/env/\(.ei)/name", value: .name},
+          {op: "remove", path: "/spec/template/spec/containers/\(.ci)/env/\(.ei)"})')"
+unset dep
+
+hosting::do kubectl -n "$namespace" patch deployment "$deployment" --type json -p "$patch" >/dev/null \
+  || hosting::die "could not patch deployment/${deployment} — a failed 'test' op means the Deployment changed after it was measured (resourceVersion ${rv}); re-run to measure it again"
+
+if hosting::dry; then
+  hosting::say inline_env_retired 0
+  hosting::say inline_env_absent "$absent"
+  hosting::say inline_env_retire dry-run
+  exit 0
+fi
+
+# ── read it back: the patch is not the outcome, the pod spec is ─────────────────────────────────
+after="$(hosting::read kubectl -n "$namespace" get deployment "$deployment" -o json 2>"$err")" \
+  || hosting::die "lost deployment/${deployment} after patching it ($(tr -d '\n' < "$err"))"
+left="$(printf '%s' "$after" | jq -r --argjson keys "$keys_json" \
+  '[.spec.template.spec.containers[] | .name as $c | .env[]? | select(.name as $n | any($keys[]; . == $n)) | "\($c)/\(.name)"] | join(", ")')"
+unset after
+[ -z "$left" ] \
+  || hosting::die "the patch was accepted but deployment/${deployment} still carries ${left} — refusing to report a retirement that did not happen"
+
+hosting::log "retired   ${remove[*]} from every container (read back); the rollout this started is waited for by the next step"
+hosting::say inline_env_retired "${#remove[@]}"
+hosting::say inline_env_absent "$absent"

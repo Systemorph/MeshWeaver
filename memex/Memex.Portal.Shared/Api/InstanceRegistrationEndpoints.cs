@@ -31,6 +31,10 @@ public static class InstanceRegistrationEndpoints
     public static IEndpointRouteBuilder MapInstanceRegistration(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost(InstanceRegistrationPayloads.Route, Register).AllowAnonymous();
+        // Every host that registers instances also lets them ROTATE and REVOKE their keys, here, on
+        // the registry that holds them (MeshWeaver#2802) — mapped from this one call so no host can
+        // serve registration while the key lifecycle 404s.
+        endpoints.MapInstanceKeyRotation();
         return endpoints;
     }
 

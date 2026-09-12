@@ -8,6 +8,14 @@ icon: /static/NodeTypeIcons/code.svg
 
 # NodeType Compilation & Releases
 
+**Compatibility follows the APIs used, not a fixed platform version**
+([Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy), maintainer clarification
+2026-09-09). Reuse a compiled artifact only when its cache contract permits it; otherwise compile
+the source against the current platform and installed dependencies. A different build identity
+alone is a cache miss, not proof of an incompatible feature and not a reason to pin the running
+platform. Diagnose concrete missing types, changed member contracts and compiler/load failures.
+The explicit `Modules:RequirePrebuilt` policy remains a separate operational choice.
+
 A **dynamic NodeType** carries its behaviour as C# source (`Source/*.cs`) plus a
 `configuration` lambda — and that source is compiled **at runtime, on demand**.
 You never redeploy the portal to add or change a NodeType. This page is the
@@ -288,6 +296,11 @@ node, its version bumps. The mismatch against the snapshot marks the NodeType
 dirty and triggers a recompile automatically — you never invalidate a cache by
 hand.
 
+A disk-cache candidate must also match the generated input for the captured source/test and
+configuration snapshot. Its DLL completion time alone cannot cover an edit made while an earlier
+compile was running. See [Compile Cache Input Freshness](../CompileCacheInputFreshness) for the
+executed stale-byte/current-stamp regression and the unchanged-input cache control.
+
 ### Source and test queries — and naming them
 
 Which Code nodes feed a compile is declared on `NodeTypeDefinition.Sources` /
@@ -375,6 +388,7 @@ just a list:
 |---|---|---|
 | Established, non-empty | every query answered, here are the sources | compile |
 | Established, **empty** | every query answered and matched nothing (sources deleted, or a configuration-only type) | compile — a failure then classifies `NoSources`, which does not gate a rollout |
+| Any, on a type its repository **retired** | the definition carries `pendingRetirement` (held for its remaining instances), or the definition node no longer exists | a failure classifies `Retired` / `Removed` — content verdicts that never gate; see [Dangling NodeTypes](../DanglingNodeTypes) → *The bake gate* |
 | **Unestablished** | at least one query errored or never answered | **refuse**: throw `SourceDiscoveryUnavailableException`, stamp `CompilationStatus.Unavailable` |
 
 A failed leg used to be swallowed (`.Catch(_ => empty)`), so the surviving legs' **partial** set
@@ -1430,6 +1444,159 @@ hub-disposal cascade on `type/AppendDemo` on 09-07; `CompileStateMirror` satelli
 Adding a fifth read-probe would not change that; leg 4 and the split-arm run are the two instruments
 left, and they measure different things — mechanism and population.
 
+#### 2026-09-10 — the first `flat=EMITS` in the wild, a local negative, and the control NO leg has ever been
+
+MeshWeaver.Plugins run [`34519677252`](https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/34519677252),
+job `103014057395`, `Portal hosts (shard 2)`, PR #1630. Runner `ubuntu-24.04`, **runtime `10.0.12`,
+SDK `10.0.401`, `linux-x64`** (read off the job's own `dotnet-install` lines, not assumed).
+
+| reading | count |
+|---|---|
+| `canary=BELOW-ROSLYN` | **64** |
+| `PROCESS CANNOT EMIT (#890)` | **64** (job log) |
+| `dissect=READS-HEALTHY symbol:OK cci:OK` | **64** |
+| `flat=` verdict | **`flat=EMITS`** |
+| distinct failed tests / classes | **14 / 8** |
+
+Both legs threw at `NamedTypeSymbol.Microsoft.Cci.ITypeDefinitionMember.get_ContainingTypeDefinition`,
+byte-identical to every prior occurrence. **`flat=EMITS` is the reading leg 4 was built for**: a
+top-level, non-generic, member-less class emitted fine in the same process microseconds after the
+nested source could not, so this process was **not emit-dead** and the fault needs the recursion.
+Note that this contradicts the 2026-09-08 occurrence's `flat=SAME-FRAME` — the flat leg's answer is
+**not constant across occurrences**, so neither branch may be quoted as a property of the defect.
+
+🚨 **ALC churn is refuted a third time, and this time by a whole-process constant rather than a
+before/after comparison.** All **51** `INIT_MEM`/`DISPOSE_MEM` records of pid `3233` — from
+`19:25:08.743` to the onset at `19:26:44.700` — read `alc=1`. Not "one at onset": one throughout.
+`asm` moved 110 → 121, `gc2` 2 → 12, RSS 149 → 526 MiB. Onset landed 462 ms into
+`CompileSingleDriverConsistencyTest.ConcurrentRequests_OnFreshNodeType_BothSucceedConsistently`, the
+first test of its class, ~96 s into the host — and per the rule above that says nothing: onset is the
+first emit attempted after the fault, and the test that owns it is whichever one was running.
+**A concurrency test being first is not evidence that concurrency is the trigger.**
+
+🚨 One caveat that applies to every occurrence report on this thread: **a compile that returns real
+diagnostics does not prove the metadata writer was healthy.** `Emit` returns before the writer runs
+when the compilation has errors, so the deliberately-broken NodeTypes (here
+`PreWarmTestBatchDown/Broken` at `19:25:24`, a correct `CompilationException`) establish that parse
+and bind work — never that the writer did.
+
+##### `exit 124` is arithmetic, not a second fault
+
+Measured end to end on this job. Onset `19:26:44.700`; last `PROCESS CANNOT EMIT` `19:38:38.462`; the
+final test — `CellSurfaceScriptingSeamTest.CellSurfacePackType_IsCallableByBareName_FromAKernelCell` —
+failed at `19:39:37.597` with *"Expected the observable to emit a value matching the predicate within
+60s"* and its own `[WATCHDOG-SOFT] … ran 60.0s`; the mesh then disposed **clean in 14 ms** ("all
+pooled I/O joined, async dispose queue drained"); the harness killed the host at `19:40:03`.
+
+So after the fault every compile-dependent test burns its full reactive budget instead of finishing
+in ~1 s, and thirteen minutes of that exhausts the wall-clock cap. **The 124 is the accumulated cost
+of the poisoning, not an independent hang** — which is exactly why raising the cap is refused: it
+would buy more 60-second waits and end the same way, one verdict later.
+
+##### A local negative worth having: the emit loop alone does not reach the state
+
+Run in Docker on the CI runtime — `mcr.microsoft.com/dotnet/sdk:10.0` resolving **SDK 10.0.401 /
+runtime 10.0.12**, the same pair CI installs — driving `EmitPipeline`'s own shapes: the canonical
+parse options (`DocumentationMode.Diagnose`), the canonical compilation options
+(`DynamicallyLinkedLibrary` + `OptimizationLevel.Debug` + `Platform.AnyCpu`), `Emit` to memory with a
+portable PDB and an XML doc stream, 175 `CreateFromFile` references off
+`TRUSTED_PLATFORM_ASSEMBLIES`, six rotating nested-generic source shapes, 4 threads, and a collectible
+`AssemblyLoadContext` loaded from the emitted bytes and unloaded every 7th emit.
+
+Run on **both** architectures, because a JIT-codegen hypothesis is architecture-specific and an
+arm64-only null would say nothing about a `linux/x64` runner:
+
+| arch | how | emits | failures | elapsed | GC |
+|---|---|---|---|---|---|
+| `linux/arm64` | native | **400,000** | **0** | 144 s | `gc0=80268 gc1=71050 gc2=294` |
+| `linux/x64` | **Rosetta** translation (a `--vz-rosetta` VM), same image, `arch=X64` confirmed in-process | **400,000** | **0** | 276 s | `gc0=82330 gc1=70033 gc2=701` |
+
+**800,000 emits, zero events**, against ~20–40 expected at the measured CI rate (roughly one
+occurrence per 20,000–40,000 compiles). So the null is worth stating: **whatever precedes the fault is
+not in the emit path.** Roslyn, the reference set, collectible-ALC load/unload, GC pressure and
+concurrent emits — on the exact runtime, on CI's architecture — do not reach it.
+
+🚨 **Two traps for whoever repeats this.** First, `--platform linux/amd64` under colima's default
+`qemu-x86_64` binfmt is **not** a usable arm: `dotnet restore` dies with `Segmentation fault (core
+dumped)` and a 4-thread emit loop never reaches its first progress checkpoint. Rosetta (a separate
+`colima start <profile> --vm-type vz --vz-rosetta` profile, so the existing VM is untouched) runs the
+same image at ~1,450 emits/s and emulates x86-64 TSO, so the JIT emits and executes the same x64 code
+CI does. Second, **build the project on the native arch and run the published IL under the emulated
+one** (`FROM --platform=$BUILDPLATFORM … AS build`): MSBuild does not survive the emulation, the
+output is portable, and nothing about the build platform reaches what is executed.
+
+The residual is now the WORKLOAD, not the architecture: the harness is an emit loop, and the CI host
+is a whole mesh test suite. Note that the CI host runs **Workstation** GC — #1605's crash frame is
+`WKS::gc_heap::find_first_object` — which is what the harness ran too, so that is not the difference
+either.
+
+##### 🚨 The control no leg has ever been: the COMPILER itself
+
+Leg 1 varies the `MetadataReference` instances. Leg 2 varies the instances **and** their file
+mappings. Leg 4 varies the source shape. Leg 3 leaves the emit altogether. **All four execute the
+same `Microsoft.CodeAnalysis.dll` and `Microsoft.CodeAnalysis.CSharp.dll`** — the same loaded
+`Assembly` objects, the same mapped image, the same JIT-compiled native code, the same statics. Those
+two files contain every symbol the verdict names — and **the fault spans both of them**, measured by
+scanning the 5.9.0 assemblies rather than assumed:
+
+| symbol | `Microsoft.CodeAnalysis.dll` | `Microsoft.CodeAnalysis.CSharp.dll` |
+|---|---|---|
+| `FullMetadataWriter`, `GetConsolidatedTypeParameters` (the caller, and the two stack frames) | **present** | absent |
+| `AsNestedTypeDefinitionImpl` (the guard that must answer FALSE) | absent | **present** |
+| `ITypeDefinitionMember` (the getter that throws, on `NamedTypeSymbol`) | present | **present** |
+
+So `BELOW-ROSLYN`'s closing sentence — *"the broken state is below Roslyn (CLR heap / JIT / GC), so no
+reference-set change can fix it"* — reads **"not the references"** as **"not Roslyn"**, and there is a
+third possibility sitting between them that no leg has ever varied: *Roslyn's own image, mapping or
+native code, in this process*. That would produce every observation on this thread — total, permanent,
+process-scoped, on freshly parsed source, with parse and bind healthy and direct symbol reads correct
+(reflection dispatches to whatever native code the method currently has, which need not be the copy
+the writer's call site reaches).
+
+**This is the third time the same reasoning error has been found on this issue**, and the pattern is
+now explicit enough to name: *a control is only a control for what it does not share.* Leg 2 found it
+in the CoreLib file mapping; leg 3's polarity note found it in the reads the dissection made; this
+finds it in the compiler binary that every leg shares by construction.
+
+**Leg 5 — a pristine COMPILER control — is the experiment that settles it**, and it is the exact
+analogue of what leg 2 did for CoreLib:
+
+1. Create a collectible `AssemblyLoadContext` and load **both** Roslyn assemblies into it from
+   *freshly read bytes* (`LoadFromStream(new MemoryStream(File.ReadAllBytes(location)))`) — fresh
+   managed bytes, no shared mmap, no shared page-cache pages, and a fresh JIT from IL.
+   Per the table above this is not a detail: the caller and the guard live in **different**
+   assemblies, so loading either one alone is a dead probe that leaves half the fault on the shared
+   copy.
+2. Drive the same `EmitCanarySource` through the private copy by reflection and record the outcome.
+
+| verdict | what it settles |
+|---|---|
+| `compiler=PRIVATE-COPY-EMITS` | a second, freshly loaded and freshly JIT-compiled Roslyn emits the shape the shared one cannot ⇒ the fault travels with **this process's copy of the compiler**, not with the CLR heap. `BELOW-ROSLYN`'s "below Roslyn" is then void, the `dotnet/runtime` venue is wrong, and the search moves to the image, its mapping, or the native code produced for it |
+| `compiler=PRIVATE-COPY-THREW@<same frame>` | the compiler binary is intact and freshly compiled code fails identically ⇒ **the first evidence that actually earns `BELOW-ROSLYN`**, and the first thing a `dotnet/runtime` report could carry that is not an absence |
+| `compiler=UNAVAILABLE(…)` / `NOT-RUN` | the private copy could not be built or driven — its own verdict, never folded into either of the above (the same rule leg 2's `INCONCLUSIVE` follows) |
+
+Two residuals, stated because the leg is only a control for what it does not share: the BCL,
+`System.Collections.Immutable` and `System.Reflection.Metadata` still resolve to the Default context,
+and the private copy starts cold at tier 0 with no profile — so a `PRIVATE-COPY-EMITS` on a single
+emit does not by itself separate "fresh mapping" from "fresh native code". The follow-up is one more
+step, not another design: repeat the private emit until it tiers up. If it then fails, the fault is
+in what tiering produces; if it never does, it is in the shared image or its mapping.
+
+🚨 **This also supersedes the split-arm `DOTNET_TieredPGO=0` run as the cheapest next measurement.**
+That experiment needs ~5 events in the control arm for a one-sided Fisher *p* ≈ 2⁻ᵃ to mean anything —
+~500 control runs at ~1 %/run, ~1000 runs total. Leg 5 asks the same question of the **next single
+occurrence**, for one ~10 MB read on a path that is already dead.
+
+##### Is this the same root cause as the #613/#1605 SIGSEGV? Consistent — not established
+
+Both are on runtime **10.0.12**, `linux-x64`, and both are *"one value is wrong while everything around
+it reads correct"*. But #1605 SIGNALS (a `SIGSEGV`, a `createdump` core, a zeroed MethodTable word on a
+live object in `WKS::gc_heap::find_first_object` — see
+[Debugging Native Crashes](/Doc/Architecture/DebuggingNativeCrashes)) and #890 never signals; and #890's
+`READS-HEALTHY` + `flat=EMITS` say the object graph the writer is walking is intact, which is the
+opposite of heap corruption. **Leg 5 is also the discriminator here**: `PRIVATE-COPY-EMITS` puts #890
+in the compiler's own image and separates the two; `PRIVATE-COPY-THREW` leaves them joinable.
+
 ### Framework-version freezing
 
 A compiled NodeType DLL references the MeshWeaver framework assemblies present
@@ -1546,7 +1713,7 @@ Every rule is a KEEP rule and they are ORed — a generation survives if **any**
 | it is the sweeping process's own framework | a failed claim write must never let a pod delete what it is loading |
 | a claim younger than `ClaimTtl` (24 h) names it | another pod is still running that image |
 | it is among the `KeepGenerations` (3) most recently written | rollback headroom — and the rollout that first introduces claims, where the outgoing image is not asserting one yet |
-| its newest file is younger than `MinimumAge` (7 d) | a backstop bounding what a wrong answer from either of the above can do |
+| its newest file is younger than `MinimumAge` (at least 30 d) | preserve 30 days of history regardless of newer generation count; configuration may extend but cannot shorten this floor |
 
 Anything the sweep cannot attribute to a generation — the claim files, an untagged pre-2026-06 DLL,
 any foreign file — is counted and **never deleted**, and any error reading the tree or the claims
@@ -1658,6 +1825,195 @@ pods far above their siblings in BOTH memory and CPU in `kubectl top pods` is th
 `Hosting/InstanceAction` (the rolling restart grace-drains each pod and the Deployment replaces
 it), and read #2194.
 
+### 🚨 A THIRD root holds a generation, and neither eviction reaches it — the kernel's reference memo
+
+`CompilationCacheService` evicts superseded `NodeAssemblyLoadContext`s, and
+`Modules:AutoRecycleOnStaleBuild` converges the instances that root them. Both act on the ALC.
+Neither touches the **native metadata mapping** a Roslyn `PortableExecutableReference` owns — and
+`KernelScriptReferences.Materialized`, the process-global memo that makes ~350 script references
+cost one materialization instead of one per kernel session (#2480 / #2578), was keyed by absolute
+path with no eviction and no bound.
+
+For framework assemblies that is exactly right: their paths are stable, so the key space is the
+assembly set. For NodeType assemblies it is not a bound at all. `EmitPipeline.EmitToDiskWithRetry`
+publishes every recompile into a brand-new `{nodeName}_{ticks}_{guid}/` directory that is never
+reused, and the cell-surface seam (`KernelExecutor.EnsureCellSurfaceReferences`, #1649) feeds
+exactly those paths in through `GetOrCreateFromFile`. `MetadataReference.CreateFromFile`
+memory-maps the PE, and the entry survives **both** the ALC's `Unload()` **and** the file's
+deletion — so one recompile of a `cellSurface: true` NodeType that any session had referenced left
+one more mapping alive for the life of the process, in the same class of memory the eviction above
+exists to reclaim.
+
+The class doc's own NoStaticState compliance claim was half right and half wrong, and the half that
+was wrong is the one the allowlist rested on. *"Holds no `Type`s and no AssemblyLoadContexts — it
+can pin neither meshes nor collectible NodeType contexts"* is true of the **object graph**: no
+managed reference into the collectible context is retained, which is why nothing here ever showed
+up as a pinned ALC. *"Bounded by the set of assemblies on disk"* is true only if that set is
+bounded, and for per-recompile release directories it is not. **The fix makes the claim true rather
+than restating it**: a file that belongs to a COLLECTIBLE load context is materialized as an
+ordinary, UNMEMOIZED reference whose lifetime is the caller's — for the cell-surface seam that is
+the kernel SESSION, which already holds the generation's `CellSurfaceAssembly.Lease` and drops both
+when the session dies. The memo keeps exactly the sharing it was written for, over stable paths
+only, and `KernelScriptReferences.IsMemoized(path)` makes the bound assertable from a test — per
+PATH rather than as an entry count, because the count moves with whatever else the shard loaded.
+
+The same file carried a second generation-ambiguity: `TryResolveByIdentity` matched the live
+AppDomain on **simple name only**, without the `IsCollectible` filter its sibling at
+`MaterializeCurrentAssemblies` carries for a documented reason. Superseded generations linger in
+`GetAssemblies()` until they are collected, so which one a script compilation got was whichever the
+enumeration reached first — arbitrary, possibly stale, and indistinguishable from the current one
+at the call site (the `CS0433`-between-two-generations shape). It now declines collectible
+assemblies and answers `null`, which sends the caller to the sibling probe and then to Roslyn's own
+resolver. A cell-surface set a session legitimately sees is declared per session and added to its
+`ScriptOptions` explicitly, so it never needed this path.
+
+### 🚨 A READ must never re-order generations — only a PUBLISH supersedes
+
+`EvictSupersededContexts` is what bounds `_loadContexts` to the current generation per NodeType, and
+its trigger used to be *"a path-keyed context was newly created"*. That is a proxy for *"a recompile
+published"*, and it is wrong for every **reader**: an assembly-hydration scan of a package's SHIPPED
+build (`GetConfigurationsFromExistingAssembly`) and a kernel session resolving a cell-surface pack
+(`CellSurfaceAssemblyProvider`) both create a path-keyed context, and neither is evidence about
+which build is current. Under the old trigger either would supersede the generation a concurrent
+rebuild had just published.
+
+That alone would be a correctness wart. What made it an outage-shaped defect is that `PinForScan`
+**re-resolves** when a pin is refused — the recovery loop that exists so a transient supersession
+cannot park a NodeType (#1151). The re-resolve created a context, and creating a context evicted the
+peers. So two scans of two generations of ONE NodeType each destroyed the context the other had just
+created:
+
+| step | scan A (`pathA`) | scan B (`pathB`) |
+|---|---|---|
+| 1 | resolves → creates ctxA, evicts ctxB | |
+| 2 | | resolves → creates ctxB, evicts ctxA |
+| 3 | `Pin()` refused → re-resolves, evicts ctxB again | |
+| 4 | | `Pin()` refused → re-resolves, evicts ctxA again |
+| … | | |
+| n | attempt 3 → `ObjectDisposedException` escapes | |
+
+`CompileResultFromAssembly` catches that throw, records `CompilationStatus.Error`, and the watcher
+**PARKS** the NodeType — a millisecond-wide race turned into `compile:Failed` for a package whose
+source is fine. Measured as #4013: `PluginGateRunnerTest.SelfTypedRootWithStaleCompileStamp` (the
+rebuild publishes while the shipped stale stamp is read — exactly two generations, exactly two
+scans) failed **1 of 362** in a merge-queue group build whose PR run was 7 049 tests / 0 failed on
+the same commit, dequeuing a documentation-only PR.
+
+The fix names the trigger honestly. `ICompilationCacheService` now has two doors:
+`GetOrCreateLoadContextForPath` is a READ and supersedes nothing, and `PublishLoadContextForPath`
+supersedes — reached only through `PinForScan(..., publishesTheBuild: true)` from the post-emit scan,
+the one moment a new generation actually exists. A **retry never supersedes**, whoever asked: a
+recovery that destroys its peers is what turned one supersession into a ping-pong. The eviction now
+fires where a generation is born rather than wherever somebody happened to ask for an unfamiliar
+path.
+
+🚨 **What the narrowed trigger costs — stated, not claimed away.** The key space that grows
+*without bound* is the per-emit `{nodeName}_{ticks}_{guid}/` directory set, and every emit
+publishes, so that half is evicted exactly as before. What is no longer evicted the moment it
+appears is a generation a process only **hydrated**: an `IAssemblyStore` path is keyed
+`v{version}-{frameworkTag}-{hash}.dll` and is first-write-wins per version, so a silo reading a
+version another silo compiled keeps the previous version's context until the NodeType hub disposes
+(`UnloadNodeContexts`, which `Modules:AutoRecycleOnStaleBuild` drives on a stale build). That
+residue is bounded by the number of VERSIONS one hub outlives, not by recompiles — and it is the
+deliberate price of the correctness clause. A read that superseded would evict the CURRENT
+generation's context and then re-create one under the same path, putting **two live ALCs behind one
+file**: the two-generations split the section below is about, manufactured by the reclaim itself.
+
+🚨 **What was NOT changed, deliberately.** The issue's suggested shape was *"treat an unloading
+context as a cache miss in `Pin()`"*. `PinForScan` already does exactly that — twice — and the
+residue was the exhaustion, not the refusal. Making `Pin()` itself succeed on an unloading context
+would be the wrong repair in the other direction: `Pin()`'s two-state test and `IsClosedToLoads()`'s
+three-state test answer **different questions** (*may I START a scan?* vs *may I LOAD inside a scan
+I already hold?*), and both are right. With a pin outstanding, `Dispose` is provably still waiting,
+which is why a LOAD is safe; with none, the drain may already be over, so a new scan would be the
+`TypeLoadException '…format is invalid'` tear the pin exists to prevent. The refusal is the
+contract; the recovery was the defect.
+
+### 🚨 One build at two paths is ONE generation — a read reuses, it never duplicates
+
+The "narrowed trigger" section above priced its residue at *generations a process only
+**hydrated***, and pictured a foreign silo's build. It missed the commonest hydration of all: the
+process's **own** publish. The post-emit scan publishes from the compile's
+`{nodeName}_{ticks}_{guid}/` directory; `UploadToStoreIfNeeded` then copies those bytes into the
+assembly store as `v{version}-{frameworkTag}-{hash}.dll`; and every instance activation resolves
+the **store** path (`MeshDataSource` / `NodeTypeEnrichmentHelpers` →
+`IAssemblyStore.TryGetAssemblyPath` → `GetConfigurationsFromExistingAssembly`). Two paths, one
+generation. While reads superseded, that read quietly evicted the publish's context. Once they
+stopped, every locally compiled generation got a **second collectible context over identical
+bytes** — and the instance hub's lifetime lease (`LeaseNodeContexts`, which leases *every* context of
+the NodeType) pinned both for the hub's whole life.
+
+Measured by `NodeTypeRecompileAlcLeakTest.RecompilingANodeType_WithALiveInstance_StillReleasesSupersededContexts`
+(MeshWeaver.Plugins, `Portal hosts (shard 3)`), which prints the file each live context was loaded
+from:
+
+| | contexts | loaded from |
+|---|---|---|
+| instance activated | 2 | `…/assembly-store…/AlcLeakTest_LeakType/v3-1a9794ba-dd22c75f5a55.dll` **and** `…/mesh-cache…/AlcLeakTest_LeakType_8df1004b5063522_…/AlcLeakTest_LeakType.dll` — the same build |
+| after each of 3 recompiles | 3, 3, 3 | those two, plus the current emit |
+
+Flat, not per-recompile — so not the unbounded curve the assertion's message describes — but a
+doubled pin on every generation a live instance runs, in every monolith and on every replica that
+compiles. The assertion (`≤ 2`: the current build plus the one generation the instance runs) was
+right; the core change was wrong. Across the 42 shard-3 runs from 05:10Z to 11:32Z on 2026-09-11 it
+failed **6 of 6** on core sets 8345/8350/8352 (all carrying #4017, `b128b804d`) and **0 of 36**
+on sets 8323–8340; the same Plugins commit `401fcadb` passed at 09:56Z on 8340 and failed at 10:09Z
+on 8345.
+
+The repair keeps #4013's rule — **a read never supersedes** — and closes the duplicate at its
+source. `ResolveLoadContextForPath`, on a READ of a path it has not seen, asks whether a live
+(not retired) context of the NodeType already serves the same build — **same MVID**, read from the
+loaded assembly or, failing that, from the file's metadata via `ServedBuildIdentity.OfFile` (a header
+read, nothing loaded) — and if so answers that context, aliased under the new path. It is a REUSE:
+nothing is evicted, so the ping-pong above cannot come back through it. Three details make the alias
+safe:
+
+- **Eviction is by CONTEXT, not by key.** A read may alias the store path to the very context a
+  publish is keeping; a key-based evictor would dispose the build it had just published.
+- **A retired context is never aliased.** A publish can retire the context between the search and
+  the alias (its evictor enumerated before the alias key existed); the resolver then drops its own
+  alias and creates a fresh context, exactly as a first read of that path always did.
+- **One lease per context.** `LeaseNodeContexts` leases each context once however many keys name it,
+  so releasing the hub's one lease performs the deferred unload.
+
+No identity ⇒ no alias: an unreadable file, or an in-memory context, resolves a fresh context as
+before. Pinned in core by `ScanPinSupersessionTest.AReadOfTheStoreCopyOfThePublishedBuildIsThatBuildsContext`,
+`…AReadOfASupersededBuildsStoreCopyGetsItsOwnContextAndDoomsNothing` and
+`…AnAliasedGenerationIsLeasedOnceAndReclaimedByTheNextPublish`.
+
+🚨 **What this does NOT close.** A replica that never compiles a type still reads each new VERSION
+another replica published (a different build, a different MVID), and those reader-created contexts
+are still reclaimed only when the NodeType hub disposes — the residue the section above states. The
+alias removes the same-build duplicate; it does not decide which of two *different* builds is current,
+and must not (#4013).
+
+### 🚨 Reading a node's content ACROSS two generations already works — #3911's headline, re-measured
+
+The 2026-09-10 control-instance incident (#3911) reported two collectible builds of
+`Hosting/InstanceAction` in one pod and attributed the dead control plane to
+`node.ContentAs<InstanceActionContent>(…)` returning `null` across them —
+*"`null → Observable.Empty → silence`"*. **That link does not survive measurement.**
+`ObjectAsExtensions.As<T>` recovers a same-SHORT-NAMED foreign type by a JSON round-trip, and it
+does so on the collectible path too, in both directions — asserted against two genuinely
+collectible generations in `TwoCollectibleGenerationsContentReadTest`, which is the case
+`ContentAsForeignAssemblyContentTest` (two static types in one non-collectible assembly) does not
+reach. The collectible branch is the one worth checking, because `PolymorphicTypeInfoResolver`
+deliberately refuses to auto-register a collectible type and formats the discriminator without
+registering it; the round-trip survives that.
+
+So the cross-generation READ was never the silence, and a change aimed at `ContentAs` would have
+moved nothing. The part of #3911 that HAS been answered is the recompile LOOP that produced two
+generations in the first place: a process running a module generation other than the one its
+activation record names ([Module Generation Substitution](../ModuleGenerationSubstitution) —
+`Assembly.LoadFrom` silently returns an already-loaded byte-identical copy from another path, which
+is why `compiledDependencies` disagreed with the runtime and the stale-build kick fired after every
+activation restart).
+
+**#3911 is therefore not closed by either page.** Its third ask — *the NodeType compiler must
+reference the LOADED module generation, not the image's `/app` copy* — is still open, and that page
+is explicit that it does not assert the MVID/generation pairing #3911 reported. What the two pages
+together do settle is which hypotheses are dead: not the read, and not `ContentAs`.
+
 ### 🚨 A LEAVING pod never touches shared NodeType state — the adoption sweep observes host shutdown
 
 The NodeType node is **one record for the whole deployment**. Every generation of pods reads its
@@ -1745,6 +2101,76 @@ that pod's log for `ADOPTION REFUSED`. Pinned by `LeavingHubAdoptionSweepTest`
 record byte-for-byte untouched, and on a live hub adopts.
 
 ---
+
+### 🚨 The batch bake compiles the definition the mesh holds WHEN IT COMPILES (2026-09-11)
+
+A pod's bake sweep enumerates every NodeType definition **once, at its start**
+(`DynamicTypePreWarmer.WarmDynamicTypes` → `DynamicTypesOf`), the batched discovery pass
+(`NodeTypeBatchBake.ResolveSources`) resolves source sets from those enumerated definitions later,
+and the sequential compile reaches each type minutes after that. `BakeOne` used to hand the
+compiler the **enumerated** node together with the **later** source set. A module update landing
+inside that window moves a definition and its files together, and the pair Roslyn received was
+neither the old content nor the new one.
+
+Measured on `memex.systemorph.com`, new pod on `3.0.0-ci.8372` started 18:50Z, while the Hosting
+module moved 1.15 → 1.16 (Plugins `cff9fb34cb`, which added `FleetWatch` and its
+`shared=@Hosting/InstanceAction/Source/ObservationQueries` entry together):
+
+| When (UTC) | `Hosting/Issue` |
+|---|---|
+| 18:53:04 — v458 | no `sources` (the defaults), module 1.15, fingerprint `ca01bf82…` `AdoptedVerified` |
+| 18:53:51 — v462 | `sources` = own `Source` + the `shared=` entry, module 1.16; `FleetWatch` in the source set |
+| ~18:55 — the pod's batch compile | "Executed source queries (2)" (the 1.15 definition) over a set holding `FleetWatch` → `CS0103 'ObservationQueries'` → a CompileError on a previously healthy type → readiness refused ~30 min |
+
+Nothing read anything partially and no resolver dropped the `shared=` entry: v458 genuinely declared
+no sources, and the pod's prebuilt DECLINE of the 1.16 bundle (`d251868c…` against the live
+`ca01bf82…`) was correct when it was taken. A fresh pod on the same image baked the type cleanly.
+It is not a regression of the core range the image moved across either: the repro below fails
+identically on `45306a33e` and on `74d4c8527`.
+
+**The rule now:** `NodeTypeBatchBake.CurrentCompileInput` re-reads the type's row immediately before
+the compile, through the same `IStorageAdapter.Read` the compile stamp already uses (never a routed
+point read, which on a type a sync has just pruned opens the storm-breaker), and compiles THAT row.
+The batch's pre-resolved set is reused only when both witnesses say it is still the set: the row
+declares the very source queries the batch resolved it with, AND the row's own
+`CurrentSourceVersions` record is absent or names exactly the versions the batch holds. Otherwise the
+sources are resolved again from the current queries through the batch's own bounded,
+truncation-checked `RunQuery` (same `DiscoveryUnestablished` invariant), and the row is read once more
+afterwards; a definition that moved AGAIN meanwhile is not compiled. One deadline covers the re-read,
+any re-resolution, the compile and the stamp — the compile gets only the time that is left.
+
+Every "I don't know" is a non-verdict (`TimedOut`, "not evaluated"), never a compile of a pair nobody
+can vouch for: a re-read that faults or runs out of budget, a row that no longer reads as a
+`NodeTypeDefinition`, a current source set that cannot be established, a definition that moved again.
+A row absent from storage is confirmed by a listing and reported `Removed` WITHOUT a compile or a
+stamp — the stamp's insert-if-absent would otherwise re-create the type its repository just pruned.
+
+**What it does NOT establish: an atomic snapshot.** Neither a row read nor a query is a transaction,
+and the version record lags the files by the sources watcher's own latency, so a source edited in the
+last instant before the compile can still be compiled at its earlier version. That residue heals
+itself — `CompiledSources` records what was compiled, the watcher's newer record reads dirty, the type
+rebuilds — and a verdict it produces is the one #1214's recovery watch exists for (see the residue
+note below).
+
+**Test:** `ABakeCompilesTheDefinitionItResolvedTest` (MeshWeaver.Hosting.Test) runs the sweep's own
+enumeration, discovery and compile against a real monolith mesh. Its repro moves a consumer's
+definition between enumeration and compile, adding a single-node `shared=` entry, and expects the
+verdict the CURRENT content earns — `Compiled` for sound content, a gating `CompileError` naming the
+genuine defect for broken content. Without the fix both cases fail with the production text
+(`Executed source queries (2)` … `CS0103 The name 'LibAnswers' does not exist`) on `45306a33e` and on
+`main`; two controls — an unmoved definition compiles from the batch set, and a genuine compile
+error still gates — pass on all three. Three further cases pin the review's findings (#4051): a source
+edited under UNCHANGED queries is compiled as it now stands once its version record moved; a moved
+definition whose current source set cannot be established inside the per-type deadline is `TimedOut`,
+never a `CompileError`; and a type pruned during the sweep is `Removed` and is NOT re-created by a
+stamp.
+
+**Residue, named rather than closed.** A mesh that is itself torn when the compile runs — the file
+has landed and its definition has not — still earns a CompileError, because that is what the content
+IS at that instant. Its cure remains #1214's `WatchForRecovery`, which retracts the regression on a
+fresh usable build on THIS image. Whether that watch can be starved when the type's own hub is hosted
+by a previous-generation pod (whose rebuild is stamped for the old framework) is consistent with this
+incident's ~30-minute hold but was not established here.
 
 ## 🚨 That recompile can FAIL — and nothing upstream can warn you
 
@@ -1844,6 +2270,151 @@ environmental cause of a blind enumeration (an unmigrated database) is refused e
 precisely by `DbVersionGate`. The escape hatch is `PreWarm:AllowUnprovenBake` — it relaxes the
 verdict only, never the record: the phase stays `Faulted` and the payload keeps saying the bake was
 never proven. It cannot waive a real regression.
+
+### 🚨 The pre-prod sweep is ACCESS-FILTERED — it agrees with the gate only over what the sweeper can read
+
+`search 'nodeType:NodeType content.compilationStatus:Error'` reads the same field
+`ClassifyDetailed` branches on, so its VERDICT per row matches the gate's. Its **denominator does
+not**. The sweep runs as the person typing it and the gate runs as the system, and those see
+different sets of rows:
+
+| | runs as | rows considered |
+|---|---|---|
+| `DynamicTypePreWarmer` boot sweep (the gate) | system | every NodeType in every partition on this replica |
+| `search`, `get`, `get_diagnostics` (the pre-prod sweep) | the caller | only the NODES the caller may read |
+
+`IMeshQueryProvider.Query` filters through `ValidateRead`; `IMeshQueryCore.Query` does not
+(`StorageAdapterMeshQueryProvider`, `useSecurityFilter`). So **a NodeType parked at `Error` inside a
+partition the sweeper has no grant on is not counted — the sweep returns a smaller number, never an
+error**, and the two instruments part company exactly where it matters.
+
+🚨 **"Rows the caller may read" is per NODE, not per partition** — a grant can sit on a single node
+below a partition root, so a sweeper denied `Helvetia` may still be shown one NodeType inside it.
+Which is why the denominator has to be counted, never inferred from the list of partitions you can
+open. (`autocomplete` joined this filtered set in #3890 and is *not* a compilation instrument: it
+returns suggestion projections — path, name, node type, icon — and never a `compilationStatus`.)
+
+🚨 **And `get`/`get_diagnostics` answer `Not found` for a node they may not read.** Denied and
+absent are the same string. That is not a hypothetical reading of the code:
+
+> #1391 recorded `BinaryClickerV2/BinaryToggle` at `CompileError` on every boot of the `memex`
+> namespace, and noted in the same thread that *"`BinaryClickerV2` is not visible to an admin MCP
+> read"* — it is a private partition. It was then **closed** on
+> `get_diagnostics @BinaryClickerV2/BinaryToggle → {"status":"Unknown","message":"Not found: …"}`,
+> read as *the type is gone*. It was not gone. Four weeks later the same `CS1929` on the same two
+> source nodes re-surfaced, unchanged, as #3883 — while
+> `search 'nodeType:NodeType content.compilationStatus:Error'` on that portal returned **0**.
+
+**Positive control for "denied, not deleted".**
+
+🚨 **This control used to have a second step that no longer exists, and its removal is the
+point.** `autocomplete '@/<Namespace>/'` ran `RunQueryNodes(…, useSecurityFilter: false)` with the
+caller's identity dropped, so it enumerated names, paths and node types the caller could not `get` —
+which is what made it a witness here, and is also why it was a **disclosure surface**. On
+memex.systemorph.com, 2026-09-10, that drill-down named five `Helvetia/*` nodes, with their titles,
+to an identity whose `get` and `search` on the very same paths answered nothing. #3890 closed it:
+the drill-down now resolves the viewer and runs the same `ValidateRead` chain as `get`, so a
+suggestion and a point read agree by construction. **There is no caller-run read that separates
+denied from deleted any more, and there should not be one** — a control that works by publishing
+someone else's document titles is a disclosure wearing an instrument's colours.
+
+🚨 **And do not read a WRITE tool's permission refusal as an existence proof.** `compile` answers
+*"Compile requires Compile permission on the target NodeType — it schedules a Roslyn build and
+records an activity under the node. Ask someone with editor access to the node (or a platform
+admin) to do it."*, which reads exactly like *"the node is there, you may just not build it"*. It is
+not. Measured on memex.systemorph.com, 2026-09-11, three calls, one answer:
+
+| call | answer |
+|---|---|
+| `compile @BinaryClickerV2/BinaryToggle` | `Compile requires Compile permission on the target NodeType …` |
+| `compile @BinaryClickerV2/NoSuchNodeType_zzz9999` *(negative control)* | **byte-identical** |
+| `compile @ThisPartitionDoesNotExist_zzz9999/NoSuchType` *(negative control)* | **byte-identical** |
+
+The authorization runs before the node is resolved, so the refusal is emitted for a path that could
+never exist. `recycle` is the same, measured the same way and the same day: *"Recycle requires
+Update permission on the target node …"* for `@BinaryClickerV2/BinaryToggle` **and** for
+`@ThisPartitionDoesNotExist_zzz9999/NoSuchType`. **Run the invented-path control before quoting any
+refusal as evidence about a real node** — the same discipline the `Not found` string already
+demands, on the tools that look like they answer differently.
+
+What is left is one read you can run and one answer that comes from the system:
+
+1. `get @Admin/Partition/<Namespace>` — the partition record survives its data. `Active` means the
+   partition was never torn down. This narrows the question to the PARTITION; it never answers
+   about the node. Ask a partition you CAN read the same way as the negative control, otherwise a
+   broken instrument reads like a deleted node.
+2. **The pod's `nodetype_bake` payload — the only instrument with the full denominator.** The boot
+   sweep (`DynamicTypePreWarmer`) enumerates `nodeType:NodeType` mesh-wide under
+   `ImpersonateAsSystem`, so it sees every NodeType in every partition on the replica, not the ones
+   you may read. And its buckets already draw the distinction this section needs — but they are
+   FOUR different statements, not one, and reading them as one is its own false negative:
+
+   | bucket | what it actually says |
+   |---|---|
+   | `Regressions` | the type EXISTS and failed to build on this image — an image verdict, and the only gating one |
+   | `Unevaluated` | NO verdict was reached (the warm timed out, or an upstream was itself unevaluated) — evidence of nothing, in either direction |
+   | `ContentBroken` | a CONTENT verdict (`NoSources` / `UpstreamContentBroken`): the type node is still there, its source queries now match ZERO Code nodes — its SOURCES were deleted out from under it |
+   | `Retired` / `Removed` | the repository withdrew the type, or a listing no longer names the node at all (`PreWarmStatus.Removed`, established by a LISTING that came back — never by a point read) |
+
+   So `Regressions` is "denied, not deleted" answered from the system side; `Retired`/`Removed` is
+   "deleted" answered the same way; `ContentBroken` is the half-way case worth naming out loud (the
+   type survived, its sources did not); and `Unevaluated` must never be read as either.
+   🚨 Read the arming caveat below before trusting its silence.
+
+🚨 **And re-read what the sweep is actually FOR.** Its question is not *"does this node
+exist"* but *"is anything broken"*, and step 2 answers that one over the whole mesh regardless of
+who may read what. Denied-versus-deleted was only ever load-bearing because the instrument you were
+allowed to run had a hole in its denominator; name the denominator and the distinction stops
+deciding anything. **Where you genuinely must know about one node in a partition you cannot read,
+the answer is its OWNER's** — ask them, or elevate (break-glass, their decision, never a sweep
+step). 🚨 **Until you have one of those, a `Not found` from outside your readable denominator has
+told you nothing and cannot close an issue.** That is precisely how #1391 was closed on a false
+negative and re-filed unchanged, four weeks later, as #3883.
+
+**So a zero from this sweep is not a green mesh; it is a green *readable* mesh.** State the
+denominator with the result — "0 of N NodeTypes over M readable partitions" — and when the deploy
+being gated spans partitions the sweeper has no grant on, the honest instruments are the ones that
+run as the system: the pod's own `nodetype_bake` health payload, which names every non-`Ok` type it
+enumerated, and the boot line's `compileErrors=` / `previouslybroken=` counters. Elevation to read
+someone else's partition is break-glass and is the owner's decision, never a sweep step.
+
+🚨 **`nodetype_bake` is CONDITIONAL, and an absent check reads exactly like a passing one.**
+It is not in this repo — the state lives here (`src/MeshWeaver.Hosting/NodeTypeBakeGate.cs`) but the
+`IHealthCheck` that surfaces it belongs to the host, `Memex.Portal.Distributed` in
+**MeshWeaver.Plugins** (`Program.cs`, registered as `nodetype_bake`), so grepping core's `src/` for
+the name finds nothing and reads as "no such instrument". Two ways its silence means nothing:
+
+- **It is registered only `if (gateBake)`.** With readiness gating off the check is not present at
+  all, and `/health` names no NodeType because none was asked for — not because none failed.
+- **`GateReadiness=true` with `DynamicTypes=false` is registered, permanently green, and protects
+  nothing** (the gate reads bake state that only the sweep writes, and the sweep never runs). The
+  two PreWarm keys are one setting; the host's own comment says so.
+
+So before trusting a green `nodetype_bake`, confirm the check is REGISTERED **and** ARMED — the
+payload must name a positive count of types it actually enumerated. A verdict with no denominator is
+the skip-trapdoor this whole page argues against, wearing a health check's colours.
+
+🚨 **Third way its silence means nothing: the check exists in `main` and not in the RUNNING IMAGE.**
+`/health` is served by the image the pod booted, never by the branch you are reading, and the gap
+between the two is routinely a day's worth of merges. Measured 2026-09-11 on
+**memex.systemorph.com**, a portal whose `/health` was *already* `Degraded` — so plainly reachable
+and reporting — and which published exactly five checks: `content-types`,
+`pending_module_activation`, `required_modules`, `bundle_adoption` and the roll-up. **No
+`bake-report`, no `source-discovery`, no `nodetype_bake`.**
+
+| | |
+|---|---|
+| running image (`/api/version`) | `3.0.0+45306a33e`, built **2026-09-10T23:37:03Z** |
+| `bake-report` / `source-discovery` first appear in | `5cf38a690` *feat(#3703,#3704): publish the two bake verdicts on /health*, **2026-09-11T08:09Z** |
+| `git ls-tree 45306a33e -- src/MeshWeaver.Hosting/NodeTypeBakeReportRegistry.cs` | *(empty — file absent at that commit)* |
+| positive control, same command, same commit, `AGENTS.md` + `DynamicTypePreWarmer.cs` | both listed |
+| distance | **58 commits** behind `main` |
+
+The instrument had landed in core nine hours after that image was built. Nothing was
+misconfigured and nothing was refusing — the code simply was not in the binary. **So check the
+running commit before concluding a check is unarmed, and run the `ls-tree` with a control**: an
+empty `ls-tree` exits 0 whether the path is absent or the commit is wrong, which is the same
+shape of false negative as everything else on this page.
 
 ### The obligation on framework changes
 

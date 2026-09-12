@@ -304,7 +304,7 @@ public static class PrebuiltAssemblySeeder
             sourceFingerprint: null);
 
     /// <summary>
-    /// What one <see cref="SeedDetailed"/> call did — the bool surface of
+    /// What one <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string)"/> call did — the bool surface of
     /// <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/>
     /// collapses everything but <see cref="Adopted"/> to <c>false</c>; a sweep that has to say WHY
     /// a type was not covered (and hand a stale-source decline to the sync reconciler) reads this.
@@ -335,6 +335,12 @@ public static class PrebuiltAssemblySeeder
         /// <summary>Nothing was written for another reason (a leaving hub, a node that is not a
         /// NodeType, a write that no-opped).</summary>
         NotSeeded = 7,
+
+        /// <summary>The bundle's fingerprint disagrees with the live sources, NO build resolved on
+        /// this process, this mesh will not compile the type, and the versions are compatible —
+        /// so the bytes were adopted anyway as the LAST build this mesh holds
+        /// (<see cref="BuildProvenance.StaleAdopted"/>, MeshWeaver#3583). Serving over dead.</summary>
+        AdoptedStale = 8,
     }
 
     /// <summary>
@@ -343,7 +349,7 @@ public static class PrebuiltAssemblySeeder
     ///
     /// <para>Cold: the write runs on Subscribe. Emits <c>true</c> when the assembly was adopted and
     /// <c>false</c> when it was declined — a decline is not an error, it is the caller's signal to
-    /// compile normally. <see cref="SeedDetailed"/> is the same call answering WHICH decline.</para>
+    /// compile normally. <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string)"/> is the same call answering WHICH decline.</para>
     /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="nodeTypePath">Mesh path of the NodeType this assembly implements.</param>
@@ -362,9 +368,105 @@ public static class PrebuiltAssemblySeeder
         ILogger? logger,
         IReadOnlyDictionary<string, string>? dependencies,
         string? sourceFingerprint)
+        => Seed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint, moduleVersion: null);
+
+    /// <summary>
+    /// <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/>
+    /// carrying the bundle's MODULE VERSION as well (MeshWeaver#3583) — the manifest's released
+    /// SemVer, stamped as <see cref="NodeTypeDefinition.AdoptedModuleVersion"/> so the owner can
+    /// judge a later source move by version compatibility rather than by fingerprint equality.
+    /// <c>true</c> for an adoption of either kind (verified-later or stale-but-serving).
+    /// </summary>
+    public static IObservable<bool> Seed(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion)
         => SeedDetailed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
-                sourceFingerprint)
-            .Select(outcome => outcome == SeedOutcome.Adopted);
+                sourceFingerprint, moduleVersion)
+            .Select(outcome => outcome is SeedOutcome.Adopted or SeedOutcome.AdoptedStale);
+
+    /// <summary>What <see cref="DecideAfterStaleDecline"/> concluded for one declined entry.</summary>
+    public enum StaleDeclineAction
+    {
+        /// <summary>The build the record names loads on this process — it keeps serving and the
+        /// bundle is left aside (the pre-existing decline).</summary>
+        KeepLiveBuild = 1,
+
+        /// <summary>Adopt the version-compatible bundle as the last build this mesh holds
+        /// (<see cref="BuildProvenance.StaleAdopted"/>): a page now, on bytes for THIS framework
+        /// identity.</summary>
+        AdoptBundle = 2,
+
+        /// <summary>No bundle can serve and this mesh compiles module content: clear the
+        /// dangling coordinates and dispatch a compile of the live source
+        /// (<see cref="AfterStaleDecline"/>).</summary>
+        DispatchCompile = 3,
+
+        /// <summary>Leave the record exactly as it is — a compile is already in flight, or there
+        /// is nothing to clear.</summary>
+        LeaveRecord = 4,
+
+        /// <summary>Nothing this process can do will serve the type: no loadable build, no
+        /// compatible bundle, and this mesh does not compile. Said at Critical by the caller.</summary>
+        Unservable = 5,
+    }
+
+    /// <summary>
+    /// 🚨 THE RULE for a bundle DECLINED on its source fingerprint, as a checkable table — the
+    /// decision <c>AfterStaleDeclineObserved</c> acts on, pure so the ordering is pinned rather
+    /// than read out of an Rx pipeline (<c>StaleDeclinePrefersBundleTest</c>).
+    ///
+    /// <para><b>A compatible bundle beats a local compile</b> (the tolerance directive of
+    /// 2026-09-12, <i>"it should all be tolerant"</i>, plus two UNATTRIBUTED, unverified statements
+    /// received mid-session — <i>"compile must happen on CI — at runtime you must resolve a package
+    /// version, not try to compile"</i> — flagged in the PR, not claimed as the maintainer's; if
+    /// they are not endorsed, drop the AdoptBundle row for a compiling mesh and nothing else in
+    /// the rule changes). When the build the record names does not
+    /// load on this process and a bundle for THIS framework identity is in hand whose module
+    /// version is compatible (or unknown), that bundle is adopted as the last build the mesh holds
+    /// — a page renders on CI-built bytes immediately — instead of clearing the coordinates and
+    /// dispatching Roslyn, which is a wait every instance of the type sat out behind the
+    /// "did not settle" overlay on memex 2026-09-12. A mesh that compiles module content still
+    /// converges: the stale-adopted record reads dirty and the next release request rebuilds it
+    /// from source in the background, behind a page that is already up.</para>
+    ///
+    /// <para>Every other row is the pre-existing behaviour: a build that resolves here is kept; a
+    /// compile already in flight is never stamped over on a compiling mesh (its terminal write
+    /// would race the adoption's) — a non-compiling mesh still adopts, as it did; a compiling
+    /// mesh with no compatible bundle dispatches; a non-compiling mesh with none is unservable.</para>
+    /// </summary>
+    /// <param name="observed">The owner's current definition.</param>
+    /// <param name="liveBuildResolvesHere">The record's build loads on this process.</param>
+    /// <param name="canCompileLocally">This mesh compiles module content for this partition.</param>
+    /// <param name="bundleAdoptable">A bundle for this identity is in hand and its module version
+    /// is compatible or unknown — never a MAJOR-incompatible one.</param>
+    public static StaleDeclineAction DecideAfterStaleDecline(
+        NodeTypeDefinition observed, bool liveBuildResolvesHere, bool canCompileLocally, bool bundleAdoptable)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        if (liveBuildResolvesHere)
+            return StaleDeclineAction.KeepLiveBuild;
+        var inFlight = observed.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling;
+        if (inFlight)
+            return !canCompileLocally && bundleAdoptable
+                ? StaleDeclineAction.AdoptBundle
+                : StaleDeclineAction.LeaveRecord;
+        if (bundleAdoptable)
+            return StaleDeclineAction.AdoptBundle;
+        if (!canCompileLocally)
+            return StaleDeclineAction.Unservable;
+        return string.IsNullOrEmpty(observed.LatestAssemblyPath)
+               && string.IsNullOrEmpty(observed.LatestAssemblyCollection)
+            ? StaleDeclineAction.LeaveRecord
+            : StaleDeclineAction.DispatchCompile;
+    }
 
     /// <summary>
     /// 🚨 <b>A stale-source decline must never leave a DANGLING record</b> (measured on
@@ -383,6 +485,10 @@ public static class PrebuiltAssemblySeeder
     /// or this mesh may not compile (the caller then logs Critical, as the refusal path does).
     /// Once per decline, never per activation: the <c>Pending</c>/<c>Compiling</c> guard makes a
     /// second decline of the same record a no-op.</para>
+    ///
+    /// <para>Since 2026-09-12 the caller consults <see cref="DecideAfterStaleDecline"/> FIRST and
+    /// reaches this dispatch only for <see cref="StaleDeclineAction.DispatchCompile"/> — a
+    /// compatible bundle for the live identity is adopted instead of compiled.</para>
     /// </summary>
     /// <param name="observed">The owner's current definition.</param>
     /// <param name="liveBuildResolvesHere">Whether the assembly store answered a path for the
@@ -447,6 +553,25 @@ public static class PrebuiltAssemblySeeder
         ILogger? logger,
         IReadOnlyDictionary<string, string>? dependencies,
         string? sourceFingerprint)
+        => SeedDetailed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+            sourceFingerprint, moduleVersion: null);
+
+    /// <summary>
+    /// <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/>
+    /// carrying the bundle manifest's module <paramref name="moduleVersion"/> (MeshWeaver#3583).
+    /// Null from a producer that recorded none — the compatibility rule then answers UNKNOWN,
+    /// which never refuses.
+    /// </summary>
+    public static IObservable<SeedOutcome> SeedDetailed(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion)
     {
         // 🚨 THE GATE. FrameworkVersion is the resolved framework build identity — a content/
         // surface identity, not a version string — and the assembly-store key carries the first
@@ -470,16 +595,22 @@ public static class PrebuiltAssemblySeeder
         // PLATFORM surface matches; this proves the MODULE/toolchain bindings do too — the store
         // key cannot see either, so an unvalidated adopt would suppress a needed rebuild exactly
         // like a framework mismatch would.
+        // 🚨 #3934 — the DECLINE NAMES ITS OWN SHAPE. A module entry is a FLOOR, so "the record did
+        // not validate" now has three distinguishable causes with three different remedies, and a
+        // fixed sentence for all three is what left three investigations across three repos unable
+        // to tell an ordinary framework roll from a module drift (Doc/Architecture/DependencyRecordFloor).
+        // FloorNotMet says "land a newer module"; NotChecked says "nothing was established here",
+        // which is never a clean bill and is exactly as declining as a drift.
         if (dependencies is not null
-            && CompiledDependencies.FindMismatch(
+            && CompiledDependencies.Validate(
                 dependencies,
                 NodeTypeCompilationHelpers.DependencyIdResolverOf(hub),
-                NodeTypeCompilationHelpers.ProcessToolchainId) is { } dependencyMismatch)
+                NodeTypeCompilationHelpers.ProcessToolchainId) is { IsSatisfied: false } outcome)
         {
             logger?.LogInformation(
-                "Prebuilt assembly for {NodeTypePath} DECLINED: dependency record mismatch — "
+                "Prebuilt assembly for {NodeTypePath} DECLINED: dependency record {Status} — "
                 + "{Mismatch} — compiling instead",
-                nodeTypePath, dependencyMismatch);
+                nodeTypePath, outcome.Status, outcome.Problem);
             return Observable.Return(SeedOutcome.DeclinedDependencies);
         }
 
@@ -532,7 +663,7 @@ public static class PrebuiltAssemblySeeder
                 .Take(1)
                 .SelectMany(node => SeedObserved(
                     hub, workspace, node!, nodeTypePath, assemblyBytes, pdbBytes, logger,
-                    dependencies, sourceFingerprint)));
+                    dependencies, sourceFingerprint, moduleVersion)));
         });
     }
 
@@ -547,7 +678,8 @@ public static class PrebuiltAssemblySeeder
         byte[]? pdbBytes,
         ILogger? logger,
         IReadOnlyDictionary<string, string>? dependencies,
-        string? sourceFingerprint)
+        string? sourceFingerprint,
+        string? moduleVersion)
     {
         var observed = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
         if (observed is null)
@@ -573,56 +705,94 @@ public static class PrebuiltAssemblySeeder
         // would have after the refusal. The owner's check stays for the pre-publication window
         // this snapshot cannot decide (no live fingerprint yet) and as the last line of defence.
         // A decline is always safe (a compile follows); a write that a refusal must undo is not.
+        //
+        // 🚨 #3583 — …and "would refuse" is now decided by MODULE VERSION COMPATIBILITY, not by the
+        // fingerprint alone. A fingerprint that differs says the source MOVED. Whether these bytes
+        // may still serve over it is the compatibility rule's answer: a MAJOR bump refuses; the
+        // same MAJOR (or unknown versions) does not. The decline below therefore keeps the live
+        // build in place exactly as before when one resolves here — but when NOTHING resolves on
+        // this process and this mesh will not compile the type, compatible bytes are ADOPTED as
+        // the last build the mesh holds (StaleAdopted) rather than leaving the type with no build
+        // at all. Measured 2026-09-09: the refusal left Essentials/Email dead on every page for an
+        // afternoon over a one-line CSS change.
         var store = hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
         if (sourceFingerprint is { Length: > 0 } producerFingerprint
             && observed.CurrentSourceFingerprint is { Length: > 0 } liveFingerprint
             && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
         {
+            var verdict = ModuleVersionCompatibility.Classify(moduleVersion, observed.CurrentModuleVersion);
             logger?.LogWarning(
                 "Prebuilt assembly for {NodeTypePath} DECLINED before writing (#2813): the bundle "
-                + "records source fingerprint {Producer} but the live sources are {Live} — the owner "
-                + "would refuse the adoption, so the live build's coordinates are left in place and "
-                + "the live source compiles instead. Rebake this package to adopt again.",
-                nodeTypePath, producerFingerprint, liveFingerprint);
-            return AfterStaleDeclineObserved(hub, workspace, store, observed, nodeTypePath, logger);
+                + "records source fingerprint {Producer} but the live sources are {Live} (bundle "
+                + "module version {Adopted}, current {Current}: {Verdict}) — the owner would not "
+                + "verify the adoption, so the live build's coordinates are left in place. Rebake "
+                + "this package to adopt again.",
+                nodeTypePath, producerFingerprint, liveFingerprint,
+                ModuleVersionCompatibility.Display(moduleVersion),
+                ModuleVersionCompatibility.Display(observed.CurrentModuleVersion), verdict);
+            return AfterStaleDeclineObserved(
+                hub, workspace, store, observed, nodeTypePath, logger,
+                adoptAnyway: verdict is ModuleVersionVerdict.Incompatible
+                    ? null
+                    : () =>
+                    {
+                        logger?.LogWarning(
+                            "Prebuilt assembly for {NodeTypePath}: no build resolves on this process "
+                            + "and this mesh will not compile the type, so the version-compatible "
+                            + "bundle ({Adopted} over {Current}) is ADOPTED as the last build this "
+                            + "mesh holds — stale-but-serving (#3583). A bundle for framework "
+                            + "{Framework} whose fingerprint matches lifts it.",
+                            nodeTypePath, ModuleVersionCompatibility.Display(moduleVersion),
+                            ModuleVersionCompatibility.Display(observed.CurrentModuleVersion),
+                            NodeTypeCompilationHelpers.FrameworkVersion);
+                        return Write(SeedOutcome.AdoptedStale);
+                    });
         }
 
-        // 🚨 ONE version, used twice. ApplyCompileSuccess documents why: the stamp must name
-        // the SAME version the store upload used, or activation resolves a store key with no
-        // bytes behind it, TryGetAssemblyPath misses, and the instance silently falls back
-        // to the default configuration.
-        var version = node.Version;
-        // Set by the lambda on the run that produced the write; false when every run declined
-        // (the hub began leaving between the upload and the write), so the caller is told the
-        // truth — "not adopted" — rather than the ADOPTED line below over a write that no-opped.
-        var stamped = false;
+        return Write(SeedOutcome.Adopted);
 
-        return store
-            .PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
-            .SelectMany(location => workspace.GetMeshNodeStream(nodeTypePath)
-                .Update(current =>
-                {
-                    var def = current?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
-                    if (current is null || def is null)
-                        return current!;
+        IObservable<SeedOutcome> Write(SeedOutcome onStamped)
+        {
+            // 🚨 ONE version, used twice. ApplyCompileSuccess documents why: the stamp must name
+            // the SAME version the store upload used, or activation resolves a store key with no
+            // bytes behind it, TryGetAssemblyPath misses, and the instance silently falls back
+            // to the default configuration.
+            var version = node.Version;
+            // Set by the lambda on the run that produced the write; false when every run declined
+            // (the hub began leaving between the upload and the write), so the caller is told the
+            // truth — "not adopted" — rather than the ADOPTED line below over a write that no-opped.
+            var stamped = false;
+            // 🚨 #3703 — WHAT we stamped, captured on the same run that set `stamped`. The bake
+            // sweep decides what to compile from a mesh-wide enumeration, which is a PROJECTION and
+            // can answer with the record this write is replacing; this definition is the fact that
+            // outranks it. Captured rather than recomputed so it is BY CONSTRUCTION the record the
+            // owner received. See NodeTypeAdoptionRegistry.RecordAdopted.
+            NodeTypeDefinition? stampedDefinition = null;
 
-                    // 🚨 #3129 — re-checked at the write itself: the store upload above is real
-                    // I/O, and a shutdown that began during it must not land a stamp from a hub
-                    // that is leaving. Returning the node unchanged makes Update a NO-OP (nothing
-                    // is posted), so the record other generations read is exactly as it was.
-                    if (hub.IsLeaving())
+            return store
+                .PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
+                .SelectMany(location => workspace.GetMeshNodeStream(nodeTypePath)
+                    .Update(current =>
                     {
-                        logger?.LogInformation(
-                            "Prebuilt assembly for {NodeTypePath} NOT stamped: this hub began "
-                            + "leaving during the upload (#3129) — the node is left as it was",
-                            nodeTypePath);
-                        return current;
-                    }
+                        var def = current?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                        if (current is null || def is null)
+                            return current!;
 
-                    stamped = true;
-                    return current with
-                    {
-                        Content = def with
+                        // 🚨 #3129 — re-checked at the write itself: the store upload above is real
+                        // I/O, and a shutdown that began during it must not land a stamp from a hub
+                        // that is leaving. Returning the node unchanged makes Update a NO-OP (nothing
+                        // is posted), so the record other generations read is exactly as it was.
+                        if (hub.IsLeaving())
+                        {
+                            logger?.LogInformation(
+                                "Prebuilt assembly for {NodeTypePath} NOT stamped: this hub began "
+                                + "leaving during the upload (#3129) — the node is left as it was",
+                                nodeTypePath);
+                            return current;
+                        }
+
+                        stamped = true;
+                        var adopted = def with
                         {
                             DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
                             CompilationStatus = CompilationStatus.Ok,
@@ -669,6 +839,11 @@ public static class PrebuiltAssemblySeeder
                             // match: the owner then records AdoptedUnverified rather
                             // than AdoptedVerified.
                             AdoptedSourceFingerprint = sourceFingerprint,
+                            // #3583 — the module version these bytes were released at, for the
+                            // compatibility rule the owner applies when the source later moves.
+                            // Null from a producer that recorded none is carried as null: the
+                            // rule then answers UNKNOWN, which never refuses.
+                            AdoptedModuleVersion = moduleVersion,
                             // The producer's dependency record (#1707 slice 2) — validated
                             // above; stamped so ongoing validity checks judge the adopted
                             // build like a locally-compiled one. Legacy bundles (null)
@@ -677,19 +852,31 @@ public static class PrebuiltAssemblySeeder
                                 ? def.CompiledDependencies
                                 : dependencies.ToImmutableSortedDictionary(
                                     kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
-                        },
-                    };
-                }))
-            .Select(_ =>
-            {
-                if (!stamped)
-                    return SeedOutcome.NotSeeded;
-                logger?.LogInformation(
-                    "Prebuilt assembly ADOPTED for {NodeTypePath} at version {Version} "
-                    + "(framework {Framework}) — no compile needed",
-                    nodeTypePath, version, NodeTypeCompilationHelpers.FrameworkVersion);
-                return SeedOutcome.Adopted;
-            });
+                        };
+                        stampedDefinition = adopted;
+                        return current with { Content = adopted };
+                    }))
+                .Select(_ =>
+                {
+                    if (!stamped)
+                        return SeedOutcome.NotSeeded;
+                    // 🚨 #3703 — the ledger entry, written on the same branch as the ADOPTED line
+                    // and never without it. `version` is the node version the write went over, so
+                    // any later enumeration at or below it provably predates this stamp; anything
+                    // above it contains this write or something newer, and then the enumeration is
+                    // the better evidence. Absent registry (a host that registered none) simply
+                    // loses the optimisation — the sweep compiles, as it does today.
+                    if (stampedDefinition is { } written)
+                        hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>()
+                            ?.RecordAdopted(nodeTypePath, version, written);
+                    logger?.LogInformation(
+                        "Prebuilt assembly ADOPTED for {NodeTypePath} at version {Version} "
+                        + "(framework {Framework}, module version {Module}) — no compile needed",
+                        nodeTypePath, version, NodeTypeCompilationHelpers.FrameworkVersion,
+                        ModuleVersionCompatibility.Display(moduleVersion));
+                    return onStamped;
+                });
+        }
     }
 
     /// <summary>
@@ -699,9 +886,20 @@ public static class PrebuiltAssemblySeeder
     /// that throws reads as "does not resolve" — an unreadable store must never keep a type parked
     /// on bytes nobody can load.
     /// </summary>
+    /// <param name="hub">The calling hub.</param>
+    /// <param name="workspace">The hub's workspace.</param>
+    /// <param name="store">The assembly store to probe.</param>
+    /// <param name="observed">The owner's current definition.</param>
+    /// <param name="nodeTypePath">The type.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="adoptAnyway">#3583 — what to do when NO build resolves here and this mesh
+    /// will NOT compile the type (RequirePrebuilt, or a module partition nothing syncs): null
+    /// means the bytes are incompatible and nothing can serve (Critical, unservable); otherwise
+    /// the continuation adopts them as the last build the mesh holds.</param>
     private static IObservable<SeedOutcome> AfterStaleDeclineObserved(
         IMessageHub hub, IWorkspace workspace, IAssemblyStore store,
-        NodeTypeDefinition observed, string nodeTypePath, ILogger? logger)
+        NodeTypeDefinition observed, string nodeTypePath, ILogger? logger,
+        Func<IObservable<SeedOutcome>>? adoptAnyway)
     {
         var resolves = observed.LastCompiledVersion is { } claimed && claimed >= 0
             ? store.TryGetAssemblyPath(nodeTypePath, claimed)
@@ -717,29 +915,60 @@ public static class PrebuiltAssemblySeeder
                 })
             : Observable.Return(true);
 
-        return resolves.SelectMany(liveBuildResolvesHere =>
+        // 🚨 #3583 — "can this mesh compile the type" is TWO facts, not one: the RequirePrebuilt
+        // flag, and whether the type's partition tracks a source (the untracked-module gate the
+        // compile watcher applies). A compile dispatched here on an untracked partition would park
+        // with NO build behind it, which is the dead page. So the tracking answer is read here as
+        // well, with the gate's own budget; an unreadable answer reads as UNTRACKED — the
+        // direction that ends in a serving build.
+        var compiles = RequirePrebuilt(hub.ServiceProvider)
+            ? Observable.Return(false)
+            : NodeTypeCompilationHelpers.PartitionTracksSources(hub, nodeTypePath)
+                .Timeout(NodeTypeCompilationHelpers.OnDemandAdoptionBudget)
+                .Catch<bool, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Prebuilt assembly for {NodeTypePath}: whether the partition tracks a source "
+                        + "could not be read — treating the type as one this mesh will not compile",
+                        nodeTypePath);
+                    return Observable.Return(false);
+                });
+
+        return resolves.CombineLatest(compiles, (r, c) => (LiveBuildResolvesHere: r, CanCompileLocally: c))
+            .Take(1)
+            .SelectMany(probe =>
         {
-            var canCompileLocally = !RequirePrebuilt(hub.ServiceProvider);
-            var dispatch = AfterStaleDecline(
+            var (liveBuildResolvesHere, canCompileLocally) = probe;
+            var action = DecideAfterStaleDecline(
                 observed, liveBuildResolvesHere, canCompileLocally,
-                NodeTypeCompilationHelpers.ModulesHashOf(hub));
-            if (liveBuildResolvesHere)
-                return Observable.Return(SeedOutcome.DeclinedStaleSources);
-            if (dispatch is null)
+                bundleAdoptable: adoptAnyway is not null);
+            switch (action)
             {
-                if (!canCompileLocally)
+                case StaleDeclineAction.KeepLiveBuild:
+                case StaleDeclineAction.LeaveRecord:
+                    return Observable.Return(SeedOutcome.DeclinedStaleSources);
+                case StaleDeclineAction.AdoptBundle:
+                    // A compatible bundle for THIS framework identity is in hand and the build the
+                    // record names cannot be loaded here. Serving the bundle is a page; a Roslyn
+                    // compile is a wait — see DecideAfterStaleDecline for the rule.
+                    return adoptAnyway!();
+                case StaleDeclineAction.Unservable:
                     logger?.LogCritical(
                         "Prebuilt assembly for {NodeTypePath} DECLINED on stale sources AND the live "
                         + "build it left in place does not resolve on this process ({Collection}/{Path}) "
-                        + "AND this mesh cannot compile ({Key}=true). NOTHING THIS PROCESS CAN DO WILL "
-                        + "SERVE THE TYPE: rebake and republish this package for framework {Framework}, "
-                        + "or bring this instance's sources onto the publication's commit.",
+                        + "AND this mesh will not compile it ({Key}=true, or the partition tracks no "
+                        + "source) AND the bundle's module version is INCOMPATIBLE with the current "
+                        + "source (#3583). NOTHING THIS PROCESS CAN DO WILL SERVE THE TYPE: rebake and "
+                        + "republish this package for framework {Framework}, or bring this instance's "
+                        + "sources onto the publication's commit.",
                         nodeTypePath, observed.LatestAssemblyCollection ?? "(null)",
                         observed.LatestAssemblyPath ?? "(null)", RequirePrebuiltConfigKey,
                         NodeTypeCompilationHelpers.FrameworkVersion);
-                return Observable.Return(canCompileLocally
-                    ? SeedOutcome.DeclinedStaleSources
-                    : SeedOutcome.DeclinedStaleSourcesUnservable);
+                    return Observable.Return(SeedOutcome.DeclinedStaleSourcesUnservable);
+                case StaleDeclineAction.DispatchCompile:
+                    break;
+                default:
+                    return Observable.Return(SeedOutcome.DeclinedStaleSources);
             }
 
             logger?.LogWarning(

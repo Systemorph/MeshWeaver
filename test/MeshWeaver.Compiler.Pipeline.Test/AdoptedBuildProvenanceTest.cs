@@ -41,14 +41,21 @@ public class AdoptedBuildProvenanceTest
 
     /// <summary>An adoption exactly as <c>PrebuiltAssemblySeeder.Seed</c> leaves it: the request is
     /// standing, and the producer's fingerprint (or its absence) is stamped.</summary>
+    /// <para>🚨 #3583 — the refusal rows below are a MAJOR bump (1.x adopted over 2.x source):
+    /// since 2026-09-09 a fingerprint that merely differs no longer refuses — it holds the build
+    /// as <see cref="BuildProvenance.StaleAdopted"/> (pinned in <c>BuildDeliveryHoldTest</c>).
+    /// Only a declared incompatibility reaches the rows this class was written for.</para>
     private static NodeTypeDefinition PendingAdoption(
-        string? producerFingerprint, string? liveFingerprint) =>
+        string? producerFingerprint, string? liveFingerprint,
+        string? adoptedVersion = "1.4.0", string? currentVersion = "2.0.0") =>
         new()
         {
             CompilationStatus = CompilationStatus.Ok,
             RequestedSourceStampAt = System.DateTimeOffset.UtcNow,
             AdoptedSourceFingerprint = producerFingerprint,
             CurrentSourceFingerprint = liveFingerprint,
+            AdoptedModuleVersion = adoptedVersion,
+            CurrentModuleVersion = currentVersion,
             CurrentSourceVersions = LiveSources,
             // Seed has ALREADY stamped the adopted build's coordinates by the time the owner judges
             // it — which is why "refuse" has to decide whether those bytes keep serving.
@@ -78,8 +85,8 @@ public class AdoptedBuildProvenanceTest
             LiveSources, canCompileLocally: true);
 
         result.BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused,
-            "the bundle states which sources it was built from and they are not the live ones — "
-            + "that is the case this whole mechanism exists to catch");
+            "the bundle states which sources it was built from and they are not the live ones, AND "
+            + "the module MAJOR moved — that is the case this whole mechanism exists to catch");
         result.CompiledSources.Should().BeNull(
             "🚨 the PRIOR snapshot has to be CLEARED, not merely left unstamped: this type compiled "
             + "here before, so it arrives carrying a CompiledSources that MATCHES the live sources "
@@ -127,6 +134,10 @@ public class AdoptedBuildProvenanceTest
 
         result.BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused,
             "the verdict is the same — what changes is only whether the rejected bytes keep serving");
+        result.CompilationStatus.Should().Be(CompilationStatus.Unavailable,
+            "#3583: a Pending here could only PARK, and a park meant Error — a Roslyn verdict on code "
+            + "nothing is wrong with; the type reports 'incompatible, awaiting bundle' instead");
+        result.CompilationError.Should().Contain("Incompatible build, awaiting bundle");
         result.CompiledSources.Should().BeNull(
             "the staleness question stays open on BOTH branches — and it matters most here, where "
             + "the compile that would refresh it is refused by design, so this record is the one "

@@ -37,12 +37,24 @@ takes the platform checkout as `--core`:
 ```bash
 # from a MeshWeaver.Plugins checkout, with a MeshWeaver checkout alongside
 dotnet run tools/generate-memex-template.cs -- <version> . dist/templates \
-    --core ../MeshWeaver --with-gui
+    --core ../MeshWeaver
 dotnet new install dist/templates/                  # or install the produced .nupkg
 ```
 
-`--with-gui` includes `Memex.Portal.Gui`, which carries the portal's pages and the dev-login
-screen — without it the scaffolded app builds but has no UI.
+🚨 **The published package has no GUI, and that is deliberate.** `Memex.Portal.Gui` carries the
+portal's pages, the dev-login screen and the whole portal composition, and it lives only in the
+private MeshWeaver.Plugins repository — so copying it into a package published to public nuget.org
+would publish private source irreversibly. Both hosts therefore reference it from a *conditioned*
+ItemGroup and compile without it
+([#3653](https://github.com/Systemorph/MeshWeaver/issues/3653)), and the generator drops the
+reference it is not shipping. What the flagless command above scaffolds is a **headless mesh
+host**: it composes the mesh, mounts module static assets and module endpoints, and answers the
+health probes — no pages, no authentication schemes, no MCP/SignalR/gRPC-web. The generated
+README says so.
+
+`--with-gui` still exists and still copies `Memex.Portal.Gui`, for generating a template inside the
+private repository. **It must never be passed by a lane that publishes**, and the generator's own
+message says why.
 
 ### 2. Scaffold a New Project
 

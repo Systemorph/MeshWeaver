@@ -109,18 +109,157 @@ hosting::log "chart     ${CHART}"
 hosting::log "release   ${release} → namespace ${namespace}"
 hosting::log "database  ${database}"
 
-hosting::do kubectl create namespace "$namespace" --dry-run=client -o yaml \
-  | { hosting::dry && cat >/dev/null || kubectl apply -f - ; } \
-  || hosting::die "could not ensure namespace ${namespace}"
+# 🚨 ENSURE = read, then create if absent — NEVER `create --dry-run=client -o yaml | kubectl apply`.
+# That idiom PATCHES an existing namespace (kubectl apply stamps last-applied-configuration), and
+# the operator's ClusterRole grants namespaces get/list/create/delete and no patch — deliberately:
+# a lifecycle run has no business editing a namespace it did not just create. Measured 2026-09-09
+# on memex (Deployments/memex-reconcile-20260909-pv-capacity), the first run to reach this line
+# after the narration fix: `namespaces "memex" is forbidden: … cannot patch resource "namespaces"`.
+# The read is a read (a dry run still performs it); only the create is a mutation.
+if hosting::read kubectl get namespace "$namespace" >/dev/null 2>&1; then
+  hosting::log "namespace ${namespace} exists"
+else
+  hosting::do kubectl create namespace "$namespace" \
+    || hosting::die "could not create namespace ${namespace}"
+fi
 
-# --atomic: a failed install ROLLS BACK rather than leaving a half-created release that the next
-# attempt then has to `helm uninstall` before it can proceed. --wait so "deployed" means the pods
-# actually came up; the plan's next step (rollout status) then verifies rather than discovers.
+# ── adopt: every resource the RECORD renders that exists live without Helm ownership ────────────
+# 🚨 WHY. An instance created before its record existed carries hand-made objects the chart now
+# renders — on memex the SecretProviderClass `memex-kv` (keyVaultSecretClasses[0] on the record),
+# applied by a laptop in 2026-08 and never in any release. Helm refuses to upgrade over such an
+# object: measured 2026-09-09 01:20Z (Deployments/memex-reconcile-20260909-operator-0b79490),
+#   UPGRADE FAILED: … SecretProviderClass "memex-kv" in namespace "memex" exists and cannot be
+#   imported into the current release: invalid ownership metadata
+# and --atomic rolled back. The config repo's helm-release lane has an `adopt` action for exactly
+# this, but it renders from the COMMITTED OVERLAY, which never carried memex-kv — so what only the
+# record renders can only be adopted here, from the record. Adoption is metadata only (two
+# annotations + one label per resource), changes no spec and restarts nothing; from then on helm
+# owns the object and the next upgrade renders it from the record — which is the design.
+#
+# Three outcomes per rendered resource, each logged: ABSENT (helm creates it below), OWNED by this
+# release (nothing to do), UNOWNED live (adopted). A live object owned by ANOTHER release is a
+# refusal, never a takeover — two releases claiming one object is how a teardown deletes the wrong
+# instance's Secret.
+rendered="$(hosting::read helm template "$release" "$CHART" --namespace "$namespace" "${files[@]}" "${sets[@]}" 2>&1)" \
+  || { if hosting::dry; then hosting::log "DRY-RUN: could not template the chart here (${rendered}); adoption is skipped in the rehearsal only"; rendered=""; else hosting::die "could not render the chart for adoption: ${rendered}"; fi; }
+adopted=0; owned=0; absent=0
+if [ -n "$rendered" ]; then
+  names="$(printf '%s\n' "$rendered" | hosting::read kubectl -n "$namespace" create --dry-run=client -o name -f - 2>&1)" \
+    || hosting::die "could not list the rendered resources for adoption: ${names}"
+  while IFS= read -r res; do
+    [ -n "$res" ] || continue
+    live="$(hosting::read kubectl -n "$namespace" get "$res" -o json 2>/dev/null)" || { absent=$((absent+1)); continue; }
+    rel="$(printf '%s' "$live" | jq -r '.metadata.annotations["meta.helm.sh/release-name"] // ""')"
+    mgr="$(printf '%s' "$live" | jq -r '.metadata.labels["app.kubernetes.io/managed-by"] // ""')"
+    if [ "$rel" = "$release" ] && [ "$mgr" = "Helm" ]; then
+      owned=$((owned+1)); continue
+    fi
+    [ -z "$rel" ] || [ "$rel" = "$release" ] \
+      || hosting::die "${res} in ${namespace} is owned by release '${rel}', not '${release}' — refusing to take it over; two releases claiming one object is how a teardown deletes the wrong instance's Secret"
+    hosting::log "adopting  ${res} (live, no Helm ownership)"
+    hosting::do kubectl -n "$namespace" annotate --overwrite "$res" \
+        "meta.helm.sh/release-name=${release}" "meta.helm.sh/release-namespace=${namespace}" >/dev/null \
+      || hosting::die "could not annotate ${res} for adoption"
+    hosting::do kubectl -n "$namespace" label --overwrite "$res" "app.kubernetes.io/managed-by=Helm" >/dev/null \
+      || hosting::die "could not label ${res} for adoption"
+    adopted=$((adopted+1))
+  done <<EOF_NAMES
+$names
+EOF_NAMES
+fi
+hosting::log "adoption  ${adopted} adopted, ${owned} already owned, ${absent} to be created"
+hosting::say adopted "$adopted"
+
+# ── preflight: can this identity write every kind the record renders? ────────────────────────
+# helm applies the release under the operator's ClusterRole. A kind the role cannot create is an
+# UPGRADE FAILED inside helm followed by an --atomic rollback — measured 2026-09-09 01:59Z on memex
+# (poddisruptionbudgets after core #3774 rendered a PDB; the rollback then erred as well). A
+# SelfSubjectAccessReview is always permitted, so ask BEFORE helm, once per rendered kind, and
+# refuse with the whole list — one line names every grant to add, instead of one failed upgrade
+# per missing kind. deploy/aks/operator/test/check-chart-kinds-granted.sh is the static half.
+if [ -n "$rendered" ]; then
+  denied=""
+  while IFS= read -r kind; do
+    [ -n "$kind" ] || continue
+    for verb in create patch delete; do
+      answer="$(hosting::read kubectl -n "$namespace" auth can-i "$verb" "$kind" 2>/dev/null || true)"
+      [ "$answer" = "yes" ] || denied="${denied} ${verb}:${kind}"
+    done
+  done <<EOF_KINDS
+$(printf '%s\n' "$names" | sed 's#/.*##' | sort -u)
+EOF_KINDS
+  [ -z "$denied" ] \
+    || hosting::die "the operator's ClusterRole cannot write every kind the record renders — denied:${denied}. Grant them in deploy/aks/manifests/hosting-operator/operator-rbac.yaml (the config repo's helm-release lane applies it on the next adopt/deploy); helm would otherwise fail inside the upgrade and roll back. ClusterRole/ClusterRoleBinding are excluded by design — a record that renders them (instancesAdmin.clusterRead) is a decision for a person."
+  hosting::log "preflight every rendered kind is writable by this identity"
+fi
+
+# A release helm cannot upgrade is refused by name, not by helm's "another operation is in
+# progress" after a 15-minute wait: pending-install / pending-upgrade / pending-rollback are the
+# states a cut-off run leaves behind, and the fix (helm rollback to the last deployed revision)
+# is a person's call.
+release_state="$(hosting::read helm status "$release" --namespace "$namespace" -o json 2>/dev/null | jq -r '.info.status // ""' 2>/dev/null || true)"
+case "$release_state" in
+  pending-*) hosting::die "release ${release} in ${namespace} is '${release_state}' — a previous operation was cut off and helm refuses every upgrade until it is resolved (helm history ${release} -n ${namespace}; helm rollback ${release} <last deployed revision>). Not done here: choosing the revision is a person's call." ;;
+  "") hosting::log "release   ${release} is not installed yet (first install)" ;;
+  *) hosting::log "release   ${release} is '${release_state}'" ;;
+esac
+
+# ── apply, and ONLY apply ───────────────────────────────────────────────────────────────────────
+# 🚨 NO --atomic AND NO --wait, and that is the whole point of this block. helm APPLIES here; the
+# rollout is OBSERVED by the caller, with a budget taken from the record.
+#
+# Measured 2026-09-09 02:35-02:51Z on memex (#3782). This ran with `--atomic --wait --timeout 15m`
+# from a Reconcile. The upgrade LANDED: at 02:50:11Z a read-only audit showed revision 44 with the
+# record's full render — 20 chart-managed objects, portal-next kept, memex-kv owned, the PDB
+# created. Nothing was wrong with it. It was simply still inside its own startup gate, which is
+# what a gated two-replica roll looks like when a generation recompiles, and the record BUDGETS
+# 10800 seconds for exactly that (`startupProbe.budgetSeconds`). Nine seconds later helm's fixed
+# fifteen minutes expired and --atomic rolled the whole thing back to revision 43's manifest. A
+# correct upgrade was destroyed by a timer that had never read the record it was applying.
+#
+# The three reasons this shape cannot be repaired by raising the number:
+#
+#   1. A wait inside helm cannot outlast the process running it. The operator Job's
+#      activeDeadlineSeconds (3600) caps every in-Job wait, so no --timeout can express a budget
+#      the record is allowed to set above it. Raising 15m to 60m moves the cliff; it does not
+#      remove it — and the failure mode at the cliff is a ROLLBACK of work that succeeded.
+#   2. --atomic converts "slow" into "reverted". Slow and broken are indistinguishable to a timer,
+#      and the two deserve opposite treatments. Only something watching the rollout can tell them
+#      apart, because only it can see whether progress is being made.
+#   3. It is not needed for the state it was there to prevent. The comment it replaces argued that
+#      --atomic avoids "a half-created release the next attempt must `helm uninstall`". A `failed`
+#      release is upgradable — helm rolls forward over it. The states that genuinely block the next
+#      upgrade are `pending-*`, and those are refused BY NAME a few lines above, before helm runs.
+#      So the guard rail is already there, and it is a better one: it names the problem and hands
+#      the revision choice to a person instead of silently reverting.
+#
+# This is the same decision the config repository's helm-release lane made deliberately (Memex#188):
+# helm applies, a separate step observes with its own budget. Two implementations of one operation
+# had opposite answers; this is the disagreement resolved, in favour of the one that did not lose a
+# good upgrade.
+#
+# 🚨 WHAT THE CALLER MUST NOW DO. Success here means APPLIED, not ROLLED OUT — the pods may still
+# be coming up, and that is the normal case rather than an edge one. The caller observes the
+# rollout against the record's own budget and reports Done only when it completes. It is told which
+# revision to watch by `::hosting:: helm_revision=<n>` below; never report a rollout no one saw
+# finish.
 hosting::do helm upgrade "$release" "$CHART" \
   --install --namespace "$namespace" --create-namespace \
-  --atomic --wait --timeout 15m \
   "${files[@]}" "${sets[@]}" \
-  || hosting::die "helm upgrade of ${release} in ${namespace} failed (rolled back by --atomic)"
+  || hosting::die "helm upgrade of ${release} in ${namespace} failed. The release was NOT rolled back (no --atomic, by design — see #3782): read \`helm status ${release} -n ${namespace}\` and \`helm history ${release} -n ${namespace}\`. A 'failed' release is upgradable, so the next attempt can roll forward over it."
+
+# The revision this apply produced — the handle the caller needs to observe the right rollout, and
+# the one piece of state that is otherwise only in helm's head. Read back rather than counted:
+# `--install` may have created revision 1 or upgraded to revision 45, and a caller that guessed
+# would watch the wrong generation. In a dry run helm was never called, so there is nothing to read
+# and nothing is claimed.
+if ! hosting::dry; then
+  helm_revision="$(hosting::read helm status "$release" --namespace "$namespace" -o json 2>/dev/null | jq -r '.version // ""' 2>/dev/null || true)"
+  [ -n "$helm_revision" ] \
+    || hosting::die "helm upgrade of ${release} in ${namespace} reported success but \`helm status\` returned no revision — the caller would have nothing to observe, and reporting an unobservable rollout as done is the failure this whole block exists to prevent."
+  hosting::log "applied   revision ${helm_revision} (NOT yet rolled out — the caller observes it)"
+  hosting::say helm_revision "$helm_revision"
+fi
 
 hosting::say release "$release"
 hosting::say namespace "$namespace"

@@ -32,6 +32,21 @@ public static class GitHubSyncConfiguration
     public static IServiceCollection AddGitHubSyncServices(this IServiceCollection services)
     {
         services.AddOptions<GitHubOAuthOptions>();
+        services.AddOptions<GitHubContentWorkflowOptions>()
+            .Configure<IConfiguration>((options, configuration) =>
+            {
+                foreach (var child in configuration
+                             .GetSection(GitHubContentWorkflowOptions.ConfigSection)
+                             .GetSection(nameof(GitHubContentWorkflowOptions.Repositories))
+                             .GetChildren())
+                {
+                    options.Repositories.Add(new GitHubContentWorkflow
+                    {
+                        Repository = child[nameof(GitHubContentWorkflow.Repository)] ?? "",
+                        Path = child[nameof(GitHubContentWorkflow.Path)] ?? "",
+                    });
+                }
+            });
         // GitHub App (machine identity): server-side operations — the plugin registry's sync of
         // the plugins repo, boot imports — authenticate as the App installation instead of a
         // personal credential. The host binds GitHub:App next to GitHub:OAuth; left unconfigured,
@@ -107,6 +122,12 @@ public static class GitHubSyncConfiguration
             sp.GetRequiredService<IStorageAdapter>(),
             sp.GetService<AccessService>(),
             sp.GetService<ILoggerFactory>()?.CreateLogger<SystemOwnedAccessRetractionHandler>()));
+        // …and the other half of that invariant: once nobody but System may hold a grant on the
+        // space, the config that made it so must still be VISIBLE and REMOVABLE by the persona who
+        // operates the platform. Platform admins always Read + Delete a sync config; everybody else
+        // exactly as before (see GitHubSyncConfigAccessRule).
+        services.AddSingleton<INodeTypeAccessRule>(sp =>
+            new GitHubSyncConfigAccessRule(sp.GetRequiredService<IMessageHub>()));
         // On-disk per-user git working trees (clone/edit/commit/push) — the working-tree
         // counterpart to content sync, shared by the AI harness + the in-portal editor.
         // Root binds from GitWorkspace:Root (env GitWorkspace__Root=/workspace in the portal,

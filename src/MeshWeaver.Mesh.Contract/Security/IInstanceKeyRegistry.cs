@@ -24,5 +24,24 @@ public interface IInstanceKeyRegistry
     /// </summary>
     /// <param name="instanceId">The instance's id — the value <c>PluginCatalog__InstanceId</c> carries.</param>
     /// <param name="keyHash">Lowercase SHA-256 hex (64 chars) of the new raw key.</param>
+    /// <remarks>
+    /// 🚨 IMMEDIATE, and therefore not what a rotation should call. It retires the old key before
+    /// anyone has proven the new one reaches the instance — the hazard MeshWeaver#2802's two-phase
+    /// protocol (<see cref="InstanceKeyRotation"/>, served on the registry's
+    /// <c>/api/instances/self/key/*</c>) exists to remove. It also only ever acts on the store of the
+    /// process it is called in, which is the registry only when that process IS the registry.
+    /// </remarks>
     IObservable<Unit> AdoptKeyHash(string instanceId, string keyHash);
+
+    /// <summary>
+    /// Revokes every key of the instance registered as <paramref name="instanceId"/> — the index
+    /// entries for its current and any staged key are deleted, so no key of it authenticates any
+    /// more, and its grants stay intact. For a key whose value nobody should have to know. Fails,
+    /// naming the id, when this registry holds no such instance — never a silent no-op on the wrong
+    /// store. The caller must be a global administrator of the registry.
+    /// </summary>
+    /// <param name="instanceId">The instance's id.</param>
+    IObservable<Unit> RevokeKey(string instanceId) =>
+        System.Reactive.Linq.Observable.Throw<Unit>(new NotSupportedException(
+            $"this {GetType().Name} cannot revoke instance keys"));
 }
