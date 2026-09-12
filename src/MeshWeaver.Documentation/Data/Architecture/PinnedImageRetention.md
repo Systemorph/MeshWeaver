@@ -720,6 +720,7 @@ the whole failure in one sentence.
 
 ## See also
 
+- [ArtifactRetentionInterlock](/Doc/Architecture/ArtifactRetentionInterlock) — the mechanism this page's job became: three axes (the third asks each installation what it is RUNNING), a completeness verdict that refuses rather than protecting less, and the TAG lock this page's manifest lock does not provide
 - [Image Cleanup](../ImageCleanup) — hand-pruning ACR safely, and the live-keeper rule this page extends from deployments to CI pins
 - [Module Versioning](../ModuleVersioning) — what a pin is, and why it is supposed to sit still
 - [Module Build Architecture](../ModuleBuildArchitecture) — pins move as one set, deliberately and rarely
