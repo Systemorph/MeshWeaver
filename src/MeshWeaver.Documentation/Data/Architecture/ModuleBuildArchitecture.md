@@ -134,6 +134,29 @@ which is untouched. Arithmetic for Plugins at N=6: the ~40 sub-minute pack legs 
 from ~40 billed minutes to ~7 (each batch ≈ 6 × 1.1 min of work ≈ 7 min, rounded once), and the
 per-leg checkout + SDK install is paid 7 times instead of 40.
 
+Every script that **operates this lane** moves with the lane: selection and newest-only scope,
+batch state, the build ledger protocol, the workspace postcondition, ACR transport, and the final
+receipt verifier. `select`, `prepare`, `build-workspace`, `pack`, `tests`, and `verify` fetch those
+clients from one resolved `build-logic-ref`, falling back to the exact reusable-workflow SHA when
+the input is absent. An explicit ref is an advanced compatibility pin: `select` requires an
+immutable SHA, verifies that its batching helper exists and supports the loaded workflow's
+`--workflow` contract, then self-tests the clients before making a build decision. It fails there
+with a migration message rather than letting an older helper fail later in a matrix job.
+
+The separate `meshweaver/` checkout stays at `platform-ref`, because that tree is the framework
+source and reference set the module compiles and tests against. Exactly two scripts deliberately
+move on that platform axis: `check-module-platform-floor.py`, whose SemVer result is parity-pinned
+to the selected runtime implementation, and `module-owned-platform.sh`, which measures the
+selected platform's shipped assembly set. The batching self-test reads the exact reusable workflow
+identified by GitHub's `job.workflow_repository` and `job.workflow_sha`, verifies that checkout
+resolved the stated SHA, and enforces that complete ownership map—including every ledger writer,
+the newest-only selector, the production verifier, and the two allowed platform clients. This
+closes the 2026-09-12 rollout failure in MeshWeaver.Plugins run 34706516117: the reusable workflow
+already contained batched legs, while the released platform pin `4764a607…` predated
+`module-pack-batch.py`; all seven test batches therefore stopped before running a suite. A lane
+helper or protocol client must always move on the tooling axis, independently of the platform it
+verifies.
+
 ### Where a module's own suite runs — and why `publish` decides
 
 A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last

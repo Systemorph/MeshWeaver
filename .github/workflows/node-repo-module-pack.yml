@@ -625,9 +625,12 @@ on:
         default: install
       build-logic-ref:
         description: >
-          Optional immutable core SHA for selection scripts. Separate from platform-ref, which
-          selects the framework source the tests build. Set it to opt into publication baseline
-          and dependency reuse; existing callers retain their platform-ref selector.
+          Optional immutable core SHA for lane orchestration scripts. Separate from platform-ref,
+          which selects the framework source the modules and tests build against. Set it to opt
+          into publication baseline and dependency reuse. The SHA must carry the same tooling
+          contract as the loaded reusable workflow; select checks that contract before it makes a
+          build decision. When absent, tooling comes from the exact reusable-workflow SHA GitHub
+          loaded — never from an independently older platform ref.
         required: false
         type: string
         default: ''
@@ -787,6 +790,11 @@ jobs:
     name: Select the affected bundles
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The helper is lane orchestration, while the workflow below is the exact definition GitHub
+      # loaded for this job. Keep both absolute so a later `cd` cannot silently change either.
+      MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
+      EXECUTING_WORKFLOW: ${{ github.workspace }}/lane-definition/.github/workflows/node-repo-module-pack.yml
     outputs:
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
       # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
@@ -811,6 +819,9 @@ jobs:
       selected: ${{ steps.scope.outputs.selected }}
       scope: ${{ steps.scope.outputs.scope }}
       lane: ${{ steps.lane.outputs.id }}
+      # One concrete tooling identity for every downstream job. An explicit input wins; otherwise
+      # use the exact reusable-workflow commit resolved from the job context below.
+      build-logic-ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}
       # The matrix as GIVEN, for the workflow's `declared` output — never the selection above, which a
       # narrowed run shrinks; the publication lane's set-aside check needs the whole catalog.
       declared: ${{ inputs.modules }}
@@ -917,15 +928,42 @@ jobs:
           # shallow clone would make every range unresolvable — which the scope script turns into
           # a FULL pack rather than an empty one, but silently paying for 29 jobs is not the plan.
           fetch-depth: 0
-      # The scope script is the PLATFORM's (one implementation, every repo), read from the same
-      # checkout the pack jobs make at platform-ref — so a workflow newer than the checkout can
-      # never call a script the checkout does not have (run 33073476996's exact failure).
-      - name: Check out Systemorph/MeshWeaver at the pinned ref
+      # A reusable workflow's `github` context belongs to its CALLER. The job context is the
+      # identity of the reusable workflow that actually defines this job. Read the whole context
+      # here because actionlint 1.7.x predates the workflow_* members and rejects direct property
+      # syntax; the runtime fields are then validated before they can become checkout inputs.
+      - name: Resolve the exact reusable workflow that defines this job
+        id: workflow
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          repository="$(jq -r '.workflow_repository // empty' <<< "$JOB_CONTEXT")"
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CONTEXT")"
+          [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is absent or invalid ('$repository')"; exit 1; }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is absent or invalid ('$sha')"; exit 1; }
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      # The scope scripts are the LANE'S tooling (one implementation, every repo), independently
+      # pinned from the framework source modules compile against. Pack/tests use this same resolved
+      # ref. If the caller does not supply one, the exact loaded workflow SHA is the only safe
+      # default: an older released platform cannot supply a newer lane's scripts (Plugins run
+      # 34706516117).
+      - name: Check out Systemorph/MeshWeaver at the build-logic ref
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.build-logic-ref || inputs.platform-ref }}
-          path: meshweaver
+          ref: ${{ inputs.build-logic-ref || steps.workflow.outputs.sha }}
+          path: build-logic
+      # The next step also verifies HEAD against the resolved job.workflow_sha before trusting the
+      # file as structural evidence, so neither build-logic-ref nor a moving @main can substitute.
+      - name: Check out the exact reusable workflow that defines this job
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.workflow.outputs.repository }}
+          ref: ${{ steps.workflow.outputs.sha }}
+          path: lane-definition
+          sparse-checkout: .github/workflows
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -935,20 +973,27 @@ jobs:
       - name: The selection can say no (self-test)
         env:
           BUILD_LOGIC_REF: ${{ inputs.build-logic-ref }}
+          JOB_WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
         run: |
           set -euo pipefail
           if [ -n "$BUILD_LOGIC_REF" ]; then
             [[ "$BUILD_LOGIC_REF" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::build-logic-ref must be an immutable SHA'; exit 1; }
           fi
-          python3 meshweaver/.github/scripts/node-repo-scope.py --self-test
+          actual_workflow_sha="$(git -C lane-definition rev-parse HEAD)"
+          [ "$actual_workflow_sha" = "$JOB_WORKFLOW_SHA" ] || { echo "::error::the workflow-definition checkout resolved '$actual_workflow_sha', but GitHub says this job is defined by '$JOB_WORKFLOW_SHA'"; exit 1; }
+          [ -f "$MODULE_PACK_BATCH" ] || { echo "::error::the resolved build-logic ref carries no .github/scripts/module-pack-batch.py. This workflow requires that helper; when build-logic-ref is explicit, move it to a commit compatible with the loaded reusable workflow."; exit 1; }
+          helper_help="$RUNNER_TEMP/module-pack-batch-help.txt"
+          python3 "$MODULE_PACK_BATCH" --help > "$helper_help"
+          grep -q -- '--workflow' "$helper_help" || { echo "::error::the resolved build-logic ref carries a module-pack-batch.py without the required --workflow contract. This workflow validates the exact YAML GitHub loaded; move an explicit build-logic-ref to a compatible commit, or omit it to use job.workflow_sha."; exit 1; }
+          python3 build-logic/.github/scripts/node-repo-scope.py --self-test
           if [ -n "$BUILD_LOGIC_REF" ]; then
-            python3 meshweaver/.github/scripts/node-repo-publication-base.py --self-test
-            python3 meshweaver/.github/scripts/node-repo-publication-reuse.py --self-test
+            python3 build-logic/.github/scripts/node-repo-publication-base.py --self-test
+            python3 build-logic/.github/scripts/node-repo-publication-reuse.py --self-test
           fi
-          python3 meshweaver/.github/scripts/node-repo-pack-verify.py --self-test
-          python3 meshweaver/.github/scripts/module-build-key.py --self-test
-          python3 meshweaver/.github/scripts/module-build-ledger.py --self-test
-          python3 meshweaver/.github/scripts/module-pack-batch.py --self-test
+          python3 build-logic/.github/scripts/node-repo-pack-verify.py --self-test
+          python3 build-logic/.github/scripts/module-build-key.py --self-test
+          python3 build-logic/.github/scripts/module-build-ledger.py --self-test
+          python3 "$MODULE_PACK_BATCH" --self-test --workflow "$EXECUTING_WORKFLOW"
       - name: Decide which module bundles this diff can reach
         id: scope
         env:
@@ -977,7 +1022,7 @@ jobs:
           if [ -n "$BUILD_LOGIC_REF" ] && [[ "$PUBLICATION_RUN" =~ ^[0-9]+$ ]] && [[ "$PUBLICATION_BASE" =~ ^[0-9a-f]{40}$ ]]; then
             publication_args=(--publication-base "$PUBLICATION_BASE")
           fi
-          python3 meshweaver/.github/scripts/node-repo-scope.py \
+          python3 build-logic/.github/scripts/node-repo-scope.py \
             --for modules --root repo --modules "@$RUNNER_TEMP/matrix.json" \
             --event "$EVENT" --base-ref "${BASE_REF:-}" --always "${ALWAYS:-}" \
             "${publication_args[@]}" > "$RUNNER_TEMP/scope.json"
@@ -1032,14 +1077,14 @@ jobs:
                 exit 0
               fi
               echo "module build ledger: REQUIRED — keying $COUNT selected module(s) against $MW_LEDGER_URL"
-              python3 meshweaver/.github/scripts/module-build-key.py --root repo \
+              python3 build-logic/.github/scripts/module-build-key.py --root repo \
                 --modules "@$RUNNER_TEMP/selection.json" \
                 --tester-digest "$TESTER_DIGEST" --platform-digest "$PLATFORM_DIGEST" --platform-ref "$PLATFORM_REF" \
                 > "$RUNNER_TEMP/keys.json"
               # Waits at most 40 of this job's 45 minutes on a live holder; a holder still busy then is
               # built anyway (a duplicate build, flagged), never a red. Exit 1 ONLY for a key the same
               # inputs already compiled RED elsewhere — that is a verdict, not the ledger's outage.
-              python3 meshweaver/.github/scripts/module-build-ledger.py decide \
+              python3 build-logic/.github/scripts/module-build-ledger.py decide \
                 --keys "@$RUNNER_TEMP/keys.json" --matrix "@$RUNNER_TEMP/selection.json" \
                 --publish "$PUBLISH" --lane "$MW_LEDGER_LANE" --wait-max 2400 --poll 30 \
                 --out-matrix "$RUNNER_TEMP/matrix.out.json" --out-build "$RUNNER_TEMP/build.out.json"
@@ -1067,7 +1112,7 @@ jobs:
             echo "build=$BUILD" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          python3 meshweaver/.github/scripts/node-repo-publication-reuse.py \
+          python3 build-logic/.github/scripts/node-repo-publication-reuse.py \
             --matrix "$MATRIX" --run "$PUBLICATION_RUN" --sha "$PUBLICATION_BASE"
 
       # ───────────── WHICH OF THE SELECTION STILL OWES A TEST RUN ─────────────
@@ -1111,10 +1156,10 @@ jobs:
         run: |
           set -euo pipefail
           echo "pack legs:"
-          python3 meshweaver/.github/scripts/module-pack-batch.py chunk \
+          python3 "$MODULE_PACK_BATCH" chunk \
             --modules "@$RUNNER_TEMP/final.json" --size "$BATCH_SIZE" --github-output "$GITHUB_OUTPUT"
           echo "tests legs:"
-          python3 meshweaver/.github/scripts/module-pack-batch.py chunk \
+          python3 "$MODULE_PACK_BATCH" chunk \
             --modules "@$RUNNER_TEMP/suites.json" --size "$BATCH_SIZE" --github-output "$GITHUB_OUTPUT" --prefix test-
           {
             echo "### Batched legs"
@@ -1169,6 +1214,13 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      - name: Check out the lane tools at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
       - name: Restore the module-pack tool (per-platform-pin cache)
         if: needs.select.outputs.build-modules != '[]'
         id: tool-cache
@@ -1241,7 +1293,7 @@ jobs:
           && (steps.image-cache.outputs.cache-hit != 'true'
               || steps.refs-cache.outputs.cache-hit != 'true'
               || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
-        run: bash meshweaver/.github/scripts/acr-login.sh
+        run: bash build-logic/.github/scripts/acr-login.sh
       - name: Fill whichever cache is cold — the run's ONE trip to the registry
         if: >-
           inputs.platform-image-digest != ''
@@ -1463,13 +1515,16 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
-      - name: Check out the ACR login helper
+      # The registry helper is lane orchestration too, but the global compiler mounts the whole
+      # workspace as its source tree. Fetch this one pre-build helper into a disposable path, then
+      # remove it before the mount; the durable tools checkout lands after the build below.
+      - name: Check out the ACR login helper at the build-logic ref
         if: inputs.acr-login == 'oidc'
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
-          path: meshweaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: build-logic-login
           sparse-checkout: .github/scripts/acr-login.sh
       - name: Restore the platform image tarball (per-digest cache)
         if: ${{ inputs.platform-image-digest != '' }}
@@ -1500,7 +1555,10 @@ jobs:
           inputs.acr-login == 'oidc'
           && ((inputs.platform-image-digest != '' && steps.image-cache.outputs.cache-hit != 'true')
               || (inputs.tester-image-digest != '' && steps.tester-cache.outputs.cache-hit != 'true'))
-        run: bash meshweaver/.github/scripts/acr-login.sh
+        run: bash build-logic-login/.github/scripts/acr-login.sh
+      - name: Keep lane tooling out of the global compiler's source mount
+        if: inputs.acr-login == 'oidc'
+        run: rm -rf build-logic-login
       # 🚨 `build-modules`, not `modules`: the ledger handed some entries a reusable bundle, and those
       # are NOT compiled here. The postcondition below is fed the SAME list — one enumerator.
       - name: Build every selected container entry in ONE workspace
@@ -1624,17 +1682,19 @@ jobs:
             --entrypoint dotnet "$img" \
             /tester/mw-plugin-test.dll build-project "${args[@]}" --output /out --bind-to-image ${accepts[@]+"${accepts[@]}"} ${superseded[@]+"${superseded[@]}"} 2>&1 | tee "$out/workspace-build.log"
           echo "built=true" >> "$GITHUB_OUTPUT"
-      # 🚨 THE PLATFORM CHECKOUT LANDS **AFTER** THE BUILD, ON PURPOSE. This job mounts
+      # 🚨 THE TOOLING CHECKOUT LANDS **AFTER** THE BUILD, ON PURPOSE. This job mounts
       # `$GITHUB_WORKSPACE` at `/repo:ro` for the container build, so anything checked out beside
-      # the content tree BEFORE that line is inside what the builder sees. The pack job checks
-      # core out at `path: meshweaver` up front because it has no such mount; here the order is
-      # inverted so the compile input stays exactly the content repository and nothing else.
-      - name: Check out Systemorph/MeshWeaver at the pinned ref
+      # the content tree before that line becomes compiler input. `always()` makes the ledger's
+      # failure writer available when the global build itself fails; the checkout is tooling only,
+      # because this job's platform is the digest-pinned image above.
+      - name: Check out the lane tools at the build-logic ref
+        if: always()
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
-          path: meshweaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
       # ───────────── THE BUILD ASSERTS ITS OWN POSTCONDITION (Plugins#1051) ─────────────
       # A green here used to mean "the compiler did not throw" and was read as "the selected set
       # was emitted". Those are different claims, and the gap between them surfaced N JOBS LATER:
@@ -1658,9 +1718,9 @@ jobs:
           MODULES: ${{ needs.select.outputs.build-modules }}
         run: |
           set -euo pipefail
-          python3 meshweaver/.github/scripts/workspace-build-verify.py --self-test
+          python3 build-logic/.github/scripts/workspace-build-verify.py --self-test
           printf '%s' "$MODULES" > "$RUNNER_TEMP/selection.json"
-          python3 meshweaver/.github/scripts/workspace-build-verify.py \
+          python3 build-logic/.github/scripts/workspace-build-verify.py \
             --modules "@$RUNNER_TEMP/selection.json" \
             --output "$RUNNER_TEMP/module-build"
       # ───────── THE LEDGER HEARS ABOUT THIS JOB — a heartbeat on success, the verdict on failure ─────────
@@ -1681,7 +1741,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r key; do
             [ -n "$key" ] || continue
-            python3 meshweaver/.github/scripts/module-build-ledger.py heartbeat --key "$key"
+            python3 build-logic/.github/scripts/module-build-ledger.py heartbeat --key "$key"
           done < <(jq -r '.[] | select(.build == "container") | .ledger.key // empty' <<< "$MODULES")
       - name: Ledger — record the compile verdict of a failed workspace
         if: failure() && inputs.ledger == 'required'
@@ -1704,7 +1764,7 @@ jobs:
             else
               { echo "the one-workspace build failed before this module's verdict; log tail:"; tail -40 "$log" 2>/dev/null; } > "$evidence"
             fi
-            python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase "$phase" --failure-file "$evidence" || true
+            python3 build-logic/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase "$phase" --failure-file "$evidence" || true
           done < <(jq -r '.[] | select(.build == "container") | select(.ledger.key != null) | [.module, .project, .ledger.key] | @tsv' <<< "$MODULES")
       - name: Hand the workspace to the matrix
         if: steps.build.outputs.built == 'true'
@@ -1747,6 +1807,9 @@ jobs:
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
+      # Workflow orchestration belongs to build-logic-ref. The platform checkout below is the
+      # framework source/tests compile against and can deliberately predate this lane's scripts.
+      MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
     # Inherit the caller's least-privilege map; declaring OIDC here rejects basic-auth callers at
     # graph creation time, before this job's `acr-login` mode can choose its conditional steps.
     # 🚨 This is a MODE SWITCH on the selection's own output, not a skip-trapdoor: GitHub refuses
@@ -1808,6 +1871,13 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      - name: Check out the batching helper at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
       # ───────────── THIS LEG'S MODULES — enumerated once, from the matrix batch ─────────────
       # The state file every step below drives; `init` refuses an empty or duplicated batch. The
       # module list is printed here so a leg's log opens with what it owns.
@@ -1824,7 +1894,7 @@ jobs:
           # and writes it through module-pack-batch.py; exported ONCE, here, so no step can point
           # at another file (a job-level `env:` cannot read `runner.temp`).
           echo "BATCH_STATE=$RUNNER_TEMP/batch/state.json" >> "$GITHUB_ENV"
-          python3 meshweaver/.github/scripts/module-pack-batch.py --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
+          python3 "$MODULE_PACK_BATCH" --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
       # ═══════ THE .NET SDK — INSTALLED BECAUSE SOMETHING DECLARED IT, NOT BY REFLEX ═══════
       # 🚨 "make installing dotnet sdk a feature flag" (maintainer, 2026-08-31). The rationale and
       # the anti-trapdoor argument are at the top of this file, under "The .NET SDK is a DECLARED
@@ -1841,7 +1911,7 @@ jobs:
           POLICY: ${{ inputs.dotnet-sdk }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           # EVERY consumer this job would hand to a runner SDK, named one by one and evaluated
           # against every entry of the batch — not a summary, an inventory. `build: container`
           # (MeshWeaver#2854) removes the COMPILER from it and NOTHING ELSE: the container path
@@ -1936,7 +2006,7 @@ jobs:
           PLATFORM_VERSION: ${{ needs.prepare.outputs.platform-version }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
             PACKAGE="$(bk get --module "$MODULE" package)"
@@ -2005,7 +2075,7 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
             ENTRY_LEDGER="$(bk get --module "$MODULE" ledger --default null)"
@@ -2034,7 +2104,7 @@ jobs:
                   echo "plan: REUSE $MODULE from run $art_run ($art_name, sha256 ${sha:-unrecorded}; holder $holder) — tests: $need_test, publish: $need_publish"
                 else
                   echo "plan: BUILD $MODULE (ledger key ${key:-<none>}; $(jq -r 'if .unavailable then "WITHOUT coordination: " + .unavailable else "attempt " + (.attempts|tostring) end' <<< "$ENTRY_LEDGER")) — tests: $need_test, publish: $need_publish"
-                  [ -z "$key" ] || python3 meshweaver/.github/scripts/module-build-ledger.py heartbeat --key "$key"
+                  [ -z "$key" ] || python3 build-logic/.github/scripts/module-build-ledger.py heartbeat --key "$key"
                 fi
               else
                 echo "plan: BUILD $MODULE (ledger off) — tests: $need_test, publish: $need_publish"
@@ -2266,7 +2336,7 @@ jobs:
           PLATFORM_APP: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.app || '' }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=build)
           [ "${#modules[@]}" -gt 0 ] || echo "no module in this batch is built here — every one is reused from the ledger, or failed before this step (see above)"
           for MODULE in "${modules[@]}"; do
@@ -2448,7 +2518,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=reuse)
           [ "${#modules[@]}" -gt 0 ] || echo "no module in this batch is reused from the ledger"
           for MODULE in "${modules[@]}"; do
@@ -2513,7 +2583,7 @@ jobs:
           PLATFORM_APP: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.app || '' }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=build)
           [ "${#modules[@]}" -gt 0 ] || { echo "nothing to pack in this batch"; exit 0; }
           own="$(bash "$GITHUB_WORKSPACE/meshweaver/.github/scripts/module-owned-platform.sh" "$GITHUB_WORKSPACE/src" ${PLATFORM_APP:+"$PLATFORM_APP"})"
@@ -2643,7 +2713,7 @@ jobs:
           PLATFORM_APP: ${{ inputs.platform-image-digest != '' && steps.refs.outputs.app || '' }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=build)
           [ "${#modules[@]}" -gt 0 ] || { echo "nothing to inspect in this batch"; exit 0; }
           # ONE script computes the set for the pack AND for this check — and with $PLATFORM_APP it
@@ -2764,7 +2834,7 @@ jobs:
         id: bundles
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           echo "paths=$(bk paths bundle)" >> "$GITHUB_OUTPUT"
           bk slots --max 10 --where 'bundle!=' --github-output "$GITHUB_OUTPUT"
 
@@ -2869,7 +2939,7 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where decision=build --where 'key!=' --where 'bundle!=')
           for MODULE in "${modules[@]}"; do
             KEY="$(bk get --module "$MODULE" key)"
@@ -2877,7 +2947,7 @@ jobs:
             VERSION="$(bk get --module "$MODULE" version)"
             set +e
             ( set -euo pipefail
-              python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Built \
+              python3 build-logic/.github/scripts/module-build-ledger.py record --key "$KEY" --status Built \
                 --bundle "$BUNDLE" --artifact-name "module-bundle-$MODULE" --retention-days 7 \
                 --version "$VERSION" ${PLATFORM_IDENTITY:+--platform-identity "$PLATFORM_IDENTITY"}
             )
@@ -2915,7 +2985,7 @@ jobs:
           LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mkdir -p "$RUNNER_TEMP/built"
           [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so no marker of this leg could be attributed to this call and the verifier would refuse it anyway. Failing here, where it is readable."; exit 1; }
           any=false
@@ -3007,7 +3077,7 @@ jobs:
           DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           evidence=false
           mapfile -t modules < <(bk list --ok --where need_test=true)
           for MODULE in "${modules[@]}"; do
@@ -3061,11 +3131,11 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where tested=true --where 'key!=')
           for MODULE in "${modules[@]}"; do
             KEY="$(bk get --module "$MODULE" key)"
-            python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Tested --trx "$RUNNER_TEMP/trx/$MODULE/ledger.trx" \
+            python3 build-logic/.github/scripts/module-build-ledger.py record --key "$KEY" --status Tested --trx "$RUNNER_TEMP/trx/$MODULE/ledger.trx" \
               || bk fail --module "$MODULE" --phase test --reason "the ledger refused the Tested record (see above)"
           done
 
@@ -3100,7 +3170,7 @@ jobs:
           TRUNK: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           [ -z "$CONTENT_REPOSITORY" ] || { echo "::error::publish-newest-only reads THIS repository's trunk, but content-repository is '$CONTENT_REPOSITORY' — a lane packing another repository's content cannot say whether a newer commit of it exists. Turn one of the two off."; exit 1; }
           [ -n "$TRUNK" ] || { echo "::error::the event carries no default branch, so the trunk tip cannot be read — and 'cannot tell' must never publish as 'nothing newer'."; exit 1; }
           git fetch --no-tags --depth=1 origin "+refs/heads/$TRUNK:refs/remotes/origin/$TRUNK"
@@ -3124,7 +3194,7 @@ jobs:
                 mkdir -p "$RUNNER_TEMP/mods/$MODULE"
                 bk get --module "$MODULE" entry --default '{}' | jq '[.]' > "$RUNNER_TEMP/mods/$MODULE/newer-entry.json"
                 GITHUB_OUTPUT="$RUNNER_TEMP/mods/$MODULE/newer-scope.out" GITHUB_STEP_SUMMARY=/dev/null \
-                  python3 meshweaver/.github/scripts/node-repo-scope.py --for modules --root . \
+                  python3 build-logic/.github/scripts/node-repo-scope.py --for modules --root . \
                     --modules "@$RUNNER_TEMP/mods/$MODULE/newer-entry.json" --event pull_request \
                     --changed-list "$changed" > "$RUNNER_TEMP/mods/$MODULE/newer-scope.json"
                 if [ "$(jq -r '.count' "$RUNNER_TEMP/mods/$MODULE/newer-scope.json")" != "0" ]; then
@@ -3172,7 +3242,7 @@ jobs:
           BUNDLES: ${{ steps.bundles.outputs.paths }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           if [ -z "${TOKEN:-}" ]; then
             echo "::error::publish was requested but no publish-token secret was provided — the registry would never receive this batch's modules, and this job would have reported success"
             exit 1
@@ -3236,11 +3306,11 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where published=true --where 'key!=')
           for MODULE in "${modules[@]}"; do
             KEY="$(bk get --module "$MODULE" key)"
-            python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Published \
+            python3 build-logic/.github/scripts/module-build-ledger.py record --key "$KEY" --status Published \
               || bk fail --module "$MODULE" --phase publish --reason "the ledger refused the Published record (see above)"
           done
 
@@ -3276,7 +3346,7 @@ jobs:
           BUNDLES: ${{ steps.bundles.outputs.paths }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mkdir -p "$RUNNER_TEMP/staged"
           [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so no staged publication of this leg could be attributed to this call and the publication lane would refuse it anyway. Failing here, where it is readable."; exit 1; }
           any=false
@@ -3367,7 +3437,7 @@ jobs:
           BUNDLES: ${{ steps.bundles.outputs.paths }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mkdir -p "$RUNNER_TEMP/receipts"
           [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so no receipt of this leg could be attributed to this call."; exit 1; }
           any=false
@@ -3479,8 +3549,8 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -uo pipefail
-          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f meshweaver/.github/scripts/module-pack-batch.py ] || { echo "the leg stopped before its modules were enumerated — no claim of this leg to record against"; exit 0; }
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f "$MODULE_PACK_BATCH" ] || { echo "the leg stopped before its modules were enumerated — no claim of this leg to record against"; exit 0; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           record() {
             local MODULE="$1" phase="$2" note="$3" key trx
@@ -3492,7 +3562,7 @@ jobs:
             trx="$RUNNER_TEMP/trx/$MODULE/ledger.trx"
             trxarg=()
             if [ -f "$trx" ]; then trxarg=(--trx "$trx"); fi
-            python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase "$phase" \
+            python3 build-logic/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase "$phase" \
               --failure-file "$RUNNER_TEMP/mods/$MODULE/failure.txt" ${trxarg[@]+"${trxarg[@]}"} || true
           }
           for MODULE in $(bk list --failed); do
@@ -3513,10 +3583,10 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -uo pipefail
-          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f meshweaver/.github/scripts/module-pack-batch.py ] || exit 0
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f "$MODULE_PACK_BATCH" ] || exit 0
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           for MODULE in $(bk list --where 'key!='); do
-            python3 meshweaver/.github/scripts/module-build-ledger.py release --key "$(bk get --module "$MODULE" key)" || true
+            python3 build-logic/.github/scripts/module-build-ledger.py release --key "$(bk get --module "$MODULE" key)" || true
           done
       # The leg is over for the modules still in play: a record left at Built/Tested (no publish on
       # this event) is marked finished so a follower stops waiting for a publish that will never
@@ -3529,9 +3599,9 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           for MODULE in $(bk list --ok --where 'key!='); do
-            python3 meshweaver/.github/scripts/module-build-ledger.py finish --key "$(bk get --module "$MODULE" key)"
+            python3 build-logic/.github/scripts/module-build-ledger.py finish --key "$(bk get --module "$MODULE" key)"
           done
 
       # ─────────────────────────── THE VERDICT — one line per module, LAST ───────────────────────────
@@ -3543,7 +3613,7 @@ jobs:
       - name: Every module of this batch has its verdict
         run: |
           set -euo pipefail
-          python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
+          python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
 
   # ════════ THE MODULE SUITES — A LANE OF THEIR OWN ON A NON-PUBLISHING RUN ════════
   # 🚨 THE MEASUREMENT THIS JOB EXISTS FOR (MeshWeaver.Plugins run 33656010754, a 39-minute PR):
@@ -3619,6 +3689,9 @@ jobs:
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
+      # Keep the orchestration helper on the lane/tooling axis; meshweaver remains the platform
+      # source axis used by dotnet test below.
+      MODULE_PACK_BATCH: ${{ github.workspace }}/build-logic/.github/scripts/module-pack-batch.py
     strategy:
       # One leg's red suite must not hide the rest — a sweep wants every verdict in one run.
       fail-fast: false
@@ -3659,6 +3732,13 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      - name: Check out the batching helper at the build-logic ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
       - name: This leg's modules
         env:
           BATCH: ${{ toJSON(matrix.batch) }}
@@ -3671,7 +3751,7 @@ jobs:
           # and writes it through module-pack-batch.py; exported ONCE, here, so no step can point
           # at another file (a job-level `env:` cannot read `runner.temp`).
           echo "BATCH_STATE=$RUNNER_TEMP/batch/state.json" >> "$GITHUB_ENV"
-          python3 meshweaver/.github/scripts/module-pack-batch.py --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
+          python3 "$MODULE_PACK_BATCH" --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
       # 🚨 UNCONDITIONAL, and the log says why. `dotnet-sdk: by-declaration` exists so a job that
       # compiles nothing on the runner stops installing an SDK by reflex — but this job's ONLY
       # work is `dotnet test`, a verb the platform image's build-project does not have at all. So
@@ -3704,7 +3784,7 @@ jobs:
           DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           evidence=false
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
@@ -3755,11 +3835,11 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mapfile -t modules < <(bk list --ok --where tested=true --where 'ledger.key!=')
           for MODULE in "${modules[@]}"; do
             KEY="$(bk get --module "$MODULE" ledger.key)"
-            python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$KEY" --status Tested --trx "$RUNNER_TEMP/trx/$MODULE/ledger.trx" \
+            python3 build-logic/.github/scripts/module-build-ledger.py record --key "$KEY" --status Tested --trx "$RUNNER_TEMP/trx/$MODULE/ledger.trx" \
               || bk fail --module "$MODULE" --phase test --reason "the ledger refused the Tested record (see above)"
           done
       - name: Upload the failing suites' evidence
@@ -3786,7 +3866,7 @@ jobs:
           LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           mkdir -p "$RUNNER_TEMP/test-receipts"
           [ -n "$LANE" ] || { echo "::error::the lane key is empty — the select job did not produce one, so no receipt of this leg could be attributed to this call and the verifier would refuse it anyway."; exit 1; }
           any=false
@@ -3822,8 +3902,8 @@ jobs:
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -uo pipefail
-          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f meshweaver/.github/scripts/module-pack-batch.py ] || { echo "the leg stopped before its modules were enumerated — nothing to record"; exit 0; }
-          bk() { python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" "$@"; }
+          [ -n "${BATCH_STATE:-}" ] && [ -f "$BATCH_STATE" ] && [ -f "$MODULE_PACK_BATCH" ] || { echo "the leg stopped before its modules were enumerated — nothing to record"; exit 0; }
+          bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
           record() {
             local MODULE="$1" note="$2" key trx
             key="$(bk get --module "$MODULE" ledger.key)"
@@ -3833,7 +3913,7 @@ jobs:
             trx="$RUNNER_TEMP/trx/$MODULE/ledger.trx"
             trxarg=()
             if [ -f "$trx" ]; then trxarg=(--trx "$trx"); fi
-            python3 meshweaver/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase test \
+            python3 build-logic/.github/scripts/module-build-ledger.py record --key "$key" --status Failed --phase test \
               --failure-file "$RUNNER_TEMP/mods/$MODULE/failure.txt" ${trxarg[@]+"${trxarg[@]}"} || true
           }
           for MODULE in $(bk list --failed); do
@@ -3848,7 +3928,7 @@ jobs:
       - name: Every module of this batch has its verdict
         run: |
           set -euo pipefail
-          python3 meshweaver/.github/scripts/module-pack-batch.py --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
+          python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" verdict --summary "$GITHUB_STEP_SUMMARY"
 
   # ═══════════════ THE COUNT GATE — one STABLE context, on every run ═══════════════
   # 🚨 A dynamic matrix cannot be a fixed list of required status checks: the per-module contexts
@@ -3880,12 +3960,14 @@ jobs:
     outputs:
       bundles-built: ${{ steps.verify.outputs.bundles_built }}
     steps:
-      - name: Check out Systemorph/MeshWeaver at the pinned ref
+      - name: Check out the verifier at the build-logic ref
+        if: needs.select.result == 'success'
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
-          ref: ${{ inputs.platform-ref }}
-          path: meshweaver
+          ref: ${{ needs.select.outputs.build-logic-ref }}
+          path: build-logic
+          sparse-checkout: .github/scripts
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -3981,7 +4063,7 @@ jobs:
           # by module name; `--lane` separates them by the stamp the producer wrote, so a marker
           # or receipt this call cannot attribute to itself is set aside and NAMED, and a
           # SELECTED module left without one reads as not built.
-          python3 meshweaver/.github/scripts/node-repo-pack-verify.py \
+          python3 build-logic/.github/scripts/node-repo-pack-verify.py \
             --expected "$EXPECTED" \
             --receipts "$RUNNER_TEMP/receipts" \
             --pack-result "$PACK_RESULT" \
