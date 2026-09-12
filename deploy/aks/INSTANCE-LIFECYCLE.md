@@ -117,6 +117,13 @@ rule is in the mesh's pure, unit-tested plan. What the scripts themselves guaran
   teardown is never retried from the top, where it would re-dump over a verified archive.
 - **`hosting-kv-ensure` never overwrites an existing master key.** Regenerating it would make every
   stored `enc:` value in that instance's database permanently unreadable.
+- **`hosting-kv-copy` materialises a fleet-shared object under the instance's prefix and never
+  rewrites one that exists** (MeshWeaver.Plugins#1723). The record's
+  `keyVaultSecrets.secrets[].copyFrom` names the source; an absent target is copied through
+  `--file`, an existing one is kept and compared with its source BY HASH — a difference is a
+  reported fact (`kv_copy_drift`), not a failure — and no value is ever printed or put on argv.
+  It exists because `hosting-kv-purge` deletes by prefix: a cross-prefix mapping would let the
+  first teardown take the shared credential with it.
 - **`hosting-export` never prints the URL it mints.** A user-delegation SAS is a bearer credential;
   it goes into a one-shot Secret the mesh reads once and deletes.
 - **`hosting-verify-catalog` proves the plugin mounts took.** An instance with green pods and an
