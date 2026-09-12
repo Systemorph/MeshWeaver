@@ -84,9 +84,46 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > **Still not measured: pull latency** — the paragraph at the end of this page stands; every
 > consuming instance now produces the measurement for free, and it should be read.
 >
-> Today container images still live in Azure Container
-> Registry (`meshweaver.azurecr.io`), named by `ACR:` in `main-cd.yml` and referenced by eight
-> workflows; moving the producers and consumers over is the next increment, not this page's.
+> **PUBLISHED (2026-09-08): CD publishes every image AND every sealed bundle publication to
+> `cr.meshweaver.cloud`, beside ACR** — the last step of the fleet-registry program (#3353).
+> Nothing is rebuilt for the second registry and ACR is not dropped: `memex.meshweaver.cloud`
+> hosts the registry pods and keeps pulling from ACR (the bootstrap constraint above), while
+> every other installation pulls from cr.
+>
+> * **Images.** Each of `main-cd.yml`'s three `Build + push …` legs (`memex-portal-ai`,
+>   `memex-migration`, `mw-plugin-test`) logs in to cr as the publisher and, in the same job right
+>   after the ACR push, copies its staging tag there with
+>   `.github/scripts/mirror-image-to-registry.sh` — `docker buildx imagetools create` with a single
+>   source, which copies the index descriptor as-is (the operation `promote` has always used for
+>   GHCR), so a digest-pinned consumer resolves the **identical** object on either host. `promote`
+>   then writes every consumer-visible tag on cr in the same phase it writes it on ACR: the
+>   identity tags (`<version>`, `<short sha>`, `<core>-p<plugins>`), the pointers (`main`,
+>   `latest`), the arming write `memex-portal-ai:<version>` (ACR first, cr immediately after,
+>   inside phase C — an installation consuming cr lists cr's tags, so that is its arming write),
+>   and the line pointers (`3-latest`, `3.0-latest`, `3.0.0-latest`).
+> * **The verification, and it is the same script every time:** after the copy, the target's
+>   digest is read BACK off cr (`docker buildx imagetools inspect … .Manifest.Digest`) and compared
+>   to ACR's; a mismatch, or a digest that cannot be read, fails that job RED. A tag existing on cr
+>   is not evidence about the bytes under it, and "verify the IMAGE, never the green tick" is the
+>   deployment doctrine. Only the readback proves an installation on cr and one on ACR roll the same
+>   build.
+> * **Bundles.** Every sealed publication — core's `meshweaver-content` and `plugins` bakes and
+>   every satellite's `node-repo-publish-bake.yml` — is pushed as the OCI index
+>   `plugins/<source>:<identity>` after the share seal, by `push-bundle-publication.sh`. The design
+>   and the consumers are on [Plugin Bundles in the Registry](../PluginBundlesInTheRegistry).
+> * **The credential.** One static account, `publisher` (`registry.publisher.username`), whose
+>   password is Key Vault `Systemorph` → `memexcloud-Registry-PublisherPassword` and whose bcrypt
+>   hash the chart carries. In CI it is `secrets.MW_REGISTRY_PUBLISHER_PASSWORD`, asserted RED by
+>   `main-cd.yml`'s `preflight` and by the bake lane's own preflight — never an `if:` that skips
+>   the push when it is unset — and provisioned in BOTH secret stores (Actions AND Dependabot) of
+>   every repository that calls the lane. `registry-login.sh` refuses a rejected password
+>   immediately rather than retrying it for the transport window.
+> * **Still on ACR, by design:** `memex.meshweaver.cloud` itself (bootstrap); `gate`'s
+>   completeness probe and `verify-images` (`check-image-set.sh` reads ACR through ARM — the set's
+>   completeness is decided on the producer's first registry, and cr holds the same digests by the
+>   readback above); the release promotion (`release.yml` retags ACR + GHCR — promoting a sealed
+>   set on cr is the next increment). What CD does NOT yet do: `verify-images` does not
+>   re-enumerate cr; the per-job readback is the evidence.
 
 ## The registry as a separate service
 
