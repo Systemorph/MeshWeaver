@@ -29,13 +29,41 @@ So, in `OciTagLister.ResolveCredential` — **selecting** the credential:
 Both rows need TWO explicit statements. A declaration alone grants nothing (there is still no key for
 that host); a key alone grants nothing (nothing says that registry trusts that portal).
 
-**And the destination itself is validated first.** `SelfUpdate:Registry` must already be a bare
-`host[:port]`: `OciRegistryClient` builds `https://{registry}/` for a value with no scheme, so
-`instance:mwi_…@evil.example` would be a valid URI whose host is `evil.example` and would receive the
-Basic credential. Host equality could never match such a value, so it is the declared-validator row
-that would otherwise make it reachable — the target check is what keeps that row from opening a
-disclosure path. A value that does not parse to an http(s) host is refused **without being echoed**,
-because the userinfo is where a key would be.
+## 🚨 This IS a trust expansion — say so
+
+**Before this change, the instance key could reach only a host that had a plugin registry configured
+on it. After it, the key can reach ANY host, provided some configured plugin registry is declared to
+be that host's validator.** That is the feature working as designed — the fleet's registry is exactly
+such a host — and it is fail-closed. But it widens who can receive a credential, and three things
+bound it:
+
+1. **An explicit declaration.** `SelfUpdate:RegistryValidationUrl` must name the validator. Absent,
+   nothing changes; absence is never permission, and no resemblance of names substitutes for it.
+2. **A bare-host target.** `SelfUpdate:Registry` must already be `host[:port]` (below).
+3. **A plugin registry actually configured at the declared validator.** A declaration for a host this
+   installation holds no key for grants nothing — there is no key to select.
+
+Remove any one of the three and the expansion becomes unbounded. They are not defence in depth; each
+one is load-bearing.
+
+### The destination is validated first, and here is the attack that requires it
+
+**`SelfUpdate:Registry` must already be a bare `host[:port]`.** `OciRegistryClient` builds
+`https://{registry}/` for a value with no scheme, so `instance:mwi_…@evil.example` is a *valid* URI
+whose host is `evil.example` — it receives the Basic credential, and the raw value is interpolated
+into a dozen of that client's error messages besides.
+
+🚨 **The fix introduced the vulnerability it exists to prevent.** Host equality could never match
+`instance:mwi_…@evil.example`, so the old code always refused it. The declared-validator rule matches
+on the *declared* host and never looks at the *target* — so the new trust path made a previously
+unreachable value reachable. Measured, not argued: with the target check deleted, the test fixture's
+attacker host received **two** credentials (Basic at the token realm, then the Bearer).
+
+That is why the requirement is host-EQUALITY and not merely "parses to a host". Do not simplify it
+back to `HostOf(registry)`: normalizing silently would accept a URL form here while
+`PortalImage`/`MigrationImage` — which interpolate the same value — stayed malformed, and the
+constraint would have lost the reason it exists. A value that does not parse to an http(s) host is
+refused **without being echoed**, because the userinfo is where a key would be.
 
 ## Why host equality was wrong
 
@@ -122,6 +150,21 @@ produce a line.
   loosening the host comparison turns this green, which is exactly the point.
 - **a declared validator this installation holds no key for** — refused. A declaration alone is not a
   grant.
+- **a target carrying userinfo** — refused, and the refusal does not echo the value.
+
+🚨 **A negative control must be proven to have RUN, not merely to be green.** Both traps were hit
+while writing these, and both produced a confident pass:
+
+- A falsification patch that **did not compile**, run with `--no-build`, reported `11/11 passed` off
+  the stale assembly — "I did not check" wearing the costume of "I checked and it was fine".
+- The disclosure assertion was at first **vacuous**: the fake answered an unknown host with `404`,
+  and the OCI client only presents Basic *after* a `401` challenge, so no credential could ever be
+  observed leaking and the assertion passed by construction. The fake now makes an unknown host
+  behave like a **hostile registry** — it challenges, serves `/v2/token`, and records whatever
+  secret it is handed. That is what turns "no credential was seen" from a tautology into a test.
+
+So each negative here was checked by deleting the guard, rebuilding for real, and confirming it goes
+red for the *right* reason.
 
 ## See also
 

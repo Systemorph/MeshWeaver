@@ -140,7 +140,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         fault.Message.Should().Contain("PluginCatalog",
             "the fix is a configuration change, and the message has to say which one");
         mirror.Requests.Should().Be(0, "a listing with no credential could only ever be a 401");
-        mirror.PresentedSecret.Should().BeNull(
+        mirror.CredentialsSeen.Should().BeEmpty(
             "the guard is a disclosure control: an arbitrary host named in SelfUpdate:Registry must "
             + "never be handed this installation's instance key");
     }
@@ -197,7 +197,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         fault.Message.Should().Contain("SelfUpdate:RegistryValidationUrl",
             "an absent declaration is refused AND the message says what would declare it");
         mirror.Requests.Should().Be(0);
-        mirror.PresentedSecret.Should().BeNull(
+        mirror.CredentialsSeen.Should().BeEmpty(
             "an undeclared pairing is not permission — the key never goes out");
     }
 
@@ -218,7 +218,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         fault.Message.Should().Contain("someone-elses-portal.example.test");
         fault.Message.Should().Contain("PluginCatalog:Registries");
         mirror.Requests.Should().Be(0);
-        mirror.PresentedSecret.Should().BeNull(
+        mirror.CredentialsSeen.Should().BeEmpty(
             "the key is only ever presented to a host this installation was issued one for");
     }
 
@@ -246,8 +246,10 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         fault.Message.Should().NotContain("mwi_");
         fault.Message.Should().Contain("SelfUpdate:Registry");
         mirror.Requests.Should().Be(0);
-        mirror.PresentedSecret.Should().BeNull(
-            "a declared validator must never make an unparseable target reachable");
+        mirror.CredentialsSeen.Should().BeEmpty(
+            "a declared validator must never make an unparseable target reachable — and this "
+            + "assertion is recorded before the fake's host check, so it can see a credential sent "
+            + "to evil.example.test, which PresentedSecret by construction could not");
     }
 
     /// <summary>
@@ -267,6 +269,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         fault.Message.Should().Contain(MirrorHost, "the message names the value to set instead");
         fault.Message.Should().Contain("bare registry host");
         mirror.Requests.Should().Be(0);
+        mirror.CredentialsSeen.Should().BeEmpty();
     }
 
     /// <summary>The declaration is read WHOLE-HOST or not at all — never a suffix, a registrable
@@ -375,21 +378,44 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         public string? PresentedSecret;
 
         private ImmutableList<string> servedHosts = ImmutableList<string>.Empty;
+        private ImmutableList<string> credentialsSeen = ImmutableList<string>.Empty;
 
         /// <summary>Every host a request actually reached — the listing must go to the CONTAINER
         /// registry, never to the portal whose key authenticates it.</summary>
         public ImmutableList<string> ServedHosts => servedHosts;
+
+        /// <summary>
+        /// 🚨 Every host that was sent ANY credential, recorded BEFORE the host check — which is
+        /// what makes the disclosure assertions non-vacuous. <see cref="PresentedSecret"/> is only
+        /// assigned inside the <c>/v2/token</c> branch, reached solely for the two hosts this fake
+        /// serves, so on its own it would read null even if the key HAD been sent to
+        /// <c>evil.example.test</c> — an assertion that cannot fail for exactly the host the
+        /// negatives exist to catch. This one can.
+        /// </summary>
+        public ImmutableList<string> CredentialsSeen => credentialsSeen;
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref Requests);
             var uri = request.RequestUri!;
-            // Both fleet shapes on one fake: the portal that serves its own /v2 mirror, and a
-            // container registry on its own host whose key is validated by that portal.
-            if (uri.Host is not (MirrorHost or RegistryHost))
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-            ImmutableInterlocked.Update(ref servedHosts, current => current.Add(uri.Host));
+            if (request.Headers.Authorization is { } offered)
+                ImmutableInterlocked.Update(ref credentialsSeen,
+                    current => current.Add($"{offered.Scheme} to {uri.Host}"));
+
+            // 🚨 AN UNKNOWN HOST BEHAVES LIKE A HOSTILE REGISTRY, NOT LIKE A 404.
+            //
+            // This is what makes the disclosure assertions real. The client presents Basic only
+            // AFTER a 401 Bearer challenge, so a fake that answered 404 here could never observe a
+            // leaked credential — and a negative asserting "no credential was seen" would pass by
+            // construction whatever the code did. (Measured: with the target guard deleted, that
+            // shape of fixture reported a clean PASS.) A real attacker-controlled host issues the
+            // challenge, so this one does too: it challenges, it serves /v2/token, and it records
+            // whatever secret is handed over. Only the tags listing stays restricted to the two
+            // hosts this fixture legitimately serves.
+            var known = uri.Host is MirrorHost or RegistryHost;
+            if (known)
+                ImmutableInterlocked.Update(ref servedHosts, current => current.Add(uri.Host));
 
             if (uri.AbsolutePath == "/v2/token")
             {
@@ -411,7 +437,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             if (request.Headers.Authorization is not { Scheme: "Bearer" } auth || auth.Parameter != InstanceKey)
                 return Task.FromResult(Challenge(uri.Host));
 
-            if (uri.AbsolutePath == $"/v2/{Repository}/tags/list")
+            if (known && uri.AbsolutePath == $"/v2/{Repository}/tags/list")
             {
                 Interlocked.Increment(ref PagesServed);
                 var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
