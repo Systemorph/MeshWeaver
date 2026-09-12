@@ -48,6 +48,31 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 6. **verify** — unconditionally pairs the selection against the receipts; a skipped pack with a
    non-zero selection is RED, and so is a delegated suite that produced no test receipt.
 
+> 📅 **2026-09-12 — where the heavy legs run (`runner`).** `node-repo-module-pack.yml` and
+> `node-repo-gate.yml` both take an optional `runner` input (default `ubuntu-latest`, so every
+> current caller is unchanged). In the module-pack lane **`pack` and `tests` honour it**;
+> `select`, `prepare`, `build-workspace` and `verify` stay on `ubuntu-latest` whatever it says,
+> because the middle two `docker pull/save/load/run` the platform and tester images. The label it
+> exists for is `aks-silos`, the Systemorph org's self-hosted ARC scale set on the AKS silos pool
+> (ephemeral, min 0 / max 8; proven on Memex run 34681270793), and three measured facts about it
+> decide what may move: it has **no Docker** (its `arc-runner-scale-set-values.yaml` sets no
+> `containerMode`, and the pod is one `ghcr.io/actions/actions-runner:2.337.0` container with no
+> dind sidecar — the CLI is there, the daemon is not); it is **non-root** (uid 1001), so the two
+> honouring jobs set `DOTNET_INSTALL_DIR=/home/runner/.dotnet` whenever `runner` is not
+> `ubuntu-latest` (`actions/setup-dotnet` cannot write `/usr/share/dotnet` there — measured on
+> Memex's `runner-proof.yml`); and it ships **no toolchain** (no .NET, Node, `gh` or `zstd` —
+> setup-dotnet supplies the SDK as before; the moved legs take only `bash`, `git`, `jq`, `curl`,
+> `sudo` and Ubuntu's `python3` from the image). Each runner pod is limited to 2 vCPU / 6 GiB, so
+> an opt-in is a measurement of one job family, not a fleet switch. The gate lane therefore
+> **declares the same input and honours it nowhere**: a shard is a `docker run` of the tester
+> image, so `plan` fails RED on any value but `ubuntu-latest` — a declared input that was silently
+> ignored would let a caller believe its shards moved. A caller opts in per job family behind a
+> repository variable (`runner: ${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}` on the module-pack
+> call; a separate variable for the gate on the day the scale set gains Docker), so the move is one
+> edit to revert. The two steps of `pack` that need what the image lacks — `gh run download` on the
+> ledger's reuse leg and the `docker cp` fallback when `prepare`'s `platform-refs-<digest>` cache
+> entry has been evicted — fail RED naming the missing tool; neither skips.
+
 ### Where a module's own suite runs — and why `publish` decides
 
 A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last
