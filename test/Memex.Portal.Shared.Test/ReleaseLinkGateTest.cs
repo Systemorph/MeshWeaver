@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Compiler;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting;
@@ -110,6 +111,68 @@ public class ReleaseLinkGateTest : IDisposable
         var link = Assert.Contains("Views", verdict.IsUpdatable ? [] : Links(published, Version, landed));
         Assert.Equal(ModuleLinkState.Unlinkable, link.State);
         Assert.True(link.CheckedTypeReferences > 0, link.Report());
+    }
+
+    /// <summary>
+    /// 🚨 Direction (i) of #4083 — the ROLL candidate: a module already landed, bound to the
+    /// contract at this line's <c>3.0.0.0</c>, measured against a candidate image whose published
+    /// surface carries the same assembly at a LOWER version (every type name present). The
+    /// candidate's copy is what loads there, and the loader refuses the bind — so the roll is
+    /// HELD as <c>ModuleUnloadable</c>, naming the module, both versions and the exception. A
+    /// measured incompatibility, never Indeterminate.
+    /// </summary>
+    [Fact]
+    public void AModuleBoundAboveTheTargetsVersion_HoldsTheRoll_NamingBothVersions()
+    {
+        var bound = typeof(MeshNode).Assembly.GetName().Version!.ToString(4);
+        var published = PublishedRoot(Version, Identity,
+            surface: WithIdentityVersion(ThisPlatformSurface(Identity), ContractAssembly, "1.0.0.0"));
+        var landed = Land(ViewPack, ModuleBindingMeshNode(ViewPack));
+
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("Views", "Views", HasContent: false)
+                { ModuleName = ViewPack, LandedModulePath = landed },
+        ]);
+
+        Assert.False(verdict.IsUpdatable);
+        Assert.False(verdict.IsIndeterminate, "a version the loader refuses is MEASURED, not unknown");
+        var blocker = Assert.Single(verdict.Blockers);
+        Assert.Equal(PackageAvailabilityKind.ModuleUnloadable, blocker.Kind);
+        Assert.Contains(ViewPack, blocker.Reason!, StringComparison.Ordinal);
+        Assert.Contains($"{ContractAssembly} {bound}", blocker.Reason!, StringComparison.Ordinal);
+        Assert.Contains("1.0.0.0", blocker.Reason!, StringComparison.Ordinal);
+        Assert.Contains("FileLoadException", blocker.Reason!, StringComparison.Ordinal);
+        var link = Assert.Contains("Views", Links(published, Version, landed));
+        Assert.Equal(ModuleLinkState.BindingConflict, link.State);
+        Assert.True(link.ComparedAssemblyReferences > 0, link.Report());
+    }
+
+    /// <summary>
+    /// The asymmetry at the roll: a candidate carrying the assembly at a HIGHER version than the
+    /// landed module was bound to rolls forward — the roll CLEARS, and the drift is on the
+    /// verdict's advisories naming the module, so it is on record and decides nothing.
+    /// </summary>
+    [Fact]
+    public void AModuleBoundBelowTheTargetsVersion_Clears_WithTheDriftAsAnAdvisory()
+    {
+        var published = PublishedRoot(Version, Identity,
+            surface: WithIdentityVersion(ThisPlatformSurface(Identity), ContractAssembly, "99.0.0.0"));
+        var landed = Land(ViewPack, ModuleBindingMeshNode(ViewPack));
+
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("Views", "Views", HasContent: false)
+                { ModuleName = ViewPack, LandedModulePath = landed },
+        ]);
+
+        Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+        Assert.Empty(verdict.Blockers);
+        var advisory = Assert.Single(verdict.Advisories);
+        Assert.Contains(ViewPack, advisory, StringComparison.Ordinal);
+        Assert.Contains("99.0.0.0", advisory, StringComparison.Ordinal);
+        Assert.Contains("rolls forward", advisory, StringComparison.Ordinal);
+        Assert.Equal(ModuleLinkState.Linkable, Assert.Contains("Views", Links(published, Version, landed)).State);
     }
 
     /// <summary>The positive control: a landed module that links against the target clears, with
@@ -539,6 +602,15 @@ public class ReleaseLinkGateTest : IDisposable
     private static string OlderPlatformSurface(string identity) =>
         ModulePlatformSurfaceJsonTest.Without(
             ThisPlatformSurface(identity), ContractAssembly, typeof(MeshNode).FullName!);
+
+    /// <summary>The same document with one assembly's recorded VERSION replaced — a platform
+    /// carrying every type name at another manifest version (#4083's shape, seen from the gate).</summary>
+    private static string WithIdentityVersion(string json, string assemblyName, string version)
+    {
+        var node = JsonNode.Parse(json)!.AsObject();
+        node["identities"]![assemblyName]!["version"] = version;
+        return node.ToJsonString();
+    }
 
     // ── fixture: the landed generation ──────────────────────────────────────────────────────────
 
