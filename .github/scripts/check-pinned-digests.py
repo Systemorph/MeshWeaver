@@ -113,6 +113,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap as _textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -618,9 +619,28 @@ def read_purge_schedules(repo_root: Path) -> tuple[list[tuple[str, str]], str | 
         if schedule:
             tasks.append((task.get("name", "?"), str(schedule)))
     if not tasks:
+        # 🚨 AN ABSENCE IS ACCEPTABLE ONLY WHEN IT IS DECLARED — the same rule the instance roster
+        # follows. "No enabled purge" has three causes and they are not the same verdict: the
+        # record went stale, retention silently stopped, or a person deliberately paused it. The
+        # first two must stay RED; the third is a fact, and on 2026-09-12 it became the true one
+        # (Roland paused `purge-old-images` while protection was incomplete, Memex#219). Without
+        # this branch, recording that truth would redden every pull request in the repository —
+        # which is how a record gets left saying `Enabled` about a task that is not.
+        pause = doc.get("pause") or {}
+        missing = [k for k in ("inForce", "since", "reason", "reEnableWhen") if not pause.get(k)]
+        if pause.get("inForce") is True and not missing:
+            return [], None
+        if pause:
+            return [], (
+                f"{RETENTION_RECORD} records no ENABLED purge task AND its `pause` declaration is "
+                f"incomplete (missing or empty: {', '.join(missing) or 'inForce is not true'}). A "
+                "pause that does not say why, since when, and what re-enables it is indistinguishable "
+                "from a record nobody updated."
+            )
         return [], (
-            f"{RETENTION_RECORD} records no ENABLED purge task with a schedule. Either the record "
-            "is stale or retention stopped; both are worth a red rather than a silent pass."
+            f"{RETENTION_RECORD} records no ENABLED purge task with a schedule and declares no "
+            "`pause`. Either the record is stale or retention stopped; both are worth a red rather "
+            "than a silent pass. A DELIBERATE pause is declared in the record's `pause` block."
         )
     return tasks, None
 
@@ -1018,20 +1038,77 @@ def run(repos: list[str], registry: str, repo_root: Path) -> int:
         print("  (Doc/Architecture/PinnedImageRetention).")
         failed = True
 
-    # A sweep that found nothing has not proven the fleet is clean; it has proven the extractor is
-    # broken (a workflow syntax the shapes above do not cover, or a token that reads no repository).
-    if not all_pins and not unreadable:
-        print("::error::not one digest pin was found anywhere in the fleet.")
-        print("  Six repositories pinned at least one image on 2026-09-06, so zero means the")
-        print("  extractor stopped matching, not that pinning stopped. Run --self-test.")
+    # 🚨 A SWEEP THAT FOUND NOTHING HAS NOT PROVEN THE FLEET IS CLEAN — but "zero pins" stopped
+    # being the evidence for that on 2026-09-12. This assertion read "six repositories pinned at
+    # least one image on 2026-09-06, so zero means the extractor stopped matching"; #3842 then moved
+    # every satellite to RESOLVING the platform set at run time (`platform-ref` /
+    # `resolve-platform.py`), and measured with this very extractor the fleet declares ZERO digest
+    # pins and SIX repositories that name a platform image without pinning one. Pinning did stop.
+    # The same premise failed the LOCK lane the same morning
+    # (run 34664099031, two hours before the purge — Doc/Architecture/ArtifactRetentionInterlock).
+    #
+    # An assertion about the FLEET expires like that; one about the INSTRUMENT does not. So:
+    #   * the extractor is exercised against a fixture carrying known digest pins on every run,
+    #     which fires even when the fleet happens to declare pins anyway;
+    #   * the surviving fleet-shaped denominator is the one still impossible — a fleet reaching for
+    #     NO platform image at all.
+    for problem in extractor_control():
+        print(f"::error::{problem}")
         failed = True
 
     if failed:
         return 1
-    emit(f"All {len(resolved)} pin declaration(s) — {len(distinct_digests)} distinct digest(s) — "
-         f"across {len(pinning)} repository(ies) resolve; {len(protected)} are locked against the "
-         f"purge and {len(pending_lock)} await the next scheduled lock.")
+    emit(verdict_line(len(scans), len(all_pins), len(resolved), len(distinct_digests),
+                      len(pinning), len(protected), len(pending_lock)))
     return 0
+
+
+def verdict_line(scanned: int, pins: int, resolved: int, distinct: int,
+                 pinning: int, protected: int, pending_lock: int) -> str:
+    """The sweep's one-line verdict — pure, so the empty-subject case is falsifiable offline.
+
+    🚨 GREEN OVER AN EMPTY SUBJECT MUST SAY SO. Zero digest pins is a true answer now: #3842 moved
+    the satellites to RESOLVING the platform set at run time. But "all 0 declaration(s) resolve"
+    reads like a sweep that checked something, and that sentence over an empty subject is how a
+    lane goes vacuous without anybody noticing. The evidence that this zero is measured is the
+    extractor control, not the absence itself."""
+    if pins == 0:
+        return (f"NOTHING TO SWEEP: {scanned} repository(ies) scanned and not one declares a digest "
+                "pin. Under #3842 the satellites RESOLVE the platform set at run time, so this is a "
+                "measured zero and not a broken extractor — the extractor control passed against a "
+                "fixture carrying known pins. What each installation is RUNNING is protected by "
+                "`lock-pinned-digests.py` AXIS 3, and the tag references by its tag lock "
+                "(Doc/Architecture/ArtifactRetentionInterlock).")
+    return (f"All {resolved} pin declaration(s) — {distinct} distinct digest(s) — "
+            f"across {pinning} repository(ies) resolve; {protected} are locked against the "
+            f"purge and {pending_lock} await the next scheduled lock.")
+
+
+def extractor_control() -> list[str]:
+    """🚨 THE INSTRUMENT, MEASURED ON EVERY RUN — the assertion that replaced the zero-pin one.
+
+    Known digest pins in a fixture, through the SAME `extract()` the sweep uses. It fires when the
+    matcher breaks even if the fleet happens to declare pins anyway, which is precisely what the
+    fleet-shaped assertion could not do."""
+    pins, malformed = extract("Systemorph/Control", "ci.yml", SELF_TEST_YAML)
+    found = {pin.digest for pin in pins}
+    expected = {
+        "sha256:df19f10afc1f807441b403eb0dfa4b8645d5187b830f77ad080def7fc65b391f",
+        "sha256:dab2a7b3a7e1523d7d728d6a9a397abef5f98b0e1e0ff8f02395a433bdedf97d",
+        "sha256:d81df6cc79ad68fcfd9fa3d4cf40588e97c7adfe8c2516e1626231c0412b1f3f",
+    }
+    problems: list[str] = []
+    if not expected <= found:
+        problems.append(
+            "THE DIGEST EXTRACTOR STOPPED MATCHING. Its control fixture declares "
+            f"{len(expected)} digest pins and `extract()` returned {len(found)}. Every "
+            "'no pins found' answer in this run is therefore worthless — including the one that "
+            "would otherwise read as a fleet that stopped pinning. Run --self-test.")
+    if not malformed:
+        problems.append(
+            "the extractor control fixture declares a PLACEHOLDER pin and the extractor reported "
+            "none malformed — the vacuity arm of the same instrument has stopped working.")
+    return problems
 
 
 # ── Self-test: the extractor's own both-ways falsification, offline ────────────────────────────
@@ -1112,23 +1189,83 @@ def self_test_schedule(repo_root: Path) -> list[str]:
     if error or purge_error:
         failures.append(f"falsification arm has no input: {error or purge_error}")
     else:
-        if ordering_problems(["0 23 * * *"], purges) == []:
+        # 🚨 THE COMPARATOR IS DRIVEN ON A FIXTURE, NOT ON THE LIVE RECORD. It used to be driven on
+        # `purges`, and on 2026-09-12 that silently went VACUOUS: Roland paused `purge-old-images`
+        # (Memex#219), the record now declares that pause, `purges` is legitimately EMPTY, and
+        # `ordering_problems(anything, [])` compares nothing and returns no problem — so all four
+        # arms below would have passed while proving nothing. The self-test caught it, which is the
+        # only reason it is not shipped that way. A comparator must stay proven on a day when its
+        # subject is switched off.
+        fixture = [("fixture-purge", "0 3 * * *")]
+        if ordering_problems(["0 23 * * *"], fixture) == []:
             failures.append(
                 "SABOTAGE UNDETECTED: a lock scheduled at 23:00 — after every purge — was accepted"
             )
-        if ordering_problems(["0 0 30 2 *"], purges) == []:
+        if ordering_problems(["0 0 30 2 *"], fixture) == []:
             failures.append(
                 "SABOTAGE UNDETECTED: a lock schedule that never fires was accepted"
             )
-        if ordering_problems(lock_crons, purges) != []:
+        if ordering_problems(lock_crons, fixture) != []:
             failures.append("the shipped pair was rejected by the very check that accepted it above")
         # …and the multi-occurrence case is ACCEPTED, so the gate does not cry wolf on a schedule
         # that fires twice and satisfies the protection through its earlier run.
-        if ordering_problems(["0 1,23 * * *"], purges) != []:
+        if ordering_problems(["0 1,23 * * *"], fixture) != []:
             failures.append(
                 "FALSE POSITIVE: a lock firing at 01:00 AND 23:00 was rejected, though its 01:00 "
                 "run precedes every purge"
             )
+        # …and THEN the shipped record, whichever of its two states it is in. Both are asserted, so
+        # neither can become the silent one.
+        if purges:
+            if ordering_problems(lock_crons, purges) != []:
+                failures.append(
+                    "the SHIPPED schedules no longer order: the lock does not fire before every "
+                    f"enabled purge ({', '.join(n for n, _ in purges)})")
+        else:
+            record = json.loads((repo_root / RETENTION_RECORD).read_text(encoding="utf-8"))
+            pause = record.get("pause") or {}
+            if pause.get("inForce") is not True:
+                failures.append(
+                    "the record lists no enabled purge and `read_purge_schedules` accepted it "
+                    "anyway without an in-force `pause` — an undeclared absence must stay RED")
+            for key in ("since", "reason", "reEnableWhen"):
+                if not pause.get(key):
+                    failures.append(
+                        f"the purge pause is in force and declares no `{key}`. A pause that does "
+                        "not say why, since when and what re-enables it is a record nobody updated")
+
+    # 🚨 AND THE REFUSAL ITSELF, driven against fixtures rather than against the shipped record.
+    # The arms above assert what the RECORD says; they cannot see whether `read_purge_schedules`
+    # would still refuse an UNDECLARED absence, because the shipped record declares one. Making the
+    # function accept anything left this self-test green until this arm existed.
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as _scratch:
+        _root = Path(_scratch)
+        (_root / RETENTION_RECORD).parent.mkdir(parents=True, exist_ok=True)
+
+        def _purges_for(document: dict):
+            (_root / RETENTION_RECORD).write_text(json.dumps(document), encoding="utf-8")
+            return read_purge_schedules(_root)
+
+        _no_pause = {"tasks": [{"name": "p", "status": "Disabled", "schedule": "0 3 * * *"}]}
+        if not _purges_for(_no_pause)[1]:
+            failures.append(
+                "SABOTAGE UNDETECTED: no enabled purge and NO `pause` declaration was accepted — "
+                "a stale record and a silently stopped retention would both read as fine")
+        _partial = dict(_no_pause, pause={"inForce": True, "since": "2026-09-12"})
+        if not _purges_for(_partial)[1]:
+            failures.append(
+                "SABOTAGE UNDETECTED: a `pause` with no `reason`/`reEnableWhen` was accepted — a "
+                "pause that explains nothing is a record nobody updated")
+        _complete = dict(_no_pause, pause={"inForce": True, "since": "2026-09-12",
+                                           "reason": "r", "reEnableWhen": "w"})
+        _tasks, _err = _purges_for(_complete)
+        if _err or _tasks:
+            failures.append(
+                f"a COMPLETE pause declaration was not accepted as a stated absence: {_err}")
+        _enabled = {"tasks": [{"name": "p", "status": "Enabled", "schedule": "0 3 * * *"}]}
+        if _purges_for(_enabled)[0] != [("p", "0 3 * * *")]:
+            failures.append("an ENABLED purge task was not read back from the record")
 
     # A missing lock workflow is a DELETED protection, and must not read as an absent subject.
     missing_root = Path(__file__).resolve().parent / "__no_such_repo_root__"
@@ -1234,13 +1371,57 @@ def self_test(repo_root: Path) -> int:
     schedule_failures = self_test_schedule(repo_root)
     failures.extend(schedule_failures)
 
+    # ── The INSTRUMENT control, which replaced the zero-pin assertion (2026-09-12) ─────────────
+    # The old rule inferred the extractor's health from the fleet's behaviour and expired the day
+    # #3842 moved the satellites off digest pins — reddening the LOCK lane two hours before the
+    # purge. This arm proves the replacement both ways.
+    if extractor_control():
+        failures.append("CONTROL: the extractor control reports a problem against its own fixture, "
+                        f"which declares well-formed pins: {extractor_control()}")
+    original_extract = globals()["extract"]
+    try:
+        globals()["extract"] = lambda gh_repo, filename, text: ([], [])
+        problems = extractor_control()
+    finally:
+        globals()["extract"] = original_extract
+    if not any("STOPPED MATCHING" in problem for problem in problems):
+        failures.append("CONTROL: the digest extractor was broken and the control did not notice — "
+                        "which would leave a fleet-wide 'no pins found' reading as clean")
+    if not any("vacuity arm" in problem for problem in problems):
+        failures.append("CONTROL: the control's malformed half did not fire on an extractor that "
+                        "reports nothing, so half of it is decoration")
+
+    # 🚨 AND THE WIRING, WHICH IS THE HALF THAT STAYED GREEN UNDER FALSIFICATION. Every arm above
+    # calls `extractor_control()` itself, so deleting the call from `run()` — or deleting the
+    # branch that refuses to report a plain green over an empty subject — left this self-test
+    # passing about code the nightly sweep no longer executes.
+    import ast as _ast
+    import inspect as _inspect
+
+    run_source = _inspect.getsource(run)
+    run_tree = _ast.parse(_textwrap.dedent(run_source))
+    run_calls = {node.func.id for node in _ast.walk(run_tree)
+                 if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name)}
+    if "extractor_control" not in run_calls:
+        failures.append("WIRING: run() no longer calls extractor_control(), so a broken extractor "
+                        "would leave a fleet-wide 'no pins found' sweep reporting success")
+    if "verdict_line" not in run_calls:
+        failures.append("WIRING: run() no longer reports through verdict_line(), so the "
+                        "empty-subject distinction below is unfalsified")
+    if "NOTHING TO SWEEP" not in verdict_line(8, 0, 0, 0, 0, 0, 0):
+        failures.append("VERDICT: a sweep that found NOTHING reported a plain green. "
+                        "'All 0 declaration(s) resolve' reads like a sweep that checked something")
+    if "NOTHING TO SWEEP" in verdict_line(8, 4, 4, 3, 2, 4, 0):
+        failures.append("VERDICT: a sweep that DID find pins reported that it found none")
+
     for line in failures:
         print(f"::error::self-test: {line}")
     if failures:
         return 1
     print(f"self-test: {len(pins)} pin(s) extracted, {len(malformed)} malformed, no false positive; "
           "the lock is scheduled before every enabled purge and the ordering check goes red when "
-          "it is not.")
+          "it is not; and the digest extractor is controlled against a fixture on every run rather "
+          "than inferred from what the fleet happens to declare.")
     return 0
 
 

@@ -16,7 +16,18 @@
     "silently and completely.",
     "",
     "`schedule`/`status`/`timeout` here are ASSERTED by `verify`; the remaining fields are",
-    "provenance and are printed, not compared."
+    "provenance and are printed, not compared.",
+    "",
+    "🚨 2026-09-12: `purge-old-images` is DISABLED. Roland ordered the purge paused while the",
+    "protection is incomplete (Memex#219); measured the same morning with `az acr task list`, both",
+    "tasks read `status: Disabled`. The pause is the MITIGATION and MeshWeaver#4081 is the FIX, so",
+    "#4081 is the precondition for turning the task back on rather than a race against it. Quote no",
+    "deletion date while `pause` below is in force: there is no live clock, and a date that has",
+    "silently stopped being true is what the next reader acts on.",
+    "",
+    "🚨 A DISABLED TASK STILL SHOWS AN ENABLED TIMER. `az acr task list` reports",
+    "`status: Disabled` on the task while its `trigger.timerTriggers[0].status` still reads",
+    "`Enabled` at `0 3 * * *`. Read the TASK's status; the trigger's is about the trigger."
   ],
   "registry": "meshweaver",
   "resourceGroup": "meshweaver-shared",
@@ -26,15 +37,21 @@
     {
       "name": "purge-old-images",
       "file": "purge-old-images.yaml",
-      "status": "Enabled",
+      "status": "Disabled",
       "schedule": "0 3 * * *",
       "timeout": 3600,
       "stepType": "EncodedTask",
       "contextPath": null,
-      "platform": { "os": "linux", "architecture": "amd64" },
-      "agentConfiguration": { "cpu": 2 },
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "agentConfiguration": {
+        "cpu": 2
+      },
       "creationDate": "2026-08-31T20:33:48.969331+00:00",
       "notes": [
+        "🚨 DISABLED 2026-09-12 — see the top-level `pause` block. This was `Enabled` at `0 3 * * *`; every note below describes the policy it runs WHEN RE-ENABLED.",
         "ONE task, TWO steps: a 7d --keep 10 step over the CI image repositories, and a separate",
         "30d step for memex-portal. The split is behaviour-preserving — merging the filter lists",
         "under the stricter window would retune memex-portal without anyone deciding to.",
@@ -52,7 +69,10 @@
       "timeout": 3600,
       "stepType": "EncodedTask",
       "contextPath": null,
-      "platform": { "os": "linux", "architecture": "amd64" },
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
       "notes": [
         "SUPERSEDED and DISABLED, not deleted — its filter list was folded into",
         "purge-old-images's two steps. Kept as the record of the Memex#122 reasoning it carries,",
@@ -60,5 +80,13 @@
         "Do not re-enable it: two divergent lists is the defect #3438 named."
       ]
     }
-  ]
+  ],
+  "pause": {
+    "inForce": true,
+    "since": "2026-09-12",
+    "measured": "az acr task list --registry meshweaver — purge-old-images status=Disabled (timer trigger still Enabled at 0 3 * * *)",
+    "reason": "Roland ordered the purge paused while artifact protection is incomplete: the fleet's tag references, the platform manifests under every locked index, and one production instance's running index were all unprotected (MeshWeaver#3438).",
+    "issue": "Memex#219",
+    "reEnableWhen": "lock-pinned-digests is green on a fleet whose tag references and index closures are locked — MeshWeaver#4081. Re-enabling before that restores the exposure the pause exists to hold off."
+  }
 }

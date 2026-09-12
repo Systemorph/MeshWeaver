@@ -68,10 +68,27 @@ active builds must still participate in the common protection inventory.
 ## Transition from the pin scanner
 
 The existing `lock-pinned-digests.py` scans workflow pins and deployment overlays and
-protects official image tags. It does not yet inventory every running portal, released
-module bundle or active build. Its zero-pin assertion is a historical denominator
-check and must be replaced by positive evidence that the new inventories were read
+protects official image tags. Its zero-pin assertion is a historical denominator check
+and must be replaced by positive evidence that the new inventories were read
 completely. Removing that assertion alone would not establish protection.
+
+**Done, 2026-09-12** — see [ArtifactRetentionInterlock](/Doc/Architecture/ArtifactRetentionInterlock).
+The scanner now also inventories every running portal: each installation the deployment
+overlays declare is asked, through its own `/api/version`, what it is RUNNING, and the
+closure of image sets built from that commit is protected. The zero-pin assertion is
+replaced by a positive control on the extractor itself, run against a fixture on every
+pass — which fires even when the fleet happens to declare pins, where the fleet-shaped
+assertion it replaces expired the day #3842 moved the satellites to run-time resolution.
+An installation that does not answer is named, makes the run INCOMPLETE and refuses the
+unlock arm; a deliberately non-live installation is declared in
+`.github/acr-retention/instances.json` with a reason, so silence is never read as
+retirement. Released module bundles and active builds are still NOT inventoried.
+
+A retained release also needs its REFERENCE, not only its content. A container tag
+carries its own deletion attribute, and it is the one the purge reads when deleting a
+tag, so a protected manifest under an unprotected tag is exactly the broken release
+described above with the halves reversed: the bytes survive and the name stops
+resolving. Both are locked.
 
 Keep existing protection while consumers migrate. Once the released-set and consumer
 inventories cover the fleet, their coverage replaces source-pin counts; do not restore
