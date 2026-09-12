@@ -61,8 +61,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 >   is listed by `OciTagLister` through `/v2/{repo}/tags/list` — the standard bearer handshake,
 >   `Basic user:key` at the realm the challenge names, every page followed by the relative
 >   `Link` — with the installation's own plugin-registry instance key (resolved through
->   `RegistryTokenResolver`; the plugin registry whose host equals the container registry host is
->   the one whose key is presented — no second secret). A refused credential is an ERROR, never an
+>   `RegistryTokenResolver`; the key presented is the one held for the container registry's own
+>   host, or — since #4093 — for the portal the installation DECLARES as that registry's validator
+>   in `SelfUpdate:RegistryValidationUrl`, which is the fleet's shape and the only other pairing
+>   that qualifies; see [The Self-Update Registry Credential](../SelfUpdateRegistryCredential) —
+>   no second secret either way). A refused credential is an ERROR, never an
 >   empty listing. The ACR path is byte-identical. 🚨 The mirror had to learn to forward the
 >   `tags/list` query string and the `Link` header for this: ACR pages at 100 tags in lexical
 >   order, so a mirror that dropped `?last=` served the OLDEST hundred to every caller and a lister
@@ -133,6 +136,14 @@ config and the identity are both correct. The pin is 3.1.1.
 Anonymous matches no rule and is denied by default. So an installation authenticates to the
 registry with the same key it already holds for the plugin registry — the credential-sprawl
 argument above, closed without the mirror.
+
+🚨 **And because the validator is ANOTHER host, the consuming side needs a declaration.** The image
+registry (`cr.meshweaver.cloud`) and the plugin registry (`memex.meshweaver.cloud`) are two different
+hosts by design, so an installation's self-updater will not present its key to the registry until the
+record declares which portal validates it there — `SelfUpdate:RegistryValidationUrl`, this registry's
+own `validationUrl`. Without it the instance boots, pulls, and then never self-updates (#4093). The
+rule, why an absent declaration refuses, and why a suffix match is not an acceptable substitute:
+[The Self-Update Registry Credential](../SelfUpdateRegistryCredential).
 
 **Why off-the-shelf.** The wire protocol is small but the operational surface is not: resumable
 chunked uploads, `Range` on blobs, SAS redirects so a layer never streams through a pod, upload

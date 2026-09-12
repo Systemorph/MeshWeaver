@@ -47,6 +47,18 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     private const string InstanceKey = "mwi_this-installations-own-plugin-registry-key";
     private const string Repository = "memex-portal-ai";
 
+    /// <summary>
+    /// The fleet's OTHER shape (#4093): a container registry on its own host, which is NOT a plugin
+    /// registry and never will be — <c>cr.meshweaver.cloud</c> decides a pull by forwarding the
+    /// caller's key to <c>memex.meshweaver.cloud</c>, so the two hosts differ by design.
+    /// </summary>
+    private const string RegistryHost = "cr.example.test";
+
+    /// <summary>The validator declaration that pairs <see cref="RegistryHost"/> with the plugin
+    /// registry this installation actually holds a key for — a registry record's
+    /// <c>validationUrl</c>, copied verbatim.</summary>
+    private const string DeclaredValidator = MirrorUrl + "/api/instances/token";
+
     /// <summary>Strictly newer than anything this test host can run as, so the roll it drives is
     /// the ordinary forward roll (the same shape ComboGateRollTest uses) — and the highest CD build
     /// number in the fixture, because lineage orders by <c>ci.N</c>, not by the SemVer prefix.</summary>
@@ -76,9 +88,9 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
-    private OciTagLister Lister(string registry = MirrorHost) => new(
+    private OciTagLister Lister(string registry = MirrorHost, string validator = "") => new(
         Mesh,
-        new SelfUpdateOptions { Registry = registry },
+        new SelfUpdateOptions { Registry = registry, RegistryValidationUrl = validator },
         Mesh.ServiceProvider.GetService<ILogger<OciTagLister>>());
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -128,6 +140,110 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         fault.Message.Should().Contain("PluginCatalog",
             "the fix is a configuration change, and the message has to say which one");
         mirror.Requests.Should().Be(0, "a listing with no credential could only ever be a 401");
+        mirror.PresentedSecret.Should().BeNull(
+            "the guard is a disclosure control: an arbitrary host named in SelfUpdate:Registry must "
+            + "never be handed this installation's instance key");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  #4093 — the registry whose validator is ANOTHER portal
+    //
+    //  The fleet's registry decides a pull by forwarding the caller's key to a portal
+    //  (cr.meshweaver.cloud → memex.meshweaver.cloud/api/instances/token), so the image registry
+    //  and the plugin registry are DIFFERENT hosts by design. These three pin the whole rule: a
+    //  DECLARED pairing resolves the key, and the two ways of not declaring one still refuse.
+    //  Delete the host check in ResolveCredential and the two negatives below go red.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 🚨 THE FIX. The container registry is on its own host and is no plugin registry; the
+    /// installation DECLARES the portal that validates its key there, and the key it already holds
+    /// for that portal is what the listing presents.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ADeclaredValidator_PresentsTheKeyHeldForThatPortal_AndListsTheRegistry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var tags = await Lister(RegistryHost, DeclaredValidator)
+            .ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct);
+
+        tags.Should().Equal(FakeMirror.Tags,
+            "an instance provisioned on the fleet registry must be able to see what it can roll to");
+        mirror.PresentedSecret.Should().Be(InstanceKey,
+            "the credential is the plugin-registry instance key this installation already holds for "
+            + "the DECLARED VALIDATOR — the registry forwards it there to decide the pull, which is "
+            + "exactly why the two hosts differ");
+        mirror.ServedHosts.Should().OnlyContain(h => h == RegistryHost,
+            "the listing goes to the container registry; the validator is named in configuration "
+            + "and never contacted by the lister");
+    }
+
+    /// <summary>
+    /// 🚨 NEGATIVE CONTROL, and the one that proves the guard still guards: the SAME registry host
+    /// as the test above, differing only in that nothing declares the pairing. It must refuse, and
+    /// the key must not leave. A rule that merely dropped or loosened the host comparison — "the
+    /// sole mount carries a key", "same registrable domain" — turns this green.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheSameRegistry_WithNoDeclaredValidator_IsStillRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Lister(RegistryHost).ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        fault.Message.Should().Contain(RegistryHost);
+        fault.Message.Should().Contain("SelfUpdate:RegistryValidationUrl",
+            "an absent declaration is refused AND the message says what would declare it");
+        mirror.Requests.Should().Be(0);
+        mirror.PresentedSecret.Should().BeNull(
+            "an undeclared pairing is not permission — the key never goes out");
+    }
+
+    /// <summary>
+    /// 🚨 NEGATIVE CONTROL: a declaration ALONE grants nothing. The validator named is a host this
+    /// installation holds no plugin-registry key for, so there is still nothing to present — the
+    /// pairing needs BOTH statements, and the refusal names the host that is missing.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ADeclaredValidatorThisInstallationHoldsNoKeyFor_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Lister(RegistryHost, "https://someone-elses-portal.example.test/api/instances/token")
+                .ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
+
+        fault.Message.Should().Contain("someone-elses-portal.example.test");
+        fault.Message.Should().Contain("PluginCatalog:Registries");
+        mirror.Requests.Should().Be(0);
+        mirror.PresentedSecret.Should().BeNull(
+            "the key is only ever presented to a host this installation was issued one for");
+    }
+
+    /// <summary>The declaration is read WHOLE-HOST or not at all — never a suffix, a registrable
+    /// domain or anything else that could make a coincidence of naming look like a grant.</summary>
+    [Fact]
+    public void TheDeclaredValidatorHost_IsReadWholeOrNotAtAll()
+    {
+        new SelfUpdateOptions().RegistryValidatorHost.Should().BeNull(
+            "nothing declared is never permission");
+        new SelfUpdateOptions { RegistryValidationUrl = "   " }.RegistryValidatorHost.Should().BeNull();
+        new SelfUpdateOptions { RegistryValidationUrl = "https://memex.meshweaver.cloud/api/instances/token" }
+            .RegistryValidatorHost.Should().Be("memex.meshweaver.cloud", "only the host is read");
+        new SelfUpdateOptions { RegistryValidationUrl = "MEMEX.meshweaver.cloud" }
+            .RegistryValidatorHost.Should().Be("memex.meshweaver.cloud",
+                "a bare host means the same portal, and host names fold case");
+        new SelfUpdateOptions { RegistryValidationUrl = "https://memex.meshweaver.cloud:8443/x" }
+            .RegistryValidatorHost.Should().Be("memex.meshweaver.cloud:8443",
+                "a non-default port is part of the host");
+        new SelfUpdateOptions { RegistryValidationUrl = "https://memex.meshweaver.cloud@evil.example.test/x" }
+            .RegistryValidatorHost.Should().BeNull(
+                "the host there is evil.example.test and it reads to a human as the opposite — a "
+                + "value that can be misread that way declares no pairing at all");
+        new SelfUpdateOptions { RegistryValidationUrl = "mailto:ops@example.test" }
+            .RegistryValidatorHost.Should().BeNull("a value that names no http host declares nothing");
     }
 
     [Fact]
@@ -211,13 +327,22 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         public int PagesServed;
         public string? PresentedSecret;
 
+        private ImmutableList<string> servedHosts = ImmutableList<string>.Empty;
+
+        /// <summary>Every host a request actually reached — the listing must go to the CONTAINER
+        /// registry, never to the portal whose key authenticates it.</summary>
+        public ImmutableList<string> ServedHosts => servedHosts;
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref Requests);
             var uri = request.RequestUri!;
-            if (!string.Equals(uri.Host, MirrorHost, StringComparison.Ordinal))
+            // Both fleet shapes on one fake: the portal that serves its own /v2 mirror, and a
+            // container registry on its own host whose key is validated by that portal.
+            if (uri.Host is not (MirrorHost or RegistryHost))
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            ImmutableInterlocked.Update(ref servedHosts, current => current.Add(uri.Host));
 
             if (uri.AbsolutePath == "/v2/token")
             {
@@ -237,7 +362,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             }
 
             if (request.Headers.Authorization is not { Scheme: "Bearer" } auth || auth.Parameter != InstanceKey)
-                return Task.FromResult(Challenge());
+                return Task.FromResult(Challenge(uri.Host));
 
             if (uri.AbsolutePath == $"/v2/{Repository}/tags/list")
             {
@@ -257,11 +382,11 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }
 
-        private static HttpResponseMessage Challenge()
+        private static HttpResponseMessage Challenge(string host)
         {
             var response = new HttpResponseMessage(HttpStatusCode.Unauthorized);
             response.Headers.WwwAuthenticate.Add(new AuthenticationHeaderValue("Bearer",
-                $"realm=\"{MirrorUrl}/v2/token\",service=\"{MirrorHost}\""));
+                $"realm=\"https://{host}/v2/token\",service=\"{host}\""));
             return response;
         }
 

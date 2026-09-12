@@ -99,7 +99,17 @@ public class SelfUpdateHostedService : IHostedService
                 ? _options.SafetyNetCheckInterval.ToString()
                 : "disabled",
             ShippedReleaseSeed.InstalledPlatformVersion, _options.Registry, _options.PortalRepository,
-            UsesOciListing ? "an OCI Distribution registry (the mirror, instance-key auth)" : "an Azure Container Registry",
+            // 🚨 On the OCI path the line says WHERE the instance key may be presented, because that
+            // is the whole configuration and its absence is invisible otherwise: an install with no
+            // declared validator boots, serves, and only reveals the gap when the first check fails
+            // (#4093). Hosts only, never the key.
+            UsesOciListing
+                ? _options.RegistryValidatorHost is { } validator
+                    ? $"an OCI Distribution registry (instance-key auth; key validated at {validator})"
+                    : "an OCI Distribution registry (instance-key auth; NO validator declared — the key "
+                      + "is presented only if this host is itself a configured plugin registry, else "
+                      + "every check refuses; see SelfUpdate:RegistryValidationUrl)"
+                : "an Azure Container Registry",
             _updater.CanPatch, _options.RetryInterval);
 
         // 🚨 EVENT-DRIVEN WITH A SAFETY NET, and the event source is deliberately OUTSIDE the
