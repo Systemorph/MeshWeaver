@@ -153,30 +153,61 @@ public static class PluginRegistryEndpoints
     // hold a whole source (Plugins/*) or a single plugin out of one (Reinsurance/UWDeepfield) — so
     // the filter runs BEFORE the merge, while each package still knows which source it came from.
     // A caller therefore cannot even learn that an ungranted package exists.
-    private static IObservable<IReadOnlyList<PackageManifest>> ListAll(
+    //
+    // 🚨 #4097 — with ONE exception that is not enumeration: a package this registry itself
+    // declares in the caller's DEFAULT SET (preInstalled) from a source the caller's grant
+    // REACHES, refused only by the caller's PLAN. That verdict used to be logged here and omitted
+    // from the wire, so the instance showed every consequence (canPatch=False, "required module
+    // not installed — install it from the registry", which it cannot) and never the cause. It now
+    // rides beside the listing as a typed refusal — package, required tier, instance plan. A
+    // package from an UNGRANTED source stays absent, tier or no tier: TierRefusal answers only
+    // when some entry reaches the package.
+    private static IObservable<RegistryListing> ListAll(
         IReadOnlyList<ConfiguredPackageSource> sources, AuthenticatedInstance? caller,
         IObservable<IReadOnlyList<PublicationArtifact>> artifacts, ILogger? logger)
         => Observable.CombineLatest(sources.Select(s =>
                 ListFrom(s, sources.Count == 1, logger).Select(list => (Source: s, Packages: list))))
-            .SelectMany(perSource => artifacts.Select(pushed => (IReadOnlyList<PackageManifest>)perSource
+            .SelectMany(perSource => artifacts.Select(pushed => new RegistryListing
+            {
                 // Stamp the source each package came from BEFORE the merge — afterwards the
                 // provenance is gone. Consumers scope source-specific actions on it (notably
                 // PluginCatalog:InstallByDefault, which must distinguish the platform repo from
                 // paid content the same instance may also be granted).
+                Packages = perSource
+                    .SelectMany(x => x.Packages
+                        .Where(p => IsGranted(caller, x.Source, p))
+                        .Select(p => p with
+                        {
+                            Source = x.Source.Name,
+                            // The bundle as an OCI artifact in the fleet's registry
+                            // (Doc/Architecture/PluginBundlesInTheRegistry), when this registry has
+                            // pushed it — matched on the content version manifest.lock gives the
+                            // bundle, then the catalog's own version. Null otherwise; additive.
+                            Artifact = pushed.ReferenceFor(
+                                x.Source.Name, p.Id, p.ReleasedVersion, p.ModuleVersion, p.Version),
+                        }))
+                    .DistinctBy(p => p.Id, StringComparer.Ordinal)
+                    .ToList(),
+                Refused = TierRefusals(caller, perSource),
+            }));
+
+    /// <summary>The default-set packages the caller's plan refuses (#4097): pre-installed, from a
+    /// source the grant reaches, not covered by the plan. Empty for the legacy anonymous caller
+    /// (nothing is refused to it) and for every package the enumeration defence must hide.</summary>
+    internal static IReadOnlyList<PlanTierRefusal> TierRefusals(
+        AuthenticatedInstance? caller,
+        IEnumerable<(ConfiguredPackageSource Source, IReadOnlyList<PackageManifest> Packages)> perSource)
+        => caller is null
+            ? []
+            : perSource
                 .SelectMany(x => x.Packages
-                    .Where(p => IsGranted(caller, x.Source, p))
-                    .Select(p => p with
-                    {
-                        Source = x.Source.Name,
-                        // The bundle as an OCI artifact in the fleet's registry
-                        // (Doc/Architecture/PluginBundlesInTheRegistry), when this registry has
-                        // pushed it — matched on the content version manifest.lock gives the
-                        // bundle, then the catalog's own version. Null otherwise; additive.
-                        Artifact = pushed.ReferenceFor(
-                            x.Source.Name, p.Id, p.ReleasedVersion, p.ModuleVersion, p.Version),
-                    }))
-                .DistinctBy(p => p.Id, StringComparer.Ordinal)
-                .ToList()));
+                    .Where(p => p.PreInstalled && !IsGranted(caller, x.Source, p))
+                    .Select(p => caller.TierRefusal(x.Source.Name, p.Id, p.Tier, p.Module))
+                    .Where(r => r is not null)
+                    .Select(r => r!))
+                .DistinctBy(r => r.PackageId, StringComparer.Ordinal)
+                .OrderBy(r => r.PackageId, StringComparer.Ordinal)
+                .ToList();
 
     /// <summary>The registry's record of pushed publications, read once per listing; the platform
     /// default records nothing.</summary>
@@ -200,7 +231,18 @@ public static class PluginRegistryEndpoints
         if (sources.Count == 0)
             return Task.FromResult(Results.Content(PluginRegistryPayloads.List([]), "application/json"));
         return ListAll(sources, caller, Artifacts(hub), logger)
-            .Select(list => (IResult)Results.Content(PluginRegistryPayloads.List(list), "application/json"))
+            .Do(listing =>
+            {
+                // Named on the registry too, as before #4097 — now beside the wire answer rather
+                // than instead of it.
+                if (listing.Refused.Count > 0)
+                    logger?.LogInformation(
+                        "Plugin registry: {Count} default-set package(s) refused to {Instance} by plan tier: {Refused}",
+                        listing.Refused.Count, caller?.Instance.InstanceId ?? "(anonymous)",
+                        string.Join("; ", listing.Refused.Select(r => r.Describe())));
+            })
+            .Select(listing => (IResult)Results.Content(
+                PluginRegistryPayloads.List(listing.Packages, listing.Refused), "application/json"))
             .Catch((Exception ex) =>
             {
                 // Surface the failure (502) rather than hide it as an empty catalog — the consumer's

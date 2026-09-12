@@ -283,7 +283,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private readonly TimeSpan readStreamSweepInterval;
     private readonly IDisposable idleSweep;
 
-    // 🚨 Invalidation signal: the SAME IMeshChangeFeed broadcast every write path
+    // 🚨 Invalidation signal: the SAME IMeshInvalidationFeed broadcast every write path
     // already publishes — post-commit storage writes (Created/Updated/Deleted) AND
     // the recycle operation (MeshOperations.RecycleCore publishes an Updated event
     // before posting DisposeRequest; in Orleans the PathCacheInvalidatorGrain
@@ -761,8 +761,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // Failure-state reset on the EXISTING invalidation broadcast (see the
         // changeFeedReset field doc). Optional service: minimal test fixtures
         // without AddMeshCatalog's feed registration simply have no reset seam.
-        changeFeedReset = meshHub.ServiceProvider.GetService<IMeshChangeFeed>()
-            ?.Subscribe(OnMeshChange);
+        var invalidationFeed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
+        changeFeedReset = invalidationFeed is not null
+            ? invalidationFeed.Subscribe(OnMeshChange)
+            : meshHub.ServiceProvider.GetService<IMeshChangeFeed>()?.Subscribe(OnMeshChange);
     }
 
     /// <summary>

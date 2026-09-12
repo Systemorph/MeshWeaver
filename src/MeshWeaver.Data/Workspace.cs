@@ -76,7 +76,7 @@ public class Workspace : IWorkspace
         // GetRemoteStream after eviction creates a fresh subscription against the
         // (re-)activated owner and pulls the current persistence state.
         //
-        // IMeshChangeFeed lives in MeshWeaver.Mesh.Contract which would create a
+        // IMeshInvalidationFeed lives in MeshWeaver.Mesh.Contract which would create a
         // Data → Mesh.Contract → Layout → Data project cycle. Resolve via reflection
         // and adapt the Subscribe(Action<MeshChangeEvent>, MeshChangeKind?) signature.
         _changeFeedSubscription = TrySubscribeToChangeFeed(hub.ServiceProvider, _logger,
@@ -238,10 +238,21 @@ public class Workspace : IWorkspace
     {
         try
         {
-            var feedType = Type.GetType("MeshWeaver.Mesh.Services.IMeshChangeFeed, MeshWeaver.Mesh.Contract", throwOnError: false);
-            if (feedType is null) return null;
-            var feed = serviceProvider.GetService(feedType);
-            if (feed is null) return null;
+            var feedType = Type.GetType(
+                "MeshWeaver.Mesh.Services.IMeshInvalidationFeed, MeshWeaver.Mesh.Contract",
+                throwOnError: false);
+            var feed = feedType is null ? null : serviceProvider.GetService(feedType);
+            if (feed is null)
+            {
+                // Compatibility for minimal hosts that supply their own pre-split logical feed.
+                feedType = Type.GetType(
+                    "MeshWeaver.Mesh.Services.IMeshChangeFeed, MeshWeaver.Mesh.Contract",
+                    throwOnError: false);
+                feed = feedType is null ? null : serviceProvider.GetService(feedType);
+            }
+            if (feedType is null || feed is null) return null;
+            var subscribe = feedType.GetMethod("Subscribe");
+            if (subscribe is null) return null;
 
             var eventType = Type.GetType("MeshWeaver.Mesh.Services.MeshChangeEvent, MeshWeaver.Mesh.Contract", throwOnError: false);
             if (eventType is null) return null;
@@ -252,18 +263,18 @@ public class Workspace : IWorkspace
             // runtime sees the exact delegate signature Subscribe expects.
             var helper = typeof(Workspace).GetMethod(nameof(SubscribeChangeFeedHelper),
                 BindingFlags.NonPublic | BindingFlags.Static)!.MakeGenericMethod(eventType);
-            return (IDisposable?)helper.Invoke(null, [feed, pathProp, onPathChanged]);
+            return (IDisposable?)helper.Invoke(null, [feed, subscribe, pathProp, onPathChanged]);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex,
-                "Workspace failed to subscribe to IMeshChangeFeed — remote stream cache will only invalidate via heartbeat resubscribe.");
+                "Workspace failed to subscribe to IMeshInvalidationFeed — remote stream cache will only invalidate via heartbeat resubscribe.");
             return null;
         }
     }
 
     private static IDisposable? SubscribeChangeFeedHelper<TEvent>(
-        object feed, PropertyInfo pathProperty, Action<string> onPathChanged)
+        object feed, MethodInfo subscribe, PropertyInfo pathProperty, Action<string> onPathChanged)
         where TEvent : class
     {
         Action<TEvent> handler = evt =>
@@ -275,7 +286,6 @@ public class Workspace : IWorkspace
             }
             catch { /* keep change-feed alive on handler faults */ }
         };
-        var subscribe = feed.GetType().GetMethod("Subscribe");
         return (IDisposable?)subscribe!.Invoke(feed, [handler, null]);
     }
 
@@ -287,7 +297,7 @@ public class Workspace : IWorkspace
     ///
     /// <para>🚨🚨 <b>DO NOT make this conditional on the stream still being LIVE.</b> It is the
     /// obvious change to make — the mirror looks healthy, the owner's own fan-out delivers routine
-    /// updates, and the two other consumers of this same <c>IMeshChangeFeed</c> broadcast already
+    /// updates, and the two other consumers of this same <c>IMeshInvalidationFeed</c> broadcast already
     /// say so in as many words (<c>MeshNodeStreamCache.ResetFailureState</c>: <i>"A healthy live
     /// entry is left untouched"</i>; <c>JsonSynchronizationStream</c>'s version-gated
     /// <c>Resubscribe</c>: <i>"a HEALTHY subscriber receives that same write through its own
