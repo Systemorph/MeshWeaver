@@ -400,6 +400,12 @@ name: node-repo module pack
 # (`Module bundles`), which is untouched. A caller that wants the old one-leg-per-module shape
 # passes `batch-size: 1`. Doc: Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to
 # end", the 2026-09-12 batching note).
+#
+# `solo-modules` (2026-09-12, later the same day) sets the suites that DOMINATE a leg apart: each
+# named module that is in the selection gets a leg of its own, first in the matrix, and the rest
+# are striped as above. Measured on MeshWeaver.Plugins#1736: MeshWeaver.AI was ~6 of the 8.6 min
+# of the leg it shared with five modules whose suites run in seconds. Same per-module semantics —
+# a solo leg IS the singleton shape a batch-size of 1 gives every module.
 
 on:
   workflow_call:
@@ -717,6 +723,20 @@ on:
         required: false
         type: number
         default: 6
+      solo-modules:
+        description: >-
+          Module names (whitespace/comma separated) that get a `pack` / `tests` leg OF THEIR OWN,
+          placed first in the matrix, while every other selected module is batched as above.
+          For the suites that dominate a leg: measured 2026-09-12 on MeshWeaver.Plugins#1736,
+          MeshWeaver.AI (1,992 tests, 2.5 min of suite plus its own compile) was ~6 of the 8.6
+          min of the leg it shared with five modules whose suites run in seconds. A solo leg has
+          the singleton shape — job name, `module-bundle-<module>` artifact and receipts are the
+          ones a batch-size of 1 would give it — and a name not in the selection is simply not
+          there (selections are incremental; absent is the normal case, never an error). Empty
+          by default: nothing is set apart unless the caller says so.
+        required: false
+        type: string
+        default: ''
     secrets:
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
@@ -1167,18 +1187,19 @@ jobs:
         id: batches
         env:
           BATCH_SIZE: ${{ inputs.batch-size }}
+          SOLO_MODULES: ${{ inputs.solo-modules }}
         run: |
           set -euo pipefail
           echo "pack legs:"
           python3 "$MODULE_PACK_BATCH" chunk \
-            --modules "@$RUNNER_TEMP/final.json" --size "$BATCH_SIZE" --github-output "$GITHUB_OUTPUT"
+            --modules "@$RUNNER_TEMP/final.json" --size "$BATCH_SIZE" --solo "$SOLO_MODULES" --github-output "$GITHUB_OUTPUT"
           echo "tests legs:"
           python3 "$MODULE_PACK_BATCH" chunk \
-            --modules "@$RUNNER_TEMP/suites.json" --size "$BATCH_SIZE" --github-output "$GITHUB_OUTPUT" --prefix test-
+            --modules "@$RUNNER_TEMP/suites.json" --size "$BATCH_SIZE" --solo "$SOLO_MODULES" --github-output "$GITHUB_OUTPUT" --prefix test-
           {
             echo "### Batched legs"
             echo
-            echo "\`batch-size: $BATCH_SIZE\` — $(jq 'length' "$RUNNER_TEMP/final.json") selected module(s) in $(sed -n 's/^batch-count=//p' "$GITHUB_OUTPUT" | tail -1) pack leg(s); $(jq 'length' "$RUNNER_TEMP/suites.json") suite(s) in $(sed -n 's/^test-batch-count=//p' "$GITHUB_OUTPUT" | tail -1) tests leg(s)."
+            echo "\`batch-size: $BATCH_SIZE\`${SOLO_MODULES:+, \`solo-modules: $SOLO_MODULES\`} — $(jq 'length' "$RUNNER_TEMP/final.json") selected module(s) in $(sed -n 's/^batch-count=//p' "$GITHUB_OUTPUT" | tail -1) pack leg(s); $(jq 'length' "$RUNNER_TEMP/suites.json") suite(s) in $(sed -n 's/^test-batch-count=//p' "$GITHUB_OUTPUT" | tail -1) tests leg(s)."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────── THE SHARED BUILD ENVIRONMENT, WARMED ONCE ───────────────────
