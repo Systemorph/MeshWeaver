@@ -33,6 +33,18 @@ public enum ModuleLinkState
     /// refused there is the whole platform's update, on a publication that may simply predate the
     /// surface document; the boot-time probe is the safety net.</summary>
     Indeterminate,
+
+    /// <summary>🚨 The <see cref="FileLoadException"/> shape (#4083): the module's bytes reference
+    /// an assembly the platform carries — third-party included — at a HIGHER version than the
+    /// platform's copy, or under a different public key token. The platform's copy is what the
+    /// loader binds (a copy travelling in the module's own bundle never loads when the platform
+    /// already carries the simple name), and .NET binds a reference only to an equal or HIGHER
+    /// version: the bind itself is refused, whatever the type names look like — both YamlDotNet
+    /// majors carry the same types, and 2026-09-11 crash-looped every new pod on exactly that.
+    /// A hard verdict everywhere <see cref="Unlinkable"/> is one: refused at landing and at boot,
+    /// a hold at the roll gate. Appended, never inserted: the state is on the wire in
+    /// serialized verdicts.</summary>
+    BindingConflict,
 }
 
 /// <summary>
@@ -66,8 +78,78 @@ public sealed record ModuleLinkVerdict(
 {
     /// <summary>True only for <see cref="ModuleLinkState.Linkable"/> — the one state a caller may
     /// load on. Written as an explicit predicate so no call site can spell the check as
-    /// <c>!= Unlinkable</c> and quietly admit <see cref="ModuleLinkState.Indeterminate"/>.</summary>
+    /// <c>!= Unlinkable</c> and quietly admit <see cref="ModuleLinkState.Indeterminate"/> — or,
+    /// since #4083, <see cref="ModuleLinkState.BindingConflict"/>.</summary>
     public bool MayLoad => State == ModuleLinkState.Linkable;
+
+    /// <summary>
+    /// 🚨 The assembly references that CANNOT bind on this platform (#4083), each as
+    /// <c>Name wanted (this platform carries have)</c>: the module asks for a HIGHER version of an
+    /// assembly the platform carries, or for a different public key token. Non-empty exactly when
+    /// <see cref="State"/> is <see cref="ModuleLinkState.BindingConflict"/>.
+    /// </summary>
+    public ImmutableArray<string> BindingConflicts => [.. Conflicts.Select(c => c.Describe())];
+
+    /// <summary>The binding conflicts as DATA (#4083) — assembly, what the module asks for, what
+    /// the platform provides — so a status surface can render them in the viewer's language and a
+    /// marker can carry them without re-parsing a sentence. <see cref="BindingConflicts"/> is the
+    /// operator spelling of the same list.</summary>
+    public ImmutableArray<AssemblyBindingConflict> Conflicts { get; init; } = [];
+
+    /// <summary>
+    /// The short status-line form of a refusal, for the module's own status surfaces (the
+    /// activation sidecar's refusal marker, the package card, <c>/health</c>) — e.g.
+    /// <c>held: references YamlDotNet 18.1.0.0, platform provides 16.3.0.0</c>. Null for
+    /// <see cref="ModuleLinkState.Linkable"/>. English by design, like <see cref="Report"/>; the
+    /// viewer-facing card localizes the sentence and takes <see cref="Needs"/> /
+    /// <see cref="Provides"/> as data.
+    /// </summary>
+    public string? HoldSummary() => State switch
+    {
+        ModuleLinkState.Linkable => null,
+        ModuleLinkState.BindingConflict =>
+            "held: " + string.Join("; ", Conflicts.Select(c => c.Short())),
+        ModuleLinkState.Unlinkable =>
+            "held: references " + string.Join(", ", MissingTypes.Take(3))
+            + (MissingTypes.Length > 3 ? $" (+{MissingTypes.Length - 3} more)" : "")
+            + ", which this platform does not carry",
+        _ => $"held: whether it links could not be determined ({Detail})",
+    };
+
+    /// <summary>What the refused module NEEDS, as language-neutral data for a localized status
+    /// line: the conflicting assemblies with the versions the module asks for
+    /// (<c>YamlDotNet 18.1.0.0, System.Reactive 7.0.0.0</c>), or for a type refusal the first
+    /// missing types. Null when nothing is refused.</summary>
+    public string? Needs() => State switch
+    {
+        ModuleLinkState.BindingConflict => string.Join(", ", Conflicts.Select(c => $"{c.Assembly} {c.Referenced}")),
+        ModuleLinkState.Unlinkable => string.Join(", ", MissingTypes.Take(3))
+            + (MissingTypes.Length > 3 ? $" (+{MissingTypes.Length - 3})" : ""),
+        ModuleLinkState.Indeterminate => Detail,
+        _ => null,
+    };
+
+    /// <summary>What this platform PROVIDES for each conflicting assembly, in the order of
+    /// <see cref="Needs"/> (<c>16.3.0.0, 6.1.0.0</c>); null unless the refusal is a binding
+    /// conflict.</summary>
+    public string? Provides() => State == ModuleLinkState.BindingConflict
+        ? string.Join(", ", Conflicts.Select(c => c.Provided))
+        : null;
+
+    /// <summary>
+    /// Version skew that is REPORTED and never refused (#4083): a reference to a LOWER version than
+    /// the platform carries (the loader rolls forward — patch drift is ordinary, and a gate that
+    /// reds on it is switched off within the week), and a carried assembly whose version the
+    /// surface does not record (a <see cref="ModulePlatformSurface.PublishedFileName"/> written
+    /// before versions were published: unknown is unknown, never a hard verdict). Carried on a
+    /// <see cref="ModuleLinkState.Linkable"/> verdict too — a reader that wants the drift can read
+    /// it; nothing decides on it.
+    /// </summary>
+    public ImmutableArray<string> Advisories { get; init; } = [];
+
+    /// <summary>How many assembly references were compared by version against the platform's copy
+    /// — the version half's DENOMINATOR, beside <see cref="CheckedTypeReferences"/>.</summary>
+    public int ComparedAssemblyReferences { get; init; }
 
     /// <summary>
     /// The operator-facing sentence: which module, what it wants that this build does not have,
@@ -78,9 +160,8 @@ public sealed record ModuleLinkVerdict(
     public string Report() => State switch
     {
         ModuleLinkState.Linkable =>
-            $"Module '{Module}' links against this platform ({CheckedTypeReferences} type "
-            + $"reference(s) checked across {CheckedAssemblies.Length} platform assembly/assemblies"
-            + Unchecked() + ").",
+            $"Module '{Module}' links against this platform ({Denominator()}" + Unchecked() + ")"
+            + Advised() + ".",
         ModuleLinkState.Unlinkable =>
             $"Module '{Module}' was built against a platform this deployment is NOT running and "
             + "CANNOT be loaded here: it references "
@@ -89,12 +170,33 @@ public sealed record ModuleLinkVerdict(
             + "throws TypeLoadException at the first render that touches it — every render, "
             + "forever, with nothing connecting it to the install. Move the platform and the "
             + "module together: this module becomes loadable when the platform updates. "
-            + $"({CheckedTypeReferences} type reference(s) checked across "
-            + $"{CheckedAssemblies.Length} platform assembly/assemblies" + Unchecked() + ")",
+            + $"({Denominator()}" + Unchecked() + ")" + Advised(),
+        ModuleLinkState.BindingConflict =>
+            $"Module '{Module}' was built against assembly VERSIONS this deployment is NOT running "
+            + "and CANNOT be loaded here: it references "
+            + string.Join(", ", BindingConflicts)
+            + ". The platform's copy is what the loader binds — a copy of the same assembly "
+            + "travelling in the module's own bundle never loads when the platform carries the "
+            + "name — and .NET binds a reference only to an EQUAL or HIGHER version under the same "
+            + "public key token, never to a lower one. Loading it anyway throws FileLoadException "
+            + "(0x80131040) the first time any code path touches the assembly; on 2026-09-11 that "
+            + "was hub construction, and every new pod crash-looped. Move the platform and the "
+            + "module together: this module becomes loadable on a platform carrying at least the "
+            + "referenced version"
+            + (MissingTypes.IsDefaultOrEmpty
+                ? ""
+                : " — and it also references " + string.Join(", ", MissingTypes)
+                  + ", which the platform's copy does not have")
+            + $". ({Denominator()}" + Unchecked() + ")" + Advised(),
         _ =>
             $"Module '{Module}': whether it links against this platform could NOT be determined "
             + $"({Detail}). Not loading it: an unanswerable check is not a passed one.",
     };
+
+    private string Denominator() =>
+        $"{CheckedTypeReferences} type reference(s) checked across {CheckedAssemblies.Length} "
+        + $"platform assembly/assemblies, {ComparedAssemblyReferences} assembly reference(s) "
+        + "compared by version";
 
     private string Unchecked() =>
         UncheckedAssemblies.IsDefaultOrEmpty
@@ -102,6 +204,58 @@ public sealed record ModuleLinkVerdict(
             : $"; {UncheckedAssemblies.Length} referenced assembly/assemblies are neither the "
               + "platform's nor this module's own closure and were NOT checked: "
               + string.Join(", ", UncheckedAssemblies);
+
+    private string Advised() =>
+        Advisories.IsDefaultOrEmpty
+            ? string.Empty
+            : $" Advisory ({Advisories.Length}), reported and deciding nothing: "
+              + string.Join("; ", Advisories);
+}
+
+/// <summary>
+/// One assembly reference the loader would refuse to bind on this platform (#4083): the module
+/// asks for a HIGHER version than the platform provides, or a different public key token.
+/// </summary>
+/// <param name="Assembly">The assembly's simple name.</param>
+/// <param name="Referenced">What the module's bytes ask for — a version (<c>18.1.0.0</c>) or, for
+/// a key conflict, a public key token.</param>
+/// <param name="Provided">What the platform's copy carries, in the same spelling.</param>
+/// <param name="IsPublicKeyToken">True when the conflict is the key, not the version.</param>
+public sealed record AssemblyBindingConflict(
+    string Assembly, string Referenced, string Provided, bool IsPublicKeyToken = false)
+{
+    /// <summary>The operator spelling, as <see cref="ModuleLinkVerdict.BindingConflicts"/> lists it.</summary>
+    public string Describe() => IsPublicKeyToken
+        ? $"{Assembly} with public key token {Referenced} (this platform carries public key token {Provided})"
+        : $"{Assembly} {Referenced} (this platform carries {Provided})";
+
+    /// <summary>The status-line spelling: <c>references YamlDotNet 18.1.0.0, platform provides 16.3.0.0</c>.</summary>
+    public string Short() => IsPublicKeyToken
+        ? $"references {Assembly} with public key token {Referenced}, platform provides {Provided}"
+        : $"references {Assembly} {Referenced}, platform provides {Provided}";
+}
+
+/// <summary>
+/// What a platform assembly IS, as the loader identifies it (#4083): the manifest version and the
+/// public key token, read from the assembly's own identity without loading it. Null members are
+/// UNKNOWN — a surface document written before versions were published, an unsigned assembly —
+/// and unknown compares as an advisory, never as a conflict.
+/// </summary>
+/// <param name="Version">The assembly's manifest version, or null when not known.</param>
+/// <param name="PublicKeyToken">The public key token as 16 lowercase hex characters, or null for
+/// an unsigned assembly or one whose token is not known.</param>
+public sealed record PlatformAssemblyIdentity(Version? Version, string? PublicKeyToken)
+{
+    /// <summary>The identity of an <see cref="AssemblyName"/> — a loaded assembly's, a file's
+    /// manifest, or a reference's — in this record's spelling.</summary>
+    public static PlatformAssemblyIdentity Of(AssemblyName name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var token = name.GetPublicKeyToken();
+        return new PlatformAssemblyIdentity(
+            name.Version,
+            token is { Length: > 0 } ? Convert.ToHexStringLower(token) : null);
+    }
 }
 
 /// <summary>
@@ -138,23 +292,43 @@ public sealed class ModulePlatformSurface
     // silent about everything else, so a reference to an undeclared assembly is judged by the same
     // carries/platform-prefix rules as against a live surface.
     private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _declared;
+    // 🚨 The DECLARED identities (#4083): assembly → version + public key token, read from the
+    // document's `identities` section. An assembly the document declares types for but no identity
+    // (a document written before #4083) is carried with an UNKNOWN identity, which the probe
+    // reports as an advisory and never as a conflict.
+    private readonly ImmutableDictionary<string, PlatformAssemblyIdentity> _declaredIdentities;
+    // 🚨 Which carried assemblies the loader binds to the PLATFORM's copy even when a module ships
+    // its own (#4083): on a running process the trusted platform assemblies and the application
+    // directory — a copy loaded from a LANDED module directory is not one of them, since a module
+    // re-landing its own siblings must be measured against the siblings it brings, not the
+    // generation it supersedes. Null means every carried assembly: a published document describes
+    // a platform image's /app alone, and a file set IS the platform host.
+    private readonly ImmutableHashSet<string>? _platformBound;
     // Per-instance memo of what each platform assembly exports. ConcurrentDictionary because a
     // caller may check several modules in parallel; an instance field, so its lifetime is the
     // batch's.
     private readonly ConcurrentDictionary<string, ImmutableHashSet<string>?> _types =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, PlatformAssemblyIdentity?> _identities =
         new(StringComparer.OrdinalIgnoreCase);
 
     private ModulePlatformSurface(
         ImmutableDictionary<string, string> files,
         ImmutableDictionary<string, Assembly> loaded,
         ImmutableDictionary<string, ImmutableHashSet<string>>? declared = null,
-        string? identity = null)
+        string? identity = null,
+        ImmutableDictionary<string, PlatformAssemblyIdentity>? declaredIdentities = null,
+        ImmutableHashSet<string>? platformBound = null)
     {
         _files = files;
         _loaded = loaded;
         _declared = declared
             ?? ImmutableDictionary<string, ImmutableHashSet<string>>.Empty
                 .WithComparers(StringComparer.OrdinalIgnoreCase);
+        _declaredIdentities = declaredIdentities
+            ?? ImmutableDictionary<string, PlatformAssemblyIdentity>.Empty
+                .WithComparers(StringComparer.OrdinalIgnoreCase);
+        _platformBound = platformBound;
         Identity = identity;
     }
 
@@ -178,12 +352,45 @@ public sealed class ModulePlatformSurface
     /// <param name="probeDirectories">Directories to add — production passes the application base
     /// directory. Missing directories are skipped.</param>
     public static ModulePlatformSurface OfRunningProcess(params string[] probeDirectories)
-        => Of(AppDomain.CurrentDomain.GetAssemblies(), probeDirectories);
+    {
+        // 🚨 What binds AHEAD of a module's own copy on this process (#4083): the trusted platform
+        // assemblies (the application's closure plus the shared frameworks — the TPA binder is
+        // consulted before any LoadFrom sibling) and whatever sits in the application directory.
+        // A copy this process loaded from a LANDED module's directory is deliberately not in the
+        // set: it is what a superseded generation brought, not what the next boot binds.
+        var platformBound = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        var tpa = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string ?? string.Empty;
+        foreach (var path in tpa.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            platformBound.Add(Path.GetFileNameWithoutExtension(path));
+        var baseDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
+        var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies();
+        foreach (var assembly in loadedAssemblies)
+        {
+            var name = assembly.GetName().Name;
+            if (string.IsNullOrEmpty(name) || assembly.IsDynamic || string.IsNullOrEmpty(assembly.Location))
+                continue;
+            if (IsUnder(assembly.Location, baseDirectory))
+                platformBound.Add(name);
+        }
+        foreach (var directory in probeDirectories ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)
+                || !string.Equals(
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)), baseDirectory,
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+            foreach (var file in Directory.EnumerateFiles(directory, "*.dll"))
+                platformBound.Add(Path.GetFileNameWithoutExtension(file));
+        }
+        return Of(loadedAssemblies, platformBound.ToImmutable(), probeDirectories);
+    }
 
     /// <summary>
     /// The pure form: an explicit set of loaded assemblies and probe directories. The seam a test
     /// fabricates an OLDER platform through — which is the only way to reproduce the defect
-    /// without two builds of the product.
+    /// without two builds of the product. The loaded assemblies handed in are what the loader
+    /// binds, so they are the platform-bound set (<see cref="IsPlatformBound"/>); the probe
+    /// directories' files are not.
     /// </summary>
     /// <param name="loadedAssemblies">The assemblies a module would bind to, in precedence order;
     /// the first of a simple name wins, exactly as the loader resolves it.</param>
@@ -192,6 +399,19 @@ public sealed class ModulePlatformSurface
         IEnumerable<Assembly> loadedAssemblies, params string[] probeDirectories)
     {
         ArgumentNullException.ThrowIfNull(loadedAssemblies);
+        var assemblies = loadedAssemblies.ToArray();
+        var platformBound = assemblies
+            .Select(a => a.GetName().Name)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Select(n => n!)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        return Of(assemblies, platformBound, probeDirectories);
+    }
+
+    private static ModulePlatformSurface Of(
+        IEnumerable<Assembly> loadedAssemblies, ImmutableHashSet<string> platformBound,
+        string[]? probeDirectories)
+    {
         var loaded = ImmutableDictionary.CreateBuilder<string, Assembly>(StringComparer.OrdinalIgnoreCase);
         foreach (var assembly in loadedAssemblies)
         {
@@ -209,7 +429,17 @@ public sealed class ModulePlatformSurface
                 files.TryAdd(Path.GetFileNameWithoutExtension(file), file);
         }
 
-        return new ModulePlatformSurface(files.ToImmutable(), loaded.ToImmutable());
+        return new ModulePlatformSurface(
+            files.ToImmutable(), loaded.ToImmutable(), platformBound: platformBound);
+    }
+
+    private static bool IsUnder(string path, string directory)
+    {
+        var parent = Path.GetDirectoryName(Path.GetFullPath(path));
+        return parent is not null
+               && string.Equals(
+                   Path.TrimEndingDirectorySeparator(parent), directory,
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -244,7 +474,8 @@ public sealed class ModulePlatformSurface
     /// <para>The shape is minimal and documented in <c>Doc/Architecture/ModulePlatformLinkGate</c>:</para>
     /// <code>
     /// { "identity": "s&lt;hash&gt;",
-    ///   "assemblies": { "MeshWeaver.Blazor": ["MeshWeaver.Blazor.BlazorView`2", …], … } }
+    ///   "assemblies": { "MeshWeaver.Blazor": ["MeshWeaver.Blazor.BlazorView`2", …], … },
+    ///   "identities": { "YamlDotNet": { "version": "16.3.0.0", "publicKeyToken": "ec19458f3c15af5e" }, … } }
     /// </code>
     /// <para>Every assembly this surface carries is listed with the SAME set <see cref="TypesOf"/>
     /// answers — type definitions and exported/forwarded types, full names, nested as
@@ -252,6 +483,16 @@ public sealed class ModulePlatformSurface
     /// live process would. An assembly whose surface cannot be read (no file, unreadable metadata)
     /// is OMITTED rather than written empty: an empty list would read as "this assembly has no
     /// types" and report every reference to it as missing.</para>
+    ///
+    /// <para>🚨 <b><c>identities</c> (#4083)</b> carries, per listed assembly, the manifest version
+    /// and public key token the loader binds by — the two facts type names cannot express (both
+    /// YamlDotNet majors carry the same type names; only the version refuses the bind). A SIBLING
+    /// of <c>assemblies</c> rather than a richer value inside it, because every reader shipped
+    /// before this section requires each <c>assemblies</c> value to be an array of strings and
+    /// throws otherwise — and ignores an unknown root property. So an older platform reads the new
+    /// document exactly as before, and a newer platform reading an older document sees no
+    /// identities and reports every version comparison as unknown (an advisory, never a
+    /// verdict).</para>
     /// </summary>
     /// <param name="identity">The framework build identity the described platform resolves, or
     /// null when the writer does not know it.</param>
@@ -259,22 +500,38 @@ public sealed class ModulePlatformSurface
     {
         var names = _declared.Keys.Concat(_loaded.Keys).Concat(_files.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.Ordinal);
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer))
         {
             writer.WriteStartObject();
             writer.WriteString(IdentityProperty, identity ?? Identity);
             writer.WriteStartObject(AssembliesProperty);
+            var listed = new List<string>();
             foreach (var name in names)
             {
                 var types = TypesOf(name);
                 if (types is null)
                     continue;
+                listed.Add(name);
                 writer.WriteStartArray(name);
                 foreach (var type in types.OrderBy(t => t, StringComparer.Ordinal))
                     writer.WriteStringValue(type);
                 writer.WriteEndArray();
+            }
+            writer.WriteEndObject();
+            writer.WriteStartObject(IdentitiesProperty);
+            foreach (var name in listed)
+            {
+                if (IdentityOf(name) is not { } assemblyIdentity)
+                    continue;
+                writer.WriteStartObject(name);
+                if (assemblyIdentity.Version is { } version)
+                    writer.WriteString(VersionProperty, version.ToString(4));
+                if (assemblyIdentity.PublicKeyToken is { } token)
+                    writer.WriteString(PublicKeyTokenProperty, token);
+                writer.WriteEndObject();
             }
             writer.WriteEndObject();
             writer.WriteEndObject();
@@ -330,20 +587,116 @@ public sealed class ModulePlatformSurface
                 $"{PublishedFileName}: '{AssembliesProperty}' is empty — a platform with no "
                 + "assemblies is not a surface anything could link against");
 
+        // 🚨 OPTIONAL (#4083): a document written before versions were published has no
+        // `identities`, and reads as a surface whose every version is UNKNOWN — advisory, never a
+        // verdict. Present, it is held to the documented shape like everything else: a malformed
+        // version would otherwise become a silent "unknown" on a document that claims to know.
+        var identities = ImmutableDictionary.CreateBuilder<string, PlatformAssemblyIdentity>(
+            StringComparer.OrdinalIgnoreCase);
+        if (root.TryGetProperty(IdentitiesProperty, out var identitiesElement))
+        {
+            if (identitiesElement.ValueKind != JsonValueKind.Object)
+                throw new JsonException(
+                    $"{PublishedFileName}: '{IdentitiesProperty}' is not an object");
+            foreach (var entry in identitiesElement.EnumerateObject())
+            {
+                if (entry.Value.ValueKind != JsonValueKind.Object)
+                    throw new JsonException(
+                        $"{PublishedFileName}: '{IdentitiesProperty}.{entry.Name}' is not an object");
+                Version? version = null;
+                if (entry.Value.TryGetProperty(VersionProperty, out var versionElement))
+                {
+                    if (versionElement.ValueKind != JsonValueKind.String
+                        || !Version.TryParse(versionElement.GetString(), out version))
+                        throw new JsonException(
+                            $"{PublishedFileName}: '{IdentitiesProperty}.{entry.Name}.{VersionProperty}' "
+                            + "is not a version");
+                }
+                string? token = null;
+                if (entry.Value.TryGetProperty(PublicKeyTokenProperty, out var tokenElement))
+                {
+                    if (tokenElement.ValueKind != JsonValueKind.String)
+                        throw new JsonException(
+                            $"{PublishedFileName}: '{IdentitiesProperty}.{entry.Name}.{PublicKeyTokenProperty}' "
+                            + "is not a string");
+                    token = tokenElement.GetString();
+                }
+                identities[entry.Name] = new PlatformAssemblyIdentity(version, token);
+            }
+        }
+
         return new ModulePlatformSurface(
             ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
             ImmutableDictionary<string, Assembly>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
             declared.ToImmutable(),
-            identity);
+            identity,
+            identities.ToImmutable());
     }
 
     private const string IdentityProperty = "identity";
     private const string AssembliesProperty = "assemblies";
+    private const string IdentitiesProperty = "identities";
+    private const string VersionProperty = "version";
+    private const string PublicKeyTokenProperty = "publicKeyToken";
 
     /// <summary>Whether this platform carries an assembly of that simple name at all.</summary>
     public bool Carries(string assemblyName) =>
         _loaded.ContainsKey(assemblyName) || _files.ContainsKey(assemblyName)
         || _declared.ContainsKey(assemblyName);
+
+    /// <summary>
+    /// 🚨 Whether the PLATFORM's copy of <paramref name="assemblyName"/> is what the loader binds
+    /// even when a module ships its own copy (#4083). True for every assembly a published document
+    /// or a file set carries (they describe a platform image and nothing else); on a running
+    /// process, true for the trusted platform assemblies and the application directory, and false
+    /// for a copy this process loaded from a landed module's directory — that copy is a superseded
+    /// generation's, and a module re-landing its own siblings is measured against the siblings it
+    /// brings. This is the predicate that decides whether a reference into the module's OWN
+    /// closure is in the denominator: it is, exactly when the platform's copy wins.
+    /// </summary>
+    public bool IsPlatformBound(string assemblyName) =>
+        Carries(assemblyName) && (_platformBound is null || _platformBound.Contains(assemblyName));
+
+    /// <summary>
+    /// The identity — manifest version and public key token — of the copy of
+    /// <paramref name="assemblyName"/> this platform binds, read from the loaded assembly's name,
+    /// the file's manifest, or the document's <c>identities</c> section; never by loading anything.
+    /// Null when the assembly is not carried or its identity is not known (a document written
+    /// before #4083, an unreadable file).
+    /// </summary>
+    public PlatformAssemblyIdentity? IdentityOf(string assemblyName) =>
+        _identities.GetOrAdd(assemblyName, ReadIdentity);
+
+    private PlatformAssemblyIdentity? ReadIdentity(string assemblyName)
+    {
+        if (_declaredIdentities.TryGetValue(assemblyName, out var declared))
+            return declared;
+        if (!_declared.IsEmpty)
+            return null; // a declared surface knows only what its document says
+
+        // The loaded copy is the exact identity bound; its name is metadata, already in memory.
+        if (_loaded.TryGetValue(assemblyName, out var assembly))
+            return PlatformAssemblyIdentity.Of(assembly.GetName());
+
+        if (_files.GetValueOrDefault(assemblyName) is not { } path)
+            return null;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var peReader = new PEReader(stream);
+            if (!peReader.HasMetadata)
+                return null;
+            var metadata = peReader.GetMetadataReader();
+            if (!metadata.IsAssembly)
+                return null;
+            return PlatformAssemblyIdentity.Of(metadata.GetAssemblyDefinition().GetAssemblyName());
+        }
+        catch (Exception exception) when (exception is IOException or BadImageFormatException
+                                              or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// The full type names <paramref name="assemblyName"/> exposes here — type definitions AND
@@ -455,11 +808,24 @@ public sealed class ModulePlatformSurface
 /// <para><b>What is in the denominator, and what is deliberately not.</b> A referenced assembly is
 /// checked when the PLATFORM carries it. An assembly travelling in the module's OWN closure is not
 /// checked — it was built together with the module, and their agreement is not this gate's
-/// question. An assembly that is in neither is NAMED in the verdict and left unchecked: it is a
-/// private dependency whose absence fails as a <c>FileNotFoundException</c>, a different defect
-/// with a different remedy. The one exception is an assembly whose simple name is the PLATFORM's
-/// own (<see cref="PlatformAssemblyPrefix"/>) that this deployment does not carry at all — that is
-/// the whole-assembly shape of the same defect and is refused.</para>
+/// question — <i>unless the platform carries the same simple name and its copy is what the loader
+/// binds</i> (<see cref="ModulePlatformSurface.IsPlatformBound"/>, #4083): then the module's copy
+/// never loads, the "built together" premise is false, and the pair that decides is
+/// module ↔ platform. An assembly that is in neither is NAMED in the verdict and left unchecked:
+/// it is a private dependency whose absence fails as a <c>FileNotFoundException</c>, a different
+/// defect with a different remedy. The one exception is an assembly whose simple name is the
+/// PLATFORM's own (<see cref="PlatformAssemblyPrefix"/>) that this deployment does not carry at
+/// all — that is the whole-assembly shape of the same defect and is refused.</para>
+///
+/// <para><b>Two measurements, one verdict (#4083).</b> Type references are resolved by NAME
+/// against the platform copy's types (the <c>TypeLoadException</c> shape,
+/// <see cref="ModuleLinkState.Unlinkable"/>); assembly references are compared by IDENTITY —
+/// version and public key token — against the platform copy's (the <c>FileLoadException</c>
+/// shape, <see cref="ModuleLinkState.BindingConflict"/>). The second is asymmetric because the
+/// loader is: a reference to a lower version than the platform carries rolls forward and is
+/// reported as an advisory; a reference to a higher version, or to a different key, is refused
+/// by the loader and is a hard verdict here. <c>MeshWeaver.*</c> assemblies keep the type-identity
+/// rule and are compared by version like every other carried assembly.</para>
 ///
 /// <para><b>Member-level skew is NOT covered and must not be assumed to be.</b> This checks TYPE
 /// references. A method or constructor signature that moved on a type that still exists (#2234's
@@ -515,7 +881,9 @@ public static class ModulePlatformLink
     /// <param name="entryBytes">The entry assembly's bytes.</param>
     /// <param name="moduleName">The module's assembly simple name (for the report).</param>
     /// <param name="closure">The simple names of the assemblies travelling WITH the module,
-    /// including the entry itself — references to those are out of the denominator.</param>
+    /// including the entry itself — references to those are out of the denominator, unless the
+    /// platform carries the same simple name and its copy is what the loader binds
+    /// (<see cref="ModulePlatformSurface.IsPlatformBound"/>, #4083).</param>
     /// <param name="surface">The platform this module would be loaded into.</param>
     public static ModuleLinkVerdict Check(
         byte[] entryBytes, string moduleName, IReadOnlySet<string> closure,
@@ -556,8 +924,71 @@ public static class ModulePlatformLink
             return Indeterminate(moduleName, $"{exception.GetType().Name}: {exception.Message}");
         }
 
+        List<AssemblyBindingConflict> conflicts = [];
+        List<string> advisories = [];
+        var comparedRefs = 0;
+
         using (peReader)
         {
+            // 🚨 THE VERSION HALF (#4083). Type names cannot express "the reference asks for
+            // 18.1.0.0 and this platform has 16.3.0.0": both YamlDotNet majors carry the same
+            // type names, and on 2026-09-11 the type walk below said Linkable while every new
+            // pod crash-looped on FileLoadException at hub construction. So every assembly
+            // reference whose simple name the platform carries is compared by IDENTITY against the
+            // platform's copy — the copy the loader binds. The rule is ASYMMETRIC on purpose,
+            // because .NET binding rolls FORWARD and never back: a reference to a LOWER version
+            // than the platform carries binds to the platform's newer copy (an advisory, so the
+            // drift is on record; never a refusal, because patch drift is ordinary and a gate that
+            // reds on it is switched off within the week), a reference to a HIGHER version is
+            // refused by the loader itself and is therefore a hard verdict here, and a different
+            // public key token under the same name is refused whatever the versions say.
+            foreach (var handle in metadata.AssemblyReferences)
+            {
+                var reference = metadata.GetAssemblyReference(handle);
+                var assemblyName = metadata.GetString(reference.Name);
+                if (!InDenominator(assemblyName, closure, surface))
+                    continue;
+
+                var wanted = PlatformAssemblyIdentity.Of(reference.GetAssemblyName());
+                var have = surface.IdentityOf(assemblyName);
+                comparedRefs++;
+                if (have is null)
+                {
+                    advisories.Add(
+                        $"{assemblyName}: the module references {wanted.Version?.ToString(4) ?? "an unversioned copy"}, "
+                        + "and this platform's surface records no version for its copy — not "
+                        + "compared (a surface published before versions were recorded reads as "
+                        + "unknown, never as a conflict)");
+                    continue;
+                }
+
+                if (wanted.PublicKeyToken is { } wantedToken && have.PublicKeyToken is { } haveToken
+                    && !string.Equals(wantedToken, haveToken, StringComparison.OrdinalIgnoreCase))
+                {
+                    conflicts.Add(new AssemblyBindingConflict(assemblyName, wantedToken, haveToken, IsPublicKeyToken: true));
+                    continue;
+                }
+
+                // An unversioned reference (0.0.0.0) binds to any version; nothing to compare.
+                if (wanted.Version is not { } wantedVersion || wantedVersion == UnversionedReference)
+                    continue;
+                if (have.Version is not { } haveVersion)
+                {
+                    advisories.Add(
+                        $"{assemblyName}: the module references {wantedVersion.ToString(4)}, and the "
+                        + "version of this platform's copy is not known — not compared");
+                    continue;
+                }
+                var order = wantedVersion.CompareTo(haveVersion);
+                if (order > 0)
+                    conflicts.Add(new AssemblyBindingConflict(
+                        assemblyName, wantedVersion.ToString(4), haveVersion.ToString(4)));
+                else if (order < 0)
+                    advisories.Add(
+                        $"{assemblyName}: the module references {wantedVersion.ToString(4)}, this "
+                        + $"platform carries {haveVersion.ToString(4)} — binds and rolls forward");
+            }
+
             foreach (var handle in metadata.TypeReferences)
             {
                 var reference = metadata.GetTypeReference(handle);
@@ -565,8 +996,10 @@ public static class ModulePlatformLink
                     continue; // same-assembly or module-scoped reference — nothing external to check
 
                 // The module's own closure: built together with the entry, so their agreement is
-                // not this gate's question.
-                if (closure.Contains(assemblyName))
+                // not this gate's question — UNLESS the platform carries the same simple name and
+                // its copy is what the loader binds (#4083), in which case the module's copy never
+                // loads and the pair that decides is module ↔ platform.
+                if (closure.Contains(assemblyName) && !surface.IsPlatformBound(assemblyName))
                     continue;
 
                 if (!surface.Carries(assemblyName))
@@ -607,14 +1040,38 @@ public static class ModulePlatformLink
             }
         }
 
+        // A binding conflict is the loader's FIRST refusal — the assembly never binds, so no type
+        // in it is ever looked up — which is why it outranks a missing type in the verdict.
+        var state = conflicts.Count > 0 ? ModuleLinkState.BindingConflict
+            : missing.Count > 0 ? ModuleLinkState.Unlinkable
+            : ModuleLinkState.Linkable;
         return new ModuleLinkVerdict(
-            missing.Count == 0 ? ModuleLinkState.Linkable : ModuleLinkState.Unlinkable,
+            state,
             moduleName,
             [.. missing.Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal)],
             checkedRefs,
             [.. checkedAssemblies.ToImmutable().OrderBy(a => a, StringComparer.OrdinalIgnoreCase)],
-            [.. uncheckedAssemblies.ToImmutable().OrderBy(a => a, StringComparer.OrdinalIgnoreCase)]);
+            [.. uncheckedAssemblies.ToImmutable().OrderBy(a => a, StringComparer.OrdinalIgnoreCase)])
+        {
+            Conflicts = [.. conflicts.Distinct().OrderBy(c => c.Assembly, StringComparer.Ordinal)],
+            Advisories = [.. advisories.Distinct(StringComparer.Ordinal).OrderBy(a => a, StringComparer.Ordinal)],
+            ComparedAssemblyReferences = comparedRefs,
+        };
     }
+
+    /// <summary>The version an assembly reference carries when the compiler was given no version
+    /// at all — it binds to any copy, so there is nothing to compare.</summary>
+    private static readonly Version UnversionedReference = new(0, 0, 0, 0);
+
+    /// <summary>
+    /// Whether a reference to <paramref name="assemblyName"/> is measured against the platform:
+    /// the platform carries it, and either the module does not ship its own copy or the platform's
+    /// copy is what the loader binds anyway (<see cref="ModulePlatformSurface.IsPlatformBound"/>).
+    /// </summary>
+    private static bool InDenominator(
+        string assemblyName, IReadOnlySet<string> closure, ModulePlatformSurface surface) =>
+        surface.Carries(assemblyName)
+        && (!closure.Contains(assemblyName) || surface.IsPlatformBound(assemblyName));
 
     private static ModuleLinkVerdict Indeterminate(string moduleName, string detail) =>
         new(ModuleLinkState.Indeterminate, moduleName, [], 0, [], [], detail);

@@ -623,6 +623,8 @@
   "ui.moduleBuiltForNewerPlatform": "Hier nicht aktiv: Diese Version wurde für eine neuere Plattform gebaut. Sie wird aktiv, sobald diese Installation aktualisiert wird.",
   "ui.moduleRunsPreviousVersion": "Läuft mit der vorherigen Version {0}: Version {1} ist installiert, lädt aber auf dieser Plattform nicht. Sie wird aktiv, sobald ein hier ladbarer Build erscheint.",
   "ui.moduleDeclaresNewerPlatform": "Deklariert Plattform ≥ {0}; diese Installation läuft mit {1}. Nur ein Hinweis — ob es lädt, wird gemessen, nicht deklariert.",
+  "ui.moduleHeldAtLanding": "Auf dieser Plattform nicht installiert: es benötigt {0}, diese Plattform stellt {1} bereit. Es wird installiert, sobald diese Installation auf eine Plattform aktualisiert, die es bereitstellt.",
+  "ui.moduleHeldAtLandingTypes": "Auf dieser Plattform nicht installiert: es verweist auf {0}, was diese Plattform nicht hat. Es wird installiert, sobald diese Installation aktualisiert wird.",
   "ui.orphanedInstallRecords": "Verwaiste Installationseinträge",
   "ui.requestAccess": "Zugriff anfragen",
   "ui.resetToDefault": "Auf Standard zurücksetzen",
