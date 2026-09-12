@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -82,7 +83,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant (TestTimeouts.TestMilliseconds is not).
     public async Task AParentDeclaringNothingLosesNothing()
     {
-        var (types, host) = await Fixture();
+        var (types, host, _) = await Fixture();
         var parentPath = $"{host}/Thing";
 
         var baseline = await LiteralQueryResults(parentPath);
@@ -125,7 +126,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task TheOldQueryLiteralsCannotReachADeclaredType()
     {
-        var (types, host) = await Fixture();
+        var (types, host, _) = await Fixture();
 
         var baseline = await LiteralQueryResults($"{host}/Deal");
         Output.WriteLine($"retired literals for {host}/Deal returned {baseline.Count}: "
@@ -149,7 +150,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task TheRenderedCreateFormOffersATypeTheParentDeclaresInAnotherPartition()
     {
-        var (types, host) = await Fixture();
+        var (types, host, _) = await Fixture();
 
         var declaring = await RenderedTypePicker($"{host}/Deal");
         var offered = PickerPaths(declaring);
@@ -178,7 +179,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task ADeclarationRestrictsDiscovery_AndIncludeGlobalTypesDecidesTheGlobals()
     {
-        var (types, host) = await Fixture();
+        var (types, host, _) = await Fixture();
         var globals = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>().GlobalCreatableTypes;
         globals.Should().NotBeEmpty("the global set is the thing IncludeGlobalTypes switches off");
 
@@ -200,14 +201,21 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
 
     /// <summary>
     /// A NodeType that opted out of the create context (<c>ExcludeFromContext: ["create"]</c> —
-    /// Release, Build, ModuleBuild, Partition) is never offered. The retired form filtered these
-    /// out of both its Items and its queries; the provider did not, and would have started offering
-    /// four uncreatable types the moment it was wired up.
+    /// Release, Build, ModuleBuild, Partition) is never offered — not by discovery, and not when a
+    /// parent's <c>CreatableTypes</c> NAMES it. The retired form filtered these out of both its
+    /// Items and its queries; the provider did not, and would have started offering four
+    /// uncreatable types the moment it was wired up.
+    ///
+    /// <para>🚨 The whitelist half is the one that reads as a judgement call and is not: the type's
+    /// own opt-out is the platform saying instances of it are made by the platform, so a module
+    /// author naming it cannot resurrect it. Both config sources — the parent's
+    /// <c>CreatableTypes</c> and the host's <c>GlobalCreatableTypes</c> — resolve through the same
+    /// exclusion-aware lookup.</para>
     /// </summary>
     [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
     public async Task ATypeThatOptedOutOfTheCreateContextIsNeverOffered()
     {
-        var (_, host) = await Fixture();
+        var (_, host, declaredButOptedOut) = await Fixture();
 
         var optedOut = Mesh.ServiceProvider.EnumerateStaticNodes()
             .Where(n => n.IsExcludedFromContext(MeshContexts.Create))
@@ -220,6 +228,49 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
         offered.Intersect(optedOut).OrderBy(x => x).Should().BeEmpty(
             "ExcludeFromContext: [\"create\"] is how a type says it is not creatable — the Create "
             + "menu is the one surface that must honour it");
+
+        // The declaring parent NAMES it in CreatableTypes, and it is still withheld.
+        var declaring = await Offered($"{host}/Deal");
+        declaring.Should().NotContain(declaredButOptedOut,
+            "the parent's CreatableTypes names {0}, which opted out of context:create — a "
+            + "whitelist ADDS types the queries could not reach, it does not overrule a type's own "
+            + "statement that it is not created by hand", declaredButOptedOut);
+    }
+
+    /// <summary>
+    /// 🚨 THE PICKER IS NOT THE ENFORCEMENT POINT — the form's <c>type</c> VALUE is, and it must
+    /// agree with what the parent allows.
+    ///
+    /// <para>The value is seeded several sections before <see cref="ICreatableTypesProvider"/> has
+    /// answered (from <c>?type=</c>, the current node, or <c>"Markdown"</c>) — it cannot be
+    /// otherwise, the answer is reactive — and the Create button reads THAT, never the picker's
+    /// items. So a parent declaring <c>CreatableTypes</c> with <c>IncludeGlobalTypes = false</c>
+    /// would render a picker holding only its declared types and still create <c>Markdown</c> for
+    /// anyone who submitted without touching the field: the menu would honour the declaration and
+    /// the write would not.</para>
+    ///
+    /// <para>Non-vacuous by construction: the seed for this node IS <c>Markdown</c> (its type is
+    /// not a NodeType and no <c>?type=</c> is given) and the parent excludes the globals, so before
+    /// the alignment the submitted value was a type the picker does not offer.</para>
+    /// </summary>
+    [Fact(Timeout = 240000)] // literal: an attribute argument must be a constant.
+    public async Task TheFormNeverSubmitsATypeThePickerWithholds()
+    {
+        var (types, host, _) = await Fixture();
+
+        var (stream, picker) = await RenderedCreateForm($"{host}/Sealed");
+        var offered = PickerPaths(picker);
+        var submitted = await SubmittedType(stream, picker);
+        Output.WriteLine($"offered: {string.Join(", ", offered.OrderBy(x => x))} | submitted: '{submitted}'");
+
+        offered.Should().NotContain("Markdown",
+            "the parent declares CreatableTypes and IncludeGlobalTypes=false, so the seeded default "
+            + "is NOT among the offered types — which is what makes this a measurement");
+        offered.Should().Contain(submitted,
+            "the value the Create button reads must be one the parent allows; a picker that "
+            + "withholds a type while the form still submits it enforces nothing");
+        submitted.Should().Be($"{types}/Question",
+            "with one allowed type it is the one selected — the person sees what will be created");
     }
 
     // ── fixture ────────────────────────────────────────────────────────────────────────────────
@@ -228,10 +279,20 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     /// Two partitions, mirroring <c>Crm</c> + <c>PearlTechnology</c>: the TYPES live in one and the
     /// INSTANCES in the other, so a declared type is provably outside the instance's ancestor chain.
     /// </summary>
-    private async Task<(string Types, string Host)> Fixture()
+    private async Task<(string Types, string Host, string OptedOut)> Fixture()
     {
         var types = "Ct" + Guid.NewGuid().ToString("N")[..8];
         var host = "Ho" + Guid.NewGuid().ToString("N")[..8];
+
+        // A platform type that declares `ExcludeFromContext: ["create"]` — Release, Build,
+        // ModuleBuild, Partition. Taken from the running mesh rather than written as a literal, so
+        // the test follows the platform if the set changes; the assertion that it is non-empty is
+        // in ATypeThatOptedOutOfTheCreateContextIsNeverOffered.
+        var optedOut = Mesh.ServiceProvider.EnumerateStaticNodes()
+            .Where(n => n.IsExcludedFromContext(MeshContexts.Create))
+            .Select(n => n.Path)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .First();
 
         await Import(new FakeRepoSource(types)
         {
@@ -244,10 +305,12 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
                 TypeNode($"{types}/Widget", "Part", new NodeTypeDefinition { Configuration = "config => config" }),
                 // The Crm/Offer shape: declares a type in its own partition, which is NOT in the
                 // ancestor chain of the instances that carry this type.
+                // It also names a type that opted OUT of being created, which the type's own
+                // opt-out must beat — a whitelist cannot resurrect an uncreatable type.
                 TypeNode(types, "Offer", new NodeTypeDefinition
                 {
                     Configuration = "config => config",
-                    CreatableTypes = [$"{types}/Question"],
+                    CreatableTypes = [$"{types}/Question", optedOut],
                 }),
                 // Same, with the globals switched off.
                 TypeNode(types, "SealedOffer", new NodeTypeDefinition
@@ -274,7 +337,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
             ],
         });
 
-        return (types, host);
+        return (types, host, optedOut);
     }
 
     private async Task Import(FakeRepoSource source)
@@ -322,7 +385,8 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     /// returned. Every child area is subscribed at once so a sibling that has not rendered yet
     /// cannot hold the read.
     /// </summary>
-    private async Task<MeshNodePickerControl> RenderedTypePicker(string nodePath)
+    private async Task<(ISynchronizationStream<JsonElement> Stream, MeshNodePickerControl Picker)>
+        RenderedCreateForm(string nodePath)
     {
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
         var stream = GetClient().GetWorkspace()
@@ -338,10 +402,28 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
             .Select(a => stream.GetControlStream(a!))
             .ToArray();
 
-        return await Observable.Merge(areas)
+        var picker = await Observable.Merge(areas)
             .OfType<MeshNodePickerControl>()
             .Where(IsTypePicker)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        return (stream, picker);
+    }
+
+    private async Task<MeshNodePickerControl> RenderedTypePicker(string nodePath)
+        => (await RenderedCreateForm(nodePath)).Picker;
+
+    /// <summary>
+    /// The value the Create button would SUBMIT — the form's own <c>type</c> field, read off the
+    /// rendered area's data at the pointer the picker is bound to. This is the value
+    /// <c>CreateLayoutArea</c>'s click handler reads; the picker's item list is only what a person
+    /// is shown.
+    /// </summary>
+    private static async Task<string> SubmittedType(
+        ISynchronizationStream<JsonElement> stream, MeshNodePickerControl picker)
+    {
+        var pointer = $"{picker.DataContext}/type";
+        return await stream.GetDataStream<string>(new JsonPointerReference(pointer))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await() ?? "";
     }
 
     private static bool IsTypePicker(MeshNodePickerControl picker) =>
@@ -377,7 +459,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     {
         public string Partition => partition;
         public bool Versioned => false;
-        public List<MeshNode> Nodes { get; set; } = [];
+        public ImmutableList<MeshNode> Nodes { get; init; } = [];
         public MeshNode? Root { get; set; }
         public IReadOnlyList<MeshNode> EnumerateSourceNodes() => Nodes;
         public MeshNode? PartitionRoot => Root;
