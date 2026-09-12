@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# hosting-registry-register --registry-url <https://registry> --instance-id <id> --home-url <https://host>
+#                           --vault <vault> --object <vault object>
+#                           [--display-name <name>] [--bootstrap-secret <vault object>]
+#
+# ISSUE this instance's plugin-registry key and store it in Key Vault (MeshWeaver.Plugins#1720).
+#
+# `hosting-kv-ensure` REQUIRES `<prefix>PluginCatalog-RegistryToken` and refuses without it: the
+# key is issued by the registry, never generated, because a random value boots an instance that
+# registers nothing and shows an empty Store with no error. Until now the issue was a hand step
+# (runbook step 2: `curl … /api/instances/register | jq -r .instanceKey`, then `az keyvault secret
+# set --file`). This is that step, run BEFORE hosting-kv-ensure in the plan:
+#
+#   vault object PRESENT  → the key it holds is presented to the registry (GET /api/instances/self)
+#                           and must authenticate as THIS instance: "already present". A key the
+#                           registry rejects, or one belonging to another instance, is a refusal
+#                           naming the hand fix — never a silent re-registration.
+#   vault object ABSENT   → POST /api/instances/register with the bootstrap key (EMPTY = open
+#                           registration on the free plan; --bootstrap-secret names a vault object
+#                           holding a platform admin's `mwr_` key for a higher plan), the returned
+#                           `mwi_` key goes into the vault through a mode-600 --file, is read back
+#                           by id, and is then PROVEN to authenticate before the step reports.
+#
+# 🚨 NEVER PRINTS A KEY — not the instance key, not the bootstrap key. Each lives in one shell
+# variable, reaches curl on STDIN (never argv; hosting::registry_call for the bearer, `--data @-`
+# for the registration body, composed by jq from the ENVIRONMENT), is compared by hash, and is
+# unset. The only fact that crosses back is the key's sha256, which the registry stores in the
+# clear anyway. Idempotent: a re-run against a present, accepted key changes nothing.
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-registry-register"
+
+registry="" instance="" display="" home="" vault="" object="" bootstrap_secret=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --registry-url)     registry="${2:-}";         shift 2 ;;
+    --instance-id)      instance="${2:-}";         shift 2 ;;
+    --display-name)     display="${2:-}";          shift 2 ;;
+    --home-url)         home="${2:-}";             shift 2 ;;
+    --vault)            vault="${2:-}";            shift 2 ;;
+    --object)           object="${2:-}";           shift 2 ;;
+    --bootstrap-secret) bootstrap_secret="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag registry-url "$registry"
+hosting::need_flag instance-id "$instance"
+hosting::need_flag home-url "$home"
+hosting::need_flag vault "$vault"
+hosting::need_flag object "$object"
+hosting::safe_url registry-url "$registry"
+hosting::safe_name instance-id "$instance"
+hosting::safe_url home-url "$home"
+hosting::safe_name vault "$vault"
+hosting::safe_name object "$object"
+display="${display:-$instance}"
+hosting::safe_name display-name "$display"
+[ -z "$bootstrap_secret" ] || hosting::safe_name bootstrap-secret "$bootstrap_secret"
+# The registry's own rule for an id (InstanceRegistration): 3–48 chars, lowercase letters, digits
+# and single hyphens. Checked here so a bad id refuses BEFORE the registry is asked (it answers 400
+# without saying which rule).
+{ [[ "$instance" =~ ^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$ ]] && [[ ! "$instance" =~ -- ]]; } \
+  || hosting::die "instance-id '${instance}' is not a registry instance id (3–48 chars: lowercase letters, digits, single hyphens) — the registry would answer 400"
+
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image — the registration body and answer are JSON"
+self="${registry}/api/instances/self"
+manual="curl -sS -X POST ${registry}/api/instances/register -H 'content-type: application/json' -d '{\"bootstrapKey\":\"\",\"instanceId\":\"${instance}\",\"displayName\":\"${display}\",\"homeUrl\":\"${home}\"}' | jq -r .instanceKey > <file>; az keyvault secret set --vault-name ${vault} --name ${object} --file <file>; rm <file>"
+
+kv_exists() { az keyvault secret show --vault-name "$vault" --name "$1" --query id -o tsv >/dev/null 2>&1; }
+
+# ── present: prove the key the vault holds is this instance's ─────────────────────────────────
+if kv_exists "$object"; then
+  if hosting::dry; then
+    hosting::log "(dry run) ${object} exists in vault ${vault} — a real run presents it to ${self} and requires it to authenticate as '${instance}'"
+    hosting::say registry_registration dry-run
+    exit 0
+  fi
+  hosting::step "Confirm the vault's key authenticates as this instance"
+  # shellcheck disable=SC2034  # read BY NAME in hosting::registry_call, so the key is never an argument
+  held="$(az keyvault secret show --vault-name "$vault" --name "$object" --query value -o tsv 2>/dev/null)" \
+    || hosting::die "${object} exists in vault ${vault} but could not be read — grant the operator identity secret GET, or re-request once it can read what it must verify"
+  hosting::registry_call held GET "$self"
+  held_hash="$(printf '%s' "$held" | hosting::sha256)"
+  unset held
+  case "$REGISTRY_STATUS" in
+    200)
+      seen="$(hosting::registry_field instanceId)"
+      [ "$seen" = "$instance" ] \
+        || hosting::die "${object} in vault ${vault} holds the key of instance '${seen:-?}' at ${registry}, not '${instance}' — the record and the vault disagree about which instance this is. Refusing to register a second one; fix the object (or registryInstanceId on the record) by hand."
+      hosting::log "present   ${object} authenticates as '${seen}' at ${registry} (sha256 ${held_hash:0:12}…) — nothing to issue"
+      hosting::say registry_registration present
+      hosting::say registry_instance "$seen"
+      hosting::say registry_key_hash "$held_hash"
+      exit 0 ;;
+    401|403)
+      hosting::die "${object} in vault ${vault} holds a key ${registry} does not accept (HTTP ${REGISTRY_STATUS}) — revoked, or issued by another registry. The object is KEPT (nothing is overwritten here): re-issue the key at the registry as a platform admin (Instance grants ▸ '${instance}' ▸ re-issue) and write it under ${object} by hand (az keyvault secret set --vault-name ${vault} --name ${object} --file <file>), or delete the object and re-request to register afresh." ;;
+    404)
+      hosting::die "${registry} has no instance-key surface (HTTP 404 on /api/instances/self) — it runs a build older than MeshWeaver#2802. Roll the registry first; nothing was changed." ;;
+    *)
+      hosting::die "the registry at ${registry} answered HTTP ${REGISTRY_STATUS} to /api/instances/self — not a verdict about the key; nothing was changed. Retry once it answers." ;;
+  esac
+fi
+
+# ── absent: register, store, prove ────────────────────────────────────────────────────────────
+if hosting::dry; then
+  hosting::log "(dry run) ${object} is absent from vault ${vault} — a real run POSTs ${registry}/api/instances/register as '${instance}' (${display}, ${home}) with $([ -n "$bootstrap_secret" ] && echo "the bootstrap key in ${bootstrap_secret}" || echo "an EMPTY bootstrap key: open registration, free plan"), stores the returned key under ${object} and proves it authenticates"
+  hosting::say registry_registration dry-run
+  exit 0
+fi
+
+hosting::step "Register the instance at the plugin registry"
+boot=""
+if [ -n "$bootstrap_secret" ]; then
+  boot="$(az keyvault secret show --vault-name "$vault" --name "$bootstrap_secret" --query value -o tsv 2>/dev/null)" \
+    || hosting::die "could not read the bootstrap key ${bootstrap_secret} from vault ${vault} — nothing was registered. Grant the operator identity secret GET on it, or register by hand: ${manual}"
+  hosting::log "bootstrap key read from ${bootstrap_secret} (a platform admin's key; the plan it grants is the registry's)"
+else
+  hosting::log "open registration (empty bootstrap key → the free plan; a platform admin raises the plan on the registry afterwards)"
+fi
+# The body is built by jq FROM THE ENVIRONMENT of one child process — the bootstrap key is never
+# an argument to jq, never an argument to curl (`--data @-` reads it from stdin).
+body="$(REG_BOOT="$boot" REG_ID="$instance" REG_NAME="$display" REG_HOME="$home" \
+  jq -cn '{bootstrapKey: env.REG_BOOT, instanceId: env.REG_ID, displayName: env.REG_NAME, homeUrl: env.REG_HOME}')"
+unset boot
+out="$(mktemp)"
+status="$(printf '%s' "$body" | curl -sS -X POST -H 'Content-Type: application/json' --data @- \
+  -o "$out" -w '%{http_code}' --max-time 30 "${registry}/api/instances/register" 2>/dev/null)" || true
+unset body
+status="${status:-000}"
+answer="$(cat "$out" 2>/dev/null || true)"; rm -f "$out"
+field() { printf '%s' "$answer" | jq -r --arg f "$1" 'if type == "object" then (.[$f] // empty | tostring) else empty end' 2>/dev/null; }
+case "$status" in
+  200) ;;
+  409) unset answer; hosting::die "instance id '${instance}' is already registered at ${registry}, but ${object} is absent from vault ${vault} — the key was issued once and is not in this vault. Re-issue it at the registry as a platform admin (Instance grants ▸ '${instance}' ▸ re-issue) and write it under ${object} by hand (az keyvault secret set --vault-name ${vault} --name ${object} --file <file>), then re-request. Nothing was changed." ;;
+  400) unset answer; hosting::die "the registry refused the registration as malformed (HTTP 400: $(field error)) — the id must be 3–48 chars of lowercase letters, digits and single hyphens. Nothing was changed." ;;
+  401|403) unset answer; hosting::die "the registry refused the bootstrap key (HTTP ${status}) — open registration is off at ${registry}, or the key in ${bootstrap_secret:-<none>} is not accepted. Name a platform admin's mwr_ key in a vault object (--bootstrap-secret) or register by hand: ${manual}. Nothing was changed." ;;
+  404) unset answer; hosting::die "${registry} has no registration surface (HTTP 404 on /api/instances/register). Nothing was changed." ;;
+  000) unset answer; hosting::die "the registry at ${registry} did not answer — nothing was registered. Retry once it answers, or register by hand: ${manual}" ;;
+  *)   unset answer; hosting::die "the registry at ${registry} answered HTTP ${status} to /api/instances/register — not a verdict. Nothing was changed." ;;
+esac
+# shellcheck disable=SC2034  # read BY NAME in hosting::registry_call below
+issued="$(field instanceKey)"
+plan="$(field plan)"
+unset answer
+case "$issued" in
+  mwi_*) ;;
+  "") hosting::die "the registry answered 200 but returned no instanceKey — refusing to store nothing under ${object}" ;;
+  *) unset issued; hosting::die "the registry returned a key that is not an mwi_ key — refusing to store it under ${object}" ;;
+esac
+if [[ "$issued" =~ [\"\\[:space:]] ]]; then unset issued; hosting::die "the registry returned a key that is not a plain token — refusing to store it"; fi
+issued_hash="$(printf '%s' "$issued" | hosting::sha256)"
+hosting::log "registered '${instance}' at ${registry} on plan ${plan:-?} — key sha256 ${issued_hash:0:12}… (the key itself is not shown, here or anywhere)"
+
+hosting::step "Store the instance key in Key Vault"
+umask 077
+key_file="$(mktemp)"
+trap 'rm -f "$key_file"' EXIT
+printf '%s' "$issued" > "$key_file"
+if ! az keyvault secret set --vault-name "$vault" --name "$object" --file "$key_file" --output none; then
+  rm -f "$key_file"; unset issued
+  hosting::die "the registry issued a key for '${instance}' but it could not be stored under ${object} in vault ${vault} — and it is shown ONCE. Revoke it at the registry (Instance grants ▸ '${instance}' ▸ revoke) and re-request; or grant the operator identity secret SET and re-request, which then answers 409 and names the re-issue path."
+fi
+rm -f "$key_file"
+kv_exists "$object" || { unset issued; hosting::die "${object} was written to vault ${vault} but cannot be read back — refusing to report a key the CSI driver will not find"; }
+hosting::log "stored    ${object} in vault ${vault} (read back by id)"
+
+hosting::step "Prove the stored key authenticates"
+hosting::registry_call issued GET "$self"
+unset issued
+proof="$(hosting::registry_field instanceId)"
+[ "$REGISTRY_STATUS" = "200" ] && [ "$proof" = "$instance" ] \
+  || hosting::die "the key the registry just issued does not authenticate as '${instance}' (HTTP ${REGISTRY_STATUS}, instance '${proof:-none}') — ${object} holds it, but the registry does not honour it. Nothing else was changed; ask the registry's admin."
+hosting::log "proven    the stored key authenticates as '${instance}' at ${registry}"
+hosting::say registry_registration registered
+hosting::say registry_instance "$instance"
+hosting::say registry_plan "${plan:-unknown}"
+hosting::say registry_key_hash "$issued_hash"
