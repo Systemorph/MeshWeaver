@@ -138,6 +138,51 @@ missing in 13 of them; the 23 spanned **18 distinct identities**; all 23 were `r
 more expensive than advertised, not less necessary; option 1 is a multiplier on a rate that 5 of 43
 merges justify; option 2 should stay off the table while manifests carry no surface set.
 
+## What landed, and what did not
+
+A future reader should not have to reconstruct which half of this shipped.
+
+| | state |
+|---|---|
+| **The gate's three refusals are distinguishable**, and the resolved identity + its origin are logged on every path | **LANDED** (#4084). Log quality only: every refusal still exits 1, nothing is advisory, no retry, no fallback. |
+| **4b — resolve the identity from the newest SEALED set** instead of a moving tag | **NOT DONE, still open.** It is a resolution change, and the measurement below shrank its target. |
+| Options 1–4 above | **not started.** Roland's call. |
+
+### Why 4b shrank
+
+The failures were classified by dispatch type (`display_title` carries it). **Measured, same 24 h
+window, `repository_dispatch` runs of Reinsurance Plugins CI, with denominators:**
+
+| dispatch type | runs | failures |
+|---|---|---|
+| `meshweaver-framework-released` | **45** (23 fail, 13 cancelled, 9 success) | **23** |
+| `meshweaver-upstream-published` | **35** (10 fail, 25 success) | **10** |
+
+Of the **23 gate** failures, **20 were `framework-released`** and 3 were `upstream-published`; the 10
+bake failures split 3 / 7. Phase 1 of the CI refactor drops `meshweaver-framework-released` from the
+satellites' trigger types — so it removes **20 of the 23 gate failures and ~45 runs/day** by a route
+that has nothing to do with 4b.
+
+What remains for 4b, by trigger path: `upstream-published` and `push`/`pull_request` resolve from a
+wake payload and a repo pin respectively — both already **settled**, so 4b does not apply. Only the
+**`schedule`** path resolves a moving release tag, which is the one the gate's own text says never
+converges (*"the schedule poll does NOT retry this identity… waiting for the poll to clear this is
+waiting for something that never [comes]"*). Measured failures on that path: **0 of 2** runs — n=2,
+far too small to justify urgency, though phase 1 promotes the daily cron to the primary full run.
+
+### 🚨 Phase 1 removes the REPORT, not the CONDITION
+
+This is the part worth not rediscovering. Those 20 failures were the system *telling* us that no
+upstream was baked for the new framework identity. Dropping the release wake stops the telling; it
+does not bake anything. **A portal that rolls onto such an identity still finds no sealed bundle and
+still compiles every NodeType locally at runtime** — the cost stage ④ exists to remove. The daily
+cron catches the condition within 24 h instead of the release wake catching it immediately.
+
+That is a real trade and it may well be the right one — 45 runs a day is real money, and a 24-hour
+detection window is tolerable for a backwards-compatible platform. But it is the same shape as
+making a gate advisory: a loud CI red becomes a quiet runtime compile. It should be chosen
+knowingly, not arrived at, which is why it is written down here rather than left in a thread.
+
 ## A related scope question, recorded so it stops being re-litigated
 
 #3583's requirement 3 asks to *"announce a version when it is actually READY on the portal"*. The
