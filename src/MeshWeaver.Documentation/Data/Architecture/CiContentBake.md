@@ -816,6 +816,40 @@ every repo calls `node-repo-publish-bake` (the lane whose script contract must n
 repo whose variant of a gate carries repo-specific machinery (Plugins' Tests-area ratchet,
 Education's course checks) keeps that job vendored until the machinery generalizes.
 
+**`node-repo-ci-failure.yml` (2026-09-12) is the lane that gives a red `main` an audience, and its
+adoption is staged: core is wired now, the six satellites wire it in follow-up PRs once the lane is
+on `main`.** Every satellite runs its full build on `push: [main]` and once a day on `schedule` (the
+per-build platform wave was switched off the same day), and a red run there is attached to no pull
+request, no reviewer and no check list: it updates nothing and pages nobody. Maintainer, 2026-09-12:
+*"put the ci-failure on all repos, in main; triaging is done by systemorph-com; communicate via MCP —
+open a thread with a triage agent; pool such connections by portal."* The caller is two jobs at the
+end of `ci.yml` (`ci-failure` on `failure()`, `ci-green` on `success()`, both `needs:` every gate
+job, both statically unreachable from a pull request; the template is in the lane's header, and each
+satellite's caller is recorded as `pending:` in `.github/lane-caller-grants.yml` until its wiring PR
+lands). In every repository that calls it the lane does the same thing: **one** open issue labelled
+`ci-main-red` with the exact title `ci-main-red: main is red` and a hidden ownership mark in its body
+(`<!-- ci-main-red ledger -->`), whose body is a dated ledger with one entry per red run (run URL,
+sha, trigger, failed jobs with links, platform set); a close inside seven days is *reopened* rather
+than re-filed, so one outage is one story; the run that goes green comments `green again: <run URL>`
+and closes it. **A mechanism may only close an issue it opened:** the ledger owns an issue only when
+it carries the label *and* the title *and* the mark *and* was authored by the Actions bot
+(`github-actions[bot]`, type `Bot` — the one term a human cannot forge, since the other three are
+public fields); anything else is logged and left alone, and the label is deliberately not
+`ci-failure` — that is `main-cd.yml`'s delivery alert, found by label alone, and sharing it would let
+a CD heal close the CI ledger while CI is still red. Each way the lane POSTs a signed event
+(`ci-failure` / `ci-green`, HMAC-SHA256 over the exact body in `X-Hub-Signature-256`, the same shape
+as the build fact) to the control portal's inbox at `vars.CONTROL_WEBHOOK_URL` —
+`https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds` — after validating that the URL is
+https, on `control-webhook-host` (default `memex.systemorph.com`) and under `/api/hooks/`, so a
+signature never travels to an arbitrary host; it then judges the inbox's `"signature"` verdict the
+same three-way way. The issue writes use the caller's `secrets.GITHUB_TOKEN` with `issues: write`
+granted on the caller job, never a GitHub App token (the installation holds no `issues` grant, and an
+issue filed by any other identity would never be owned); the ledger logic is
+`.github/scripts/ci-failure-ledger.py`, fetched at the lane's `scripts-ref` and self-tested at the
+start of every run and in core's `workflow-shell` job. Core's own caller is the same two jobs at the
+end of `dotnet-test.yml`; `main-cd.yml`'s `ci-failure` issue records a different subject (an image
+set that did not publish), is unchanged, and the two never touch each other's issues.
+
 ## 🚨 `node-repo-validate` is not one lane among several — it is where the FLEET-WIDE guards run
 
 The other lanes do a repo's own work. `node-repo-validate` also carries the checks that apply to

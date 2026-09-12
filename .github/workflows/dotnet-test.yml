@@ -2013,6 +2013,17 @@ jobs:
     - name: "No workflow mapping writes a key twice"
       run: python3 .github/scripts/check-workflow-yaml-keys.py --root .
 
+    # 🚨 The ledger every repository's red `main` is routed onto (node-repo-ci-failure.yml, maintainer
+    # 2026-09-12: "put the ci-failure on all repos, in main") — proven here because core OWNS the
+    # script and every satellite fetches it at its scripts ref. Its rules are load-bearing: ONE open
+    # `ci-main-red` issue per repo (append, never duplicate), a close inside 7 days is REOPENED rather
+    # than re-filed, green closes with `green again: <run URL>`, a malformed failed-jobs input is
+    # refused before any write, and it only ever closes an issue it opened (its own label AND an
+    # ownership mark in the body — never main-cd.yml's `ci-failure`). A guard that could not say no
+    # would file a second issue per red day, or close CD's.
+    - name: "The ci-failure ledger can say no (self-test)"
+      run: python3 .github/scripts/ci-failure-ledger.py --self-test
+
     # 🚨 combo-verify.yml fires on `workflow_run` / `workflow_dispatch`, NEVER on `pull_request`, so
     # nothing else on this PR opens it — the same blind spot #2642 cost 33 hours on. Its `preflight`
     # is the only thing between "no per-instance credential was provisioned" and a lane that
@@ -3377,3 +3388,76 @@ jobs:
           echo "> reuses an already-green tree marker reports success **without executing the suite**,"
           echo "> so the window taken from the run list can exclude the change set that actually broke it."
         } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────── MAIN IS RED: SAY SO WHERE SOMEONE READS ───────────────────────────
+  # A red push-to-main run here is attached to no pull request, no reviewer and no check list, and
+  # `main-cd.yml` only fires on a SUCCESSFUL run — so a red main updates nothing and pages nobody
+  # (the same empty room a scheduled red goes into; AGENTS.md → "an honest red nobody reads is the
+  # same defect as a gate that cannot fail"). Maintainer, 2026-09-12: "put the ci-failure on all
+  # repos, in main; triaging is done by systemorph-com". These two jobs are the thin caller each
+  # satellite wires in its own follow-up PR once the lane is on main (the contract is in
+  # node-repo-ci-failure.yml's header) — core is wired first, here: one `ci-main-red`
+  # issue per repository, a dated ledger entry per red run, closed by the run that goes green, and a
+  # signed event to the control portal's triage inbox each way. main-cd.yml's own `ci-failure`
+  # DELIVERY alerting is a different subject (an image set that did not publish) and is untouched —
+  # and the two never meet: the ledger has its own label and an ownership mark in the body, so a CD
+  # heal cannot close the CI ledger and the ledger cannot close CD's issue.
+  #
+  # `needs: [collect-results]` is the whole graph: `Consolidate test results` `needs:` every other job,
+  # runs `always()`, and carries an explicit fail step per dependency — so `failure()` here is "some
+  # gate failed" and `success()` is "every gate passed", with nothing between them to reason about.
+  #
+  # 🚨 STATICALLY PR-UNREACHABLE, and the order of the `if:` terms is load-bearing:
+  # `github.event_name != 'pull_request'` comes FIRST so check-pr-secret-preflight.py proves from the
+  # file alone that `secrets.CONTROL_WEBHOOK_SECRET` (an org secret with NO Dependabot-store copy) is
+  # never consumed on a pull request. `github.ref == 'refs/heads/main'` keeps a `merge_group` ref
+  # (`refs/heads/gh-readonly-queue/main/…`) and a `workflow_dispatch` on a branch out.
+  #
+  # `permissions:` REPLACES the workflow-level map for these jobs, and the lane's job demands exactly
+  # these three: `issues: write` for the ledger, `actions: read` to list this run's failed jobs,
+  # `contents: read` because a block that omits it takes it away. GITHUB_TOKEN, never an App token —
+  # the installation holds no `issues` grant. The reference is `./` so the lane at THIS commit runs
+  # (main-cd.yml calls its lanes the same way) and check-workflow-permission-pairing.py --root . can
+  # pair the two halves in one checkout.
+  ci-failure:
+    name: "main is red: file it, tell the control portal"
+    needs: [collect-results]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && failure()
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: failure
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      # Core IS the platform: there is no core set this run "built against".
+      platform-set: ""
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+
+  ci-green:
+    name: "main is green: close the ledger"
+    needs: [collect-results]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && success()
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/node-repo-ci-failure.yml
+    with:
+      outcome: success
+      run: ${{ github.run_id }}
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      sha: ${{ github.sha }}
+      event: ${{ github.event_name }}
+      platform-set: ""
+      control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+      control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
