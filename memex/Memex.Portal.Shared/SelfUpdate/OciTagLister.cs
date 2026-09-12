@@ -79,7 +79,7 @@ public sealed class OciTagLister(
         //    never match such a value, so the declared-validator branch below is what would make it
         //    reachable — this refusal is the reason that branch cannot open a disclosure path.
         //
-        // Requiring host-equality (not merely "parses to a host") also keeps this in step with
+        // Requiring a bare host (not merely "parses to a host") also keeps this in step with
         // SelfUpdateOptions.PortalImage/MigrationImage, which interpolate the SAME value into an
         // image reference and need a bare host for it to be well-formed.
         var registry = SelfUpdateOptions.HostOf(configured);
@@ -92,7 +92,13 @@ public sealed class OciTagLister(
                 + "credentials, and never one this platform cannot also use as the registry half of "
                 + "an image reference. The configured value is not repeated here because a value of "
                 + "this shape can carry a credential."));
-        if (!string.Equals(registry, configured, StringComparison.OrdinalIgnoreCase))
+        // 🚨 "Bare" is a TEXTUAL test on the configured value, NOT equality with the host HostOf
+        // read from it: HostOf drops a scheme-default port, so `cr.example.test:443` — a legal
+        // `host:port` the documentation promises — would fail an equality test and be refused with
+        // a message claiming it carries a scheme or a path when it carries neither (#4094 review).
+        // A value that parsed (so: no userinfo) and carries no scheme and no path IS a bare host,
+        // whatever port it names; the client and the messages then use the normalized host.
+        if (!IsBareHost(configured))
             // Safe to name: HostOf refuses userinfo, so a value that parsed cannot have carried one.
             return Observable.Throw<IReadOnlyList<string>>(new InvalidOperationException(
                 $"SelfUpdate:Registry must be a bare registry host, but it carries a scheme or a path; "
@@ -104,6 +110,15 @@ public sealed class OciTagLister(
                 hub, registry, ResolveCredential(registry), options.RegistryUsername, HttpClientName, logger)
             .ListTags(repository);
     }
+
+    /// <summary>
+    /// Whether a value that <see cref="SelfUpdateOptions.HostOf"/> could read is ALSO nothing but
+    /// <c>host[:port]</c>: no scheme, no path, no query, no fragment. Userinfo is not tested here
+    /// because HostOf already refused it. Pure.
+    /// </summary>
+    private static bool IsBareHost(string configured) =>
+        !configured.Contains("://", StringComparison.Ordinal)
+        && configured.IndexOfAny(['/', '\\', '?', '#']) < 0;
 
     /// <summary>
     /// 🚨 The plugin-registry credential this installation may present to the container registry —
@@ -128,20 +143,46 @@ public sealed class OciTagLister(
     /// need the operator to have configured a plugin registry on the host in question, so the key
     /// only ever goes where this installation was already given one for.</para>
     ///
-    /// <para>Faults, naming the hosts (never the key), when no host qualifies or when the resolved
-    /// credential is empty: a listing without a credential could only ever be a 401, so the
-    /// misconfiguration is said once here instead of on every check as a refused handshake. Cold:
-    /// the fault is raised at subscription, before the client sends a byte.</para>
+    /// <para>The SHAPE of the credential follows the host: the registry's own host gets what the
+    /// Store presents (<see cref="RegistryTokenResolver.ResolveToken"/> — a short-lived token when
+    /// the stored key was exchanged for one); a declared validator gets the DURABLE key
+    /// (<see cref="RegistryTokenResolver.ResolveDurableKey"/>), because on the fleet's shape the
+    /// validator IS the key-to-token exchange and refuses a token by design.</para>
+    ///
+    /// <para>Faults, naming the hosts (never the key), when the declaration is set but unreadable,
+    /// when no host qualifies, when the only registry on a qualifying host carries its credential
+    /// inside its URL, or when the resolved credential is empty: a listing without a credential
+    /// could only ever be a 401, so the misconfiguration is said once here instead of on every
+    /// check as a refused handshake. Cold: the fault is raised at subscription, before the client
+    /// sends a byte.</para>
     /// </summary>
     private IObservable<string> ResolveCredential(string registry) =>
         Observable.Defer(() =>
         {
+            // 🚨 A DECLARED-BUT-UNREADABLE validator is refused as MALFORMED, first and on its own —
+            // never folded into "nothing declared". `RegistryValidatorHost` is null for both, and
+            // treating the two alike diagnosed a typo'd scheme or a userinfo-bearing declaration
+            // as an ABSENT one: the boot line said "NO validator declared" and the refusal told the
+            // operator to set the key they had already set (#4094 review). The value is not echoed —
+            // a userinfo-bearing value lands exactly here, and the userinfo is where a key would be.
+            if (options.RegistryValidatorDeclared && options.RegistryValidatorHost is null)
+                return Observable.Throw<string>(new InvalidOperationException(
+                    "SelfUpdate:RegistryValidationUrl is set but does not name an http(s) host, so it "
+                    + "declares no validator and the listing refuses. Set it to the registry record's "
+                    + "validationUrl verbatim (for example https://memex.meshweaver.cloud/api/instances/token) "
+                    + "or to a bare host — never a value carrying credentials. The configured value is "
+                    + "not repeated here because a value of this shape can carry a credential."));
+
             var catalog = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
             var registries = RegistryTokenResolver.WithLegacyTokens(catalog, catalog.EffectiveRegistries);
             var declaredValidator = options.RegistryValidatorHost;
 
             var match = On(registries, registry);
-            if (match is null && declaredValidator is not null && On(registries, declaredValidator) is { } paired)
+            // The HOST the match was made on — the parsed host, never `match.Url`, which may carry
+            // userinfo; every message and log line below names this and nothing else.
+            var matchedHost = registry;
+            var paired = false;
+            if (match is null && declaredValidator is not null && On(registries, declaredValidator) is { } viaValidator)
             {
                 // 🚨 The new, security-relevant decision, said out loud once per listing — and this
                 // is an Information line, so it LEAVES THE POD for Loki. It therefore carries TWO
@@ -149,22 +190,48 @@ public sealed class OciTagLister(
                 // not the key, not a prefix or suffix of it, not its length, not a hash of it.
                 // Do not add one "for diagnostics" — a length is a fact about a credential.
                 //
-                // 🚨 And the hosts are the PARSED hosts, never `paired.Url`. A configured URL may
-                // carry userinfo (`https://instance:mwi_…@memex.meshweaver.cloud`), which would put
-                // the key in Loki in a field nobody thinks of as a credential — the #3201 shape,
-                // where the registry key sat in a pod spec `kubectl describe` printed and is still
-                // owed a rotation. `declaredValidator` IS this registry's host by construction: it
-                // is what `On(...)` just matched it by.
+                // 🚨 And the hosts are the PARSED hosts, never `viaValidator.Url`. A configured URL
+                // may carry userinfo (`https://instance:mwi_…@memex.meshweaver.cloud`), which would
+                // put the key in Loki in a field nobody thinks of as a credential — the #3201
+                // shape, where the registry key sat in a pod spec `kubectl describe` printed and is
+                // still owed a rotation. `declaredValidator` IS this registry's host by
+                // construction: it is what `On(...)` just matched it by.
                 logger?.LogInformation(
                     "[SelfUpdate] presenting the instance key configured under PluginCatalog:Registries "
                     + "for {PluginRegistryHost} to the container registry {Registry}: "
                     + "SelfUpdate:RegistryValidationUrl declares that host as the portal which validates "
-                    + "this installation's key there.",
+                    + "this installation's key there. The durable key is presented, unexchanged — the "
+                    + "validator IS the key-to-token exchange and refuses a token.",
                     declaredValidator, registry);
-                match = paired;
+                match = viaValidator;
+                matchedHost = declaredValidator;
+                paired = true;
             }
 
             if (match is null)
+            {
+                // 🚨 A plugin registry that EXISTS on the host but whose URL carries credentials is
+                // named as such, never diagnosed as "no plugin registry is configured on that host".
+                // HostOf refuses userinfo (so `https://memex.meshweaver.cloud@evil.example` can never
+                // be read as memex), which also means a registry configured as
+                // `https://instance:mwi_…@host` stops matching on BOTH branches — the pre-#4094
+                // reader tolerated it. The registry is real and the catalog is already talking to
+                // it; what is wrong is WHERE the credential sits, and the message says so. The URL
+                // is not echoed: the credential is in it.
+                var credentialInUrl = registries.FirstOrDefault(r =>
+                    CarriesCredentialsFor(r.Url, registry)
+                    || (declaredValidator is not null && CarriesCredentialsFor(r.Url, declaredValidator)));
+                if (credentialInUrl is not null)
+                    return Observable.Throw<string>(new InvalidOperationException(
+                        $"SelfUpdate:Registry is '{registry}', an OCI registry the self-updater authenticates "
+                        + "with this installation's plugin-registry instance key. A plugin registry IS configured "
+                        + "for that host or for its declared validator, but its PluginCatalog:Registries URL "
+                        + "carries credentials (user:secret@host), and a URL of that shape is never read as "
+                        + "naming a host — the credential is where a human misreads the host. Move the key "
+                        + "to PluginCatalog:Registries:N:Token and set the URL to the bare "
+                        + "https://host; the registry then qualifies. The URL is not repeated here because "
+                        + "the credential is in it."));
+
                 return Observable.Throw<string>(new InvalidOperationException(
                     $"SelfUpdate:Registry is '{registry}', an OCI registry the self-updater authenticates "
                     + "with this installation's plugin-registry instance key — but no plugin registry "
@@ -181,15 +248,31 @@ public sealed class OciTagLister(
                           + "is no key to present. Add that host to PluginCatalog:Registries with the "
                           + "instance key issued for it. ")
                     + "Or set SelfUpdate:Registry back to the upstream Azure Container Registry."));
+            }
 
+            // 🚨 WHICH SHAPE of the credential depends on WHO validates it, and the two branches
+            // differ here on purpose:
+            //  * the registry's OWN host is a portal serving its /v2 mirror, whose token endpoint
+            //    runs the same authenticator the plugin registry does and accepts BOTH the durable
+            //    key and the short-lived token — so it is handed what the Store presents
+            //    (`ResolveToken`: the configured token, or the stored key EXCHANGED for a JWT);
+            //  * a DECLARED validator is, on the fleet's shape, the key-to-token exchange itself
+            //    (`/api/instances/token`), and that endpoint refuses a token by design — a token may
+            //    never mint its successor. An auto-registered installation (PluginCatalog:BootstrapKey,
+            //    no configured Token) resolving through `ResolveToken` would therefore present an
+            //    `mwa_` JWT and be refused on EVERY check, while only an installation with a raw
+            //    Token configured would ever work (#4094 review). So this branch presents the
+            //    DURABLE key with no exchange — the one shape every validator that accepts the
+            //    instance key accepts.
             var resolver = hub.ServiceProvider.GetService<RegistryTokenResolver>();
             var credential = resolver is null
                 ? Observable.Return(match.Token?.Trim() ?? string.Empty)
-                : resolver.ResolveToken(match);
+                : paired
+                    ? resolver.ResolveDurableKey(match)
+                    : resolver.ResolveToken(match);
 
-            // 🚨 The HOST, never `match.Url` — same reason as the log line above: a configured URL
-            // may carry userinfo, and this message is logged by the poller on every failed check.
-            var matchedHost = SelfUpdateOptions.HostOf(match.Url) ?? "(unreadable URL)";
+            // 🚨 `matchedHost`, never `match.Url` — same reason as the log line above: a configured
+            // URL may carry userinfo, and this message is logged by the poller on every failed check.
             return credential.Select(token => token.Length > 0
                 ? token
                 : throw new InvalidOperationException(
@@ -198,6 +281,19 @@ public sealed class OciTagLister(
                     + "PluginCatalog:Registries:N:Token (or the legacy PluginCatalog:RegistryToken), or "
                     + "through auto-registration with PluginCatalog:BootstrapKey."));
         });
+
+    /// <summary>
+    /// Whether a configured plugin-registry URL names <paramref name="host"/> BUT carries
+    /// credentials (userinfo) — the one shape <see cref="SelfUpdateOptions.HostOf"/> refuses for a
+    /// registry that nevertheless exists and is in use. Serves the DIAGNOSIS only: nothing is ever
+    /// matched, selected or logged through this reader. Pure.
+    /// </summary>
+    private static bool CarriesCredentialsFor(string? url, string host) =>
+        Uri.TryCreate((url ?? string.Empty).Trim(), UriKind.Absolute, out var uri)
+        && uri.UserInfo.Length > 0
+        && uri.Scheme is "http" or "https"
+        && string.Equals(uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}", host,
+            StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The configured plugin registry living on <paramref name="host"/> — whole-host, case

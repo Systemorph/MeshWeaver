@@ -61,11 +61,23 @@ public record SelfUpdateOptions
     public string RegistryValidationUrl { get; init; } = "";
 
     /// <summary>
+    /// Whether the operator SET <see cref="RegistryValidationUrl"/> at all — a separate question
+    /// from whether it could be read (<see cref="RegistryValidatorHost"/>), and the two must stay
+    /// separate: collapsing "declared but unreadable" into "not declared" diagnoses a typo'd scheme
+    /// or a userinfo-bearing value as an ABSENT declaration, and the refusal then tells the operator
+    /// to set the key they already set — a fail-closed fallback forging a correct-looking bug. A
+    /// declared value that yields no host is refused as MALFORMED, naming the key and never the
+    /// value. Pure.
+    /// </summary>
+    public bool RegistryValidatorDeclared => !string.IsNullOrWhiteSpace(RegistryValidationUrl);
+
+    /// <summary>
     /// The HOST of <see cref="RegistryValidationUrl"/> — the ONE extra plugin registry whose
     /// instance key may be presented to <see cref="Registry"/>. <c>null</c> when nothing is
-    /// declared, when the value names no http(s) host, or when it is blank: every one of those is
-    /// "no pairing declared", which refuses. Pure; a non-default port is part of the host, the
-    /// path and scheme are discarded.
+    /// declared OR when the declared value names no http(s) host; the two are told apart by
+    /// <see cref="RegistryValidatorDeclared"/>, and a caller that refuses on <c>null</c> must
+    /// consult it to say WHICH of the two it is refusing on. Pure; a non-default port is part of
+    /// the host, the path and scheme are discarded.
     /// </summary>
     public string? RegistryValidatorHost => HostOf(RegistryValidationUrl);
 
@@ -75,9 +87,12 @@ public record SelfUpdateOptions
     /// Null for anything else — a mailto:, a file path, a blank — so a value that cannot be read
     /// as a host declares no pairing rather than half of one. Pure.
     ///
-    /// <para>Public because the tag lister reads plugin-registry URLs with it too: ONE host-reading
-    /// rule on both sides of the comparison, so the two can never drift into disagreeing about
-    /// what <c>https://memex.meshweaver.cloud:443/</c> is.</para>
+    /// <para>Public because it is THE registry-host rule of the platform, not this record's: the tag
+    /// lister reads plugin-registry URLs with it, and <c>RegistryUpdateReconciler.SameRegistry</c>
+    /// decides whether a broadcast names a configured registry with it — ONE reader on every side
+    /// of every comparison, so no two subsystems can drift into disagreeing about what
+    /// <c>https://memex.meshweaver.cloud:443/</c> is. The port rule is therefore fleet-wide: a
+    /// scheme-default port is not part of the host, any other port is.</para>
     /// </summary>
     public static string? HostOf(string? value)
     {

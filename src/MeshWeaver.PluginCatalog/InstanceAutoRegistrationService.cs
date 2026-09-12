@@ -106,16 +106,38 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Token, DateTimeOffset ExpiresAt)> tokens =
         new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The effective credential for <paramref name="registry"/> — a JWT when the registry
-    /// issues one, else the durable key. Cold; emits once.</summary>
-    public IObservable<string> ResolveToken(PluginRegistryReference registry)
-    {
-        if (!string.IsNullOrWhiteSpace(registry.Token))
-            return Observable.Return(registry.Token.Trim());
+    /// <summary>The effective credential for <paramref name="registry"/> — a configured token as
+    /// configured, never exchanged; else the stored key EXCHANGED for a JWT when the registry issues
+    /// one, else that key itself. Cold; emits once.</summary>
+    public IObservable<string> ResolveToken(PluginRegistryReference registry) =>
+        ConfiguredToken(registry) is { } configured
+            ? Observable.Return(configured)
+            : StoredCredential(registry)
+                .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
 
-        return StoredCredential(registry)
-            .SelectMany(raw => raw.Length == 0 ? Observable.Return("") : Exchange(registry.Url, raw));
-    }
+    /// <summary>
+    /// The DURABLE credential this installation holds for <paramref name="registry"/> — the
+    /// configured <c>Token</c>, else the stored auto-registration key decrypted — with NO exchange.
+    /// Empty when it holds neither. Cold; emits once.
+    ///
+    /// <para>🚨 For the ONE caller whose counterpart IS the exchange endpoint. A container registry
+    /// that decides a pull by forwarding the presented secret to the portal's key→token exchange
+    /// (<c>cr.meshweaver.cloud</c> → <c>/api/instances/token</c>, <c>SelfUpdate:RegistryValidationUrl</c>)
+    /// must be handed the <c>mwi_</c> key itself: that endpoint refuses a token by design — a token
+    /// may never mint its successor — so the <c>mwa_</c> JWT <see cref="ResolveToken"/> yields for an
+    /// auto-registered installation is a 401 there on every attempt (#4093, review of #4094). The
+    /// two methods share ONE rule for "which durable credential" (<see cref="ConfiguredToken"/>,
+    /// then the store) and differ only in whether the STORED key is exchanged.</para>
+    /// </summary>
+    public IObservable<string> ResolveDurableKey(PluginRegistryReference registry) =>
+        ConfiguredToken(registry) is { } configured
+            ? Observable.Return(configured)
+            : StoredCredential(registry);
+
+    /// <summary>An explicitly configured token wins over the store, on every path, as configured —
+    /// it is presented as-is whether or not it is an instance key. Null when none is configured.</summary>
+    private static string? ConfiguredToken(PluginRegistryReference registry) =>
+        string.IsNullOrWhiteSpace(registry.Token) ? null : registry.Token.Trim();
 
     /// <summary>
     /// The durable <c>mwi_</c> key exchanged for a token at <c>{registry}/api/instances/token</c>,

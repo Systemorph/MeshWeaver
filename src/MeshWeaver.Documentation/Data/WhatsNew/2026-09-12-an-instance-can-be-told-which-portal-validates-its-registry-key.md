@@ -2,7 +2,7 @@
 Name: An instance can be told which portal validates its registry key
 Category: Fix
 Description: An installation pulling its images from cr.meshweaver.cloud booted normally and then never updated itself, because the self-updater would only present its instance key to a registry that was also its plugin registry. It now presents it to the portal the registry DECLARES as its validator — and still refuses every host nobody declared.
-Icon: RefreshCcw
+Icon: ArrowSync
 Order: -20260912
 ---
 
@@ -35,9 +35,16 @@ side: `SelfUpdate:RegistryValidationUrl` (chart: `selfUpdate.registryValidationU
 instance, a record's `extraPortalConfig`). Set it to the registry record's validation URL — a bare
 host works too — and the self-updater presents the key it already holds for that portal.
 
+The key presented to a declared validator is the durable instance key itself — never the short-lived
+token the plugin catalog otherwise exchanges it for — so an instance that registered itself at first
+boot (`PluginCatalog:BootstrapKey`, no token configured anywhere) is covered exactly like one with a
+configured token: the validator is the exchange endpoint, and it refuses a token by design.
+
 `SelfUpdate:Registry` must also be a bare `host` or `host:port`: the same value is used as the
 registry half of an image reference, and a value shaped like `user:secret@host` would be a valid URI
-naming a different host as the one to hand the instance key to.
+naming a different host as the one to hand the instance key to. A declaration that is set but does
+not name a host, and a plugin registry whose URL carries its credential, are each refused with a
+message that says so — never diagnosed as "nothing declared" or "no registry configured".
 
 **It is a grant, and nothing else is one.** The key still goes only to a host that is a configured
 plugin registry, or to a registry whose declared validator is one. An absent declaration **refuses**,

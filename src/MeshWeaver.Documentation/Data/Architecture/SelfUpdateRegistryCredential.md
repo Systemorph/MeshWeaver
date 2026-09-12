@@ -29,6 +29,23 @@ So, in `OciTagLister.ResolveCredential` — **selecting** the credential:
 Both rows need TWO explicit statements. A declaration alone grants nothing (there is still no key for
 that host); a key alone grants nothing (nothing says that registry trusts that portal).
 
+### The SHAPE of the credential follows the row
+
+🚨 **A declared validator is handed the DURABLE `mwi_` key, never an exchanged token.** The Store's
+resolver (`RegistryTokenResolver.ResolveToken`) presents a configured `Token` as configured, but a
+STORED key — the one an auto-registered installation holds after `PluginCatalog:BootstrapKey`, the
+zero-touch shape `InstanceProvisioningPlan` documents — it first EXCHANGES for a short-lived `mwa_`
+token at `/api/instances/token`. On the fleet's shape the declared validator **is** that exchange
+endpoint, and it refuses a token by design (a token may never mint its successor;
+`InstanceTokenEndpoints`). So a lister resolving through `ResolveToken` would present `mwa_…` to
+`cr.meshweaver.cloud`, be refused on every check, and fix only the installations with a raw `Token`
+configured — `build` and `pearl` — while the auto-registered ones stayed frozen (review of #4094).
+The second row therefore resolves through `ResolveDurableKey`: the configured token, else the stored
+key decrypted, **no exchange**. The first row is unchanged — a portal's own `/v2` mirror runs the same
+authenticator the plugin registry does and accepts both shapes. `OciTagListerTest` pins it with the
+auto-registered shape: the presented secret is the stored `mwi_` key and the exchange route is never
+called; resolving through `ResolveToken` reports one exchange and a refused listing.
+
 ## 🚨 Measured: with the target check removed, the instance key reaches an arbitrary host — twice
 
 Not an argument, a measurement. Delete the bare-host requirement, point `SelfUpdate:Registry` at
@@ -70,11 +87,25 @@ on the *declared* host and never looks at the *target* — so the new trust path
 unreachable value reachable. Measured, not argued: with the target check deleted, the test fixture's
 attacker host received **two** credentials (Basic at the token realm, then the Bearer).
 
-That is why the requirement is host-EQUALITY and not merely "parses to a host". Do not simplify it
+That is why the requirement is a BARE HOST and not merely "parses to a host". Do not simplify it
 back to `HostOf(registry)`: normalizing silently would accept a URL form here while
 `PortalImage`/`MigrationImage` — which interpolate the same value — stayed malformed, and the
 constraint would have lost the reason it exists. A value that does not parse to an http(s) host is
 refused **without being echoed**, because the userinfo is where a key would be.
+
+🚨 **"Bare" is a textual test on the configured value, not equality with the parsed host.** `HostOf`
+drops a scheme-default port, so a check written as `HostOf(value) == value` refused `cr.example.test:443`
+— a legal `host:port` this page and the chart promise — with a message claiming it "carries a scheme
+or a path" (review of #4094). The check is now: no scheme, no path, no query, no fragment (userinfo
+was refused a line earlier); the client and the credential match then use the normalized host.
+
+`SelfUpdateOptions.HostOf` is the platform's ONE registry-host rule, not this feature's. It used to
+have a twin — `RegistryUpdateReconciler.SameRegistry` decided whether a `ModulePublished` broadcast
+names a configured registry with its own reader, with different port semantics (`http://x:443` and
+`https://x` were the same registry there and different hosts here). `SameRegistry` now reads through
+`HostOf`, so the two subsystems agree: a scheme-default port is not part of the host, any other port
+is, and a value that names no http(s) host — a bare non-URL, a `mailto:`, a URL carrying userinfo —
+names no registry anywhere rather than matching a second copy of the same unreadable string.
 
 ## Why host equality was wrong
 
@@ -142,6 +173,28 @@ host is ever read**, and it is read whole: a non-default port is part of it, and
 userinfo (`https://memex.meshweaver.cloud@evil.example`) declares NOTHING rather than a pairing with
 the host a human would not have read. An empty value — the default — declares nothing and refuses.
 
+🚨 **"Declared" and "readable" are two questions, and the refusal says which one failed.** A value
+that is SET but names no http(s) host — userinfo, a typo'd scheme, a `mailto:` — is refused as
+**malformed** (`SelfUpdate:RegistryValidationUrl is set but does not name an http(s) host`, value not
+echoed), never folded into "nothing declared": collapsing the two told the operator to declare the
+key they had already set, a fail-closed fallback forging a correct-looking bug (review of #4094). The
+boot line has the same three states: validated at `{host}`, SET but unreadable, NO validator
+declared. `SelfUpdateOptions.RegistryValidatorDeclared` is the predicate; `RegistryValidatorHost` is
+the reading.
+
+### The alternative: derive it on the control instance — recorded, not done
+
+The pairing could be **derived at render time** instead of hand-copied: `HelmValues` already derives
+`selfUpdate.registry` from the image host, and the hosting record whose `registry.host` equals it
+carries the `validationUrl`. One declaration on the registry's own record, no per-consumer copies,
+still no network in the update path — the consumer-side key stays the wire; only who writes it
+changes. It would also give `PluginBundleClient.DownloadArtifact`, which today presents the same key
+to whatever host the catalog advertises with no declaration at all, the same rule as the self-updater
+— one key/host pair currently lives under two trust rules. That is a real alternative to this page's
+design, and it is deliberately NOT part of #4094: it moves where a trust rule lives.
+[#4123](https://github.com/Systemorph/MeshWeaver/issues/4123) carries it, ordered after the
+config-repo declaration that closes #4093.
+
 ## What the refusal says
 
 The message names the hosts and the key that would declare the pairing. It never names, echoes,
@@ -149,6 +202,24 @@ lengths or logs the credential itself. The one new log line, at `Information` on
 only, names the plugin registry, the container registry and the declared validator — so "who did this
 installation hand its key to" is answerable from Loki, and a pairing nobody declared can never
 produce a line.
+
+Two diagnoses exist so that a wrong one is never given:
+
+- **A plugin registry that EXISTS on the host, but whose URL carries credentials**
+  (`https://instance:mwi_…@memex.meshweaver.cloud`). `HostOf` refuses userinfo, so such a registry
+  matches on neither row — the pre-#4094 reader tolerated it — and without its own diagnosis the
+  refusal would claim "no plugin registry is configured on that host" about a registry the catalog is
+  already talking to. The message names the host, says the URL carries credentials, and names the fix
+  (`PluginCatalog:Registries:N:Token`, bare `https://host`); the URL is not echoed. Refuse-and-name
+  was chosen over matching the host: userinfo in a plugin-registry URL is never honoured as a
+  credential by the catalog either (the HTTP client drops it), the catalog logs `registry.Url`
+  verbatim on several pre-existing paths, and no record in the fleet uses the shape — so the right
+  answer is to say where the credential belongs, not to read past it.
+- **The boot line names the HOST read from `SelfUpdate:Registry`, never the configured value.** It
+  is an `Information` line, written on every start BEFORE the lister's non-echoing refusal has ever
+  run — so the pre-review line, which logged `_options.Registry` verbatim, would have shipped
+  `instance:mwi_…@evil.example` to Loki at boot. A value `HostOf` cannot read is named as
+  `(unreadable — see SelfUpdate:Registry)`. `OciTagListerTest` pins it against a captured logger.
 
 ## The negative control
 
@@ -162,6 +233,11 @@ produce a line.
 - **a declared validator this installation holds no key for** — refused. A declaration alone is not a
   grant.
 - **a target carrying userinfo** — refused, and the refusal does not echo the value.
+- **a declaration that is set but unreadable** — refused as malformed, never as absent, value not
+  echoed.
+- **a plugin registry whose URL carries credentials** — refused naming the cause and the fix, never
+  as "no registry configured"; URL not echoed.
+- **the boot line** — names the host, never the configured value, and names the third validator state.
 
 🚨 **A negative control must be proven to have RUN, not merely to be green.** Both traps were hit
 while writing these, and both produced a confident pass:
@@ -182,18 +258,29 @@ question, by deleting the guard it protects, stripping the test to the assertion
 measuring what it reported. **Two of the five shared the shape**, and the hostile-host fixture fixed
 both:
 
-| negative | guard deleted ⇒ the assertion reports | was it vacuous? |
-|---|---|---|
-| no plugin registry on that host | **2 credentials** at `other.example.test` | **YES** — an unknown host was 404'd before any credential could be observed. Same shape as the userinfo one; fixed by the same change |
-| the same registry, nothing declared | **3 credentials** | no — the target is a host the fake serves, so the challenge always happened |
-| a declared validator holding no key | **3 credentials** | no — same reason |
-| a target carrying userinfo | **2 credentials** at `evil.example.test` | **YES** — the case that started this audit |
-| a URL-form target | **4 requests** under the `HostOf`-without-equality simplification | no — and it is precisely what blocks that simplification |
+Every negative asserts the DISCLOSURE first (`CredentialsSeen`, recorded before the fake's host
+check) and the message second, through `Record.ExceptionAsync` rather than `Assert.ThrowsAsync` — so
+a falsification reports *what leaked*, not "no exception was thrown". Re-run in the review round of
+#4094, each patch built under `-warnaserror` before it ran (a patch that did not compile is VOID, and
+the runner refuses it rather than replaying the stale assembly — the first attempt was exactly that):
 
-The two non-fake negatives cannot take this shape at all: the validator-host test asserts values
-returned by a pure function with no fake in the path, and the refused-key test drives a host the fake
-*does* serve and asserts that an exception is thrown, which an empty-list regression could not
-satisfy.
+| negative | guard deleted ⇒ the assertion reports | vacuous? |
+|---|---|---|
+| no plugin registry on that host | **2 credentials** at `other.example.test` | was — an unknown host was 404'd before any credential could be observed; fixed by the hostile-host fake |
+| the same registry, nothing declared | **3 credentials** | no |
+| a declared validator holding no key | **3 credentials** | no |
+| a target carrying userinfo | **2 credentials** at `evil.example.test` | was — the case that started the audit |
+| a URL-form target (3 shapes) | the `no plugin registry` message for the raw value; under the equality form of the check, `host:443` refused with an untrue message | no |
+| a declaration set but unreadable (3 shapes) | the old **"no validator is declared"** diagnosis | no |
+| a plugin registry whose URL carries credentials (2 rows) | the old **"no plugin registry is configured"** diagnosis; **3 credentials** when the host guard goes | no |
+| the boot line | the line with **`instance:mwi_…@evil.example.test`** in it; the two-state line saying **"NO validator declared"** | no |
+| a refused key faults, never an empty list | `No exception was thrown` under a `.Catch(empty)` | no |
+| a third host reached (the positives' `ReachedHosts`) | `Expected all items to match` with `third.example.test` in the list | **was** — `ServedHosts` was appended only for KNOWN hosts, so an un-credentialed request to a third host was invisible by construction; every host is now recorded before the fake decides what it serves |
+| the auto-registered shape presents the durable key | **`ExchangeRequests` 1, expected 0** under `ResolveToken` | no |
+| the key held for the DECLARED validator, two registries | **`mwi_issued-by-a…`** presented instead of B's under `registries.First()` | no — and with one registry configured this assertion could not exist |
+
+The pure-function negatives (the validator-host reader, declared-vs-readable) have no fake in the
+path and cannot take this shape.
 
 **The same audit is owed across the wider suite; it is not part of this change.**
 
