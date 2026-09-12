@@ -88,7 +88,53 @@ public sealed record ModuleLinkVerdict(
     /// assembly the platform carries, or for a different public key token. Non-empty exactly when
     /// <see cref="State"/> is <see cref="ModuleLinkState.BindingConflict"/>.
     /// </summary>
-    public ImmutableArray<string> BindingConflicts { get; init; } = [];
+    public ImmutableArray<string> BindingConflicts => [.. Conflicts.Select(c => c.Describe())];
+
+    /// <summary>The binding conflicts as DATA (#4083) — assembly, what the module asks for, what
+    /// the platform provides — so a status surface can render them in the viewer's language and a
+    /// marker can carry them without re-parsing a sentence. <see cref="BindingConflicts"/> is the
+    /// operator spelling of the same list.</summary>
+    public ImmutableArray<AssemblyBindingConflict> Conflicts { get; init; } = [];
+
+    /// <summary>
+    /// The short status-line form of a refusal, for the module's own status surfaces (the
+    /// activation sidecar's refusal marker, the package card, <c>/health</c>) — e.g.
+    /// <c>held: references YamlDotNet 18.1.0.0, platform provides 16.3.0.0</c>. Null for
+    /// <see cref="ModuleLinkState.Linkable"/>. English by design, like <see cref="Report"/>; the
+    /// viewer-facing card localizes the sentence and takes <see cref="Needs"/> /
+    /// <see cref="Provides"/> as data.
+    /// </summary>
+    public string? HoldSummary() => State switch
+    {
+        ModuleLinkState.Linkable => null,
+        ModuleLinkState.BindingConflict =>
+            "held: " + string.Join("; ", Conflicts.Select(c => c.Short())),
+        ModuleLinkState.Unlinkable =>
+            "held: references " + string.Join(", ", MissingTypes.Take(3))
+            + (MissingTypes.Length > 3 ? $" (+{MissingTypes.Length - 3} more)" : "")
+            + ", which this platform does not carry",
+        _ => $"held: whether it links could not be determined ({Detail})",
+    };
+
+    /// <summary>What the refused module NEEDS, as language-neutral data for a localized status
+    /// line: the conflicting assemblies with the versions the module asks for
+    /// (<c>YamlDotNet 18.1.0.0, System.Reactive 7.0.0.0</c>), or for a type refusal the first
+    /// missing types. Null when nothing is refused.</summary>
+    public string? Needs() => State switch
+    {
+        ModuleLinkState.BindingConflict => string.Join(", ", Conflicts.Select(c => $"{c.Assembly} {c.Referenced}")),
+        ModuleLinkState.Unlinkable => string.Join(", ", MissingTypes.Take(3))
+            + (MissingTypes.Length > 3 ? $" (+{MissingTypes.Length - 3})" : ""),
+        ModuleLinkState.Indeterminate => Detail,
+        _ => null,
+    };
+
+    /// <summary>What this platform PROVIDES for each conflicting assembly, in the order of
+    /// <see cref="Needs"/> (<c>16.3.0.0, 6.1.0.0</c>); null unless the refusal is a binding
+    /// conflict.</summary>
+    public string? Provides() => State == ModuleLinkState.BindingConflict
+        ? string.Join(", ", Conflicts.Select(c => c.Provided))
+        : null;
 
     /// <summary>
     /// Version skew that is REPORTED and never refused (#4083): a reference to a LOWER version than
@@ -164,6 +210,29 @@ public sealed record ModuleLinkVerdict(
             ? string.Empty
             : $" Advisory ({Advisories.Length}), reported and deciding nothing: "
               + string.Join("; ", Advisories);
+}
+
+/// <summary>
+/// One assembly reference the loader would refuse to bind on this platform (#4083): the module
+/// asks for a HIGHER version than the platform provides, or a different public key token.
+/// </summary>
+/// <param name="Assembly">The assembly's simple name.</param>
+/// <param name="Referenced">What the module's bytes ask for — a version (<c>18.1.0.0</c>) or, for
+/// a key conflict, a public key token.</param>
+/// <param name="Provided">What the platform's copy carries, in the same spelling.</param>
+/// <param name="IsPublicKeyToken">True when the conflict is the key, not the version.</param>
+public sealed record AssemblyBindingConflict(
+    string Assembly, string Referenced, string Provided, bool IsPublicKeyToken = false)
+{
+    /// <summary>The operator spelling, as <see cref="ModuleLinkVerdict.BindingConflicts"/> lists it.</summary>
+    public string Describe() => IsPublicKeyToken
+        ? $"{Assembly} with public key token {Referenced} (this platform carries public key token {Provided})"
+        : $"{Assembly} {Referenced} (this platform carries {Provided})";
+
+    /// <summary>The status-line spelling: <c>references YamlDotNet 18.1.0.0, platform provides 16.3.0.0</c>.</summary>
+    public string Short() => IsPublicKeyToken
+        ? $"references {Assembly} with public key token {Referenced}, platform provides {Provided}"
+        : $"references {Assembly} {Referenced}, platform provides {Provided}";
 }
 
 /// <summary>
@@ -855,7 +924,7 @@ public static class ModulePlatformLink
             return Indeterminate(moduleName, $"{exception.GetType().Name}: {exception.Message}");
         }
 
-        List<string> conflicts = [];
+        List<AssemblyBindingConflict> conflicts = [];
         List<string> advisories = [];
         var comparedRefs = 0;
 
@@ -896,9 +965,7 @@ public static class ModulePlatformLink
                 if (wanted.PublicKeyToken is { } wantedToken && have.PublicKeyToken is { } haveToken
                     && !string.Equals(wantedToken, haveToken, StringComparison.OrdinalIgnoreCase))
                 {
-                    conflicts.Add(
-                        $"{assemblyName} with public key token {wantedToken} (this platform carries "
-                        + $"public key token {haveToken})");
+                    conflicts.Add(new AssemblyBindingConflict(assemblyName, wantedToken, haveToken, IsPublicKeyToken: true));
                     continue;
                 }
 
@@ -914,9 +981,8 @@ public static class ModulePlatformLink
                 }
                 var order = wantedVersion.CompareTo(haveVersion);
                 if (order > 0)
-                    conflicts.Add(
-                        $"{assemblyName} {wantedVersion.ToString(4)} (this platform carries "
-                        + $"{haveVersion.ToString(4)})");
+                    conflicts.Add(new AssemblyBindingConflict(
+                        assemblyName, wantedVersion.ToString(4), haveVersion.ToString(4)));
                 else if (order < 0)
                     advisories.Add(
                         $"{assemblyName}: the module references {wantedVersion.ToString(4)}, this "
@@ -987,7 +1053,7 @@ public static class ModulePlatformLink
             [.. checkedAssemblies.ToImmutable().OrderBy(a => a, StringComparer.OrdinalIgnoreCase)],
             [.. uncheckedAssemblies.ToImmutable().OrderBy(a => a, StringComparer.OrdinalIgnoreCase)])
         {
-            BindingConflicts = [.. conflicts.Distinct(StringComparer.Ordinal).OrderBy(c => c, StringComparer.Ordinal)],
+            Conflicts = [.. conflicts.Distinct().OrderBy(c => c.Assembly, StringComparer.Ordinal)],
             Advisories = [.. advisories.Distinct(StringComparer.Ordinal).OrderBy(a => a, StringComparer.Ordinal)],
             ComparedAssemblyReferences = comparedRefs,
         };

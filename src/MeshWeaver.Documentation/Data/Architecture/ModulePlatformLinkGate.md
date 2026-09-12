@@ -187,6 +187,18 @@ unchanged in kind: `ModulePlatformSurface.ToJson`, written by `BakeOutput.WriteP
 and by `mw-plugin-test platform-surface`; `publish-bake-bundles.sh` uploads whatever the bake
 wrote.
 
+**Where a hold shows — a hold must be visible where a person looks, not only logged.**
+
+| Path | Where the verdict is written | What it says |
+|---|---|---|
+| roll candidate (i) | `Admin/UpdatePolicy` → `heldReason` (the poller writes `verdict.HoldReason` verbatim); the Updates tab renders it | `Views: its landed module MeshWeaver.AI cannot load on 3.0.0-ci.8323 (…): … references YamlDotNet 18.0.0.0 (this platform carries 16.0.0.0) — the target's copy is what the loader binds …` |
+| module landing (ii) | the module's own **refusal marker** `modules/activation.d/<Name>.refused` (`ModuleActivationSidecar.RefusedLanding`), read by `PendingModuleActivations` onto the package card (⛔ *Not installed on this platform: it needs YamlDotNet 18.1.0.0, this platform provides 16.3.0.0 …*, localized) and into `/health`'s activation report | `held: references YamlDotNet 18.1.0.0, platform provides 16.3.0.0` |
+| boot | the unloadable marker (`<Name>.unloadable`, unchanged) → quarantined on the card and in `/health` | the probe's report |
+
+Before this date the landing path's refusal was **one warning line in a pod log** (`PluginBundleClient`: *"landing failed — the module is unchanged"*) and nothing else: no entry is written on a refusal, so no status surface had anything to show. The marker is written by the refusing landing, cleared by the next landing of that module that lands anything, and by uninstall.
+
+**Blast radius, measured 2026-09-12** — the registry's published module set (30 module bundles on memex.meshweaver.cloud) under the new rule, each bundle's own copies in its closure, against the image's `/app` + shared frameworks as the surface: `3.0.0-ci.8372` (memex) and `3.0.0-ci.8403` (memex-cloud): **0 held**, 1 advisory (ContainerRegistry: System.Reactive 6.1.0.0 → platform 7.0.0.0, rolls forward). `3.0.0-ci.8323` — the image that crash-looped on 09-11 — **20 of 30 held**: `MeshWeaver.AI` on `YamlDotNet 18.0.0.0` vs `16.0.0.0` *and* `System.Reactive 7.0.0.0` vs `6.1.0.0`, `MeshWeaver.Publish` on YamlDotNet, eighteen others on System.Reactive (core bumped both on 09-11, after 8323 was built). The rule fires on exactly the image that failed and on nothing the fleet runs now.
+
 **What this still does not see.** Member-level skew (below), and the publish side: nothing yet
 compares a bundle about to be published against the images the fleet actually runs (#4066). Every
 receiving pod measures for itself, with this probe.

@@ -109,6 +109,13 @@ public class ModuleLinkVersionTest : IDisposable
         // The document reaches the same verdict as the files: the roll gate and the boot probe
         // cannot disagree about this.
         Assert.Equal(onFiles.BindingConflicts, onDocument.BindingConflicts);
+
+        // The status-line form — what the refusal marker, the package card and /health carry.
+        Assert.Equal("held: references YamlDotNet 18.1.0.0, platform provides 16.3.0.0", onFiles.HoldSummary());
+        Assert.Equal("YamlDotNet 18.1.0.0", onFiles.Needs());
+        Assert.Equal("16.3.0.0", onFiles.Provides());
+        var conflict18 = Assert.Single(onFiles.Conflicts);
+        Assert.Equal(new AssemblyBindingConflict(Yaml, "18.1.0.0", "16.3.0.0"), conflict18);
     }
 
     /// <summary>
@@ -281,14 +288,46 @@ public class ModuleLinkVersionTest : IDisposable
         var above = new Version(carried!.Version!.Major + 1, 0, 0, 0).ToString(4);
 
         const string name = "MeshWeaver.Test.LandingAiPack";
+        const string packagePath = "InstalledPackages/AI";
         var standIn = YamlStandIn(above);
         var refusal = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await landing.LandModule(name, [(name + ".dll", ModuleAgainst(standIn, name)), (Yaml + ".dll", standIn)])
+            await landing.LandModule(name, [(name + ".dll", ModuleAgainst(standIn, name)), (Yaml + ".dll", standIn)],
+                    packagePath: packagePath, version: "1.9.0")
                 .Timeout(TestTimeouts.Convergence).Await());
 
         Assert.Contains(Yaml + " " + above, refusal.Message, StringComparison.Ordinal);
         Assert.Contains("FileLoadException", refusal.Message, StringComparison.Ordinal);
         Assert.Empty(ModuleActivationSidecar.Read(root).Entries);
+
+        // 🚨 LEGIBLE (#4083): the refusal is on the module's own marker, in the words a person
+        // reads — not only in a log line — and the activation report renders it for the package.
+        var provided = carried!.Version!.ToString(4);
+        var marker = ModuleActivationSidecar.ReadRefused(root, name);
+        Assert.NotNull(marker);
+        Assert.Equal($"held: references {Yaml} {above}, platform provides {provided}", marker.Reason);
+        Assert.Equal($"{Yaml} {above}", marker.Needs);
+        Assert.Equal(provided, marker.Provides);
+        Assert.Equal(packagePath, marker.PackagePath);
+        Assert.Equal("1.9.0", marker.Version);
+
+        var report = new PendingModuleActivations(root).Read();
+        Assert.False(report.IsUndetermined, report.UndeterminedReason);
+        var row = Assert.Single(report.Refused);
+        Assert.Equal(name, row.Name);
+        Assert.Same(row, report.RefusalForPackage(packagePath));
+        Assert.Contains("REFUSED at landing", report.Describe(), StringComparison.Ordinal);
+        Assert.Contains($"{name} (1.9.0): held: references {Yaml} {above}, platform provides {provided}",
+            report.Describe(), StringComparison.Ordinal);
+        Assert.DoesNotContain(report.Unresolvable, p => string.Equals(p.Name, name, StringComparison.Ordinal));
+
+        // A later landing of the same module that LANDS (bound below the platform's copy) clears
+        // the marker: the state it described is gone.
+        var older = YamlStandIn("1.0.0.0");
+        await landing.LandModule(name, [(name + ".dll", ModuleAgainst(older, name)), (Yaml + ".dll", older)],
+                packagePath: packagePath, version: "1.9.1")
+            .Timeout(TestTimeouts.Convergence).Await();
+        Assert.Null(ModuleActivationSidecar.ReadRefused(root, name));
+        Assert.Empty(new PendingModuleActivations(root).Read().Refused);
     }
 
     /// <summary>The positive control on the same path: a module bound BELOW the running copy's

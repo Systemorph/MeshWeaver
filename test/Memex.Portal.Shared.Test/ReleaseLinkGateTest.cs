@@ -143,6 +143,13 @@ public class ReleaseLinkGateTest : IDisposable
         Assert.Contains($"{ContractAssembly} {bound}", blocker.Reason!, StringComparison.Ordinal);
         Assert.Contains("1.0.0.0", blocker.Reason!, StringComparison.Ordinal);
         Assert.Contains("FileLoadException", blocker.Reason!, StringComparison.Ordinal);
+        // 🚨 LEGIBLE (#4083): HoldReason is the exact string the self-update poller writes onto
+        // Admin/UpdatePolicy.heldReason (SelfUpdateHostedService: `HeldReason = verdict.HoldReason`),
+        // so it must name the module, the reference and BOTH versions on its own.
+        Assert.NotNull(verdict.HoldReason);
+        Assert.Contains(ViewPack, verdict.HoldReason, StringComparison.Ordinal);
+        Assert.Contains($"{ContractAssembly} {bound}", verdict.HoldReason, StringComparison.Ordinal);
+        Assert.Contains("1.0.0.0", verdict.HoldReason, StringComparison.Ordinal);
         var link = Assert.Contains("Views", Links(published, Version, landed));
         Assert.Equal(ModuleLinkState.BindingConflict, link.State);
         Assert.True(link.ComparedAssemblyReferences > 0, link.Report());
