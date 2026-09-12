@@ -113,6 +113,18 @@ public sealed record ModuleActivationReport(
     /// <summary>Whether anything was refused at landing.</summary>
     public bool HasRefused => !IsUndetermined && !Refused.IsEmpty;
 
+    /// <summary>
+    /// 🚨 The modules this instance's PLAN keeps it from installing (#4097): the registry
+    /// declared their packages in the default set and refused them by tier, and the default
+    /// install recorded the typed verdict on the activation record. Not pending (nothing landed),
+    /// not refused-at-landing (nothing was fetched) — a state whose remedy is the instance's plan,
+    /// which no restart, landing or platform update changes. Init-only, for binary compatibility.
+    /// </summary>
+    public ImmutableList<Mesh.Security.PlanTierRefusal> TierRefused { get; init; } = [];
+
+    /// <summary>Whether any module's package is refused by the instance's plan.</summary>
+    public bool HasTierRefused => !IsUndetermined && !TierRefused.IsEmpty;
+
     /// <summary>The refusal row for the module the install record at <paramref name="packagePath"/>
     /// asked to land, or null.</summary>
     public ModuleRefusal? RefusalForPackage(string? packagePath) =>
@@ -208,7 +220,8 @@ public sealed record ModuleActivationReport(
               + (HasQuarantined ? "; " + DescribeQuarantined(Quarantined) : string.Empty)
               + (HasFallbacks ? "; " + DescribeFallbacks(Fallbacks) : string.Empty)
               + (HasFloorAdvisories ? "; " + DescribeFloorAdvisories(FloorAdvisories) : string.Empty)
-              + (HasRefused ? "; " + DescribeRefused(Refused) : string.Empty);
+              + (HasRefused ? "; " + DescribeRefused(Refused) : string.Empty)
+              + (HasTierRefused ? "; " + DescribeTierRefused(TierRefused) : string.Empty);
 
     /// <summary>
     /// One human-readable line naming the modules that run their PREVIOUS generation (#3649) or
@@ -236,6 +249,20 @@ public sealed record ModuleActivationReport(
             + "and working, behind the set; no restart changes that, a build that loads here does: "
             + string.Join("; ", rows.Take(Math.Max(1, maxNamed)))
             + (rows.Length > maxNamed ? $"; …(+{rows.Length - maxNamed})" : string.Empty);
+    }
+
+    /// <summary>The plan-tier sentence for operators (#4097): each refused package with the tier it
+    /// needs and the plan the instance is on — <c>⛔ Not installed on this instance: Hosting needs
+    /// plan tier enterprise, this instance is on free.</c></summary>
+    public static string DescribeTierRefused(IReadOnlyCollection<Mesh.Security.PlanTierRefusal> refused, int maxNamed = 10)
+    {
+        var named = refused.Take(maxNamed)
+            .Select(r => $"{r.Module ?? r.PackageId}: {r.Describe()}");
+        return $"{refused.Count} module(s) are refused by this instance's PLAN — the registry "
+               + "declares their packages in the default set and does not serve them at this plan; "
+               + "no restart, landing or platform update changes that: "
+               + string.Join("; ", named)
+               + (refused.Count > maxNamed ? $" … +{refused.Count - maxNamed}" : string.Empty);
     }
 
     /// <summary>The refusal sentence for operators (#4083): each module by name with its status
@@ -653,6 +680,9 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 .Select(pair => new ModuleRefusal(
                     pair.Key, pair.Value.PackagePath, pair.Value.Version, pair.Value.Reason,
                     pair.Value.RefusedAt, pair.Value.Needs, pair.Value.Provides))],
+            // #4097 — what the registry refuses this instance's PLAN, from the markers the default
+            // install keeps in step with the registry's answer (the same list boot and /health read).
+            TierRefused = activation.TierRefusals,
             MeshModuleSet = ModuleSetStore.Describe(sets)
                 + (setNotes.Count > 0 ? " — " + string.Join("; ", setNotes) : string.Empty),
         };
