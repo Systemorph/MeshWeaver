@@ -386,6 +386,18 @@ name: node-repo module pack
 # (`Module bundles`), which is untouched. A caller that wants the old one-leg-per-module shape
 # passes `batch-size: 1`. Doc: Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to
 # end", the 2026-09-12 batching note).
+#
+# 🚨 module-pack-batch.py is the LANE's script and is FETCHED at the lane's SCRIPTS ref
+# (`scripts-ref`, then `build-logic-ref`, then `platform-ref`) in `select`, `pack` and `tests` —
+# never read out of the `meshweaver/` checkout those jobs make at `platform-ref`. The checkout is
+# the PLATFORM's commit, and for an unpinned caller that is the newest SEALED set, hours behind a
+# lane called at `@main`: #4096 merged at 16:43Z on 2026-09-12 and every `pack` leg of Plugins main
+# read the script out of a checkout sealed at a7450f3aa (14:46Z) — `python3: can't open file` —
+# so Plugins published nothing until a seal carried it. This is the scripts-ref / platform-ref
+# split node-repo-gate.yml already lives by (#4095, compose-gate-host.sh). A caller of this lane
+# at `@main` passes `scripts-ref: main`. ScriptsRefFetchGuard (MeshWeaver.Documentation.Test) fails
+# any lane job that runs a `meshweaver/.github/scripts/*.py` it neither fetched at scripts-ref nor
+# lists as old enough to be in every sealed set.
 
 on:
   workflow_call:
@@ -410,6 +422,26 @@ on:
         description: The Systemorph/MeshWeaver commit the modules build against (a pin, not a branch).
         required: true
         type: string
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at — today
+          `module-pack-batch.py`, the batching bookkeeping every `pack` and `tests` leg drives and
+          `select` self-tests. Same contract as node-repo-gate's `scripts-ref`: distinct from
+          `platform-ref`, which names the PLATFORM the modules build against and is, for an
+          unpinned caller, the newest SEALED set — hours behind the lane called at `@main`.
+          Empty (the default) falls back to `build-logic-ref` (this lane's existing pin for its
+          selection scripts — an immutable core SHA a caller resolves at run time) and then to
+          `platform-ref`, right for a caller that pins the lane and the platform to one commit.
+          🚨 A caller that pins NOTHING passes `main` here: on 2026-09-12 (#4096) this lane's
+          batching script landed on core main at 16:43Z, every `pack` leg of MeshWeaver.Plugins
+          main read it out of the checkout at `platform-ref` — a set sealed at a7450f3aa, two
+          hours earlier — and died with `python3: can't open file '…/module-pack-batch.py'`, so
+          Plugins published nothing until a seal carried the file. `github.job_workflow_sha` cannot
+          stand in: it is EMPTY inside a reusable called from another repository (measured
+          2026-08-30), so the lane's own ref is an input, never inferred.
+        required: false
+        type: string
+        default: ''
       publish:
         description: >
           Hand the packed bundles to the registry. TRUNK-ONLY, not push-only — a PR packs and
@@ -920,6 +952,11 @@ jobs:
       # The scope script is the PLATFORM's (one implementation, every repo), read from the same
       # checkout the pack jobs make at platform-ref — so a workflow newer than the checkout can
       # never call a script the checkout does not have (run 33073476996's exact failure).
+      # 🚨 That holds only for scripts OLDER than every platform a caller can resolve. A script
+      # added to core AFTER the newest sealed set is exactly what this checkout does not have —
+      # module-pack-batch.py, #4096, Plugins run 34707906260 — so that one is FETCHED at the
+      # lane's scripts ref two steps down, never read from here. ScriptsRefFetchGuard names the
+      # scripts allowed to be read from the checkout; a new one must be fetched.
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:
@@ -929,6 +966,36 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      # 🚨 THE LANE'S OWN batching script, at the LANE's scripts ref — never read out of the
+      # checkout above. That checkout is the PLATFORM's commit (`platform-ref`; `select` prefers
+      # `build-logic-ref`), and for an unpinned caller the platform is the newest SEALED set, hours
+      # behind a lane called at `@main`. #4096 landed module-pack-batch.py on core main at 16:43Z
+      # on 2026-09-12; every Plugins `pack` leg then read it out of a checkout sealed at a7450f3aa
+      # (14:46Z) and died with `python3: can't open file '…/module-pack-batch.py'` — Plugins main
+      # published nothing until a seal carried the file. Same fetch shape as node-repo-gate.yml's
+      # compose-gate-host.sh (#4095): curl (the self-hosted runner ships no `gh`), the raw media
+      # type, RED by name on a miss, and the self-test right after — an unproven script is no
+      # script. Written INTO the checkout's path, so every `python3 meshweaver/.github/scripts/
+      # module-pack-batch.py` below reads the fetched bytes. ScriptsRefFetchGuard (Documentation.Test)
+      # holds this step in every job that runs the script.
+      - name: Fetch module-pack-batch.py at the lane's scripts ref
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.build-logic-ref || inputs.platform-ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SCRIPT="meshweaver/.github/scripts/module-pack-batch.py"
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / build-logic-ref / platform-ref are all empty — module-pack-batch.py has no ref to be fetched at"; exit 1; }
+          mkdir -p "$(dirname "$SCRIPT")"
+          curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/module-pack-batch.py?ref=${SCRIPTS_REF}" \
+            || { echo "::error::could not fetch module-pack-batch.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver. The file is read at the lane's SCRIPTS ref (inputs.scripts-ref, then build-logic-ref, then platform-ref) and a ref older than the lane does not have it — a caller of this lane at @main passes scripts-ref: main (MeshWeaver#4096: Plugins main stalled on 2026-09-12 reading it out of a sealed platform-ref)."; exit 1; }
+          [ -s "$SCRIPT" ] || { echo "::error::the fetched module-pack-batch.py at ${SCRIPTS_REF} is empty"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched module-pack-batch.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          python3 "$SCRIPT" --self-test
+          echo "module-pack-batch.py: fetched at ${SCRIPTS_REF} into $SCRIPT and self-tested"
       # 🚨 The selection logic owes its own proof that it can say no AND that every fallback still
       # falls back. It runs here, on every run, next to the answer it produces — a selector whose
       # self-test is only run by someone remembering to is a selector nobody checks.
@@ -1808,6 +1875,36 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      # 🚨 THE LANE'S OWN batching script, at the LANE's scripts ref — never read out of the
+      # checkout above. That checkout is the PLATFORM's commit (`platform-ref`; `select` prefers
+      # `build-logic-ref`), and for an unpinned caller the platform is the newest SEALED set, hours
+      # behind a lane called at `@main`. #4096 landed module-pack-batch.py on core main at 16:43Z
+      # on 2026-09-12; every Plugins `pack` leg then read it out of a checkout sealed at a7450f3aa
+      # (14:46Z) and died with `python3: can't open file '…/module-pack-batch.py'` — Plugins main
+      # published nothing until a seal carried the file. Same fetch shape as node-repo-gate.yml's
+      # compose-gate-host.sh (#4095): curl (the self-hosted runner ships no `gh`), the raw media
+      # type, RED by name on a miss, and the self-test right after — an unproven script is no
+      # script. Written INTO the checkout's path, so every `python3 meshweaver/.github/scripts/
+      # module-pack-batch.py` below reads the fetched bytes. ScriptsRefFetchGuard (Documentation.Test)
+      # holds this step in every job that runs the script.
+      - name: Fetch module-pack-batch.py at the lane's scripts ref
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.build-logic-ref || inputs.platform-ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SCRIPT="meshweaver/.github/scripts/module-pack-batch.py"
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / build-logic-ref / platform-ref are all empty — module-pack-batch.py has no ref to be fetched at"; exit 1; }
+          mkdir -p "$(dirname "$SCRIPT")"
+          curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/module-pack-batch.py?ref=${SCRIPTS_REF}" \
+            || { echo "::error::could not fetch module-pack-batch.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver. The file is read at the lane's SCRIPTS ref (inputs.scripts-ref, then build-logic-ref, then platform-ref) and a ref older than the lane does not have it — a caller of this lane at @main passes scripts-ref: main (MeshWeaver#4096: Plugins main stalled on 2026-09-12 reading it out of a sealed platform-ref)."; exit 1; }
+          [ -s "$SCRIPT" ] || { echo "::error::the fetched module-pack-batch.py at ${SCRIPTS_REF} is empty"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched module-pack-batch.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          python3 "$SCRIPT" --self-test
+          echo "module-pack-batch.py: fetched at ${SCRIPTS_REF} into $SCRIPT and self-tested"
       # ───────────── THIS LEG'S MODULES — enumerated once, from the matrix batch ─────────────
       # The state file every step below drives; `init` refuses an empty or duplicated batch. The
       # module list is printed here so a leg's log opens with what it owns.
@@ -3659,6 +3756,36 @@ jobs:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: meshweaver
+      # 🚨 THE LANE'S OWN batching script, at the LANE's scripts ref — never read out of the
+      # checkout above. That checkout is the PLATFORM's commit (`platform-ref`; `select` prefers
+      # `build-logic-ref`), and for an unpinned caller the platform is the newest SEALED set, hours
+      # behind a lane called at `@main`. #4096 landed module-pack-batch.py on core main at 16:43Z
+      # on 2026-09-12; every Plugins `pack` leg then read it out of a checkout sealed at a7450f3aa
+      # (14:46Z) and died with `python3: can't open file '…/module-pack-batch.py'` — Plugins main
+      # published nothing until a seal carried the file. Same fetch shape as node-repo-gate.yml's
+      # compose-gate-host.sh (#4095): curl (the self-hosted runner ships no `gh`), the raw media
+      # type, RED by name on a miss, and the self-test right after — an unproven script is no
+      # script. Written INTO the checkout's path, so every `python3 meshweaver/.github/scripts/
+      # module-pack-batch.py` below reads the fetched bytes. ScriptsRefFetchGuard (Documentation.Test)
+      # holds this step in every job that runs the script.
+      - name: Fetch module-pack-batch.py at the lane's scripts ref
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.build-logic-ref || inputs.platform-ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SCRIPT="meshweaver/.github/scripts/module-pack-batch.py"
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / build-logic-ref / platform-ref are all empty — module-pack-batch.py has no ref to be fetched at"; exit 1; }
+          mkdir -p "$(dirname "$SCRIPT")"
+          curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/module-pack-batch.py?ref=${SCRIPTS_REF}" \
+            || { echo "::error::could not fetch module-pack-batch.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver. The file is read at the lane's SCRIPTS ref (inputs.scripts-ref, then build-logic-ref, then platform-ref) and a ref older than the lane does not have it — a caller of this lane at @main passes scripts-ref: main (MeshWeaver#4096: Plugins main stalled on 2026-09-12 reading it out of a sealed platform-ref)."; exit 1; }
+          [ -s "$SCRIPT" ] || { echo "::error::the fetched module-pack-batch.py at ${SCRIPTS_REF} is empty"; exit 1; }
+          head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched module-pack-batch.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
+          python3 "$SCRIPT" --self-test
+          echo "module-pack-batch.py: fetched at ${SCRIPTS_REF} into $SCRIPT and self-tested"
       - name: This leg's modules
         env:
           BATCH: ${{ toJSON(matrix.batch) }}

@@ -3,7 +3,9 @@
 per-module bookkeeping that keeps a batch from becoming a coupling.
 
 (The name on this first line is load-bearing: the module-pack lane fetches this file at the
-caller's `platform-ref` and its `select` job self-tests it on every run.)
+lane's `scripts-ref` — NOT out of its `platform-ref` checkout, which for an unpinned caller is the
+newest sealed set and did not have it (#4096, Plugins main 2026-09-12) — and every job that runs
+it self-tests the fetched bytes first.)
 
 WHY THIS EXISTS (measured 2026-09-05..12)
 ------------------------------------------
