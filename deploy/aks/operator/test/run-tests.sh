@@ -406,6 +406,73 @@ case "$_kve_log" in *"memex-postgres-password"*|*"secret set"*) bad "a dry run n
 case "$_kve_out" in *"::hosting:: kv_db_connection=would-create"*) ok "…and reports would-create, never created" ;; *) bad "dry run reports would-create" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 unset _kve_out _kve_rc _kve_log _kve_state _kve_written
+echo "── hosting-kv-copy: a fleet-shared object materialised under the prefix, never shown ──"
+# MeshWeaver.Plugins#1723 — a credential several instances hold (the fleet GitHub App's PEM) has to
+# exist under EACH holder's prefix, because hosting-kv-purge deletes by prefix on teardown and a
+# cross-prefix mapping would let the first teardown take the shared object with it. The copy was a
+# hand step; now the record states `copyFrom` and the Provision runs this. The stub records every
+# argv and answers the vault from a state, so the decisions — copy only when ABSENT, keep when
+# present (drift reported, never rewritten), never print — are asserted here.
+KVC_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-copy" && pwd)"
+kvc() {  # kvc [env…] -- <args…>
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _kvc_state="$(mktemp -d)"
+  _kvc_out="$(env "${envs[@]}" PATH="$KVC_STUBS:$PATH" HOSTING_KVC_STATE="$_kvc_state" hosting-kv-copy "$@" 2>&1)"; _kvc_rc=$?
+  _kvc_log="$(cat "$_kvc_state/az.log" 2>/dev/null || true)"
+}
+KVC_PEM="-----BEGIN-FAKE-PEM-NEVER-PRINTED-----"
+
+kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -eq 0 ] && ok "kv-copy materialises an ABSENT target from its source" || bad "kv-copy copies an absent target" "exited ${_kvc_rc}: ${_kvc_out}"
+[ "$(cat "$_kvc_state/set.build-GitHub-App-PrivateKey" 2>/dev/null)" = "$KVC_PEM" ] && ok "…byte-for-byte" || bad "the copy is byte-identical" "wrote: $(cat "$_kvc_state/set.build-GitHub-App-PrivateKey" 2>/dev/null)"
+case "$_kvc_out" in *NEVER-PRINTED*) bad "kv-copy never prints the value" "it did: ${_kvc_out}" ;; *) ok "kv-copy never prints the value" ;; esac
+case "$_kvc_log" in *NEVER-PRINTED*) bad "…and never puts it on an az command line" "az saw: ${_kvc_log}" ;; *) ok "…and never puts it on an az command line" ;; esac
+case "$_kvc_out" in *"::hosting:: kv_copy_created=1"*"::hosting:: kv_copy_kept=0"*"::hosting:: kv_copy_drift=0"*) ok "the run reports created=1 kept=0 drift=0" ;; *) bad "kv-copy facts" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM} build-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -eq 0 ] && ok "an EXISTING, matching target is kept (a re-provision is idempotent)" || bad "existing target kept" "exited ${_kvc_rc}: ${_kvc_out}"
+case "$_kvc_log" in *"secret set"*) bad "a kept target is never rewritten" "az saw: ${_kvc_log}" ;; *) ok "a kept target is never rewritten" ;; esac
+case "$_kvc_out" in *"kv_copy_created=0"*"kv_copy_kept=1"*"kv_copy_drift=0"*) ok "…reported as kept, no drift" ;; *) bad "kept facts" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM} build-GitHub-App-PrivateKey=rotated-elsewhere-NEVER-PRINTED" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -eq 0 ] && ok "a target that DIFFERS from its source is still kept — drift is a fact, not a failure" || bad "differing target kept" "exited ${_kvc_rc}: ${_kvc_out}"
+case "$_kvc_log" in *"secret set"*) bad "…and is not rewritten" "az saw: ${_kvc_log}" ;; *) ok "…and is not rewritten" ;; esac
+case "$_kvc_out" in *"kv_copy_drift=1"*) ok "…and the drift is reported (kv_copy_drift=1)" ;; *) bad "drift reported" "said: ${_kvc_out}" ;; esac
+case "$_kvc_out" in *NEVER-PRINTED*) bad "…without printing either value" "it did: ${_kvc_out}" ;; *) ok "…without printing either value" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="a=1 b=2" -- --vault Systemorph --copy x=a --copy y=b
+[ "$_kvc_rc" -eq 0 ] && ok "several --copy pairs run in one step" || bad "several pairs" "exited ${_kvc_rc}: ${_kvc_out}"
+case "$_kvc_out" in *"kv_copy_created=2"*) ok "…each counted" ;; *) bad "count of two" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -ne 0 ] && ok "an unreadable source refuses" || bad "unreadable source refuses" "exited 0: ${_kvc_out}"
+case "$_kvc_out" in *"could not read memexsystemorph-GitHub-App-PrivateKey"*"az keyvault secret show --vault-name Systemorph --name memexsystemorph-GitHub-App-PrivateKey --query value -o json | jq -j . | az keyvault secret set --vault-name Systemorph --name build-GitHub-App-PrivateKey --file /dev/stdin"*) ok "…naming the source and the exact hand command" ;; *) bad "names the hand command" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" HOSTING_KVC_SET_FAIL=1 -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -ne 0 ] && ok "a vault that refuses the write fails the step" || bad "refused write fails" "exited 0: ${_kvc_out}"
+case "$_kvc_out" in *NEVER-PRINTED*) bad "…without printing the value on the failure path" "it did: ${_kvc_out}" ;; *) ok "…without printing the value on the failure path" ;; esac
+rm -rf "$_kvc_state"
+
+refuses_hard "kv-copy needs --vault"                    "missing required flag --vault" hosting-kv-copy --copy a=b
+refuses_hard "kv-copy needs at least one --copy"        "missing required flag --copy"  hosting-kv-copy --vault V
+refuses_hard "kv-copy refuses a pair without '='"       "is not <target>=<source>"      hosting-kv-copy --vault V --copy ab
+refuses_hard "kv-copy refuses copying an object onto itself" "onto itself"              hosting-kv-copy --vault V --copy a=a
+refuses_hard "kv-copy refuses a target with a metacharacter" "is not a plain name"      hosting-kv-copy --vault V --copy 'a;id=b'
+refuses_hard "kv-copy refuses a source with a backtick"      "is not a plain name"      hosting-kv-copy --vault V --copy 'a=b`id`'
+refuses_hard "kv-copy rejects unknown flags"            "unknown argument"              hosting-kv-copy --vault V --copy a=b --nope 1
+
+kvc HOSTING_DRY_RUN=true HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -eq 0 ] && ok "a dry-run kv-copy succeeds" || bad "dry-run kv-copy" "exited ${_kvc_rc}: ${_kvc_out}"
+case "$_kvc_log" in *"--query value"*|*"secret set"*) bad "a dry run reads no value and writes nothing" "az saw: ${_kvc_log}" ;; *) ok "a dry run reads no value and writes nothing" ;; esac
+case "$_kvc_out" in *"kv_copy_created=1"*) ok "…and says what it would copy" ;; *) bad "dry run would-copy" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+unset _kvc_out _kvc_rc _kvc_log _kvc_state
 
 echo
 echo "── the ::hosting:: contract the mesh parses ──────────────────────"
