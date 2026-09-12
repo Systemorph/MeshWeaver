@@ -685,6 +685,27 @@ line of the verdict naming the CONTENT.
 * Both lanes take **`platform-image` + `platform-image-digest`** (required; resolved branch for
   branch as the tester's `image-digest`, so a framework release, an upstream's publication and a
   push can never pair two waves). The tester **executes**; the portal **supplies**.
+* **Both lanes resolve the platform themselves when called with EMPTY digests** (2026-09-12;
+  maintainer rule, verbatim: *"for compile always find latest package of platform and plugins"*).
+  A satellite resolves the newest platform-sealed core set at run time (#3842) and re-resolves it
+  in the first step of every normal job, so a *Re-run failed jobs* tests the newest packages
+  (Education#320/#323, Reinsurance#202, Crm#94, Manufacturing#82, SocialMedia#181, Plugins#1739) —
+  but a `uses:` job takes its digests as call-time inputs from the caller's stored `platform-ref`
+  outputs, and GitHub offers no hook inside a reusable workflow to re-resolve. So `node-repo-gate.yml`
+  (`plan`, then once more per shard against `plan`'s row as `PLATFORM_BASELINE`) and
+  `node-repo-publish-bake.yml` (the first platform step of its one job) run core's
+  `.github/scripts/resolve-platform.py` — fetched at `scripts-ref` like the other lane scripts —
+  whenever both digest inputs are empty and `allow-unpinned` is not set: the newest `main-cd.yml`
+  run on `main` whose `Promote: tag the full set`, `Verify every image shipped` and `Bake platform
+  content in the shipped image + publish` all succeeded, images present in ACR by the version or
+  identity tag; the Plugins publication found on its own (the newest run whose `Plugins: bake +
+  seal …` succeeded — possibly an older run) and printed beside it in the log, the `::notice` and
+  the step summary; the caller's repository variable `MW_PLATFORM_REF` honoured as a freeze (in a
+  reusable workflow `vars` resolves from the **caller's** repository — GitHub docs, Variables
+  reference). Non-empty digests are taken verbatim and the resolver never runs — a caller that pins
+  still pins; one empty digest beside a pinned one is red by name. The caller can then stop
+  passing digests: `image-digest: ''` / `platform-image-digest: ''`, and the lane's `platform-set`
+  output says what it gated.
 * The lane pulls both images, extracts both `/app` trees, and asserts with the tester's own
   `framework-identity /portal --expect <tester identity>` that the two **resolve one identity** —
   they are one build — before it trusts anything else. On a mismatch the verb names the canonical

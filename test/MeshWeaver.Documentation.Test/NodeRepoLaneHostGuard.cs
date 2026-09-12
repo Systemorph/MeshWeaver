@@ -152,7 +152,7 @@ public class NodeRepoLaneHostGuard
                 $"{Gate}: `{dockerVerb}` must still exist for CONTAINER mode — this guard would otherwise pass "
                 + "vacuously the day the container path was deleted rather than kept.");
         }
-        Assert.True(Regex.IsMatch(lines, @"if: steps\.platform\.outputs\.mode == 'container'"),
+        Assert.True(Regex.IsMatch(lines, @"if: steps\.platform-source\.outputs\.mode == 'container'"),
             $"{Gate}: every step that pulls or logs in must be gated on the MEASURED container mode, so a "
             + "volume-mode shard can never reach a registry.");
 
