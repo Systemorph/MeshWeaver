@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -884,19 +885,18 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
 
     /// <summary>
     /// Whether a broadcast's <see cref="ModulePublished.Registry"/> names a configured registry:
-    /// by HOST when both parse as absolute URLs — a registry announces itself by its public URL,
-    /// which a consumer may have configured with a different scheme or a trailing slash — with the
-    /// port compared only when one side names one explicitly (a scheme's default port is not a
-    /// statement about the registry); else by the trimmed, case-insensitive URL. Pure.
+    /// by HOST — a registry announces itself by its public URL, which a consumer may have
+    /// configured with a different scheme or a trailing slash — read on both sides through
+    /// <see cref="SelfUpdateOptions.HostOf"/>, the platform's ONE registry-host rule (the
+    /// self-updater selects its credential with the same reader, #4094). A scheme-default port is
+    /// not part of the host; any other port is; a value that names no http(s) host — a bare
+    /// non-URL, a <c>mailto:</c>, a URL carrying userinfo — names no registry and matches nothing,
+    /// rather than matching a second copy of the same unreadable string. Pure.
     /// </summary>
-    internal static bool SameRegistry(string? configured, string? announced)
-    {
-        if (Uri.TryCreate(Key(configured), UriKind.Absolute, out var a)
-            && Uri.TryCreate(Key(announced), UriKind.Absolute, out var b))
-            return string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase)
-                   && ((a.IsDefaultPort && b.IsDefaultPort) || a.Port == b.Port);
-        return string.Equals(Key(configured), Key(announced), StringComparison.OrdinalIgnoreCase);
-    }
+    internal static bool SameRegistry(string? configured, string? announced) =>
+        SelfUpdateOptions.HostOf(configured) is { } a
+        && SelfUpdateOptions.HostOf(announced) is { } b
+        && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
     private static string EffectiveRef(string? gitRef) => string.IsNullOrWhiteSpace(gitRef) ? "HEAD" : gitRef;
 
