@@ -72,7 +72,21 @@ public static class ModuleVersionCompatibility
     public static bool Refuses(string? adoptedVersion, string? currentVersion)
         => Classify(adoptedVersion, currentVersion) is ModuleVersionVerdict.Incompatible;
 
-    /// <summary>The MAJOR component of a SemVer-ish string, or null when none can be read.</summary>
+    /// <summary>
+    /// The MAJOR component of a SemVer-ish string, or null when none can be read.
+    ///
+    /// <para>🚨 A value is a VERSION only when its leading integer is followed by a version
+    /// separator (<c>.</c>, <c>-</c>, <c>+</c>) or by the end of the string. A content HASH such as
+    /// <c>221c6c286785ddf2</c> — which is what a bundle baked without a released version carried
+    /// as its module version — starts with digits too, and reading those digits as "major 221"
+    /// against a root at <c>1.10</c> classified every such bundle INCOMPATIBLE and refused it.
+    /// Measured on memex 2026-09-12: the CI bundle for the running framework identity sat on the
+    /// prebuilt volume, its source fingerprint matched the live sources, and
+    /// <c>Prebuilt assembly for Store/Plugin DECLINED … (bundle module version 221c6c286785ddf2,
+    /// current 1.10: Incompatible)</c> sent every instance of the type through a Roslyn compile
+    /// instead. Ten of sixteen hex hashes start with a digit, so the refusal was the common case,
+    /// not a corner. A hash is UNKNOWN — nothing was compared — never a declared MAJOR bump.</para>
+    /// </summary>
     public static int? MajorOf(string? version)
     {
         if (string.IsNullOrWhiteSpace(version))
@@ -84,6 +98,10 @@ public static class ModuleVersionCompatibility
         while (end < span.Length && char.IsAsciiDigit(span[end]))
             end++;
         if (end == 0)
+            return null;
+        // The digits must END the version core: a following letter (a hash, a word) means the
+        // value is not a version at all, and its digits are not a major.
+        if (end < span.Length && span[end] is not ('.' or '-' or '+'))
             return null;
         return int.TryParse(span[..end], NumberStyles.None, CultureInfo.InvariantCulture, out var major)
             ? major
