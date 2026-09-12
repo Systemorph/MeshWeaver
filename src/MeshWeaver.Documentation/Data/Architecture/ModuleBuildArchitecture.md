@@ -63,15 +63,25 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 > Memex's `runner-proof.yml`); and it ships **no toolchain** (no .NET, Node, `gh` or `zstd` —
 > setup-dotnet supplies the SDK as before; the moved legs take only `bash`, `git`, `jq`, `curl`,
 > `sudo` and Ubuntu's `python3` from the image). Each runner pod is limited to 2 vCPU / 6 GiB, so
-> an opt-in is a measurement of one job family, not a fleet switch. The gate lane therefore
-> **declares the same input and honours it nowhere**: a shard is a `docker run` of the tester
-> image, so `plan` fails RED on any value but `ubuntu-latest` — a declared input that was silently
-> ignored would let a caller believe its shards moved. A caller opts in per job family behind a
-> repository variable (`runner: ${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}` on the module-pack
-> call; a separate variable for the gate on the day the scale set gains Docker), so the move is one
-> edit to revert. The two steps of `pack` that need what the image lacks — `gh run download` on the
-> ledger's reuse leg and the `docker cp` fallback when `prepare`'s `platform-refs-<digest>` cache
-> entry has been evicted — fail RED naming the missing tool; neither skips.
+> an opt-in is a measurement of one job family, not a fleet switch. The gate lane declared the
+> same input that morning and honoured it nowhere — a shard is a `docker run` of the tester image,
+> and `aks-silos` has no daemon — until the **same afternoon**, when the org gained a SECOND,
+> Docker-capable scale set: **`aks-silos-dind`** (`containerMode: dind`, a privileged `docker:dind`
+> sidecar over `DOCKER_HOST`, min 0 / max 6, on its own pool; proven on Memex run 34694129111 —
+> `docker run --rm hello-world` → "Hello from Docker!", Engine 29.8.0, scale-from-zero 157 s; same
+> non-root `actions-runner:2.337.0` image, so no `gh`, no `az`, no .NET; runner container limited
+> to 6 CPU / 20 GiB, and the tester's container runs in the sidecar's 6 CPU / 16 GiB). Since then
+> **`node-repo-gate.yml`'s `gate` job honours `runner`** (`plan` and `verify` stay on
+> `ubuntu-latest`); the refusal in `plan` is replaced by the shard's first step asserting
+> `docker info` succeeds — RED naming the runner on a label without a daemon, `aks-silos` included
+> — and the two lane-script fetches that used `gh api` now `curl` the same endpoint. A caller opts
+> in per job family behind a repository variable of its own
+> (`runner: ${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}` on the module-pack call,
+> `runner: ${{ vars.MW_RUNNER_GATE || 'ubuntu-latest' }}` on the gate call; both unset today), so
+> each move is one edit to revert. The two steps of `pack` that need what the image lacks —
+> `gh run download` on the ledger's reuse leg and the `docker cp` fallback when `prepare`'s
+> `platform-refs-<digest>` cache entry has been evicted — fail RED naming the missing tool; neither
+> skips.
 
 ### Where a module's own suite runs — and why `publish` decides
 
