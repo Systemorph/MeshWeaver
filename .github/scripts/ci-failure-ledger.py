@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ci-failure-ledger.py — ONE `ci-failure` issue per repository, kept true by every run of `main`.
+"""ci-failure-ledger.py — ONE `ci-main-red` issue per repository, kept true by every run of `main`.
 
 (The name on this first line is load-bearing: node-repo-ci-failure.yml fetches this file at its
 scripts ref and refuses a body whose first 400 bytes do not name it — the same shape as
@@ -12,8 +12,17 @@ Every satellite runs its full build on `push: [main]` and once a day on `schedul
 is attached to no pull request, no reviewer and no check list — it is red in an empty room, the twin
 of a gate that cannot fail (AGENTS.md → "a SCHEDULED lane's honest red is red in an EMPTY ROOM").
 This script routes it onto an artefact that outlives the run: one issue in the calling repository,
-labelled `ci-failure`, whose BODY is a dated ledger with one entry per red run. The lane then POSTs
+labelled `ci-main-red`, whose BODY is a dated ledger with one entry per red run. The lane then POSTs
 a signed event to the control portal, whose triage agent opens a thread on it.
+
+🚨 A MECHANISM MAY ONLY CLOSE AN ISSUE IT OPENED. Core's main-cd.yml files and heals its own
+`ci-failure` issue (a DELIVERY hole, a different subject) by listing that label alone, `--limit 1`.
+Sharing the label would let a CD heal CLOSE this ledger while CI is still red — and between that
+close and the next reopen the signal reads "resolved". So this ledger has its OWN label
+(`ci-main-red`, never `ci-failure`) and its own ownership mark, a hidden line in the body
+(`<!-- ci-main-red ledger -->`). "Matching" is label AND exact title AND that marker: an issue
+lacking any of the three is never appended to, reopened, commented on or closed — it is logged and
+left alone, and a fresh ledger is filed beside it if one is needed.
 
 THE FOUR RULES, each covered by --self-test
 --------------------------------------------
@@ -25,10 +34,8 @@ THE FOUR RULES, each covered by --self-test
   * `success` + a matching OPEN issue    → comment `green again: <run URL>` and CLOSE it.
     `success` + none                     → no-op, and NO event (nothing changed).
 
-"Matching" is label AND exact title. The title is what keeps this ledger apart from another
-`ci-failure` writer in the same repository (core's main-cd.yml files "CD failed on main: run N"
-under the same label): listing by label alone would append this story onto that issue and close it
-on the next green.
+An issue this script creates never carries `ci-failure` — that label is CD's, and CD's search
+must never find the ledger any more than the ledger finds CD's.
 
 IT CANNOT PASS SILENTLY. A malformed `failed-jobs` input, an outcome that is neither word, a token
 that cannot write issues (403 → the message names the `issues: write` grant on the CALLER job), an
@@ -52,11 +59,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 API = "https://api.github.com"
-DEFAULT_LABEL = "ci-failure"
-DEFAULT_TITLE = "ci-failure: main is red"
+DEFAULT_LABEL = "ci-main-red"
+DEFAULT_TITLE = "ci-main-red: main is red"
 DEFAULT_REOPEN_WINDOW_DAYS = 7
 MAX_LEDGER_ENTRIES = 40          # ~500 bytes an entry; GitHub caps a body at 65,536 characters
-LEDGER_MARK = "<!-- ci-failure-ledger -->"
+LEDGER_MARK = "<!-- ci-main-red ledger -->"  # the ownership mark: only an issue carrying it is ours
+FORBIDDEN_LABEL = "ci-failure"               # CD's label; the ledger never files under it
 ENTRY_HEAD = "### "              # every ledger entry starts with this at column 0
 FAILED_CONCLUSIONS = ("failure", "timed_out")
 
@@ -132,8 +140,15 @@ def _parse_iso(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
+def owns(issue: Issue, label: str, title: str) -> bool:
+    """The ownership test: label AND exact title AND the hidden marker in the body. All three, so a
+    hand-labelled issue, a same-titled issue from another writer, or a body somebody rewrote is
+    never something this ledger closes."""
+    return label in issue.labels and issue.title == title and LEDGER_MARK in (issue.body or "")
+
+
 def decide(outcome: str, matching: list[Issue], now: datetime, reopen_window_days: int) -> Verdict:
-    """The rule table above, over the issues that carry the label AND the exact title."""
+    """The rule table above, over the issues this ledger OWNS (see `owns`)."""
     if outcome not in ("failure", "success"):
         raise Red(f"outcome must be `failure` or `success`, got {outcome!r}")
     open_ones = sorted((i for i in matching if i.state == "open"), key=lambda i: i.number)
@@ -269,18 +284,19 @@ class GitHub:
     def ensure_label(self, label: str) -> None:
         status, _ = self.call("POST", "labels", body={
             "name": label, "color": "B60205",
-            "description": "main is red — the ledger issue every red run on main appends to"}, ok=(201, 422))
+            "description": "main is red — the CI ledger every red run on main appends to (not CD's ci-failure)"}, ok=(201, 422))
         # 422 = already exists, which is the idempotent path; 201 = created now.
         _ = status
 
-    def matching_issues(self, label: str, title: str) -> list[Issue]:
+    def labelled_issues(self, label: str) -> list[Issue]:
+        """Every issue (never a pull request) carrying `label`, any state — ownership is judged by `owns`."""
         out: list[Issue] = []
         for page in range(1, 6):
             _, items = self.call("GET", "issues", {"labels": label, "state": "all", "per_page": 100,
                                                    "page": page, "sort": "updated", "direction": "desc"})
             items = items or []
             for it in items:
-                if "pull_request" in it or it.get("title") != title:
+                if "pull_request" in it:
                     continue
                 out.append(Issue(it["number"], it["title"], it["state"], it.get("body") or "", it["html_url"],
                                  tuple(l["name"] for l in it.get("labels", [])), it.get("closed_at")))
@@ -289,8 +305,11 @@ class GitHub:
         return out
 
     def create_issue(self, title: str, label: str, body: str) -> Issue:
+        if label == FORBIDDEN_LABEL or LEDGER_MARK not in body:
+            raise Red(f"refusing to file a ledger issue under `{label}` / without its ownership mark — that is CD's label, and an unmarked issue is one this ledger could never prove it opened")
         _, it = self.call("POST", "issues", body={"title": title, "labels": [label], "body": body})
-        return Issue(it["number"], it["title"], it["state"], it.get("body") or "", it["html_url"])
+        return Issue(it["number"], it["title"], it["state"], it.get("body") or "", it["html_url"],
+                     tuple(l["name"] for l in it.get("labels", [])))
 
     def update_issue(self, number: int, **fields) -> Issue:
         _, it = self.call("PATCH", f"issues/{number}", body=fields)
@@ -318,6 +337,24 @@ class GitHub:
 
 # ── apply the verdict ─────────────────────────────────────────────────────────────────────────
 
+def owned_issues(gh, label: str, title: str) -> tuple[list[Issue], list[Issue]]:
+    """(the issues this ledger owns, the same-label issues it does NOT and will never touch)."""
+    seen = gh.labelled_issues(label)
+    mine = [i for i in seen if owns(i, label, title)]
+    foreign = [i for i in seen if not owns(i, label, title)]
+    return mine, foreign
+
+
+def _owned(gh, label: str, title: str, number: int) -> Issue:
+    """The issue, re-read and re-proven ours right before a write — never a number trusted from earlier."""
+    mine, _ = owned_issues(gh, label, title)
+    for i in mine:
+        if i.number == number:
+            return i
+    raise Red(f"#{number} is not (or no longer) this ledger's issue — it lacks the `{label}` label, the exact "
+              f"title or the `{LEDGER_MARK}` mark. A mechanism may only close an issue it opened; nothing written.")
+
+
 def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
           reopen_window_days: int) -> tuple[Issue | None, str | None]:
     """Perform the verdict. Returns (the issue touched, the event body to POST or None)."""
@@ -325,6 +362,7 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
         return None, None
     if verdict.action == "close":
         assert verdict.issue is not None
+        _owned(gh, label, title, verdict.issue)          # re-proven at the moment of the write
         gh.comment(verdict.issue, f"green again: {run.run_url}\n\n"
                                   f"Commit `{run.sha}`, trigger `{run.trigger}`. Closing; a red within "
                                   f"{reopen_window_days} days reopens this issue rather than filing a new one.")
@@ -336,11 +374,11 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
         issue = gh.create_issue(title, label, append_entry(new_body(run.repo, reopen_window_days), entry))
     elif verdict.action == "append":
         assert verdict.issue is not None
-        current = next(i for i in gh.matching_issues(label, title) if i.number == verdict.issue)
+        current = _owned(gh, label, title, verdict.issue)
         issue = gh.update_issue(verdict.issue, body=append_entry(current.body, entry))
     elif verdict.action == "reopen":
         assert verdict.issue is not None
-        current = next(i for i in gh.matching_issues(label, title) if i.number == verdict.issue)
+        current = _owned(gh, label, title, verdict.issue)
         issue = gh.update_issue(verdict.issue, state="open", body=append_entry(current.body, entry))
     else:
         raise Red(f"unknown verdict {verdict.action!r}")
@@ -379,7 +417,7 @@ def main(argv: list[str]) -> int:
     try:
         token = env("GH_TOKEN") or env("GITHUB_TOKEN") or ""
         if not token:
-            raise Red("no GH_TOKEN — the caller must pass `secrets: github-token: ${{ secrets.GITHUB_TOKEN }}`; refusing to report 'nothing to do' on no access")
+            raise Red("no GH_TOKEN — the caller must forward its secrets.GITHUB_TOKEN as `secrets: github-token:`; refusing to report 'nothing to do' on no access")
         for name, value in (("repo", a.repo), ("outcome", a.outcome), ("run-id", a.run_id),
                             ("run-url", a.run_url), ("sha", a.sha), ("trigger", a.trigger)):
             if not value:
@@ -400,10 +438,15 @@ def main(argv: list[str]) -> int:
         run = Run(a.repo, a.outcome, str(a.run_id), a.run_url, a.sha, a.trigger, failed_jobs,
                   a.platform_set or "", jobs_note)
 
-        matching = gh.matching_issues(a.label, a.title)
+        if a.label == FORBIDDEN_LABEL:
+            raise Red(f"the ledger label must never be `{FORBIDDEN_LABEL}` — that is main-cd.yml's delivery alert, and sharing it lets a CD heal close this ledger while CI is red")
+        matching, foreign = owned_issues(gh, a.label, a.title)
+        for f in foreign:
+            print(f"leaving #{f.number} alone ({f.state}, {f.title!r}): it carries `{a.label}` but not this ledger's "
+                  f"title and `{LEDGER_MARK}` mark, so this mechanism did not open it and will not touch it")
         verdict = decide(a.outcome, matching, now, a.reopen_window_days)
         print(f"{verdict.action.upper():7} {verdict.reason} (label `{a.label}`, title {a.title!r}, "
-              f"{len(matching)} matching issue(s) seen)")
+              f"{len(matching)} owned issue(s), {len(foreign)} foreign)")
         issue, body = apply(gh, run, verdict, a.title, a.label, now, a.reopen_window_days)
         if issue is not None:
             print(f"issue #{issue.number} {issue.state}: {issue.html_url}")
@@ -438,10 +481,11 @@ class _Fake:
         self.writes += 1
         self.labels.add(label)
 
-    def matching_issues(self, label, title):
-        return [i for i in self.issues.values() if label in i.labels and i.title == title]
+    def labelled_issues(self, label):
+        return [i for i in self.issues.values() if label in i.labels]
 
     def create_issue(self, title, label, body):
+        assert label != FORBIDDEN_LABEL and LEDGER_MARK in body, "the fake mirrors the real refusal"
         self.writes += 1
         n = self.next_number
         self.next_number += 1
@@ -481,7 +525,7 @@ def self_test() -> int:
                    tuple(failed), "3.0.0-ci.4711", note)
 
     def go(gh, r):
-        v = decide(r.outcome, gh.matching_issues(label, title), now, 7)
+        v = decide(r.outcome, owned_issues(gh, label, title)[0], now, 7)
         issue, body = apply(gh, r, v, title, label, now, 7)
         return v, issue, body
 
@@ -493,6 +537,8 @@ def self_test() -> int:
     check("no issue -> create", v.action == "create" and len(gh.issues) == 1 and issue is not None)
     check("created body carries the ledger mark and ONE entry",
           issue is not None and LEDGER_MARK in issue.body and issue.body.count("\n" + ENTRY_HEAD) == 1)
+    check("the ledger's issue carries `ci-main-red` and NEVER `ci-failure` (CD's label)",
+          issue is not None and label in issue.labels and FORBIDDEN_LABEL not in issue.labels and label != FORBIDDEN_LABEL)
     ev = json.loads(body or "{}")
     check("ci-failure event names repo, run, issue and the failed job",
           ev.get("event") == "ci-failure" and ev.get("run") == 555 and ev.get("issueNumber") == issue.number
@@ -547,13 +593,40 @@ def self_test() -> int:
     v, issue7, _ = go(gh7, run("failure", [job]))
     check("closed 9 d ago -> create a fresh issue", v.action == "create" and issue7 is not None and issue7.number != 8 and len(gh7.issues) == 2)
 
-    # 8. another writer's open ci-failure issue (different title) is neither appended to nor closed
-    other = Issue(9, "CD failed on main: run 42", "open", "cd", "https://github.com/o/r/issues/9", (label,))
-    gh8 = _Fake([other])
+    # 8. CD's own open `ci-failure` issue (main-cd.yml's shape) is never touched — different label, so
+    #    the ledger never even lists it; and the ledger's create never files under that label.
+    cd = Issue(9, "CD failed on main: run 42", "open", "CD failed on main: [run 42](u) for commit `abc`.",
+               "https://github.com/o/r/issues/9", (FORBIDDEN_LABEL,))
+    gh8 = _Fake([cd])
     v, issue8, _ = go(gh8, run("failure", [job]))
-    check("a same-label issue with another title is not this ledger", v.action == "create" and issue8 is not None and issue8.number != 9)
-    v, _, _ = go(_Fake([other]), run("success"))
-    check("green never closes another writer's issue", v.action == "noop")
+    check("CD's `ci-failure` issue is never this ledger: a fresh `ci-main-red` one is filed beside it",
+          v.action == "create" and issue8 is not None and issue8.number != 9 and gh8.issues[9].state == "open"
+          and gh8.issues[9].body == cd.body and FORBIDDEN_LABEL not in issue8.labels)
+    gh8b = _Fake([cd])
+    v, _, _ = go(gh8b, run("success"))
+    check("green never closes or comments on CD's issue", v.action == "noop" and gh8b.writes == 0 and gh8b.issues[9].state == "open")
+    try:
+        _Fake().create_issue(title, FORBIDDEN_LABEL, new_body("o/r", 7))
+        check("filing under `ci-failure` is refused", False, "was accepted")
+    except AssertionError:
+        check("filing under `ci-failure` is refused", True)
+
+    # 8b. a `ci-main-red` issue WITHOUT the ownership mark (hand-labelled, or a rewritten body) is never
+    #     closed, commented on, reopened or appended to — logged as foreign, left exactly as found.
+    unmarked = Issue(10, title, "open", "someone labelled this by hand", "https://github.com/o/r/issues/10", (label,))
+    gh8c = _Fake([unmarked])
+    mine, foreign = owned_issues(gh8c, label, title)
+    check("an unmarked `ci-main-red` issue is FOREIGN, not owned", mine == [] and [f.number for f in foreign] == [10])
+    v, _, _ = go(gh8c, run("success"))
+    check("green never closes an unmarked `ci-main-red` issue", v.action == "noop" and gh8c.writes == 0 and gh8c.issues[10].state == "open")
+    v, issue8c, _ = go(gh8c, run("failure", [job]))
+    check("red files a fresh marked issue beside the unmarked one, which is untouched",
+          v.action == "create" and issue8c is not None and issue8c.number != 10 and gh8c.issues[10].body == unmarked.body)
+    try:
+        _owned(gh8c, label, title, 10)
+        check("a write aimed at an unmarked issue is refused at the moment of the write", False, "was allowed")
+    except Red:
+        check("a write aimed at an unmarked issue is refused at the moment of the write", True)
 
     # 9. the ledger is bounded
     b = new_body("o/r", 7)
@@ -582,7 +655,8 @@ def self_test() -> int:
         print("::error title=ci-failure-ledger self-test::" + "; ".join(fails), file=sys.stderr)
         return 1
     print("✓ ci-failure-ledger self-test: create / append / reopen-recent / create-after-old / close-with-comment / "
-          "noop-when-green / refuse-malformed / other-writer-untouched / bounded-ledger / jobs-listed — every rule fires and stays silent as designed")
+          "noop-when-green / refuse-malformed / cd-ci-failure-untouched / unmarked-ci-main-red-untouched / never-labelled-ci-failure / "
+          "bounded-ledger / jobs-listed — every rule fires and stays silent as designed")
     return 0
 
 

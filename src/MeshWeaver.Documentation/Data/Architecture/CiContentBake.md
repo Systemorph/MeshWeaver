@@ -824,11 +824,15 @@ nobody. Maintainer, 2026-09-12: *"put the ci-failure on all repos, in main; tria
 systemorph-com; communicate via MCP — open a thread with a triage agent; pool such connections by
 portal."* The caller is two jobs at the end of `ci.yml` (`ci-failure` on `failure()`, `ci-green` on
 `success()`, both `needs:` every gate job, both statically unreachable from a pull request), and the
-lane does the same thing in every repository: **one** open issue labelled `ci-failure` with the exact
-title `ci-failure: main is red`, whose body is a dated ledger with one entry per red run (run URL,
-sha, trigger, failed jobs with links, platform set); a close inside seven days is *reopened* rather
-than re-filed, so one outage is one story; the run that goes green comments `green again: <run URL>`
-and closes it. Each way the lane POSTs a signed event (`ci-failure` / `ci-green`, HMAC-SHA256 over
+lane does the same thing in every repository: **one** open issue labelled `ci-main-red` with the exact
+title `ci-main-red: main is red` and a hidden ownership mark in its body (`<!-- ci-main-red ledger -->`),
+whose body is a dated ledger with one entry per red run (run URL, sha, trigger, failed jobs with
+links, platform set); a close inside seven days is *reopened* rather than re-filed, so one outage is
+one story; the run that goes green comments `green again: <run URL>` and closes it. **A mechanism may
+only close an issue it opened:** the ledger's find, append, reopen, comment and close all require the
+label *and* the title *and* the mark, an issue lacking any of them is logged and left alone, and the
+label is deliberately not `ci-failure` — that is `main-cd.yml`'s delivery alert, found by label alone,
+and sharing it would let a CD heal close the CI ledger while CI is still red. Each way the lane POSTs a signed event (`ci-failure` / `ci-green`, HMAC-SHA256 over
 the exact body in `X-Hub-Signature-256`, the same shape as the build fact) to the control portal's
 inbox at `vars.CONTROL_WEBHOOK_URL` — `https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds`
 — and judges the inbox's `"signature"` verdict the same three-way way. The issue writes use the
@@ -837,7 +841,7 @@ token (the installation holds no `issues` grant); the ledger logic is
 `.github/scripts/ci-failure-ledger.py`, fetched at the lane's `scripts-ref` and self-tested at the
 start of every run and in core's `workflow-shell` job. Core wires the same two jobs at the end of
 `dotnet-test.yml`; `main-cd.yml`'s own `ci-failure` issue records a different subject (an image set
-that did not publish) and is unchanged.
+that did not publish) and is unchanged, and the two never touch each other's issues.
 
 ## 🚨 `node-repo-validate` is not one lane among several — it is where the FLEET-WIDE guards run
 

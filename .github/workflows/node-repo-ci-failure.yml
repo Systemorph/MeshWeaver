@@ -15,11 +15,21 @@ name: Node repo ci-failure ledger (reusable)
 # issue plus a heal ledger; this lane gives every repository's BUILD the same artefact, and then
 # tells the control portal, whose triage agent opens a thread on it. main-cd's mechanism is untouched.
 #
+# 🚨 ITS OWN LABEL — `ci-main-red`, NEVER `ci-failure` — AND ITS OWN OWNERSHIP MARK. A mechanism
+# may only close an issue it opened. main-cd.yml's alert and heal find CD's issue by listing the
+# `ci-failure` label alone (`--limit 1`); had this ledger shared the label, a CD heal could have
+# CLOSED it while CI was still red, and between that close and the next reopen the signal reads
+# "resolved" — a day-one silent failure. So: CD's search never finds the ledger, and the ledger
+# never finds CD's. The ledger's find / append / reopen / comment / close all require the label AND
+# the exact `issue-title` AND a hidden line in the body, `<!-- ci-main-red ledger -->`; an issue
+# lacking any of the three (hand-labelled, another writer, a rewritten body) is logged and left
+# exactly as found, and a fresh ledger is filed beside it if one is needed. Self-tested.
+#
 # WHAT IT DOES, per outcome — the logic lives in .github/scripts/ci-failure-ledger.py, self-tested
 # (`--self-test`) in core's `workflow-shell` job AND at the start of every run of this lane:
 #
-#   outcome: failure   find the calling repo's issue labelled `ci-failure` with the exact
-#                      `issue-title`. Open → APPEND a dated ledger entry to its body (run URL, sha,
+#   outcome: failure   find the calling repo's issue labelled `ci-main-red` with the exact
+#                      `issue-title` and the ownership mark. Open → APPEND a dated ledger entry to its body (run URL, sha,
 #                      trigger, failed jobs with links, platform set). Closed within the last 7 days
 #                      → REOPEN it and append (flapping is one story). Otherwise CREATE it. Never a
 #                      second open issue. Then POST, signed, to `control-webhook-url`:
@@ -146,10 +156,10 @@ on:
         type: string
         default: ""
       issue-title:
-        description: The exact title of the ledger issue. Label + title identify it; another writer's `ci-failure` issue under a different title is never touched.
+        description: The exact title of the ledger issue. The `ci-main-red` label + this title + the body's ownership mark identify it; nothing else is ever closed or commented on.
         required: false
         type: string
-        default: "ci-failure: main is red"
+        default: "ci-main-red: main is red"
       control-webhook-url:
         description: The control portal's triage inbox — pass vars.CONTROL_WEBHOOK_URL (https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds).
         required: true
@@ -228,7 +238,7 @@ jobs:
           # names the `issues: write` grant on the caller job.
           code=$(curl -sS -o "$RUNNER_TEMP/issues-probe" -w '%{http_code}' --connect-timeout 10 --max-time 30 \
             -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues?labels=ci-failure&state=all&per_page=1") || code=000
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues?labels=ci-main-red&state=all&per_page=1") || code=000
           if [ "$code" != "200" ]; then
             echo "::error::GET /repos/${GITHUB_REPOSITORY}/issues answered HTTP ${code} with the token this lane was handed. It must be the caller's secrets.GITHUB_TOKEN, forwarded as \`secrets: github-token:\`, on a caller job granting \`permissions: {contents: read, issues: write, actions: read}\`. Response: $(head -c 300 "$RUNNER_TEMP/issues-probe" || true)"
             exit 1
@@ -254,7 +264,7 @@ jobs:
       - name: "The ledger can say no (self-test)"
         run: python3 "$RUNNER_TEMP/ci-failure-ledger.py" --self-test
 
-      - name: Open, append to, reopen, or close the ci-failure issue
+      - name: Open, append to, reopen, or close the ci-main-red ledger issue
         id: ledger
         env:
           GH_TOKEN: ${{ secrets.github-token }}
@@ -266,7 +276,8 @@ jobs:
           LEDGER_FAILED_JOBS: ${{ inputs.failed-jobs }}
           LEDGER_PLATFORM_SET: ${{ inputs.platform-set }}
           LEDGER_ISSUE_TITLE: ${{ inputs.issue-title }}
-          LEDGER_LABEL: ci-failure
+          # NEVER ci-failure — that is main-cd.yml's delivery alert; the script refuses that label outright.
+          LEDGER_LABEL: ci-main-red
         run: |
           set -euo pipefail
           export LEDGER_EVENT_OUT="$RUNNER_TEMP/event.json"

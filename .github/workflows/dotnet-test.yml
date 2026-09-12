@@ -2016,9 +2016,11 @@ jobs:
     # 🚨 The ledger every repository's red `main` is routed onto (node-repo-ci-failure.yml, maintainer
     # 2026-09-12: "put the ci-failure on all repos, in main") — proven here because core OWNS the
     # script and every satellite fetches it at its scripts ref. Its rules are load-bearing: ONE open
-    # issue per repo (append, never duplicate), a close inside 7 days is REOPENED rather than
-    # re-filed, green closes with `green again: <run URL>`, and a malformed failed-jobs input is
-    # refused before any write. A guard that could not say no would file a second issue per red day.
+    # `ci-main-red` issue per repo (append, never duplicate), a close inside 7 days is REOPENED rather
+    # than re-filed, green closes with `green again: <run URL>`, a malformed failed-jobs input is
+    # refused before any write, and it only ever closes an issue it opened (its own label AND an
+    # ownership mark in the body — never main-cd.yml's `ci-failure`). A guard that could not say no
+    # would file a second issue per red day, or close CD's.
     - name: "The ci-failure ledger can say no (self-test)"
       run: python3 .github/scripts/ci-failure-ledger.py --self-test
 
@@ -3375,10 +3377,12 @@ jobs:
   # (the same empty room a scheduled red goes into; AGENTS.md → "an honest red nobody reads is the
   # same defect as a gate that cannot fail"). Maintainer, 2026-09-12: "put the ci-failure on all
   # repos, in main; triaging is done by systemorph-com". These two jobs are the same thin caller
-  # every satellite wires (the contract is in node-repo-ci-failure.yml's header): one `ci-failure`
+  # every satellite wires (the contract is in node-repo-ci-failure.yml's header): one `ci-main-red`
   # issue per repository, a dated ledger entry per red run, closed by the run that goes green, and a
   # signed event to the control portal's triage inbox each way. main-cd.yml's own `ci-failure`
-  # DELIVERY alerting is a different subject (an image set that did not publish) and is untouched.
+  # DELIVERY alerting is a different subject (an image set that did not publish) and is untouched —
+  # and the two never meet: the ledger has its own label and an ownership mark in the body, so a CD
+  # heal cannot close the CI ledger and the ledger cannot close CD's issue.
   #
   # `needs: [collect-results]` is the whole graph: `Consolidate test results` `needs:` every other job,
   # runs `always()`, and carries an explicit fail step per dependency — so `failure()` here is "some
