@@ -16,4 +16,6 @@ current build while an exact lookup still returned the previous one.
 Every process now connects its database change listener directly to its local cache invalidation
 feed. Older notification payloads remain supported during rollout by reading the committed row once
 for its node type and version. A notification handled by one replica no longer has to reach another
-replica's process memory through a single cluster grain.
+replica's process memory through a single cluster grain. Database echoes stay on the cache-only
+feed, so actions such as access-grant email and instance synchronization still run once from the
+writer's logical event.

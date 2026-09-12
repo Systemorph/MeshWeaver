@@ -806,6 +806,8 @@ public static class PersistenceExtensions
         services.TryAddSingleton<InProcessMeshChangeFeed>();
         services.TryAddSingleton<IMeshChangeFeed>(sp =>
             sp.GetRequiredService<InProcessMeshChangeFeed>());
+        services.TryAddSingleton<IMeshInvalidationFeed>(sp =>
+            sp.GetRequiredService<InProcessMeshChangeFeed>());
         // Mesh-wide content-type resolver: the ONE $type→CLR-Type map for dynamically-compiled
         // NodeTypes, reachable from every hub (incl. the domain-agnostic cache hub) and retained
         // for the process lifetime. Populated at MeshDataSource.WithContentType; consulted by the

@@ -25,7 +25,7 @@ public class StorageChangeFeedRelayTest
     private const string Path = "Hosting/PlatformBuilds/plugins";
 
     [Fact]
-    public async Task PersistenceRegistration_RelaysACommittedWriteIntoTheSameLocalFeed()
+    public async Task PersistenceRegistration_RelaysStorageOnlyToTheSameLocalInvalidationFeed()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -33,23 +33,38 @@ public class StorageChangeFeedRelayTest
         await using var provider = services.BuildServiceProvider();
 
         var contract = provider.GetRequiredService<IMeshChangeFeed>();
+        var invalidations = provider.GetRequiredService<IMeshInvalidationFeed>();
         var local = provider.GetRequiredService<InProcessMeshChangeFeed>();
         contract.Should().BeSameAs(local,
-            "storage notifications and IMeshChangeFeed consumers must share one process-local Subject");
+            "logical events and direct cache invalidations must share one process-local owner");
+        invalidations.Should().BeSameAs(local,
+            "storage notifications and cache consumers must share that same process-local owner");
 
-        MeshChangeEvent? received = null;
-        using var subscription = contract.Subscribe(change => received = change);
+        var logical = new List<MeshChangeEvent>();
+        var invalidated = new List<MeshChangeEvent>();
+        using var logicalSubscription = contract.Subscribe(logical.Add);
+        using var faultingInvalidator = invalidations.Subscribe(_ =>
+            throw new InvalidOperationException("one broken cache"));
+        using var invalidationSubscription = invalidations.Subscribe(invalidated.Add);
         var node = Node(version: 7, nodeType: "Hosting/Publication");
 
         await provider.GetRequiredService<IStorageAdapter>()
             .Write(node, json)
             .Should().Emit();
 
-        received.Should().NotBeNull();
-        received!.Path.Should().Be(Path);
-        received.Kind.Should().Be(MeshChangeKind.Updated);
-        received.NodeType.Should().Be("Hosting/Publication");
-        received.Version.Should().Be(7);
+        logical.Should().BeEmpty(
+            "a durable-store echo must not re-run mail, instance sync or other logical consumers");
+        invalidated.Should().ContainSingle();
+        invalidated[0].Path.Should().Be(Path);
+        invalidated[0].Kind.Should().Be(MeshChangeKind.Updated);
+        invalidated[0].NodeType.Should().Be("Hosting/Publication");
+        invalidated[0].Version.Should().Be(7);
+
+        contract.Publish(MeshChangeEvent.Updated(Node(version: 8, nodeType: "Hosting/Publication")));
+
+        logical.Select(e => e.Version).Should().Equal(8L);
+        invalidated.Select(e => e.Version).Should().Equal(new[] { 7L, 8L },
+            "the writer's explicit logical publish must invalidate its own process too");
     }
 
     [Fact]
@@ -61,7 +76,8 @@ public class StorageChangeFeedRelayTest
         using var adapter = new ControllableNotificationAdapter(durable);
         using var feed = new InProcessMeshChangeFeed(adapter);
         MeshChangeEvent? received = null;
-        using var subscription = feed.Subscribe(change => received = change);
+        using var subscription = ((IMeshInvalidationFeed)feed)
+            .Subscribe(change => received = change);
         var committedAt = DateTimeOffset.Parse("2026-09-12T13:43:58Z");
 
         // The first core image may run briefly with an older PostgreSQL notifier whose payload has
@@ -89,7 +105,7 @@ public class StorageChangeFeedRelayTest
         };
         using var feed = new InProcessMeshChangeFeed(adapter);
         var received = new List<MeshChangeEvent>();
-        using var subscription = feed.Subscribe(received.Add);
+        using var subscription = ((IMeshInvalidationFeed)feed).Subscribe(received.Add);
 
         adapter.Announce(new DataChangeNotification(
             Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
@@ -112,7 +128,7 @@ public class StorageChangeFeedRelayTest
         using var adapter = new ControllableNotificationAdapter(durable);
         using var feed = new InProcessMeshChangeFeed(adapter);
         var received = new List<MeshChangeEvent>();
-        using var subscription = feed.Subscribe(received.Add);
+        using var subscription = ((IMeshInvalidationFeed)feed).Subscribe(received.Add);
 
         adapter.Announce(new DataChangeNotification(
             Path, (DataChangeKind)int.MaxValue, Entity: null, DateTimeOffset.UtcNow)
@@ -144,8 +160,12 @@ public class StorageChangeFeedRelayTest
         using var feedB = new InProcessMeshChangeFeed(replicaB);
         var seenA = new List<MeshChangeEvent>();
         var seenB = new List<MeshChangeEvent>();
-        using var subscriptionA = feedA.Subscribe(seenA.Add);
-        using var subscriptionB = feedB.Subscribe(seenB.Add);
+        var logicalA = new List<MeshChangeEvent>();
+        var logicalB = new List<MeshChangeEvent>();
+        using var subscriptionA = ((IMeshInvalidationFeed)feedA).Subscribe(seenA.Add);
+        using var subscriptionB = ((IMeshInvalidationFeed)feedB).Subscribe(seenB.Add);
+        using var logicalSubscriptionA = feedA.Subscribe(logicalA.Add);
+        using var logicalSubscriptionB = feedB.Subscribe(logicalB.Add);
         var notification = new DataChangeNotification(
             Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow)
         {
@@ -160,6 +180,8 @@ public class StorageChangeFeedRelayTest
 
         seenA.Select(e => (e.Path, e.Version)).Should().Equal((Path, 31L));
         seenB.Select(e => (e.Path, e.Version)).Should().Equal((Path, 31L));
+        logicalA.Should().BeEmpty("a storage listener copy is cache invalidation, not a logical event");
+        logicalB.Should().BeEmpty("a storage listener copy is cache invalidation, not a logical event");
     }
 
     private static MeshNode Node(long version, string nodeType) =>

@@ -251,7 +251,7 @@ public static class JsonSynchronizationStream
     }
 
     /// <summary>
-    /// Subscribes to the mesh change feed (resolved via reflection to avoid a
+    /// Subscribes to the mesh invalidation feed (resolved via reflection to avoid a
     /// Data → Mesh.Contract → Layout → Data project cycle) and invokes
     /// <paramref name="onOwnerChanged"/> with the announced node version when an event's Path
     /// equals the owner's bare path. Returns null if no change-feed service is registered.
@@ -262,11 +262,18 @@ public static class JsonSynchronizationStream
         try
         {
             var feedType = Type.GetType(
-                "MeshWeaver.Mesh.Services.IMeshChangeFeed, MeshWeaver.Mesh.Contract",
+                "MeshWeaver.Mesh.Services.IMeshInvalidationFeed, MeshWeaver.Mesh.Contract",
                 throwOnError: false);
-            if (feedType is null) return null;
-            var feed = serviceProvider.GetService(feedType);
-            if (feed is null) return null;
+            var feed = feedType is null ? null : serviceProvider.GetService(feedType);
+            if (feed is null)
+            {
+                // Compatibility for minimal hosts that supply their own pre-split logical feed.
+                feedType = Type.GetType(
+                    "MeshWeaver.Mesh.Services.IMeshChangeFeed, MeshWeaver.Mesh.Contract",
+                    throwOnError: false);
+                feed = feedType is null ? null : serviceProvider.GetService(feedType);
+            }
+            if (feedType is null || feed is null) return null;
 
             var eventType = Type.GetType(
                 "MeshWeaver.Mesh.Services.MeshChangeEvent, MeshWeaver.Mesh.Contract",
@@ -280,19 +287,20 @@ public static class JsonSynchronizationStream
                 nameof(SubscribeOwnerPathChangeFeedHelper),
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
                 .MakeGenericMethod(eventType);
-            return (IDisposable?)helper.Invoke(null, [feed, pathProp, versionProp, ownerPath, onOwnerChanged]);
+            return (IDisposable?)helper.Invoke(
+                null, [feed, feedType, pathProp, versionProp, ownerPath, onOwnerChanged]);
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex,
-                "Stream subscriber could not attach MeshChangeFeed listener for {Owner} — falling back to heartbeat-only resubscribe.",
+                "Stream subscriber could not attach MeshInvalidationFeed listener for {Owner} — falling back to heartbeat-only resubscribe.",
                 ownerPath);
             return null;
         }
     }
 
     private static IDisposable? SubscribeOwnerPathChangeFeedHelper<TEvent>(
-        object feed, System.Reflection.PropertyInfo pathProperty,
+        object feed, Type feedType, System.Reflection.PropertyInfo pathProperty,
         System.Reflection.PropertyInfo? versionProperty, string ownerPath, Action<long> onOwnerChanged)
         where TEvent : class
     {
@@ -310,7 +318,7 @@ public static class JsonSynchronizationStream
             }
             catch { /* keep change-feed alive on handler faults */ }
         };
-        var subscribe = feed.GetType().GetMethod("Subscribe");
+        var subscribe = feedType?.GetMethod("Subscribe");
         return (IDisposable?)subscribe!.Invoke(feed, [handler, null]);
     }
 

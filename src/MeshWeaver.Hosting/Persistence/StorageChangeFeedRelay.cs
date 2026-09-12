@@ -9,9 +9,10 @@ namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
 /// Relays the storage adapter's process-local <see cref="IStorageAdapter.Changes"/> stream into
-/// the process-local mesh change feed. Durable backends such as PostgreSQL feed every process's
-/// adapter from their database change channel, so this gives every replica its own cache
-/// invalidation without relying on one cluster-singleton Orleans grain to reach process memory.
+/// the process-local <see cref="IMeshInvalidationFeed"/>. Durable backends such as PostgreSQL feed
+/// every process's adapter from their database change channel, so this gives every replica its own
+/// cache invalidation without relying on one cluster-singleton Orleans grain to reach process
+/// memory or re-running logical event consumers on every replica.
 /// </summary>
 /// <remarks>
 /// The relay is owned by the mesh-scoped <see cref="InProcessMeshChangeFeed"/> and dies with it.

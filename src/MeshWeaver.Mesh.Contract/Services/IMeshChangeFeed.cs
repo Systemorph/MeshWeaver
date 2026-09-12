@@ -4,7 +4,8 @@ namespace MeshWeaver.Mesh.Services;
 /// Change feed for mesh data mutations (create/update/delete).
 /// Producers call <see cref="Publish"/> after each write.
 /// Consumers call <see cref="Subscribe"/> with optional filter.
-/// In monolith: in-process Subject. In Orleans: BroadcastChannel cross-silo.
+/// Logical subscribers run in the publishing process; cache consumers use
+/// <see cref="IMeshInvalidationFeed"/> to observe commits from every process.
 /// </summary>
 public interface IMeshChangeFeed
 {
@@ -20,6 +21,25 @@ public interface IMeshChangeFeed
     /// <param name="handler">Callback invoked for each matching event.</param>
     /// <param name="filter">If set, only events matching this kind are delivered.</param>
     /// <returns>Disposable subscription.</returns>
+    IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null);
+}
+
+/// <summary>
+/// Process-local invalidation feed for caches and live mirrors whose answer becomes stale when a
+/// node commits on any replica. Direct <see cref="IMeshChangeFeed.Publish"/> calls reach this feed
+/// too; durable storage backends additionally relay their cross-process notifications here.
+/// </summary>
+/// <remarks>
+/// This is deliberately separate from <see cref="IMeshChangeFeed"/>. Logical event consumers can
+/// send mail, run an instance sync or append an outbox entry and therefore must retain the
+/// publisher's single logical delivery. Cache invalidation is idempotent and must run once in every
+/// process, including replicas that did not perform the write.
+/// </remarks>
+public interface IMeshInvalidationFeed
+{
+    /// <summary>
+    /// Subscribes a process-local invalidation handler, optionally filtered by change kind.
+    /// </summary>
     IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null);
 }
 
