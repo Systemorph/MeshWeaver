@@ -563,7 +563,8 @@ public static class TreeBake
                 BundleWriter.Write(
                     file,
                     packageId,
-                    manifest?.ReleasedVersion ?? manifest?.ModuleVersion ?? manifest?.Version,
+                    // The SemVer before the content hash — same rule and reason as BakeOutput.
+                    manifest?.ReleasedVersion ?? manifest?.Version ?? manifest?.ModuleVersion,
                     frameworkIdentity,
                     [.. entries.OrderBy(e => e.NodePath, StringComparer.Ordinal)],
                     sourceSha,
