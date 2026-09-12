@@ -799,7 +799,13 @@ public static class PersistenceExtensions
     /// </summary>
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {
-        services.TryAddSingleton<IMeshChangeFeed, InProcessMeshChangeFeed>();
+        // Register the concrete process-local feed once, then expose that SAME instance through
+        // the public seam. Orleans also resolves the concrete feed for local delivery; registering
+        // the interface implementation separately would construct two Subjects and relay storage
+        // notifications into one while consumers listened to the other.
+        services.TryAddSingleton<InProcessMeshChangeFeed>();
+        services.TryAddSingleton<IMeshChangeFeed>(sp =>
+            sp.GetRequiredService<InProcessMeshChangeFeed>());
         // Mesh-wide content-type resolver: the ONE $type→CLR-Type map for dynamically-compiled
         // NodeTypes, reachable from every hub (incl. the domain-agnostic cache hub) and retained
         // for the process lifetime. Populated at MeshDataSource.WithContentType; consulted by the
