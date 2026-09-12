@@ -236,6 +236,8 @@ directory arms without that chain; and the non-default path still warns and stil
   "auto-merge" means *enqueue when the PR's own required checks are green*. `auto-arm.yml` does this
   for every non-draft PR **whose base is the default branch**; see the section above for why a
   stacked PR is deliberately left unarmed. Marking a PR **draft** is the opt-out.
+- 🚨 **DISARMING auto-merge does NOT hold a pull request. Converting it to DRAFT does.** This is the
+  single most likely way to believe you have stopped a merge and be wrong — see the section below.
 - **A push to a queued branch ejects it.** GitHub removes the entry (reason `MANUAL`-shaped from the
   steward's point of view: it comments once and takes no action); auto-arm re-arms on the
   `synchronize` event, so the new head re-enters the queue once its own run is green. Do not push to
@@ -249,6 +251,53 @@ directory arms without that chain; and the non-default path still warns and stil
   the run — the PR needs a fix or, with evidence and an issue, a catalogue entry. Remove the label
   when you re-arm.
 - **Reading the queue:** `gh pr view <n> --json mergeQueueEntry`, or the `status` command above.
+
+## 🚨 Disarming auto-merge is not a hold — DRAFT is the only durable one
+
+**Measured: `MeshWeaver.Plugins#1683` was deliberately disarmed during a merge window and merged
+anyway.** Nothing malfunctioned. `auto-arm.yml` fires on `synchronize`, so **the next push re-armed
+it** — and a pull request being held is exactly a pull request someone is still pushing to.
+
+The asymmetry is the whole point, and it is structural rather than a bug to fix:
+
+| act | what it is | how long it lasts |
+|---|---|---|
+| `gh pr merge --disable-auto` | a **state** GitHub owns | until the next `synchronize`, `opened`, `reopened` or `ready_for_review` event — i.e. **until the next push** |
+| convert to **draft** | a **property of the pull request** the lane reads | until *you* mark it ready; `ready_for_review` is what re-arms |
+
+Read off the merged lane: `types: [opened, reopened, ready_for_review, synchronize]` and a job
+condition of `github.event.pull_request.draft == false`. A draft is never armed no matter how many
+times it is pushed to, and marking it ready arms it immediately — so draft is a **two-sided** hold
+the lane honours on both edges, while a disarm is a one-shot the next event overwrites. (GitHub also
+disables auto-merge when a pull request is converted to draft, so the conversion does both halves in
+one act. That last clause is GitHub's documented behaviour rather than something measured here.)
+
+**So: to hold a pull request, convert it to draft. Never rely on `--disable-auto`** — and if you
+find a PR merged that you thought you had stopped, look for a push after the disarm before looking
+for anything else.
+
+**#4057 does not change this.** That fix stops the lane arming a pull request whose base is not the
+default branch; for an ordinary pull request onto `main`, re-arming after a disarm is unchanged.
+
+### The option considered and NOT taken
+
+Making the lane refuse to re-arm a pull request a human explicitly disarmed is attractive and is
+**not small**, so it was left alone rather than half-built:
+
+- **Honour a `hold` label.** Needs the label to exist in all eight repositories and a convention
+  nobody has agreed to. It would at least fail *toward* today's behaviour — a missing or misspelled
+  label arms, as now — and the refusal would be visible on the pull request, so it would not be a
+  silent skip. But a fleet-wide convention is a maintainer's call, not a side effect of a CI fix.
+- **Read the timeline for `auto_merge_disabled` and decline to re-arm after it.** This needs no
+  convention and rests on real evidence rather than a marker, which makes it the better design —
+  but it turns a read failure into a policy decision: fail *open* and the hold is not a hold, fail
+  *closed* and one flaky API call silently stops arming the whole repository. That trade-off, and a
+  paginated timeline read, is engineering with a decision in it, not a small patch.
+
+Either way the rule that must survive is the one this document already states: **a decision not to
+arm has to be SAID, on the pull request.** A hold that works by something quietly not happening is
+the same defect as a gate that skips on a missing input — silence and "still running" look
+identical.
 
 ## Related
 
