@@ -126,11 +126,20 @@ public class CdImageVersionsShareOneSourceGuard
     /// repository must take its ref from <c>needs.gate.outputs.plugins_sha</c>, the value
     /// <c>gate</c> resolved once. A branch name there — <c>main</c>, or the steering variable
     /// unresolved — is the regression.</para>
+    ///
+    /// <para>🚨 <b>The one register this rule does not govern, and why it is still read here.</b>
+    /// <c>satellite-compat</c> (2026-09-12) points the reusable compile gate at each satellite's
+    /// <c>main</c>. Those checkouts are not members of the image set — nothing they contain is
+    /// built into an image or sealed beside one — so there is no set identity for their ref to
+    /// keep consistent, and pinning them to the plugins sha would be a category error (it is a
+    /// different repository). The detector still SEES them (it must, or it is blind to a satellite
+    /// that a future job promotes into a build input); what excuses them is a POSITIVE assertion
+    /// in <see cref="TheSatelliteCompatRegister_IsAMeasurementNotAnImageInput"/>, not a blind spot.</para>
     /// </summary>
     [Fact]
     public void EveryPluginCheckoutUsesTheCommitTheGateResolved()
     {
-        var pins = PluginRefs();
+        var pins = PluginRefs().Where(x => !x.InSatelliteCompat).ToList();
 
         Assert.True(pins.Count >= 4,
             $"Expected at least the two image legs and the two reusable calls to name a plugin "
@@ -155,6 +164,46 @@ public class CdImageVersionsShareOneSourceGuard
             + "MW_PLUGINS_REF keeps steering the run through `gate`, which resolves it ONCE.");
     }
 
+    /// <summary>
+    /// <b>The <c>satellite-compat</c> register is a measurement, not an image input.</b> The
+    /// exemption above is only honest if what it exempts is exactly that: the satellites, at their
+    /// own default branch, and never the plugin repository whose commit IS a set member. Each
+    /// clause fails by name if a future edit turns the register into something else.
+    /// </summary>
+    [Fact]
+    public void TheSatelliteCompatRegister_IsAMeasurementNotAnImageInput()
+    {
+        var register = PluginRefs().Where(x => x.InSatelliteCompat).ToList();
+
+        Assert.True(register.Count >= 5,
+            $"Expected the satellite-compat matrix in {Workflow} to name at least the five satellites; "
+            + $"found {register.Count}. Either the job was renamed or its register moved — in both "
+            + "cases the exemption in EveryPluginCheckoutUsesTheCommitTheGateResolved excuses nothing "
+            + "and this guard checks nothing.");
+
+        var plugins = register.Where(x => x.Repo.Equals("Systemorph/MeshWeaver.Plugins", StringComparison.OrdinalIgnoreCase)).ToList();
+        Assert.True(plugins.Count == 0,
+            "satellite-compat must never check MeshWeaver.Plugins: Plugins is BUILT in this run at "
+            + "gate's plugins_sha and its publication is sealed by plugins-bake — compiling it from "
+            + "a moving branch here would judge a tree the set does not contain. Found:\n  "
+            + string.Join("\n  ", plugins.Select(x => $"line {x.Line}")));
+
+        // The matrix entries carry no `ref:` of their own; the ONE ref for the whole register is the
+        // reusable call's `content-ref:`, and it is the satellite's default branch — what that
+        // satellite's daily run would bake. A sha here would be one this run resolved for itself,
+        // which is precisely the shape the rule above forbids for a set member; for a non-member it
+        // would merely be a stale measurement wearing a pin's name.
+        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var (start, end) = SatelliteCompatRange(lines);
+        var contentRef = lines[start..end]
+            .Where(l => !Regex.IsMatch(l, @"^\s*#"))
+            .Select(l => Regex.Match(l, @"^\s*content-ref:\s*(?<ref>\S+)\s*$"))
+            .Where(m => m.Success)
+            .Select(m => m.Groups["ref"].Value)
+            .ToList();
+        Assert.Equal(new[] { "main" }, contentRef);
+    }
+
     /// <summary>The one accepted ref: the sha <c>gate</c> resolved, and nothing else beside it.</summary>
     private static readonly Regex PinnedExactly =
         new(@"^[""']?\$\{\{\s*needs\.gate\.outputs\.plugins_sha\s*\}\}[""']?$", RegexOptions.Compiled);
@@ -165,10 +214,11 @@ public class CdImageVersionsShareOneSourceGuard
     /// Comment lines are skipped: this workflow explains its own history in prose, and a matcher
     /// that read a comment would report an edge that does not exist.
     /// </summary>
-    private static IReadOnlyList<(int Line, string Repo, string Ref)> PluginRefs()
+    private static IReadOnlyList<(int Line, string Repo, string Ref, bool InSatelliteCompat)> PluginRefs()
     {
         var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
-        var found = new List<(int, string, string)>();
+        var found = new List<(int, string, string, bool)>();
+        var (compatStart, compatEnd) = SatelliteCompatRange(lines);
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -185,10 +235,23 @@ public class CdImageVersionsShareOneSourceGuard
                 if (m.Success) { refValue = m.Groups["ref"].Value; break; }
             }
 
-            found.Add((i + 1, repo.Groups["repo"].Value, refValue));
+            found.Add((i + 1, repo.Groups["repo"].Value, refValue, i >= compatStart && i < compatEnd));
         }
 
         return found;
+    }
+
+    /// <summary>The [start, end) line range of the <c>satellite-compat</c> job, or an empty range
+    /// when the job is absent — in which case nothing is exempted and the register test above
+    /// fails by name rather than this helper guessing.</summary>
+    private static (int Start, int End) SatelliteCompatRange(string[] lines)
+    {
+        var start = Array.FindIndex(lines, l => l.Equals("  satellite-compat:", StringComparison.Ordinal));
+        if (start < 0) return (0, 0);
+        var end = Array.FindIndex(lines, start + 1, l =>
+            l.Length > 3 && l.StartsWith("  ", StringComparison.Ordinal) && l[2] != ' ' && l[^1] == ':'
+            && l[2..^1].All(c => char.IsLetterOrDigit(c) || c == '-' || c == '_'));
+        return (start, end < 0 ? lines.Length : end);
     }
 
     private static string FindRepoRoot()

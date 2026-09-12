@@ -249,9 +249,14 @@ public class PlatformBakeLaneGuard
     /// construction: nothing can be built against a framework other than the one shipping.
     ///
     /// <para>What this guard still refuses: the samples trees (no deployment embeds them), and any
-    /// checkout that is not <c>Systemorph/MeshWeaver.Plugins</c>. The plugins checkout is the ONE
-    /// deliberate cross-repo input — a second one would be a new decision, not an extension of
-    /// this one.</para>
+    /// checkout that is not <c>Systemorph/MeshWeaver.Plugins</c> — with ONE further, enumerated
+    /// exception. The plugins checkout is the deliberate cross-repo BUILD input. The second
+    /// decision arrived 2026-09-12 (maintainer: the fleet rebuilds once a day, so every core build
+    /// must still MEASURE compatibility): the <c>satellite-compat</c> job points the reusable
+    /// compile gate at each satellite's content. That is a read-and-compile, never a build input —
+    /// nothing it checks out reaches an image, and it runs after <c>promote</c> and blocks nothing.
+    /// Its register is asserted POSITIVELY below: exactly the five satellites, and only inside that
+    /// job. A sixth repository, or a satellite named anywhere else in the file, is a new decision.</para>
     /// </summary>
     [Fact]
     public void PlatformBake_CompilesOnlyWhatTheImageEmbeds()
@@ -272,13 +277,41 @@ public class PlatformBakeLaneGuard
             + "still compile-GATE on every PR in dotnet-test.yml's doc-gate — that proves the "
             + "content, which is the part worth paying for.");
 
-        // The main build checks out exactly ONE other repository — the plugins it builds and ships.
-        // Asserted POSITIVELY (present, and the only one) rather than as an absence: the portal
-        // host lives there now, so a main-cd without this checkout cannot build the deployment
-        // image at all (measured 2026-08-26: every push run failed at the version step and nothing
-        // published until this was restored). And a third `repository:` would be a new decision.
-        var text = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
-        var repos = Regex.Matches(text, @"repository:\s*(\S+)")
+        // The main build checks out exactly ONE other repository AS A BUILD INPUT — the plugins it
+        // builds and ships. Asserted POSITIVELY (present, and the only one) rather than as an
+        // absence: the portal host lives there now, so a main-cd without this checkout cannot build
+        // the deployment image at all (measured 2026-08-26: every push run failed at the version
+        // step and nothing published until this was restored).
+        //
+        // The `satellite-compat` job (2026-09-12) is the enumerated exception: it names the five
+        // satellites in its matrix and hands them to node-repo-compile-check.yml as
+        // `content-repository: ${{ matrix.repository }}`. Both halves are asserted — the matrix
+        // lists exactly the five, and OUTSIDE that job the only repository named is Plugins — so a
+        // sixth satellite, a satellite named by another job, or a matrix that silently lost one all
+        // fail here by name. (`${{` is the matrix expression itself, seen through the same regex.)
+        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var (compatStart, compatEnd) = JobRange(lines, "satellite-compat");
+        var compat = ExecutableLinesOf(string.Join("\n", lines[compatStart..compatEnd]));
+        var satellites = Regex.Matches(compat, @"repository:\s*(\S+)")
+            .Select(m => m.Groups[1].Value.Trim())
+            .Where(v => !v.StartsWith("${{", StringComparison.Ordinal))
+            .Distinct()
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(
+            new[]
+            {
+                "Systemorph/MeshWeaver.Crm",
+                "Systemorph/MeshWeaver.Education",
+                "Systemorph/MeshWeaver.Manufacturing",
+                "Systemorph/MeshWeaver.Reinsurance",
+                "Systemorph/MeshWeaver.SocialMedia",
+            },
+            satellites);
+        Assert.Contains("content-repository: ${{ matrix.repository }}", compat, StringComparison.Ordinal);
+
+        var outside = ExecutableLinesOf(string.Join("\n", lines[..compatStart].Concat(lines[compatEnd..])));
+        var repos = Regex.Matches(outside, @"repository:\s*(\S+)")
             .Select(m => m.Groups[1].Value.Trim())
             .Distinct()
             .ToList();
@@ -787,6 +820,19 @@ public class PlatformBakeLaneGuard
         if (end < 0)
             end = lines.Length;
         return string.Join("\n", lines[start..end]);
+    }
+
+    /// <summary>The [start, end) line range of one job's block — the job key line through the line
+    /// before the next job key. Asserted present: a job this guard pins by name that is gone would
+    /// otherwise turn its assertions into a pass over an empty string.</summary>
+    private static (int Start, int End) JobRange(string[] lines, string jobName)
+    {
+        var start = Array.FindIndex(lines, l => l.Equals($"  {jobName}:", StringComparison.Ordinal));
+        Assert.True(start >= 0, $"no '{jobName}:' job in {Workflow} — the per-build satellite compatibility "
+            + "measurement (2026-09-12) is the counterweight to the fleet's once-a-day rebuild; without it a "
+            + "core merge that breaks a satellite is found at 03:00 or on a portal at self-update.");
+        var end = Array.FindIndex(lines, start + 1, IsJobKey);
+        return (start, end < 0 ? lines.Length : end);
     }
 
     private static bool IsJobKey(string line) =>

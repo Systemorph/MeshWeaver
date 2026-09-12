@@ -677,6 +677,33 @@ five attempts with backoff, then a loud error naming it a REGISTRY/INFRA failure
 sibling jobs in the same run reached the same registry fine. `alert-on-failure` still files the red
 on the `ci-failure` issue, so a genuinely broken bake is never silent.
 
+**`satellite-compat` (2026-09-12) — every core build MEASURES every satellite, none of them blocks
+it.** The fleet assumes the platform is backwards compatible within a major, so the satellites
+(SocialMedia, Crm, Reinsurance, Education, Manufacturing; Plugins is built inside this run) rebuild
+once a day rather than on every platform build — which took away the only per-build evidence that a
+core merge did not break them. This job is the counterweight: after `promote`, one leg per satellite
+in parallel runs the same reusable compile gate the satellites run on their own pull requests
+(`node-repo-compile-check.yml`, pointed at the satellite's `main` through the read-only fleet-reader
+App) against the tester **this run** promoted — pulled from its GHCR mirror at the digest
+`satellite-compat-image` asserts equal to ACR's — plus the module bundles **this run** packed, the
+same bytes `plugins-bake` seals. Measured on that lane, a leg costs ~2 min on an unbilled
+`ubuntu-latest` runner. The semantics are *red but not blocking*, and both halves are the point: it
+does not gate `promote`, `notify-platform-update` or `plugins-bake` (the set is published and every
+instance gates itself; a satellite's compile must never hold a veto over the platform's delivery —
+`PlatformNeverDependsOnPluginsGuard` pins the direction), yet a failing leg fails the job, so the run
+is red, `alert-on-failure` files it on the `ci-failure` issue naming the satellite, the set and the
+first failing types (from each leg's `verdict-artifact`), and `delivery-verdict` renders every leg
+under **Compatibility** — and goes red itself if the gate was *skipped* on a publishing run, because
+a skipped measurement painted grey is the one outcome worse than a red one. `fail-fast: false`, no
+`continue-on-error`, no `if:` on a credential: `preflight` asserts `FLEET_READER_APP_ID` /
+`FLEET_READER_APP_PRIVATE_KEY` red. A red here means "this set breaks that satellite's NodeTypes";
+the fix lands in the satellite (its source or its allow-file ratchet) or in core if a surface it
+should not have broken moved, and the daily rebuild will not repair it on its own. The lane measures
+the whole matrix rather than the satellites whose NodeTypes reference the changed surface: nothing
+in the run knows which satellite binds what, and a matrix that guessed would skip exactly the leg it
+should have run — if the five concurrent jobs per build ever matter against the org's job ceiling,
+that narrowing is the honest lever, not a shorter timeout.
+
 ### The release EVENT — the pipeline calls memex; memex registers and publishes
 
 **The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must

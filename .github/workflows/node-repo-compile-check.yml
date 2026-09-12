@@ -36,6 +36,15 @@ name: Node repo compile-check (reusable)
 #     secrets:
 #       acr-username: ${{ secrets.ACR_USERNAME }}
 #       acr-password: ${{ secrets.ACR_PASSWORD }}
+#
+# The SECOND caller shape (MeshWeaver, 2026-09-12): the platform's own CD points this lane at a
+# satellite's content — `content-repository: Systemorph/MeshWeaver.<X>`, `content-ref: main`, the
+# tester at THIS run's digest, this run's module bundles as `module-artifacts`, and a
+# `verdict-artifact` so the run can relay WHICH satellite broke on WHICH types. That is the
+# per-build counterweight to the fleet's daily rebuild (satellites rebuild once a day, not per
+# platform build): every core build still MEASURES compatibility, cheaply, so a break is known
+# within the hour rather than at 03:00 or on a portal at self-update. A node repo calling this lane
+# with no content-repository behaves exactly as before.
 
 on:
   workflow_call:
@@ -93,6 +102,34 @@ on:
         required: false
         type: string
         default: main
+      content-repository:
+        description: >-
+          The repository whose NodeTypes are compile-checked. Empty = the caller (every node repo
+          checking its own content — the original shape). The platform's CD sets it to each
+          satellite in turn (its `satellite-compat` matrix), so every core build measures every
+          satellite against the set it just promoted. With it set, `content-app-id` /
+          `content-app-private-key` are REQUIRED and asserted RED before the checkout: the caller's
+          GITHUB_TOKEN cannot read another repository.
+        required: false
+        type: string
+        default: ''
+      content-ref:
+        description: >-
+          The ref of content-repository to check. Empty = the caller's own commit. The platform's
+          CD passes the satellite's default branch — what that satellite's own daily run would bake.
+        required: false
+        type: string
+        default: ''
+      verdict-artifact:
+        description: >-
+          When set, the gate's verdict is ALSO written as JSON (compile-check.py --report) and
+          uploaded under this artifact name — for a caller that has to RELAY the result rather than
+          read this job's log (a matrix of these calls has no steps of its own). Uploaded on red as
+          well as green; a run that produced no report fails the upload RED rather than uploading
+          nothing, so "no verdict" can never be read as "clean".
+        required: false
+        type: string
+        default: ''
       upstream-seed:
         description: >-
           The upstream source(s) whose SEALED publication for this image's framework identity
@@ -116,18 +153,72 @@ on:
       registry-key:
         description: An instance key (mwi_…) able to read the packages named in registry-modules.
         required: false
+      content-app-id:
+        description: >-
+          App id of a GitHub App with Contents: Read on content-repository. Required whenever
+          content-repository is set (the caller's GITHUB_TOKEN cannot read another repository);
+          asserted RED before the checkout, never skipped. The platform passes its READ-ONLY
+          fleet-reader App.
+        required: false
+      content-app-private-key:
+        description: Private key (PEM) of that App.
+        required: false
 
 jobs:
   compile-check:
     name: Compile every NodeType (vs core)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # 🚨 A job-level `permissions:` in a workflow_call lane is a DEMAND on every caller, not a
+    # grant (MeshWeaver#3933 took MeshWeaver.Plugins down for five hours with one `id-token:
+    # write` here). Both scopes below sit inside GitHub's RESTRICTED default (contents / packages /
+    # metadata read), so a caller that writes no `permissions:` at all — four satellites call this
+    # lane exactly that way, see .github/lane-caller-grants.yml — still satisfies them, and
+    # check-workflow-permission-pairing.py --fleet holds that against the roster on every core PR.
+    #   contents — the checkout
+    #   packages — the platform's CD pulls the tester from its GHCR mirror with GITHUB_TOKEN (core
+    #              holds no ACR password and OIDC would be `id-token`, the one scope no default
+    #              grants); a node repo pulling from ACR with its own credential does not use it.
     permissions:
       contents: read
+      packages: read
     steps:
+      # 🚨 A content checkout from ANOTHER repository needs a token that can read it. The caller's
+      # GITHUB_TOKEN is scoped to the calling repository alone, so `repository: Systemorph/<sat>`
+      # (private) answers 404 under it. When content-repository is set, the App credential is
+      # ASSERTED red, never fallen back on: a fallback to github.token would 404 anyway, one step
+      # later and blaming the checkout. Same shape as node-repo-publish-bake.yml's content checkout.
+      - name: Resolve the content repository's credential
+        id: content-repo
+        if: inputs.content-repository != ''
+        env:
+          REPO: ${{ inputs.content-repository }}
+          APP_ID: ${{ secrets.content-app-id }}
+          APP_KEY: ${{ secrets.content-app-private-key }}
+        run: |
+          set -euo pipefail
+          [ -n "$APP_ID" ]  || { echo "::error::content-repository is '$REPO' but secrets.content-app-id is empty — the caller's GITHUB_TOKEN cannot read another repository, so the checkout would 404. Pass a GitHub App installed on '$REPO' with Contents: Read."; exit 1; }
+          [ -n "$APP_KEY" ] || { echo "::error::content-repository is '$REPO' but secrets.content-app-private-key is empty — see content-app-id."; exit 1; }
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO#*/}"   >> "$GITHUB_OUTPUT"
+      - name: Mint a read token for the content repository
+        id: content-token
+        if: inputs.content-repository != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.content-app-id }}
+          private-key: ${{ secrets.content-app-private-key }}
+          owner: ${{ steps.content-repo.outputs.owner }}
+          repositories: ${{ steps.content-repo.outputs.name }}
+          permission-contents: read
       - name: Check out the node repo
         uses: actions/checkout@v7
         with:
+          # Empty inputs fall through to the caller's own repo + commit — byte-identical to the
+          # default checkout for every node repo; only the platform's CD points these elsewhere.
+          repository: ${{ inputs.content-repository || github.repository }}
+          ref: ${{ inputs.content-ref || github.sha }}
+          token: ${{ steps.content-token.outputs.token || github.token }}
           path: repo
       - uses: actions/setup-python@v7
         with:
@@ -304,7 +395,26 @@ jobs:
         env:
           MW_REPO_ROOT: ${{ github.workspace }}/repo
           MW_ALLOW_FILE: ${{ github.workspace }}/repo/scripts/compile-check.allow
+          VERDICT_ARTIFACT: ${{ inputs.verdict-artifact }}
         # --refs points at the assemblies unpacked from the platform image — a FLAT directory;
         # compile-check.py globs it recursively, dedupes by filename, and compiles each
         # NodeType's resolved source-set. The script is the PLATFORM's, fetched above.
-        run: python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs
+        # --report only when a verdict artifact was asked for: the flag exists from the platform
+        # ref that introduced satellite-compat, and a caller naming an artifact against an older
+        # platform-ref fails here on the unknown flag — RED, not a silent artifact-less pass.
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs \
+            ${VERDICT_ARTIFACT:+--report "$RUNNER_TEMP/compile-check-verdict.json"}
+      # 🚨 `always()` so a RED gate uploads its verdict too — that is the whole point of the
+      # artifact — and `if-no-files-found: error` so a run that died before writing one fails
+      # here rather than handing the consumer nothing to read. This is a reporter riding a
+      # gate whose result is already decided above, never a step the gate's own colour depends on.
+      - name: Upload the verdict
+        if: ${{ always() && inputs.verdict-artifact != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.verdict-artifact }}
+          path: ${{ runner.temp }}/compile-check-verdict.json
+          retention-days: 7
+          if-no-files-found: error

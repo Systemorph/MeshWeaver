@@ -308,6 +308,8 @@ jobs:
           DEPENDENT_DISPATCH_APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
           DEPENDENT_DISPATCH_APP_PRIVATE_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+          FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         run: |
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login")
@@ -318,6 +320,13 @@ jobs:
           [ -n "$DEPENDENT_DISPATCH_APP_ID" ]          || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID          GitHub App whose installation token reads the Plugins content tree for plugins-modules / plugins-bake (content-app-id) — NOT a dispatch credential: core dispatches to no repository")
           [ -n "$DEPENDENT_DISPATCH_APP_PRIVATE_KEY" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY that App's private key, PEM")
           [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares the Plugins publication is sealed to (<account>/<share>…)")
+          # The READ-ONLY fleet-reader App is what `satellite-compat` checks each satellite's main out
+          # with (content-app-id on node-repo-compile-check.yml). Asserted here, on every tick, so a
+          # missing credential is a red preflight naming it — never a leg that mints nothing and is
+          # painted grey. Measured 2026-09-12: the App (`meshweaver-reader`, installation 161095771)
+          # is installed org-wide (repository_selection: all), MeshWeaver.Crm included.
+          [ -n "$FLEET_READER_APP_ID" ]          || missing+=("secrets.FLEET_READER_APP_ID          app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), whose installation token checks out each satellite's main for satellite-compat — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
+          [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::CD cannot deliver a release event — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -2533,6 +2542,141 @@ jobs:
       # asserts it and why it must actually reach this lane.
       webhook-secret: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
 
+  # ────────── SATELLITE COMPATIBILITY: every satellite's NodeTypes against THIS set ──────────
+  # 🚨 The per-build counterweight to the DAILY rebuild (maintainer decision, 2026-09-12). The fleet
+  # assumes the platform is backwards compatible within a MAJOR, so the satellites (SocialMedia,
+  # Crm, Reinsurance, Education, Manufacturing; Plugins is built inside this run) rebuild ONCE A
+  # DAY, not per platform build. That removes the per-build wave's cost — and with it the only
+  # per-build evidence that a core merge did not break them. Without something here a break is
+  # found at 03:00 by the daily run, or on a portal at self-update, hours after the merge that
+  # caused it and by someone else.
+  #
+  # So every core build still MEASURES compatibility, cheaply: one leg per satellite, in parallel,
+  # each compiling every NodeType of that satellite's `main` against the tester THIS run promoted
+  # plus the module bundles THIS run packed (`plugins-modules` — the same bytes `plugins-bake`
+  # seals, so a verdict here is a verdict about the publication the satellites will consume). It
+  # is the reusable compile gate the satellites run on their own pull requests, pointed at their
+  # content from here; `compile-check.py` is fetched at THIS run's core sha. Measured on the same
+  # lane (MeshWeaver.Crm run 34686027657, 2026-09-12): 1 min 50 s per leg.
+  #
+  # 🚨 RED, BUT NOT BLOCKING — and both halves are deliberate.
+  #   * NOT blocking: it runs AFTER `promote` (the set is already armed), and neither
+  #     `notify-platform-update` nor `plugins-bake` waits for it. The set is published; each
+  #     instance gates ITSELF (Admin/UpdatePolicy, its own bake health). Blocking the publish on a
+  #     satellite's compile would hand every satellite a veto over the platform's delivery — the
+  #     dependency direction this repository forbids (PlatformNeverDependsOnPluginsGuard).
+  #   * RED: a failing leg fails THIS job, the run is red, `alert-on-failure` files it on the
+  #     `ci-failure` issue naming the satellite, the set and the first failing types, and
+  #     `delivery-verdict` lists every leg under "Compatibility". Never `continue-on-error`, never
+  #     an `if:` on a credential: `preflight` asserts the fleet-reader App RED, and a leg that
+  #     cannot mint, pull or compile is a red leg. `fail-fast: false`, so one satellite's red does
+  #     not cancel the others' measurement — the verdict is per satellite or it is not a verdict.
+  #
+  # Budget: ubuntu-latest in a public repository — unbilled. Five parallel legs of ~2 min add
+  # ≤ ~3 min of wall time beside `plugins-bake` (which they do not wait for), and five concurrent
+  # jobs per build against the org's job ceiling. Narrowing the matrix to the satellites whose
+  # NodeTypes reference the changed surface is the honest lever if that concurrency ever matters;
+  # it is NOT done here — nothing in this run knows which satellite binds which surface, and a
+  # matrix that guessed would skip exactly the leg it should have run.
+  #
+  # 🚨 Why the GHCR mirror and not ACR: the lane authenticates to its registry with a username and
+  # a password (the satellites' ACR credential). Core holds no ACR password — it pushes by OIDC —
+  # and OIDC inside the lane would demand `id-token: write` of every satellite caller, the #3933
+  # startup-failure shape. `promote`'s phase B mirrors the tester to GHCR by digest (imagetools
+  # copies the index), so the job below resolves the GHCR tag and ASSERTS it is the digest
+  # `plugins-bake-image` resolved on ACR; the legs then pull `ghcr.io/…@<that digest>` with
+  # GITHUB_TOKEN. One set, one digest, two registries — verified, not assumed.
+  satellite-compat-image:
+    name: "Compatibility: the tester on GHCR is this run's digest"
+    needs: [preflight, gate, plugin-test-image, promote, plugins-bake-image]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.mirror.outputs.image }}
+      digest: ${{ steps.mirror.outputs.digest }}
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve the mirrored tester and assert it is the promoted digest
+        id: mirror
+        env:
+          VERSION: ${{ needs.plugin-test-image.outputs.version }}
+          ACR_DIGEST: ${{ needs.plugins-bake-image.outputs.digest }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          [ -n "${VERSION:-}" ] || { echo "::error::plugin-test-image produced no version — cannot name the tester the satellites are checked against"; exit 1; }
+          case "$ACR_DIGEST" in sha256:*) ;; *) echo "::error::plugins-bake-image resolved no digest for the tester (got '$ACR_DIGEST') — nothing to assert the mirror against"; exit 1 ;; esac
+          ns=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
+          ref="ghcr.io/$ns/mw-plugin-test:$VERSION"
+          digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          case "$digest" in sha256:*) ;; *) echo "::error::could not resolve a digest for $ref (got '$digest') — promote's phase B mirrors the tester to GHCR; if it is not there, the set is not what promote said it was"; exit 1 ;; esac
+          [ "$digest" = "$ACR_DIGEST" ] || { echo "::error::the GHCR mirror of mw-plugin-test:$VERSION is $digest but ACR's is $ACR_DIGEST — the two registries do not hold ONE image for this set, so a compatibility verdict against the mirror would be a verdict about a different tester. Read promote's phase B."; exit 1; }
+          echo "image=ghcr.io/$ns/mw-plugin-test" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "satellite-compat tester: $ref = $digest (equal to ACR's)"
+
+  satellite-compat:
+    name: "Compatibility: ${{ matrix.satellite }}'s NodeTypes compile against this set"
+    needs: [preflight, gate, plugin-test-image, promote, plugins-bake-image, plugins-modules, satellite-compat-image]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    strategy:
+      # 🚨 One red satellite must not cancel the other four's measurement.
+      fail-fast: false
+      matrix:
+        # The satellite register of this gate. `repository:` is spelled out per entry rather than
+        # composed from `satellite` so the guards that inventory every cross-repository reach in
+        # this file (PlatformBakeLaneGuard, PlatformNeverDependsOnPluginsGuard) SEE each one by
+        # name — a detector that cannot see its subject reports a clean tree forever.
+        include:
+          - satellite: MeshWeaver.SocialMedia
+            repository: Systemorph/MeshWeaver.SocialMedia
+          - satellite: MeshWeaver.Crm
+            repository: Systemorph/MeshWeaver.Crm
+          - satellite: MeshWeaver.Reinsurance
+            repository: Systemorph/MeshWeaver.Reinsurance
+          - satellite: MeshWeaver.Education
+            repository: Systemorph/MeshWeaver.Education
+          - satellite: MeshWeaver.Manufacturing
+            repository: Systemorph/MeshWeaver.Manufacturing
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/node-repo-compile-check.yml
+    with:
+      content-repository: ${{ matrix.repository }}
+      # The satellite's own default branch — what its daily run would bake. Deliberately NOT a sha
+      # this run resolved: the satellites are not part of the image set, so there is no set identity
+      # to keep consistent (contrast the Plugins checkouts, pinned to gate's plugins_sha), and each
+      # leg checks out exactly once.
+      content-ref: main
+      platform-ref: ${{ needs.gate.outputs.sha }}
+      test-image: ${{ needs.satellite-compat-image.outputs.image }}:${{ needs.plugin-test-image.outputs.version }}
+      image-digest: ${{ needs.satellite-compat-image.outputs.digest }}
+      # THIS run's module bundles — the set `plugins-bake` seals (same pattern, same artifacts), and
+      # the four modules every satellite declares as `registry-modules: AI Essentials Stripe Maps`
+      # with `upstream-seed: plugins` on its own gate. From the artifacts, not the seal: the seal is
+      # being written by `plugins-bake` in parallel, and the bytes are the same by construction.
+      module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration,Maps,Payments.Stripe}
+      verdict-artifact: satellite-compat-${{ matrix.satellite }}
+    secrets:
+      # GHCR takes any username with a token that can read the package; GITHUB_TOKEN can, because
+      # promote pushed the mirror under it and the lane's job holds `packages: read`.
+      acr-username: ${{ github.actor }}
+      acr-password: ${{ secrets.GITHUB_TOKEN }}
+      # The satellites are PRIVATE: this run's GITHUB_TOKEN cannot check them out. The READ-ONLY
+      # fleet-reader App is installed on every one of them; preflight asserts it.
+      content-app-id: ${{ secrets.FLEET_READER_APP_ID }}
+      content-app-private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+
   verify-images:
     name: "Verify every image shipped"
     needs: [gate, portal-image, migration-image, plugin-test-image, promote]
@@ -2692,7 +2836,8 @@ jobs:
     # publish actually happened while it can only see two of the nine jobs that make it happen.
     needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote,
             publish-bake, notify-platform-update, verify-images,
-            plugins-modules, plugins-bake-image, plugins-bake]
+            plugins-modules, plugins-bake-image, plugins-bake,
+            satellite-compat-image, satellite-compat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2940,6 +3085,81 @@ jobs:
           fi
           echo "every delivery leg ran and succeeded: $LEGS"
 
+      # ─────────── Compatibility: every satellite's NodeTypes against this set ───────────
+      # The legs are `satellite-compat`'s (see that job): RED on a break, NOT blocking. This step
+      # RELAYS them — one table on the run page, one line per satellite in the log — and holds the
+      # one thing the legs' own colour cannot: that the gate RAN. A publishing run on which the
+      # compatibility job was skipped or cancelled certified nothing, and GitHub paints that grey
+      # like a pass; here it is red, naming the job's result. A leg that ran and FAILED is listed
+      # with its failing types and does NOT fail this step twice — its own red already carries the
+      # run, and `alert-on-failure` files it.
+      # `always()`: the table renders even when a verdict step above went red — a run that is
+      # already red for delivery still owes the reader the compatibility reading it took.
+      - name: Collect the satellite verdicts
+        if: ${{ always() && needs.gate.outputs.publish == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: satellite-compat-*
+          path: ${{ runner.temp }}/satellite-compat
+      - name: "Compatibility: every satellite's NodeTypes compile against this set"
+        if: ${{ always() && needs.gate.outputs.publish == 'true' }}
+        env:
+          COMPAT_RESULT: ${{ needs.satellite-compat.result }}
+          COMPAT_IMAGE_RESULT: ${{ needs.satellite-compat-image.result }}
+          # The same register as the job's matrix. A satellite named here with no verdict artifact
+          # is reported NOT MEASURED, never folded into a green.
+          SATELLITES: MeshWeaver.SocialMedia MeshWeaver.Crm MeshWeaver.Reinsurance MeshWeaver.Education MeshWeaver.Manufacturing
+          VERSION: ${{ needs.portal-image.outputs.version }}
+          VERDICTS: ${{ runner.temp }}/satellite-compat
+        run: |
+          set -euo pipefail
+          {
+            echo "### 🧩 Compatibility — every satellite's NodeTypes against \`${VERSION}\` (satellite-compat=${COMPAT_RESULT})"
+            echo ""
+            echo "| Satellite | Verdict | NodeTypes | Breaks | Known debt |"
+            echo "|---|---|---:|---|---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          red=0; unmeasured=0
+          for sat in $SATELLITES; do
+            f="$VERDICTS/satellite-compat-$sat/compile-check-verdict.json"
+            if [ ! -f "$f" ]; then
+              unmeasured=$((unmeasured + 1))
+              echo "| $sat | ⚪ NOT MEASURED — no verdict artifact | | | |" >> "$GITHUB_STEP_SUMMARY"
+              echo "compatibility: $sat — NOT MEASURED (no verdict artifact; read that leg)"
+              continue
+            fi
+            fail=$(jq -r '.gate_fail' "$f")
+            types=$(jq -r '.types' "$f")
+            debt=$(jq -r '.known_debt | length' "$f")
+            breaks=$(jq -r --arg bt '`' '([.new_breaks[].type] + [.fp_drift[].type] + [.stale_allow[] | . + " (compiles now — remove from allow)"]) | map($bt + . + $bt) | join(", ")' "$f")
+            if [ "$fail" = "true" ]; then
+              red=$((red + 1))
+              echo "| $sat | ❌ RED | $types | ${breaks:-?} | $debt |" >> "$GITHUB_STEP_SUMMARY"
+              echo "compatibility: $sat — RED against $VERSION: ${breaks:-?}"
+              jq -r '(.new_breaks + .fp_drift)[] | "    \(.type): \(.error)"' "$f"
+            else
+              echo "| $sat | ✅ compiles | $types | — | $debt |" >> "$GITHUB_STEP_SUMMARY"
+              echo "compatibility: $sat — compiles against $VERSION ($types NodeType(s), $debt known-debt)"
+            fi
+          done
+          case "$COMPAT_RESULT" in
+            success|failure) ;;
+            *)
+              echo "- ❌ the compatibility gate did NOT run on this publishing run (satellite-compat=${COMPAT_RESULT}, satellite-compat-image=${COMPAT_IMAGE_RESULT}) — nothing above was measured" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::the gate decided to PUBLISH, but satellite-compat=${COMPAT_RESULT} (satellite-compat-image=${COMPAT_IMAGE_RESULT}): the compatibility of this set with the satellites was NOT measured. A skipped gate is painted like a passed one; it is not one. Read satellite-compat-image / plugins-modules for why the legs never ran."
+              exit 1 ;;
+          esac
+          if [ "$COMPAT_RESULT" = "success" ] && [ "$unmeasured" -gt 0 ]; then
+            echo "::error::satellite-compat reports success but $unmeasured satellite(s) above have no verdict artifact — a leg that measured nothing must not read as a pass. Either the matrix and the SATELLITES register in this step diverged, or a leg uploaded no report."
+            exit 1
+          fi
+          if [ "$red" -gt 0 ]; then
+            echo "- ❌ **$red satellite(s) do not compile against this set.** The set IS published and every instance gates itself; the red is \`satellite-compat\`'s own and is filed on the \`ci-failure\` issue. Fix lands in the SATELLITE (or core, if the break is the platform's) — the daily rebuild will not repair it on its own." >> "$GITHUB_STEP_SUMMARY"
+            echo "compatibility: $red satellite(s) RED — see the satellite-compat legs; this verdict lists, it does not re-fail"
+          else
+            echo "compatibility: every satellite compiles against $VERSION"
+          fi
+
       # Make the outcome unmissable on the run page. A 3-second success and a 20-minute delivery
       # are otherwise identical at a glance, which is how a merged fix sat unshipped.
       - name: Say plainly what this run did
@@ -2987,7 +3207,11 @@ jobs:
     # event that starts the cross-repo rebake wave used to be unfailable, and a failure nobody is
     # paged for is still invisible. A red notify job does NOT mean the images are missing —
     # `verify-images` answers that — it means no satellite learned about them.
-    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict]
+    # `satellite-compat` (+ its image job) is in this list ON PURPOSE (2026-09-12): it is the
+    # per-build compatibility measurement that replaced the per-build satellite wave, it does not
+    # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
+    # Its verdict artifacts are read below so the alert names the satellite and the types.
+    needs: [preflight, gate, portal-image, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2996,6 +3220,14 @@ jobs:
     permissions:
       issues: write
     steps:
+      # The satellite verdicts, if any leg wrote one (same-run artifacts need no extra scope). A
+      # matching-nothing pattern downloads nothing, and the step below then simply has no
+      # compatibility lines to add — the alert is still filed.
+      - name: Collect the satellite verdicts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: satellite-compat-*
+          path: ${{ runner.temp }}/satellite-compat
       - name: Create or comment on ci-failure issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -3005,8 +3237,25 @@ jobs:
           # read "for commit ``". The fallbacks cover a failure IN gate, before it produced outputs.
           HEAD_SHA: ${{ needs.gate.outputs.sha || github.event.workflow_run.head_sha || github.sha }}
           REASON: ${{ needs.gate.outputs.reason }}
+          COMPAT_RESULT: ${{ needs.satellite-compat.result }}
+          VERSION: ${{ needs.portal-image.outputs.version }}
+          VERDICTS: ${{ runner.temp }}/satellite-compat
         run: |
           set -euo pipefail
+          # One line per satellite whose verdict says RED: the satellite, the set, the first three
+          # failing types with their first error. Composed with printf, never a multi-line literal —
+          # a body line at column 1 would end this block scalar (same reasoning as `gate`'s ledger).
+          compat=""; bt='`'
+          for f in "$VERDICTS"/satellite-compat-*/compile-check-verdict.json; do
+            [ -f "$f" ] || continue
+            sat=$(basename "$(dirname "$f")"); sat="${sat#satellite-compat-}"
+            [ "$(jq -r '.gate_fail' "$f")" = "true" ] || continue
+            first=$(jq -r --arg bt "$bt" '(.new_breaks + .fp_drift + [.stale_allow[] | {type: ., error: "compiles now — remove it from scripts/compile-check.allow"}]) | .[:3] | map($bt + .type + $bt + " — " + .error) | join("; ")' "$f")
+            compat=$(printf '%s\n* **%s** does not compile against %s%s%s: %s' "$compat" "$sat" "$bt" "${VERSION:-this set}" "$bt" "${first:-(see the leg)}")
+          done
+          if [ -n "$compat" ]; then
+            compat=$(printf '\n\n**Compatibility** (satellite-compat=%s) — the set IS published and every instance gates itself; what is red is the measurement that a satellite still compiles against it. The fix lands in the SATELLITE (its NodeTypes, or its allow-file ratchet), or in core if the platform broke a surface it should not have — the daily rebuild will not repair it on its own. Triage: the control instance, from the failing types below.%s' "$COMPAT_RESULT" "$compat")
+          fi
           # Ensure the label exists (--force = update-or-create, idempotent). Non-fatal for the
           # same reason as in `gate`: this is the ALERT path, so a 503 here must not swallow the
           # alert it is decorating. If the label genuinely does not exist, the `--label` on the
@@ -3020,8 +3269,9 @@ jobs:
 
           * an IMAGE job / promote / verify-images: no complete image set was published. Publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set.
           * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
+          * satellite-compat (a matrix leg) / satellite-compat-image: the set IS published and the release event WAS sent - what failed is the per-build measurement that a satellite's NodeTypes still compile against it (the counterweight to the daily rebuild, 2026-09-12). A red leg names the satellite; the lines under Compatibility below name the types. No image and no publication is missing.
 
-          The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. This issue CLOSES ITSELF when a CD run reports a successful heal (#3176) - a later failure files a fresh issue rather than appending here, so this one's title and age stay true to its own cause."
+          The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. This issue CLOSES ITSELF when a CD run reports a successful heal (#3176) - a later failure files a fresh issue rather than appending here, so this one's title and age stay true to its own cause.${compat}"
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then

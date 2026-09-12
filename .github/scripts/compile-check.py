@@ -222,6 +222,37 @@ def evaluate_gate(result: dict, allow: dict, node_set: dict) -> dict:
             "stale_allow": stale_allow, "ghosts": ghosts}
 
 
+def write_report(path: Path, verdict: dict, result: dict, *, gate_fail: bool, scope, elapsed: float) -> None:
+    """The verdict as MACHINE-READABLE JSON — for a caller that has to relay it, not read it.
+
+    core's `satellite-compat` lane (MeshWeaver, 2026-09-12) runs this gate once per satellite on
+    every platform build, inside a matrix of reusable-workflow calls. A matrix `uses:` job has no
+    steps of its own and its outputs overwrite each other leg by leg, so the ONLY way the run's
+    verdict and the `ci-failure` issue can name WHICH satellite broke and on WHICH NodeTypes is a
+    per-leg artifact — and an artifact is worth exactly what the file inside it says. So the file
+    carries the same verdict the console prints, keyed the same way, with the FIRST error line of
+    every failing type: enough for a triage line, never a second judgement. Written before the
+    exit code is decided so a red run has a report too; a run that dies before this point leaves
+    no file, and the consumer treats "no report" as "not measured" rather than as clean."""
+    first = lambda n: (result.get(n, (None, []))[1] or ["(no CS error captured)"])[0]
+    payload = {
+        "gate_fail": bool(gate_fail),
+        "scope": "full" if scope is None else list(scope),
+        "types": len(result),
+        "elapsed_seconds": round(elapsed, 1),
+        "clean": len(verdict["clean"]),
+        "known_debt": [{"type": n, "error": first(n)} for n in verdict["known_debt"]],
+        "new_breaks": [{"type": n, "error": first(n)} for n in verdict["new_breaks"]],
+        "fp_drift": [{"type": n, "expected": e, "actual": a, "error": first(n)} for n, e, a in verdict["fp_drift"]],
+        "stale_allow": list(verdict["stale_allow"]),
+        "unverifiable": list(verdict["unverifiable"]),
+        "ghosts": list(verdict["ghosts"]),
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 # ── source resolution (mirror the mesh's three source queries) ─────────────────────────────────────
 
 def resolve_spec(spec: str, nd: Path, root: Path):
@@ -1037,6 +1068,35 @@ def _self_test() -> int:
             ROOT = saved_root
     failures.extend(scope_failures)
 
+    # 🚨 THE REPORT MUST CARRY THE VERDICT, IN BOTH COLOURS. A relayed verdict is read by a job
+    # that cannot see this console (core's satellite-compat lane names the failing satellite and
+    # its types from the file alone), so a report that says "green" for a red gate — or names no
+    # type — would make that lane certify compatibility it never measured.
+    with tempfile.TemporaryDirectory() as tmp:
+        rep = Path(tmp) / "nested" / "verdict.json"
+        result = {"Pkg/Broken": ("fail", ["CS0246: 'Gone' could not be found", "CS0103: second"]),
+                  "Pkg/Fine": ("ok", []), "Pkg/Debt": ("fail", ["CS0246: x"])}
+        allow = {"Pkg/Debt": failure_fingerprint(["CS0246: x"])}
+        v = evaluate_gate(result, allow, {n: frozenset() for n in result})
+        write_report(rep, v, result, gate_fail=bool(v["new_breaks"]), scope=None, elapsed=12.34)
+        got = json.loads(rep.read_text(encoding="utf-8"))
+        if got.get("gate_fail") is not True:
+            failures.append(f"  report: a NEW break must read gate_fail=true, got {got.get('gate_fail')!r}")
+        if [b.get("type") for b in got.get("new_breaks", [])] != ["Pkg/Broken"]:
+            failures.append(f"  report: new_breaks must name Pkg/Broken, got {got.get('new_breaks')!r}")
+        if got.get("new_breaks", [{}])[0].get("error") != "CS0246: 'Gone' could not be found":
+            failures.append("  report: a break must carry its FIRST error line")
+        if [d.get("type") for d in got.get("known_debt", [])] != ["Pkg/Debt"] or got.get("clean") != 1:
+            failures.append(f"  report: known_debt/clean counts wrong: {got!r}")
+        if got.get("scope") != "full" or got.get("types") != 3:
+            failures.append(f"  report: scope/types wrong: {got.get('scope')!r}/{got.get('types')!r}")
+        green = {"Pkg/Fine": ("ok", [])}
+        write_report(rep, evaluate_gate(green, {}, {"Pkg/Fine": frozenset()}), green,
+                     gate_fail=False, scope=["Pkg"], elapsed=1)
+        got = json.loads(rep.read_text(encoding="utf-8"))
+        if got.get("gate_fail") is not False or got.get("new_breaks") or got.get("scope") != ["Pkg"]:
+            failures.append(f"  report: a clean gate must read gate_fail=false with no breaks, got {got!r}")
+
     if failures:
         print("✗ using-directive parser self-test FAILED:")
         print("\n".join(failures))
@@ -1046,6 +1106,8 @@ def _self_test() -> int:
           f"{len(MODULE_REFS_NOT_IN_IMAGE)} registry-served assemblies, absolutized")
     print("✓ --modules scope: a subset selects only its packages, an unknown id and an empty list "
           "are refused, the ratchet judges the unit's allow entries only")
+    print("✓ --report: the JSON verdict carries gate_fail in both colours, every new break with its "
+          "first error, the known-debt list and the scope")
     return 0
 
 
@@ -1064,6 +1126,10 @@ def main() -> int:
                     help="compile ONLY the NodeTypes of these packages (top-level folders) — the "
                          "atomic unit the caller selected; the allow-file ratchet is judged over "
                          "them alone. An unknown id or an empty list is RED. Omit for a full run.")
+    ap.add_argument("--report", metavar="PATH",
+                    help="also write the verdict as JSON to PATH (see write_report) — what a caller "
+                         "that has to RELAY the result reads, e.g. core's per-satellite compat lane. "
+                         "Never changes the exit code.")
     args = ap.parse_args()
 
     if args.self_test:
@@ -1333,6 +1399,9 @@ def main() -> int:
         unit = "full tree" if selected is None else f"unit {', '.join(selected)}"
         print(f"\n✓ compile gate GREEN ({unit}): {len(clean)} clean, {len(known_debt)} known-debt "
               f"(shrinking), no new breaks.")
+    if args.report:
+        write_report(Path(args.report), verdict, result, gate_fail=gate_fail, scope=selected, elapsed=elapsed)
+        print(f"verdict written to {args.report}")
     return 1 if gate_fail else 0
 
 

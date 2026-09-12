@@ -63,7 +63,12 @@ public class PlatformNeverDependsOnPluginsGuard
         [
             new KeyValuePair<string, string>("main-cd.yml",
                 "publishes portal-ai + memex-migration from plugins-repo/src, keys the image set on the "
-                + "core/plugins PAIR (#2622), and packs+bakes the Plugins module bundles for that identity"),
+                + "core/plugins PAIR (#2622), packs+bakes the Plugins module bundles for that identity, "
+                + "and — since 2026-09-12, the counterweight to the satellites' once-a-day rebuild — "
+                + "points the reusable compile gate at each satellite's main in `satellite-compat`: a "
+                + "read-and-compile after `promote` that blocks nothing and builds nothing into an "
+                + "image, RED so a break is known within the hour rather than at 03:00 (its register "
+                + "is pinned by PlatformBakeLaneGuard)"),
             new KeyValuePair<string, string>("edge-images.yml",
                 "the manual edge channel — same two projects"),
         ]);
@@ -98,6 +103,10 @@ public class PlatformNeverDependsOnPluginsGuard
         "MeshWeaver.Reinsurance",
         "MeshWeaver.SocialMedia",
         "MeshWeaver.Manufacturing",
+        // Added 2026-09-12 with `satellite-compat`, the first workflow here to name it in an
+        // actionable form. Absent from this list the detector was blind to a Crm reach by
+        // construction — exactly the "stops seeing its subject" defect the summary describes.
+        "MeshWeaver.Crm",
     ];
 
     /// <summary>
