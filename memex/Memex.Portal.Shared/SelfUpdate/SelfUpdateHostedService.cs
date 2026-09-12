@@ -103,8 +103,31 @@ public class SelfUpdateHostedService : IHostedService
             _options.SafetyNetCheckInterval > TimeSpan.Zero
                 ? _options.SafetyNetCheckInterval.ToString()
                 : "disabled",
-            ShippedReleaseSeed.InstalledPlatformVersion, _options.Registry, _options.PortalRepository,
-            UsesOciListing ? "an OCI Distribution registry (the mirror, instance-key auth)" : "an Azure Container Registry",
+            ShippedReleaseSeed.InstalledPlatformVersion,
+            // 🚨 The HOST read from SelfUpdate:Registry, never the configured value. This is an
+            // Information line, so it leaves the pod for Loki at boot — before the OCI lister's
+            // refusal (which deliberately does not echo the value) has ever run — and a value of
+            // the shape `instance:mwi_…@evil.example` would have shipped the key to Loki here on
+            // every start (#4094 review). A value HostOf cannot read is named as unreadable, not
+            // printed; the lister's first check then says what is wrong with it.
+            SelfUpdateOptions.HostOf(_options.Registry) ?? "(unreadable — see SelfUpdate:Registry)",
+            _options.PortalRepository,
+            // 🚨 On the OCI path the line says WHERE the instance key may be presented, because that
+            // is the whole configuration and its absence is invisible otherwise: an install with no
+            // declared validator boots, serves, and only reveals the gap when the first check fails
+            // (#4093). Hosts only, never the key — and THREE states, not two: a declaration that is
+            // set but unreadable is a misconfiguration to name, never "NO validator declared".
+            UsesOciListing
+                ? _options.RegistryValidatorHost is { } validator
+                    ? $"an OCI Distribution registry (instance-key auth; key validated at {validator})"
+                    : _options.RegistryValidatorDeclared
+                        ? "an OCI Distribution registry (instance-key auth; SelfUpdate:RegistryValidationUrl "
+                          + "is SET but does not name an http(s) host — every check refuses until it does; "
+                          + "the value is not repeated here)"
+                        : "an OCI Distribution registry (instance-key auth; NO validator declared — the key "
+                          + "is presented only if this host is itself a configured plugin registry, else "
+                          + "every check refuses; see SelfUpdate:RegistryValidationUrl)"
+                : "an Azure Container Registry",
             _updater.CanPatch, _options.RetryInterval);
 
         // 🚨 #4097 — canPatch=False used to be the whole story, and it pointed at

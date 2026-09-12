@@ -56,14 +56,41 @@ selfUpdate:
   # Container Registry, listed through ACR's API with the workload identity above. A registry
   # login-server host here — `memex.meshweaver.cloud`, the read-through mirror another
   # installation serves at /v2 — makes the self-updater list tags through the OCI Distribution API
-  # instead, authenticated with THIS installation's plugin-registry instance key (the mirror host
-  # must equal a pluginCatalog registry's host; no second secret), and roll to images named on
-  # that host. Every installation EXCEPT the one serving the mirror sets this — the mirror instance
-  # cannot serve the image that boots it (Doc/Architecture/ContainerRegistryInMemex).
+  # instead, authenticated with THIS installation's plugin-registry instance key (no second
+  # secret), and roll to images named on that host. Every installation EXCEPT the one serving the
+  # mirror sets this — the mirror instance cannot serve the image that boots it
+  # (Doc/Architecture/ContainerRegistryInMemex).
+  #
+  # 🚨 WHICH key is presented is decided by a PAIRING, and there are exactly two ways to qualify:
+  # this host IS a pluginCatalog registry (a portal serving its own /v2 mirror), or
+  # `registryValidationUrl` below declares the portal that validates this installation's key here
+  # AND that portal is a pluginCatalog registry. The fleet's own registry needs the SECOND — do not
+  # read the first as a requirement to put both on one host, which is what #4093 was.
+  #
+  # 🚨 A BARE `host` or `host:port` ONLY — never a URL, a path, or a value carrying credentials.
+  # The same value is interpolated into the portal and migration image references, and a value of
+  # the form `user:secret@host` would be a valid URI naming a DIFFERENT host as the one to hand the
+  # instance key to. Anything else is refused at startup of the listing.
   #
   # 🚨 PAIRED with portal.imagePullSecret below: the images the updater rolls to are named on this
   # host, so the kubelet needs a credential for it. AcrPull on the node identity covers ACR only.
   registry: ""
+  # 🚨 THE PORTAL THAT VALIDATES THIS INSTALLATION'S KEY AT THAT REGISTRY (MeshWeaver#4093) — the
+  # registry record's own `validationUrl`, copied verbatim (a bare host works too; only the host is
+  # read). Set it whenever `registry` above is a registry that decides a pull by FORWARDING the
+  # caller's key to a portal, which is the fleet's shape: cr.meshweaver.cloud asks
+  # https://memex.meshweaver.cloud/api/instances/token whether the key is good, so the image
+  # registry and the plugin registry are two DIFFERENT hosts by design
+  # (Doc/Architecture/ContainerRegistryInMemex). Leave it empty when the registry IS the portal that
+  # serves the catalog — a portal serving its own /v2 mirror needs no declaration.
+  #
+  # 🚨 It is a GRANT, and an absent one is a refusal, never permission: the self-updater presents
+  # this installation's instance key ONLY to a host that is a configured pluginCatalog registry, or
+  # to `registry` when this names that registry's validator AND a pluginCatalog registry is
+  # configured there. Two explicit statements, both required; name resemblance grants nothing.
+  # Without it an instance on the fleet registry boots fine and then never self-updates — every
+  # check fails with "no plugin registry is configured on that host".
+  registryValidationUrl: ""
 # ---- Container image mirror (the /v2 pull surface THIS installation serves) -----------------
 # The read-through OCI mirror (src/MeshWeaver.ContainerImages, MeshWeaver#3353): this installation
 # proxies container images from an upstream registry with ONE credential it holds, while every
