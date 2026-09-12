@@ -406,6 +406,163 @@ case "$_kve_log" in *"memex-postgres-password"*|*"secret set"*) bad "a dry run n
 case "$_kve_out" in *"::hosting:: kv_db_connection=would-create"*) ok "…and reports would-create, never created" ;; *) bad "dry run reports would-create" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 unset _kve_out _kve_rc _kve_log _kve_state _kve_written
+echo "── hosting-kv-copy: a fleet-shared object materialised under the prefix, never shown ──"
+# MeshWeaver.Plugins#1723 — a credential several instances hold (the fleet GitHub App's PEM) has to
+# exist under EACH holder's prefix, because hosting-kv-purge deletes by prefix on teardown and a
+# cross-prefix mapping would let the first teardown take the shared object with it. The copy was a
+# hand step; now the record states `copyFrom` and the Provision runs this. The stub records every
+# argv and answers the vault from a state, so the decisions — copy only when ABSENT, keep when
+# present (drift reported, never rewritten), never print — are asserted here.
+KVC_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-copy" && pwd)"
+kvc() {  # kvc [env…] -- <args…>
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _kvc_state="$(mktemp -d)"
+  _kvc_out="$(env "${envs[@]}" PATH="$KVC_STUBS:$PATH" HOSTING_KVC_STATE="$_kvc_state" hosting-kv-copy "$@" 2>&1)"; _kvc_rc=$?
+  _kvc_log="$(cat "$_kvc_state/az.log" 2>/dev/null || true)"
+}
+KVC_PEM="-----BEGIN-FAKE-PEM-NEVER-PRINTED-----"
+
+kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -eq 0 ] && ok "kv-copy materialises an ABSENT target from its source" || bad "kv-copy copies an absent target" "exited ${_kvc_rc}: ${_kvc_out}"
+[ "$(cat "$_kvc_state/set.build-GitHub-App-PrivateKey" 2>/dev/null)" = "$KVC_PEM" ] && ok "…byte-for-byte" || bad "the copy is byte-identical" "wrote: $(cat "$_kvc_state/set.build-GitHub-App-PrivateKey" 2>/dev/null)"
+case "$_kvc_out" in *NEVER-PRINTED*) bad "kv-copy never prints the value" "it did: ${_kvc_out}" ;; *) ok "kv-copy never prints the value" ;; esac
+case "$_kvc_log" in *NEVER-PRINTED*) bad "…and never puts it on an az command line" "az saw: ${_kvc_log}" ;; *) ok "…and never puts it on an az command line" ;; esac
+case "$_kvc_out" in *"::hosting:: kv_copy_created=1"*"::hosting:: kv_copy_kept=0"*"::hosting:: kv_copy_drift=0"*) ok "the run reports created=1 kept=0 drift=0" ;; *) bad "kv-copy facts" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM} build-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -eq 0 ] && ok "an EXISTING, matching target is kept (a re-provision is idempotent)" || bad "existing target kept" "exited ${_kvc_rc}: ${_kvc_out}"
+case "$_kvc_log" in *"secret set"*) bad "a kept target is never rewritten" "az saw: ${_kvc_log}" ;; *) ok "a kept target is never rewritten" ;; esac
+case "$_kvc_out" in *"kv_copy_created=0"*"kv_copy_kept=1"*"kv_copy_drift=0"*) ok "…reported as kept, no drift" ;; *) bad "kept facts" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM} build-GitHub-App-PrivateKey=rotated-elsewhere-NEVER-PRINTED" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -eq 0 ] && ok "a target that DIFFERS from its source is still kept — drift is a fact, not a failure" || bad "differing target kept" "exited ${_kvc_rc}: ${_kvc_out}"
+case "$_kvc_log" in *"secret set"*) bad "…and is not rewritten" "az saw: ${_kvc_log}" ;; *) ok "…and is not rewritten" ;; esac
+case "$_kvc_out" in *"kv_copy_drift=1"*) ok "…and the drift is reported (kv_copy_drift=1)" ;; *) bad "drift reported" "said: ${_kvc_out}" ;; esac
+case "$_kvc_out" in *NEVER-PRINTED*) bad "…without printing either value" "it did: ${_kvc_out}" ;; *) ok "…without printing either value" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="a=1 b=2" -- --vault Systemorph --copy x=a --copy y=b
+[ "$_kvc_rc" -eq 0 ] && ok "several --copy pairs run in one step" || bad "several pairs" "exited ${_kvc_rc}: ${_kvc_out}"
+case "$_kvc_out" in *"kv_copy_created=2"*) ok "…each counted" ;; *) bad "count of two" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -ne 0 ] && ok "an unreadable source refuses" || bad "unreadable source refuses" "exited 0: ${_kvc_out}"
+case "$_kvc_out" in *"could not read memexsystemorph-GitHub-App-PrivateKey"*"az keyvault secret show --vault-name Systemorph --name memexsystemorph-GitHub-App-PrivateKey --query value -o json | jq -j . | az keyvault secret set --vault-name Systemorph --name build-GitHub-App-PrivateKey --file /dev/stdin"*) ok "…naming the source and the exact hand command" ;; *) bad "names the hand command" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+
+kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" HOSTING_KVC_SET_FAIL=1 -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -ne 0 ] && ok "a vault that refuses the write fails the step" || bad "refused write fails" "exited 0: ${_kvc_out}"
+case "$_kvc_out" in *NEVER-PRINTED*) bad "…without printing the value on the failure path" "it did: ${_kvc_out}" ;; *) ok "…without printing the value on the failure path" ;; esac
+rm -rf "$_kvc_state"
+
+refuses_hard "kv-copy needs --vault"                    "missing required flag --vault" hosting-kv-copy --copy a=b
+refuses_hard "kv-copy needs at least one --copy"        "missing required flag --copy"  hosting-kv-copy --vault V
+refuses_hard "kv-copy refuses a pair without '='"       "is not <target>=<source>"      hosting-kv-copy --vault V --copy ab
+refuses_hard "kv-copy refuses copying an object onto itself" "onto itself"              hosting-kv-copy --vault V --copy a=a
+refuses_hard "kv-copy refuses a target with a metacharacter" "is not a plain name"      hosting-kv-copy --vault V --copy 'a;id=b'
+refuses_hard "kv-copy refuses a source with a backtick"      "is not a plain name"      hosting-kv-copy --vault V --copy 'a=b`id`'
+refuses_hard "kv-copy rejects unknown flags"            "unknown argument"              hosting-kv-copy --vault V --copy a=b --nope 1
+
+kvc HOSTING_DRY_RUN=true HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -eq 0 ] && ok "a dry-run kv-copy succeeds" || bad "dry-run kv-copy" "exited ${_kvc_rc}: ${_kvc_out}"
+case "$_kvc_log" in *"--query value"*|*"secret set"*) bad "a dry run reads no value and writes nothing" "az saw: ${_kvc_log}" ;; *) ok "a dry run reads no value and writes nothing" ;; esac
+case "$_kvc_out" in *"kv_copy_created=1"*) ok "…and says what it would copy" ;; *) bad "dry run would-copy" "said: ${_kvc_out}" ;; esac
+rm -rf "$_kvc_state"
+unset _kvc_out _kvc_rc _kvc_log _kvc_state
+
+echo "── hosting-signin-app: the client secret is kept, added never rotated, never shown ──"
+# MeshWeaver.Plugins#1719 — runbook step 1 registered the Entra app and minted its secret by hand.
+# The stub answers Graph and the vault from a state and — like the real az — prints a minted
+# secret on STDERR too, so the no-leak arm proves the script discards it. 🚨 The stub is FIRST on
+# PATH for every case: a laptop with a real, logged-in az would otherwise read a real vault.
+SA_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/signin-app" && pwd)"
+sa() {  # sa [env…] -- <args…>
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _sa_state="$(mktemp -d)"
+  _sa_out="$(env "${envs[@]}" PATH="$SA_STUBS:$PATH" HOSTING_SA_STATE="$_sa_state" hosting-signin-app "$@" 2>&1)"; _sa_rc=$?
+  _sa_log="$(cat "$_sa_state/az.log" 2>/dev/null || true)"
+}
+SA_ARGS=(--name acme --host acme.meshweaver.cloud --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret)
+SA_ID=66d36350-397d-420f-97b2-ae173fc97d05
+
+# Present + app readable + redirect on it → kept, verified.
+sa HOSTING_SA_EXISTING=acme-Authentication-Microsoft-ClientSecret -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -eq 0 ] && ok "a PRESENT client secret is kept and the app verified" || bad "present + verified" "exited ${_sa_rc}: ${_sa_out}"
+case "$_sa_log" in *"credential reset"*|*"secret set"*) bad "…nothing minted, nothing written" "az saw: ${_sa_log}" ;; *) ok "…nothing minted, nothing written" ;; esac
+case "$_sa_out" in *"::hosting:: signin_secret=kept"*"::hosting:: signin_app_verify=true"*) ok "…reported kept + verify=true" ;; *) bad "kept facts" "said: ${_sa_out}" ;; esac
+rm -rf "$_sa_state"
+
+# Present, app unreadable (no Graph right) → kept, verify UNKNOWN, not red, hand command named.
+sa HOSTING_SA_EXISTING=acme-Authentication-Microsoft-ClientSecret HOSTING_SA_GRAPH_DENIED=1 -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -eq 0 ] && ok "an identity without Graph read keeps the secret and does NOT fail the provision" || bad "no Graph read is not red" "exited ${_sa_rc}: ${_sa_out}"
+case "$_sa_out" in *"::hosting:: signin_app_verify=unknown"*"az ad app show --id ${SA_ID} --query web.redirectUris"*|*"az ad app show --id ${SA_ID} --query web.redirectUris"*"::hosting:: signin_app_verify=unknown"*) ok "…reports verify=unknown and the hand command" ;; *) bad "unknown verify" "said: ${_sa_out}" ;; esac
+rm -rf "$_sa_state"
+
+# Present, app readable, redirect MISSING → RED naming az ad app update.
+sa HOSTING_SA_EXISTING=acme-Authentication-Microsoft-ClientSecret HOSTING_SA_REDIRECTS="https://other.example.test/signin-microsoft" -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -ne 0 ] && ok "a readable app WITHOUT the redirect URI is a failed step (AADSTS50011 otherwise)" || bad "missing redirect fails" "exited 0: ${_sa_out}"
+case "$_sa_out" in *"az ad app update --id ${SA_ID} --web-redirect-uris https://acme.meshweaver.cloud/signin-microsoft"*) ok "…naming the exact hand command" ;; *) bad "names az ad app update" "said: ${_sa_out}" ;; esac
+rm -rf "$_sa_state"
+
+# Present, no client id on the record → kept, verify skipped.
+sa HOSTING_SA_EXISTING=acme-Authentication-Microsoft-ClientSecret -- "${SA_ARGS[@]}"
+[ "$_sa_rc" -eq 0 ] && ok "present with no client id on the record is kept (verify skipped)" || bad "present no id" "exited ${_sa_rc}: ${_sa_out}"
+case "$_sa_out" in *"signin_app_verify=skipped"*) ok "…and says so" ;; *) bad "skipped fact" "said: ${_sa_out}" ;; esac
+rm -rf "$_sa_state"
+
+# Absent + client id → a credential is ADDED (--append), stored through --file, never printed.
+sa -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -eq 0 ] && ok "an ABSENT secret with a named app gets a credential added" || bad "absent + id mints" "exited ${_sa_rc}: ${_sa_out}"
+case "$_sa_log" in *"ad app credential reset --id ${SA_ID} --append --display-name acme --years 1"*) ok "…with --append: nothing existing is rotated" ;; *) bad "append" "az saw: ${_sa_log}" ;; esac
+[ "$(cat "$_sa_state/set.acme-Authentication-Microsoft-ClientSecret" 2>/dev/null)" = "fake-client-secret-NEVER-PRINTED" ] && ok "…the secret is stored under the object, byte-for-byte, no trailing newline" || bad "secret stored" "vault got: '$(cat "$_sa_state/set.acme-Authentication-Microsoft-ClientSecret" 2>/dev/null)'"
+case "$_sa_out" in *NEVER-PRINTED*) bad "signin-app never prints the secret (az's stderr echo is discarded)" "it did: ${_sa_out}" ;; *) ok "signin-app never prints the secret (az's stderr echo is discarded)" ;; esac
+case "$_sa_log" in *NEVER-PRINTED*) bad "…and never puts it on an az command line" "az saw: ${_sa_log}" ;; *) ok "…and never puts it on an az command line" ;; esac
+case "$_sa_out" in *"::hosting:: signin_secret=created"*"::hosting:: signin_secret_expires=2027-09-12T00:00:00Z"*"::hosting:: signin_app_verify=true"*) ok "…reported created + expiry + verified" ;; *) bad "created facts" "said: ${_sa_out}" ;; esac
+rm -rf "$_sa_state"
+
+# Absent + client id, Graph denied → RED with the exact hand commands; nothing written.
+sa HOSTING_SA_GRAPH_DENIED=1 -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -ne 0 ] && ok "without Application.ReadWrite.OwnedBy the mint is a RED step" || bad "denied mint is red" "exited 0: ${_sa_out}"
+case "$_sa_out" in *"Application.ReadWrite.OwnedBy"*"az ad app credential reset --id ${SA_ID} --append --display-name acme --years 1 --query password -o tsv > <file> 2>/dev/null; az keyvault secret set --vault-name Systemorph --name acme-Authentication-Microsoft-ClientSecret --file <file>"*) ok "…naming the right and the exact hand commands" ;; *) bad "denied message" "said: ${_sa_out}" ;; esac
+[ ! -f "$_sa_state/set.acme-Authentication-Microsoft-ClientSecret" ] && ok "…and writes nothing" || bad "denied writes nothing" "it wrote"
+rm -rf "$_sa_state"
+
+# Absent + NO client id → RED: registering the app is the hand step, with the runbook's commands.
+sa -- "${SA_ARGS[@]}"
+[ "$_sa_rc" -ne 0 ] && ok "absent secret and no app on the record is a RED step — registering the app is not automated" || bad "no app is red" "exited 0: ${_sa_out}"
+case "$_sa_out" in *"az ad app create --display-name \"acme Portal (acme.meshweaver.cloud)\" --sign-in-audience AzureADMultipleOrgs --web-redirect-uris \"https://acme.meshweaver.cloud/signin-microsoft\""*"set signIn.microsoftClientId"*) ok "…naming the runbook's exact commands and the record field to set" ;; *) bad "register-by-hand message" "said: ${_sa_out}" ;; esac
+case "$_sa_log" in *"ad app"*) bad "…without calling Graph" "az saw: ${_sa_log}" ;; *) ok "…without calling Graph" ;; esac
+rm -rf "$_sa_state"
+
+# Vault refuses the write after the mint → RED, names the credential to remove, no secret printed.
+sa HOSTING_SA_SET_FAIL=1 -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -ne 0 ] && ok "a vault that refuses the write fails the step" || bad "set fail" "exited 0"
+case "$_sa_out" in *NEVER-PRINTED*) bad "…without printing the secret on the failure path" "it did: ${_sa_out}" ;; *) ok "…without printing the secret on the failure path" ;; esac
+rm -rf "$_sa_state"
+
+refuses_hard "signin-app needs --host"                 "missing required flag --host"   hosting-signin-app --name a --vault V --object o
+refuses_hard "signin-app needs --object"               "missing required flag --object" hosting-signin-app --name a --host a.test --vault V
+refuses_hard "signin-app refuses a host with a space"  "is not a hostname"              hosting-signin-app --name a --host 'a.test x' --vault V --object o
+refuses_hard "signin-app refuses a client id that is not a GUID" "is not an Entra application"  hosting-signin-app --name a --host a.test --vault V --object o --client-id 'x;id'
+refuses_hard "signin-app refuses a name with a metacharacter" "is not a plain name"     hosting-signin-app --name 'a`id`' --host a.test --vault V --object o
+refuses_hard "signin-app rejects unknown flags"        "unknown argument"               hosting-signin-app --name a --host a.test --vault V --object o --nope 1
+
+# Dry runs: present → kept + verify dry-run; absent + id → would-create; neither Graph nor vault written.
+sa HOSTING_DRY_RUN=true HOSTING_SA_EXISTING=acme-Authentication-Microsoft-ClientSecret -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -eq 0 ] && ok "a dry run over a present secret succeeds" || bad "dry present" "exited ${_sa_rc}"
+case "$_sa_out" in *"signin_secret=kept"*"signin_app_verify=dry-run"*) ok "…reports kept + verify=dry-run" ;; *) bad "dry present facts" "said: ${_sa_out}" ;; esac
+rm -rf "$_sa_state"
+sa HOSTING_DRY_RUN=true -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -eq 0 ] && ok "a dry run over an absent secret succeeds" || bad "dry absent" "exited ${_sa_rc}: ${_sa_out}"
+case "$_sa_log" in *"ad app"*|*"secret set"*) bad "…and touches neither Graph nor the vault" "az saw: ${_sa_log}" ;; *) ok "…and touches neither Graph nor the vault" ;; esac
+case "$_sa_out" in *"signin_secret=would-create"*) ok "…reporting would-create" ;; *) bad "would-create" "said: ${_sa_out}" ;; esac
+rm -rf "$_sa_state"
+unset _sa_out _sa_rc _sa_log _sa_state
 echo "── hosting-image-mirror: the pinned images reach the fleet registry, once, verified ──"
 # MeshWeaver.Plugins#1722 — cr.meshweaver.cloud serves only what was pushed to it; a record pinning
 # a tag it lacks sent a human to `crane copy` (runbook step 4). The crane stub keeps a two-registry

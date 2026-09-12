@@ -38,12 +38,18 @@ public class ModuleSuiteLaneGuard
     public void TheInlineSuite_RunsOnlyWhenThisCallPublishes()
     {
         var pack = JobBody("pack");
+        // The step's `if:` reads the batch-wide switch (`need_test` = any module of the leg still
+        // owes a suite); INSIDE it, the loop runs only the modules whose own `need_test` fact is
+        // true — the entry's `test != false` folded in by the plan step. Batched legs, 2026-09-12.
         Assert.Contains(
-            "if: ${{ inputs.publish && matrix.entry.test != false && steps.plan.outputs.need_test == 'true' }}",
+            "if: ${{ inputs.publish && steps.plan.outputs.need_test == 'true' }}",
             pack, StringComparison.Ordinal);
+        Assert.Contains("bk list --ok --where need_test=true", pack, StringComparison.Ordinal);
         // Still AFTER the bundle upload and BEFORE the hand-over when it does run: that ordering is
-        // the entire reason a publishing run keeps paying for it.
-        var upload = pack.IndexOf("name: module-bundle-${{ matrix.entry.module }}", StringComparison.Ordinal);
+        // the entire reason a publishing run keeps paying for it. The upload is the first of the
+        // unrolled per-module slots (`module-bundle-<module>` is a per-module NAME every caller's
+        // `module-artifacts` pattern globs, so it cannot become one artifact per batch).
+        var upload = pack.IndexOf("name: module-bundle-${{ steps.bundles.outputs.s1 }}", StringComparison.Ordinal);
         var suite = pack.IndexOf("dotnet test \"$tests\"", StringComparison.Ordinal);
         var publish = pack.IndexOf("-X POST \"$REGISTRY/api/plugins/bundles/$PACKAGE", StringComparison.Ordinal);
         Assert.True(upload >= 0 && suite >= 0 && publish >= 0, "the pack job must still upload, test and publish");
@@ -67,7 +73,8 @@ public class ModuleSuiteLaneGuard
         // A matrix with zero vectors does not evaluate, so the count is asserted the way `pack`
         // asserts its own.
         Assert.Contains("needs.select.outputs.test-count != '0'", tests, StringComparison.Ordinal);
-        Assert.Contains("entry: ${{ fromJson(needs.select.outputs.test-modules) }}", tests, StringComparison.Ordinal);
+        // The matrix is the suite subset cut into batches by `select` (module-pack-batch.py chunk).
+        Assert.Contains("batch: ${{ fromJson(needs.select.outputs.test-batches) }}", tests, StringComparison.Ordinal);
 
         // 🚨 `select` ONLY. Depending on prepare / build-workspace / pack would put the suite back
         // on the very chain this job exists to run beside, and the change would measure as nothing.
@@ -88,16 +95,20 @@ public class ModuleSuiteLaneGuard
         var pack = JobBody("pack");
         // `none` | `inline` | `lane`, written into the receipt rather than inferred afterwards from
         // an `if:` — the pairing below is what makes "it ran nowhere" impossible to do quietly.
-        Assert.Contains(
-            "TESTS: ${{ steps.plan.outputs.need_test != 'true' && 'none' || (inputs.publish && 'inline' || 'lane') }}",
-            pack, StringComparison.Ordinal);
+        // Computed per module in the receipt loop, from the module's own `need_test` fact and the
+        // call's `publish` input — the same three-way rule the `if:` expression used to encode.
+        Assert.Contains("if [ \"$(bk get --module \"$MODULE\" need_test)\" != true ]; then TESTS=none", pack, StringComparison.Ordinal);
+        Assert.Contains("elif [ \"$PUBLISH\" = true ]; then TESTS=inline", pack, StringComparison.Ordinal);
+        Assert.Contains("else TESTS=lane; fi", pack, StringComparison.Ordinal);
         Assert.Contains("tests:$t", pack, StringComparison.Ordinal);
 
         var tests = JobBody("tests");
         Assert.Contains("tests:\"lane\"", tests, StringComparison.Ordinal);
         // Lane-stamped and lane-named, like every other artifact here: artifacts are RUN-WIDE and a
         // repo may call this lane twice in one run.
-        Assert.Contains("name: module-tests-receipt-${{ needs.select.outputs.lane }}-${{ matrix.entry.module }}",
+        // ONE artifact per batch, one `<module>.json` per module inside it: `verify` globs
+        // `module-tests-receipt-<lane>-*` with merge-multiple and keys on the `module` field.
+        Assert.Contains("name: module-tests-receipt-${{ needs.select.outputs.lane }}-${{ matrix.batch.id }}",
             tests, StringComparison.Ordinal);
         Assert.Contains("if-no-files-found: error", tests, StringComparison.Ordinal);
         // The receipt means the suite got to the end green, so it is the LAST evidence step.
@@ -147,6 +158,68 @@ public class ModuleSuiteLaneGuard
         Assert.Contains("if (.ledger.decision // \"build\") == \"reuse\"", select, StringComparison.Ordinal);
         Assert.Contains("then (.ledger.needTest == true)", select, StringComparison.Ordinal);
         Assert.Contains("else (.test != false) end", select, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The interim headless-browser step (Systemorph/Memex#323 deletes it) is ONE implementation
+    /// living in two places, and this is what keeps it one.
+    ///
+    /// <para>It cannot be a script under <c>.github/scripts/</c>: both jobs check core out at
+    /// <c>inputs.platform-ref</c> — the newest SEALED set, hours behind the lane text, which
+    /// arrives from <c>@main</c> — so a new file would be absent there and the step would die
+    /// <c>exit 127</c> until a set seals (MeshWeaver#3842; and <c>github.job_workflow_sha</c> is
+    /// measured EMPTY inside a reusable called from another repo, Plugins#1566). So the block is
+    /// duplicated between <c>pack</c> (publishing runs, where the suite is inline) and
+    /// <c>tests</c> (every other run) — and duplication that nothing checks is duplication that
+    /// drifts, which here means one lane of the fleet quietly losing its browser.</para>
+    /// </summary>
+    [Fact]
+    public void TheBrowserStep_IsOneImplementation_InBothJobsThatRunASuite()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var steps = Regex.Matches(
+            text,
+            @"      - name: A headless browser for the pixel-export suites\n(?<body>(?:        .*\n|\n)+)");
+        // BOTH jobs that can run a module's suite on a self-hosted runner, or the fleet has a lane
+        // where the browser is missing again: `pack` owns the suite when the call publishes,
+        // `tests` owns it otherwise, and `runner` moves both.
+        Assert.Equal(2, steps.Count);
+
+        var runs = steps.Select(m =>
+        {
+            var body = m.Groups["body"].Value;
+            var i = body.IndexOf("        run: |\n", StringComparison.Ordinal);
+            Assert.True(i >= 0, "the browser step must carry a `run:` block");
+            return body[i..];
+        }).ToList();
+        Assert.Equal(runs[0], runs[1]);
+
+        // Gated OFF on ubuntu-latest in both, so GitHub's image — which ships Chrome — is
+        // byte-identical to before this step existed.
+        foreach (var m in steps.Cast<Match>())
+            Assert.Contains("inputs.runner != 'ubuntu-latest'", m.Groups["body"].Value, StringComparison.Ordinal);
+
+        var run = runs[0];
+        // The discovery list is a COPY OF A CONTRACT: MeshWeaver.Plugins'
+        // src/MeshWeaver.Markdown.Export/Pixel/PixelRenderingOptions.cs reads exactly these, in
+        // this order, behind exactly these two environment variables. Installing a browser
+        // anywhere that file does not look is not installing a browser.
+        foreach (var path in new[]
+                 {
+                     "\"${CHROME_BIN:-}\"", "\"${PUPPETEER_EXECUTABLE_PATH:-}\"",
+                     "/usr/bin/chromium", "/usr/bin/chromium-browser",
+                     "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/microsoft-edge",
+                 })
+            Assert.Contains(path, run, StringComparison.Ordinal);
+        // 🚨 It must LAUNCH the thing, not merely find it — a present-but-unlaunchable browser
+        // reads to the suite exactly like a missing one, six tests later — and it must go red BY
+        // NAME when it cannot. Both halves of that, and the export the suite actually consumes.
+        Assert.Contains("--dump-dom about:blank", run, StringComparison.Ordinal);
+        Assert.Contains("did NOT start headless", run, StringComparison.Ordinal);
+        Assert.Contains("rendered no document", run, StringComparison.Ordinal);
+        Assert.Contains("printf 'CHROME_BIN=%s\\n' \"$browser\" >> \"$GITHUB_ENV\"", run, StringComparison.Ordinal);
+        // No silent branch: every exit from this step is an ::error:: or a proven browser.
+        Assert.DoesNotContain("continue-on-error", run, StringComparison.Ordinal);
     }
 
     private static string JobBody(string job)

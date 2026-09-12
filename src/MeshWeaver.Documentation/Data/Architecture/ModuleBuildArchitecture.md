@@ -83,6 +83,80 @@ select ─┬─► prepare (ONCE) ──► build (ONE workspace) ──► pac
 > `platform-refs-<digest>` cache entry has been evicted — fail RED naming the missing tool; neither
 > skips.
 
+> 📅 **2026-09-12, later — `pack` needs neither Docker nor a registry (Memex#316).** The first
+> self-hosted pack leg (MeshWeaver.SocialMedia run 34696706383, runner
+> `aks-silos-g5hdc-runner-pmhpw`) died exactly at that "fallback": `platform-refs-sha256:ddefa9b0…
+> missed the cache and this runner … has no Docker daemon to pull meshweaver.azurecr.io/memex-portal-ai
+> with` — while `prepare` had HIT the same key six minutes earlier (175 MB). Not an eviction:
+> **actions/cache versions an entry by the path STRING**, and `${{ runner.temp }}` is
+> `/home/runner/work/_temp` on GitHub-hosted but `/home/runner/_work/_temp` under ARC, so every
+> self-hosted leg missed by construction and every miss put Docker and ACR on the path. Maintainer
+> decision: the leg "should not" need Docker and "should not need acr at all", and runners keep
+> the platform installed until the platform updates. So `pack` now takes the pinned image's
+> `/app` from, in order: **(1)** the runner's platform mount `/opt/platform/<digest>/`, real only
+> when its `.complete` marker holds the digest (an Azure Files volume the runner pods carry,
+> refreshed once per sealed set — a directory test, read in place, never a registry call);
+> **(2)** the run artifact `platform-refs-<lane>` — `prepare` tars the very `/app` it `docker cp`'d
+> (gzip, because the runner image has no `zstd`; 1521 files / 542 MB → 216 MB, proven byte- and
+> mode-identical on `sha256:ddefa9b0…`) and uploads it with retention 1 day, guaranteed within the
+> run as no cache is; **(3)** neither ⇒ RED naming the mount path, the artifact and `prepare` as
+> the job that should have produced it. The job summary states which source was taken. The cache
+> restore, the `docker create`/`cp` fallback, `azure/login`, the ACR login and the `acr-*` secrets
+> are gone from `pack` — by content, no `docker`, `azure` or `acr` token remains in `pack` or
+> `tests`; the per-digest cache lives in `prepare` alone, where it saves the registry pull on a
+> hosted runner whose path string never moves. `tests` never consumed an image. The gate lane's
+> tester image is #4095's file and still `docker pull`s on `aks-silos-dind`; a pre-pulled-on-node
+> → pull → RED ladder of the same shape is noted there, not done here.
+
+**Batched legs (2026-09-12).** GitHub bills every job rounded *up* to a whole minute, and most legs
+of this lane were shorter than the unit they were billed in — measured 2026-09-05..12 on
+MeshWeaver.Plugins: 4,975 sampled `Module bundles / Module bundle` legs at a **median of 1.1 min**
+(p90 8.4), 1,385 `Module bundles` parent legs at 1.1 min, 2,935 `Module tests` legs at 4.0 min (p90
+8.2); whole-minute rounding on the sub-minute legs was ≈12 % of Plugins' bill (~4,700 billed
+minutes a day) and 25–40 % in Crm / Reinsurance / SocialMedia. So `pack` and `tests` now expand
+**one leg per batch** of `batch-size` modules (default 6, hard cap 10) — `select` cuts the
+selection deterministically (sorted by module name, striped over ⌈n/N⌉ legs so an alphabetical
+family such as `MeshWeaver.AI.*` is spread rather than stacked; ≤N modules is one leg, a
+single-module repository is unchanged) with `.github/scripts/module-pack-batch.py`, and the same
+script keeps one state record per module inside the leg. **A batch is a runner-sharing device,
+not a coupling**: every module still builds, packs, uploads its own `module-bundle-<module>`
+(kept as a per-module name — the ledger records it and every caller's `module-artifacts`
+pattern globs it — through unrolled upload slots), runs its own suite, and on a publishing call
+POSTs its own bundle right after its own suite; a phase that fails for one module marks *that*
+module failed in that phase, every later phase skips it, the sibling modules complete and
+publish, and the leg's last step prints one status line per module and reds the leg over any
+failure — so `verify` still reads `pack: failure` and still accounts every module by its own
+receipt (a failed module drops none). Receipts, built markers, staged publications and test
+evidence are one artifact per batch with one file per module, which every consumer already reads
+through `<kind>-<lane>-*` + merge-multiple keyed on the `module` inside each file. No required
+context moves; the fleet's protected-job matchers read the caller's job name (`Module bundles`),
+which is untouched. Arithmetic for Plugins at N=6: the ~40 sub-minute pack legs of a full run go
+from ~40 billed minutes to ~7 (each batch ≈ 6 × 1.1 min of work ≈ 7 min, rounded once), and the
+per-leg checkout + SDK install is paid 7 times instead of 40.
+
+Every script that **operates this lane** moves with the lane: selection and newest-only scope,
+batch state, the build ledger protocol, the workspace postcondition, ACR transport, and the final
+receipt verifier. `select`, `prepare`, `build-workspace`, `pack`, `tests`, and `verify` fetch those
+clients from one resolved `build-logic-ref`, falling back to the exact reusable-workflow SHA when
+the input is absent. An explicit ref is an advanced compatibility pin: `select` requires an
+immutable SHA, verifies that its batching helper exists and supports the loaded workflow's
+`--workflow` contract, then self-tests the clients before making a build decision. It fails there
+with a migration message rather than letting an older helper fail later in a matrix job.
+
+The separate `meshweaver/` checkout stays at `platform-ref`, because that tree is the framework
+source and reference set the module compiles and tests against. Exactly two scripts deliberately
+move on that platform axis: `check-module-platform-floor.py`, whose SemVer result is parity-pinned
+to the selected runtime implementation, and `module-owned-platform.sh`, which measures the
+selected platform's shipped assembly set. The batching self-test reads the exact reusable workflow
+identified by GitHub's `job.workflow_repository` and `job.workflow_sha`, verifies that checkout
+resolved the stated SHA, and enforces that complete ownership map—including every ledger writer,
+the newest-only selector, the production verifier, and the two allowed platform clients. This
+closes the 2026-09-12 rollout failure in MeshWeaver.Plugins run 34706516117: the reusable workflow
+already contained batched legs, while the released platform pin `4764a607…` predated
+`module-pack-batch.py`; all seven test batches therefore stopped before running a suite. A lane
+helper or protocol client must always move on the tooling axis, independently of the platform it
+verifies.
+
 ### Where a module's own suite runs — and why `publish` decides
 
 A `needs:` on a `uses:` job waits for the **whole** called workflow, so anything inside the last
