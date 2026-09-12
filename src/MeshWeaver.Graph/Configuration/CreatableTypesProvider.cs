@@ -79,8 +79,12 @@ internal sealed class CreatableTypesProvider(
         // GetMeshNodeStream lookup on top of the type-node query.
         var parentDefObs = ResolveParentNodeTypeDefinition(currentType);
 
-        var typesObs = typeNodesObs.CombineLatest(parentDefObs, (typeNodes, parentDef) =>
-            BuildInfos(typeNodes, meshConfiguration, hub.ServiceProvider, currentType, parentDef, hub.JsonSerializerOptions));
+        var typesObs = typeNodesObs
+            .CombineLatest(parentDefObs, (typeNodes, parentDef) => (typeNodes, parentDef))
+            .SelectMany(x => ResolveDeclaredTypeNodes(meshQueryCore, x.parentDef)
+                .Select(declared => BuildInfos(
+                    x.typeNodes, declared, meshConfiguration, hub.ServiceProvider,
+                    currentType, x.parentDef, hub.JsonSerializerOptions)));
 
         // Outer security gate: only apply Create-permission filter for a
         // specific parent path. Root listing (nodePath == "") is global
@@ -190,6 +194,76 @@ internal sealed class CreatableTypesProvider(
     }
 
     /// <summary>
+    /// The nodes behind the type paths a CONFIG source NAMES — <see cref="NodeTypeDefinition.CreatableTypes"/>
+    /// on the parent type and <see cref="MeshConfiguration.GlobalCreatableTypes"/> — restricted to
+    /// the ones the static registry does not already hold, keyed by path.
+    ///
+    /// <para>🚨 <b>Why this read exists.</b> A named path is added by
+    /// <see cref="BuildInfoFromConfig"/> whether or not any query returned it — that is the whole
+    /// point of a declaration, it reaches types no namespace-scoped query can. But a RUNTIME
+    /// NodeType can carry <c>ExcludeFromContext: ["create"]</c> just as a platform one does, and
+    /// without its node in hand that opt-out is invisible here: the create-filtered queries
+    /// correctly omit the type and this path would synthesise it straight back in. So the paths a
+    /// config source names, and only those, are looked up.</para>
+    ///
+    /// <para>🚨 <b>One anchored QUERY per path, never a point read.</b> A declared type MAY NOT
+    /// EXIST — synthesising an entry for a path the mesh does not have yet is deliberate — and a
+    /// point read of an absent node answers a routing NotFound that terminates the stream AND opens
+    /// the storm-breaker on that path (Doc/Architecture/CqrsAndContentAccess). A <c>path:</c> query
+    /// answers zero rows instead. One path per query keeps each one ANCHORED on its own partition;
+    /// a <c>path:a|b|c</c> alternation names no first segment and would fan out over every schema
+    /// (#3202).</para>
+    /// </summary>
+    private IObservable<ImmutableDictionary<string, MeshNode?>> ResolveDeclaredTypeNodes(
+        IMeshQueryCore? meshQueryCore, NodeTypeDefinition? parentDef)
+    {
+        var empty = ImmutableDictionary<string, MeshNode?>.Empty
+            .WithComparers(StringComparer.OrdinalIgnoreCase);
+
+        // 🚨 The globals are probed only when they will be USED. A parent with
+        // IncludeGlobalTypes = false never displays them, and BuildInfos drops them either way —
+        // probing them anyway would spend a query and a 15 s timeout budget per global path on
+        // every render of a sealed parent's Create form.
+        var includeGlobal = parentDef?.IncludeGlobalTypes ?? true;
+        var declared = (parentDef?.CreatableTypes ?? [])
+            .Concat(includeGlobal ? meshConfiguration.GlobalCreatableTypes : [])
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            // A static registration carries its own ExcludeFromContext in memory — no read needed,
+            // and every platform type that opts out of create is one of those.
+            .Where(p => hub.ServiceProvider.FindStaticNode(p) is null)
+            .ToArray();
+        if (declared.Length == 0)
+            return Observable.Return(empty);
+
+        // No query core at all is a CONFIGURATION fact, not a failure: a host without one has no
+        // persisted nodes, so a declared path that is not static provably does not exist and the
+        // forgiving synthesis is the right answer. Recorded as CONFIRMED ABSENT, never as unknown.
+        if (meshQueryCore is null)
+            return Observable.Return(
+                declared.Aggregate(empty, (acc, path) => acc.SetItem(path, null)));
+
+        var lookups = declared.Select(path => meshQueryCore
+            .Query<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{path} nodeType:NodeType"),
+                hub.JsonSerializerOptions)
+            .Take(1)
+            .Select(change => (path, node: change.Items.FirstOrDefault(), probed: true))
+            // 🚨 A PROBE THAT DID NOT COMPLETE IS NOT AN ANSWER. Folding a timeout or a fault into
+            // the same "no row" the successful empty query produces would make a transient read
+            // failure OFFER the very type this read exists to withhold — the opt-out would hold
+            // when storage is healthy and lapse exactly when it is not. `probed: false` keeps the
+            // two apart and BuildInfoFromConfig fails closed on it.
+            .Timeout(TimeSpan.FromSeconds(15),
+                Observable.Return((path, node: (MeshNode?)null, probed: false)))
+            .Catch<(string path, MeshNode? node, bool probed), Exception>(
+                _ => Observable.Return((path, node: (MeshNode?)null, probed: false))));
+
+        return Observable.Merge(lookups)
+            .Aggregate(empty, (acc, x) => x.probed ? acc.SetItem(x.path, x.node) : acc);
+    }
+
+    /// <summary>
     /// Resolves the <see cref="NodeTypeDefinition"/> for <paramref name="currentType"/>.
     /// Static config (built-in types) first, then a live
     /// <c>GetMeshNodeStream</c> lookup so RUNTIME NodeTypes — which are not in
@@ -215,6 +289,7 @@ internal sealed class CreatableTypesProvider(
 
     private static IReadOnlyList<CreatableTypeInfo> BuildInfos(
         IReadOnlyList<MeshNode> queryNodes,
+        ImmutableDictionary<string, MeshNode?> declaredNodes,
         MeshConfiguration meshConfiguration,
         IServiceProvider serviceProvider,
         string? currentType,
@@ -256,7 +331,7 @@ internal sealed class CreatableTypesProvider(
         //    registered, minus what opted out of `context:create`.
         foreach (var typeNode in serviceProvider.EnumerateStaticNodes())
         {
-            if (typeNode.IsExcludedFromContext(MeshContexts.Create)) continue;
+            if (IsExcludedFromCreate(typeNode, meshConfiguration)) continue;
             if (!Allowed(typeNode.Path)) continue;
             if (!added.Add(typeNode.Path)) continue;
             result.Add(BuildInfoFromMeshNode(typeNode, options));
@@ -274,7 +349,8 @@ internal sealed class CreatableTypesProvider(
                 foreach (var typePath in parentDef.CreatableTypes)
                 {
                     if (!added.Add(typePath)) continue;
-                    var info = BuildInfoFromConfig(typePath, serviceProvider, options);
+                    var info = BuildInfoFromConfig(
+                        typePath, declaredNodes, meshConfiguration, serviceProvider, options);
                     if (info is not null) result.Add(info);
                 }
             }
@@ -286,7 +362,8 @@ internal sealed class CreatableTypesProvider(
             foreach (var typePath in meshConfiguration.GlobalCreatableTypes)
             {
                 if (!added.Add(typePath)) continue;
-                var info = BuildInfoFromConfig(typePath, serviceProvider, options);
+                var info = BuildInfoFromConfig(
+                    typePath, declaredNodes, meshConfiguration, serviceProvider, options);
                 if (info is not null) result.Add(info);
             }
         }
@@ -299,6 +376,17 @@ internal sealed class CreatableTypesProvider(
             .ThenBy(x => x.DisplayName ?? x.NodeTypePath, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
+
+    /// <summary>
+    /// 🚨 THE create-context exclusion, in the same two halves every query backend applies
+    /// (<c>StorageAdapterMeshQueryProvider.IsExcludedByContext</c> /
+    /// <c>StaticNodeQueryProvider.IsExcludedByContext</c>): the TYPE-level map built from the
+    /// registered nodes, then the node's own <see cref="MeshNode.ExcludeFromContext"/>. Written
+    /// once here so the menu and the queries that feed it cannot answer differently.
+    /// </summary>
+    private static bool IsExcludedFromCreate(MeshNode node, MeshConfiguration meshConfiguration) =>
+        meshConfiguration.IsExcludedFromContext(node.NodeType, MeshContexts.Create)
+        || node.IsExcludedFromContext(MeshContexts.Create);
 
     private static CreatableTypeInfo BuildInfoFromMeshNode(MeshNode node, System.Text.Json.JsonSerializerOptions options)
     {
@@ -325,14 +413,34 @@ internal sealed class CreatableTypesProvider(
     /// would be a hole in the one rule this provider exists to apply. The opt-out is read from the
     /// static registry, which is where every platform type that declares one lives.</para>
     /// </summary>
-    private static CreatableTypeInfo? BuildInfoFromConfig(
-        string typePath, IServiceProvider serviceProvider, System.Text.Json.JsonSerializerOptions options)
+    internal static CreatableTypeInfo? BuildInfoFromConfig(
+        string typePath,
+        ImmutableDictionary<string, MeshNode?> declaredNodes,
+        MeshConfiguration meshConfiguration,
+        IServiceProvider serviceProvider,
+        System.Text.Json.JsonSerializerOptions options)
     {
-        var node = serviceProvider.FindStaticNode(typePath);
-        if (node is not null)
-            return node.IsExcludedFromContext(MeshContexts.Create)
+        // 1. Static registration — resolved with no read at all.
+        var staticNode = serviceProvider.FindStaticNode(typePath);
+        if (staticNode is not null)
+            return IsExcludedFromCreate(staticNode, meshConfiguration)
                 ? null
-                : BuildInfoFromMeshNode(node, options);
+                : BuildInfoFromMeshNode(staticNode, options);
+
+        // 2. 🚨 THREE OUTCOMES, NOT TWO. A key PRESENT means the probe completed and its answer
+        //    stands; a key ABSENT means the probe did not complete, which is UNKNOWN — and
+        //    unknown fails CLOSED. Treating unknown as "no such node" would synthesise the entry
+        //    and offer a type whose opt-out simply could not be read, which is the failure this
+        //    lookup was added to prevent, arriving only under load.
+        if (!declaredNodes.TryGetValue(typePath, out var probed))
+            return null;
+        if (probed is not null)
+            return IsExcludedFromCreate(probed, meshConfiguration)
+                ? null
+                : BuildInfoFromMeshNode(probed, options);
+
+        // 3. Confirmed absent: the declaration names a type the mesh does not have yet. Offering
+        //    it is deliberate — a declaration may precede the import that lands the type.
         return new CreatableTypeInfo(
             NodeTypePath: typePath,
             DisplayName: GetLastSegment(typePath),
