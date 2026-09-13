@@ -593,10 +593,39 @@ jobs:
             echo "no module content affected (see the affected computation above) — nothing for the gate to test"
             exit 0
           fi
+          # 🚨 NEVER FAN OUT WIDER THAN THERE IS WORK (MeshWeaver#4175). A narrowed PR run gates the
+          # packages `affected` selected, and the fan-out is computed from the caller's input alone —
+          # so a diff touching fewer packages than `shards` produced a shard with NOTHING in it, and
+          # an empty shard is not a harmless no-op: it installs no package, so the tester's
+          # bake-consumption postcondition fires ("the bake in '/seed' declares assemblies for N
+          # NodeType(s), NONE of which this run installed — the gate judged none of the baked bytes")
+          # and the fold fails the required context. Measured on MeshWeaver.Plugins#1768, run
+          # 34749441237: shards 1-3 gated Store / AI / Hosting and adopted 17/17, 17/17, 35/35;
+          # shard 4/4 gated `0 of 3` and failed the whole run.
+          #
+          # 🚨 THE POSTCONDITION STAYS EXACTLY AS STRICT. The tempting alternative — let a shard that
+          # installed nothing pass — would make an empty leg indistinguishable from one that judged
+          # the bytes, which is the vacuous-leg shape this lane keeps having to refuse (#4155 is the
+          # same family one value along). The fan-out is what was wrong, so the fan-out is clamped.
+          # A FULL run (`run_all: true`, i.e. push / schedule / narrowing off) gates every discovered
+          # package and is never clamped: `mount` is empty there precisely because nothing was
+          # narrowed, and the shards divide a population this step cannot count.
+          EFFECTIVE="$SHARDS"
+          if [ "$RUN_ALL" != "true" ]; then
+            AFFECTED=$(printf '%s' "$MOUNT" | tr -s '[:space:]' '\n' | grep -c '[^[:space:]]' || true)
+            [ -n "$AFFECTED" ] || AFFECTED=0
+            if [ "$AFFECTED" -lt "$EFFECTIVE" ]; then
+              echo "narrowed run: $AFFECTED affected package(s) ($MOUNT) — fanning across $AFFECTED shard(s), not the caller's $SHARDS, so no shard is handed an empty slice (MeshWeaver#4175)"
+              EFFECTIVE="$AFFECTED"
+            fi
+          fi
+          # A narrowed run with a non-empty mount always has at least one package, and `run_all` with
+          # an empty mount took the `nothing_to_gate` exit above — so this can only be a lane defect.
+          [ "$EFFECTIVE" -ge 1 ] || { echo "::error::the effective shard count came out $EFFECTIVE with run_all='$RUN_ALL' and mount='$MOUNT' — refusing to plan a fan-out that gates nothing (MeshWeaver#4175)"; exit 1; }
           echo "nothing_to_gate=false" >> "$GITHUB_OUTPUT"
-          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
-          echo "matrix=$(seq 1 "$SHARDS" | jq -R . | jq -sc 'map(tonumber)')" >> "$GITHUB_OUTPUT"
-          echo "fanning the gate out across $SHARDS shard(s)"
+          echo "shards=$EFFECTIVE" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(seq 1 "$EFFECTIVE" | jq -R . | jq -sc 'map(tonumber)')" >> "$GITHUB_OUTPUT"
+          echo "fanning the gate out across $EFFECTIVE shard(s)"
       # ───────────── THE PLATFORM: the caller's pins verbatim, or resolved HERE (the header) ─────────────
       # Not an input-shaped `if:` — the step runs whenever there is something to gate and branches
       # INSIDE on the inputs, so a caller's pin is echoed back byte-for-byte and an empty pair is
