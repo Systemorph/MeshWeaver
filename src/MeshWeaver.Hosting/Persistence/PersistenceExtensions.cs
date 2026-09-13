@@ -836,6 +836,11 @@ public static class PersistenceExtensions
         // an empty instrument wearing a green tick.
         services.TryAddSingleton<NodeTypeBakeReportRegistry>();
         services.TryAddSingleton<SourceDiscoveryRegistry>();
+        // 🚨 …and the third, for the same reason and in the same place (#4063): what this identity
+        // has SEALED, and which module-bearing repositories the publication seal is currently
+        // freezing. The boot publication sweep and every green-build delivery record into it; the
+        // host's SealedSyncHealthCheck prints it, census-tagged, whatever the status.
+        services.TryAddSingleton<SealedSyncCensus>();
         // Late owner-response watch for cross-hub writes: UpdateRemote arms an entry per
         // posted patch; the cache hub's PatchDataResponse handler dispatches responses whose
         // 2s caller window already closed (see LatePatchResponseRegistry). Mesh-scoped

@@ -354,10 +354,12 @@ public sealed class GitHubWebhookProcessor
                 // somewhere, not here. Repositories the instance runs no publication of are
                 // unaffected (SealedSyncGate: no attributable seal ⇒ today's behaviour).
                 var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-                var sealedForThisIdentity = SealedPublicationIndex.ReadFor(
-                    hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey],
-                    identity, logger);
+                var publishedRoot = hub.ServiceProvider.GetService<IConfiguration>()
+                    ?[ShippedPrebuiltBundles.PublishedRootConfigKey];
+                var sealedForThisIdentity = SealedPublicationIndex.ReadFor(publishedRoot, identity, logger);
                 var held = 0;
+                var gateEvaluated = 0;
+                string? heldReason = null;
                 var picked = new List<PushTarget>();
                 var skipped = new List<string>();
                 foreach (var node in match.Configs)
@@ -368,10 +370,12 @@ public sealed class GitHubWebhookProcessor
                         skipped.Add($"{node.Path} ({reason})");
                         continue;
                     }
+                    gateEvaluated++;
                     if (SealedSyncGate.Decide(repo, headSha, cfg?.LastSyncCommitSha, sealedForThisIdentity, identity)
                         is { Proceed: false } hold)
                     {
                         held++;
+                        heldReason ??= hold.HoldReason;
                         skipped.Add($"{node.Path} ({hold.HoldReason})");
                         RecordSealHold(node, cfg, hold.HoldReason);
                         continue;
@@ -393,6 +397,29 @@ public sealed class GitHubWebhookProcessor
                     + "{Targeting} targeting this repository, {Selected} selected, {Skipped} skipped{SkipDetail}.",
                     repo, branch, headSha, match.Candidates, match.Configs.Count, targets.Count,
                     skipped.Count, skipped.Count == 0 ? string.Empty : " — " + string.Join("; ", skipped));
+                // 🚨 THE INSTANCE-LEVEL FACT, published (#4063). The per-space note #4065 writes is
+                // read one node at a time by an operator who already suspects something; the census
+                // states "this identity has no publication of repository X at or after its last
+                // green build" on /health, where a freeze and a quiet week stop looking the same.
+                // The publication reading is recorded on EVERY delivery, not only at boot, so the
+                // denominator is as fresh as the deliveries — the boot-only reconciler is precisely
+                // what left the 2026-09-12 freeze unstated for nine hours.
+                //
+                // A release is recorded only when the gate actually RAN and let everything through
+                // (gateEvaluated > 0 && held == 0). A delivery in which every config was dropped by
+                // SkipReason never asked the gate anything, and clearing a standing hold on that
+                // would be a verdict taken from a measurement that was not made.
+                if (hub.ServiceProvider.GetService<SealedSyncCensus>() is { } census)
+                {
+                    var now = DateTimeOffset.UtcNow;
+                    census.RecordPublication(new SealedPublicationReading(
+                        identity, publishedRoot, [.. sealedForThisIdentity], now));
+                    if (held > 0)
+                        census.RecordHold(repo.ToString(), headSha, heldReason ?? "held", held, now);
+                    else if (gateEvaluated > 0)
+                        census.RecordRelease(repo.ToString());
+                }
+
                 if (held > 0)
                     // Its own line, at Warning: a source held back by the seal is content that
                     // quietly stops arriving until the registry seals this commit for this identity

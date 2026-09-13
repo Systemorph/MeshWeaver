@@ -100,6 +100,13 @@ public static class GitHubSyncConfiguration
         // because only the sync layer knows the configs; an instance without git sync keeps the
         // hosting default (no reconciler ⇒ the sweep proceeds as before).
         services.TryAddSingleton<Hosting.IPublicationSyncReconciler, SealedPublicationSyncReconciler>();
+        // 🚨 …and the TRIGGER that seam was missing (#4063). Its only caller was the boot sweep, so
+        // a repository whose publish-bake seals AFTER its green-build webhook never advanced inside
+        // one process lifetime: the delivery at head sha A is held because the seal is not at A yet,
+        // and the delivery at B is held because the seal is at A. The publication's own arrival in
+        // the mesh (Hosting/PlatformBuilds/<source>) is the fact that releases it — an event that
+        // already existed and was simply not listened to. No timer, no poller, no retry.
+        services.AddHostedService<PublicationSealArrivalService>();
         // Surfaces the per-space GitHub sync sources on the partition administration page
         // (PartitionSyncAdminLayoutArea resolves all IPartitionSyncSourceProvider from DI).
         // ONE provider instance, TWO seams: the administration GUI's rich one and the compile
