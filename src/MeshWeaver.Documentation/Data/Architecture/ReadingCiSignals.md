@@ -191,6 +191,53 @@ Two bugs that make a monitor lie, both hit in one session:
   of a PR with zero checks. Decide readiness by asserting the **required set is present and
   SUCCESS**, never by the absence of failures.
 
+### 🚨 A lookup that cannot reach its target answers the DEFAULT, forever, on every machine
+
+The other direction of the same defect: the gate runs, its input is a constant, and the constant is
+one the gate refuses. Between 21:37Z and 05:05Z on 2026-09-12 **no MeshWeaver.Plugins bundle
+reached the registry** — every module of every batch failed the module-pack lane's publish
+stand-down with
+
+```
+✗ matrix entry missing package/module/project: {}
+##[error]could not decide whether a newer trunk commit reaches this module (exit 1) — 'cannot tell' never publishes
+```
+
+The step asked its state tool for the whole matrix entry as `bk get --module "$MODULE" entry
+--default '{}'`. But `get` resolves a recorded fact, **else a dotted path *inside* the entry** — so
+the key `entry` asked for a field *named* `entry` inside the matrix entry, which no matrix entry
+carries. It therefore answered `{}` for every module, on every runner, deterministically. There was
+no way to ask that tool for the whole entry at all.
+
+**Two readings this produced, both wrong, and both cheap to rule out:**
+
+- *"It is the runner image."* The window coincided exactly with those legs running on a different
+  runner set, and the same legs published fine on the next run — so the shape read as "the tool sees
+  a different state file or checkout on that image". It is not: the call is machine-independent and
+  reproduces in one command on a laptop. **The run that "worked" never executed the line** — it sat
+  in the `else` branch of a three-way check, reached only when the trunk tip differs from this run's
+  commit *and* the two trees differ; that run's commit WAS the tip, and its log says so
+  (`this run's commit … IS the trunk tip — nothing newer; publishing`).
+- *"Something merged in between fixed it."* Nobody touched the tool or the step. A branch that is
+  not taken is not a fix.
+
+**The generalisation.** A default is only a default if the lookup can also *succeed*. Where the key
+can never resolve, `--default X` is not a fallback — it is a hard-coded X wearing a lookup's
+clothes, and it turns the gate downstream into a constant. So: give a reader that must return a
+whole structure **its own subcommand with no default**, which reds naming what it wanted and the
+phase that wanted it; keep `--default` for keys that name a real field, where absence is a genuine
+state. The pin is a self-test case that round-trips the structure and asserts the absent case is a
+red — added first, and **watched to fail** against the unfixed tool (#4140).
+
+### 🚨 A diagnostic printed on a DATA channel is eaten by the consumer
+
+The same step pipes the reader into `jq`. The tool wrote its `::error::` to **stdout**, so on the
+absent case `jq` consumed the message and answered `parse error`, naming no module — the red was
+real, and said nothing about which module or why. Any subcommand whose stdout a caller pipes or
+captures (`PACKAGE="$(bk get …)"`) must write every diagnostic to **stderr**: on stdout it is either
+swallowed, or assigned into the variable as though it were the value. The runner annotates
+`::error::` from stderr, and the log shows stderr regardless.
+
 ## A green gate can be answering with evidence it did not produce
 
 The traps above are about a check that never *ran*. This one is worse: the check runs, does its
