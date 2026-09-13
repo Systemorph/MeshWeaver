@@ -325,7 +325,10 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             if (context.Operation is not (NodeOperation.Create or NodeOperation.Update))
                 return Observable.Return(NodeValidationResult.Unauthorized(denial));
 
-            return PartitionWriteGuardValidator.DescribeOwnerlessPartition(_hub, context.Node.Path)
+            // The principal is passed so the probe can name the ONE denial the durable store
+            // disagrees with (#4061 finding 2) — see DescribeDeniedWrite. It changes no verdict.
+            return PartitionWriteGuardValidator.DescribeDeniedWrite(
+                    _hub, context.Node.Path, effectiveUserId)
                 .Take(1)
                 .Select(diagnosis => NodeValidationResult.Unauthorized(
                     diagnosis is null ? denial : $"{denial}. {diagnosis}"))
