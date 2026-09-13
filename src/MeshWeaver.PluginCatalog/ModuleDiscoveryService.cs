@@ -722,11 +722,17 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
                 // 🚨 Its own line, at Warning, exactly as the webhook path logs a held source: a
                 // first import that imports NOTHING leaves an empty Space, and an empty Space is
                 // indistinguishable from a module that simply has no content unless something says
-                // so. The scan re-runs the import on its next pass (Evaluate's case (1): a config
-                // with no LastSyncCommitSha is the re-import trigger), so this releases itself.
+                // so.
+                // 🚨 And the line says WHEN it will be retried rather than "later". Evaluate's case
+                // (1) re-runs the import on the next scan (a config with no LastSyncCommitSha is the
+                // trigger) — but scans are enqueued at boot and on BuildCompletion emissions, so on
+                // an instance receiving no build webhooks the next scan IS the next boot. A seal
+                // completing mid-process is not noticed until then (MeshWeaver#4063's shape).
                 logger?.LogWarning(
                     "[ModuleDiscovery] the first import of '{Space}' is HELD — {Reason}. The Space and "
-                    + "its sync entry are in place; the next scan retries it.", spaceId, plan.HoldReason);
+                    + "its sync entry are in place; the next scan retries it — that is the next green "
+                    + "build of this repo, or this instance's next start if it receives no build "
+                    + "webhooks (MeshWeaver#4063).", spaceId, plan.HoldReason);
                 return Observable.Return($"first import held — {plan.HoldReason}");
             }
             // System both as the trigger identity (TriggerAuthorizedAsSystem short-circuits an
@@ -751,7 +757,20 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     /// sealed of <paramref name="source"/>'s repository, put to <see cref="SealedSyncGate"/>. A
     /// source whose repo path is not an <c>owner/name</c> GitHub repository matches no seal and so
     /// keeps today's behaviour — the same fail-open the gate itself has.
+    ///
+    /// <para><b>The local-disk read runs inline, deliberately, and here is the measurement.</b> Every
+    /// caller of <see cref="SealedPublicationIndex.ReadFor"/> reads it this way —
+    /// <c>GitHubWebhookProcessor</c> inside its own <c>Select</c>, and <c>ShippedPrebuiltBundles</c>
+    /// twice during seeding; there is no <c>IIoPool</c>-wrapped bundle reader to be consistent with,
+    /// so wrapping this one alone would make the four call sites disagree about a shared pure
+    /// function. It also does not reach the hub: the scan pipeline is
+    /// <c>ObserveOn(TaskPoolScheduler.Default)</c> + <c>Concat</c> precisely so a scan never runs on
+    /// the thread that queued it, so the exposure is one pool thread and the next queued scan — on a
+    /// path that already does a git fetch and a full import. Moving all four behind the pool is a
+    /// worthwhile change and it is a change to <see cref="SealedPublicationIndex"/>'s contract, not
+    /// to this call.</para>
     /// </summary>
+    /// <param name="source">The configured package source whose repository the seal is read for.</param>
     private SealedSyncGate.FirstImportPlan FirstImportPlan(ConfiguredPackageSource source)
     {
         var (owner, name) = ModuleDiscovery.SplitRepo(source.RepoPath);

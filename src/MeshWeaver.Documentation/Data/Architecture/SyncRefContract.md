@@ -256,12 +256,21 @@ three answers:
 | exactly one sealed commit, attributed by the `repository.txt` marker | `UpdateToProvenCommitFromGitHub` at that commit |
 | attributable but torn, at an unknown commit, or two seals disagreeing | **import nothing**, say why, retry next scan |
 
-Two properties keep the original rationale intact. A repository this instance runs no publication of
-still provisions at the tip, so AutoSync on a webhook-less consumer is exactly as alive as before —
-that *was* the case the residue was about. And a held first import is self-releasing: it leaves a Space
-whose `_GitSync` carries no `LastSyncCommitSha`, which is precisely the condition
-`ModuleDiscoveryService.Evaluate` re-runs the import on, so the next scan retries it once the seal
-lands. The blast radius of the hold is still "a new empty partition", never live content going dark.
+The original rationale stays intact where it applied: a repository this instance runs no publication
+of still provisions at the tip, so AutoSync on a webhook-less consumer is exactly as alive as before —
+that *was* the case the residue was about. The blast radius of a hold is still "a new empty
+partition", never live content going dark.
+
+🚨 **How a hold releases, stated exactly — the loose version of this is wrong and was caught in
+review.** Two paths re-run a held first import: the discovery scan's next pass (a `_GitSync` with no
+`LastSyncCommitSha` is `ModuleDiscoveryService.Evaluate`'s re-import trigger) and
+`SealedPublicationSyncReconciler`, which brings a source onto the sealed commit when the seal is read.
+But scans are enqueued at **boot** and on **`BuildCompletion`** emissions, and the reconciler runs from
+`ShippedPrebuiltBundles.SeedPublishedRoot`, which is **boot-time** — so on an instance receiving no
+build webhooks, *both reduce to the next process start*, and a seal that completes mid-process is not
+noticed until then. That is [#4063](https://github.com/Systemorph/MeshWeaver/issues/4063)'s shape and
+this hold inherits it. The Warning the scan logs says so in those terms rather than "later", so an
+operator reading it knows which event to wait for.
 
 🚨 A first import can be attributed **only by the repository marker**. It has neither a built commit
 nor a last-sync commit, so both commit-attribution legs of `SealedSyncGate.BelongsTo` have nothing to

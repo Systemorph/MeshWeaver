@@ -157,6 +157,44 @@ public class SealedSyncGateTest
     }
 
     [Fact]
+    public void AFirstImport_IsHeldByATornSIBLING_EvenWhenAnotherPublicationOfTheRepoIsSealed()
+    {
+        // 🚨 The fail-open one level in: deciding on the SEALED entries alone would let a good seal
+        // override a torn sibling of the same repository, pinning the Space while part of that
+        // repository's bytes are missing here. Reported by review on #4212.
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed),
+             Source("plugins-extra", "Systemorph/MeshWeaver.Plugins", Built, sealedState: false,
+                 refusal: "no completion sentinel")], Identity);
+        plan.Proceed.Should().BeFalse(
+            "every attributable publication must be usable, not merely one of them");
+        plan.HoldReason.Should().Contain("'plugins-extra'").And.Contain("no completion sentinel");
+        plan.Commit.Should().BeNull();
+    }
+
+    [Fact]
+    public void AFirstImport_IsHeldByAnUnknownCommitSIBLING_EvenWhenAnotherPublicationIsSealed()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed),
+             Source("plugins-extra", "Systemorph/MeshWeaver.Plugins", null)], Identity);
+        plan.Proceed.Should().BeFalse();
+        plan.HoldReason.Should().Contain("an unknown commit").And.Contain("'plugins-extra'");
+    }
+
+    [Fact]
+    public void AFirstImport_HoldReason_CountsTheOtherUnusablePublications()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("a", "Systemorph/MeshWeaver.Plugins", null),
+             Source("b", "Systemorph/MeshWeaver.Plugins", Built, sealedState: false, refusal: "torn"),
+             Source("c", "Systemorph/MeshWeaver.Plugins", Sealed)], Identity);
+        plan.Proceed.Should().BeFalse();
+        plan.HoldReason.Should().Contain("and 1 more of Systemorph/MeshWeaver.Plugins",
+            "a hold that names one witness must still say how many others are in the same state");
+    }
+
+    [Fact]
     public void AFirstImport_AgainstASealAtAnUnknownCommit_Holds()
     {
         var plan = SealedSyncGate.DecideFirstImport(Plugins,
