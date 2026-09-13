@@ -31,6 +31,8 @@ REFUSE = [
     (r"\bIAsyncLifetime\b|override\s+(async\s+)?(ValueTask|Task)\s+(DisposeAsync|InitializeAsync)\b", "implements IAsyncLifetime / overrides the fixture's InitializeAsync/DisposeAsync — the runner has no per-class lifecycle hook yet"),
     (r"Observable\.Using\([^\n]*Impersonate", "opens an impersonation scope with Observable.Using — the in-mesh shape is AsSystem (check-impersonation.py); needs a hand port"),
     (r"\.ToTask\(", "bridges an observable to a Task with .ToTask( — forbidden in every gated root (ObservableToTaskBridgeGuard); compose reactively first"),
+    (r"\.Wait\(\)|\.GetAwaiter\(\)\.GetResult\(\)", "blocks on a wait (.Wait() / .GetAwaiter().GetResult()) — ObservableToTaskBridgeGuard"),
+    (r"(?s)TaskCompletionSource.*\.Subscribe\s*\(|\.Subscribe\s*\(.*TaskCompletionSource", "hand-rolls an observable→Task bridge (TaskCompletionSource + Subscribe) — ObservableToTaskBridgeGuard; use ReactiveCompletion.ObserveCompletion"),
     (r"using Microsoft\.Playwright|\bIPage\b|\bIBrowser\b|PortalFixture", "drives a browser (Playwright) — an e2e host, not an in-mesh case"),
     (r"(?m)^using Orleans|OrleansSharedTestBase|\bTestCluster\b|\bISiloHost\b|\bRoutingGrain\b|\bIGrainFactory\b", "needs the Orleans silo host — the gate's mesh is the monolith"),
     (r"using MeshWeaver\.Testing\.Xunit\b|MeshWeaver\.Testing\.Xunit\.", "tests the xunit adapter itself (MeshWeaver.Testing.Xunit is not a platform assembly)"),
@@ -167,6 +169,8 @@ public class SampleTest : MonolithMeshTestBase
     assert convert("var x = Observable.Using(() => access.ImpersonateAsSystem(), _ => y);", "x")[0] is None
     assert "InMeshTestBase.AsSystem(access, () => Mesh.CreateNode(n))" in convert("var r = access.RunAsSystem(() => Mesh.CreateNode(n));", "x")[0]
     assert convert("var t = obs.ToTask();", "x")[0] is None
+    assert convert("var r = task.GetAwaiter().GetResult();", "x")[0] is None
+    assert convert("var tcs = new TaskCompletionSource<int>();\nobs.Subscribe(v => tcs.TrySetResult(v));", "x")[0] is None
     assert convert("var n = await ws.GetMeshNodeStream(p).FirstAsync();", "x")[0] is None
     assert convert("class X : HubTestBase { protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration c) => c; }", "x")[0] is None
     assert convert("var h = GetHost(c => c.AddData());", "x")[0] is None

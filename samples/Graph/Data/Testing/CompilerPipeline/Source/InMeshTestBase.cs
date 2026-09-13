@@ -133,9 +133,10 @@ public abstract class InMeshTestBase
     /// <summary>The mesh's access service.</summary>
     protected static AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
-    /// <summary>Creates a node as the platform provisioner (the xunit base's SeedTopLevel).</summary>
-    protected async Task<MeshNode> SeedTopLevel(MeshNode node)
-        => await AsSystem(Access, () => NodeFactory.CreateNode(node))
+    /// <summary>Creates a node as the platform provisioner (the xunit base's SeedTopLevel). Reactive: a test
+    /// awaits the observable it returns; no mesh write is awaited here (HubReachableAsyncGuard).</summary>
+    protected IObservable<MeshNode> SeedTopLevel(MeshNode node)
+        => AsSystem(Access, () => NodeFactory.CreateNode(node))
             .SubscribeOn(TaskPoolScheduler.Default)
             .Take(1)
             .Timeout(Context.Deadline);
