@@ -5,13 +5,16 @@ namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Links a Memex agent thread to the Microsoft Teams conversation that spawned it, so the agent's reply
-/// can be sent back into the same Teams chat (proactively, after the agent finishes). Stored as a
-/// satellite of the thread at <c>{threadPath}/_TeamsConversation/{id}</c>. The reply sender uses
-/// <see cref="LastDeliveredMessageId"/> to send only new agent messages once.
+/// can be sent back into the same Teams chat (proactively, after the agent finishes). Stored as
+/// CONTENT in the Admin partition at <c>Admin/_TeamsConversation/{key}</c> (MeshWeaver.Plugins#1773),
+/// one node per conversation — never beneath the thread: a node under the configured <c>_Thread</c>
+/// satellite segment is excluded from every untargeted content query, which is how the earlier
+/// <c>{threadPath}/_TeamsConversation/{id}</c> placement was found by nobody (Plugins#1665). The
+/// reply sender uses <see cref="LastDeliveredMessageId"/> to send only new agent messages once.
 /// </summary>
 public record TeamsConversation
 {
-    /// <summary>Stable satellite id; one Teams conversation per thread, so it is constant.</summary>
+    /// <summary>The node id: a stable, path-safe key of the conversation id (one per conversation).</summary>
     [Browsable(false)]
     [Key]
     public string Id { get; init; } = "teams-conversation";   // one per thread → stable id

@@ -51,8 +51,10 @@ Key points:
   (`{username}/_Thread/{id}`), and the `conversationId` is matched to it via a `TeamsConversation`
   link node that is CONTENT in the Admin partition — `Admin/_TeamsConversation/{key}`, `key` a stable
   hash of the conversation id — never a node under the thread: `_Thread` is a configured satellite
-  segment, so anything beneath a thread path is invisible to every content query on both backends,
-  which is why the link used to be found by nobody (MeshWeaver.Plugins#1665 / #1773). New →
+  segment, so a node beneath a thread path lives in the satellite table and is excluded from every
+  UNTARGETED content query on both backends (a query that targets the satellite path itself is
+  routed to that table); the old mesh-wide `nodeType:TeamsConversation …` lookup was untargeted,
+  which is why it found the link by nobody (MeshWeaver.Plugins#1665 / #1773). New →
   `StartThread`, existing → `SubmitMessage` — the canonical
   [thread extensions](/Doc/Architecture/ThreadOperations).
 - **The agent runs as the mapped Memex user.** Teams users are mapped by **AAD object id** to a `User`
