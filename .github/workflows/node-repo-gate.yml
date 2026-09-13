@@ -1278,7 +1278,7 @@ jobs:
               echo "|---|---|---|"
               echo "| \`push\` / \`pull_request\` | this repo's PIN | the PIN is wrong — move it to an identity the upstream HAS published for |"
               echo "| \`repository_dispatch\` | the wake's own payload | the wave is mid-flight; the upstream's publication re-triggers this run |"
-              echo "| \`schedule\` | a MOVING release tag this run resolved itself | nobody promised the upstream published for it |"
+              echo "| \`schedule\` | the platform this run RESOLVED for itself — printed above; normally the newest platform-SEALED set, else a caller pin, an \`allow-unpinned\` tag or an \`MW_PLATFORM_REF\` freeze | nobody promised the upstream published for THAT set |"
               echo ""
               echo "This run's event was \`${GITHUB_EVENT_NAME:-unknown}\`."
               echo ""
@@ -1286,12 +1286,15 @@ jobs:
               echo "identity, POSTs the publication to the control instance, which dispatches"
               echo "\`meshweaver-upstream-published\` to every repository that declares that source."
               echo ""
-              echo "🚨 **The \`schedule\` poll does NOT retry this identity** — it re-resolves a moving"
-              echo "tag, so the next poll asks about whatever has been promoted since. If no wake ever"
+              echo "🚨 **The \`schedule\` poll does NOT retry this identity** — it resolves the platform"
+              echo "again next time and lands on a DIFFERENT one. That is not a resolution defect to fix"
+              echo "here: what is missing is the UPSTREAM's publication for whichever set was chosen, and"
+              echo "\`Doc/Architecture/CiContentBake\` refuses the walk-back-to-the-newest-identity-that-HAS-a"
+              echo "publication fallback by name (MeshWeaver#3583). If no wake ever"
               echo "arrives, the upstream is not publishing for released identities at all: that is"
               echo "the UPSTREAM's red, and nothing in this repository repairs it."
             } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
-            echo "::error title=Upstreams not ready — did not gate::upstream '$src' has no SEALED publication at $where for framework identity $IDENTITY. What re-enables it is the upstream's own publish-bake dispatching meshweaver-upstream-published for this identity — NOT the schedule poll, which re-resolves a moving tag and therefore asks about a different identity next time. This run's event was ${GITHUB_EVENT_NAME:-unknown}."
+            echo "::error title=Upstreams not ready — did not gate::upstream '$src' has no SEALED publication at $where for framework identity $IDENTITY. What re-enables it is the upstream's own publish-bake dispatching meshweaver-upstream-published for this identity — NOT the schedule poll, which resolves the platform again and therefore asks about a different identity next time. This run's event was ${GITHUB_EVENT_NAME:-unknown}."
             exit 1
           }
 
