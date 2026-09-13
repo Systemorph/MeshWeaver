@@ -303,10 +303,20 @@ def self_test() -> int:
 SUPERSEDE_CALL = re.compile(r"^\s*uses:\s*\S*/node-repo-supersede\.yml@", re.M)
 
 
+PER_MODULE_DEPLOY = re.compile(r"^\s*uses:\s*\S*/node-repo-module-publish\.yml@", re.M)
+
+
 def supersede_calls(body: str) -> list[str]:
     """Per-module deploy (2026-09-11): no job may call the supersede lane. The lane refuses every
     event but a push to main, so ANY call is a canceller of main runs — the second canceller, beside
-    `cancel-in-progress`, that the expression check above cannot see. Comment lines never match."""
+    `cancel-in-progress`, that the expression check above cannot see. Comment lines never match.
+
+    Fleet (2026-09-13): the rule binds a repo that publishes PER MODULE (it calls
+    node-repo-module-publish.yml — a cancelled main run then publishes nothing). A repo still on the
+    whole-repo bake (the satellites: publish-bake, no module-publish) keeps the supersede lane by
+    design — its design of record is ModuleBuildArchitecture → "Superseded runs on main"."""
+    if not PER_MODULE_DEPLOY.search(body):
+        return []
     return [
         f"line {body.count(chr(10), 0, m.start()) + 1}: calls node-repo-supersede.yml. This repo is on "
         "PER-MODULE DEPLOY: a push run on main is never cancelled, because a cancelled run publishes "
