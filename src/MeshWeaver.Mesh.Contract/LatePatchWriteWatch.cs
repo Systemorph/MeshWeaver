@@ -100,9 +100,10 @@ public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink, IUndelive
     public static readonly TimeSpan VerdictBoundGrace = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// 🚨 The outer bound on a caller-visible mesh WRITE: the instant <c>UpdateRemote</c> gives up
-    /// and reports <c>OwnerUnreachable</c>. Public because a bound nobody can see gets re-authored
-    /// as a literal somewhere else, and then the two numbers collide.
+    /// 🚨 The outer bound on ONE ATTEMPT of a caller-visible mesh write: the instant
+    /// <c>UpdateRemote</c> gives up on <b>this attempt</b> and reports <c>OwnerUnreachable</c>.
+    /// Public because a bound nobody can see gets re-authored as a literal somewhere else, and then
+    /// the two numbers collide.
     ///
     /// <para>They did collide. The convention for a test wait was a hand-written <c>30 s</c> — the
     /// same number as <see cref="LateResponseWatchBound"/>, and one second BELOW this. So a test
@@ -111,11 +112,68 @@ public sealed class LatePatchResponseRegistry : ILatePatchVerdictSink, IUndelive
     /// have said <c>OwnerUnreachable — the owner produced no terminal for this patch</c>. The
     /// failure that carried the explanation was never the one anybody read (#2819).</para>
     ///
-    /// <para>🚨 Anything waiting on a write must bound itself STRICTLY ABOVE this, so the
-    /// framework's terminal wins and names the cause. <c>TestTimeouts.Convergence</c> derives from
-    /// it rather than restating it.</para>
+    /// <para>🚨 <b>PER-ATTEMPT — and this doc said otherwise for months, which is half of #3477's
+    /// defect.</b> It used to read <i>"the outer bound on a caller-visible mesh WRITE"</i> with no
+    /// qualifier, and <c>TestTimeouts.Convergence</c> derived from it, so <b>every waiter in the
+    /// fleet was given a deadline that a legitimate write can exceed by ~3×</b>. A write the owner
+    /// NACKs as never-applied is RE-ENQUEUED (<c>MeshNodeStreamHandle.MaxOwnerDisposingReenqueues</c>),
+    /// and every re-attempt arms a FRESH deadline from its OWN post and pays its own base read
+    /// outside it. The waiter therefore expired while the framework's named terminal was still due,
+    /// and the failure read as an anonymous timeout — which is precisely the sighting #3477 was
+    /// filed on, and precisely what the wording above promises will never happen.</para>
+    ///
+    /// <para>🚨 <b>The rule, so a reader picks correctly rather than picking this one by default:</b>
+    /// <list type="bullet">
+    ///   <item><b>A waiter that can cover a RE-ENQUEUE bounds itself strictly above
+    ///     <see cref="WriteTotalBound"/>.</b> Example: a test that watches a write through an owner
+    ///     disposal (<c>LateNackReenqueueTest</c>) — the NACK is the whole subject, so re-attempts
+    ///     are the expected path, not the pathological one.</item>
+    ///   <item><b>A waiter on ONE attempt bounds itself strictly above this.</b> Example:
+    ///     <c>MeshExtensions.InnerCreateVerdictBound</c>, which bounds the upsert's inner
+    ///     <c>CreateNodeRequest</c> — the CREATE leg has no owner-side <c>OwnerDisposing</c> NACK
+    ///     (the open half of #3510) and so never re-enqueues; giving it the total would make a
+    ///     dead-owner create wait minutes to say the same thing.</item>
+    /// </list>
+    /// Either way: STRICTLY above, never equal, so the framework's terminal wins and names the
+    /// cause.</para>
     /// </summary>
     public static TimeSpan WriteVerdictBound => LateResponseWatchBound + VerdictBoundGrace;
+
+    /// <summary>
+    /// 🚨 The outer bound on a caller-visible mesh write <b>including every re-attempt it may
+    /// legitimately make</b> — the bound <see cref="WriteVerdictBound"/>'s own prose used to claim
+    /// to be (#3477).
+    ///
+    /// <para><b>DERIVED, never typed.</b> Every term is read from the code that actually spends it,
+    /// so the published number cannot drift from the path the way it already did once:</para>
+    /// <list type="bullet">
+    ///   <item>attempt 0 — <c>MeshNodeStreamHandle.BaseStateWaitBound</c> (the mirror base read)
+    ///     then <see cref="WriteVerdictBound"/>, armed from that attempt's post;</item>
+    ///   <item>each of <c>MeshNodeStreamHandle.MaxOwnerDisposingReenqueues</c> re-attempts — the
+    ///     same base read, PLUS <c>MeshNodeStreamHandle.DefaultNodeReadBudget</c> for the
+    ///     authoritative re-read a PHANTOM base forces (<c>ReattemptBaseSource</c>), then a FRESH
+    ///     <see cref="WriteVerdictBound"/> armed from ITS post.</item>
+    /// </list>
+    ///
+    /// <para>🚨 The terms compose ADDITIVELY, not as alternatives — the mistake this issue's own
+    /// elimination table made, and the one <c>LatePatchResponseRegistry</c> already records about
+    /// the owner-side paths (<i>"enumerated as ALTERNATIVES, taking their maximum; in
+    /// <c>ApplyMeshNodePatchInTurn</c> they compose ADDITIVELY"</i>). Reading them as alternatives
+    /// is what made the region between the per-attempt bound and this one look impossible instead
+    /// of merely silent.</para>
+    ///
+    /// <para>🚨 <b>This is not a bound anything is allowed to WIDEN, and it is not the default
+    /// choice.</b> It is a statement of what the re-enqueue path already costs. Pointing a general
+    /// convergence wait at it would inflate every wedged test's failure time several-fold to buy a
+    /// bound almost nothing needs — see the rule on <see cref="WriteVerdictBound"/> for which
+    /// waiter takes which.</para>
+    /// </summary>
+    public static TimeSpan WriteTotalBound =>
+        MeshNodeStreamHandle.BaseStateWaitBound + WriteVerdictBound
+        + MeshNodeStreamHandle.MaxOwnerDisposingReenqueues
+          * (MeshNodeStreamHandle.BaseStateWaitBound
+             + MeshNodeStreamHandle.DefaultNodeReadBudget
+             + WriteVerdictBound);
 
     private sealed record Entry(
         string Path,

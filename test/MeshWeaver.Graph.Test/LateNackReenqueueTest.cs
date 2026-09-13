@@ -71,17 +71,23 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    // 240_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a constant, so
-    // the property cannot be written here. The value must still DOMINATE it — 216 s at the CI
-    // factor (Convergence 108 s x OuterMargin 2) — or the xunit kill pre-empts the inner wait and
-    // the failure cannot say what it was waiting for.
+    // 600_000 ms, not TestTimeouts.WriteTestMilliseconds: an attribute argument must be a constant,
+    // so the property cannot be written here. The value must still DOMINATE it — 560 s at the CI
+    // factor (WriteConvergence 280 s x OuterMargin 2) — or the xunit kill pre-empts the inner wait
+    // and the failure cannot say what it was waiting for. TheOuterKillDominatesTheInnerWait below
+    // is what enforces that, because a literal cannot enforce itself.
     //
-    // 🚨 It was 90_000, which is BELOW TestTimeouts.Convergence on a runner (108 s), so every
-    // internal wait in this test was killed anonymously before it could report. That is exactly the
-    // defect TestTimeouts exists to prevent, and it is what the 2026-09-09 sighting of this test's
-    // sibling looked like: "Test execution timed out after 90000 milliseconds", no assertion, no
-    // named wait (#3477).
-    [Fact(Timeout = 240_000)]
+    // 🚨 It was 240_000, sized against TestTimeouts.TestMilliseconds — the ONE-ATTEMPT bound. This
+    // test's whole subject is a write the owner NACKs, which RE-ENQUEUES, and a re-enqueue chain
+    // can legitimately run to WriteTotalBound (203 s) before the framework itself gives up. So the
+    // outer kill sat below the inner wait again, one level up from where #3477 first found it.
+    //
+    // 🚨 And it was 90_000 before that, which is BELOW TestTimeouts.Convergence on a runner
+    // (108 s), so every internal wait in this test was killed anonymously before it could report.
+    // That is exactly the defect TestTimeouts exists to prevent, and it is what the 2026-09-09
+    // sighting of this test's sibling looked like: "Test execution timed out after 90000
+    // milliseconds", no assertion, no named wait (#3477).
+    [Fact(Timeout = 600_000)]
     public async Task LateOwnerDisposingNack_AfterOptimisticEmit_ReenqueuesAndLands()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -192,6 +198,12 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
             // window closed inside a region that is silent BY DESIGN and the failure could only ever
             // read "System.TimeoutException : The operation has timed out." — which is verbatim what
             // #3477 recorded, with the write's own diagnosis discarded unread.
+            //
+            // 🚨 Reordering fixed WHICH wait reported; it did not fix the NUMBER. The replacement
+            // was TestTimeouts.Convergence, which derives from the per-attempt WriteVerdictBound —
+            // so the same silent region was still reachable, just one bound further out. The wait
+            // now names WriteConvergence, derived from WriteTotalBound, which is composed from the
+            // re-enqueue path's own constants rather than restating them.
             // 🚨 The bound is TURNED INTO A VALUE, never allowed to throw. A bare
             // `.Timeout(...)` raises an anonymous TimeoutException before any assertion runs — the
             // very defect this reordering exists to remove — so the elapsed bound becomes `false`
@@ -201,15 +213,18 @@ public class LateNackReenqueueTest(ITestOutputHelper output) : MonolithMeshTestB
                     || Volatile.Read(ref callerError) is not null)
                 .Select(_ => true)
                 .Take(1)
-                .Timeout(TestTimeouts.Convergence, Observable.Return(false))
+                .Timeout(TestTimeouts.WriteConvergence, Observable.Return(false))
                 .FirstAsync().Await(ct);
             settled.Should().BeTrue(
-                "the write must reach a terminal, and TestTimeouts.Convergence dominates the bound "
-                + "UpdateRemote PUBLISHES (LatePatchResponseRegistry.WriteVerdictBound). 🚨 If THIS "
-                + "is what failed, the write is unbounded rather than merely slow: a re-enqueue "
-                + "chain arms a fresh deadline per attempt and pays a base read outside it, so its "
-                + "composite worst case exceeds the published bound — the open defect recorded in "
-                + "Doc/Architecture/PhantomBaseAfterOwnerDisposal, not a number to widen here");
+                "the write must reach a terminal, and TestTimeouts.WriteConvergence dominates the "
+                + "bound that actually applies to a write which RE-ENQUEUES "
+                + "(LatePatchResponseRegistry.WriteTotalBound). 🚨 This used to be Convergence, "
+                + "which derives from the PER-ATTEMPT WriteVerdictBound — so it could expire while "
+                + "the framework's named terminal was still legitimately due, and the failure then "
+                + "read as an anonymous TimeoutException with the write's own diagnosis discarded "
+                + "unread. That was #3477's own sighting, and it is fixed by the bound this wait "
+                + "now names. 🚨 If THIS is what failed now, the write really is unbounded rather "
+                + "than merely slow — chase what produced no terminal, do not widen the number");
             Volatile.Read(ref callerError).Should().BeNull(
                 "the re-enqueued attempt landed, so the caller must see a success");
             Volatile.Read(ref callerTerminal)!.Name.Should().Be(marker,

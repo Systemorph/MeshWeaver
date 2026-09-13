@@ -55,10 +55,15 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
                         filter: null));
                 }));
 
-    // 240_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a constant, so
-    // the property cannot be written here. The value must still DOMINATE it — 216 s at the CI
-    // factor (Convergence 108 s x OuterMargin 2) — or the xunit kill pre-empts the inner wait and
-    // the failure cannot say what it was waiting for.
+    // 600_000 ms, not TestTimeouts.WriteTestMilliseconds: an attribute argument must be a constant,
+    // so the property cannot be written here. The value must still DOMINATE it — 560 s at the CI
+    // factor (WriteConvergence 280 s x OuterMargin 2) — or the xunit kill pre-empts the inner wait
+    // and the failure cannot say what it was waiting for. TestTimeoutsTest.TheOuterKillDominates-
+    // TheInnerWait enforces the pair; a literal cannot enforce itself.
+    //
+    // 🚨 It was 240_000, sized against the ONE-ATTEMPT scale. The caller-terminal wait below spans
+    // a RE-ENQUEUE (attempt 0's NACK, then attempt 1), which the framework bounds at
+    // WriteTotalBound (203 s) rather than at WriteVerdictBound (31 s) — #3477.
     //
     // 🚨 It was 90_000, and EVERY wait below is TestTimeouts.Convergence, which is 108 s on a
     // runner. So on CI this test could never report which wait failed — the xunit kill always won.
@@ -66,7 +71,7 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
     // as a bare "Test execution timed out after 90000 milliseconds", no assertion and no named
     // wait, and #3477 has been unable to attribute that sighting since. An outer bound below the
     // inner one is the exact defect TestTimeouts exists to prevent.
-    [Fact(Timeout = 240_000)]
+    [Fact(Timeout = 600_000)]
     public async Task AReenqueuedAttemptInheritsTheCorrelationIdOfTheNackThatCausedIt()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -177,7 +182,12 @@ public class LateNackReenqueueCorrelationTest(ITestOutputHelper output) : Monoli
             // Both accepted patches use the same idempotent assignment. Releasing the real
             // executor lets the re-attempt finish; its terminal must reach the original caller.
             Volatile.Write(ref releaseGate, 1);
-            var terminal = await caller.Timeout(TestTimeouts.Convergence).Await(ct);
+            // 🚨 WriteConvergence, not Convergence: this wait spans a RE-ENQUEUE — attempt 0's
+            // controlled NACK and then attempt 1's own post, each arming a FRESH WriteVerdictBound
+            // and each paying a base read outside it. Convergence derives from the PER-ATTEMPT
+            // bound, so it could expire while the caller's terminal was still legitimately due and
+            // report an anonymous TimeoutException in place of the framework's diagnosis (#3477).
+            var terminal = await caller.Timeout(TestTimeouts.WriteConvergence).Await(ct);
             Assert.Equal("corr-probe", terminal.Name);
             var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .SelectMany(_ => storage.Read(path, Mesh.JsonSerializerOptions))
