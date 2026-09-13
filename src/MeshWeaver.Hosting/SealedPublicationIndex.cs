@@ -110,6 +110,27 @@ public static class SealedPublicationIndex
     /// </summary>
     public static IReadOnlyList<SealedSource> ReadFor(
         string? publishedRoot, string? identity, ILogger? logger = null)
+        => ReadResolvedFor(publishedRoot, identity, logger).Select(r => r.Source).ToList();
+
+    /// <summary>
+    /// 🚨 <see cref="ReadFor"/> plus the publication directory each reading was taken from — so a
+    /// caller that ALSO reads bytes can read them from the same publication instead of resolving
+    /// the pointer a second time (#3461).
+    ///
+    /// <para>Two independent resolutions of one pointer are two publications whenever it moves
+    /// between them, and <c>ShippedPrebuiltBundles.SeedPublishedRoot</c> is exactly that caller:
+    /// it takes this index for the markers the sync reconciler decides on and then enumerates the
+    /// bundles to adopt. Straddling a pointer move there hands the reconciler one generation's
+    /// commit while the bytes come from another — the same class of disagreement this page's
+    /// routing exists to remove, one level up. The snapshot is the fix, and it is the shell
+    /// analogue of <c>carry-forward-bundles.sh</c>'s one-publication postcondition.</para>
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="identity">The framework identity whose directory to read.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>Each source's reading and the directory it came from.</returns>
+    internal static IReadOnlyList<(SealedSource Source, string Directory)> ReadResolvedFor(
+        string? publishedRoot, string? identity, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
             return [];
@@ -132,7 +153,8 @@ public static class SealedPublicationIndex
         }
     }
 
-    private static SealedSource ReadSource(string sourceDirectory, ILogger? logger)
+    private static (SealedSource Source, string Directory) ReadSource(
+        string sourceDirectory, ILogger? logger)
     {
         // 🚨 The SOURCE name is the directory's own, taken BEFORE resolution — a generation is
         // an instance of a publication of 'plugins', never a source called
@@ -154,22 +176,23 @@ public static class SealedPublicationIndex
             commit = null;
         var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
         if (!File.Exists(sentinel))
-            return new SealedSource(source, repository, commit, false, "no completion sentinel");
+            return (new SealedSource(source, repository, commit, false, "no completion sentinel"), publication);
         try
         {
             var missing = File.ReadAllLines(sentinel)
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .FirstOrDefault(name => !File.Exists(Path.Combine(publication, name)));
-            return missing is null
+            return (missing is null
                 ? new SealedSource(source, repository, commit, true, null)
                 : new SealedSource(source, repository, commit, false,
-                    $"the seal lists '{missing}', which is not on disk");
+                    $"the seal lists '{missing}', which is not on disk"), publication);
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "SealedPublicationIndex: could not read the seal of {Directory}", publication);
-            return new SealedSource(source, repository, commit, false, $"the seal could not be read: {ex.GetType().Name}");
+            return (new SealedSource(source, repository, commit, false,
+                $"the seal could not be read: {ex.GetType().Name}"), publication);
         }
     }
 

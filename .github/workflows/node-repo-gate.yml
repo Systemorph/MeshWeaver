@@ -1489,6 +1489,7 @@ jobs:
           share="${rest%%/*}"; base=""
           case "$rest" in */*) base="${rest#*/}" ;; esac
           fetched=0
+          SEED_GENERATIONS=""
           for src in $UPSTREAMS; do
             prefix="${base:+$base/}prebuilt-bundles/$IDENTITY/$src"
             resolve_publication_dir "$account" "$share" "$prefix"
@@ -1525,11 +1526,16 @@ jobs:
                 exit 1
               fi
             fi
-            # The generation this seed READ — carried to the module composition below, so the two
-            # steps of one gate cannot end up on two different publications of one upstream. Empty
-            # under the flat layout. One line per upstream; the composition takes the FIRST, which
-            # is the only one it resolves for (`compose_once` reads upstreams in the order given).
-            case "$dir" in "$prefix"/*) printf 'SEED_GENERATION=%s\n' "${dir#"$prefix"/}" >> "$GITHUB_ENV" ;; esac
+            # The generation this seed READ, accumulated PER SOURCE — carried to the module
+            # composition below, so the two steps of one gate cannot end up on two different
+            # publications of one upstream.
+            #
+            # 🚨 One entry per upstream, never one scalar. `upstream-seed` is a LIST, so a single
+            # value would be applied to every source: a gate for `plugins education` would read
+            # education's modules out of a directory named after plugins' generation, and a flat
+            # source following a generation source would inherit the previous one's value. An
+            # absent entry means "resolve that source's pointer yourself".
+            case "$dir" in "$prefix"/*) SEED_GENERATIONS="${SEED_GENERATIONS:+$SEED_GENERATIONS }$src=${dir#"$prefix"/}" ;; esac
             # EXISTENCE FIRST, fail CLOSED (the publish script's own rule): an unreadable answer
             # is not "absent", and absent is a red gate, not an empty seed.
             sealed=$(az storage file exists --account-name "$account" --share-name "$share" \
@@ -1551,6 +1557,7 @@ jobs:
             echo "upstream '$src': $n bundle(s) from $account/$share/$dir"
             fetched=$((fetched + n))
           done
+          [ -z "$SEED_GENERATIONS" ] || printf 'SEED_GENERATIONS=%s\n' "$SEED_GENERATIONS" >> "$GITHUB_ENV"
           # The tester keys a seed to this file; without it the seed is refused as unaddressable.
           printf '%s' "$IDENTITY" > "$SEED_DIR/framework-mvid.txt"
           [ "$fetched" -gt 0 ] || { echo "::error::upstream publications were sealed but held no bundles — refusing an empty seed"; exit 1; }
@@ -1625,33 +1632,43 @@ jobs:
               head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
               chmod +x "$SCRIPT"
               if [ -n "${REGISTRY_URL:-}" ]; then
+                # 🚨 THE REGISTRY PATH IS NOT PINNED ACROSS THE TWO STEPS, and saying so is the
+                # point. Each read is internally consistent — the seed waits out a reseal (the
+                # #3401 restart loop) and this composition pins every module fetch to the
+                # generation its own index carried, via If-Match — but the seed and this step read
+                # the publication INDEPENDENTLY, so a publication that advances between them can
+                # still give this gate one generation's bundles and another's modules. That gap
+                # predates MeshWeaver#3461's reader routing and is not closed by it: closing it
+                # needs the registry to accept a generation on the module-SET read the way it
+                # already does on a module fetch, which is a registry-side question. The storage
+                # path below IS pinned, because the share lets the seed name what it read.
                 "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
                   --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
               else
-                # 🚨 ONE PUBLICATION PER GATE, not one per STEP (MeshWeaver#3461). `seed` resolved
-                # `_current` and downloaded that generation's *.zip; resolving it again here would
-                # let a pointer that advanced in between hand this gate one generation's BUNDLES and
-                # another's MODULE bytes — the cross-step form of exactly the mix the per-module pin
-                # already prevents inside one composition. So the seed's answer is carried, never
-                # re-derived.
+                # 🚨 ONE PUBLICATION PER UPSTREAM PER GATE, not one per STEP (MeshWeaver#3461).
+                # `seed` resolved each upstream's `_current` and downloaded that generation's *.zip;
+                # resolving them again here would let a pointer that advanced in between hand this
+                # gate one generation's BUNDLES and another's MODULE bytes — the cross-step form of
+                # exactly the mix the per-module pin already prevents inside one composition. So the
+                # seed's answer is carried, per source, never re-derived.
                 #
                 # 🚨 It is passed only when the script FETCHED AT THIS LANE'S REF understands it. The
                 # workflow is pinned by the caller's `uses:` while the script is fetched at
                 # `scripts-ref || platform-ref`, so a new workflow can meet an old script — which
                 # would exit 2 on an unknown argument and red every satellite gate. Same probe, same
                 # reason, as node-repo-publish-bake.yml's SEAL_MODULES_OWN check. Without it the
-                # script resolves the pointer itself, which is this PR's behaviour minus the
-                # cross-step pin — correct, just not pinned.
-                GEN_ARG=""
-                if [ -n "${SEED_GENERATION:-}" ] && grep -q -- '--generation' "$SCRIPT"; then
-                  GEN_ARG="$SEED_GENERATION"
-                  echo "composing modules from the generation this gate's seed read: $SEED_GENERATION"
-                elif [ -n "${SEED_GENERATION:-}" ]; then
-                  echo "::warning::the compose script at ${SCRIPTS_REF} predates MeshWeaver#3461's --generation (this gate's seed read generation $SEED_GENERATION). It will resolve the publication pointer itself, so a pointer that advances between the two steps could hand this gate one generation's bundles and another's module bytes. It stops as soon as the resolved scripts ref carries the newer script; nothing to do here."
+                # script resolves each pointer itself: correct per source, just not pinned across
+                # the two steps.
+                GEN_ARGS=""
+                if [ -n "${SEED_GENERATIONS:-}" ] && grep -q -- '--generations' "$SCRIPT"; then
+                  GEN_ARGS="$SEED_GENERATIONS"
+                  echo "composing modules from the generation(s) this gate's seed read: $SEED_GENERATIONS"
+                elif [ -n "${SEED_GENERATIONS:-}" ]; then
+                  echo "::warning::the compose script at ${SCRIPTS_REF} predates MeshWeaver#3461's --generations (this gate's seed read $SEED_GENERATIONS). It will resolve each publication pointer itself, so a pointer that advances between the two steps could hand this gate one generation's bundles and another's module bytes. It stops as soon as the resolved scripts ref carries the newer script; nothing to do here."
                 fi
-                if [ -n "$GEN_ARG" ]; then
+                if [ -n "$GEN_ARGS" ]; then
                   "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
-                    --storage-target "$(printf '%s\n' $TARGETS | head -1)" --generation "$GEN_ARG"
+                    --storage-target "$(printf '%s\n' $TARGETS | head -1)" --generations "$GEN_ARGS"
                 else
                   "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
                     --storage-target "$(printf '%s\n' $TARGETS | head -1)"

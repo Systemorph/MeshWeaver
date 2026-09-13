@@ -294,7 +294,7 @@ public class PublicationGenerationTest
     /// which commit came back, not whether the call threw.</para>
     /// </summary>
     [Fact]
-    public void TheSealIndex_ReadsTheGenerationsMarkers_NotTheFlatCopys()
+    public void TheSealIndex_ReadsTheGenerationsMarkers_NotTheFlatCopies()
     {
         using var root = new TempRoot();
         var source = root.Source(Identity, Source);
