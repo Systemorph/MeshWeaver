@@ -483,7 +483,8 @@ jobs:
         {
           echo "### Test selection"; echo
           echo "- $(grep '^mode=' /tmp/scope.txt | cut -d= -f2-) — $(grep '^reason=' /tmp/scope.txt | cut -d= -f2-)"
-          p=$(grep '^projects=' /tmp/scope.txt | cut -d= -f2-); [ -n "$p" ] && echo "- projects: $p"
+          p=$(grep '^projects=' /tmp/scope.txt | cut -d= -f2-)
+          if [ -n "$p" ]; then echo "- projects: $p"; fi
         } >> "$GITHUB_STEP_SUMMARY"
     - name: "Probe refs/ci-green for this tree"
       id: probe
