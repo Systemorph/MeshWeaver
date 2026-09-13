@@ -172,6 +172,73 @@ public sealed class PersistenceService : IStorageAdapter
             .DefaultIfEmpty(default(MeshNode?))
             .FirstAsync();
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 <b>The facade FORWARDS the batch; it must never degrade it into N point reads.</b>
+    /// Without this override the interface DEFAULT applies —
+    /// <c>Observable.Merge(paths.Select(p =&gt; Read(p, options)))</c> — and because this type is the
+    /// <see cref="IStorageAdapter"/> every host resolves from DI (the guard decorators above it
+    /// both delegate <c>ReadMany</c> straight through), <b>every</b> batched read in the platform
+    /// silently became one unbounded-concurrency point read per path, and a backend's batched
+    /// override was unreachable from the facade. Callers that say in so many words that they are
+    /// doing ONE batched read — <c>InstallCompleteness.Observe</c>, <c>StaleMainNodeRepair</c>,
+    /// <c>StorageAdapterMeshQueryProvider</c>'s exact-path probe — were doing the opposite.
+    ///
+    /// <para>🚨 It is not only round-trips. A point read and a batched read <b>do not fail the same
+    /// way</b>: <c>PostgreSqlStorageAdapter.Read</c> catches <c>42P01 undefined_table</c> (a
+    /// half-provisioned partition whose satellite table was never created) and answers <c>null</c>
+    /// — indistinguishable from "no such node" — while its batched path lets that fault
+    /// propagate. Under the degraded default, therefore, "this partition's table does not exist"
+    /// was spelled exactly like "this node is absent", and a completeness sweep turned it into an
+    /// ABSENT name for a healthy node instead of the honest "the mesh could not be read"
+    /// (#4200).</para>
+    ///
+    /// <para><b>Semantics are <see cref="ReadCore"/>'s, applied to a set:</b> providers are tried
+    /// in <c>_allOrdered</c> order and the FIRST provider that has a path wins. Provider <c>i + 1</c>
+    /// is asked ONLY for the paths still unanswered, and only after provider <c>i</c> has
+    /// completed — a <c>Concat</c>-shaped walk, never a <c>Merge</c> across providers, so a later
+    /// provider can never answer for a path an earlier one already owns. Order of the emitted
+    /// sequence is NOT part of the contract ("Order is not guaranteed; missing paths are simply
+    /// absent"), and nothing here adds one.</para>
+    ///
+    /// <para><b>No legacy-partition repair, deliberately.</b> <see cref="Read"/> wraps
+    /// <see cref="ReadCore"/> in <see cref="LegacyUserPartitionRepair.ReadWithRepair"/>; this does
+    /// not, and the single-<see cref="Read"/> path is unchanged. That repair fires on a miss for a
+    /// BARE PARTITION-ROOT path (<c>{id}</c>, one segment) whose legacy <c>User/{id}</c> twin holds
+    /// the real user. A batch is a set of DECLARED CHILD paths — an install manifest, a stale-main
+    /// sweep, a query's exact-path probe — so it is not that shape, and running the repair per
+    /// element would put a legacy-twin probe plus a durable WRITE behind every bulk miss.</para>
+    /// </remarks>
+    public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+        => paths.Count == 0
+            ? Observable.Empty<MeshNode>()
+            : ReadManyFrom(
+                paths.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase), options, 0);
+
+    /// <summary>
+    /// One step of the provider walk: ask provider <paramref name="index"/> for everything still
+    /// unanswered, emit what it has, and hand the REMAINDER to the next provider once it
+    /// completes.
+    ///
+    /// <para><c>Publish</c> shares the provider's answers between the two consumers that both need
+    /// them — the caller (which gets each node) and the fold that computes what is left — so the
+    /// remaining-path set is a running accumulator over a bounded PATH set rather than a
+    /// materialised list of nodes, and the provider is subscribed once. <c>Defer</c> is
+    /// load-bearing: an adapter that throws SYNCHRONOUSLY from <c>ReadMany</c> (a shape
+    /// <c>StorageAdapterMeshQueryProvider</c> guards against explicitly) would otherwise throw out
+    /// of the composition instead of arriving as an <c>OnError</c> — and a FAULT must reach the
+    /// caller, never be quietly read as "these paths are absent".</para>
+    /// </summary>
+    private IObservable<MeshNode> ReadManyFrom(
+        ImmutableHashSet<string> remaining, JsonSerializerOptions options, int index)
+        => index >= _allOrdered.Count || remaining.IsEmpty
+            ? Observable.Empty<MeshNode>()
+            : Observable.Defer(() => _allOrdered[index].Adapter.ReadMany(remaining, options))
+                .Publish(answers => answers.Merge(
+                    answers
+                        .Aggregate(remaining, (rest, node) => rest.Remove(node.Path))
+                        .SelectMany(rest => ReadManyFrom(rest, options, index + 1))));
+
     /// <summary>
     /// Try-then-claim: each writable provider's <see cref="IStorageAdapter.Write"/>
     /// emits the saved node on accept or <c>null</c> on decline. We walk the

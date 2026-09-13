@@ -42,6 +42,25 @@ public sealed class PathFilteringStorageAdapter(IStorageAdapter inner, Func<stri
             : Observable.Return<MeshNode?>(null);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 <b>Forwarded, and SCOPED in the same act.</b> The interface default would fan the batch
+    /// back out into one <see cref="Read"/> per path through <c>this</c> — which at least stays
+    /// correct, because <see cref="Read"/> applies the predicate — but never reaches the inner
+    /// adapter's batched implementation (#4200). A forward that simply passed every path on would
+    /// be worse than the default rather than better: this decorator exists because an unscoped
+    /// provider claimed paths that were not its, and handing the inner adapter paths outside the
+    /// predicate would let it answer for exactly those. So the predicate is applied to the SET
+    /// first; a batch with nothing in scope asks the inner adapter nothing at all.
+    /// </remarks>
+    public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+    {
+        var mine = paths.Where(matches).ToArray();
+        return mine.Length == 0
+            ? Observable.Empty<MeshNode>()
+            : inner.ReadMany(mine, options);
+    }
+
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => matches(path)
             ? inner.Delete(path)
