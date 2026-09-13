@@ -145,7 +145,7 @@ A future reader should not have to reconstruct which half of this shipped.
 | | state |
 |---|---|
 | **The gate's three refusals are distinguishable**, and the resolved identity + its origin are logged on every path | **LANDED** (#4084). Log quality only: every refusal still exits 1, nothing is advisory, no retry, no fallback. |
-| **4b — resolve the identity from the newest SEALED set** instead of a moving tag | **NOT DONE, still open — and it is the one item here that needs NO decision.** The measurement below was read as shrinking its target; the 2026-09-13 correction shows phase 1 made that path the PRIMARY one. Blocked on #4142 for validation, not on a call. |
+| **4b — resolve the identity from the newest SEALED set** instead of a moving tag | 🚨 **ALREADY IMPLEMENTED — it was never open**, and it does not remove the red it was expected to. Measured below (*Second correction*): the satellites resolved the newest **platform-sealed** set on the `schedule` path from at least 2026-09-10, two days before this row was first written, and a `schedule` run that did exactly that still reddened at the upstream gate. What is left on that path is the CONDITION, i.e. options 1–4. |
 | Options 1–4 above | **not started.** Roland's call. |
 
 ### Why 4b shrank
@@ -187,6 +187,62 @@ while [#4142](https://github.com/Systemorph/MeshWeaver/issues/4142) has every sa
 failing at preflight (66 of 66 jobs from 2026-09-12T18:11Z), "the newest sealed set" resolves against
 a population that has not moved, so a resolver written against it cannot be exercised. Sequence 4b
 after #4142, not after the decision.
+
+#### 🚨 Second correction (2026-09-13, 22:xxZ): 4b was ALREADY IMPLEMENTED, and it does not remove the red
+
+Both sections above argue about 4b's **target** and neither checked whether 4b's **subject** was
+already built. It was. Three readings, each of which could have falsified this and did not:
+
+**1. The satellites resolved the newest platform-SEALED set on `schedule` before this row was
+written.** `MeshWeaver.Manufacturing`'s `ci.yml` at `e050bb1994` (the copy in force on 2026-09-10)
+and `MeshWeaver.Crm`'s at `ea933f597` (2026-09-10T06:10Z) both carry a step named, literally,
+**"Resolve the newest retained sealed platform set"**, running `scripts/resolve-platform.py` on every
+trigger, with `--wait-for-seal 900` added on `schedule` and `repository_dispatch`. The row claiming
+"NOT DONE" was written on 2026-09-12 09:21Z, two days later. Core's own reusable lanes got the same
+canonical resolver on 2026-09-12T14:14Z (`39caeed993`), for callers that pass empty digests.
+
+**2. The control: a `schedule` run that resolved exactly that way, and reddened anyway.**
+`MeshWeaver.Manufacturing` run **34433928561**, event `schedule`, 2026-09-10:
+
+```
+03:39:39Z  job "Platform pins name one build"
+           main-cd #8240 (core e29d40aad) = 3.0.0-ci.8240: sealed, images resolved by tag
+           set=3.0.0-ci.8240
+           plugins-sealed=absent
+           source=the newest sealed platform set — 1 newer run(s) passed over, see the log
+03:41:56Z  job "test-repos / Gate shard 1/1"
+           framework-identity: MATCH — '/portal' resolves sc7894b5af0202eca75c4394987c96477
+03:41:58Z  ##[error]upstream 'plugins' has no SEALED publication at https://memex.meshweaver.cloud
+           for framework identity sc7894b5af0202eca75c4394987c96477 … This run's event was schedule.
+```
+
+So 4b's mechanism was in force, on the path 4b is about, and the gate red is unchanged.
+
+**3. Why it cannot help, stated as a mechanism rather than as a measurement.** 4b resolves the newest
+set whose **PLATFORM** is sealed. The gate asks whether this repository's **UPSTREAM** has a sealed
+publication *for that set's identity*. Those are two different facts and the resolver checks only the
+first — it does not even hold the set back on the second: `plugins-sealed=absent` is **printed by the
+resolver itself** in the run above, and the set is chosen anyway. That is deliberate and documented in
+`resolve-platform.py` ("a seal that FAILED, was SKIPPED or CANCELLED is terminal and does not hold the
+set back … the lane's upstream fetch says RED, by name"). No resolution change reaches this: the
+publication the gate wants **does not exist for any recent identity**, which is stage ④'s condition —
+options 1–4.
+
+**What made it look open, and it is the instrument's own sentence.** Both lanes print, in the
+"Upstreams not ready" step summary and in the `::error` beside it, *"the `schedule` poll … re-resolves
+a **moving tag**"*. That wording dates from 2026-09-08 (`c6161c0a96`), predates the resolver, and is
+the sole textual basis for "only the `schedule` path resolves a moving release tag". Its *conclusion*
+survives — the poll does resolve a different set next time, so it never retries this identity — but
+its *mechanism* does not, and reading the mechanism as a defect put an implemented item on the open
+list twice. Corrected in `node-repo-gate.yml` and `node-repo-publish-bake.yml` in the same change as
+this section.
+
+🚨 **The stronger reading is a DECISION, not a bigger 4b.** "Resolve the newest set for which every
+declared upstream has *also* published" is implementable — the resolver already has the datum it would
+branch on — but it means taking an **older** platform set whenever the fleet's publications lag, which
+directly contradicts the rule quoted at the top of `resolve-platform.py` (maintainer, 2026-09-12:
+*"for compile always find latest package of platform and plugins"*). So it belongs beside options 1–4
+on the decision list, not on the "needs no decision" line.
 
 ### Re-measured 2026-09-13 on a fresh window — the rate went UP, the ratio did not move
 
