@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -131,6 +132,53 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
         emissions.Should().BeEmpty(
             "a stream that can never emit again must hand back a sequence that says so by "
             + "COMPLETING, not one that throws when a subscriber arrives");
+    }
+
+    /// <summary>
+    /// 🚨 THE OTHER WAY A STREAM IS DEAD, and it ends differently — Systemorph/MeshWeaver.Plugins#1715.
+    ///
+    /// <para><see cref="SynchronizationStreamLiveness.IsUsable"/> counts a FAULTED stream exactly as
+    /// dead as a disposed one (#2387), so <c>GetStream&lt;T&gt;</c>'s guard fires for both. But the
+    /// store of a faulted stream is a <c>ReplaySubject</c> holding a terminal <c>OnError</c>, and
+    /// under the Rx grammar every later subscriber gets that error re-delivered — the fault IS what
+    /// "subscribing to it would produce". Answering <c>Observable.Empty</c> for this shape turned an
+    /// owner's routing NotFound into a clean completion for anyone who subscribed after it had
+    /// landed. <c>NamedAreaView.BindData</c> is such a subscriber whenever the miss is answered faster
+    /// than the render's first frame — the same-process SECOND miss on a path is, in milliseconds —
+    /// and a view whose control stream completes empty enters no error branch: no node-gone card,
+    /// no error card, nothing. The Plugins guard that renders that card read the swallow as
+    /// <c>Sequence contains no elements</c>, intermittently, on 2026-09-12.</para>
+    ///
+    /// <para>Faulted through the stream's own <c>OnError</c> rather than through a routing miss, so
+    /// the fault is a known instance and the assertion can pin IDENTITY: the subscriber must receive
+    /// the stream's fault, not a fault about it. The disposed sibling above keeps completing empty —
+    /// that is the shape whose store really is completed.</para>
+    /// </summary>
+    [HubFact]
+    public async Task GetControlStream_OnAFaultedStream_ReDeliversTheFault()
+    {
+        var stream = OpenStream();
+        await stream.GetControlStream(TestArea)
+            .Should().Within(TestTimeouts.Quick).Match(x => x is HtmlControl);
+        stream.IsUsable().Should().BeTrue("precondition: the stream served the area before it faults");
+
+        var fault = new InvalidOperationException("owner gone — the stream's own terminal");
+        stream.OnError(fault);
+        stream.TryGetHub().Should().BeNull(
+            "precondition: a faulted stream is as dead as a disposed one to every guard (#2387)");
+
+        var terminal = await stream.GetControlStream(TestArea)
+            .Materialize()
+            .Where(n => n.Kind != NotificationKind.OnNext)
+            .Take(1)
+            .Timeout(TestTimeouts.Quick)
+            .Await(TestContext.Current.CancellationToken);
+
+        terminal.Kind.Should().Be(NotificationKind.OnError,
+            "a late subscriber to a FAULTED store is told the fault — a completion here is the "
+            + "swallow that left a view with no error branch to enter");
+        terminal.Exception.Should().BeSameAs(fault,
+            "…and it is the stream's own terminal, re-delivered, not a fault manufactured about it");
     }
 
     /// <summary>
