@@ -886,8 +886,64 @@ all three writers that can fulfil the request, so turning assert into check fixe
 | bundle stamp | matches the live one | outcome |
 |---|---|---|
 | yes | yes | adopt; `BuildProvenance = AdoptedVerified` |
-| yes | **no** | 🚨 **refuse** — no stamp, flip `Pending` to compile the live source; `AdoptionRefused` |
+| yes | **no**, and NOT ONE declared source query has matched a node here (#4208) | 🚨 **DEFER** — the record is returned untouched, so the one-shot stamp request is left **standing**; the sources watcher's next publication judges it |
+| yes | **no**, same module MAJOR (or versions nobody recorded) | the build keeps serving as `StaleAdopted` (#3583); a mesh that compiles module content also flips `Pending` |
+| yes | **no**, module **MAJOR** bump | 🚨 **refuse** — no stamp, `AdoptionRefused` |
 | no (legacy), or the owner's own not published yet | — | adopt, **keep the stamp**; `AdoptedUnverified` |
+
+> 🚨 **"The live one establishes nothing" is a THIRD answer, not a flavour of "no"** (#4208).
+> `NodeTypeSourceFingerprint` has no null: an EMPTY compile input folds to
+> `e3b0c44298fc1c14`, a perfectly ordinary-looking 16-character value, and every
+> `is { Length: > 0 }` guard accepts it — including the one this table's last row exists for. So a
+> NodeType activated **before** the sources it declares have been imported publishes a live
+> fingerprint that disagrees with every producer, and "the source moved past these bytes" gets read
+> off a set nobody established.
+>
+> Measured on MeshWeaver.Reinsurance#204, gate shard 1/1, 2026-09-13. `Reinsurance/AggregateSection`
+> declares the three source queries every Reinsurance NodeType declares, and sorts **first** in its
+> namespace — ahead of the `Reinsurance/Source/*` nodes the two `shared=@…` entries read:
+>
+> ```
+> 16:16:50.758 bake-seed  Prebuilt assembly ADOPTED … (framework s5c186d0c…, module version 1.0.21)
+> 16:16:50.760 CompileWatcher [AdoptedSourceStamp] …: the source moved past the adopted build
+>                            (bundle fingerprint 2c12e765f7b3f3e9, live e3b0c44298fc…)
+> 16:16:55.310 MeshNodeCompilationService  Failed to compile assembly …
+>              MISSING SOURCES: 3 of 3 declared source queries … matched NO nodes on this mesh
+>              CS0246 (line 68): 'Premium' could not be found …
+> 16:16:55.383 CompileWatcher  NodeType … PARKED after compile failure
+> ```
+>
+> The refusal dispatched a compile, that compile ran against nothing, and Roslyn's completely
+> genuine-looking `CS0246`s parked the type — seconds before its 26 sources landed. `AmountType` and
+> every later sibling, with the identical queries, adopted green.
+>
+> **The cure is to DEFER, never to refuse.** `NodeTypeCompilationHelpers.CanJudgeAdoption` is the one
+> predicate every writer asks before spending the one-shot request — the adopted fingerprint absent
+> (a legacy bundle needs no live counterpart), or the two **equal** (including the honest empty==empty
+> of a type that genuinely compiles from no sources), or **a declared source query matched a node**.
+> False means the judgement is postponed, not answered: the request stays standing and the sources
+> watcher — a live synced query, no timer and no poll — fulfils it in the same write that establishes
+> the value. Nothing is stranded meanwhile, because `CompiledSources` and `CurrentSourceVersions` are
+> both empty, so `IsDirty` is false and the install's release request is satisfied by the adopted
+> build instead of compiling it.
+>
+> 🚨 **The witness is the SNAPSHOT, not the hash**, and the difference is not cosmetic. The tick
+> snapshot counts every MATCHED node; the fingerprint is folded over `CollectCompileSources`, which
+> deliberately drops executable cells and blank files. A type whose only matched node is one of those
+> has an established source set AND the empty fold — reading the hash as the witness would defer its
+> adoption **indefinitely**, trading this park for a permanent hold. "Did any declared query match a
+> node?" is the question the incident is actually about.
+>
+> **Residue, named rather than assumed.** A source set that is empty because it was DELETED is
+> indistinguishable from one not yet imported — no witness anybody holds separates them — so its
+> stamp request stays standing indefinitely. Bounded and benign: the adopted build keeps serving,
+> `IsDirty` is false, nothing recompiles and nothing parks, and the owner logs a Warning naming the
+> type on every judgement attempt.
+>
+> 🚨 The seeder's **pre-write decline** asks the same question, for the same reason: its premise —
+> *"sources only ever move the live fingerprint further from a bundle baked earlier"* — does not hold
+> for a set nobody established, and a decline there reaches `AfterStaleDecline`, which on a record
+> whose build does not resolve here dispatches the very compile this exists to prevent.
 
 > 🚨 **The legacy row keeps the stamp deliberately.** Withholding it makes every legacy-bundle type
 > `IsDirty` on arrival, the `!IsDirty` absorb branch stops firing, and every install recompiles
