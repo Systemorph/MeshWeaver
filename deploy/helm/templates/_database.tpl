@@ -68,24 +68,34 @@
 {{- $orleans | default (printf "Host=memex-postgres-service;Port=5432;Username=postgres;Password=%s;Database=orleans" $secrets.memex_postgres_password) -}}
 {{- end -}}
 
-{{- /* `host:port` for one ADO.NET connection string, or the empty string when it names no host.
-       Npgsql accepts `Host=` and `Server=`, case-insensitively, and defaults the port to 5432. A
-       multi-host value (`Host=a,b`) contributes its FIRST entry — a probe of one member of a
-       failover pair is the honest lower bound, and probing a comma-joined string would probe
-       nothing at all. */ -}}
-{{- define "memex.dbEndpoint" -}}
+{{- /* One ADO.NET connection string as a HOST GROUP — `h1,h2:port` — or the empty string when it
+       names no host. Npgsql accepts `Host=` and `Server=`, case-insensitively, defaults the port to
+       5432, and accepts a COMMA-SEPARATED failover list.
+
+       🚨 Every member of that list is kept, and the waiter below treats the group as "any ONE of
+       these answers". Keeping only the first would let the gate pass having waited for `a` while
+       the process connects to `b` — the same "the gate passed says nothing about the connection
+       that failed" defect one level down. Requiring ALL of them would be the opposite error: the
+       point of a failover list is that one member suffices, so demanding a standby be up would
+       block a perfectly valid deployment. */ -}}
+{{- define "memex.dbHostGroup" -}}
 {{- $cs := . -}}
-{{- $hostMatch := regexFind "(?i)(^|;)[ \t]*(host|server)[ \t]*=[ \t]*[^;,]+" $cs -}}
+{{- $hostMatch := regexFind "(?i)(^|;)[ \t]*(host|server)[ \t]*=[ \t]*[^;]+" $cs -}}
 {{- if $hostMatch -}}
-{{- $host := trim (last (splitList "=" $hostMatch)) -}}
+{{- $hosts := list -}}
+{{- range splitList "," (last (splitList "=" $hostMatch)) -}}
+{{- if trim . -}}{{- $hosts = append $hosts (trim .) -}}{{- end -}}
+{{- end -}}
+{{- if $hosts -}}
 {{- $port := "5432" -}}
 {{- $portMatch := regexFind "(?i)(^|;)[ \t]*port[ \t]*=[ \t]*[0-9]+" $cs -}}
 {{- if $portMatch -}}{{- $port = trim (last (splitList "=" $portMatch)) -}}{{- end -}}
-{{- printf "%s:%s" $host $port -}}
+{{- printf "%s:%s" (join "," $hosts) $port -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
-{{- /* Every DISTINCT `host:port` the half's process will open, space-separated — the mesh database
+{{- /* Every DISTINCT host GROUP the half's process will open, space-separated — the mesh database
        always, and the orleans one whenever AdoNet clustering is configured. Deduplicated, because
        the derived orleans string names the same server as the mesh one and probing it twice says
        nothing extra.
@@ -93,10 +103,10 @@
        🚨 Fails the render when no host could be derived. See the header. */ -}}
 {{- define "memex.dbProbeTargets" -}}
 {{- $targets := list -}}
-{{- $mesh := include "memex.dbEndpoint" (include "memex.meshConnectionString" .) -}}
+{{- $mesh := include "memex.dbHostGroup" (include "memex.meshConnectionString" .) -}}
 {{- if $mesh -}}{{- $targets = append $targets $mesh -}}{{- end -}}
 {{- if eq (include "memex.adoNetClustering" .) "true" -}}
-{{- $orleans := include "memex.dbEndpoint" (include "memex.orleansConnectionString" .) -}}
+{{- $orleans := include "memex.dbHostGroup" (include "memex.orleansConnectionString" .) -}}
 {{- if $orleans -}}{{- $targets = append $targets $orleans -}}{{- end -}}
 {{- end -}}
 {{- $targets = $targets | uniq -}}
@@ -111,5 +121,5 @@
        endpoint as it waits, so the log says WHICH host is not answering rather than only that
        something is not. */ -}}
 {{- define "memex.waitForDatabasesCommand" -}}
-{{- printf "for t in %s; do h=${t%%:*}; p=${t##*:}; until nc -z $h $p; do echo 'waiting for postgres at '$h:$p; sleep 2; done; echo 'postgres ready at '$h:$p; done" (include "memex.dbProbeTargets" .) -}}
+{{- printf "for g in %s; do p=${g##*:}; hs=${g%%:*}; while true; do for h in $(echo $hs | tr ',' ' '); do nc -z $h $p && { echo 'postgres ready at '$h:$p; break 2; }; done; echo 'waiting for postgres at '$hs:$p; sleep 2; done; done" (include "memex.dbProbeTargets" .) -}}
 {{- end -}}

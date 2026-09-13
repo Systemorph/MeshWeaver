@@ -19,8 +19,15 @@
 # one host and an explicit `ConnectionStrings__orleans` naming another, asserting that the output
 # either probes the second or fails the render. Invariant 16 is that assertion.
 #
+# 🚨 The orleans half is also a COMMA-SEPARATED FAILOVER LIST, which is the second thing nothing
+# else here renders. Npgsql may open ANY member of it, so a probe that covered only the first would
+# pass having waited for `orleans-a` while the process connects to `orleans-b` — the same "the gate
+# passed says nothing about the connection that failed" defect one level down. Invariant 16 requires
+# every member to be probed; the waiter treats the group as "any ONE of these answers", because
+# demanding a standby be up would block a valid deployment.
+#
 # Everything below that is not the subject is only what invariants 2–4 and 14–15 demand of any
-# replica floor above one. Placeholders, no credential; neither host exists.
+# replica floor above one. Placeholders, no credential; none of these hosts exists.
 replicas:
   portal: 2
 keda:
@@ -33,10 +40,10 @@ config:
 secrets:
   memex_portal:
     ConnectionStrings__memex: "Host=mesh-db.example.test;Port=5432;Database=memex;Username=memex;Password=placeholder"
-    ConnectionStrings__orleans: "Host=orleans-db.example.test;Port=6432;Database=orleans;Username=memex;Password=placeholder"
+    ConnectionStrings__orleans: "Host=orleans-a.example.test,orleans-b.example.test;Port=6432;Database=orleans;Username=memex;Password=placeholder"
   memex_migration:
     ConnectionStrings__memex: "Host=mesh-db.example.test;Port=5432;Database=memex;Username=memex;Password=placeholder"
-    ConnectionStrings__orleans: "Host=orleans-db.example.test;Port=6432;Database=orleans;Username=memex;Password=placeholder"
+    ConnectionStrings__orleans: "Host=orleans-a.example.test,orleans-b.example.test;Port=6432;Database=orleans;Username=memex;Password=placeholder"
 persistence:
   data:
     claimName: "memex-data"

@@ -48,6 +48,19 @@ The connection strings themselves are also now written in one place instead of t
 migration, the portal and the gate cannot drift into disagreeing about where the database is — a
 property the configuration already claimed and did not have.
 
+One deployment path needed a second change to make that true. The script that sets up an external
+database used to hand the connection string to the cluster *after* the deployment had been prepared,
+by editing the stored value in place. A value that arrives after preparation cannot reach a gate that
+was written during it — so on that path the gate would still have watched the wrong door. The string
+now goes in with everything else, which also removes a long-standing hazard: because preparing a
+deployment replaces stored values wholesale, the next routine update would overwrite the working
+connection string and point the portal at a database that is not running until someone re-applied
+the edit by hand.
+
+Where a database is configured with a list of interchangeable servers, the gate waits for any one of
+them to answer — which is what the portal itself needs — rather than for the first one only, or for
+all of them.
+
 Two smaller things follow from it. A configuration naming no host at all now fails when the
 deployment is prepared, with a message saying so, rather than rendering a gate that waits for
 nothing and passes. And the deployment's own consistency check has a new rule: every database host
