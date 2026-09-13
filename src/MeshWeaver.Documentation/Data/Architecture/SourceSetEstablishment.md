@@ -182,7 +182,10 @@ property for a probability.
 The measurement above was built (#3799: `ChunkTiming` on every source-discovery query) and then
 published on `/health` as the `source-discovery` entry (#4015), which prints its reading whether
 or not it is healthy. Both live portals reached an image carrying it on 2026-09-12. Read 2026-09-13
-07:1xZ, six calls per portal sampling two replicas each, every replica said the same thing:
+07:06:01–07:06:38Z, six `GET /health` calls per portal, which reached two replicas per portal (the
+bodies split 3/3 on memex.systemorph.com and 2/3 on memex.meshweaver.cloud, where one call
+returned an empty body — a failed transport, excluded). Every **sampled** replica said the same
+thing:
 
 ```
 source-discovery: Healthy — 3 discovery query/queries measured on this replica; every gap stayed
@@ -203,9 +206,10 @@ before emitting the merged one; the partitioned Postgres query drains its enumer
 publishing), so the quiet window has nothing to truncate: a `Throttle(…).Take(1)` after a
 single-chunk `Initial` settles on that chunk whatever the gap to a later `Added` would have been. A
 later change is by protocol a change *after* the initial set, not part of it. The completion rule
-is therefore **exonerated as the mechanism of the 2026-09-08 short read** — on the readings and on
-the contract — and the terminal marker that would replace it remains a protocol design decision
-with no measured defect behind it.
+is therefore **exonerated as the mechanism of the 2026-09-08 short read** — on the sampled readings
+and on the contract — and the terminal marker that would replace it remains a protocol design
+decision with no measured defect behind it. A replica the six calls did not reach is unmeasured,
+not clean; the per-pod reading is `Sample` on the deployment record.
 
 What that leaves is the other branch this section already named: the shortfall was **upstream, in
 what the providers returned** at 00:31:22Z on that boot. The same shape has since been measured
