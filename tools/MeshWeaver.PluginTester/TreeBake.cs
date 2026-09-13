@@ -484,10 +484,14 @@ public static class TreeBake
                 {
                     ResolvedIncludePaths = [.. compiled.Inputs.ResolvedIncludes.Keys],
                 });
-                options.Output.WriteLine(
-                    $"   ok  {compiled.NodePath} "
-                    + $"[{compiled.Inputs.MatchedSourcePaths.Length} source(s), "
-                    + $"{compiled.Dependencies.Count} dependency record entr(ies)]");
+                // One line per compiled type only under MW_LOG_LEVEL (GateVerbosity): a full bake
+                // is ~1,100 of them, and the verdict is the per-package `bake: … → N assembly(ies)`
+                // line plus every FAILED type, which are printed regardless.
+                if (GateVerbosity.Verbose)
+                    options.Output.WriteLine(
+                        $"   ok  {compiled.NodePath} "
+                        + $"[{compiled.Inputs.MatchedSourcePaths.Length} source(s), "
+                        + $"{compiled.Dependencies.Count} dependency record entr(ies)]");
             }
             // 🚨 A FAILING TYPE FAILS THAT TYPE — never the whole bake. The catch used to name
             // exactly two exception types, and anything else escaped BakeAll, unwound past the
