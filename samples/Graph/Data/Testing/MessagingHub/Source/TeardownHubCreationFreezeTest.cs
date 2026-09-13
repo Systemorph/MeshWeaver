@@ -78,7 +78,7 @@ public class TeardownHubCreationFreezeTest(MeshTestContext context) : InMeshTest
             // any freeze observed on the descendants came from the synchronous
             // cascade inside Dispose().
             root.Post(new Blocker(), o => o.WithTarget(root.Address));
-            await handlerEntered.Should().Within(10.Seconds()).Emit("the blocker handler must be running");
+            await handlerEntered.Should().Within(TimeSpan.FromSeconds(10)).Emit("the blocker handler must be running");
 
             root.Dispose();
 

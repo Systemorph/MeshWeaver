@@ -21,7 +21,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Notification retention (Systemorph/MeshWeaver#3250): the policy that decides what has expired,
+/// MeshWeaver.Mesh.Notification retention (Systemorph/MeshWeaver#3250): the policy that decides what has expired,
 /// the query shape that keeps a sweep bounded, and the logon action that applies both.
 ///
 /// <para>The four properties these cases exist to pin, in the order a reviewer should read them:
@@ -50,7 +50,7 @@ public class NotificationRetentionTest(MeshTestContext context) : InMeshTestBase
             // 🚨 Preserved by the create pipeline (`LastModified == default ? now : …`), which is
             // what lets a test seed a genuinely OLD row instead of racing a clock.
             LastModified = lastModified,
-            Content = new Notification
+            Content = new MeshWeaver.Mesh.Notification
             {
                 Title = "Something happened",
                 Message = "…",
@@ -166,7 +166,7 @@ public class NotificationRetentionTest(MeshTestContext context) : InMeshTestBase
     {
         // The negative control for the case above. Without it, `CrossPartition.Should().BeFalse()`
         // would also pass against a parser that never sets the flag at all.
-        new QueryParser().Parse($"nodeType:Notification {ParsedQuery.CrossPartitionQualifier}")
+        new QueryParser().Parse($"nodeType:MeshWeaver.Mesh.Notification {ParsedQuery.CrossPartitionQualifier}")
             .CrossPartition.Should().BeTrue();
     }
 

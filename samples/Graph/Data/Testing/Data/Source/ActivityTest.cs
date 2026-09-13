@@ -40,7 +40,7 @@ public class ActivityTest(MeshTestContext context) : InMeshTestBase(context)
         
         
         var log = await closeTask
-            .WaitAsync(3.Seconds(), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None)
             ;
         log.Should().NotBeNull();
         log.Status.Should().Be(ActivityStatus.Succeeded);
@@ -69,12 +69,12 @@ public class ActivityTest(MeshTestContext context) : InMeshTestBase(context)
         
         // Wait for the main activity to complete before disposal
         activityLog = await taskComplete
-            .WaitAsync(3.Seconds(), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None)
             ;
         // Second independent subscription to the same reactive completion observes the
         // identical terminal log (AsyncSubject replays the final value to every subscriber).
         var activityLog2 = await taskComplete2
-            .WaitAsync(3.Seconds(), CancellationToken.None);
+            .WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
 
         await DisposeAsync();
         activityLog.Should().NotBeNull();
@@ -99,7 +99,7 @@ public class ActivityTest(MeshTestContext context) : InMeshTestBase(context)
 
         // Wait for main activity to auto-complete
         var log = await activity.Completion.FirstAsync().Await(CancellationToken.None)
-            .WaitAsync(3.Seconds(), CancellationToken.None);
+            .WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
 
         log.Should().NotBeNull();
         log.Status.Should().Be(ActivityStatus.Failed,
@@ -126,7 +126,7 @@ public class ActivityTest(MeshTestContext context) : InMeshTestBase(context)
         activity.Complete();
 
         var log = await activity.Completion.FirstAsync().Await(CancellationToken.None)
-            .WaitAsync(3.Seconds(), CancellationToken.None);
+            .WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
 
         log.Should().NotBeNull();
         log.Status.Should().Be(ActivityStatus.Failed,
@@ -153,7 +153,7 @@ public class ActivityTest(MeshTestContext context) : InMeshTestBase(context)
         activity.Complete();
 
         var finalLog = await activity.Completion.FirstAsync().Await(CancellationToken.None)
-            .WaitAsync(3.Seconds(), CancellationToken.None);
+            .WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
 
         finalLog.Status.Should().Be(ActivityStatus.Failed,
             "activity should be Failed when sub-activity had errors");

@@ -37,7 +37,7 @@ public class OrleansApiTokenTest(MeshTestContext context) : OrleansMeshTestBase(
     [MeshFact]
     public async Task CreateApiToken_ViaStandardCreateNodeRequest()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
+        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token;
         var client = GetClient();
         var meshAddress = Fixture.ClientMesh.Address;
 
@@ -77,7 +77,7 @@ public class OrleansApiTokenTest(MeshTestContext context) : OrleansMeshTestBase(
     [MeshFact]
     public async Task ValidateInvalidToken_Fails()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
+        var ct = new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token;
         var client = GetClient();
 
         var fakeToken = "mw_0000000000000000000000000000000000000000000000000000000000000000";

@@ -19,7 +19,7 @@ using MeshWeaver.Compiler;
 /// that cannot run at all (<c>UNAVAILABLE</c>) would retire the discriminator silently, turning
 /// every future occurrence into a verdict with nothing behind it. That is what this pins.</para>
 /// </summary>
-public class EmitCanaryPrivateCompilerLegTest(MeshTestContext context)
+public class EmitCanaryPrivateCompilerLegTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact]
     public void OnAHealthyProcess_ThePrivateCopyEmits_AndIsNotTheSharedAssembly()

@@ -15,7 +15,7 @@ using MeshWeaver.Layout.Composition;
 /// Before the fix, when rendering container controls with multiple views,
 /// the areas would be double-prefixed causing structural issues.
 /// </summary>
-public class ContainerControlAreaNestingTest(MeshTestContext context)
+public class ContainerControlAreaNestingTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private readonly ITestOutputHelper output = output;
 

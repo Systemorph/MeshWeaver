@@ -156,7 +156,7 @@ public class IndeterminateProbeReResolutionTest(MeshTestContext context) : InMes
             .EnrichWithNodeType(meshHub, new MeshConfiguration(Array.Empty<MeshNode>()),
                 compilationService: null, instance)
             .Take(1)
-            .Should().Within(20.Seconds()).Emit();
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit();
 
         probe.Calls.Should().BeGreaterThan(0,
             "the existence probe must still run — this test is about what happens when it does " +

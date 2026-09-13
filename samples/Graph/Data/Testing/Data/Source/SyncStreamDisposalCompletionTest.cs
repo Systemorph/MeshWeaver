@@ -119,7 +119,7 @@ public class SyncStreamDisposalCompletionTest(MeshTestContext context) : InMeshT
         await host.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
             .FirstOrDefaultAsync()
-            .Timeout(10.Seconds())
+            .Timeout(TimeSpan.FromSeconds(10))
             .Await(CancellationToken.None);
 
         activeSubscriberCompleted.Should().BeTrue(

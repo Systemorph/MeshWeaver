@@ -93,7 +93,7 @@ public class RefusedContentSyncIsNotSuccessTest(MeshTestContext context) : InMes
         };
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
 
         Output.WriteLine($"outcome = {result.Outcome}");
 
@@ -121,7 +121,7 @@ public class RefusedContentSyncIsNotSuccessTest(MeshTestContext context) : InMes
         };
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
 
         Output.WriteLine($"outcome = {result.Outcome}");
 

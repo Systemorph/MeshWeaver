@@ -118,7 +118,7 @@ public class RefusedContentSyncIsVisibleTest(MeshTestContext context) : InMeshTe
         var source = SourceWith(partition, OversizedVideo(), SmallPoster());
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
 
         Output.WriteLine($"outcome = {result.Outcome}");
         foreach (var refused in result.RefusedContent)
@@ -146,8 +146,8 @@ public class RefusedContentSyncIsVisibleTest(MeshTestContext context) : InMeshTe
 
         // 🚨 The durable, author-visible half: the verdict is ON THE SPACE, read back off the mesh.
         var ledger = await Mesh
-            .GetMeshNode($"{partition}/_Activity/content-sync", 60.Seconds())
-            .FirstAsync().Timeout(90.Seconds());
+            .GetMeshNode($"{partition}/_Activity/content-sync", TimeSpan.FromSeconds(60))
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90));
 
         ledger.Should().NotBeNull(
             "the person who committed the assets opens the Space, not the partition's import "
@@ -177,7 +177,7 @@ public class RefusedContentSyncIsVisibleTest(MeshTestContext context) : InMeshTe
         var source = SourceWith(partition, SmallPoster());
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
 
         var entry = result.RefusedContent.Should().ContainSingle().Subject;
         Output.WriteLine($"refused: {entry.NodePath} — {entry.Reason}");
@@ -213,7 +213,7 @@ public class RefusedContentSyncIsVisibleTest(MeshTestContext context) : InMeshTe
         };
 
         var result = await StaticRepoImporter.ImportSource(Mesh, source)
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
 
         result.Outcome.Should().Be("Imported");
         result.RefusedContent.Should().BeEmpty();
@@ -223,7 +223,7 @@ public class RefusedContentSyncIsVisibleTest(MeshTestContext context) : InMeshTe
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{partition}/_Activity scope:children"))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
             .Select(c => c.Items)
-            .FirstAsync().Timeout(90.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(90));
 
         Output.WriteLine($"_Activity children = {string.Join(", ", children.Select(n => n.Id))}");
         children.Should().NotContain(n => n.Id == "content-sync",

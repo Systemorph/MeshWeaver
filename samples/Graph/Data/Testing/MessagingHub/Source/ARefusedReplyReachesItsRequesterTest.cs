@@ -213,7 +213,7 @@ public class ARefusedReplyReachesItsRequesterTest(MeshTestContext context) : InM
                 responder.JsonSerializerOptions);
             responder.DeliverMessage(nack);
 
-            await Observable.FromAsync(() => response).Should().NotEmit(3.Seconds(),
+            await Observable.FromAsync(() => response).Should().NotEmit(TimeSpan.FromSeconds(3),
                 "a refused NACK must not be answered with another NACK — the requester's callback "
                 + "stays as it was, and the two hubs do not answer each other's refusals");
             Mesh.DescribeRequestFate(requestId).Should().NotContain("REPLY_REFUSED_REQUESTER_NACKED",

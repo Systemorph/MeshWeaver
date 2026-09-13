@@ -109,7 +109,7 @@ public class NodeTypeEnrichmentDoubleCallTest(MeshTestContext context) : InMeshT
         await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(Mesh, cfg, compilationService: null, afterCatalog)
             .Take(1)
-            .Should().Within(500.Milliseconds()).Emit();
+            .Should().Within(TimeSpan.FromMilliseconds(500)).Emit();
 
         sw.Stop();
 
@@ -145,7 +145,7 @@ public class NodeTypeEnrichmentDoubleCallTest(MeshTestContext context) : InMeshT
         var result = await NodeTypeEnrichmentHelpers
             .EnrichWithNodeType(Mesh, cfg, compilationService: null, preEnriched)
             .Take(1)
-            .Should().Within(5.Seconds()).Emit();
+            .Should().Within(TimeSpan.FromSeconds(5)).Emit();
         sw.Stop();
 
         sw.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500),

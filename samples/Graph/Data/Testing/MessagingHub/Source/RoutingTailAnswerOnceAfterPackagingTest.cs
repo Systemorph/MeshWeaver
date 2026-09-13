@@ -90,7 +90,7 @@ public class RoutingTailAnswerOnceAfterPackagingTest(MeshTestContext context) : 
             "inner failure"));
         var control = Submit("ordinary-payload");
 
-        var answered = await answeredSoFar.Should().Within(30.Seconds())
+        var answered = await answeredSoFar.Should().Within(TimeSpan.FromSeconds(30))
             .Match(a => a.Contains(control.Id),
                 "an ordinary request that fails routing must still be reported to its sender");
 

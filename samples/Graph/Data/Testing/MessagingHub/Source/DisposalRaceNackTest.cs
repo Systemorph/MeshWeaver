@@ -119,7 +119,7 @@ public class DisposalRaceNackTest(MeshTestContext context) : InMeshTestBase(cont
         {
             // 1. Stall the victim's turn loop.
             host.Post(new Blocker(), o => o.WithTarget(victimAddress));
-            await handlerEntered.Should().Within(20.Seconds()).Emit(
+            await handlerEntered.Should().Within(TimeSpan.FromSeconds(20)).Emit(
                 "the blocker handler must be holding the victim's action block");
 
             // 2. Accepted while the hub is healthy, so it lands in the MAIN queue behind the

@@ -58,7 +58,7 @@ public class InflightHubCreationDrainTest(MeshTestContext context) : InMeshTestB
 
         try
         {
-            await constructionEntered.Should().Within(10.Seconds()).Emit(
+            await constructionEntered.Should().Within(TimeSpan.FromSeconds(10)).Emit(
                 "the hosted-hub construction must have started before disposal begins");
 
             var disposalCompleted = client.DisposalCompleted.Take(1).Await();

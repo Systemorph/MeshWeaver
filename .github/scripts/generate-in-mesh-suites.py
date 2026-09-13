@@ -62,6 +62,27 @@ def generate(suite_id: str) -> tuple[int, int, int]:
             dest = src_dir / f"{f.parent.name}_{f.name}"
         dest.write_text(out, encoding="utf-8")
         converted.append(dest.name)
+    # a type declared in a REFUSED file is gone for the suite: every converted file that names it is
+    # refused too, until the set is stable (declarations only — never the word in prose)
+    decl = re.compile(r"^\s*(?:public|internal|private|protected|static|sealed|abstract|partial|file|\s)*\s*(?:class|record|struct|interface|enum)\s+(\w+)", re.M)
+    refused_by_name = {n for n, _ in refused}
+    while True:
+        gone: set[str] = set()
+        for f in sources_of(project):
+            if f.name in refused_by_name:
+                gone |= set(decl.findall(f.read_text(encoding="utf-8-sig")))
+        gone -= {"InMeshTestBase", "Assert", "Record", "TestTimeouts"}
+        newly = []
+        for n in list(converted):
+            text = (src_dir / n).read_text(encoding="utf-8")
+            mine = set(decl.findall(text))
+            hit = sorted(t for t in gone - mine if re.search(r"\b" + re.escape(t) + r"\b", text))
+            if hit:
+                newly.append((n, f"uses {', '.join(hit[:3])} declared in a refused file"))
+        if not newly:
+            break
+        for n, why in newly:
+            (src_dir / n).unlink(); converted.remove(n); refused.append((n, why)); refused_by_name.add(n)
     total = len(converted) + len(refused)
     cases = sum(len(re.findall(r"\[Mesh(Fact|Theory)\b", (src_dir / n).read_text(encoding="utf-8"))) for n in converted)
     if not cases:

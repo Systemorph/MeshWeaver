@@ -71,7 +71,7 @@ public class HubWatcherStopsAtTeardownStartTest(MeshTestContext context) : InMes
     private static async Task ParkTheActionBlock(IMessageHub root, Stall stall)
     {
         root.Post(new Blocker(), o => o.WithTarget(root.Address));
-        await stall.Entered.Should().Within(10.Seconds()).Emit("the blocker handler must be running");
+        await stall.Entered.Should().Within(TimeSpan.FromSeconds(10)).Emit("the blocker handler must be running");
     }
 
     [MeshFact]

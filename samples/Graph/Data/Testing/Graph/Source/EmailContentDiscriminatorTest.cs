@@ -29,7 +29,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// pipeline (a compiled plugin) queued its notification emails as ordinary mesh writes:
 /// <c>Content = new Email {…}</c>, serialized across the hub boundary as JSON carrying
 /// <c>$type: "Email"</c>. Every OTHER built-in content type (MarkdownContent, Comment,
-/// Notification, the security types…) is registered in <c>WithGraphTypes</c>; <c>Email</c> alone
+/// MeshWeaver.Mesh.Notification, the security types…) is registered in <c>WithGraphTypes</c>; <c>Email</c> alone
 /// was not — so the validator's strict built-in branch correctly refused the write, and the form's
 /// "Notifying our team" phase failed on every mesh. The omission was invisible for as long as only
 /// IN-PROCESS writers (EmailInboundProcessor) created email nodes, because typed in-process content

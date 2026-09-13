@@ -47,7 +47,7 @@ public class TaskSchedulerInvariantTest(MeshTestContext context) : InMeshTestBas
                 return request.Processed();
             }));
 
-        var response = await hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).Should().Within(10.Seconds()).Emit();
+        var response = await hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         response.Message.TaskSchedulerId.Should().Be(TaskScheduler.Default.Id,
             because: "hosted hubs must default to TaskScheduler.Default — they are independent actors");
@@ -79,7 +79,7 @@ public class TaskSchedulerInvariantTest(MeshTestContext context) : InMeshTestBas
                     return request.Processed();
                 }));
 
-        var response = await hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).Should().Within(10.Seconds()).Emit();
+        var response = await hub.Observe(new WhereAmIRequest(), o => o.WithTarget(hub.Address)).Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         response.Message.TaskSchedulerId.Should().Be(customScheduler.Id,
             because: "WithTaskScheduler must couple the hub's ActionBlock to the supplied scheduler");
@@ -129,9 +129,9 @@ public class TaskSchedulerInvariantTest(MeshTestContext context) : InMeshTestBas
                 }));
 
         // Trigger parent → which creates sub-hub + posts to it.
-        await parent.Observe(new WhereAmIRequest(), o => o.WithTarget(parent.Address)).Should().Within(10.Seconds()).Emit();
+        await parent.Observe(new WhereAmIRequest(), o => o.WithTarget(parent.Address)).Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
-        var observed = await subDone.Should().Within(10.Seconds()).Emit();
+        var observed = await subDone.Should().Within(TimeSpan.FromSeconds(10)).Emit();
 
         observed.TaskSchedulerId.Should().Be(TaskScheduler.Default.Id,
             because: "hosted sub-hubs must default to TaskScheduler.Default even when created from a parent that uses a custom scheduler");

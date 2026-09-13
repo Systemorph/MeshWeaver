@@ -38,7 +38,7 @@ using MeshWeaver.Mesh;
 /// can trip it. If it fires, the answer is never a larger bound — it is that the peel is seeing
 /// vertices it should not.</para>
 /// </summary>
-public class ImportWriteOrderScaleTest(MeshTestContext context)
+public class ImportWriteOrderScaleTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshTheory]
     [MeshInlineData(500)]

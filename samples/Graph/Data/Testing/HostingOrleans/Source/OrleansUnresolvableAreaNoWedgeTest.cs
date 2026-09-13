@@ -86,7 +86,7 @@ public class OrleansUnresolvableAreaNoWedgeTest(MeshTestContext context) : Orlea
                 .GetControlStream(address, badArea)
                 .Materialize()
                 .FirstAsync()
-                .Timeout(15.Seconds())
+                .Timeout(TimeSpan.FromSeconds(15))
                 .Await();
         }
         catch (TimeoutException)

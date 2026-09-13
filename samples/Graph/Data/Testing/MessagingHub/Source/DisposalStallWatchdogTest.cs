@@ -78,7 +78,7 @@ public class DisposalStallWatchdogTest : InMeshTestBase
 
         var started = DateTime.UtcNow;
         root.Dispose();
-        await root.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(120.Seconds());
+        await root.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TimeSpan.FromSeconds(120));
         var elapsed = DateTime.UtcNow - started;
 
         elapsed.Should().BeGreaterThan(TimeSpan.FromSeconds(9),
@@ -122,7 +122,7 @@ public class DisposalStallWatchdogTest : InMeshTestBase
         try
         {
             victim.Post(new WedgeEvent(), o => o.WithTarget(victim.Address));
-            await entered.Should().Within(10.Seconds()).Emit("the turn must hold the block before we dispose");
+            await entered.Should().Within(TimeSpan.FromSeconds(10)).Emit("the turn must hold the block before we dispose");
 
             victim.Dispose();
 
@@ -189,7 +189,7 @@ public class DisposalStallWatchdogTest : InMeshTestBase
         try
         {
             victim.Post(new WedgeEvent(), o => o.WithTarget(victim.Address));
-            await entered.Should().Within(10.Seconds()).Emit("the turn must hold the block before we dispose");
+            await entered.Should().Within(TimeSpan.FromSeconds(10)).Emit("the turn must hold the block before we dispose");
 
             var completed = victim.DisposalCompleted.FirstOrDefaultAsync().Await();
             victim.Dispose();
@@ -216,8 +216,8 @@ public class DisposalStallWatchdogTest : InMeshTestBase
             // The work finishes; the ordinary phases run to the end.
             Volatile.Write(ref release, 1);
             await completed.WaitAsync(TestTimeouts.Convergence);
-            await ownDisposed.Should().Within(5.Seconds()).Emit("ShutDown disposes the hub's own registrations");
-            await childDisposed.Should().Within(5.Seconds()).Emit("DisposeHostedHubs disposes the children");
+            await ownDisposed.Should().Within(TimeSpan.FromSeconds(5)).Emit("ShutDown disposes the hub's own registrations");
+            await childDisposed.Should().Within(TimeSpan.FromSeconds(5)).Emit("DisposeHostedHubs disposes the children");
             victim.RunLevel.Should().Be(MessageHubRunLevel.Dead);
         }
         finally
@@ -251,7 +251,7 @@ public class DisposalStallWatchdogTest : InMeshTestBase
 
         var started = DateTime.UtcNow;
         victim.Dispose();
-        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(60.Seconds());
+        await victim.DisposalCompleted.FirstOrDefaultAsync().Await().WaitAsync(TimeSpan.FromSeconds(60));
         var elapsed = DateTime.UtcNow - started;
 
         elapsed.Should().BeGreaterThan(TimeSpan.FromSeconds(7),

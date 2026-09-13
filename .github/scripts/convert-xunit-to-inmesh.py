@@ -32,10 +32,14 @@ REFUSE = [
     (r"Observable\.Using\([^\n]*Impersonate", "opens an impersonation scope with Observable.Using — the in-mesh shape is AsSystem (check-impersonation.py); needs a hand port"),
     (r"\.ToTask\(", "bridges an observable to a Task with .ToTask( — forbidden in every gated root (ObservableToTaskBridgeGuard); compose reactively first"),
     (r"using Microsoft\.Playwright|\bIPage\b|\bIBrowser\b|PortalFixture", "drives a browser (Playwright) — an e2e host, not an in-mesh case"),
-    (r"^using Orleans|OrleansSharedTestBase|\bTestCluster\b|\bISiloHost\b|\bRoutingGrain\b|\bIGrainFactory\b", "needs the Orleans silo host — the gate's mesh is the monolith"),
+    (r"(?m)^using Orleans|OrleansSharedTestBase|\bTestCluster\b|\bISiloHost\b|\bRoutingGrain\b|\bIGrainFactory\b", "needs the Orleans silo host — the gate's mesh is the monolith"),
     (r"using MeshWeaver\.Testing\.Xunit\b|MeshWeaver\.Testing\.Xunit\.", "tests the xunit adapter itself (MeshWeaver.Testing.Xunit is not a platform assembly)"),
-    (r"using MeshWeaver\.Hosting\.AspNetCore|WebApplication\.CreateBuilder|\bIApplicationBuilder\b", "builds an ASP.NET host — the host assembly is not on the NodeType reference set"),
+    (r"(?m)using MeshWeaver\.Hosting\.AspNetCore|^using Microsoft\.AspNetCore|WebApplication\.CreateBuilder|\bIApplicationBuilder\b|\bDefaultHttpContext\b|\bRequestDelegate\b", "builds an ASP.NET host — the host assembly is not on the NodeType reference set"),
+    (r"(?m)^using Memex\.|\bMemex\.Portal\.", "references the Memex portal host (Memex.Portal.Shared) — a host project, not a platform assembly"),
+    (r"\[MemberData\(|\[ClassData\(", "uses xunit MemberData/ClassData — no in-mesh equivalent yet"),
     (r"FindRepositoryRoot|ScannedRoots|RatchetedRoots|ProductionRoots|GetRepositoryRoot|\bRepoRoot\b", "reads the repository tree from the test bin (a source-scanning guard) — no tree in a mesh; stays on xunit"),
+    (r"(?m)^using MeshWeaver\.Plugin\.Build|^using MeshWeaver\.ContainerImages|MeshWeaver\.ComboVerifier|^using MeshWeaver\.PluginTester|\bModulePackCommand\b|\bContainerImageCatalog\b|\bDockerImageGate\b", "tests build tooling (MeshWeaver.Plugin.Build, ContainerImages, the tester, ComboVerifier) — not a content-surface assembly"),
+    (r"(?m)^namespace [\w.]+\s*\n?\{[^\n]*\n(?:.*\n)*?^namespace ", "several brace-form namespaces in one file — in-mesh sources are one compilation; needs a hand split"),
     (r"\bTestScheduler\b|Microsoft\.Reactive\.Testing", "uses Microsoft.Reactive.Testing's TestScheduler — not a platform assembly"),
     (r"\bawait\b[^;]*?(GetMeshNodeStream|GetWorkspace\(|GetDataStream|GetRemoteStream|IMeshService|meshService\.|ObserveQuery|GetQuery\(|\.Query\(|\.CreateNode\(|\.UpdateNode\(|\.DeleteNode\(|\.CopyNode\()", "awaits a mesh read/write directly (HubReachableAsyncGuard.NoNewAwaitOfAMeshRead) — compose reactively and subscribe, or wait through ObserveCompletion"),
 ]
@@ -50,6 +54,18 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     s = re.sub(r"^using MeshWeaver\.Fixture;\n", "", s, flags=re.M)
     s = re.sub(r"^using MeshWeaver\.Hosting\.Monolith\.TestBase;\n", "", s, flags=re.M)
     s = re.sub(r"^namespace [\w.]+;\n\n?", "", s, flags=re.M)
+    # the brace form `namespace X { … }` would swallow every file joined after it (in-mesh sources are one
+    # compilation): drop the opening line and the file's last closing brace
+    # only the file's OWN top-level brace namespace (column 0, no file-scoped one) — a `namespace X {` inside
+    # a string literal (compiler tests carry C# source as text) is indented and must be left alone
+    if not re.search(r"^namespace [\w.]+;", text, flags=re.M):
+        heads = list(re.finditer(r"^namespace [\w.]+\s*\n?\{[ \t]*\n", s, flags=re.M))
+        if len(heads) == 1:
+            m = heads[0]
+            s = s[:m.start()] + s[m.end():]
+            k = s.rstrip().rfind("}")
+            if k >= 0:
+                s = s[:k] + s[k + 1:]
     s = re.sub(r"^\s*\[CollectionDefinition\([^\]]*\)\]\s*\n", "", s, flags=re.M)
     s = re.sub(r"^\s*\[Collection\([^\]]*\)\]\s*\n", "", s, flags=re.M)
     s = re.sub(r"\[Fact(\(([^)]*)\))?\]", lambda m: "[MeshFact" + (f"({_args(m.group(2))})" if m.group(2) else "") + "]", s)
@@ -60,6 +76,13 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     # a primary constructor forwarding the xunit output to its base: `X(ITestOutputHelper output) : Base(output)`
     s = re.sub(r"\(ITestOutputHelper\s+output\)\s*:\s*InMeshTestBase\(output\)", "(MeshTestContext context) : InMeshTestBase(context)", s)
     s = re.sub(r"\[assembly:[^\]]*\]\s*\n", "", s)
+    # hoisted usings make `Notification` ambiguous (MeshWeaver.Mesh vs System.Reactive) — the mesh's is meant
+    if "using MeshWeaver.Mesh;" in s and "System.Reactive.Notification" not in s:
+        s = s.replace("new Notification(", "new MeshWeaver.Mesh.Notification(")
+        s = re.sub(r"(?<![\w.])Notification(?![\w<]|\s*\()", "MeshWeaver.Mesh.Notification", s)
+    # FluentAssertions/Humanizer `n.Seconds()` — Humanizer's twin makes it ambiguous once any file hoists it
+    s = re.sub(r"\b([\w.]+)\.(Milliseconds|Seconds|Minutes)\(\)", r"TimeSpan.From\2(\1)", s)
+    s = re.sub(r"^using Humanizer;\n", "", s, flags=re.M)
     s = s.lstrip("\ufeff")
     s = re.sub(r"\(ITestOutputHelper\s+output\)\s*:\s*base\(output\)", "(MeshTestContext context) : base(context)", s)
     s = re.sub(r"\(ITestOutputHelper\s+output\)", "(MeshTestContext context)", s)
@@ -68,6 +91,8 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     # AsSystem(access, () => work) is the sanctioned Observable.Create shape.
     s = re.sub(r"\b([A-Za-z_][A-Za-z0-9_.]*)\.RunAsSystem\(", r"AsSystem(\1, ", s)
     s = re.sub(r"^using Xunit\.Abstractions;\n", "", s, flags=re.M)
+    # a class that only took the output helper (no base): give it the base so `output`/`Output` resolve
+    s = re.sub(r"(class \w+\(MeshTestContext context\))(\s*)(?=\{|\n|$)", r"\1 : InMeshTestBase(context)\2", s)
     header = (f"// <meshweaver>\n// Id: {node_id}\n// DisplayName: {node_id} — migrated from xunit (convert-xunit-to-inmesh.py)\n// </meshweaver>\n"
               "#nullable enable\nusing MeshWeaver.Reactive.Assertions;\nusing MeshWeaver.Testing.InMesh;\n")
     if "using System;" not in s:
@@ -122,6 +147,15 @@ public class SampleTest : MonolithMeshTestBase
     assert convert("using Microsoft.Playwright;", "x")[0] is None
     assert "[MeshFact(TimeoutSeconds = 30)]" in convert("[HubFact]\npublic void A() {}", "x")[0]
     assert "(MeshTestContext context) : InMeshTestBase(context)" in convert("public class T(ITestOutputHelper output) : HubTestBase(output) {}", "x")[0]
+    assert "class U(MeshTestContext context) : InMeshTestBase(context)" in convert("public class U(ITestOutputHelper output)\n{\n}", "x")[0]
+    assert "namespace" not in convert("namespace A.B\n{\n    public class C { }\n}\n", "x")[0]
+    assert convert("namespace A.B\n{\n    public class C { }\n}\n", "x")[0].rstrip().endswith("public class C { }")
+    assert "TimeSpan.FromSeconds(5)" in convert("var t = 5.Seconds();", "x")[0]
+    assert "MeshWeaver.Mesh.Notification" in convert("using MeshWeaver.Mesh;\nvar n = new Notification();", "x")[0]
+    assert "MeshWeaver.Mesh.Notification" not in convert("using MeshWeaver.Mesh;\nvar n = Notification(1);", "x")[0]
+    kept = convert("namespace A;\nvar s = \"namespace X\\n{\\n}\";\nclass C { }", "x")[0]
+    assert kept.count("{") == kept.count("}"), kept
+    assert convert("namespace A\n{\nclass C { }\n}\nnamespace B\n{\nclass D { }\n}", "x")[0] is None
     print("✓ convert-xunit-to-inmesh self-test: attributes (HubFact too), base, ctor (primary too), usings, header; refusals name their reason — ToTask, awaited mesh reads, host configuration, browsers, Orleans"); return 0
 
 def main() -> int:

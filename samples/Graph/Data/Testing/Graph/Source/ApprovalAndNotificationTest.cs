@@ -13,8 +13,8 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
 /// <summary>
-/// Tests for the Approval and Notification data models (platform-level, MeshWeaver.Mesh.Contract),
-/// the Notification node type, and related infrastructure. The record and its <c>_Approval</c> →
+/// Tests for the Approval and MeshWeaver.Mesh.Notification data models (platform-level, MeshWeaver.Mesh.Contract),
+/// the MeshWeaver.Mesh.Notification node type, and related infrastructure. The record and its <c>_Approval</c> →
 /// <c>annotations</c> satellite mapping stay platform-level so approval data keeps deserializing
 /// and routing; the approval UI and its node type ship as the node-native <c>Approvals</c> package
 /// (MeshWeaver.Plugins), whose own suites cover them.
@@ -126,12 +126,12 @@ public class ApprovalAndNotificationTest
 
     #endregion
 
-    #region Notification Data Model Tests
+    #region MeshWeaver.Mesh.Notification Data Model Tests
 
     [MeshFact]
     public void Notification_DefaultValues_AreCorrect()
     {
-        var notification = new Notification();
+        var notification = new MeshWeaver.Mesh.Notification();
 
         notification.Id.Should().NotBeNullOrEmpty();
         notification.Title.Should().BeEmpty();
@@ -152,7 +152,7 @@ public class ApprovalAndNotificationTest
         var node = new MeshNode("notif1", "ACME/_Thread/chat-abc/_Notification")
         {
             MainNode = "ACME/_Thread/chat-abc",
-            Content = new Notification()
+            Content = new MeshWeaver.Mesh.Notification()
         };
         node.MainNode.Should().NotBe(node.Path);
         node.Path.Should().StartWith(node.MainNode + "/");
@@ -161,7 +161,7 @@ public class ApprovalAndNotificationTest
     [MeshFact]
     public void Notification_CanBeCreated_WithAllProperties()
     {
-        var notification = new Notification
+        var notification = new MeshWeaver.Mesh.Notification
         {
             Id = "notif-1",
             Title = "Approval Requested",
@@ -186,7 +186,7 @@ public class ApprovalAndNotificationTest
     [MeshFact]
     public void Notification_CanToggleReadStatus()
     {
-        var notification = new Notification { IsRead = false };
+        var notification = new MeshWeaver.Mesh.Notification { IsRead = false };
         var read = notification with { IsRead = true };
 
         read.IsRead.Should().BeTrue();
@@ -199,7 +199,7 @@ public class ApprovalAndNotificationTest
     [MeshInlineData(NotificationType.General)]
     public void Notification_AllTypes_AreValid(NotificationType type)
     {
-        var notification = new Notification { NotificationType = type };
+        var notification = new MeshWeaver.Mesh.Notification { NotificationType = type };
         notification.NotificationType.Should().Be(type);
     }
 
@@ -240,7 +240,7 @@ public class ApprovalAndNotificationTest
     [MeshFact]
     public void NotificationNodeType_HasCorrectNodeType()
     {
-        NotificationNodeType.NodeType.Should().Be("Notification");
+        NotificationNodeType.NodeType.Should().Be("MeshWeaver.Mesh.Notification");
     }
 
     [MeshFact]
@@ -248,7 +248,7 @@ public class ApprovalAndNotificationTest
     {
         var node = NotificationNodeType.CreateMeshNode();
 
-        node.Name.Should().Be("Notification");
+        node.Name.Should().Be("MeshWeaver.Mesh.Notification");
         node.Icon.Should().Contain("bell.svg");
         node.ExcludeFromContext.Should().Contain("search");
         node.ExcludeFromContext.Should().Contain("create");
@@ -270,10 +270,10 @@ public class ApprovalAndNotificationTest
     [MeshFact]
     public void MeshNode_WithNotificationContent_IsNotSatellite()
     {
-        var notification = new Notification { Title = "Test" };
+        var notification = new MeshWeaver.Mesh.Notification { Title = "Test" };
         var node = new MeshNode("notif1", "User/user1") { Content = notification };
 
-        // Notification is not satellite content, so GetPrimaryPath returns node's own path
+        // MeshWeaver.Mesh.Notification is not satellite content, so GetPrimaryPath returns node's own path
         node.GetPrimaryPath().Should().Be("User/user1/notif1");
     }
 
@@ -297,7 +297,7 @@ public class ApprovalAndNotificationTest
         var registry = new TestTypeRegistry();
         registry.WithGraphTypes();
 
-        registry.GetType(nameof(Notification)).Should().Be(typeof(Notification));
+        registry.GetType(nameof(MeshWeaver.Mesh.Notification)).Should().Be(typeof(MeshWeaver.Mesh.Notification));
         registry.GetType(nameof(NotificationType)).Should().Be(typeof(NotificationType));
     }
 
@@ -310,7 +310,7 @@ public class ApprovalAndNotificationTest
         // Verify all expected types are registered (including pre-existing ones)
         registry.GetType(nameof(Approval)).Should().NotBeNull();
         registry.GetType(nameof(ApprovalStatus)).Should().NotBeNull();
-        registry.GetType(nameof(Notification)).Should().NotBeNull();
+        registry.GetType(nameof(MeshWeaver.Mesh.Notification)).Should().NotBeNull();
         registry.GetType(nameof(NotificationType)).Should().NotBeNull();
         registry.GetType(nameof(Comment)).Should().NotBeNull();
     }
@@ -430,12 +430,12 @@ public class ApprovalAndNotificationTest
 
     #endregion
 
-    #region Notification Creation Patterns
+    #region MeshWeaver.Mesh.Notification Creation Patterns
 
     [MeshFact]
     public void Notification_ForApprovalRequest_HasCorrectType()
     {
-        var notification = new Notification
+        var notification = new MeshWeaver.Mesh.Notification
         {
             Title = "Approval Requested",
             Message = "Alice requested your approval for 'Publication review'",
@@ -451,7 +451,7 @@ public class ApprovalAndNotificationTest
     [MeshFact]
     public void Notification_ForApprovalGiven_HasCorrectType()
     {
-        var notification = new Notification
+        var notification = new MeshWeaver.Mesh.Notification
         {
             Title = "Approval Granted",
             Message = "Bob approved your request",
@@ -466,7 +466,7 @@ public class ApprovalAndNotificationTest
     [MeshFact]
     public void Notification_ForApprovalRejected_HasCorrectType()
     {
-        var notification = new Notification
+        var notification = new MeshWeaver.Mesh.Notification
         {
             Title = "Approval Rejected",
             Message = "Bob rejected your request",

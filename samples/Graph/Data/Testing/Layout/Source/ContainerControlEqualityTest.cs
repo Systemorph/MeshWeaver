@@ -14,7 +14,7 @@ using System.Linq;
 /// This addresses the issue where DistinctUntilChanged() in LayoutAreaHost doesn't detect
 /// changes in container controls when their child views change.
 /// </summary>
-public class ContainerControlEqualityTest(MeshTestContext context)
+public class ContainerControlEqualityTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private readonly ITestOutputHelper output = output;
 

@@ -55,7 +55,31 @@ public static class Assert
     public static async Task<T> ThrowsAsync<T>(Func<Task> action) where T : Exception { try { await action(); } catch (T ex) { return ex; } catch (Exception ex) { throw Fail($"Assert.ThrowsAsync failed — expected {typeof(T).Name}, got {ex.GetType().Name}: {ex.Message}"); } throw Fail($"Assert.ThrowsAsync failed — expected {typeof(T).Name}, nothing thrown"); }
     public static T ThrowsAny<T>(Action action) where T : Exception { try { action(); } catch (T ex) { return ex; } throw Fail($"Assert.ThrowsAny failed — expected {typeof(T).Name}"); }
     public static async Task<T> ThrowsAnyAsync<T>(Func<Task> action) where T : Exception { try { await action(); } catch (T ex) { return ex; } throw Fail($"Assert.ThrowsAnyAsync failed — expected {typeof(T).Name}"); }
+    public static void DoesNotContain(string expected, string? actual, StringComparison comparison) { if (actual is not null && actual.Contains(expected, comparison)) throw Fail($"Assert.DoesNotContain failed — '{expected}' in '{actual}'"); }
+    public static void Equal<T>(T expected, T actual, IEqualityComparer<T> comparer) { if (!comparer.Equals(expected, actual)) throw Fail($"Assert.Equal failed — expected {Show(expected)}, got {Show(actual)}"); }
+    public static void Equal(decimal expected, decimal actual, int precision) { if (Math.Round(expected, precision) != Math.Round(actual, precision)) throw Fail($"Assert.Equal failed — expected {expected}, got {actual} (precision {precision})"); }
+    public static void Equal(DateTime expected, DateTime actual, TimeSpan precision) { if ((expected - actual).Duration() > precision) throw Fail($"Assert.Equal failed — {expected:o} vs {actual:o} beyond {precision}"); }
+    public static void NotEqual<T>(IEnumerable<T> expected, IEnumerable<T> actual) { if (expected.SequenceEqual(actual)) throw Fail("Assert.NotEqual failed — sequences are equal"); }
+    public static void Equivalent(object? expected, object? actual) { if (!Equals(expected, actual) && System.Text.Json.JsonSerializer.Serialize(expected) != System.Text.Json.JsonSerializer.Serialize(actual)) throw Fail($"Assert.Equivalent failed — expected {Show(expected)}, got {Show(actual)}"); }
+    public static void Collection<T>(IEnumerable<T> collection, params Action<T>[] inspectors) { var list = collection.ToList(); if (list.Count != inspectors.Length) throw Fail($"Assert.Collection failed — {list.Count} element(s), {inspectors.Length} inspector(s)"); for (var i = 0; i < list.Count; i++) inspectors[i](list[i]); }
+    public static void Distinct<T>(IEnumerable<T> collection) { var list = collection.ToList(); if (list.Distinct().Count() != list.Count) throw Fail("Assert.Distinct failed — duplicates present"); }
+    public static void Subset<T>(ISet<T> expectedSuperset, ISet<T>? actual) { if (actual is null || !actual.IsSubsetOf(expectedSuperset)) throw Fail("Assert.Subset failed"); }
+    public static void Superset<T>(ISet<T> expectedSubset, ISet<T>? actual) { if (actual is null || !actual.IsSupersetOf(expectedSubset)) throw Fail("Assert.Superset failed"); }
+    public static void Multiple(params Action[] checks) { var failures = new List<string>(); foreach (var c in checks) { try { c(); } catch (Exception ex) { failures.Add(ex.Message); } } if (failures.Count > 0) throw Fail("Assert.Multiple failed:\n" + string.Join("\n", failures)); }
+    public static void Skip(string reason) => throw Fail("skipped: " + reason);
+    public static void SkipWhen(bool condition, string reason) { if (condition) throw Fail("skipped: " + reason); }
+    public static void SkipUnless(bool condition, string reason) { if (!condition) throw Fail("skipped: " + reason); }
+    public static void ProperSubset<T>(ISet<T> expectedSuperset, ISet<T>? actual) { if (actual is null || !actual.IsProperSubsetOf(expectedSuperset)) throw Fail("Assert.ProperSubset failed"); }
+    public static void Raises<T>(Action<Action<T>> attach, Action<Action<T>> detach, Action testCode) { var raised = false; Action<T> h = _ => raised = true; attach(h); try { testCode(); } finally { detach(h); } if (!raised) throw Fail("Assert.Raises failed — no event"); }
     private static string Show(object? v) => v is null ? "null" : v is string s ? $"'{s}'" : v.ToString() ?? "?";
+}
+
+/// <summary>xunit's <c>Record</c>: capture the exception a delegate throws, or null.</summary>
+public static class Record
+{
+    public static Exception? Exception(Action testCode) { try { testCode(); return null; } catch (Exception ex) { return ex; } }
+    public static Exception? Exception(Func<object?> testCode) { try { testCode(); return null; } catch (Exception ex) { return ex; } }
+    public static async Task<Exception?> ExceptionAsync(Func<Task> testCode) { try { await testCode(); return null; } catch (Exception ex) { return ex; } }
 }
 
 /// <summary>

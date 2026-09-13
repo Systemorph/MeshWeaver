@@ -49,7 +49,7 @@ using System.Reflection.PortableExecutable;
 /// It also stops at the assembly boundary: what <c>MeshWeaver.Compiler</c> does internally is that
 /// assembly's business, and it is a library with no hub dependency by construction (#1712).</para>
 /// </summary>
-public class MeshFreeBakePathTest(MeshTestContext context)
+public class MeshFreeBakePathTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Names whose appearance anywhere on a call path means a mesh is being built or driven: the

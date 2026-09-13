@@ -75,7 +75,7 @@ public class ShuttingDownSignalTest(MeshTestContext context) : InMeshTestBase(co
         try
         {
             root.Post(new Blocker(), o => o.WithTarget(root.Address));
-            await handlerEntered.Should().Within(10.Seconds()).Emit("the blocker handler must be running");
+            await handlerEntered.Should().Within(TimeSpan.FromSeconds(10)).Emit("the blocker handler must be running");
 
             Volatile.Read(ref rootSignalled).Should().Be(0, "a live hub has not begun shutting down");
             Volatile.Read(ref childSignalled).Should().Be(0, "a live hub has not begun shutting down");

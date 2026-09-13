@@ -56,7 +56,7 @@ public class DisposalDeadlockDiagnosticsTest : InMeshTestBase
         try
         {
             victim.Post(new WedgeEvent(), o => o.WithTarget(victim.Address));
-            await entered.Should().Within(10.Seconds()).Emit("the turn must hold the block before we dispose");
+            await entered.Should().Within(TimeSpan.FromSeconds(10)).Emit("the turn must hold the block before we dispose");
 
             victim.Dispose();
 

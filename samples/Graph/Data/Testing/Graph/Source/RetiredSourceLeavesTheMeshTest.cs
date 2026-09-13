@@ -111,7 +111,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
         IObservable<MeshNode> write;
         using (Access.SwitchAccessContext(Author))
             write = MeshService.CreateNode(node);
-        await write.FirstAsync().Timeout(60.Seconds());
+        await write.FirstAsync().Timeout(TimeSpan.FromSeconds(60));
     }
 
     /// <summary>The partition's immediate children, read through the query index. Bounded retry on
@@ -119,7 +119,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
     /// confirmed through <c>PrunedPaths</c>.</summary>
     private IObservable<IReadOnlyCollection<string>> ChildrenWhen(
         string partition, Func<IReadOnlyCollection<string>, bool> settled) =>
-        Observable.Interval(100.Milliseconds()).StartWith(0L)
+        Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
             .SelectMany(_ => MeshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{partition} scope:children"))
                 .Take(1))
@@ -159,7 +159,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
                 Root = Space(partition),
                 Nodes = [Page(partition, "Kept"), Page(partition, "Retired")],
             })
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
         Output.WriteLine($"pass 1 = {first.Outcome} ({first.Count} node(s))");
         first.Outcome.Should().Be("Imported");
 
@@ -175,7 +175,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
         };
         var second = await StaticRepoImporter
             .ImportSource(Mesh, afterRetirement, policy: TwoWaySince(horizon))
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
         Output.WriteLine(
             $"pass 2 = {second.Outcome}, preserved {second.Preserved}, pruned [{string.Join(", ", second.PrunedPaths)}]");
 
@@ -192,7 +192,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
 
         var settled = await ChildrenWhen(partition,
                 children => !children.Contains(retired, StringComparer.OrdinalIgnoreCase))
-            .Timeout(120.Seconds());
+            .Timeout(TimeSpan.FromSeconds(120));
         settled.Should().Contain(authored,
             "the authored node is still in the mesh after the prune that removed the retired one");
         settled.Should().Contain(kept, "and so is the file the repository still ships");
@@ -202,7 +202,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
         // "Skipped" — the exact state memex.systemorph.com was frozen in.
         var third = await StaticRepoImporter
             .ImportSource(Mesh, afterRetirement, policy: TwoWaySince(horizon))
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
         Output.WriteLine($"pass 3 = {third.Outcome}, preserved {third.Preserved}");
 
         third.Outcome.Should().NotBe("Skipped",
@@ -213,7 +213,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
             + "to the branch head, after which no import ever looks again");
 
         var afterThird = await ChildrenWhen(partition, children => children.Contains(authored))
-            .Timeout(120.Seconds());
+            .Timeout(TimeSpan.FromSeconds(120));
         afterThird.Should().Contain(authored,
             "🚨 and the re-import this fix newly causes must not be the thing that finally deletes "
             + "the authored node — the ownership test governs every pass, not just the first");
@@ -239,7 +239,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
                 Root = Space(partition),
                 Nodes = [Page(partition, "Kept"), Page(partition, "Retired")],
             })
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
 
         var afterRetirement = new RepoSource(partition)
         {
@@ -249,7 +249,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
 
         var converging = await StaticRepoImporter
             .ImportSource(Mesh, afterRetirement, policy: TwoWaySince(horizon))
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
         Output.WriteLine(
             $"converging = {converging.Outcome}, preserved {converging.Preserved}, "
             + $"pruned [{string.Join(", ", converging.PrunedPaths)}]");
@@ -259,7 +259,7 @@ public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTes
 
         var again = await StaticRepoImporter
             .ImportSource(Mesh, afterRetirement, policy: TwoWaySince(horizon))
-            .FirstAsync().Timeout(240.Seconds());
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(240));
         Output.WriteLine($"again = {again.Outcome}");
 
         again.Outcome.Should().Be("Skipped",
