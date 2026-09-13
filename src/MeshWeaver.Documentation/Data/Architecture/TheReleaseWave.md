@@ -4,9 +4,10 @@ Category: Documentation
 Description: How a publication becomes a repository_dispatch across the plugin fleet — the single emitter rule, the image/digest contract that puts resolution on the RECEIVER, and the transitional gap left by retiring the GitHub-to-GitHub job
 ---
 
-A module is built against a platform **pin**, so when the platform (or an upstream catalog)
-publishes, every dependent repo must rebuild or its portals read `FrameworkDeclined` and adopt
-nothing. The mechanism that wakes them is the **release wave**: one `repository_dispatch` per
+A module is built against a platform **pin** *(as of 2026-09-12 no repository carries one — see
+"After phase 1" below; the wave mechanics on this page are unchanged)*, so when the platform (or an
+upstream catalog) publishes, every dependent repo must rebuild or its portals read
+`FrameworkDeclined` and adopt nothing. The mechanism that wakes them is the **release wave**: one `repository_dispatch` per
 subscribed repository.
 
 This page exists because the wave has been mis-diagnosed twice in one day, in opposite directions —
@@ -102,6 +103,55 @@ Move a pin before step 1 and the publication POSTs to an inbox that discards it:
 emitter stops, nothing replaces it, and **the wave dies silently** — every dependent falls back to
 its daily schedule poll, which is exactly the "absence of evidence read as evidence" failure the
 whole lane is built to refuse.
+
+## After phase 1 (2026-09-12) — measured 2026-09-13: the wave moved, it did not stop
+
+The transitional gap above closed: the `bundle-publication` branch exists
+(`PlatformBuildInboxWatcher.BroadcastPublication`, MeshWeaver.Plugins), every publishing caller
+posts the record, and phase 1 of the fleet CI refactor (Plugins#1707/#1709, Reinsurance#198,
+Crm#91, SocialMedia#178, Manufacturing#79; the process page is MeshWeaver.Plugins
+`Hosting/BuildAndReleaseProcess`) put `meshweaver-framework-released` behind a switch that is off
+by default and dropped it from the satellites' receivers. Its stated expectation was that the
+whole `repository_dispatch` share of the fleet's bill (≈15,000 minutes a day) goes away.
+
+**It did not — measured by run over the first 19 hours, 2026-09-12T12:00Z → 09-13T07:08Z:**
+
+| repo | `upstream-published` runs | `framework-released` runs | core CD runs in the window |
+|---|---|---|---|
+| Crm | **23** | 0 | 41 |
+| SocialMedia | **24** | 0 | 41 |
+| Manufacturing | **23** | 0 | 41 |
+| Education | 18 | **42** — Education#320 is unmerged; `ci.yml:28` still lists the type | 41 |
+| Reinsurance | **0** | 0 | 41 |
+
+The emitter is the one this page names: core CD's own `plugins-bake` calls the reusable lane with
+`webhook-url`, so its `register-publication` posts a `plugins` `bundle-publication` **on every core
+build** — a fresh framework identity each time, so `IsRepeat` never fires — and `DependentsOf(plugins)`
+is every satellite that declares `plugins`. Twenty of twenty core register jobs succeeded in the
+window, and each dependent's run started within seconds of one (core 06:22:40Z → Crm 06:22:41Z).
+So the per-build wave now wears `meshweaver-upstream-published`; only its name changed. Reinsurance's
+zero is the one anomaly — it declares `plugins crm` and lists the type, so its registration on the
+control instance is the next thing to read. Education's 42 say the `framework-released` emitter is
+also still live for any receiver that lists the type.
+
+Whether one wake per core build is wanted is Roland's decision (the same identity churn is costed in
+[Framework Identity Churn](../FrameworkIdentityChurn)); what this section settles is that the phase-1
+expectation was a prediction, and the count replaced it.
+
+### The pin this page opens with is gone
+
+*"A module is built against a platform pin"* — no longer. Audited on every repository's `main` on
+2026-09-13 (`.github/workflows/ci.yml`, uncommented lines): **no** `MW_PLATFORM_REF` /
+`MW_PLATFORM_SET` / `MW_IMAGE_DIGEST` / `MW_PORTAL_IMAGE_DIGEST` literal in any of the six (the one
+remaining reference is `FREEZE: ${{ vars.MW_PLATFORM_REF }}`, the incident-freeze repository
+VARIABLE the resolver honours by design); every `uses: Systemorph/MeshWeaver/…` lane ref is `@main`
+(0 of 43 pinned to a sha); `check-platform-pins.py` is invoked nowhere. Every repository resolves the
+newest sealed set at run time with `resolve-platform.py` — and **carries its own copy of it**: seven
+copies at six distinct sizes on 2026-09-13 (core 68,150 B; Crm 69,027; Reinsurance 69,035;
+SocialMedia 69,035; Manufacturing 69,037; Plugins 60,365; Education 46,786), with no drift guard
+comparing them (`node-repo-validate` checks none). The reusable lanes fetch **core's** copy at
+`scripts-ref` for their own resolution, so the copies decide only what a satellite's *own* jobs
+resolve — which is exactly the file the same-drift argument on Plugins#1565 was about.
 
 ## Reading a wave, in order
 

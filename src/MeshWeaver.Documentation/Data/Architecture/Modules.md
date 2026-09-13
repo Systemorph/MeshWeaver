@@ -594,6 +594,33 @@ instead of failing cleanly.
 Two modules already needed this: Snowflake P/Invokes `libsf_mini_core.*` (and Mono.Unix), and
 Cosmos' query-plan `ServiceInterop` is native. Both were shipping with those files pruned away.
 
+🚨 **This is the IN-IMAGE closure lane only. A REGISTRY bundle (`.module.nupkg`) cannot carry a
+native asset — verified on `main` 2026-09-13 (#4126).** The resolver above is wired for both, and
+`ModuleLandingService` lays a landed bundle out under `modules/<generation>/`, so a `runtimes/` tree
+placed there WOULD resolve. Nothing puts one there:
+
+- `src/MeshWeaver.Plugin.Build/DepsClosure.cs:148-151` takes only `runtime` entries ending in
+  `.dll`; `:152` detects `runtimeTargets` and `:182-184` turns that into a **warning** (*"declares
+  native runtimeTargets the bundle does not carry"*) — nothing ships them another way.
+- `tools/MeshWeaver.PluginTester/ContainerReferenceSet.cs:307` reads only the `runtime` section of
+  the image's `deps.json`, and `:360-370` `Resolve` marks a package `Supplied=false` when it
+  contributes no assembly — so a `build: container` module cannot even DECLARE a native-only
+  package (`ProjectBuild.cs:951-958` refuses it RED as *"PackageReference(s) the container does not
+  supply"*), although the image carries the library flat in `/app`.
+- The bundle format has two sections and both are flat: `NuGetPackageWriter.cs:64-79`
+  (`meshweaver/modules/<file>`, `meshweaver/moduleassets/` for `wwwroot/**`); the packer writes
+  exactly those (`src/MeshWeaver.Plugin.Build/ModulePackCommand.cs:667-681`), and the consumers
+  filter to flat entries (`ServedModuleBytes.cs:204-206`, `PublishedBundleCatalogue.cs:519-521`) —
+  an entry under `meshweaver/modules/runtimes/…` would be silently dropped.
+
+The one native family the fleet ships through the registry today (SkiaSharp, for
+`MeshWeaver.Markdown.Export`) works because the PORTAL HOST carries the natives, the
+"host happens to have it" shape the 2026-09-01 What's New called a defect for managed assemblies.
+What closing #4126 needs: `DepsClosure`/`PrivateClosure` carry `runtimeTargets` per RID, a
+manifest-declared native section in the bundle, the landing service laying it out under the module
+folder, `ContainerReferenceSet.Resolve` treating a native-only package as supplied, and the warning
+above becoming a refusal.
+
 ## The bundle lane — modules as Store packages (#1664)
 
 A compiled module reaches a deployment one of two ways: shipped in the image (the baseline above),
