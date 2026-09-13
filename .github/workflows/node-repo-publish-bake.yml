@@ -317,17 +317,27 @@ on:
           for readers that predate pointer resolution, and THAT copy still races: flipping a
           prefix closes the window for pointer-following readers only.
 
-          🚨 DO NOT FLIP A PREFIX UNTIL EVERY PRODUCER OF IT CAN WRITE GENERATIONS. A new writer
-          and an old writer on one prefix is the half-migration to avoid: the new one moves the
-          pointer, the old one replaces the flat copy in place and never touches it, so a
-          pointer-following reader keeps serving its generation and never sees the old writer's
-          NEWER publication — a stale serve with nothing red anywhere. `plugins` is the only
-          prefix with two producers (core CD's `plugins-bake` and this repo's own `publish-bake`),
-          so it flips in ONE change set; every other prefix flips in its own repository's PR.
+          🚨 THE LAYOUT BELONGS TO THE PREFIX, NOT TO THIS INPUT — so a prefix may be flipped ONE
+          PRODUCER AT A TIME. A live `_current` means some producer already writes generations, and
+          a run that found one publishes a generation whatever this input says (loudly, naming the
+          caller to flip). That is what makes the half-migration unreachable rather than merely
+          forbidden: without it the new writer moves the pointer, the old one replaces the flat
+          copy in place and never touches it, and a pointer-following reader keeps serving its
+          generation and never sees the old writer's NEWER publication — a stale serve with
+          nothing red anywhere. `plugins` is the only prefix with two producers (core CD's
+          `plugins-bake` and this repo's own `publish-bake`), they live in two repositories that
+          cannot merge atomically, and they may now be flipped in either order; every other prefix
+          flips in its own repository's PR. Setting this input to `generation` is still what you
+          should do on both — it makes the prefix's layout explicit instead of discovered.
 
-          🚨 Retention is not implemented: generations accumulate until a sweep lands. That sweep
-          deletes from the production share, so it is its own reviewed change — and it is a
-          precondition on flipping, not a follow-up.
+          🚨 A flat caller on a migrated prefix NEVER takes the prefix back. Retiring or
+          re-pointing would move consumers backwards: the pointer is moved BEFORE the flat
+          compatibility copy is refreshed, so a run seeing an older flat copy could skip and
+          expose bytes older than the generation it displaced.
+
+          Retention is implemented (MeshWeaver#3959) and registered in the portal hosts, so
+          generations under a retained identity are collected once nothing names them and they are
+          older than the window. It is no longer a precondition on flipping.
 
           Full reference: Doc/Architecture/SealedPublicationGenerations.
         required: false

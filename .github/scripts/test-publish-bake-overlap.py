@@ -1137,52 +1137,55 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
     # ── This is not a hypothetical: `prebuilt-bundles/<identity>/plugins` has TWO producers living
     # ── in TWO repositories (core CD's `plugins-bake` and the MeshWeaver.Plugins satellite's own
     # ── `publish-bake`), so phase 4 CANNOT be one atomic change set — the fleet must pass through
-    # ── this state. Before the fix the flat producer read every "already published / which
-    # ── architecture / which source commit" answer off the GENERATION the pointer names and then
-    # ── wrote the FLAT directory, so it published into a directory no reader resolves and reported
-    # ── success while every consumer kept serving the older generation: one seal, self-consistent
-    # ── to every consumer, and wrong — this issue's own failure mode, one layout further in.
-    print("\nmixed layout — a FLAT publisher on a prefix a generation publisher pointed at:")
+    # ── this state. This lane's own `publication-layout` description names what happens then: "the
+    # ── new one moves the pointer, the old one replaces the flat copy in place and never touches
+    # ── it, so a pointer-following reader keeps serving its generation and never sees the old
+    # ── writer's NEWER publication — a stale serve with nothing red anywhere". The writer now makes
+    # ── that state UNREACHABLE rather than merely forbidden: the layout belongs to the PREFIX, so a
+    # ── live pointer means this run publishes a generation whatever its caller asked for.
+    print("\nmixed layout — a FLAT caller on a prefix a generation publisher pointed at:")
     h.reset()
     h.publish(core, "Systemorph/MeshWeaver", "3501", gen)
-    tok_gen = "Systemorph-MeshWeaver-3501-1"
+    tok_gen, tok_flat = "Systemorph-MeshWeaver-3501-1", "Systemorph-MeshWeaver.Plugins-3502-1"
     r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3502")     # flat — the default, unflipped
     s = h.shelf()
-    check("the fixture really is mixed (a generation exists AND this run sealed the flat directory)",
-          s.generations() == [tok_gen] and s.sealed()
-          and set(s.bakes_present()) - {"<marker>"} == {"satellite"},
-          f"generations={s.generations()}, {denominator(s)}")
     if expect_defect:
-        check("PRE-FIX: the pointer still names the generation, so every consumer serves the OLDER "
-              "publication while this run reports success",
-              r.returncode == 0 and s.pointer() == tok_gen, f"rc={r.returncode}, _current={s.pointer()!r}")
+        check("PRE-FIX: the run wrote the FLAT directory and left the pointer on the generation, so "
+              "every consumer serves the OLDER publication while this run reports success",
+              r.returncode == 0 and s.pointer() == tok_gen and s.generations() == [tok_gen]
+              and set(s.bakes_present()) - {"<marker>"} == {"satellite"},
+              f"rc={r.returncode}, _current={s.pointer()!r}, generations={s.generations()}")
     else:
-        check("the pointer is retired, so the publication this run sealed is the one consumers resolve",
-              r.returncode == 0 and s.pointer() == "",
-              f"rc={r.returncode}, _current={s.pointer()!r}")
-        check("…and the run says so out loud, naming the mixed layout rather than fixing it quietly",
-              "retired" in r.stdout and "publication-layout: flat" in r.stdout,
-              "a half-flipped fleet must not read as intentional")
-        check("the generation itself is untouched — a routing statement was retired, never content",
-              s.under(tok_gen).sealed() and len(s.under(tok_gen).files()) == EXPECTED_FILES,
+        check("the run publishes a GENERATION although its caller asked for flat",
+              r.returncode == 0 and sorted(s.generations()) == sorted([tok_gen, tok_flat]),
+              f"rc={r.returncode}, generations={s.generations()}")
+        check("…and the pointer names THIS run's publication, so consumers resolve what it sealed",
+              s.pointer() == tok_flat and s.under(tok_flat).sealed()
+              and len(s.under(tok_flat).files()) == EXPECTED_FILES,
+              f"_current={s.pointer()!r}: {denominator(s.under(tok_flat))}")
+        check("…and it says so out loud, naming the caller that should be flipped",
+              "is on the GENERATION layout" in r.stdout and "publication-layout: flat" in r.stdout,
+              "a half-migrated prefix must not be repaired silently")
+        check("the earlier generation is untouched — nothing went backwards and nothing was deleted",
+              s.under(tok_gen).sealed() and len(s.under(tok_gen).files()) == EXPECTED_FILES
+              and set(s.under(tok_gen).bakes_present()) - {"<marker>"} == {"core-cd"},
               f"{tok_gen}: {denominator(s.under(tok_gen))}")
 
-    # ── …and the SKIP path, which is the one nobody reads. A flat run whose content is already on
-    # ── the prefix writes nothing at all; if the pointer survived only there, the trap would stand
-    # ── for exactly the runs that produce no output to look at.
-    print("\nmixed layout — the skip path retires it too (a run that writes nothing still moves the prefix):")
+    # ── …and the SKIP path. A flat caller whose content is already the live publication must not
+    # ── acquire the prefix at all: its decisions are read from the generation the pointer names
+    # ── (unchanged), so it skips — and the pointer stays exactly where the other producer put it.
+    # ── Retiring or re-pointing here is what would move consumers BACKWARDS, because the pointer is
+    # ── moved BEFORE the flat compatibility copy is refreshed.
+    print("\nmixed layout — a FLAT caller with the live content changes nothing (never backwards):")
     h.reset()
     h.publish(core, "Systemorph/MeshWeaver", "3601", gen)
     r = h.publish(core, "Systemorph/MeshWeaver", "3602")            # the SAME content, flat
     s = h.shelf()
     check("the fixture really did skip (not vacuous — nothing was republished)",
           r.returncode == 0 and "already published; skipping" in r.stdout, f"rc={r.returncode}")
-    if expect_defect:
-        check("PRE-FIX: nothing was written and the pointer still routes consumers to the generation",
-              s.pointer() == "Systemorph-MeshWeaver-3601-1", f"_current={s.pointer()!r}")
-    else:
-        check("the pointer is retired even on a run that publishes nothing",
-              s.pointer() == "", f"_current={s.pointer()!r}")
+    check("the pointer is left on the generation the other producer published",
+          s.pointer() == "Systemorph-MeshWeaver-3601-1" and s.generations() == ["Systemorph-MeshWeaver-3601-1"],
+          f"_current={s.pointer()!r}, generations={s.generations()}")
 
     # ── FAIL CLOSED: a file that cannot be read back is refused, not assumed unchanged. ────────
     print("\nfail-closed (an unreadable answer is not a permissive one):")
