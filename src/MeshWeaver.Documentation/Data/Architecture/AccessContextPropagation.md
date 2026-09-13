@@ -385,6 +385,27 @@ Three rules apply to every sanctioned identity:
 2. **Fine-grained permissions** — each identity is granted ONLY the specific operations it actually needs. Not "all protocol operations for `sync/*`"; rather "cache-read for `cache/mesh-node-cache` on these specific paths".
 3. **Tested boundary** — every sanctioned identity has a test verifying that misuse fails. Posting a write under a read-only identity must yield `UnauthorizedAccessException`. Without this test, the sanctioning is voodoo.
 
+### Choosing the identity for an infrastructure post (#4061)
+
+An infrastructure post has **three** candidate identities and only one of them authorises a write to
+somebody else's path. Both wrong answers were measured, each costing a build cycle, on the
+post-creation announcement in `MeshExtensions.RunPostCreationHandlersObs`:
+
+| Candidate | What it actually grants | Verdict for an infrastructure WRITE |
+|---|---|---|
+| nothing (the ambient `AsyncLocal`) | whatever the last stage left set | **Never.** An Rx stage is subscribed from the previous stage's completion, on a thread that scope never reached, so the identity is a property of what the persistence layer last did. The announcement rode a *sibling handler's* `ImpersonateAsSystem` scope when that scope had not been torn down yet, and rode the caller when it had — the same code path, two identities, 41 ms apart in one test run. |
+| `o.ImpersonateAsHub(hub.Address)` | `Permission.Read` on the hub's OWN path and its ANCESTOR scopes, and nothing else | **Never for a write.** `PermissionEvaluator`'s hub-credential early return is guarded by `IsHubReadableScope`, so an `Update` on another node's path is not in it: the gate answers `Access denied: user 'portal/nodeops-…' lacks Update permission on '…'`. The hub credential exists for a hub syncing its OWN store, not for writing elsewhere. |
+| `o.WithAccessContext(WellKnownUsers.SystemContext)` | `Permission.All` (SecurityService grants System unconditionally) | **This one**, when the write is genuinely the platform's own bookkeeping. Carried as a VALUE, so no Rx stage boundary can lose it. |
+
+The third is only legitimate when the post is infrastructure in the strict sense — the same bar as
+`ImpersonateAsSystem`. The announcement qualifies because the row is **already persisted** by the
+time it is announced (the post only tells the running mesh so) and the nodes come from an
+`INodePostCreationHandler` registered in `src/`, never from the request. A post carrying user data,
+or acting on a user's behalf, still rides the user's identity — see the anti-patterns table below.
+
+Pinned by `PostCreationAnnouncementContextTest`, whose negative control asserts that an ordinary
+write by the creator, through the same instrument, still arrives as the **creator**.
+
 ### Example 1 — `cache/mesh-node-cache` (read-only hydrator)
 
 The `MeshNodeStreamCache` pre-loads MeshNodes from storage to serve cache hits for every user. It cannot run under a user identity because it services many. It is sanctioned via:
