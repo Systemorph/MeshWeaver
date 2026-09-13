@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.Common;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -49,11 +50,66 @@ public class TransientInitializationFaultRetiresTheActivationTest(ITestOutputHel
 
     private int attempts;
 
-    /// <summary>The first initialization faults transiently; every later one succeeds.</summary>
+    /// <summary>Signalled by the FIRST initialization attempt once it is parked — the hub exists,
+    /// its gates are closed, and it has not faulted yet. That instant is the test's fence.</summary>
+    private readonly AsyncSubject<Unit> firstAttemptParked = new();
+
+    /// <summary>Opened by the test to let the parked first attempt fault.</summary>
+    private readonly AsyncSubject<Unit> releaseFault = new();
+
+    /// <summary>
+    /// The first initialization attempt PARKS until the test releases it and then faults
+    /// transiently; every later attempt succeeds at once.
+    ///
+    /// <para>🚨 The park is the fix for a race this test had and CI found (queue build
+    /// 34750238233, shard 1, the <c>BuildupAction</c> seam): the fault fired 2 ms after the hub was
+    /// built — before the test's request had even been posted — so the request activated the FRESH
+    /// hub and was SERVED. That is the CORRECT behaviour for a request arriving after the
+    /// retirement (step 3 asserts exactly it), but the assertion was written for the OTHER
+    /// ordering, so it read "No exception was thrown". Whether the request is in flight when the
+    /// activation retires was decided by how long <c>GetClient()</c> took — a coin toss, and a
+    /// test that asserts one side of a coin toss is a flake with an opinion. Parking the attempt
+    /// makes the ordering a FACT rather than a hope.</para>
+    /// </summary>
     private IObservable<T> FirstAttemptFaults<T>(T value)
-        => Observable.Defer(() => Interlocked.Increment(ref attempts) == 1
-            ? Observable.Throw<T>(new TransientConnectionException())
-            : Observable.Return(value));
+        => Observable.Defer(() =>
+        {
+            if (Interlocked.Increment(ref attempts) != 1)
+                return Observable.Return(value);
+            firstAttemptParked.OnNext(Unit.Default);
+            firstAttemptParked.OnCompleted();
+            return releaseFault.SelectMany(_ => Observable.Throw<T>(new TransientConnectionException()));
+        });
+
+    /// <summary>
+    /// True when <paramref name="trail"/> shows the request IN FLIGHT AT <paramref name="address"/>
+    /// — that hub has taken it into a queue of its own, so it is owed an answer by THIS activation.
+    ///
+    /// <para>🚨 The two seams park it in DIFFERENT queues, and a fence that knew only one of them
+    /// is how this test wasted a CI run. A <c>DataContext</c> initialises off the turn, so the
+    /// hub's pump is free: the delivery is dequeued, found on-target behind the closed
+    /// <c>DataContextInit</c> gate, and lands in the DEFERRED queue
+    /// (<c>DEFERRED gates=[…]</c>). A <c>BuildupAction</c> runs ON the init turn, so the pump is
+    /// BUSY: the delivery sits in the MAIN queue and never reaches the deferral decision —
+    /// measured, with the report this branch's sibling shipped:
+    /// <c>target pump now: host/1 RunLevel=Starting turn=InitializeHubRequest running 35004ms
+    /// buffer=1 deferred=0</c>. Either queue is "in flight at this activation"; the wait accepts
+    /// both and requires the hub, because several hubs appear on one trail and the stage renders
+    /// as <c>{stage}@{hub}(+Nms)</c>.</para>
+    /// </summary>
+    private static bool InFlightAt(string trail, Address address)
+    {
+        foreach (var token in (string[])["QUEUED queue=", "DEFERRED gates="])
+            for (var i = trail.IndexOf(token, StringComparison.Ordinal); i >= 0;
+                 i = trail.IndexOf(token, i + token.Length, StringComparison.Ordinal))
+            {
+                var end = trail.IndexOf(" → ", i, StringComparison.Ordinal);
+                var stage = end < 0 ? trail[i..] : trail[i..end];
+                if (stage.Contains($"@{address}(", StringComparison.Ordinal))
+                    return true;
+            }
+        return false;
+    }
 
     private MessageHubConfiguration HostFor(MessageHubConfiguration c, Seam seam, bool reactivatesOnDemand)
     {
@@ -90,14 +146,37 @@ public class TransientInitializationFaultRetiresTheActivationTest(ITestOutputHel
     {
         seam = which;
         var ct = TestContext.Current.CancellationToken;
-        var first = GetHost();
+        // The client FIRST: its own hub construction must not sit inside the window this test
+        // fences, and nothing about it is under test.
         var client = GetClient();
+        var first = GetHost();
+
+        // THE FENCE, in two steps, because the assertion below is about ONE ordering and both
+        // orderings are legal: (a) the first initialization attempt is parked — the activation
+        // exists and has not faulted; (b) the request is in flight AT that activation (in its main
+        // queue behind the init turn, or in its deferred queue behind the init gate — see
+        // InFlightAt). Only then is the fault released, so "the request was in flight when the
+        // activation retired" is a fact of the run rather than a race against GetClient().
+        await firstAttemptParked.Should().Within(TestTimeouts.Convergence).Emit(
+            "the first initialization attempt must be parked before the request is posted");
+
+        var requestId = Guid.NewGuid().ToString("N");
+        var response = client
+            .Observe((object)new ProbeRequest(), o => o.WithTarget(first.Address), requestId)!
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Select(_ => Mesh.DescribeRequestFate(requestId))
+            .Where(trail => InFlightAt(trail, first.Address))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"[fence] in flight at the first activation: {Mesh.DescribeRequestFate(requestId)}");
+
+        releaseFault.OnNext(Unit.Default);
+        releaseFault.OnCompleted();
 
         // 1. The activation whose init met the fault refuses the requester TRANSIENTLY, in the
         //    owner's own vocabulary — not with the terminal "initialization failed".
-        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => client
-            .Observe(new ProbeRequest(), o => o.WithTarget(first.Address))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct));
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
         Output.WriteLine($"first activation refused: errorType={failure.Failure!.ErrorType} message={failure.Failure.Message}");
         failure.Failure.ErrorType.Should().Be(ErrorType.ShuttingDown,
             "a transient infrastructure fault is not a property of the activation — the requester "
@@ -139,12 +218,28 @@ public class TransientInitializationFaultRetiresTheActivationTest(ITestOutputHel
         seam = which;
         reactivatesOnDemand = false;
         var ct = TestContext.Current.CancellationToken;
-        var host = GetHost();
         var client = GetClient();
+        var host = GetHost();
 
-        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => client
-            .Observe(new ProbeRequest(), o => o.WithTarget(host.Address))
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct));
+        // The same fence as the positive case, for the same reason: the control must compare the
+        // two paths on the SAME ordering, or it is comparing two different experiments.
+        await firstAttemptParked.Should().Within(TestTimeouts.Convergence).Emit(
+            "the first initialization attempt must be parked before the request is posted");
+
+        var requestId = Guid.NewGuid().ToString("N");
+        var response = client
+            .Observe((object)new ProbeRequest(), o => o.WithTarget(host.Address), requestId)!
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Select(_ => Mesh.DescribeRequestFate(requestId))
+            .Where(trail => InFlightAt(trail, host.Address))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        releaseFault.OnNext(Unit.Default);
+        releaseFault.OnCompleted();
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
         Output.WriteLine($"latched: errorType={failure.Failure!.ErrorType} message={failure.Failure.Message}");
         failure.Failure.ErrorType.Should().Be(ErrorType.Failed);
         failure.Failure.Message.Should().Contain("initialization failed");
