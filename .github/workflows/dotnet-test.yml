@@ -446,12 +446,46 @@ jobs:
       # that executed the tests", which is exactly how a red got attributed to the wrong PR.
       # Empty for markers written before this was recorded.
       marker_run: ${{ steps.probe.outputs.marker_run }}
+      # The change set's TEST SELECTION (affected-tests.py): which test projects this change owes.
+      tests-mode: ${{ steps.scope.outputs.mode }}
+      tests-projects: ${{ steps.scope.outputs.projects }}
+      tests-reason: ${{ steps.scope.outputs.reason }}
     steps:
     - uses: actions/checkout@v7
       with:
         # Only HEAD's tree matters; the marker push in collect-results needs
         # nothing deeper either (it points the ref at github.sha).
         fetch-depth: 1
+    # ── Tests only for changed functionality (the fleet rule, applied to core 2026-09-13) ──────
+    # Every run used to execute every test project — 5 shards, ~21 of a run's 31 job-minutes —
+    # whatever the change touched. On a PULL REQUEST the diff against the base is mapped to the
+    # ProjectReference graph and only the test projects that reach a changed project run; a
+    # change outside src/ and test/ (a workflow, a props file, an allow list, tools/…) still runs
+    # everything, and docs/markdown-only changes run none. merge_group, push, schedule and
+    # dispatch always run the full suite — the merge queue is the coupling check. The verdict is
+    # printed here and asserted downstream: every shard obeys the SAME selection through
+    # shard-assign.sh, and the collector accepts "no evidence" ONLY for mode=none.
+    - name: Which test projects this change owes
+      id: scope
+      env:
+        EVENT: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/affected-tests.py --self-test
+        if [ "$EVENT" = "pull_request" ] && [ -n "$BASE_SHA" ]; then
+          git fetch --depth=1 origin "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || git fetch --depth=1 origin "$BASE_SHA"
+          python3 .github/scripts/affected-tests.py --base "$BASE_SHA" --head "$HEAD_SHA" | tee /tmp/scope.txt
+        else
+          python3 .github/scripts/affected-tests.py --all | tee /tmp/scope.txt
+        fi
+        {
+          echo "### Test selection"; echo
+          echo "- $(grep '^mode=' /tmp/scope.txt | cut -d= -f2-) — $(grep '^reason=' /tmp/scope.txt | cut -d= -f2-)"
+          p=$(grep '^projects=' /tmp/scope.txt | cut -d= -f2-)
+          if [ -n "$p" ]; then echo "- projects: $p"; fi
+        } >> "$GITHUB_STEP_SUMMARY"
     - name: "Probe refs/ci-green for this tree"
       id: probe
       run: |
@@ -608,6 +642,8 @@ jobs:
     - name: Package test outputs (one tarball per shard)
       env:
         SHARD_TOTAL: 6
+        TEST_SELECTION: ${{ needs.precheck.outputs.tests-mode }}
+        TEST_PROJECTS: ${{ needs.precheck.outputs.tests-projects }}
       run: |
         set -euo pipefail
         # ── Why PER SHARD and not one tarball for everyone ──────────────────
@@ -681,8 +717,15 @@ jobs:
           # as "helper project, nothing to run", exit=0, GREEN. A whole suite could
           # pass having executed zero tests. Fail here instead.
           if [ ! -s ".build-paths-$i.txt" ]; then
-            echo "::error::shard $i got no bin trees to pack — shard-assign.sh failed or the build produced no test output."
-            exit 1
+            if [ "${TEST_SELECTION:-all}" != "all" ]; then
+              # Under a selection a shard may legitimately own nothing (fewer owed projects than
+              # shards, or none): ship a marker so the shard's download and extract still succeed.
+              echo "shard $i: nothing owed by the change set (TEST_SELECTION=$TEST_SELECTION) — packing a marker"
+              mkdir -p test; echo "nothing owed" > "test/.nothing-owed-$i"; echo "test/.nothing-owed-$i" > ".build-paths-$i.txt"
+            else
+              echo "::error::shard $i got no bin trees to pack — shard-assign.sh failed or the build produced no test output."
+              exit 1
+            fi
           fi
           tar -I 'zstd -T0 --long=27' -cf "build-output-$i.tar.zst" -T ".build-paths-$i.txt"
           echo "shard $i: $(wc -l < ".build-paths-$i.txt") bin trees, $(du -h "build-output-$i.tar.zst" | cut -f1)"
@@ -716,7 +759,7 @@ jobs:
   # host — NO restore, NO build, NO MSBuild.
   test:
     name: "Run tests (shard ${{ matrix.shard }})"
-    needs: build
+    needs: [build, precheck]
     # HARD CAP on a shard. Each project already has its own `timeout 8m` below, but that
     # only bounds a project that is RUNNING — it cannot bound a shard that wedges between
     # projects. 20 min is ~1.5x the slowest observed shard (14m36s) with the rebalanced
@@ -1122,6 +1165,8 @@ jobs:
         Logging__LogLevel__Default: Warning
         SHARD_INDEX: ${{ matrix.shard }}
         SHARD_TOTAL: 6
+        TEST_SELECTION: ${{ needs.precheck.outputs.tests-mode }}
+        TEST_PROJECTS: ${{ needs.precheck.outputs.tests-projects }}
         # Native-crash diagnosability (SIGSEGV/SIGABRT of a test host): the runtime
         # writes a mini core dump before dying, collected into the shard artifact.
         # First seen: FutuRe.Test exit=139 on the first native-host run — not
@@ -1131,7 +1176,8 @@ jobs:
         DOTNET_DbgMiniDumpType: 2
         DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
       run: |
-        # EVERY test project runs — no exclusion list (see .github/scripts/shard-assign.sh).
+        # EVERY OWED test project runs — the change set's selection (precheck → shard-assign.sh),
+        # never a hand-kept exclusion list.
         # PostgreSql and Cosmos come up via Testcontainers using pre-installed Docker,
         # Orleans via in-proc TestCluster, Acme/FutuRe via dynamic Code-piece compilation.
         #
@@ -1154,6 +1200,13 @@ jobs:
         # `set +e` is in force above, so a broken script would leave `selected`
         # empty and the shard would run NOTHING and report green. Fail loudly.
         if [ "${#selected[@]}" -eq 0 ]; then
+          if [ "${TEST_SELECTION:-all}" != "all" ]; then
+            # The change set owes fewer projects than there are shards (or none): this shard has
+            # nothing to run and says so — the collector's evidence gate reads the selection.
+            echo "shard $SHARD_INDEX/$SHARD_TOTAL: nothing owed by this change set (TEST_SELECTION=$TEST_SELECTION)"
+            mkdir -p test; echo "[CI] shard-$SHARD_INDEX exit=0 (nothing owed by the change set — TEST_SELECTION=$TEST_SELECTION)" >> test/test-results.log
+            exit 0
+          fi
           echo "::error::shard-assign.sh produced no projects for shard $SHARD_INDEX/$SHARD_TOTAL — refusing to report a green shard that ran nothing."
           exit 1
         fi
@@ -2934,6 +2987,9 @@ jobs:
           --pr-body-file "$RUNNER_TEMP/pr-body.md"
 
   collect-results:
+    env:
+      TESTS_MODE: ${{ needs.precheck.outputs.tests-mode }}
+      TESTS_REASON: ${{ needs.precheck.outputs.tests-reason }}
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
     # broken by this PR — that is the whole point of the gate (see its step below). preflight
@@ -3051,7 +3107,17 @@ jobs:
         # required check. A required check that passes on no evidence is worse than a
         # flaky one: it lets an untested tree merge and ship.
         trx_count=$(find all-results -name '*.trx' 2>/dev/null | wc -l | tr -d ' ')
-        if [ "$trx_count" = "0" ]; then
+        if [ "$trx_count" = "0" ] && [ "${TESTS_MODE:-all}" = "none" ]; then
+          # The ONE sanctioned zero-evidence verdict besides the green-tree reuse: precheck's
+          # selection said no test project reads this change (affected-tests.py), and every
+          # shard packed and ran nothing on that basis. The reason is on the wall here.
+          echo "No test ran — the change set owes no test project: ${TESTS_REASON}"
+          {
+            echo "### ✅ No test project is affected by this change"
+            echo
+            echo "${TESTS_REASON} (affected-tests.py, mode=none). The build, the doc gate and every policy gate still ran."
+          } >> "$GITHUB_STEP_SUMMARY"
+        elif [ "$trx_count" = "0" ]; then
           echo "::error::No test results found in any shard — the suite did not run, so this run proves nothing. Failing (the reuse path is the ONLY sanctioned way to skip tests)."
           {
             echo "### ❌ No test evidence"
