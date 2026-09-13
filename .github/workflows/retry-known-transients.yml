@@ -53,7 +53,7 @@ jobs:
           #     shared rule blocks": actions/create-github-app-token got `status: 500` from
           #     GitHub's own API on all 4 of its attempts; the same gate was green on 8 other runs
           #     between 08:49Z and 08:57Z, and the two manual `rerun-failed-jobs` POSTs at 09:01Z
-          #     and 10:1xZ ALSO answered 500 — GitHub was degraded, nothing in this repo was.
+          #     and 09:03Z ALSO answered 500 — GitHub was degraded, nothing in this repo was.
           #     The regex asserts GitHub's OWN identity (the exact installations/access_tokens
           #     URL in the mint's RESPONSE block, immediately followed by its status) and accepts
           #     ONLY a 5xx there: a 401/403/404/422 on that same URL is a PERMISSION or
