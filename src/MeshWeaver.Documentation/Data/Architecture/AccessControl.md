@@ -796,6 +796,44 @@ per-child deny, no root grant.
 | Purchase / coupon opens the whole subtree | ONE `Viewer` `AccessAssignment` at the plugin root; grants inherit downward |
 | Denied reader is redirected | `NodeTypeGate.RedirectOnDenied`, resolved relative to the gated node |
 
+## 🚨 A denial the durable store disagrees with says so (#4061)
+
+The fold reads grants through a process-wide cached, SYNCED QUERY — `ObserveEffectiveAssignments`
+→ `SecurityQuery` → `IMeshNodeStreamCache.GetQuery`, one entry per partition
+(`$security-access:{partition}`). That is what makes it cheap; it also means a permission decision
+is taken from a SNAPSHOT, and a snapshot older than the write that granted a right denies a right
+the store already holds.
+
+That state used to produce the LEAST information of any denial. `RlsNodeValidator` already runs a
+durable probe on every refused create/update — `PartitionWriteGuardValidator` — but it answered one
+question, *"is this the ownerless-partition residue (#638)?"*, and returned `null` as soon as ANY
+grant existed. So the denial in which the fold is least trustworthy got the bare
+`Access denied: Create permission required for node '…'` and nothing else. Measured on unmodified
+`main`, that is verbatim what came back.
+
+The probe now also takes the refused PRINCIPAL, and when `{partition}/_Access` holds a node at the
+path that principal's grant is minted under (`{principal}_Access`) the message says so, and names
+both causes it cannot tell apart:
+
+- the fold answered from a snapshot older than the write that granted it — retrying normally
+  succeeds; or
+- that node is not a readable `AccessAssignment` (its content degraded to an untyped `JsonElement`,
+  so `ComputeScopeRoles` skips it) — retrying will not help.
+
+🚨 **It changes no verdict, and must not.** The decision is already taken when this runs; the
+store-side grant is EVIDENCE, never an authorisation. Reading it as one would be a second,
+unreviewed permission path that bypasses roles, denies, policies and group expansion entirely — the
+probe reads PATHS, not content, and cannot know what the grant it found actually confers.
+
+**What this does NOT do is fix the race**, and the residue is stated rather than implied. Two
+in-memory controls stay green on `main`: the full delete→recreate→child-create shape
+(`SpaceRecreateGrantVisibilityTest`) and the isolated read-after-write on the fold
+(`AFreshGrantIsVisibleToTheNextCheckTest`) — so the reported PostgreSQL failure needs something an
+in-memory mesh does not have, and neither control distinguishes the remaining candidates. Also
+measured while building this: a grant written straight through `IStorageAdapter` is carried by the
+adapter's own change feed and IS seen by the fold immediately, so "the store has it and the fold
+does not" cannot be constructed by bypassing the mesh write path — only by content the fold skips.
+
 ## Two properties worth relying on
 
 **A gate only ever GRANTS.** It never denies, never caps, and never removes a permission a role or
