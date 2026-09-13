@@ -239,7 +239,7 @@ tree, so widening the ratchet is a fleet-scale change rather than part of this f
 one, write the standard comment beside it: the constant must DOMINATE `TestTimeouts.TestMilliseconds`
 (216 s at the CI factor), because an attribute argument cannot be a property.
 
-## 🚨 Still open: `WriteVerdictBound` is not the bound it says it is
+## ✅ Closed: `WriteVerdictBound` now says which bound it is — and the total is published beside it
 
 `LatePatchResponseRegistry.WriteVerdictBound` documents itself as *"the outer bound on a
 caller-visible mesh WRITE: the instant `UpdateRemote` gives up and reports `OwnerUnreachable`"*, and
@@ -252,19 +252,41 @@ deadline — so the true worst case before a caller sees any terminal is
 3 attempts x (BaseStateWaitBound 30 s + GetMeshNode 10 s + WriteVerdictBound 31 s) ≈ 213 s
 ```
 
-against a published 31 s. Nothing in this change alters that; the two candidate fixes are a
-maintainer decision, not an implementation detail:
+against a published 31 s. **Resolved by splitting the constant** — the third option, which neither
+of the two originally considered is:
 
-- **Mint the deadline ONCE per write** (at attempt 0's entry) and thread the remaining budget into
-  every re-attempt, exactly as `correlationId` is threaded. The published bound becomes true, and a
-  NACK arriving late in the budget makes the re-attempt fail fast rather than land — a write that
-  would have landed at 90 s is now refused at 31 s with a diagnosis.
-- **Publish the composite bound** instead. Honest, but `TestTimeouts.Convergence` then becomes ~218 s
-  locally and ~654 s on CI, which inflates every convergence wait in the fleet to buy a bound almost
-  nothing needs.
+- ❌ **Mint the deadline ONCE per write** and thread the remaining budget into every re-attempt. The
+  published bound becomes true — but a NACK arriving late in the budget then makes the re-attempt
+  fail fast rather than land, so a row that reaches storage at ~90 s today would start being
+  **dropped**. That is a regression dressed as a fix, and the loss is data, not latency.
+- ❌ **Publish the composite as THE bound.** Nothing is dropped, but `TestTimeouts.Convergence`
+  becomes ~654 s on CI, so every wedged test in the fleet pays minutes to buy headroom almost
+  nothing needs — permanently, because the ratchet on test bounds only moves down.
+- ✅ **Split it.** `WriteVerdictBound` stays per-attempt with its documentation **corrected to say
+  so** (the uncorrected doc is half the defect: it is what made every fleet waiter derive a wrong
+  deadline), and a new `WriteTotalBound` publishes the composite beside it, **derived** from
+  `BaseStateWaitBound`, `DefaultNodeReadBudget`, `MaxOwnerDisposingReenqueues` and
+  `WriteVerdictBound` rather than typed — so the published number cannot drift from the path the way
+  the prose already did. Additive, truthful, and it costs nothing to a waiter that does not
+  re-enqueue.
 
-The first is the better shape; it changes caller-visible behaviour on the slow path, so it is stated
-here rather than smuggled in.
+**Which waiter takes which** is stated as a rule on `WriteVerdictBound` itself and in
+[Bounds Must Be Ordered](../BoundsMustBeOrdered) — a waiter that can cover a re-enqueue uses the total
+(`TestTimeouts.WriteConvergence`), a waiter on one attempt uses the per-attempt bound. The sweep that
+makes it a fix rather than a constant: `LateNackReenqueueTest` and `LateNackReenqueueCorrelationTest`
+are the only two waiters in the tree that await a caller terminal ACROSS a re-enqueue, and both now
+name the total; `MeshExtensions.InnerCreateVerdictBound` correctly stays per-attempt, because the
+CREATE leg has no owner-side `OwnerDisposing` NACK (the open half of #3510) and so never re-enqueues.
+
+🚨 **The outer kill moved with it.** Both tests' `[Fact(Timeout = …)]` was `240_000`, sized against
+the one-attempt scale and therefore **below** their own inner wait — the third time this pair has
+inverted (`90_000` was the first, and it produced the uninterpretable 2026-09-09 sighting this page
+records). `TestTimeoutsTest.TheOuterKillDominatesTheInnerWait` now holds the two together, because a
+compile-time literal cannot enforce itself.
+
+🚨 **Cross-repo:** `LateNackReenqueueTest` is one test in two files. The MeshWeaver.Plugins twin must
+carry this body before that repo's pin moves past this change — `TeardownTwinParityTest` reddens in
+the PIN BUMP, not here.
 
 🚨 The corroboration is that `ClassifyPatchException`'s own remarks already predicted the shape
 without naming the mechanism: *"Routing more faults here makes that class MORE likely, not less, and

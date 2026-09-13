@@ -42,6 +42,13 @@ public static class TestTimeouts
     private static TimeSpan FrameworkWriteBound => LatePatchResponseRegistry.WriteVerdictBound;
 
     /// <summary>
+    /// 🚨 The framework's outer bound on a write INCLUDING its re-attempts. Only
+    /// <see cref="WriteConvergence"/> derives from it; <see cref="Convergence"/> deliberately does
+    /// not — see the rule there.
+    /// </summary>
+    private static TimeSpan FrameworkWriteTotalBound => LatePatchResponseRegistry.WriteTotalBound;
+
+    /// <summary>
     /// Local baseline for one convergence wait. Every other value is derived from it — and it is
     /// itself derived from <see cref="FrameworkWriteBound"/> rather than written as a literal, so
     /// the ordering holds by construction instead of by whoever writes the next test remembering
@@ -86,8 +93,50 @@ public static class TestTimeouts
     /// <summary>
     /// How long to wait for a convergence that has no deadline of its own. Use this instead of
     /// writing a literal.
+    ///
+    /// <para>🚨 <b>This is the ONE-ATTEMPT bound and it stays that way (#3477).</b> It dominates
+    /// <see cref="FrameworkWriteBound"/>, which <c>UpdateRemote</c> arms per attempt. A test
+    /// watching a write that can legitimately RE-ENQUEUE — an owner disposal, a recycle, a
+    /// not-yet-ready activation — must use <see cref="WriteConvergence"/> instead: this bound can
+    /// expire while the framework's named terminal for such a write is still due, and the failure
+    /// then reads as an anonymous timeout rather than as <c>OwnerUnreachable</c>.</para>
     /// </summary>
     public static TimeSpan Convergence => LocalConvergence * Factor;
+
+    /// <summary>
+    /// 🚨 How long to wait for a write that can legitimately RE-ENQUEUE — a write whose owner may
+    /// NACK it as never-applied (an owner disposal, a recycle, a not-yet-ready activation), where
+    /// the re-attempt is the expected path rather than the pathological one. Use this instead of
+    /// <see cref="Convergence"/> in exactly those tests, and nowhere else.
+    ///
+    /// <para><b>Why this exists as a SECOND bound rather than as a wider <see cref="Convergence"/>
+    /// (#3477).</b> <c>WriteVerdictBound</c> is armed per ATTEMPT: a re-attempt arms a fresh one
+    /// from its own post and pays its own base read outside it, so a write that re-enqueues twice
+    /// can legitimately run ~3× past the bound <see cref="Convergence"/> derives from. A test
+    /// watching such a write therefore expired while the framework's named terminal
+    /// (<c>OwnerUnreachable</c>, carrying <c>corr=</c>) was still due, and reported an anonymous
+    /// <c>TimeoutException</c> instead — the exact failure #3477 was filed on, twice.</para>
+    ///
+    /// <para>🚨 <b>And why <see cref="Convergence"/> was NOT simply widened to this.</b> Almost
+    /// nothing re-enqueues; pointing the general wait here would multiply every WEDGED test's
+    /// failure time several-fold — on CI, minutes per wedge — to buy headroom a handful of tests
+    /// need. The ratchet on test bounds only moves DOWN, so that cost would be permanent. Two
+    /// named bounds with a stated rule is the honest shape; one bound sized for the worst caller
+    /// is not.</para>
+    ///
+    /// <para>🚨 <b>The slack is added to the TOTAL, not multiplied over it</b> — and that is not a
+    /// saving, it is what the numbers mean. <see cref="Factor"/> exists because a convergence is
+    /// machine-speed-dependent; <see cref="FrameworkWriteTotalBound"/> is not. It is composed of
+    /// the framework's own wall-clock deadlines, and a slower runner does not make
+    /// <c>WriteVerdictBound</c> longer — it makes the terminal take longer to PROPAGATE, which is
+    /// exactly the additive cost <see cref="LocalConvergence"/> already reasons about. So this
+    /// grants the total the SAME CI-scaled headroom <see cref="Convergence"/> grants one attempt
+    /// (<c>Convergence - FrameworkWriteBound</c>), rather than tripling deadlines that do not
+    /// scale. Multiplying instead would put this near 10 minutes on CI for no reason anyone could
+    /// defend.</para>
+    /// </summary>
+    public static TimeSpan WriteConvergence =>
+        FrameworkWriteTotalBound + (Convergence - FrameworkWriteBound);
 
     /// <summary>
     /// The value for <c>[Fact(Timeout = …)]</c>, in milliseconds — deliberately LARGER than
@@ -102,6 +151,20 @@ public static class TestTimeouts
     /// near the inner one.
     /// </summary>
     private const double OuterMargin = 2.0;
+
+    /// <summary>
+    /// 🚨 The <c>[Fact(Timeout = …)]</c> value, in milliseconds, for a test whose inner wait is
+    /// <see cref="WriteConvergence"/>. Same invariant as <see cref="TestMilliseconds"/> and the
+    /// same reason: an xunit timeout at or below the inner wait kills the test ANONYMOUSLY, which
+    /// is cause 2 of #3477 — a sighting of that shape (run 34332482683,
+    /// <i>"Test execution timed out after 90000 milliseconds"</i>) carried no assertion and named
+    /// no wait, and was uninterpretable by construction rather than by bad luck.
+    ///
+    /// <para>An attribute argument must be a compile-time constant, so a test cannot write this
+    /// directly — it writes a literal and a guard asserts the literal dominates this value. That
+    /// guard is the thing that keeps the pair honest; the literal alone cannot.</para>
+    /// </summary>
+    public static int WriteTestMilliseconds => (int)(WriteConvergence * OuterMargin).TotalMilliseconds;
 
     /// <summary>A convergence expected to be quick — a local projection, a cached read.</summary>
     public static TimeSpan Quick => Convergence / 3;
