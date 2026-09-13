@@ -55,6 +55,18 @@ public static class PluginCatalogConfigurationExtensions
             // alone would leave the build-node subscription never opened (Copilot catch). Forwarded
             // to the same instance so start/stop and the mesh singleton are one object.
             .ConfigureServices(services => services
+                // 🚨 The registry's listing cache (#4222). GET /api/plugins resolved its sources
+                // FRESH on every request and each listing re-fetched the whole plugins repository
+                // from GitHub and re-parsed ~70 manifests — measured 12-19 s to first byte from
+                // inside two production portals, and 2,028 attempt timeouts over 33.6 days on the
+                // control instance alone. Mesh-scoped SINGLETON, because the thing that has to
+                // outlive a request is precisely what the per-request source factory cannot hold;
+                // and mesh-scoped rather than static so a test mesh cannot inherit another's
+                // catalog (Doc/Architecture/NoStaticState).
+                .AddSingleton(sp => new PackageListingCache(
+                    PackageListingCache.WindowOf(
+                        sp.GetService<IConfiguration>()?[PackageListingCache.WindowSecondsConfigKey]),
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<PackageListingCache>()))
                 .AddSingleton<PluginUpdateWatcher>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
                     sp => sp.GetRequiredService<PluginUpdateWatcher>())

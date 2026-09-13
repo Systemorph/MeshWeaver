@@ -162,7 +162,11 @@ public static class PluginRegistryEndpoints
     // rides beside the listing as a typed refusal — package, required tier, instance plan. A
     // package from an UNGRANTED source stays absent, tier or no tier: TierRefusal answers only
     // when some entry reaches the package.
-    private static IObservable<RegistryListing> ListAll(
+    /// <remarks>🚨 Internal for the #4222 DISCLOSURE control (<c>InternalsVisibleTo</c>): the
+    /// listing cache under <c>ListFrom</c> is shared across callers, so a test has to be able to
+    /// drive TWO callers through ONE cached source list and see each get only its own grant. A
+    /// cache that leaked would otherwise be invisible until it was in production.</remarks>
+    internal static IObservable<RegistryListing> ListAll(
         IReadOnlyList<ConfiguredPackageSource> sources, AuthenticatedInstance? caller,
         IObservable<IReadOnlyList<PublicationArtifact>> artifacts, ILogger? logger)
         => Observable.CombineLatest(sources.Select(s =>

@@ -164,6 +164,12 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
             "Plugin update watcher: {Repo} built green at {Sha} ({Workflow} #{Run}) — checking installed modules.",
             build.RepositoryUrl, build.HeadSha, build.WorkflowName, build.RunNumber);
 
+        // 🚨 The listing cache's PRIMARY invalidation (#4222). This is the moment the registry
+        // learns the source repository changed — the webhook it already receives — so forget every
+        // listing of it here rather than letting the freshness window run out. The window is the
+        // safety net for a broadcast that never arrived, not the mechanism.
+        hub.ServiceProvider.GetService<PackageListingCache>()?.EvictRepo(build.RepositoryUrl);
+
         // The catalog node declares its own format; before #3384 this read `nodeRepo: true`
         // unconditionally while the browse view read the same record as package.json.
         var source = PackageSources.FromRepo(
