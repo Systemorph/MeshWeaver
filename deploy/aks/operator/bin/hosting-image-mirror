@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# hosting-image-mirror --registry <fleet registry host> --repository <path> --tag <tag>
+#                      --vault <vault> --publisher-secret <vault object>
+#                      [--also <path>]… [--source <acr host>] [--publisher <user>]
+#
+# Put the pinned platform images INTO the fleet registry when it lacks them (MeshWeaver.Plugins#1722).
+#
+# CD publishes every sealed set to ACR (meshweaver.azurecr.io); the fleet's pods pull from the
+# registry the public instance hosts (cr.meshweaver.cloud, MeshWeaver#3353), which serves only what
+# has been pushed to it. A record pinning a tag the fleet registry does not hold used to send a
+# human to `crane copy` as the registry's publisher (runbook step 4) — or, before #1546, straight
+# into ImagePullBackOff at step 11. This step is that copy, for the PORTAL image and, with --also,
+# the MIGRATION image (Memex#141: the two must ride the same tag).
+#
+#   per image: tag present in the fleet registry → KEPT (never re-pushed); its digest is compared
+#              with the source's and a difference is reported (`image_drift`) — a re-tagged build
+#              upstream is the operator's call, not this step's.
+#              absent → the source is asked (a tag absent THERE refuses, naming the sealed set to
+#              pin), `crane copy` runs, and BOTH digests are read back and must match.
+#
+# Credentials: the fleet registry's publisher password is read from the vault (--publisher-secret)
+# and the ACR token comes from `az acr login --expose-token` under the operator identity (which
+# needs AcrPull on the source registry). Both reach crane on STDIN (`--password-stdin`) into a
+# private DOCKER_CONFIG that lives for this process — never argv, never printed, never a fact.
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-image-mirror"
+
+registry="" repository="" tag="" vault="" publisher_secret="" source_host="meshweaver.azurecr.io" publisher="publisher"
+also=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --registry)         registry="${2:-}";         shift 2 ;;
+    --repository)       repository="${2:-}";       shift 2 ;;
+    --tag)              tag="${2:-}";              shift 2 ;;
+    --also)             also+=("${2:-}");          shift 2 ;;
+    --source)           source_host="${2:-}";      shift 2 ;;
+    --vault)            vault="${2:-}";            shift 2 ;;
+    --publisher-secret) publisher_secret="${2:-}"; shift 2 ;;
+    --publisher)        publisher="${2:-}";        shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag registry "$registry"
+hosting::need_flag repository "$repository"
+hosting::need_flag tag "$tag"
+hosting::need_flag vault "$vault"
+hosting::need_flag publisher-secret "$publisher_secret"
+hosting::need_flag source "$source_host"
+hosting::need_flag publisher "$publisher"
+hosting::safe_host registry "$registry"
+hosting::safe_host source "$source_host"
+hosting::safe_name vault "$vault"
+hosting::safe_name publisher-secret "$publisher_secret"
+hosting::safe_name publisher "$publisher"
+hosting::safe_name tag "$tag"
+# A repository PATH: one or more plain segments joined by '/'.
+safe_path() {
+  [[ "$2" =~ ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?(/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*$ ]] \
+    || hosting::die "${1} '${2}' is not a repository path (lowercase segments joined by '/') — refusing to interpolate it into a command"
+}
+safe_path repository "$repository"
+for extra in "${also[@]}"; do safe_path also "$extra"; done
+# Only an Azure Container Registry is a source today: the ACR token comes from az, and the
+# registry's short name is the host's first label. Another upstream is a design change, not a flag.
+case "$source_host" in
+  *.azurecr.io) acr="${source_host%%.*}" ;;
+  *) hosting::die "source '${source_host}' is not an Azure Container Registry host (<name>.azurecr.io) — the fleet's upstream is ACR, and its token comes from az" ;;
+esac
+[ "$registry" != "$source_host" ] || hosting::die "registry and source are both ${registry} — nothing to mirror"
+
+images=("$repository" "${also[@]}")
+manual=""
+for repo in "${images[@]}"; do manual="${manual}crane copy ${source_host}/${repo}:${tag} ${registry}/${repo}:${tag}; "; done
+manual="az acr login --name ${acr} --expose-token (then crane auth login) and, as the registry's ${publisher} (password in vault ${vault} object ${publisher_secret}): ${manual}"
+
+if hosting::dry; then
+  for repo in "${images[@]}"; do
+    hosting::log "(dry run) would ensure ${registry}/${repo}:${tag} — read its digest as ${publisher}; if absent, copy it from ${source_host}/${repo}:${tag} and compare both digests"
+  done
+  hosting::say image_mirror dry-run
+  exit 0
+fi
+
+command -v crane >/dev/null 2>&1 || hosting::die "crane is not installed in this image — the copy is a registry-to-registry manifest+blob copy, and nothing else here can do it. Rebuild the operator image (deploy/aks/operator/Dockerfile installs it), or copy by hand: ${manual}"
+
+# A private docker config for this process: crane reads credentials from it, nothing else does,
+# and it goes with the process.
+umask 077
+DOCKER_CONFIG="$(mktemp -d)"; export DOCKER_CONFIG
+trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+
+# ── the fleet registry, as its publisher ─────────────────────────────────────────────────────
+hosting::step "Sign in to the fleet registry as its publisher"
+password="$(az keyvault secret show --vault-name "$vault" --name "$publisher_secret" --query value -o tsv 2>/dev/null)" \
+  || hosting::die "could not read the publisher password ${publisher_secret} from vault ${vault} — nothing was copied. Grant the operator identity secret GET on it, or copy by hand: ${manual}"
+[ -n "$password" ] || hosting::die "vault ${vault} object ${publisher_secret} is EMPTY — the registry accepts no push without it"
+if ! printf '%s' "$password" | crane auth login "$registry" -u "$publisher" --password-stdin >/dev/null 2>&1; then
+  unset password
+  hosting::die "crane could not sign in to ${registry} as ${publisher} — the password in ${publisher_secret} does not match the registry's publisher hash (RegistrySpec.publisherPasswordBcrypt). Nothing was copied."
+fi
+unset password
+hosting::log "signed in to ${registry} as ${publisher}"
+
+# digest_of <ref> — the manifest digest on STDOUT, or nothing (absent or unreadable). Never dies:
+# callers decide what absence means at each side.
+digest_of() { crane digest "$1" 2>/dev/null; }
+
+# ── what the fleet registry already holds ────────────────────────────────────────────────────
+hosting::step "Read the fleet registry"
+present=() absent=()
+declare -A have
+for repo in "${images[@]}"; do
+  d="$(digest_of "${registry}/${repo}:${tag}")"
+  if [ -n "$d" ]; then have["$repo"]="$d"; present+=("$repo"); hosting::log "present  ${registry}/${repo}:${tag} @ ${d:0:19}…"
+  else absent+=("$repo"); hosting::log "absent   ${registry}/${repo}:${tag}"; fi
+done
+
+# ── the source, only when something has to come from it ──────────────────────────────────────
+mirrored=0 kept=${#present[@]} drift=0
+if [ ${#absent[@]} -gt 0 ]; then
+  hosting::step "Sign in to the source registry"
+  token="$(az acr login --name "$acr" --expose-token --query accessToken -o tsv 2>/dev/null)" \
+    || hosting::die "az acr login --name ${acr} --expose-token failed — the operator identity needs AcrPull on ${source_host} (and to see it: Reader on the registry resource), which it does not hold today. Nothing was copied. Copy by hand: ${manual}"
+  [ -n "$token" ] || hosting::die "az acr login returned no token for ${acr} — nothing was copied"
+  if ! printf '%s' "$token" | crane auth login "$source_host" -u 00000000-0000-0000-0000-000000000000 --password-stdin >/dev/null 2>&1; then
+    unset token
+    hosting::die "crane could not sign in to ${source_host} with the ACR token — nothing was copied"
+  fi
+  unset token
+  hosting::log "signed in to ${source_host} as the operator identity"
+
+  for repo in "${absent[@]}"; do
+    hosting::step "Mirror ${repo}:${tag}"
+    src="${source_host}/${repo}:${tag}" dst="${registry}/${repo}:${tag}"
+    sd="$(digest_of "$src")"
+    [ -n "$sd" ] || hosting::die "${src} does not exist — the pinned tag is not in the source registry either, so no copy can put it in ${registry}. Pin a tag of a SEALED set (the newest sealed main-cd set), or publish ${tag}. Nothing was copied for ${repo}$( [ "$mirrored" -gt 0 ] && echo "; ${mirrored} image(s) earlier in this run were")."
+    hosting::do crane copy "$src" "$dst" >/dev/null \
+      || hosting::die "crane copy ${src} → ${dst} failed — nothing to undo (a partial copy is not a tag); re-request, or copy by hand: ${manual}"
+    dd="$(digest_of "$dst")"
+    [ "$dd" = "$sd" ] \
+      || hosting::die "${dst} reads back as '${dd:-absent}' but the source is ${sd} — the copy did not land as the same manifest; refusing to report it mirrored"
+    hosting::log "mirrored ${dst} @ ${dd:0:19}… (same digest as ${src})"
+    mirrored=$((mirrored + 1))
+  done
+
+  # Present images are compared with the source too, now that the source is readable — a
+  # difference is a FACT (a re-tagged build upstream), never a re-push over what the pods run.
+  for repo in "${present[@]}"; do
+    sd="$(digest_of "${source_host}/${repo}:${tag}")"
+    if [ -n "$sd" ] && [ "$sd" != "${have[$repo]}" ]; then
+      hosting::log "drift    ${registry}/${repo}:${tag} @ ${have[$repo]:0:19}… differs from ${source_host} @ ${sd:0:19}… — KEPT (never re-pushed); re-tag deliberately if the upstream build moved"
+      drift=$((drift + 1))
+    fi
+  done
+fi
+
+hosting::log "${registry}: ${mirrored} mirrored, ${kept} already present, ${drift} differing from ${source_host}"
+hosting::say image_mirrored "$mirrored"
+hosting::say image_present "$kept"
+hosting::say image_drift "$drift"
+hosting::say image_tag "$tag"
