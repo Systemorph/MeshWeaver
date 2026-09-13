@@ -327,6 +327,56 @@ stamp with the reason, or install it. The registry lane already carries the same
 `.github/acr-retention/instances.json`, with the reason and the issue; the two are deliberately
 separate files because they are two different stores, and neither infers the other's answer.
 
+## 🚨 A second registry: when an installation's images are somewhere this lane cannot lock
+
+**Measured 2026-09-13: the protection lane was RED, and its reason was a false sentence.** The
+01:18Z scheduled run ended:
+
+```
+##[error]AXIS 3 — installation `build` runs core c84c6c0 and its overlay
+(Systemorph/Memex deployments/aks/build/values.build.public.yaml) pins no image at all,
+so there is no repository in which to protect what it runs.
+```
+
+That overlay pins **two** images. Run through the shipped extractors, the real file answers
+`ACR pins: 0`, `foreign pins: 2 → cr.meshweaver.cloud` — `memex-portal-ai:3.0.0-ci.8411` and its
+migration twin, in **the fleet's own registry**. `REGISTRY_HOST_RE` matches `*.azurecr.io` and
+nothing else, which is correct for a lane that locks one ACR, but it made "pins its images
+elsewhere" spell identically to "pins nothing" — and *that* reading sends the reader to fix an
+extractor that is working perfectly.
+
+🚨 **And the red was not free.** `pause.reEnableWhen` is *"lock-pinned-digests is green"*, so a live
+installation moving registry was standing between the fleet and re-enabling cleanup — while the
+installation that IS exposed to the ACR purge (`memex`, six pins in this ACR) got no locks either,
+because the run refuses as a whole. One instance's registry question was holding the other's
+protection hostage.
+
+`build` is the fleet's build server and it is the first LIVE installation on `cr.meshweaver.cloud`;
+`pearl` pins there too and is declared not-installed, so it was never asked.
+
+**What the mechanism now does.** Foreign references are *extracted and named*. They are never
+locked — nothing here can write to another registry — but the three facts stay distinct:
+
+| the overlay | the run |
+|---|---|
+| pins in this ACR | protected, as before |
+| pins **only** elsewhere, **undeclared** | **RED**, naming the registry and what to write. Silently skipping would make an unprotected installation look like a protected one |
+| pins **only** elsewhere, **declared** | accepted, and printed on its **own denominator line** — `…declared OUT OF THIS REGISTRY'S SCOPE` — so it can never be counted among the answered and read as covered |
+| pins **nothing**, in any registry | RED, and the message now says "in ANY registry" so it means what it says |
+
+**`registry` in `instances.json` is a SCOPE statement, never an exemption from answering.** An
+installation carrying one is still live, still expected to answer `/api/version`, still counted. It
+is checked **both ways** against what the overlay actually pins, so it cannot go stale in silence: a
+declaration naming a registry the overlay does not pin in is RED, and so is one on an installation
+that **also** pins in this ACR — half in is not out, and excusing it wholesale would leave the half
+that IS here unprotected. It is refused on a non-live entry (which runs nothing, so needs no scope)
+and refused without a `reason`.
+
+🚨 **What retains `cr.meshweaver.cloud` is NOT established by this.** The declaration states that
+those images are out of *this lane's* reach; it does not claim anything protects them. That question
+is open on #3438 and it grows with every installation provisioned on the fleet's own registry —
+which, per the new-deployment path, is now the default.
+
 ## The window is DECIDED, and the record is now held to it
 
 The policy is #3842's, quoted verbatim in #3438's body and in #3859's acceptance list:
@@ -393,6 +443,10 @@ not downstream of that night's protection verdict.
 
 ## What is still the maintainer's, and is not code
 
+0. **What retains `cr.meshweaver.cloud`.** The fleet's own registry now serves at least one live
+   installation and is the default for new ones, and `acr purge` cannot reach it. This lane
+   declares those images out of its scope; nothing yet says what keeps them, or deletes them.
+   That is the same question this page answers for the ACR, asked again about a second store.
 1. **The decided window has not been APPLIED to the registry.** The record states it; the live
    (disabled) task still carries `--ago 7d --keep 10`. Applying it is the same act as lifting the
    pause, and it belongs to whoever owns the registry. Its cost is storage: dropping `--keep 10`
