@@ -107,11 +107,91 @@ public class DepsClosureTest
     }
 
     [Fact]
-    public void NativeAssets_AreWarnedAbout_NotSilentlyDropped()
+    public void ANativeAtALayoutTheLOADERDoesNotProbe_IsNamed_AndNotCarried()
     {
         var result = DepsClosure.Derive(Graph, "MeshWeaver.Mail.MicrosoftGraph");
 
-        Assert.Contains(result.Warnings, w => w.Contains("Microsoft.Identity.Client"));
+        // This graph's native sits at `runtimes/win/lib/net8.0/…`, which is NOT the shape
+        // `ModuleNativeAssets` probes (`runtimes/<rid>/native/<file>`). Carrying it at its own path
+        // would put bytes somewhere nothing looks at — which reads as "the bundle ships it" and
+        // behaves as if it does not. So it is named instead, and the name says why.
+        Assert.Empty(result.Natives);
+        Assert.Contains(result.Warnings,
+            w => w.Contains("Microsoft.Identity.Client")
+                 && w.Contains("runtimes/win/lib/net8.0/msalruntime.dll")
+                 && w.Contains("runtimes/<rid>/native/<file>"));
+    }
+
+    /// <summary>A graph whose native package contributes NO managed assembly at all — the shape
+    /// the whole issue was measured on (<c>SQLitePCLRaw.lib.e_sqlite3</c>), and the one the old
+    /// warning could not reach.</summary>
+    private const string PureNativeGraph = """
+        {
+          "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+          "targets": {
+            ".NETCoreApp,Version=v10.0": {
+              "MeshWeaver.AppleMessages/1.0.0": {
+                "dependencies": { "SQLitePCLRaw.lib.e_sqlite3": "3.53.3", "RidPicky": "1.0.0" },
+                "runtime": { "MeshWeaver.AppleMessages.dll": {} }
+              },
+              "SQLitePCLRaw.lib.e_sqlite3/3.53.3": {
+                "runtimeTargets": {
+                  "runtimes/linux-x64/native/libe_sqlite3.so": { "rid": "linux-x64", "assetType": "native" },
+                  "runtimes/osx-arm64/native/libe_sqlite3.dylib": { "rid": "osx-arm64", "assetType": "native" },
+                  "runtimes/linux-x64/native/libe_sqlite3.a": { "rid": "linux-x64", "assetType": "native" }
+                }
+              },
+              "RidPicky/1.0.0": {
+                "runtime": { "lib/net10.0/RidPicky.dll": {} },
+                "runtimeTargets": {
+                  "runtimes/win-x64/lib/net10.0/RidPicky.dll": { "rid": "win-x64", "assetType": "runtime" }
+                }
+              }
+            }
+          },
+          "libraries": {
+            "MeshWeaver.AppleMessages/1.0.0": { "type": "project" },
+            "SQLitePCLRaw.lib.e_sqlite3/3.53.3": { "type": "package" },
+            "RidPicky/1.0.0": { "type": "package" }
+          }
+        }
+        """;
+
+    [Fact]
+    public void APackageWhoseONLYContributionIsNative_IsCarried_NotSkippedBeforeItIsLookedAt()
+    {
+        var result = DepsClosure.Derive(PureNativeGraph, "MeshWeaver.AppleMessages");
+
+        // 🚨 THE CASE THE OLD CODE COULD NOT REACH. The loop short-circuited on
+        // `RuntimeFiles.Count == 0`, so a package contributing no managed assembly was `continue`d
+        // BEFORE the native branch — it warned about nothing and dropped everything, silently.
+        Assert.Contains(result.Natives,
+            n => n.RelativePath == "runtimes/linux-x64/native/libe_sqlite3.so" && n.Rid == "linux-x64");
+        Assert.Contains(result.Natives,
+            n => n.RelativePath == "runtimes/osx-arm64/native/libe_sqlite3.dylib");
+        // Static libraries are LINK-time inputs, never loaded — the same exclusion the in-image
+        // lane has applied since #1728, and carrying them would inflate every such bundle.
+        Assert.DoesNotContain(result.Natives, n => n.RelativePath.EndsWith(".a"));
+        // …and it contributes no managed file, so the flat closure is unchanged by it.
+        Assert.DoesNotContain("libe_sqlite3.so", result.Files);
+    }
+
+    [Fact]
+    public void ARidSpecificMANAGEDAsset_IsStillDropped_AndIsNAMED()
+    {
+        var result = DepsClosure.Derive(PureNativeGraph, "MeshWeaver.AppleMessages");
+
+        // The negative control for the case above: `assetType: "runtime"` is NOT a native, so it
+        // must not sneak into the native section — the flat closure has one slot per assembly name
+        // and no way to choose a RID. If the derivation keyed on `runtimeTargets` alone rather
+        // than on the asset TYPE, this would be carried and the assertion fails.
+        Assert.DoesNotContain(result.Natives, n => n.Package == "RidPicky");
+        // Still dropped — but NAMED, which is the half the old warning got right and could not
+        // deliver for a pure-native package.
+        Assert.Contains(result.Warnings,
+            w => w.Contains("RidPicky") && w.Contains("runtimes/win-x64/lib/net10.0/RidPicky.dll"));
+        // The RID-agnostic copy still rides, exactly as before.
+        Assert.Contains("RidPicky.dll", result.Files);
     }
 
     /// <summary>An Import-shaped graph: the module references a MODULE-OWNED MeshWeaver.*

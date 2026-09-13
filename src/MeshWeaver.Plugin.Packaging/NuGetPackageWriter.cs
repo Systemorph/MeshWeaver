@@ -82,6 +82,30 @@ public static class NuGetPackageWriter
     public static string ModuleAssetEntryPathFor(string relativePath) =>
         $"{ModuleAssetFolder}/{relativePath}";
 
+    /// <summary>
+    /// Where a module's RID-specific NATIVE payloads ride (#4126) — a section of its own, declared
+    /// in the manifest like the other two.
+    ///
+    /// <para>🚨 It cannot be <see cref="ModuleFolder"/>. Every consumer of that folder filters to
+    /// FLAT entries by construction — <c>ServedModuleBytes</c> and <c>PublishedBundleCatalogue</c>
+    /// both require the remainder after the prefix to contain no <c>/</c> — so a native written
+    /// under <c>meshweaver/modules/runtimes/…</c> would be SILENTLY skipped, not laid out. And it
+    /// cannot be <see cref="ModuleAssetFolder"/> either: that folder means "static WEB assets", the
+    /// landing service's own logs and docs say wwwroot, and conflating a loadable binary with a
+    /// served file would make every future rule about one apply to the other.</para>
+    ///
+    /// <para>Unlike module files, and like static assets, the relative path is PRESERVED: the
+    /// loader probes <c>&lt;moduleDir&gt;/runtimes/&lt;rid&gt;/native/&lt;lib&gt;</c>, so the path
+    /// IS the contract.</para>
+    /// </summary>
+    public const string ModuleNativeFolder = "meshweaver/modulenatives";
+
+    /// <summary>The bundle entry path for one native payload, by its module-relative path
+    /// (<c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>).</summary>
+    /// <param name="relativePath">The module-relative path, <c>/</c>-separated.</param>
+    public static string ModuleNativeEntryPathFor(string relativePath) =>
+        $"{ModuleNativeFolder}/{relativePath}";
+
     /// <summary>One file destined for the package.</summary>
     /// <param name="PathInPackage">Full entry path, e.g. <c>meshweaver/content/index.json</c>.</param>
     /// <param name="OpenRead">Opens the bytes. A factory rather than a byte[] so a large assembly
@@ -174,6 +198,12 @@ public static class NuGetPackageWriter
           <Default Extension="png" ContentType="application/octet" />
           <Default Extension="svg" ContentType="application/octet" />
           <Default Extension="lock" ContentType="application/octet" />
+          <!-- Native payloads (#4126). A [Content_Types].xml that does not declare an extension
+               makes the part undeclared for a strict OPC reader; these are the three shapes a
+               loadable native takes on the platforms this ships to. -->
+          <Default Extension="so" ContentType="application/octet" />
+          <Default Extension="dylib" ContentType="application/octet" />
+          <Default Extension="pdb" ContentType="application/octet" />
         </Types>
         """;
 }

@@ -457,6 +457,12 @@ public static class ModulePackCommand
         // The closure: entry DLL (+ symbols when present) + the derived private dependency
         // closure when asked for + exactly the files the caller named.
         var closure = new List<string> { moduleName + ".dll" };
+        // 🚨 Module-relative NATIVE paths (#4126) — a list of their OWN, never folded into
+        // `closure`: that list is FLAT by contract (every consumer of meshweaver/modules filters to
+        // entries with no '/' in the remainder), so a `runtimes/<rid>/native/<lib>` entry put there
+        // would be silently skipped at the consumer rather than laid out. They also cannot ride
+        // `--with`, which refuses any name with a path component.
+        var natives = new List<string>();
         var entryPdb = moduleName + ".pdb";
         if (File.Exists(Path.Combine(moduleDirectory, entryPdb)))
             closure.Add(entryPdb);
@@ -525,6 +531,31 @@ public static class ModulePackCommand
                 $"deps-closure: bundling {present.Count} private dependency file(s); "
                 + $"excluded {derived.ExcludedPlatformCarried.Count} platform-carried, "
                 + $"{missing.Count} framework-resolved");
+
+            // 🚨 NATIVE payloads (#4126). Same existence rule as the managed files and for a harder
+            // reason: a module that lands without the engine it declared does not degrade, it
+            // throws DllNotFoundException at first use. A declared native ABSENT from the folder is
+            // reported per file and NOT packed — it is a publish-folder question (a RID-specific
+            // asset only materialises for a RID the publish targeted), not a reason to refuse a
+            // bundle whose managed closure is complete.
+            foreach (var native in derived.Natives)
+            {
+                var onDisk = Path.Combine(
+                    moduleDirectory, native.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(onDisk))
+                {
+                    Console.WriteLine(
+                        $"deps-closure: native declared by '{native.Package}' for {native.Rid} is "
+                        + $"not in this publish: {native.RelativePath}");
+                    continue;
+                }
+                if (!natives.Contains(native.RelativePath, StringComparer.OrdinalIgnoreCase))
+                    natives.Add(native.RelativePath);
+            }
+            if (natives.Count > 0)
+                Console.WriteLine(
+                    $"deps-closure: bundling {natives.Count} native payload(s): "
+                    + string.Join(", ", natives));
         }
 
         foreach (var extra in extras)
@@ -686,6 +717,11 @@ public static class ModulePackCommand
                 sourceCommit,
                 module = new { assemblyName = moduleName, assemblies = closure, minMeshVersion,
                     staticAssets = staticAssets.Count > 0 ? staticAssets : null,
+                    // #4126 — DECLARED, like every other section, so BundleReader never enumerates
+                    // a folder. Omitted entirely when there are none (WhenWritingNull below), so a
+                    // bundle from before this existed and one that simply has no native read the
+                    // same.
+                    nativeAssets = natives.Count > 0 ? natives : null,
                 },
                 // DECLARED, so BundleReader.ReadContent stays manifest-driven — these files are
                 // written into a consumer's working tree, and a glob would recreate anything a
@@ -716,6 +752,13 @@ public static class ModulePackCommand
             var path = Path.Combine(moduleDirectory, relative.Replace('/', Path.DirectorySeparatorChar));
             return new NuGetPackageWriter.Entry(
                 NuGetPackageWriter.ModuleAssetEntryPathFor(relative), () => File.OpenRead(path));
+        }));
+
+        entries.AddRange(natives.Select(relative =>
+        {
+            var path = Path.Combine(moduleDirectory, relative.Replace('/', Path.DirectorySeparatorChar));
+            return new NuGetPackageWriter.Entry(
+                NuGetPackageWriter.ModuleNativeEntryPathFor(relative), () => File.OpenRead(path));
         }));
 
         entries.AddRange(contentFiles.Select(relative =>

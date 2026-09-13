@@ -86,13 +86,52 @@ public static class DepsClosure
         IReadOnlyList<string> Files,
         IReadOnlyList<string> ExcludedPlatformCarried,
         IReadOnlyList<string> Warnings,
-        IReadOnlyList<string> PackageUniverse);
+        IReadOnlyList<string> PackageUniverse)
+    {
+        /// <summary>
+        /// 🚨 The RID-specific NATIVE payloads the reachable closure declares — the thing the
+        /// bundle used to drop with a warning (#4126). An <c>init</c> PROPERTY, deliberately not a
+        /// primary-constructor parameter: a parameter replaces the record's constructor signature,
+        /// so every assembly already compiled against the 4-parameter one calls a constructor this
+        /// build no longer has, and the repo's binary-compatibility gate refuses it.
+        ///
+        /// <para>Empty is the ordinary case — almost no module declares a native. Non-empty means
+        /// the module's own dependency graph says it needs one, and the packer must carry it: the
+        /// runtime resolver (<c>ModuleNativeAssets</c>) probes exactly
+        /// <c>&lt;moduleDir&gt;/runtimes/&lt;rid&gt;/native/&lt;lib&gt;</c>, so
+        /// <see cref="NativeAsset.RelativePath"/> is already the layout it is looking for.</para>
+        /// </summary>
+        public IReadOnlyList<NativeAsset> Natives { get; init; } = [];
+    }
+
+    /// <summary>
+    /// One loadable native payload a package declares for one RID, as deps.json names it.
+    /// </summary>
+    /// <param name="RelativePath">The deps.json key, <c>/</c>-separated — always of the shape
+    /// <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>, which is the layout the loader probes.</param>
+    /// <param name="Rid">The runtime identifier the payload is for.</param>
+    /// <param name="Package">The package that declares it — for the pack log, so a native can be
+    /// traced back to the dependency that asked for it.</param>
+    public sealed record NativeAsset(string RelativePath, string Rid, string Package);
+
+    /// <summary>
+    /// The ONE layout a carried native can be found at. <c>ModuleNativeAssets</c>, the runtime
+    /// resolver, probes <c>&lt;moduleDir&gt;/runtimes/&lt;rid&gt;/native/&lt;lib&gt;</c> and then
+    /// the flat folder — nothing else. A payload declared at any other shape is therefore not
+    /// carried but NAMED: carrying it at its own path would put bytes somewhere the loader will
+    /// never look, which reads as "the bundle ships it" and behaves as if it does not.
+    /// </summary>
+    private static bool IsProbedNativeLayout(string path) =>
+        path.StartsWith("runtimes/", StringComparison.OrdinalIgnoreCase)
+        && path.Contains("/native/", StringComparison.OrdinalIgnoreCase);
 
     private sealed record Node(
         string Name,
         List<string> Dependencies,
         List<string> RuntimeFiles,
-        bool HasNativeAssets,
+        IReadOnlyList<NativeAsset> Natives,
+        IReadOnlyList<string> RidSpecificManaged,
+        IReadOnlyList<string> UnreachableNatives,
         string? LibraryType);
 
     /// <summary>
@@ -149,9 +188,8 @@ public static class DepsClosure
                 runtimeFiles.AddRange(runtime.EnumerateObject()
                     .Select(r => Path.GetFileName(r.Name.Replace('\\', '/')))
                     .Where(f => f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)));
-            var hasNative = entry.Value.TryGetProperty("runtimeTargets", out var rts)
-                            && rts.EnumerateObject().Any();
-            nodes[name] = new Node(name, dependencies, runtimeFiles, hasNative,
+            nodes[name] = new Node(name, dependencies, runtimeFiles, NativesOf(entry.Value, name),
+                RidSpecificManagedOf(entry.Value), UnreachableNativesOf(entry.Value),
                 libraryTypes.GetValueOrDefault(name));
         }
 
@@ -173,16 +211,37 @@ public static class DepsClosure
         platformStops.UnionWith(module.Dependencies.Where(IsStop));
 
         var files = new List<string>();
+        var natives = new List<NativeAsset>();
         var warnings = new List<string>();
         foreach (var name in ownReachable.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
-            if (!nodes.TryGetValue(name, out var node) || node.RuntimeFiles.Count == 0)
+            // 🚨 NO `RuntimeFiles.Count == 0` SHORT-CIRCUIT. It used to sit here, and it made the
+            // one case that matters most completely silent: a package whose ONLY contribution is
+            // native (SQLitePCLRaw.lib.e_sqlite3 is the measured example) has no runtime file, so
+            // it was `continue`d before the native branch ran and warned about NOTHING. The
+            // warning existed and could not fire for a pure-native dependency (#4126).
+            if (!nodes.TryGetValue(name, out var node))
                 continue;
             files.AddRange(node.RuntimeFiles);
-            if (node.HasNativeAssets)
+            natives.AddRange(node.Natives);
+            // 🚨 What is STILL dropped, now that the natives are not: a RID-specific MANAGED
+            // assembly (`assetType: "runtime"` under runtimeTargets). The flat closure carries one
+            // file per name, and there is no flat answer to "which RID's copy" — so these stay out
+            // and are NAMED. Reporting them is the point: the warning this replaced could not fire
+            // for a pure-native package at all, and a drop nobody is told about is how a module
+            // lands that faults at first use.
+            foreach (var dropped in node.RidSpecificManaged)
                 warnings.Add(
-                    $"'{name}' declares native runtimeTargets the bundle does not carry — "
-                    + "if the module needs them at runtime, they must ship another way");
+                    $"'{name}' declares a RID-specific MANAGED asset the bundle does not carry: "
+                    + $"{dropped}. The module's flat closure has one slot per assembly name and no "
+                    + "way to choose a RID at pack time; if the module needs it, name the RID's "
+                    + "copy explicitly with --with.");
+            foreach (var unreachable in node.UnreachableNatives)
+                warnings.Add(
+                    $"'{name}' declares a native asset at '{unreachable}', which is NOT the layout "
+                    + "the module loader probes (runtimes/<rid>/native/<file>) — it is not carried, "
+                    + "because bytes at a path nothing looks at read as shipped and behave as "
+                    + "absent. If the module needs it, name it explicitly with --with.");
         }
         var excluded = platformStops.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
@@ -194,11 +253,102 @@ public static class DepsClosure
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        var carried = natives
+            .DistinctBy(n => n.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         return new Result(
             files.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             excluded,
             warnings,
-            universe);
+            universe)
+        {
+            Natives = carried,
+        };
+    }
+
+    /// <summary>
+    /// The LOADABLE native payloads one deps.json node declares, by RID.
+    ///
+    /// <para>Only <c>assetType: "native"</c> entries: a <c>runtimeTargets</c> section also carries
+    /// RID-specific MANAGED assemblies (<c>assetType: "runtime"</c>), and those belong to the flat
+    /// closure's own rules, not here. Static libraries (<c>.a</c>, <c>.lib</c>) are excluded — the
+    /// same exclusion the in-image lane has applied since #1728: they are link-time inputs, never
+    /// loaded, and carrying them would inflate every bundle that touches a native package.</para>
+    ///
+    /// <para>The key is taken VERBATIM (only <c>\</c> normalised to <c>/</c>) because it already
+    /// is the layout the runtime resolver probes. Anything not of the shape
+    /// <c>runtimes/&lt;rid&gt;/native/…</c> is skipped rather than reshaped: guessing a layout for
+    /// an entry whose own declaration does not state one is how a native ends up somewhere the
+    /// loader will never look.</para>
+    /// </summary>
+    private static IReadOnlyList<NativeAsset> NativesOf(JsonElement node, string package)
+    {
+        if (!node.TryGetProperty("runtimeTargets", out var targets)
+            || targets.ValueKind != JsonValueKind.Object)
+            return [];
+        var found = new List<NativeAsset>();
+        foreach (var entry in targets.EnumerateObject())
+        {
+            if (!entry.Value.TryGetProperty("assetType", out var assetType)
+                || !string.Equals(assetType.GetString(), "native", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var path = entry.Name.Replace('\\', '/');
+            if (!IsProbedNativeLayout(path))
+                continue;               // reported by UnreachableNativesOf, never silently dropped
+            if (path.EndsWith(".a", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".lib", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var rid = entry.Value.TryGetProperty("rid", out var r) ? r.GetString() ?? "" : "";
+            if (string.IsNullOrEmpty(rid))
+                rid = path.Split('/') is [_, var fromPath, ..] ? fromPath : "";
+            found.Add(new NativeAsset(path, rid, package));
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Native assets a node declares at a layout the loader does NOT probe — reported, not carried.
+    /// Static libraries are excluded here too: they are link-time inputs, and naming one as
+    /// "unreachable" would send a reader looking for a load path that was never wanted.
+    /// </summary>
+    private static IReadOnlyList<string> UnreachableNativesOf(JsonElement node)
+    {
+        if (!node.TryGetProperty("runtimeTargets", out var targets)
+            || targets.ValueKind != JsonValueKind.Object)
+            return [];
+        var found = new List<string>();
+        foreach (var entry in targets.EnumerateObject())
+        {
+            if (!entry.Value.TryGetProperty("assetType", out var assetType)
+                || !string.Equals(assetType.GetString(), "native", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var path = entry.Name.Replace('\\', '/');
+            if (IsProbedNativeLayout(path)
+                || path.EndsWith(".a", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".lib", StringComparison.OrdinalIgnoreCase))
+                continue;
+            found.Add(path);
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// The RID-specific MANAGED assets a node declares (<c>assetType: "runtime"</c> under
+    /// <c>runtimeTargets</c>) — reported, not carried. See the warning at the call site.
+    /// </summary>
+    private static IReadOnlyList<string> RidSpecificManagedOf(JsonElement node)
+    {
+        if (!node.TryGetProperty("runtimeTargets", out var targets)
+            || targets.ValueKind != JsonValueKind.Object)
+            return [];
+        var found = new List<string>();
+        foreach (var entry in targets.EnumerateObject())
+            if (entry.Value.TryGetProperty("assetType", out var assetType)
+                && string.Equals(assetType.GetString(), "runtime", StringComparison.OrdinalIgnoreCase))
+                found.Add(entry.Name.Replace('\\', '/'));
+        return found;
     }
 
     // ONE spelling of "the platform side owns this name", shared with the platform-shipped witness
