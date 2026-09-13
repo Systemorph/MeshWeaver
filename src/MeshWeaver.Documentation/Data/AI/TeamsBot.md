@@ -47,11 +47,20 @@ agent runs as that user  ──►  TeamsReplySender
 
 Key points:
 
-- **One Teams conversation = one agent thread.** The `conversationId` is matched to its thread via a
-  `TeamsConversation` link node (`{threadPath}/_TeamsConversation/…`); new → `StartThread`, existing →
-  `SubmitMessage` — the canonical [thread extensions](/Doc/Architecture/ThreadOperations).
+- **One Teams conversation = one agent thread.** The thread is the user's own ordinary thread
+  (`{username}/_Thread/{id}`), and the `conversationId` is matched to it via a `TeamsConversation`
+  link node that is CONTENT in the Admin partition — `Admin/_TeamsConversation/{key}`, `key` a stable
+  hash of the conversation id — never a node under the thread: `_Thread` is a configured satellite
+  segment, so a node beneath a thread path lives in the satellite table and is excluded from every
+  UNTARGETED content query on both backends (a query that targets the satellite path itself is
+  routed to that table); the old mesh-wide `nodeType:TeamsConversation …` lookup was untargeted,
+  which is why it found the link by nobody (MeshWeaver.Plugins#1665 / #1773). New →
+  `StartThread`, existing → `SubmitMessage` — the canonical
+  [thread extensions](/Doc/Architecture/ThreadOperations).
 - **The agent runs as the mapped Memex user.** Teams users are mapped by **AAD object id** to a `User`
-  node (`content.objectId`); an unmapped sender gets a polite "no account" reply.
+  node (`content.objectId`); an unmapped sender gets a polite "no account" reply. 🚨 No `User` node
+  carries that field today — the portal keys users by email and the activity carries only the Entra
+  GUID — so every real sender is currently "unmapped"; that is MeshWeaver.Plugins#1774.
 - **The reply is read, not re-emitted.** `TeamsReplySender` uses **`ThreadFlow.ObserveResponses`** — the
   same read-side abstraction the GUI uses to render messages — to read each completed assistant
   `ThreadMessage` at `{threadPath}/{messageId}` and post it back. Nothing Teams-specific in the agent.

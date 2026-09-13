@@ -13,7 +13,13 @@ public static class TeamsConversationNodeType
     /// <summary>The NodeType value used to identify Teams-conversation link nodes.</summary>
     public const string NodeType = "TeamsConversation";
 
-    /// <summary>Satellite segment under a thread: <c>{threadPath}/_TeamsConversation</c>.</summary>
+    /// <summary>
+    /// The segment the Teams channel files its conversation links under. 🚨 Not beneath a thread any
+    /// more: <c>{threadPath}/_TeamsConversation/…</c> sat under the configured <c>_Thread</c> satellite
+    /// segment, where no content query on either backend could find it (MeshWeaver.Plugins#1665).
+    /// Since Plugins#1773 the link is content at <c>Admin/_TeamsConversation/{key}</c>; this constant
+    /// is the segment name in that path.
+    /// </summary>
     public const string Segment = "_TeamsConversation";
 
     /// <summary>Registers the built-in "TeamsConversation" MeshNode on the mesh builder.</summary>
