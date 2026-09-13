@@ -414,10 +414,17 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
         endpoint.RefreshCalls.Should().Be(1);
 
         // The controller's read — GetConnection never asks the token endpoint — agrees, because the
-        // refusal was stamped on the credential: the reconnect link now runs the dialog.
-        var controllerRead = await auth.GetConnection(user).Should().Within(TestTimeouts.Convergence).Emit();
-        controllerRead.Connection.Should().Be(EaConnection.NotConnected,
-            "a reconnect that bounces a 'connected' user back without a dialog is the loop this stamp ends");
+        // refusal was stamped on the credential: the reconnect link now runs the dialog. The stamp
+        // is a write through the node stream; its echo reaches the mirror a later read snapshots
+        // moments after the write is acknowledged, so this WAITS for the stamped reading (the
+        // request/response re-query shape) rather than asserting on one read — CI read Connected
+        // once, a few ms after the write, on a snapshot the echo had not reached yet.
+        var controllerRead = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => auth.GetConnection(user))
+            .Where(read => read.Connection == EaConnection.NotConnected)
+            .FirstAsync()
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "a reconnect that bounces a 'connected' user back without a dialog is the loop this stamp ends");
         controllerRead.Diagnostic.Should().Contain("refused the stored grant");
 
         (await auth.GetAccessToken(user).Should().Within(TestTimeouts.Convergence).Emit())
