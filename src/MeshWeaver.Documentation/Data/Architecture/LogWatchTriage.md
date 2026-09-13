@@ -500,10 +500,12 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl -n monitoring create secret generic mw-log-watcher --from-literal=ingest-token=$TOKEN"
 #    …and set LogWatch__IngestToken to the same value on the portal (via its KeyVault secret).
 
-# 2. Build and push the watcher image.
-dotnet publish tools/MeshWeaver.LogWatcher/MeshWeaver.LogWatcher.csproj -c Release \
-  -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
-  -p:ContainerRepository=memex-log-watcher -p:ContainerImageTag=<tag>
+# 2. Pick a PUBLISHED watcher image — never hand-build one. The watcher's source is
+#    MeshWeaver.Plugins (src/MeshWeaver.LogWatcher; it left core on 2026-08-27, #2276), and that
+#    repo's `log-watcher image` lane pushes meshweaver.azurecr.io/memex-log-watcher:<version>,
+#    :<sha7> and :latest on every change to the watcher or its contract (Plugins#823/#992).
+#    A tag you did not read from the registry is not a tag you can deploy.
+az acr repository show-tags -n meshweaver --repository memex-log-watcher -o tsv
 
 # 3. Apply the Deployment + PVC.
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \

@@ -806,10 +806,13 @@ az aks command invoke -g <rg> -n <cluster> --command \
 #    unbound route reads exactly like "no route configured": incidents pile up at New, silently.
 #    Issues are opened as the GitHub App (GitHub:App), never a user's OAuth token.
 
-# 3. Build + push the watcher image.
-dotnet publish tools/MeshWeaver.LogWatcher/MeshWeaver.LogWatcher.csproj -c Release \
-  -t:PublishContainer -p:ContainerRegistry=<acrName>.azurecr.io \
-  -p:ContainerRepository=memex-log-watcher -p:ContainerImageTag=<tag>
+# 3. The watcher image is PUBLISHED, never hand-built. Its source is MeshWeaver.Plugins
+#    (src/MeshWeaver.LogWatcher — it left core on 2026-08-27, #2276), and that repo's
+#    `log-watcher image` lane pushes <acrName>.azurecr.io/memex-log-watcher:<version>, :<sha7>
+#    and :latest on every change to the watcher or its contract (Plugins#823/#992). Read the
+#    published tags before step 4 and pick one; a tag you did not see in the registry is not a
+#    tag you can deploy:
+az acr repository show-tags -n <acrName> --repository memex-log-watcher -o tsv
 
 # 4. Apply the Deployment + PVC (edit the image tag + watched namespaces in the manifest first).
 az aks command invoke -g <rg> -n <cluster> \
