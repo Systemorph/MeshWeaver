@@ -17,7 +17,39 @@ ACR=meshweaver.azurecr.io
 
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f ./aks-extras.yaml                                   # StorageClass + RWX PVCs
-helm upgrade --install memex ./helm -f ./helm/values.yaml -f ./values.aks.yaml -f ./values.deploy.yaml -n "$NS"
+
+# 🚨 THE EXTERNAL CONNECTION STRING GOES THROUGH HELM, NOT A PATCH AFTERWARDS (MeshWeaver#4173).
+#
+# This used to `kubectl patch` both Secrets once the upgrade had finished, under the note
+# "Chart-gen gap: the secret template hardcodes the in-cluster pg connection string". That gap was
+# closed when the template started taking `secrets.<half>.ConnectionStrings__memex` from values —
+# the patch outlived the reason for it, and by then it was actively harmful in two ways:
+#
+#   * helm REPLACES a Secret wholesale, so ANY later `helm upgrade` (including one run by someone
+#     else) overwrote the working connection string with the in-cluster default and the portal
+#     pointed at a Postgres that is not running until the patch re-ran. That hazard is written up
+#     in memex-portal/secrets.yaml and this script was the thing still creating it.
+#   * the `wait-for-postgres` init container is rendered by helm, so a value that arrives AFTER the
+#     render cannot reach it: the probe waited for `memex-postgres-service` while the process
+#     opened the Flexible Server. An init container that passes while naming a host the process
+#     never opens is #3780's failure mode with the evidence removed.
+#
+# A values FILE rather than `--set`: a connection string contains `;` and `=`, and `--set` also
+# treats `,` as a separator — three ways to mangle it silently. The literal block below needs no
+# quoting at all, and the file is deleted on exit because it holds the password.
+PGVALS="$(mktemp -t memex-pgconn-XXXXXX).yaml"
+trap 'rm -f "$PGVALS"' EXIT
+{
+  echo "secrets:"
+  echo "  memex_portal:"
+  echo "    ConnectionStrings__memex: |-"
+  echo "      $MEMEX_PG_CONN"
+  echo "  memex_migration:"
+  echo "    ConnectionStrings__memex: |-"
+  echo "      $MEMEX_PG_CONN"
+} > "$PGVALS"
+
+helm upgrade --install memex ./helm -f ./helm/values.yaml -f ./values.aks.yaml -f ./values.deploy.yaml -f "$PGVALS" -n "$NS"
 
 # External managed Postgres -> don't run the chart's in-cluster pg.
 kubectl -n "$NS" scale statefulset memex-postgres-statefulset --replicas=0 || true
@@ -41,11 +73,10 @@ kubectl -n "$NS" set image deployment/memex-portal-deployment    memex-portal="$
 # values.aks.yaml) - no volume patching here either: the old bolt-on patch meant any plain
 # `helm upgrade` reverted /data to emptyDir until the patch re-ran, wiping the
 # assembly/nuget/DataProtection caches on every restart in the gap.
-# Chart-gen gap: the secret template hardcodes the in-cluster pg connection string -> repoint
-# both portal + migration at the external Flexible Server (server FQDN + password + SSL).
-for s in memex-portal-secrets memex-migration-secrets; do
-  kubectl -n "$NS" patch secret "$s" --type merge -p "{\"stringData\":{\"ConnectionStrings__memex\":\"${MEMEX_PG_CONN}\"}}"
-done
+# 🚨 NO post-helm secret patch here any more — the connection string went in through the values
+# file above (MeshWeaver#4173). See the block at the top of this script for why a patch that lands
+# after the render is both a live outage on the next `helm upgrade` and a start-up gate that waits
+# for a host the process never opens.
 kubectl -n "$NS" rollout restart deployment/memex-portal-deployment
 echo "=== deployed ==="; kubectl -n "$NS" get deploy,pvc,svc -o wide
 

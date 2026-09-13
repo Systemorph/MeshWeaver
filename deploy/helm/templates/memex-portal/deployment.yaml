@@ -101,14 +101,21 @@ spec:
         # Postgres and the portal start concurrently on a fresh install; the portal's hub
         # init FAILS (and the host aborts) if Postgres isn't yet accepting connections.
         # Gate startup on Postgres TCP readiness so the ordering is deterministic.
+        #
+        # 🚨 EVERY host this pod will OPEN, derived from the connection strings themselves
+        # (MeshWeaver#4173). This used to probe one host taken from `config.memex_portal.MEMEX_HOST`
+        # — a CONFIG value — while the boot opens `ConnectionStrings__memex` and
+        # `ConnectionStrings__orleans`, which are SECRETS from a different half of the values, and
+        # nothing rendered, asserted or logged that they named the same host. An explicit orleans
+        # host was therefore gated by NOTHING: the pod passed Init:1/1 and the silo then died in
+        # `MembershipTableManager` on a name that never resolved (#3780), with the init container's
+        # PASS saying nothing about the connection that failed. See templates/_database.tpl.
         - name: "wait-for-postgres"
           image: "busybox:1.36"
           command:
             - "sh"
             - "-c"
-            {{- $pgHost := .Values.postgres.enabled | ternary "memex-postgres-service" (.Values.config.memex_portal.MEMEX_HOST | default "memex-postgres-service") }}
-            {{- $pgPort := .Values.postgres.enabled | ternary "5432" (.Values.config.memex_portal.MEMEX_PORT | default "5432") }}
-            - "until nc -z {{ $pgHost }} {{ $pgPort }}; do echo 'waiting for postgres'; sleep 2; done"
+            - {{ include "memex.waitForDatabasesCommand" (dict "root" $ "half" "memex_portal") | quote }}
 {{- if $bundles.enabled }}
         # Bundle materialisation from the fleet registry (Doc/Architecture/PluginBundlesInTheRegistry,
         # gated by the `memex.bundles` helper in _bundles.tpl): pulls the sealed publication of

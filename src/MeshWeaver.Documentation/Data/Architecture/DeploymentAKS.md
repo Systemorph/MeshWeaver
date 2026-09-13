@@ -465,7 +465,18 @@ target".
 only the first is a wait:
 
 - the portal pod's `wait-for-postgres` **initContainer** genuinely blocks startup until Postgres accepts TCP
-  connections; and
+  connections — on **every** host the pod will open, derived from the connection strings themselves
+  (`ConnectionStrings__memex`, and `ConnectionStrings__orleans` under AdoNet clustering), and naming each
+  endpoint as it waits. 🚨 Until MeshWeaver#4173 it probed a single host taken from the parallel CONFIG
+  value `config.memex_portal.MEMEX_HOST`, while the connections are SECRETS rendered from another half of
+  the values, with nothing comparing them — so a deployment whose orleans host differed was gated by
+  nothing at all: the pod passed `Init:1/1` and the silo then died at lifecycle stage
+  `RuntimeGrainServices` with `Name or service not known` out of `MembershipTableManager`
+  ([#3780](https://github.com/Systemorph/MeshWeaver/issues/3780)). What made that expensive to read was
+  the init container's PASS: it said nothing about the connection that failed, so a gate that was never
+  covering the host looked like a transient resolver blip. The probe's coverage is now asserted at render
+  time by invariant 16 of `deploy/aks/scripts/check-chart-invariants.sh`, on a fixture whose mesh and
+  orleans databases are on different servers; and
 - the portal's **`DbVersionGate`** hosted service does a **one-shot check at startup, and does not wait**. It
   reads `admin.mesh_nodes.db_version` once and, if it is below the `ExpectedDbVersion` constant compiled into
   the build, logs `Critical` and calls `lifetime.StopApplication()`.

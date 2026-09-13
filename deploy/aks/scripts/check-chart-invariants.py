@@ -520,6 +520,115 @@ if _fetch is not None:
             "exists to prevent.",
         )
 
+# ---- 16. every database host the pod OPENS is a host the gate WAITS for ----
+# 🚨 MeshWeaver#4173 / #3780. `wait-for-postgres` exists to make one thing deterministic — the
+# process does not start before the database it opens is accepting connections. It used to probe a
+# host taken from `config.<half>.MEMEX_HOST`, a CONFIG value, while the boot opens
+# `ConnectionStrings__memex` and `ConnectionStrings__orleans`, which are SECRETS rendered from a
+# different half of the values. Nothing compared them. An explicit orleans host naming another
+# server was therefore gated by NOTHING: the pod passes Init:1/1, the silo reaches
+# `RuntimeGrainServices`, and `MembershipTableManager` dies on a name that never resolved — with
+# the init container's PASS saying nothing about the connection that failed, which is what makes
+# the failure read as a resolver blip instead of as a gate that was never covering that host.
+#
+# The assertion is the one sentence the gate has to be able to make: "every database this pod will
+# open is accepting connections". Checked for BOTH halves that carry one — the portal Deployment
+# and the migration Job.
+def _cs_hosts(cs):
+    """Every host an ADO.NET connection string names, plus the port — the same rule
+    memex.dbHostGroup applies. Npgsql accepts a COMMA-SEPARATED failover list, and the process may
+    open any member of it, so all of them are returned: a probe that covered only the first would
+    pass having waited for `a` while the process connects to `b`."""
+    import re as _re
+    m = _re.search(r"(?i)(?:^|;)\s*(?:host|server)\s*=\s*([^;]+)", cs or "")
+    if not m:
+        return [], None
+    p = _re.search(r"(?i)(?:^|;)\s*port\s*=\s*(\d+)", cs or "")
+    hosts = [h.strip() for h in m.group(1).split(",") if h.strip()]
+    return hosts, (p.group(1) if p else "5432")
+
+
+def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label):
+    """Every host `secret_obj` names must appear in the wait-for-postgres command of `obj`.
+
+    🚨 It counts its check FIRST and has no early return that skips one. An absent object or an
+    absent Secret is a FINDING, not a reason to check nothing: both the portal Deployment and the
+    migration Job are unconditional in this chart, so either going missing is a template regression
+    — and a check that quietly evaluates nothing when its input disappears is the skip-trapdoor
+    shape this whole script is written against (AGENTS.md → "A gate NEVER tests its own inputs").
+    """
+    global checks
+    checks += 1
+    if obj is None:
+        finding(
+            f"{label}: no {obj_kind} was rendered, so its database probe could not be checked",
+            f"this chart renders the {label} {obj_kind} unconditionally. Its absence is a template "
+            "regression — and 'the object is gone' must not read as 'the object's gate is fine'.",
+        )
+        return
+    if secret_obj is None:
+        finding(
+            f"{label}: {kind_name} was not rendered, so there is nothing to compare the probe to",
+            "the connection strings this process opens live in that Secret. Without it the probe's "
+            "coverage cannot be established, and unestablished must never read as covered.",
+        )
+        return
+    pod_spec = (((obj.get("spec") or {}).get("template") or {}).get("spec")) or {}
+    waiter = next(
+        (c for c in (pod_spec.get("initContainers") or []) if c.get("name") == "wait-for-postgres"),
+        None,
+    )
+    if waiter is None:
+        finding(
+            f"{label} has no wait-for-postgres init container",
+            "the start-up ordering it guarantees is not optional — without it the process races "
+            "the database on every fresh install.",
+        )
+        return
+    probed = " ".join(waiter.get("command") or [])
+    data = secret_obj.get("stringData") or secret_obj.get("data") or {}
+    opened = {
+        key: _cs_hosts(value)
+        for key, value in data.items()
+        if key.startswith("ConnectionStrings__")
+    }
+    if not any(hosts for hosts, _ in opened.values()):
+        finding(
+            f"{label}: no connection string in {kind_name} names a host",
+            "the probe then has nothing to derive, and an init container that probes nothing "
+            "PASSES — 'the gate could not run' must never read as 'the gate passed'.",
+        )
+        return
+    for key, (hosts, port) in sorted(opened.items()):
+        for host in hosts:
+            if host in probed:
+                continue
+            finding(
+                f"{label}: {key} names host '{host}:{port}' that wait-for-postgres does not probe",
+                "the init container passing then says NOTHING about the connection this process "
+                "will open. That is exactly #3780: Init:1/1, then the silo dies in "
+                "MembershipTableManager on a name that never resolved. Derive the probe from the "
+                "connection strings (templates/_database.tpl), never from a parallel config value.",
+            )
+
+
+_probe_coverage("memex-portal-secrets", "Deployment", dep, secret, "portal")
+# The migration Job's name carries .Release.Revision, so it is matched by PREFIX rather than by a
+# fixed name — a lookup that silently found nothing would make this half of the check vacuous.
+_probe_coverage(
+    "memex-migration-secrets",
+    "Job",
+    next(
+        (
+            d for d in by_kind("Job")
+            if ((d.get("metadata") or {}).get("name") or "").startswith("memex-migration-")
+        ),
+        None,
+    ),
+    next(iter(by_kind("Secret", "memex-migration-secrets")), None),
+    "migration",
+)
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(
