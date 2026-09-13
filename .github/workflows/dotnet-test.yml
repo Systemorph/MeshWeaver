@@ -2401,6 +2401,19 @@ jobs:
     - name: "Execute the lanes' one-build-per-assembly-name assertion"
       run: python3 .github/scripts/test-module-set-consistency.py
 
+    # The SAME invariant, over the population that actually had the defect (#3732). The assertion
+    # above covers the set a bake COMPOSES — 4 bundles on Reinsurance's gate, 5 on Plugins'
+    # publish-bake. The 15 copies / 3 builds measured on memex lived across a publication's ~40
+    # MODULE bundles, which no bake composes and therefore no reading has ever covered: a green
+    # denominator of 4 against a population of 40 says nothing about this defect, and the issue
+    # says so in the instrument's own words. `module-set-census.py` takes the census per bundle in
+    # the pack leg and reads the verdict in `verify`, the only job that sees the whole wave. This
+    # harness executes both halves over real zip fixtures, asserts the DENOMINATOR (including the
+    # two zero-shapes that look like a clean measurement), pins the report-not-refusal posture in
+    # both directions, and mutates the real subject to watch the finding disappear.
+    - name: "Execute the publication-wide one-build-per-assembly-name reading"
+      run: python3 .github/scripts/test-module-set-census.py
+
     # The gate's shard PLAN decides how many runners judge a run's packages, and it read the
     # caller's `shards` alone while the step above it narrowed the run — so a PR touching fewer
     # packages than `shards` handed a shard an empty slice, the tester's bake-consumption
