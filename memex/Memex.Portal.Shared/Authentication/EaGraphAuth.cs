@@ -212,7 +212,15 @@ public sealed class EaGraphAuth(
                     })
                     .SelectMany(answer => answer.IsSuccess
                         ? MintFrom(answer.Body, userObjectId)
-                        : Refused(userObjectId, read.Credential!, TokenRefusal.Of(answer.StatusCode, answer.Body)));
+                        : Refused(userObjectId, read.Credential!, TokenRefusal.Of(answer.StatusCode, answer.Body)))
+                    // No HTTP answer at all — DNS, a reset, the pool's timeout — is a failure to
+                    // find out, the same as a 503: Undetermined, never a fault out of the tool.
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex, "EaGraphAuth: the token endpoint could not be reached for {User}", userObjectId);
+                        return Observable.Return(EaGraphAccess.Unknown(
+                            "the Microsoft token endpoint could not be reached: " + ex.Message));
+                    });
             });
     }
 
@@ -251,13 +259,17 @@ public sealed class EaGraphAuth(
             $"Microsoft refused the stored grant ({refusal.Summary}); it must be consented again — "
             + "a reconnect, never a first connection");
         return Stamp(userObjectId, credential, refusal.Summary)
-            // The stamp is bookkeeping for the NEXT read; the verdict stands whether or not the
-            // write landed, and a failed stamp must not turn a refused grant into an outage.
             .Select(_ => verdict)
+            // 🚨 A stamp that did NOT land answers Undetermined, not the verdict. Handing out the
+            // consent link while the controller still reads the credential as Connected is the
+            // two-reader disagreement this stamp exists to end; "ask again in a moment" is true
+            // here — the next call re-attempts the stamp — and the diagnostic says what happened.
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "EaGraphAuth: could not stamp the refused grant for {User}", userObjectId);
-                return Observable.Return(verdict);
+                return Observable.Return(EaGraphAccess.Unknown(
+                    $"Microsoft refused the stored grant ({refusal.Summary}) but the refusal could not be "
+                    + "recorded on the credential; the next call records it"));
             });
     }
 
@@ -279,9 +291,21 @@ public sealed class EaGraphAuth(
             }
             var ws = hub.GetWorkspace();
             var access = hub.ServiceProvider.GetService<AccessService>();
-            var stamped = credential with { RefusedAt = DateTimeOffset.UtcNow, RefusalReason = reason };
+            var refusedToken = credential.RefreshTokenEncrypted;
+            var options = hub.JsonSerializerOptions;
             return access.RunAsSystem(() => ws.GetMeshNodeStream(PathFor(userObjectId))
-                    .Update(node => node with { Content = stamped }))
+                    // The lambda runs on the OWNER over the node's CURRENT content: a re-consent or a
+                    // rotation that landed while the refusal was in flight holds a different token,
+                    // and stamping THAT would mark a live grant dead. Stamp only the grant that was
+                    // refused; otherwise leave the node exactly as it is.
+                    .Update(node =>
+                    {
+                        var current = node.ContentAs<EaCredential>(options, logger);
+                        return current is null
+                               || !string.Equals(current.RefreshTokenEncrypted, refusedToken, StringComparison.Ordinal)
+                            ? node
+                            : node with { Content = current with { RefusedAt = DateTimeOffset.UtcNow, RefusalReason = reason } };
+                    }))
                 .Finally(scope.Dispose);
         });
 

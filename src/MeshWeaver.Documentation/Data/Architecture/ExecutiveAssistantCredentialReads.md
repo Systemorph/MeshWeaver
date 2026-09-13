@@ -159,9 +159,21 @@ instead of taking its fast path. A successful consent rewrites the node without 
 
 Everything the endpoint says that is *not* about the grant stays `Undetermined`, unstamped, and
 is retried on the next call — that is what "ask me again in a moment" promises, and for an outage
-it is true. `EaCredentialReadTest` pins both halves against a scripted token endpoint: the refused
-grant reads `NotConnected`, is stamped, and is redeemed exactly once; the 503 reads
-`Undetermined`, is not stamped, and is redeemed again next time.
+it is true. So is a token endpoint that could not be reached at all (DNS, a reset, the pool's
+timeout): caught on the redemption chain, never a fault out of the tool.
+
+Three edges the stamp is careful about: it is applied on the owner over the node's **current**
+content and only while that content still holds the token that was refused — a re-consent or a
+rotation that landed in between is left alone; a stamp that did **not** land answers
+`Undetermined` (with the refusal in the diagnostic), because handing out the consent link while
+the controller still reads `Connected` is the disagreement the stamp exists to end, and "ask again"
+is true there — the next call records it; and a call that raced the stamp (two tool calls in the
+same instant, both past the read before either stamped) redeems once more — the stamp bounds the
+redemptions to the calls in flight when it landed, not to exactly one.
+
+`EaCredentialReadTest` pins the halves against a scripted token endpoint: the refused grant reads
+`NotConnected`, is stamped (the controller's read agrees), and a later call does not redeem again;
+the 503 reads `Undetermined`, is not stamped, and is redeemed again next time.
 
 ### What a caller must do with `Undetermined`
 

@@ -21,13 +21,12 @@ namespace Memex.Portal.Shared.Authentication;
 /// </summary>
 public sealed record TokenRefusal(int StatusCode, string? Error, string? Description)
 {
-    /// <summary>The OAuth <c>error</c> values that name the grant itself rather than us or the service.</summary>
-    private static readonly string[] GrantErrors = ["invalid_grant", "interaction_required", "consent_required"];
-
-    /// <summary>True when Entra answered that the stored grant cannot be redeemed — consent is the remedy.</summary>
+    /// <summary>
+    /// True when Entra answered that the stored grant cannot be redeemed — consent is the remedy.
+    /// The three OAuth <c>error</c> values that name the grant itself rather than us or the service.
+    /// </summary>
     public bool GrantRefused =>
-        StatusCode == 400 && Error is not null
-        && Array.Exists(GrantErrors, e => string.Equals(e, Error, StringComparison.Ordinal));
+        StatusCode == 400 && Error is "invalid_grant" or "interaction_required" or "consent_required";
 
     /// <summary>The endpoint's own words, for the diagnostic and the credential's stamp.</summary>
     public string Summary =>
