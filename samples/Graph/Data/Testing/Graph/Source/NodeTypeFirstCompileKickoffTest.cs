@@ -57,7 +57,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// </summary>
 public class NodeTypeFirstCompileKickoffTest(MeshTestContext context) : InMeshTestBase(context)
 {
-    private const string NodeTypePath = $"{TestPartition}/PandasExplorerProbe";
+    private static readonly string NodeTypePath = $"{TestPartition}/PandasExplorerProbe";
 
     private static readonly TimeSpan VerdictBudget = TimeSpan.FromSeconds(10);
 

@@ -26,6 +26,13 @@ conv = importlib.util.module_from_spec(spec); spec.loader.exec_module(conv)  # t
 
 SKIP_DIRS = {"bin", "obj", "TestResults"}
 
+# Files the converter accepts but the in-mesh compile still refuses for a reason no rule expresses well —
+# each a HAND PORT, named with what it needs. Shrink this list, never grow it silently.
+HAND_PORT = {
+    "TaskSchedulerInvariantTest.cs": "reads a typed Message off hub.Observe(request), which is untyped in-mesh — needs the typed Observe",
+    "QuiescingHubRefusesNewWorkTest.cs": "builds Task<IMessageDelivery<T>> from the untyped hub.Observe — needs the typed Observe",
+}
+
 
 def project_of(suite_json: dict) -> str:
     m = re.match(r"(.+?) \(in-mesh\)$", suite_json["name"])
@@ -79,6 +86,9 @@ def generate(suite_id: str) -> tuple[int, int, int]:
     src_dir.mkdir(parents=True, exist_ok=True)
     converted, refused = [], []
     for f in sources_of(project):
+        if f.name in HAND_PORT:
+            refused.append((f.name, HAND_PORT[f.name]))
+            continue
         out, why = conv.convert(f.read_text(encoding="utf-8-sig"), f"Testing/{suite_id}/{f.stem}")
         if out is None:
             refused.append((f.name, why))

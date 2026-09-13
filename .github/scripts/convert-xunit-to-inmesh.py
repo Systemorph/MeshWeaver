@@ -40,16 +40,28 @@ REFUSE = [
     (r"FindRepositoryRoot|ScannedRoots|RatchetedRoots|ProductionRoots|GetRepositoryRoot|\bRepoRoot\b", "reads the repository tree from the test bin (a source-scanning guard) — no tree in a mesh; stays on xunit"),
     (r"(?m)^using MeshWeaver\.Plugin\.Build|^using MeshWeaver\.ContainerImages|MeshWeaver\.ComboVerifier|^using MeshWeaver\.PluginTester|\bModulePackCommand\b|\bContainerImageCatalog\b|\bDockerImageGate\b", "tests build tooling (MeshWeaver.Plugin.Build, ContainerImages, the tester, ComboVerifier) — not a content-surface assembly"),
     (r"(?m)^namespace [\w.]+\s*\n?\{[^\n]*\n(?:.*\n)*?^namespace ", "several brace-form namespaces in one file — in-mesh sources are one compilation; needs a hand split"),
-    (r"\bFreshThread\b|\bFileOutput\b|\.QueryAsync\(|\bHostBuilder\b", "uses the xunit fixture's helpers (FreshThread, FileOutput, QueryAsync, HostBuilder) — not on the platform"),
+    (r"(?m)^using MeshWeaver\.AI\b", "binds the AI module — a registry module composed per mesh, not the framework"),
+    (r"\bServices\.Add\w+\(", "configures the host's service collection (Services.Add…) — the pre-boot substitution facility"),
+    (r"\bFreshThread\b|\bFileOutput\b|\.QueryAsync\b|\bHostBuilder\b", "uses the xunit fixture's helpers (FreshThread, FileOutput, QueryAsync, HostBuilder) — not on the platform"),
     (r"base\.DisposeAsync\(|await DisposeAsync\(", "calls the fixture's DisposeAsync — the runner has no per-class lifecycle hook yet"),
     (r"\bTestScheduler\b|Microsoft\.Reactive\.Testing", "uses Microsoft.Reactive.Testing's TestScheduler — not a platform assembly"),
     (r"\bawait\b[^;]*?(GetMeshNodeStream|GetWorkspace\(|GetDataStream|GetRemoteStream|IMeshService|meshService\.|ObserveQuery|GetQuery\(|\.Query\(|\.CreateNode\(|\.UpdateNode\(|\.DeleteNode\(|\.CopyNode\()", "awaits a mesh read/write directly (HubReachableAsyncGuard.NoNewAwaitOfAMeshRead) — compose reactively and subscribe, or wait through ObserveCompletion"),
 ]
 
+def _using_in_a_string(text: str) -> bool:
+    """A line shaped like a using directive AFTER the first type declaration can only be C# source quoted in
+    a string — and the in-mesh compile hoists EVERY using-shaped line to the top (CombineSources), which
+    guts the string (CS9002) or leaves a directive mid-file (CS1529)."""
+    m = re.search(r"^\s*(?:public|internal|sealed|abstract|static|partial|file|\s)*\s*(?:class|record|struct|interface|enum)\s+\w", text, flags=re.M)
+    return bool(m) and bool(re.search(r"^\s*using [A-Za-z][\w.]*(\s*=\s*[\w.]+)?;\s*$", text[m.end():], flags=re.M))
+
+
 def convert(text: str, node_id: str) -> tuple[str | None, str]:
     for pat, why in REFUSE:
         if re.search(pat, text):
             return None, why
+    if _using_in_a_string(text):
+        return None, "quotes C# source with using directives in a string — the in-mesh compile hoists every using-shaped line"
     s = text
     s = re.sub(r"^using Xunit(\.[\w.]+)?;\n", "", s, flags=re.M)
     s = re.sub(r"^using FluentAssertions(\.[\w.]+)?;\n", "", s, flags=re.M)
@@ -95,6 +107,8 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     # a primary-constructor class that kept the xunit helper in a field: the base's Output is that field
     s = re.sub(r"^\s*private readonly ITestOutputHelper \w+ = \w+;\n", "", s, flags=re.M)
     s = s.replace("typeof(Xunit.FactAttribute)", "typeof(MeshFactAttribute)")
+    # a const built from the partition is a static readonly now (TestPartition is a property)
+    s = re.sub(r"\bconst string (\w+) = (\$?\"[^\"\n]*TestPartition[^\n]*)", r"static readonly string \1 = \2", s)
     # a namespace-relative name the dropped `namespace MeshWeaver.…` used to resolve
     if not re.search(r"\b(class|record|struct|enum|interface)\s+Domain\b", s):
         s = re.sub(r"(?<![\w.])Domain\.", "MeshWeaver.Domain.", s)
@@ -165,6 +179,8 @@ public class SampleTest : MonolithMeshTestBase
     assert convert("namespace A.B\n{\n    public class C { }\n}\n", "x")[0].rstrip().endswith("public class C { }")
     assert "TimeSpan.FromSeconds(5)" in convert("var t = 5.Seconds();", "x")[0]
     assert 'source.IndexOf("[assembly:");' in convert('var i = source.IndexOf("[assembly:");\n}', "x")[0]
+    assert convert('class C { const string S = """\n    using Foo;\n    """; }', "x")[0] is None
+    assert "static readonly string P = $\"{TestPartition}/x\"" in convert('class C { private const string P = $"{TestPartition}/x"; }', "x")[0]
     assert "[assembly:" not in convert("[assembly: Foo]\nclass C { }", "x")[0]
     assert "MeshWeaver.Mesh.Notification" in convert("using MeshWeaver.Mesh;\nvar n = new Notification();", "x")[0]
     assert "MeshWeaver.Mesh.Notification" not in convert("using MeshWeaver.Mesh;\nvar n = Notification(1);", "x")[0]

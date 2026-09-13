@@ -43,8 +43,7 @@ public abstract class InMeshTestBase
     }
 
     /// <summary>For a migrated class with no constructor of its own: the runner's ambient context.</summary>
-    protected InMeshTestBase() : this(MeshTestContext.Current ?? throw new InvalidOperationException(
-        "no MeshTestContext is current — the runner sets it before constructing a test class")) { }
+    protected InMeshTestBase() : this(Current) { }
 
     /// <summary>The xunit estate's field name for its output helper (<c>output.WriteLine(…)</c>).</summary>
     protected TestOutput output => Output;
@@ -59,29 +58,32 @@ public abstract class InMeshTestBase
     protected const string ClientType = "client";
 
     /// <summary>The live mesh's address (the fixture's separate host hub has no in-mesh twin).</summary>
-    protected Address CreateMeshAddress(string? id = null) => Mesh.Address;
+    protected static Address CreateMeshAddress(string? id = null) => Mesh.Address;
 
     /// <summary>The live mesh's address — every post the xunit test aimed at "the host" lands here.</summary>
-    protected Address CreateHostAddress(string? id = null) => Mesh.Address;
+    protected static Address CreateHostAddress(string? id = null) => Mesh.Address;
 
     /// <summary>A fresh client address, the shape <see cref="GetClient"/> registers.</summary>
     protected static Address CreateClientAddress(string? id = null) => new(ClientType, id ?? Guid.NewGuid().ToString("N")[..12]);
 
     /// <summary>The host hub of the xunit fixture: in-mesh, the mesh itself.</summary>
-    protected IMessageHub GetHost() => Mesh;
+    protected static IMessageHub GetHost() => Mesh;
 
     /// <summary>A logger for the test class (the fixture's <c>Logger</c> field).</summary>
     protected ILogger Logger => Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType().Name);
 
     /// <summary>The mesh hub (the xunit base's <c>Mesh</c>).</summary>
-    protected IMessageHub Mesh => Context.Hub;
+    protected static IMessageHub Mesh => Current.Hub;
+
+    private static MeshTestContext Current => MeshTestContext.Current ?? throw new InvalidOperationException("no MeshTestContext is current — the runner sets it before constructing a test class");
 
     /// <summary>This class's partition — every node a case writes goes under it. Static, read off the
     /// runner's ambient context, because the xunit estate uses it in field initialisers.</summary>
-    protected static string TestPartition => (MeshTestContext.Current ?? throw new InvalidOperationException("no MeshTestContext is current")).Partition;
+    protected static string TestPartition => Current.Partition;
 
-    /// <summary>The fixture's <c>Services</c>: the mesh's service provider.</summary>
-    protected IServiceProvider Services => Mesh.ServiceProvider;
+    /// <summary>The fixture's <c>Services</c> / <c>ServiceProvider</c>: the mesh's service provider.</summary>
+    protected static IServiceProvider Services => Mesh.ServiceProvider;
+    protected static IServiceProvider ServiceProvider => Mesh.ServiceProvider;
 
     /// <summary>The xunit <c>ITestOutputHelper</c> shape: lines land in the verdict's detail column.</summary>
     protected TestOutput Output { get; }
@@ -129,7 +131,7 @@ public abstract class InMeshTestBase
         });
 
     /// <summary>The mesh's access service.</summary>
-    protected AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+    protected static AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
     /// <summary>Creates a node as the platform provisioner (the xunit base's SeedTopLevel).</summary>
     protected async Task<MeshNode> SeedTopLevel(MeshNode node)
