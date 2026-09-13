@@ -344,9 +344,24 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
         receipt = PublicationSource(sha, version, f"{version}-ci.{run_number}")
         receipts[job_id, run_number] = receipt
         sources.add(receipt)
-    if len(sources) != 1:
+    # 🚨 ZERO AND TWO ARE DIFFERENT SENTENCES (#4242). This said "successful platform bakes
+    # disagree on source/release (found 0 distinct receipts)" for a run that has NO successful
+    # platform bake at all — an ABSENCE reported in the vocabulary of a DISAGREEMENT. `choose`
+    # never asks about such a run (it skips an unsealed one first), but anything that probes runs
+    # directly does, and on 2026-09-13 that sentence was read off eleven ordinary non-publishing
+    # runs and reported as a fleet-wide bake defect. Measured the same day over main-cd 8505–8531:
+    # 20 of 27 runs are unsealed and answer this, while ALL SEVEN sealed runs are attributable and
+    # NONE disagrees. Saying which of the two states it is costs one branch.
+    if not sources:
         raise ProvenanceUnavailable(
-            f"successful platform bakes disagree on source/release (found {len(sources)} distinct receipts)")
+            "this run published nothing: it has no SUCCESSFUL platform bake, so there is no "
+            "publication receipt to read. That is the ordinary shape of a main-cd run that did not "
+            "publish — it is not a disagreement, and not a bake defect")
+    if len(sources) > 1:
+        raise ProvenanceUnavailable(
+            f"successful platform bakes DISAGREE on source/release — {len(sources)} distinct "
+            "receipts in one run, where every leg must name the same source and release: "
+            + "; ".join(sorted(f"{s.sha[:9]}/{s.set_name}" for s in sources)))
     return next(iter(sources))
 
 
@@ -708,6 +723,32 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 continue
             examined += 1
 
+            # 🚨 DOES THE FREEZE NAME *THIS* RUN? (#4242) Every "a freeze is an instruction, not a
+            # preference" escalation below must be asked about the run the freeze NAMES, never
+            # about whatever run the scan happens to be on.
+            #
+            # It used to be spelled `if freeze_kind:` — correct only because the two filters above
+            # had already narrowed the scan to one run. `--verify-source` deliberately does NOT
+            # apply the head-sha filter (the set's real sha is the bake receipt's, unknown until
+            # the jobs are read), so the scan reaches runs the freeze does not name — and the FIRST
+            # unsealed one aborted the whole resolution with a sentence that was simply false:
+            #
+            #   --freeze 7ee11bc7… --verify-source
+            #   ::error:: the freeze names main-cd #8530 (core e0e4aeff3), which is not a sealed set
+            #
+            # 7ee11bc7 is the head of #8506. #8530 was merely the newest run in the scan. Measured
+            # against live core CD, 2026-09-13 — and it makes --verify-source unusable during an
+            # incident freeze, which is exactly when resolution has to keep working.
+            #
+            # 🚨 It NARROWS and never widens. A set freeze is already down to one run number, and a
+            # sha freeze without verification is already down to one head sha; both keep answering
+            # exactly as before. The only case that changes is a sha freeze WITH verification, where
+            # the honest answer for a run that cannot produce a receipt is "no evidence that this is
+            # the frozen run" — so the scan continues, and if no run's receipt matches, the terminal
+            # "the freeze matched no verified sealed set" says that, which is true.
+            freeze_names_this_run = bool(freeze_kind) and (
+                freeze_kind == "set" or not verify_source or sha == freeze_value)
+
             jobs = run_jobs(fetch, int(run["id"]))
             v = verdict(jobs, run)
             # A run that is still sealing is worth waiting for on a release trigger: the dispatch
@@ -747,7 +788,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                     why += " — still sealing; the next run (or the daily poll) follows it"
                 skipped.append(f"{label}: NOT sealed — {why}")
                 log(f"  skip {skipped[-1]}")
-                if freeze_kind:
+                if freeze_names_this_run:
                     raise ResolutionError(
                         f"the freeze names {label}, which is not a sealed set ({why}). A freeze is "
                         "an instruction, not a preference: refusing to substitute another set.")
@@ -755,13 +796,13 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             # 🚨 The ONE bounded exception: platform sealed, its own Plugins seal still running.
             # The publication for this identity does not exist yet (minutes); taking the set now
             # is a certain red on the upstream fetch. A freeze is an instruction and goes through.
-            if v.plugins_pending and not freeze_kind:
+            if v.plugins_pending and not freeze_names_this_run:
                 skipped.append(f"{label}: platform sealed, but its Plugins publication is still "
                                f"sealing (`{PLUGINS_SEAL_JOB[1]}` {v.plugins}) — the newest set "
                                "with a sealed publication is taken; the next run follows this one")
                 log(f"  skip {skipped[-1]}")
                 continue
-            if v.plugins_pending and freeze_kind:
+            if v.plugins_pending and freeze_names_this_run:
                 log(f"  ::warning title=Frozen set is still sealing its plugins::{label}: the freeze "
                     "names a set whose Plugins publication is still sealing; taken as instructed — "
                     "the upstream fetch says whether the registry holds it yet")
@@ -775,7 +816,13 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 except ProvenanceUnavailable as error:
                     skipped.append(f"{label}: source/release unverified — {error}")
                     log(f"  skip {skipped[-1]}")
-                    if freeze_kind:
+                    # 🚨 The same narrowing, and here it is load-bearing twice over: measured on
+                    # live core CD 2026-09-13, ELEVEN of the newest FOURTEEN main-cd runs raise
+                    # ProvenanceUnavailable. Escalating on `freeze_kind` alone would abort a sha
+                    # freeze on the first of them, which is almost always a run the freeze does not
+                    # name. (That the rate is 11/14 at all is a separate bake-side defect, filed on
+                    # its own — it is not this bug.)
+                    if freeze_names_this_run:
                         raise ResolutionError(
                             f"the freeze names {label}, but its source/release is unverified: "
                             f"{error}. Refusing to substitute another set.") from error
@@ -1586,6 +1633,79 @@ def self_test() -> int:
                                           id_8203: _receipt() + _receipt()}, jobs=with_ids),
                         _registry(full), tester, portal, log=logs.append, verify_source=True),
          lambda message: "no sealed platform set" in message)
+
+    # 🚨 #4242 — AN ABSENT RECEIPT IS NOT A DISAGREEMENT, and telling them apart is the whole
+    # value of the sentence. A run with no successful platform bake used to answer "successful
+    # platform bakes disagree on source/release (found 0 distinct receipts)" — an ABSENCE in the
+    # vocabulary of a DISAGREEMENT — and on 2026-09-13 that was read off eleven ordinary
+    # non-publishing main-cd runs and reported as a fleet-wide bake defect that measurement then
+    # found no trace of (8505–8531: 20 of 27 unsealed, all 7 sealed runs attributable, 0 disagreeing).
+    total += 1
+    try:
+        publication_source(lambda _p: "", _jobs(bake="skipped"), 8207, {})
+        failures.append("a run with no successful platform bake must raise")
+    except ProvenanceUnavailable as error:
+        # It may SAY "not a disagreement" — what it must not do is ASSERT one.
+        if "published nothing" not in str(error) or "DISAGREE" in str(error):
+            failures.append(f"an ABSENT receipt must not be reported as a disagreement: {error}")
+    total += 1
+    # 🚨 `two` at module scope in this function is the RUN LIST. Naming a local after it shadowed
+    # it for every later case and made `choose` iterate an int — caught by the suite immediately,
+    # which is the point of running it after every edit.
+    disagreeing = {70011: _receipt("a" * 40, "3.0.0-ci.8207"),
+                   70012: _receipt("b" * 40, "3.0.0-ci.8207")}
+    two_jobs = _jobs()
+    bake_rows = [j for j in two_jobs if str(j["name"]).startswith(REQUIRED_JOBS[2][1])]
+    bake_rows[0]["id"] = 70011
+    # Two legs of ONE run naming different sources IS the disagreement, and it must say both.
+    two_jobs.append({**bake_rows[0], "id": 70012,
+                     "name": REQUIRED_JOBS[2][1] + " (linux-arm64)"})
+    try:
+        publication_source(lambda path: disagreeing[int(path.rsplit("/", 2)[1])], two_jobs, 8207, {})
+        failures.append("two legs naming different sources must raise")
+    except ProvenanceUnavailable as error:
+        if "DISAGREE" not in str(error) or "aaaaaaaaa" not in str(error):
+            failures.append(f"a real disagreement must name the receipts it found: {error}")
+
+    # 🚨 #4242 — THE SCAN REACHES RUNS THE FREEZE DOES NOT NAME, and every "a freeze is an
+    # instruction" escalation has to be asked about the run the freeze NAMES. Measured against live
+    # core CD 2026-09-13: `--freeze 7ee11bc7… --verify-source` aborted with *"the freeze names
+    # main-cd #8530 (core e0e4aeff3), which is not a sealed set"* — false; 7ee11bc7 is the head of
+    # #8506, and #8530 was merely the newest run in the scan. It made --verify-source unusable
+    # during an incident freeze, which is exactly when resolution has to keep working.
+    #
+    # The fixture is that shape: the frozen run is OLDER than the newest, and the runs ahead of it
+    # in the scan are unsealed and unattributable. On the pre-#4242 code the first of them aborts.
+    frozen_sha = "f" * 40
+    scan = [_run(8530, C), _run(8520, A), _run(8506, frozen_sha)]
+    id_8506 = 70006
+    scan_jobs = {
+        1000 + 8530: _jobs(bake="in progress"),                      # unsealed, and NEWEST
+        1000 + 8520: _jobs_with_bake_id(70005),                      # sealed, receipt below
+        1000 + 8506: _jobs_with_bake_id(id_8506),                    # sealed, the frozen one
+    }
+    scan_full = dict(full)
+    scan_full[("mw-plugin-test", "3.0.0-ci.8506")] = D1
+    scan_full[("memex-portal-ai", "3.0.0-ci.8506")] = D2
+    scan_logs = {
+        70005: _receipt("d" * 40, "3.0.0-ci.8520"),
+        id_8506: _receipt(frozen_sha, "3.0.0-ci.8506"),
+    }
+
+    case("a sha freeze naming an OLDER sealed run resolves past the unsealed runs ahead of it", True,
+         lambda: choose(_fetch_with_logs(scan_logs, runs=scan, jobs=scan_jobs),
+                        _registry(scan_full), tester, portal, freeze=frozen_sha,
+                        log=logs.append, verify_source=True),
+         lambda c: c.sha == frozen_sha and c.set_name == "3.0.0-ci.8506")
+    # …and the escalation it replaced is still there for the run the freeze DOES name: an
+    # unsealed frozen run is RED, and the message names THAT run.
+    case("…while a sha freeze naming an UNSEALED run is still RED, naming that run", False,
+         lambda: choose(_fetch_with_logs(scan_logs, runs=scan, jobs={
+                            **scan_jobs, 1000 + 8506: _jobs(bake="failure")}),
+                        _registry(scan_full), tester, portal, freeze=frozen_sha,
+                        log=logs.append, verify_source=True),
+         lambda message: "not a sealed set" in message and "#8506" in message
+                         and "#8530" not in message)
 
     # Under a FREEZE the same condition is fatal: a freeze names one set and may not substitute.
     case("an unverifiable set under a freeze is RED, never substituted", False,
