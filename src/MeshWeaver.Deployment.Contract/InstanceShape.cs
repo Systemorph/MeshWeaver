@@ -378,6 +378,20 @@ public sealed record KeyVaultSecretRef
     /// <summary>The vault object's name. Blank → derived from <see cref="Key"/> by the naming rule.</summary>
     [Description("Key Vault secret name — blank derives it as {prefix}{Section}-{Key}")]
     public string? VaultSecret { get; init; }
+
+    /// <summary>
+    /// A FLEET-SHARED vault object this one is a copy of (MeshWeaver.Plugins#1723) — the fleet
+    /// GitHub App's private key lives under the control instance's prefix, and an instance that
+    /// holds the same App maps it under its OWN prefix. The Provision materialises the copy
+    /// (<c>hosting-kv-copy</c>) when the object is absent and keeps it as written when it exists,
+    /// reporting a value that differs from the source as drift. Why a copy rather than a
+    /// cross-prefix mapping: <c>hosting-kv-purge</c> deletes by prefix on teardown, so the first
+    /// teardown of an instance mapping the shared object directly would take the fleet's credential
+    /// with it. A NAME, never a value. Carried here (2026-09-13) so Plugins' Hosting module can
+    /// compile against this contract (MeshWeaver.Plugins#1541) without a local copy of the record.
+    /// </summary>
+    [Description("Fleet-shared vault object this one is copied from on Provision (name only)")]
+    public string? CopyFrom { get; init; }
 }
 
 /// <summary>
