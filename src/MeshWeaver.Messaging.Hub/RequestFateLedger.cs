@@ -252,10 +252,32 @@ internal sealed class RequestFateLedger
         {
             bool Has(string token) => snapshot.Any(s => s.StartsWith(token, StringComparison.Ordinal));
 
+            // The post seam's own verdicts come FIRST (#4072): they are recorded AFTER
+            // RESPONSE_POSTED and say what became of the reply, so reading RESPONSE_POSTED alone
+            // as "lost between responder and requester" would blame the transport for a refusal
+            // the seam stamped one stage later.
+            if (Has("REPLY_REFUSED_SHUTTING_DOWN"))
+                return "a reply WAS minted and the post seam REFUSED it: the responder's own pump is "
+                     + "closed and no parent could carry it (the stage names both run levels), and it "
+                     + "was not a NACK the in-process carrier could take. Nothing transported it — the "
+                     + "requester is left to its own bound. A typed reply lost this way is the "
+                     + "documented residue of Doc/Architecture/RefusedRepliesDuringTeardown.";
+            if (Has("NACK_DELIVERED_IN_PROCESS"))
+                return "the responder's NACK was handed straight to the requester's hub in-process "
+                     + "(the parent could not carry it) and the callback is STILL pending — chase the "
+                     + "requester's OWN intake and queue, not the responder.";
+            if (Has("REPLY_FORWARDED_THROUGH_PARENT"))
+                return "a reply WAS posted and forwarded through the responder's live parent and the "
+                     + "callback is STILL pending — chase the delivery from that parent to the "
+                     + "requester, not the handler.";
             if (Has("RESPONSE_POSTED"))
                 return "a reply WAS posted for this correlation and the callback is STILL pending — "
                      + "the reply was lost between the responder and the requester, so chase the "
                      + "response delivery, not the handler.";
+            if (Has("NACK_DECLINED") && !Has("FAILURE_REPORTED"))
+                return "the delivery was abandoned or faulted, its NACK was classified, and every "
+                     + "carrier declined — the NACK_DECLINED stage names why. Nothing answered the "
+                     + "requester.";
             if (snapshot.Any(s => s.Contains("_ERROR", StringComparison.Ordinal)
                                   || s.StartsWith("HANDLER_FAULT", StringComparison.Ordinal)))
                 return "the chain FAULTED and no reply was posted — the fault is the cause; find "

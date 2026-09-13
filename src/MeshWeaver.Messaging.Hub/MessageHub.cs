@@ -3035,6 +3035,101 @@ public sealed class MessageHub : IMessageHub
     private int quiesceRearms;
 
     /// <summary>
+    /// Hands a <see cref="DeliveryFailure"/> that no transport can carry DIRECTLY to the in-process
+    /// hub its requester lives under, when that hub still admits replies — the carrier of last
+    /// resort for an answer minted during a whole-tree teardown (#4072).
+    ///
+    /// <para><b>Why a NACK needs its own carrier.</b> Every route out of a hub tearing down goes
+    /// through its parent: <c>NackThroughParent</c> posts through it and
+    /// <c>PostImplGeneric</c> forwards a correlated reply through it. Both decline the moment the
+    /// parent is itself past <see cref="MessageHubRunLevel.DisposeHostedHubs"/>, and at a
+    /// whole-tree teardown that is the state EVERY sibling is answered in — the parent disposes
+    /// its children only after reaching that phase. The comment those declines carried read
+    /// "every sender is going away too", which is not what happens: a sibling that is
+    /// <see cref="MessageHubRunLevel.Quiescing"/> is WAITING for exactly this answer, re-arms its
+    /// budget for it ([QUIESCE-WAIT], <see cref="AReplyIsOwedByAShuttingDownLocalHub"/>), and
+    /// only gives up on <c>[QUIESCE-CUT]</c> — so the whole teardown paces itself on the sum of
+    /// those budgets for an answer that existed the whole time. Measured on
+    /// <c>LeavingHubAdoptionSweepTest</c> (14 s, PASSING): the responder's trail ended
+    /// <c>NACK_DECLINED reason=parent-DisposeHostedHubs → FAILURE_REPORTED → RESPONSE_POSTED →
+    /// REPLY_REFUSED_SHUTTING_DOWN runLevel=Dead parent=mesh/…@DisposeHostedHubs</c>, while the
+    /// requester sat Quiescing with that callback pending for 4 s.</para>
+    ///
+    /// <para><b>Why this is not a second transport.</b> It is offered ONLY where the delivery is
+    /// being dropped — after the parent route and <see cref="IUndeliverableReplySink"/> have both
+    /// declined — so there is no post left for it to race, the precondition
+    /// <c>Doc/Architecture/RefusedRepliesDuringTeardown</c> requires. And it carries a NACK ONLY:
+    /// a <see cref="DeliveryFailure"/> acknowledges no state, so the reorder hazard that keeps
+    /// typed replies off any bypass (an ack overtaking the change it acknowledges) cannot arise.
+    /// The delivery lands on the requester's own intake — its gate decides, its pump serialises —
+    /// exactly as a routed delivery would; nothing is dispatched on the responder's turn.</para>
+    ///
+    /// <para>Resolution mirrors <see cref="AReplyIsOwedByAShuttingDownLocalHub"/>: climb the
+    /// target's host chain, look the top-level hub up under the root (never create), then shorter
+    /// prefixes for a hub hosting a sub-path. A remote requester, a requester the root does not
+    /// host, or one already past <see cref="MessageHubRunLevel.DisposeHostedHubs"/> (its intake
+    /// refuses and its callbacks are cancelled) leaves the drop as it was.</para>
+    /// </summary>
+    /// <param name="failure">The NACK, targeted at the requester and carrying <c>PostOptions.RequestId</c>.</param>
+    /// <returns><c>true</c> when the requester's hub accepted the delivery into its intake.</returns>
+    internal bool TryDeliverNackInProcess(IMessageDelivery failure)
+    {
+        if (failure.Message is not DeliveryFailure
+            || !failure.Properties.ContainsKey(PostOptions.RequestId)
+            || failure.Target is not { } target)
+            return false;
+        try
+        {
+            IMessageHub root = this;
+            while ((root as MessageHub)?.messageService is MessageService ms && ms.ParentHub is { } parent)
+                root = parent;
+            // The requester's host chain, OUTERMOST first: routing up through a non-mesh parent
+            // stamps the sender with that parent (HierarchicalRouting), so a requester nested two
+            // levels down reads `R{Host=P}` and resolves as root → P → R. Only the LAST hub has
+            // to admit the delivery; the ones in between are looked up, never posted to, so their
+            // own run level does not matter (a collection past DisposeHostedHubs still resolves
+            // existing hubs — it only refuses to CREATE).
+            var levels = ImmutableList<Address>.Empty;
+            for (var level = target; level is not null; level = level.Host)
+                levels = levels.Insert(0, level with { Host = null });
+            var requester = ResolveTopLevelHub(root, levels[0]);
+            for (var i = 1; requester is not null && i < levels.Count; i++)
+                requester = requester.GetHostedHub(levels[i], HostedHubCreation.Never);
+            if (requester is null
+                || ReferenceEquals(requester, this)
+                || requester.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                return false;
+            requester.DeliverMessage(failure);
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            // A hosted collection on the way is gone: nothing here can take it, the drop stands.
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The hub under <paramref name="root"/> that hosts <paramref name="top"/> — the address
+    /// itself, then shorter path prefixes for a hub hosting a sub-path — never created. Mirrors
+    /// the resolution <see cref="AReplyIsOwedByAShuttingDownLocalHub"/> and
+    /// <c>HierarchicalRouting</c> perform at the root.
+    /// </summary>
+    private static IMessageHub? ResolveTopLevelHub(IMessageHub root, Address top)
+    {
+        if (root.Address.Equals(top))
+            return root;
+        var segments = top.Segments;
+        for (var k = segments.Length; k >= 1; k--)
+        {
+            var candidate = k == segments.Length ? top : new Address(segments[..k]);
+            if (root.GetHostedHub(candidate, HostedHubCreation.Never) is { } hosted)
+                return hosted;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// True when a pending reply for <paramref name="target"/> is guaranteed to arrive from a hub in
     /// THIS mesh that is itself shutting down. Such a hub answers every delivery it accepted before
     /// it signals Dead and leaves its owner's registry: served ahead of its own ShutdownRequest, or
