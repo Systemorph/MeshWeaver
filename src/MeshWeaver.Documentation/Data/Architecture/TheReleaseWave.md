@@ -165,21 +165,65 @@ difference changes an answer on the inputs that repository passes:
 
 | copy | raw lines vs canonical | code lines | what differs | changes an answer? |
 |---|---|---|---|---|
-| Crm, Reinsurance, SocialMedia, Manufacturing | 173 | **6** | three string literals: the `User-Agent` header value, one log line, one step-summary sentence | **no** — none is read by the resolution |
-| Education (vintage 2026-09-11) | 584 | **233** | lacks `refresh`/`load_baseline`/`output_rows`/`emit` (the re-run freshness path) and `PluginsPublication`/`PLUGINS_LOOKBACK` (the Plugins publication found on its own); `choose`, `Verdict`, `Chosen` differ | **yes** — on a "re-run failed jobs" it re-uses the stored resolution (the Education#320 defect), and on a set whose own Plugins seal is not the newest it decides differently |
-| Plugins (fork, 2026-09-12, #1694) | 1,031 | **527** | ADDS `ceiling_for`/`main_passed_ceiling` (a pull request resolves the newest sealed set that Plugins `main` has already PASSED on), `PublicationSource`/`publication_source`, `run_jobs_of`; LACKS the freshness path above | **yes, by design** — on `pull_request` runs the ceiling can choose an older set than the canonical would |
+| Crm, Reinsurance, SocialMedia, Manufacturing, **Education** | 173 | **6** | three string literals: the `User-Agent` header value, one log line, one step-summary sentence | **no** — none is read by the resolution |
+| Plugins (fork, 2026-09-12, #1694) | 1,031 | **520** | ADDS `ceiling_for`/`main_passed_ceiling`/`run_jobs_of` (a pull request resolves the newest sealed set that Plugins `main` has already PASSED on) and `PublicationSource`/`publication_source`/`ProvenanceUnavailable` (the chosen set's sha and release read from the platform-bake job's own final publication receipt); LACKS `platform_version` | **yes, by design** — on `pull_request` runs the ceiling can choose an older set than the canonical would |
 
-So four copies are behaviourally the canonical, one lags, one is a fork with a policy the canonical
-does not have. **The guard** — `.github/scripts/check-resolver-copy.py`, run by `node-repo-validate`
+🚨 **Education's row is the one that moved, and #4171's own body is now stale about it.** That body
+recorded Education at 233 answer-changing code lines from a 2026-09-11 vintage; re-measured on
+2026-09-13 against the same canonical it is **6**, the same three string literals as the other four.
+It converged on its own. The reading to take from that is not "the table was wrong" but the standing
+one: a drift figure is a MEASUREMENT with a date on it, and a satellite's copy moves between the
+filing and the flip — so re-run `check-resolver-copy.py` before acting on any number written here.
+
+So five copies are behaviourally the canonical and one is a fork with policy the canonical
+did not have. **The guard** — `.github/scripts/check-resolver-copy.py`, run by `node-repo-validate`
 on every satellite PR and push — compares the copy to the canonical fetched at the lane's
 `scripts-ref` at the code level, prints the functions that differ, and is **advisory until
 2026-09-15T00:00:00Z and red from then** (`RED_FROM` in the script): a canonical fetched at `main`
 is live on merge for every caller, so the fleet sees the finding for a day before it can fail on
-it. A repository with no copy passes — that is the end state. Before the flip: the four re-copy (one
-commit each), Education re-copies (its lag is answer-changing), and Plugins' ceiling is ported into
-the canonical as an opt-in — a fork cannot pass a guard whose subject is "one canonical", and that
-is the guard doing its job. The freeze (`MW_PLATFORM_REF`) is untouched: the guard compares files
-and never runs the resolver.
+it. A repository with no copy passes — that is the end state. The freeze (`MW_PLATFORM_REF`) is
+untouched: the guard compares files and never runs the resolver.
+
+### Following your own `main`: the ceiling, now an option on the canonical
+
+🚨 **A deliberate difference belongs in the canonical as an OPTION, never in a fork** — and the
+guard is what makes that rule enforceable rather than advisory. Plugins' ceiling is therefore in
+`.github/scripts/resolve-platform.py` itself, off unless asked for:
+
+| flag | what it does |
+|---|---|
+| `--passed-on-main OWNER/REPO` | reads that repository's newest successful `ci.yml` push runs on `main`, takes the core-CD run number each one's `Platform for this run` annotation names, and caps the choice at the highest of them |
+| `--passed-ceiling N` | the same cap, handed straight in — a re-resolving job passes the `ceiling` output its run's `platform-ref` job already established, so the main-run read is paid for once per run |
+
+The rule it expresses: **a pull request resolves the newest sealed set that repository's own `main`
+has already passed on.** When core seals a set that regresses the repository, `main` goes red on it
+and every open pull request keeps building on the last set main passed — before it, one such set
+reddened every open PR at once, four times in 24 h, 91 PR-hours exposed.
+
+Three properties are load-bearing and each has a self-test case that fails without it
+(`resolve-platform.py --self-test`, 58 cases):
+
+- **Opt-in.** `choose(..., passed_ceiling=None)` — every caller that does not ask — takes exactly
+  the path it took before. The self-test proves this as a PAIR on one fixture: the same runs and the
+  same registry, one argument different, opposite answers.
+- **A freeze overrides the ceiling, including an unreadable one.** `MW_PLATFORM_REF` is an
+  instruction for an incident, and the likeliest moment to need it is precisely when `main` is red
+  and has passed nothing recently — so a freeze skips the ceiling entirely rather than being checked
+  against it.
+- **"main has passed nothing" is a REFUSAL, not a fallback.** Falling back to the newest sealed set
+  would put every pull request back on an unvouched set, which is the thing the rule exists to
+  prevent. The refusal names what it read and points at `MW_PLATFORM_REF`.
+
+A run held back by the ceiling says so: `lag` on the `Chosen`, an output row, a `Platform lag
+(pull requests follow main)` notice and a summary row, each naming BOTH set ids — so "why did my
+core fix not show up in my PR?" is answered from the run's own log.
+
+**What is NOT ported, and is the remaining reason Plugins' copy cannot be a verbatim re-copy:** its
+receipt-based provenance (`publication_source` / `PublicationSource` / `ProvenanceUnavailable`),
+which reads the chosen set's core sha and release from the platform-bake job's own
+`bake published: …` log line instead of from the run's `head_sha` plus `Directory.Build.props`. That
+is a separate policy with its own credential question (it reads another repository's job LOGS), and
+it is not the ceiling. Adopting the canonical drops it; keeping it needs its own opt-in port.
 
 ## Reading a wave, in order
 
