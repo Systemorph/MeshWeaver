@@ -1,0 +1,247 @@
+// <meshweaver>
+// Id: Testing/Data/SynchronizationStreamTest
+// DisplayName: Testing/Data/SynchronizationStreamTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+﻿using System.Collections.Generic;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
+using MeshWeaver.Messaging;
+using System;
+using System.Threading;
+using System.Collections.Immutable;
+
+/// <summary>
+/// Base interface for testing Select projection
+/// </summary>
+public interface IBaseData
+{
+    string Id { get; }
+}
+
+/// <summary>
+/// Derived type implementing IBaseData for Select projection tests
+/// </summary>
+public record DerivedData(string Id, string ExtraInfo) : IBaseData;
+
+/// <summary>
+/// Tests for synchronization stream operations and data change management
+/// </summary>
+public class SynchronizationStreamTest(MeshTestContext context) : InMeshTestBase(output)
+{
+    private const string Instance = nameof(Instance);
+
+    /// <summary>
+    /// Configures the host with MyData, DerivedData and object types for synchronization testing
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .AddData(data =>
+                data.AddSource(
+                    dataSource =>
+                        dataSource.WithType<MyData>(type =>
+                            type.WithKey(instance => instance.Id)
+                        ).WithType<DerivedData>(type =>
+                            type.WithKey(d => d.Id)
+                        ).WithType<object>(type => type.WithKey(i => i))
+                )
+            );
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .AddData(data => data);
+    }
+
+    /// <summary>
+    /// Tests parallel updates to the synchronization stream with concurrent modifications
+    /// </summary>
+    [MeshFact]
+    public async Task ParallelUpdate()
+    {
+        var workspace = GetHost().GetWorkspace();
+        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+        var stream = workspace.GetStream(new CollectionsReference(collectionName));
+        ((object?)stream).Should().NotBeNull();
+
+        // Accumulate every MyData emission reactively so we can block on the
+        // actual condition (10 items) instead of a fixed Task.Delay.
+        var tracked = stream!.Reduce(new EntityReference(collectionName, Instance))!
+            .Select(i => i.Value!)
+            .OfType<MyData>()
+            .Scan(ImmutableList<MyData>.Empty, (acc, d) => acc.Add(d))
+            .Replay(1);
+        tracked.Connect();
+
+        var count = 0;
+        Enumerable.Range(0, 10).AsParallel().Select(_ =>
+        {
+            stream.Update(state =>
+            {
+                var instance = new MyData(Instance, (++count).ToString());
+                var existingInstance = state?.Collections.GetValueOrDefault(collectionName)?.Instances
+                    .GetValueOrDefault(Instance);
+
+                return stream.ApplyChanges(
+                    new EntityStoreAndUpdates(
+                        WorkspaceOperations.Update((state ?? new()), collectionName, i => i.Update(Instance, instance)),
+                        [new EntityUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
+                        stream.StreamId)
+                );
+            }, _ => { });
+            return true;
+        }).ToArray();
+
+        var tracker = await tracked.Should().Within(5.Seconds()).Match(acc => acc.Count == 10);
+
+        tracker.Should().HaveCount(10);
+        tracker.Select(t => t.Text).Should().Equal(Enumerable.Range(0, 10).Select(exp => (exp + 1).ToString()));
+    }
+
+    /// <summary>
+    /// Tests that Select projects ISynchronizationStream&lt;DerivedData&gt; to ISynchronizationStream&lt;IBaseData&gt;
+    /// </summary>
+    [MeshFact]
+    public async Task SelectProjectsDerivedToBaseType()
+    {
+        // Arrange: configure workspace with DerivedData
+        var workspace = GetHost().GetWorkspace();
+        var collectionName = workspace.DataContext.GetTypeSource(typeof(DerivedData))!.CollectionName;
+        var stream = workspace.GetStream(new CollectionsReference(collectionName));
+        ((object?)stream).Should().NotBeNull();
+
+        // Reduce to get a stream of DerivedData entities
+        var derivedStream = stream!.Reduce(new EntityReference(collectionName, "1"))!
+            .Select(i => i.Value)
+            .Where(v => v is DerivedData)
+            .Select(v => (DerivedData)v!)
+            .Replay(1);
+        derivedStream.Connect();
+
+        // Act: use Select to project DerivedData to IBaseData. Accumulate the
+        // projected values reactively so we block on the condition (1 item),
+        // not a fixed Task.Delay.
+        var baseDataStream = stream.Reduce(new EntityReference(collectionName, "1"))!
+            .Select(d => (IBaseData)d!)
+            .Where(change => change.Value is not null)
+            .Scan(ImmutableList<IBaseData>.Empty, (acc, change) => acc.Add(change.Value!))
+            .Replay(1);
+        baseDataStream.Connect();
+
+        // Add a DerivedData instance
+        var instance = new DerivedData("1", "Extra information");
+        stream.Update(state =>
+        {
+            var store = WorkspaceOperations.Update(state ?? new(), collectionName, c => c.Update("1", instance));
+            return stream.ApplyChanges(new EntityStoreAndUpdates(
+                store,
+                [new EntityUpdate(collectionName, "1", instance)],
+                stream.StreamId));
+        });
+
+        // Assert: the Select stream should have received the projected IBaseData
+        var receivedBaseData = await baseDataStream.Should().Match(acc => acc.Count == 1);
+        receivedBaseData.Should().HaveCount(1);
+        receivedBaseData[0].Should().BeOfType<DerivedData>();
+        receivedBaseData[0].Id.Should().Be("1");
+    }
+
+    /// <summary>
+    /// Tests that Select can transform stream values using a lambda expression
+    /// </summary>
+    [MeshFact]
+    public async Task SelectTransformsValues()
+    {
+        // Arrange
+        var workspace = GetHost().GetWorkspace();
+        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+        var stream = workspace.GetStream(new CollectionsReference(collectionName));
+        ((object?)stream).Should().NotBeNull();
+
+        // Act: use Select to extract just the Text property as a string, and
+        // accumulate distinct text values reactively so we block on the actual
+        // condition (both values present) instead of a fixed Task.Delay.
+        var textStream = stream!.Reduce(new EntityReference(collectionName, "test"))!
+            .Select(obj => obj is MyData data ? data.Text : null!)
+            .Where(change => change.Value is not null)
+            .Select(change => change.Value!)
+            .DistinctUntilChanged()
+            .Scan(ImmutableList<string>.Empty, (acc, text) => acc.Add(text))
+            .Replay(1);
+        textStream.Connect();
+
+        // Add MyData instances with different Text values
+        stream.Update(state =>
+        {
+            var instance = new MyData("test", "Hello World");
+            var store = WorkspaceOperations.Update(state ?? new(), collectionName, c => c.Update("test", instance));
+            return stream.ApplyChanges(new EntityStoreAndUpdates(
+                store,
+                [new EntityUpdate(collectionName, "test", instance)],
+                stream.StreamId));
+        });
+
+        stream.Update(state =>
+        {
+            var instance = new MyData("test", "Updated Text");
+            var store = WorkspaceOperations.Update(state ?? new(), collectionName, c => c.Update("test", instance));
+            return stream.ApplyChanges(new EntityStoreAndUpdates(
+                store,
+                [new EntityUpdate(collectionName, "test", instance)],
+                stream.StreamId));
+        });
+
+        // Assert: should have received both text values, in order
+        var receivedTexts = await textStream.Should().Match(acc => acc.Count == 2);
+        receivedTexts.Should().HaveCount(2);
+        receivedTexts.Should().ContainInOrder("Hello World", "Updated Text");
+    }
+
+    /// <summary>
+    /// When a server-side stream errors via OnError, the client stream should also fail.
+    /// </summary>
+    [MeshFact]
+    public async Task ServerStreamError_PropagatesTo_ClientStream()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var hostWorkspace = host.GetWorkspace();
+        var collectionName = hostWorkspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+
+        // Get the data source stream (the parent stream that all reduced streams subscribe to)
+        var dataSource = hostWorkspace.DataContext.GetDataSourceForType(typeof(MyData))!;
+        var dataSourceStream = dataSource.GetStreamForPartition(null);
+        ((object?)dataSourceStream).Should().NotBeNull();
+
+        // Get client-side stream (subscribes remotely to host)
+        var clientWorkspace = client.GetWorkspace();
+        var clientStream = clientWorkspace.GetRemoteStream<EntityStore>(
+            CreateHostAddress(), new CollectionsReference(collectionName));
+
+        // Wait for initial data to arrive
+        var initial = await clientStream.Should().Within(3.Seconds()).Emit();
+        initial.Should().NotBeNull();
+
+        // Track errors on client stream. ReplaySubject buffers the error so the
+        // reactive assertion below still observes it even if OnError fires before
+        // the assertion subscribes.
+        var errorReceived = new System.Reactive.Subjects.ReplaySubject<Exception>();
+        clientStream.Subscribe(_ => { }, ex => errorReceived.OnNext(ex));
+
+        // Fail the data source stream — this should propagate to all subscribers
+        dataSourceStream!.OnError(new InvalidOperationException("Server stream failed"));
+
+        // Client should receive the error
+        var error = await errorReceived.Should().Within(1.Seconds()).Emit();
+
+        error.Should().NotBeNull();
+        Output.WriteLine($"Client received error: {error.Message}");
+    }
+}

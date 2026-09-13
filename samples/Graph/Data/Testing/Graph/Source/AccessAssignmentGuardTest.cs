@@ -1,0 +1,433 @@
+// <meshweaver>
+// Id: Testing/Graph/AccessAssignmentGuardTest
+// DisplayName: Testing/Graph/AccessAssignmentGuardTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+
+/// <summary>
+/// Pins the ACCESS-GRANT SCOPE INVARIANT: a grant must be scoped to the node it is filed under.
+///
+/// <para><b>What went wrong.</b> A grant is scoped by <c>MainNode</c>, NOT by its folder. So
+/// <c>Admin/_Access/{user}_Access</c> with an EMPTY <c>MainNode</c> is not "admin of the Admin
+/// partition" — it is a <b>ROOT</b> grant: All on every partition, every space and every user's
+/// private home, by scope inheritance. It reads as harmless in the node tree.</para>
+///
+/// <para>memex, 2026-07-28: <b>43 accounts</b> held that shape (empty <c>node_path_prefix</c> in
+/// <c>admin.user_effective_permissions</c>) against exactly ONE correctly-scoped platform admin —
+/// including external course participants who had merely redeemed a coupon. They accrued one per
+/// user over two weeks and were still being created that day.</para>
+///
+/// <para>Every KNOWN writer sets <c>MainNode</c> correctly, so an unknown path produces them. That
+/// is why this is guarded structurally at the create boundary rather than fixed writer by writer.</para>
+/// </summary>
+public class AccessAssignmentGuardTest
+{
+    private static MeshNode Grant(string path, string? mainNode, string nodeType = "AccessAssignment")
+    {
+        var slash = path.LastIndexOf('/');
+        return new MeshNode(slash < 0 ? path : path[(slash + 1)..], slash < 0 ? "" : path[..slash])
+        {
+            NodeType = nodeType,
+            // Deliberately null in some cases: a null MainNode is one of the shapes under test
+            // (it reaches the evaluator as root scope exactly like the empty string does).
+            MainNode = mainNode!
+        };
+    }
+
+    // ── ScopeFromPath ────────────────────────────────────────────────────────────────────
+
+    [MeshTheory]
+    [MeshInlineData("Admin/_Access/rbuergi_Access", "Admin")]
+    [MeshInlineData("AgenticEngineering/_Access/sglauser_Access", "AgenticEngineering")]
+    [MeshInlineData("Store/Plugin/_Access/x_Access", "Store/Plugin")]   // scopes nest
+    [MeshInlineData("rbuergi/_Access/rbuergi_Access", "rbuergi")]       // a user's own home
+    public void ScopeFromPath_ReadsTheScopeBeforeTheAccessFolder(string path, string expected) =>
+        AccessAssignmentGuard.ScopeFromPath(path).Should().Be(expected);
+
+    /// <summary>A root-level <c>_Access/{id}</c> encodes the ROOT scope — the data-superuser shape.</summary>
+    [MeshFact]
+    public void ScopeFromPath_RootLevelAccessIsTheEmptyScope() =>
+        AccessAssignmentGuard.ScopeFromPath("_Access/rbuergi_Access").Should().Be("");
+
+    [MeshTheory]
+    [MeshInlineData("Admin/Invitation/abc")]
+    [MeshInlineData("")]
+    [MeshInlineData(null)]
+    public void ScopeFromPath_NonGrantPathsAreNotGrantPaths(string? path) =>
+        AccessAssignmentGuard.ScopeFromPath(path).Should().BeNull();
+
+    // ── The invariant ────────────────────────────────────────────────────────────────────
+
+    /// <summary>🚨 THE 43-SUPERUSER BUG: empty MainNode under a scope folder means ROOT.</summary>
+    [MeshFact]
+    public void EmptyMainNode_IsRejected_BecauseItGrantsRootNotTheFolder()
+    {
+        var node = Grant("Admin/_Access/rbuergi_Access", mainNode: "");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out var reason).Should().BeTrue(
+            "an empty MainNode grants ROOT — every partition — not the Admin partition");
+        reason.Should().Contain("ROOT");
+        reason.Should().Contain("MainNode='Admin'", "the message must say exactly how to fix it");
+    }
+
+    [MeshFact]
+    public void NullMainNode_IsRejectedToo()
+    {
+        var node = Grant("Admin/_Access/x_Access", mainNode: null);
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeTrue();
+    }
+
+    /// <summary>The correct platform-admin shape — the one row on memex that was right.</summary>
+    [MeshFact]
+    public void MainNodeMatchingThePath_IsValid()
+    {
+        var node = Grant("Admin/_Access/rsalzmann_Access", mainNode: "Admin");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    /// <summary>Every user is admin of their OWN partition — that shape must keep working.</summary>
+    [MeshFact]
+    public void UsersOwnHomeGrant_IsValid()
+    {
+        var node = Grant("albiona.emiri/_Access/albiona.emiri_Access", mainNode: "albiona.emiri");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    /// <summary>Course entitlement grants (PluginGate.Enroll) must keep working.</summary>
+    [MeshFact]
+    public void PluginEntitlementGrant_IsValid()
+    {
+        var node = Grant("AgenticEngineering/_Access/sglauser_Access", mainNode: "AgenticEngineering");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    /// <summary>A grant pointing somewhere OTHER than its folder silently grants elsewhere —
+    /// arguably worse than the empty case, because it looks deliberate.</summary>
+    [MeshFact]
+    public void MismatchedMainNode_IsRejected()
+    {
+        var node = Grant("AgenticEngineering/_Access/x_Access", mainNode: "Underwriting");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out var reason).Should().BeTrue();
+        reason.Should().Contain("Underwriting");
+        reason.Should().Contain("AgenticEngineering");
+    }
+
+    /// <summary>
+    /// THE MEMEX SHAPE, and the reason this guard exists: a grant filed in the Admin partition —
+    /// where it reads as an ordinary platform-admin grant — whose empty MainNode silently scopes it
+    /// to ROOT instead. 34 accounts held exactly this, 21 of them course participants who had only
+    /// redeemed a coupon. It is a MISMATCH (path says "Admin", MainNode says root), so the
+    /// consistency rule catches it; no separate root-grant rule is needed for the incident.
+    /// </summary>
+    [MeshFact]
+    public void TheAdminFolderRootGrant_IsRejected()
+    {
+        var node = Grant("Admin/_Access/rbuergi_Access", mainNode: "");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out var reason).Should().BeTrue();
+        reason.Should().Contain("ROOT");
+        reason.Should().Contain("Admin");
+    }
+
+    /// <summary>
+    /// A SELF-CONSISTENT root grant passes the write boundary — deliberately, and this pins it so
+    /// the decision is visible rather than looking like an oversight.
+    ///
+    /// <para>It is still the superuser shape, but it is not what produced the incident (those were
+    /// mismatches, above) and it is how the test harness grants mesh-wide rights —
+    /// <c>AssignmentNodeFactory.UserRole(user, role)</c> with no scope, at ~200 call sites, plus
+    /// <c>TestUsers.PublicAdminAccess()</c>'s root entry. Refusing it here failed four of six CI
+    /// shards, because those tests could then be granted nothing at all.</para>
+    ///
+    /// <para>What keeps it out of reach in practice is <see cref="AccessAssignmentGuard.CanGrantAt"/>:
+    /// the access UI offers no grant surface in a root context, so this shape cannot be produced by
+    /// a human clicking. Narrowing it further means rescoping those call sites first.</para>
+    /// </summary>
+    [MeshFact]
+    public void ASelfConsistentRootGrant_IsAllowedAtTheWriteBoundary_ButNeverOfferedInTheUi()
+    {
+        var node = Grant("_Access/rbuergi_Access", mainNode: "");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse(
+            "the harness grants mesh-wide rights this way; the incident shape was a MISMATCH");
+        AccessAssignmentGuard.CanGrantAt("").Should().BeFalse(
+            "…and the UI must never offer it — that is what closes the hole a human could open");
+    }
+
+    /// <summary>Case must not decide whether someone becomes a superuser.</summary>
+    [MeshFact]
+    public void ScopeComparison_IsCaseInsensitive()
+    {
+        var node = Grant("Admin/_Access/x_Access", mainNode: "admin");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    /// <summary>The guard is about AccessAssignments only — it must not reject unrelated nodes that
+    /// happen to live under an _Access folder.</summary>
+    [MeshFact]
+    public void NonAccessAssignmentNodes_AreIgnored()
+    {
+        var node = Grant("Admin/_Access/readme", mainNode: "", nodeType: "Markdown");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    [MeshFact]
+    public void NullNode_IsIgnored() =>
+        AccessAssignmentGuard.IsScopeInvalid(null, out _).Should().BeFalse();
+
+    /// <summary>An AccessAssignment that is not on a grant path at all is not this guard's business.</summary>
+    [MeshFact]
+    public void AssignmentOffAGrantPath_IsIgnored()
+    {
+        var node = Grant("Admin/Invitation/abc", mainNode: "");
+
+        AccessAssignmentGuard.IsScopeInvalid(node, out _).Should().BeFalse();
+    }
+
+    // ── The navigation context that produces the shape ───────────────────────────────────
+    //
+    // `nodePath` in the access-control area is host.Hub.Address — the NAVIGATION CONTEXT, not the
+    // URL. At root it is EMPTY, AccessNamespace("") becomes a root-level "_Access" folder, and both
+    // creation sites set MainNode = nodePath = "". That is a superuser mintable from a button.
+
+    [MeshTheory]
+    [MeshInlineData("Admin")]
+    [MeshInlineData("AgenticEngineering")]
+    [MeshInlineData("Store/Plugin")]
+    [MeshInlineData("rbuergi")]
+    public void CanGrantAt_APartitionContext_IsAllowed(string scope) =>
+        AccessAssignmentGuard.CanGrantAt(scope).Should().BeTrue();
+
+    [MeshTheory]
+    [MeshInlineData("")]
+    [MeshInlineData("   ")]
+    [MeshInlineData(null)]
+    public void CanGrantAt_TheRootContext_IsRefused(string? scope) =>
+        AccessAssignmentGuard.CanGrantAt(scope).Should().BeFalse(
+            "at root there is no partition to scope to — a grant there is a platform-wide superuser");
+
+    [MeshFact]
+    public void EnsureScopeValid_ThrowsOnTheRootShape()
+    {
+        var node = Grant("Admin/_Access/x_Access", mainNode: "");
+
+        var act = () => AccessAssignmentGuard.EnsureScopeValid(node);
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [MeshFact]
+    public void EnsureScopeValid_PassesTheCorrectShape()
+    {
+        var node = Grant("Admin/_Access/x_Access", mainNode: "Admin");
+
+        var act = () => AccessAssignmentGuard.EnsureScopeValid(node);
+
+        act.Should().NotThrow();
+    }
+
+    // ── A system-owned space grants nobody write access ──────────────────────────────────
+    //
+    // memex 2026-08-04: SST/_Access/rbuergi_Access (Admin) was written at 14:48:07 and
+    // SST/_GitSync at 14:48:14 — the Space was hand-created seven seconds before it became
+    // system-owned, so the creator-Admin grant was minted the ordinary way and simply stayed.
+    // Seventeen Admin grants across three meshes came from that window.
+
+    private static MeshNode GrantOf(string path, string subject, params string[] roles) =>
+        Grant(path, mainNode: AccessAssignmentGuard.ScopeFromPath(path)) with
+        {
+            Content = new AccessAssignment
+            {
+                AccessObject = subject,
+                Roles = roles.Select(r => new RoleAssignment { Role = r }).ToArray()
+            }
+        };
+
+    private static AccessAssignment Content(MeshNode node) => (AccessAssignment)node.Content!;
+
+    [MeshTheory]
+    [MeshInlineData("Admin")]
+    [MeshInlineData("Editor")]
+    [MeshInlineData("PlatformAdmin")]
+    [MeshInlineData("SomeCustomRole")]      // allowlist, not denylist: an unknown role is NOT waved through
+    public void PrivilegedGrantOnASystemOwnedSpace_IsRefused(string role)
+    {
+        var node = GrantOf("SST/_Access/rbuergi_Access", "rbuergi", role);
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: true, out var reason)
+            .Should().BeTrue("a GitSynced space is rewritten from its repo — only the system identity may write it");
+        reason.Should().Contain("rbuergi");
+        reason.Should().Contain("SST", "the message must name the space it is protecting");
+    }
+
+    /// <summary>The entitlement shape — what a purchase, a coupon or an admin grant writes.</summary>
+    [MeshTheory]
+    [MeshInlineData("Viewer")]
+    [MeshInlineData("Commenter")]
+    public void AnEntitlementIsStillAllowed(string role)
+    {
+        var node = GrantOf("SST/_Access/learner_Access", "learner", role);
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: true, out _)
+            .Should().BeFalse("read-only access IS the funnel — buying a plugin must keep working");
+    }
+
+    /// <summary>The importer's own identity is the one Admin a system-owned space has.</summary>
+    [MeshFact]
+    public void TheSystemIdentityMayHoldAdmin()
+    {
+        var node = GrantOf("SST/_Access/system-security_Access", WellKnownUsers.System, "Admin");
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: true, out _)
+            .Should().BeFalse("system-security is the identity the GitSync import writes under");
+    }
+
+    /// <summary>A deny only ever REMOVES access — it is how plugin gating darkens every child.</summary>
+    [MeshFact]
+    public void ADeniedRoleIsNotAWriteGrant()
+    {
+        var node = Grant("SST/StandReModel/_Access/Anonymous_Access", mainNode: "SST/StandReModel") with
+        {
+            Content = new AccessAssignment
+            {
+                AccessObject = WellKnownUsers.Anonymous,
+                Roles = [new RoleAssignment { Role = "Editor", Denied = true }]
+            }
+        };
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: true, out _)
+            .Should().BeFalse("a Denied assignment cannot confer anything");
+    }
+
+    /// <summary>A user's own home, a hand-seeded tenant Space — not system-owned, not this rule's business.</summary>
+    [MeshFact]
+    public void AnOrdinarySpaceIsUntouched()
+    {
+        var node = GrantOf("rbuergi/_Access/rbuergi_Access", "rbuergi", "Admin");
+
+        AccessAssignmentGuard.IsForbiddenOnSystemOwned(node, Content(node), systemOwned: false, out _)
+            .Should().BeFalse("without a _GitSync the partition is owned by its creator, as before");
+    }
+
+    /// <summary>Nested scopes resolve to the PARTITION, because _GitSync is wired on the root.</summary>
+    [MeshTheory]
+    [MeshInlineData("Store/Plugin", "Store")]
+    [MeshInlineData("SST", "SST")]
+    public void PartitionOf_TakesTheFirstSegment(string scope, string expected) =>
+        AccessAssignmentGuard.PartitionOf(scope).Should().Be(expected);
+
+    [MeshFact]
+    public void ConfersWriteAccess_IgnoresEmptyAndDeniedRoles()
+    {
+        AccessAssignmentGuard.ConfersWriteAccess(new AccessAssignment { Roles = [] })
+            .Should().BeFalse();
+        AccessAssignmentGuard.ConfersWriteAccess(null).Should().BeFalse();
+        AccessAssignmentGuard.ConfersWriteAccess(new AccessAssignment
+        {
+            Roles = [new RoleAssignment { Role = "" }, new RoleAssignment { Role = "Admin", Denied = true }]
+        }).Should().BeFalse();
+    }
+
+    // ─────────────── SYSTEM-OWNED means ONE-WAY, not "has a _GitSync" ───────────────
+
+    private static MeshNode SyncConfig(bool? twoWay) => new("_GitSync", "Deployments")
+    {
+        NodeType = "GitHubSyncConfig",
+        Content = twoWay is null
+            ? System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                """{"$type":"GitHubSyncConfig","repositoryUrl":"https://github.com/o/r"}""")
+            : System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                $$"""{"$type":"GitHubSyncConfig","repositoryUrl":"https://github.com/o/r","twoWay":{{(twoWay.Value ? "true" : "false")}}}"""),
+    };
+
+    /// <summary>No sync at all — an ordinary space, owned by whoever created it.</summary>
+    [MeshFact]
+    public void NoSyncConfig_IsNotSystemOwned()
+        => Assert.False(AccessAssignmentGuard.IsSystemOwned(null, null));
+
+    /// <summary>
+    /// A ONE-WAY sync IS system-owned: the repo overwrites the live node on every sync, so a write
+    /// by anyone but the importer is silently reverted.
+    /// </summary>
+    [MeshTheory]
+    [MeshInlineData(false)]
+    [MeshInlineData(null)]     // absent → the documented default, which is one-way
+    public void OneWaySync_IsSystemOwned(bool? twoWay)
+        => Assert.True(AccessAssignmentGuard.IsSystemOwned(SyncConfig(twoWay), null));
+
+    /// <summary>
+    /// 🚨 A BIJECTIVE sync is NOT system-owned. With twoWay the server copy is preserved and
+    /// committed back, so the mesh nodes are the working copy and the people editing them must be
+    /// able to write. Measured on memex.systemorph.com 2026-08-18: `Deployments` was configured
+    /// twoWay:true and its own skill documented UI editing as first-class, yet granting a second
+    /// person Editor was refused — the only account that could use the feature was the one whose
+    /// grant predated the guard.
+    /// </summary>
+    [MeshFact]
+    public void BijectiveSync_IsNotSystemOwned()
+        => Assert.False(AccessAssignmentGuard.IsSystemOwned(SyncConfig(true), null));
+
+    /// <summary>
+    /// The whole point, end to end: the same Editor grant that a one-way sync refuses is ALLOWED
+    /// on a bijective one.
+    /// </summary>
+    [MeshFact]
+    public void EditorGrant_IsRefusedOnOneWay_AndAllowedOnBijective()
+    {
+        var node = GrantOf("Deployments/_Access/sglauser_Access", "sglauser", "Editor");
+
+        Assert.True(AccessAssignmentGuard.IsForbiddenOnSystemOwned(
+            node, Content(node),
+            AccessAssignmentGuard.IsSystemOwned(SyncConfig(false), null), out var reason));
+        Assert.Contains("SYSTEM-OWNED", reason);
+
+        Assert.False(AccessAssignmentGuard.IsForbiddenOnSystemOwned(
+            node, Content(node),
+            AccessAssignmentGuard.IsSystemOwned(SyncConfig(true), null), out _));
+    }
+
+    /// <summary>
+    /// Reading the flag must survive every shape the config arrives in — typed on its owning hub,
+    /// JsonElement from persistence. A shape test that missed would read a bijective config as
+    /// one-way and reinstate the refusal.
+    /// </summary>
+    [MeshFact]
+    public void TwoWay_IsReadFromAnyContentShape()
+    {
+        var fromJson = SyncConfig(true);
+        Assert.True(AccessAssignmentGuard.IsTwoWay(fromJson, null));
+
+        // The anonymous-object shape a node builder produces, serialized as its concrete type.
+        var typed = new MeshNode("_GitSync", "Deployments")
+        {
+            NodeType = "GitHubSyncConfig",
+            Content = new { twoWay = true, repositoryUrl = "https://github.com/o/r" },
+        };
+        Assert.True(AccessAssignmentGuard.IsTwoWay(typed, null));
+    }
+
+    /// <summary>An unreadable or contentless config keeps the space PROTECTED — fail closed.</summary>
+    [MeshFact]
+    public void UnreadableConfig_FailsClosed()
+    {
+        Assert.False(AccessAssignmentGuard.IsTwoWay(null, null));
+        var noContent = new MeshNode("_GitSync", "Deployments") { NodeType = "GitHubSyncConfig" };
+        Assert.False(AccessAssignmentGuard.IsTwoWay(noContent, null));
+        Assert.True(AccessAssignmentGuard.IsSystemOwned(noContent, null),
+            "a config we cannot read must leave the space system-owned, never open it up");
+    }
+
+}

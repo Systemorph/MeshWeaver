@@ -1,0 +1,332 @@
+// <meshweaver>
+// Id: Testing/CompilerPipeline/AssemblyLoadContextLeakTest
+// DisplayName: Testing/CompilerPipeline/AssemblyLoadContextLeakTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using MeshWeaver.Graph.Configuration;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+
+/// <summary>
+/// 🚨 Memory-leak guard for dynamically-compiled NodeType assemblies.
+///
+/// <para>Every NodeType is compiled into a <b>collectible</b>
+/// <see cref="System.Runtime.Loader.AssemblyLoadContext"/> (<c>NodeAssemblyLoadContext</c>,
+/// <c>isCollectible: true</c>). The whole point of "collectible" is that once the owner
+/// drops it and calls <c>Unload()</c>, the GC reclaims the JIT'd native code + metadata.
+/// If ANY managed reference survives — a process-wide static dictionary holding a
+/// generated <see cref="Type"/>, a top-level singleton cache that is never disposed,
+/// a compiled accessor delegate over the type — the ALC is <i>pinned</i> and the
+/// assembly (plus its native footprint) leaks for the process lifetime. Across a
+/// CI suite of dynamic-compilation tests that accumulation is what drives the
+/// late-project OOM / GC-stall flakes.</para>
+///
+/// <para>These tests are the deterministic, dependency-free equivalent of a
+/// "dotMemory delta == 0" assertion: load a REAL emitted assembly into the cache,
+/// take a <see cref="WeakReference"/> to its load context, drop every strong ref,
+/// dispose the owning cache, force GC, and assert the context was collected. A
+/// trivial hand-written type would not exercise the pinning paths — the assembly
+/// must be genuinely emitted and loaded so a real <see cref="Type"/> exists to be
+/// captured by whatever cache leaks.</para>
+/// </summary>
+public sealed class AssemblyLoadContextLeakTest : IDisposable
+{
+    private readonly string _cacheDir;
+    private readonly CompilationCacheService _service;
+
+    public AssemblyLoadContextLeakTest()
+    {
+        _cacheDir = Path.Combine(Path.GetTempPath(), $"alc-leak-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_cacheDir);
+        _service = new CompilationCacheService(
+            Options.Create(new CompilationCacheOptions
+            {
+                CacheDirectory = _cacheDir,
+                EnableCompilationCache = true,
+            }),
+            NullLogger<CompilationCacheService>.Instance);
+    }
+
+    public void Dispose()
+    {
+        try { _service.Dispose(); } catch { /* idempotent */ }
+        try { Directory.Delete(_cacheDir, recursive: true); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Emit a tiny, self-contained assembly so the collectible ALC genuinely loads a
+    /// real <see cref="Type"/> (the thing a leaking cache would pin). Returns raw bytes.
+    /// </summary>
+    private static byte[] EmitTinyAssembly(string asmName, string typeName)
+    {
+        var code =
+            $"namespace {asmName} {{ public sealed class {typeName} {{ public int Value {{ get; set; }} }} }}";
+        var compilation = CSharpCompilation.Create(
+            assemblyName: asmName,
+            syntaxTrees: new[] { CSharpSyntaxTree.ParseText(code) },
+            references: new[]
+            {
+                MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+            },
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        using var ms = new MemoryStream();
+        var result = compilation.Emit(ms);
+        result.Success.Should().BeTrue(
+            "the leak probe needs a real assembly: " +
+            string.Join("\n", result.Diagnostics.Select(d => d.ToString())));
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Load an emitted assembly into the cache's collectible context, USE its type
+    /// (instantiate — mirrors NodeType content usage), then return ONLY a weak ref to
+    /// the context. <see cref="MethodImplOptions.NoInlining"/> + the locals dying with
+    /// this frame guarantees no strong reference to the assembly/type/context survives
+    /// on the caller's stack across the subsequent GC.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private WeakReference LoadUseAndWeakRef(string nodeName)
+    {
+        var asmName = $"GenAsm_{nodeName}";
+        var typeName = "Widget";
+        var bytes = EmitTinyAssembly(asmName, typeName);
+
+        var assembly = _service.LoadAssemblyFromBytes(nodeName, bytes, pdbBytes: null);
+        var type = assembly.GetType($"{asmName}.{typeName}");
+        type.Should().NotBeNull("the emitted type must be loadable from the collectible context");
+        var instance = Activator.CreateInstance(type!);
+        instance.Should().NotBeNull();
+
+        // The context the cache created to hold this assembly (same instance — GetOrAdd).
+        var context = _service.GetOrCreateLoadContext(nodeName);
+        return new WeakReference(context);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ForceCollect(WeakReference weak)
+    {
+        // Collectible ALC unload finalizes on a background pass; loop a few hard GCs.
+        for (var i = 0; i < 12 && weak.IsAlive; i++)
+        {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+        }
+    }
+
+    /// <summary>
+    /// Core property: <see cref="CompilationCacheService.Dispose"/> must release every
+    /// collectible context it owns so the GC can reclaim it. If this is RED, the cache
+    /// itself (or a static cache a loaded type flowed into) pins the ALC even after an
+    /// explicit dispose — the dispose path is not enough. If GREEN, the cache releases
+    /// correctly and any remaining leak is a <i>lifetime</i> problem (the top-level
+    /// singleton is simply never disposed) rather than a pinning problem.
+    /// </summary>
+    [MeshFact]
+    public void DisposingCache_CollectsLoadedAssemblyContext()
+    {
+        var weak = LoadUseAndWeakRef("leak_probe_node");
+        weak.IsAlive.Should().BeTrue("context is held by the cache before dispose");
+
+        _service.Dispose();
+        ForceCollect(weak);
+
+        weak.IsAlive.Should().BeFalse(
+            "after CompilationCacheService.Dispose() the collectible NodeAssemblyLoadContext and its " +
+            "emitted assembly MUST be GC-collected — a surviving reference is the ALC leak");
+    }
+
+    /// <summary>
+    /// Per-context release: <see cref="CompilationCacheService.UnloadContext"/> (the
+    /// per-node unload used on recompile / release-advance) must also let the ALC be
+    /// collected, without disposing the whole cache. This is the property the per-node
+    /// scoped ownership relies on — when a node hub disposes, unloading its context
+    /// reclaims the assembly.
+    /// </summary>
+    [MeshFact]
+    public void UnloadContext_CollectsThatContext_WithoutDisposingCache()
+    {
+        var weak = LoadUseAndWeakRef("unload_probe_node");
+        weak.IsAlive.Should().BeTrue();
+
+        _service.UnloadContext("unload_probe_node");
+        ForceCollect(weak);
+
+        weak.IsAlive.Should().BeFalse(
+            "UnloadContext must release the collectible context so per-node disposal reclaims memory");
+    }
+
+    /// <summary>Emit a tiny assembly to a UNIQUE on-disk path — one recompile's output.</summary>
+    private string EmitTinyAssemblyToDisk(string asmName, string typeName)
+    {
+        var bytes = EmitTinyAssembly(asmName, typeName);
+        // Mirror EmitToDiskWithRetry: each release writes to its own {name}_{guid} subdir, so
+        // successive loads of the same node land on DIFFERENT keys in _loadContexts.
+        var dir = Path.Combine(_cacheDir, $"{asmName}_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dll = Path.Combine(dir, $"{asmName}.dll");
+        File.WriteAllBytes(dll, bytes);
+        return dll;
+    }
+
+    /// <summary>
+    /// Load an emitted assembly through the path-keyed context (the live recompile path,
+    /// <c>CompileResultFromAssembly</c> → <c>PublishLoadContextForPath</c>), USE its type, and
+    /// return ONLY a weak ref to the context. Locals die with this <see cref="MethodImplOptions.NoInlining"/>
+    /// frame so no strong ref survives on the caller's stack.
+    ///
+    /// <para>🚨 The PUBLISH door, because this models a recompile that just emitted these bytes.
+    /// Since #4013 the plain <c>GetOrCreateLoadContextForPath</c> is a READ and supersedes nothing:
+    /// a reader's resolve is no evidence about which build is current, and letting it evict is what
+    /// let two concurrent scans destroy each other's contexts until the pin retry cap rethrew.</para>
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private WeakReference LoadPathAndWeakRef(string nodeName, string dllPath)
+    {
+        var context = _service.PublishLoadContextForPath(nodeName, dllPath);
+        var assembly = context.LoadNodeAssembly();
+        assembly.Should().NotBeNull("the emitted assembly must load from its path-keyed context");
+        var type = assembly!.GetTypes().FirstOrDefault(t => t.IsClass);
+        type.Should().NotBeNull();
+        Activator.CreateInstance(type!).Should().NotBeNull();
+        return new WeakReference(context);
+    }
+
+    /// <summary>
+    /// 🚨 The per-recompile reclaim (the memex native-memory leak). A long-lived NodeType hub is
+    /// recompiled repeatedly WITHOUT tearing down; each recompile writes a new unique path and loads
+    /// it via <see cref="CompilationCacheService.PublishLoadContextForPath"/>. Publishing the NEW
+    /// path must evict + collect the SUPERSEDED context for the same NodeType then and there — not
+    /// only on hub teardown (<c>UnloadNodeContexts</c>). If RED, every recompile pins another
+    /// collectible ALC + its native metadata/JIT for the hub's whole life → unbounded growth to the
+    /// GC hard limit → the GC-thrash crash. The current context must survive (not over-evicted).
+    /// </summary>
+    [MeshFact]
+    public void RecompileToNewPath_EvictsAndCollects_SupersededContext_WithoutTeardown()
+    {
+        const string node = "recompile_evict_node";
+
+        var v1Dll = EmitTinyAssemblyToDisk($"GenAsm_{node}_v1", "Widget");
+        var weakV1 = LoadPathAndWeakRef(node, v1Dll);
+        weakV1.IsAlive.Should().BeTrue("V1's context is held by the cache after the first load");
+
+        // A recompile: a NEW unique path for the SAME node. Loading it evicts V1's superseded context.
+        var v2Dll = EmitTinyAssemblyToDisk($"GenAsm_{node}_v2", "Widget");
+        var weakV2 = LoadPathAndWeakRef(node, v2Dll);
+
+        ForceCollect(weakV1);
+
+        weakV1.IsAlive.Should().BeFalse(
+            "loading a new path for the same NodeType must evict + collect the SUPERSEDED " +
+            "AssemblyLoadContext without waiting for hub teardown — otherwise every recompile leaks an ALC");
+        weakV2.IsAlive.Should().BeTrue(
+            "the CURRENT context (just-loaded V2) must NOT be evicted — it is the live assembly the hub runs on");
+    }
+
+    /// <summary>
+    /// 🚨 The unload-during-scan guard. A context PINNED by an in-flight assembly scan must not be
+    /// torn down: <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/> mid-scan corrupts
+    /// the assembly the scanner holds (TypeLoadException '…format is invalid' — the flaky Orleans
+    /// dynamic-compilation race). So <c>Dispose()</c> must DRAIN pins before unloading: it blocks
+    /// while a pin is held and completes once released.
+    /// </summary>
+    [MeshFact]
+    public void Pin_DefersTheUnload_UntilTheScanReleases()
+    {
+        var ctx = _service.GetOrCreateLoadContext("pin_drain_node");
+        var pin = ctx.Pin();
+
+        // 🚨 Dispose RETURNS IMMEDIATELY now (#2488/#2549) — it hands the unload to the drain
+        // signal instead of blocking on it. This test used to assert the blocking itself, which
+        // was the MECHANISM; the PROPERTY it existed for ("or it unloads the LoaderAllocator
+        // mid-scan") is what is asserted below, and it is now guaranteed rather than merely
+        // likely: the old spin drain gave up after 5 s and unloaded anyway.
+        ctx.Dispose();
+
+        ctx.IsDisposed.Should().BeFalse(
+            "a scan pin is still held, so the LoaderAllocator must NOT be unloaded — that is the "
+            + "use-after-unload this pin exists to prevent");
+
+        pin.Dispose();
+
+        ctx.IsDisposed.Should().BeTrue(
+            "releasing the last pin IS the drain signal, and the unload runs on it");
+    }
+
+    /// <summary>Once a context starts unloading, a NEW scan must not be able to pin it — the caller
+    /// must re-resolve against the current context rather than scan a doomed assembly.</summary>
+    [MeshFact]
+    public void Pin_Throws_OnceContextIsUnloading()
+    {
+        var ctx = _service.GetOrCreateLoadContext("pin_disposed_node");
+        ctx.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => ctx.Pin());
+    }
+
+    /// <summary>
+    /// 🚨 The other half of the pin contract, and the one that was missing: a pin must make the
+    /// assembly LOADABLE for as long as it is held, not merely delay <c>Unload()</c>.
+    ///
+    /// <para>Dispose() drains in-flight pins BEFORE it unloads, so while a pin is held the
+    /// LoaderAllocator is provably still alive and nothing about the assembly has changed. But
+    /// the "is this context dead?" flag that <c>LoadNodeAssembly</c> guards on was the SAME flag
+    /// Dispose raised on entry — so a scan that had legitimately pinned the context got
+    /// <c>ObjectDisposedException: Cannot load assembly from disposed context</c> thrown into it
+    /// by the very teardown that was standing there waiting for it to finish.</para>
+    ///
+    /// <para>That throw is not a hiccup. <c>CompileResultFromAssembly</c> catches it, writes
+    /// <c>CompilationStatus.Error</c>, and the compile watcher PARKS the NodeType — "further
+    /// activations serve the cached error without recompiling" — so a millisecond-wide teardown
+    /// race permanently kills the type. Observed as
+    /// <c>StaleStampRootBindingTest.StaleStampSelfTypedRoot_RootServesItsTypesArea</c> failing
+    /// with exactly that message on main (run 31683003325) and on an unrelated PR 40 minutes
+    /// later (run 31686258015), both 2026-08-13, plus 6× on 08-10.</para>
+    ///
+    /// <para>Deterministic, not timing-hopeful: the pin is taken FIRST and released only after the
+    /// load has been attempted, so the interleaving this asserts is the one that always happens.</para>
+    /// </summary>
+    [MeshFact]
+    public void PinnedScan_StillLoadsTheAssembly_WhileTheUnloadIsDeferred()
+    {
+        const string nodeName = "pin_load_during_drain";
+        var dllPath = EmitTinyAssemblyToDisk(nodeName, "Widget");
+        var ctx = _service.GetOrCreateLoadContextForPath(nodeName, dllPath);
+
+        // A scan pins the context — exactly what CompileResultFromAssembly does via PinForScan.
+        // Not a `using`: the release below IS the drain signal, and the assertion after it needs
+        // the unload to have happened.
+        var pin = ctx.Pin();
+
+        // Teardown starts underneath it (a concurrent recompile/eviction/hub disposal). Dispose
+        // returns at once and the unload waits on the drain signal (#2488/#2549).
+        ctx.Dispose();
+
+        // THE ASSERTION, unchanged in substance: the pinned scan can still load. Before the
+        // original fix this threw ObjectDisposedException and the caller recorded a permanent
+        // CompilationStatus.Error.
+        var assembly = ctx.LoadNodeAssembly();
+        assembly.Should().NotBeNull(
+            "a pin held across a concurrent Dispose must keep the assembly loadable: the unload "
+            + "waits for the pins, so the LoaderAllocator is still alive and refusing the load "
+            + "would only manufacture a compile 'failure' that parks the NodeType for good");
+        assembly!.GetTypes().Should().NotBeEmpty(
+            "the scan the pin exists to protect is GetTypes — it must complete against live metadata");
+
+        // Releasing the last pin completes the drain, and the deferred unload runs on it.
+        pin.Dispose();
+
+        // …and once the drain is over the context IS closed: a later load must not resurrect it.
+        Assert.Throws<ObjectDisposedException>(() => ctx.LoadNodeAssembly());
+    }
+}

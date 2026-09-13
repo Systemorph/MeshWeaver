@@ -1,0 +1,21 @@
+{
+  "$type": "MeshNode",
+  "id": "CompilerPipeline",
+  "namespace": "Testing",
+  "path": "Testing/CompilerPipeline",
+  "mainNode": "Testing/CompilerPipeline",
+  "name": "MeshWeaver.Compiler.Pipeline.Test (in-mesh)",
+  "description": "MeshWeaver.Compiler.Pipeline.Test migrated in-mesh (.github/scripts/convert-xunit-to-inmesh.py, 2026-09-13): 85 of 88 files as [MeshFact] cases run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh. Refused, still on xunit: 3 — EmitCanaryDissectionTest.cs: reads process dumps — stays on xunit; FullShareRefusesTheCompileTest.cs: overrides ConfigureMesh — needs the per-suite configuration facility; UntrackedModuleContentNeverCompilesHereTest.cs: overrides ConfigureMesh — needs the per-suite configuration facility.",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "state": "Active",
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "description": "An in-mesh test suite.",
+    "configuration": "config => config.WithContentType<MeshWeaver.Markdown.MarkdownContent>().AddMarkdownViews().AddLayout(layout => layout.WithView(\"Tests\", (host, ctx) => MeshWeaver.Testing.InMesh.MeshTestRunner.Area(host, \"Testing/CompilerPipeline\", typeof(ADoomedCompileIsClassifiedNotRepeatedTest).Assembly)))",
+    "includeGlobalTypes": true,
+    "sources": [
+      "namespace:Source scope:subtree"
+    ]
+  }
+}

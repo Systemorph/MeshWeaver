@@ -1,0 +1,177 @@
+// <meshweaver>
+// Id: Testing/Graph/OpenGraphPreviewServiceTest
+// DisplayName: Testing/Graph/OpenGraphPreviewServiceTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.Net.Http;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
+using MeshWeaver.Graph;
+using MeshWeaver.Mesh.Threading;
+
+/// <summary>
+/// Pins <see cref="OpenGraphPreviewService"/> against a REAL loopback HTTP server
+/// (<see cref="TestOgServer"/>): the promise cache fetches each URL once and replays to every
+/// subscriber; a FAILED fetch surfaces the URL-only fallback and evicts its entry so the next
+/// subscriber retries once; and the SSRF guard refuses non-http(s) schemes and literal
+/// loopback / private / link-local hosts without issuing any request.
+/// </summary>
+public sealed class OpenGraphPreviewServiceTest : IAsyncLifetime
+{
+    private TestOgServer server = null!;
+    private readonly IoPoolRegistry pools = new();
+    private readonly HttpClient http = new();
+
+    private OpenGraphPreviewService CreateService(bool allowLoopback = true) =>
+        new(() => pools.Get(IoPoolNames.Http), () => http, allowLoopback);
+
+    private static Task<OpenGraphPreview> Await(IObservable<OpenGraphPreview> preview) =>
+        preview.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
+
+    [MeshFact]
+    public async Task Get_SameUrlTwice_FetchesOnceAndReplays()
+    {
+        var service = CreateService();
+        var url = server.BaseUrl + "page";
+
+        var first = await Await(service.Get(url));
+        var second = await Await(service.Get(url));
+
+        Assert.Equal(1, server.RequestCount);
+        Assert.True(first.Fetched);
+        Assert.Equal("Served Title", first.Title);
+        Assert.Equal("Served description.", first.Description);
+        // The relative og:image resolves against the page URL.
+        Assert.Equal(server.BaseUrl + "og.png", first.Image);
+        Assert.Equal(first, second);
+    }
+
+    [MeshFact]
+    public async Task Get_FailedFetch_FallsBackEvictsAndRetriesOnNextSubscriber()
+    {
+        var service = CreateService();
+        var url = server.BaseUrl + "flaky";
+
+        server.StatusCode = 500;
+        var failed = await Await(service.Get(url));
+
+        Assert.False(failed.Fetched);
+        Assert.Null(failed.Title);
+        Assert.Equal(url, failed.Url);
+
+        // The failure evicted the entry: the next page view's subscriber re-runs the fetch once.
+        server.StatusCode = 200;
+        var recovered = await Await(service.Get(url));
+
+        Assert.True(recovered.Fetched);
+        Assert.Equal("Served Title", recovered.Title);
+        Assert.Equal(2, server.RequestCount);
+    }
+
+    /// <summary>
+    /// 🚨 The pinned-degraded-card defect. A portal mid-restart answers HTTP <b>200</b> with its
+    /// SPA catch-all shell: a plain <c>&lt;title&gt;</c> and no <c>og:*</c> tags. Nothing throws,
+    /// so the exception-eviction path never fires — and that empty answer used to be cached for
+    /// the whole process lifetime, leaving one card stuck on "Memex Portal" with no description
+    /// while every neighbouring card rendered correctly. A successful-but-og-less fetch must be
+    /// evicted exactly like a failed one.
+    /// </summary>
+    [MeshFact]
+    public async Task Get_SuccessfulFetchWithoutOgTags_IsNotCachedAndRetries()
+    {
+        var service = CreateService();
+        var url = server.BaseUrl + "Ifrs17";
+
+        server.OmitOgTags = true;
+        var degraded = await Await(service.Get(url));
+
+        // The fetch SUCCEEDED — this is not the failure path — but it carried nothing usable.
+        Assert.True(degraded.Fetched);
+        Assert.False(degraded.IsResolved);
+        Assert.False(degraded.DeclaresOpenGraph);
+        // The catch-all's <title> is exactly why keying the cache on Title would not have
+        // caught this: the preview HAS a title, it is simply the wrong page's.
+        Assert.Equal("Memex Portal", degraded.Title);
+        Assert.Null(degraded.Description);
+        Assert.Equal(1, server.RequestCount);
+
+        // Not cached: the next view re-fetches, and now that the portal is back it resolves.
+        server.OmitOgTags = false;
+        var recovered = await Await(service.Get(url));
+
+        Assert.True(recovered.IsResolved);
+        Assert.Equal("Served Title", recovered.Title);
+        Assert.Equal("Served description.", recovered.Description);
+        Assert.Equal(2, server.RequestCount);
+
+        // And the good answer IS cached — the retry does not become a permanent re-fetch.
+        var replayed = await Await(service.Get(url));
+        Assert.Equal(recovered, replayed);
+        Assert.Equal(2, server.RequestCount);
+    }
+
+    /// <summary>An icon is found for practically any page, degraded ones included, so it must
+    /// never be mistaken for evidence that the metadata is good.</summary>
+    [MeshFact]
+    public async Task Get_OgLessPageWithAnIcon_IsStillNotCached()
+    {
+        var service = CreateService();
+        var url = server.BaseUrl + "shell";
+
+        server.OmitOgTags = true;
+        server.IconHref = "/favicon.ico";
+
+        var degraded = await Await(service.Get(url));
+
+        Assert.Equal(server.BaseUrl + "favicon.ico", degraded.Icon);
+        Assert.False(degraded.IsResolved);
+
+        await Await(service.Get(url));
+        Assert.Equal(2, server.RequestCount);
+    }
+
+    [MeshFact]
+    public async Task Get_GuardedTarget_YieldsFallbackWithoutAnyRequest()
+    {
+        var service = CreateService(allowLoopback: false);
+
+        var preview = await Await(service.Get(server.BaseUrl + "page"));
+
+        Assert.False(preview.Fetched);
+        Assert.Equal(0, server.RequestCount);
+    }
+
+    [MeshTheory]
+    [MeshInlineData("ftp://example.org/file")]
+    [MeshInlineData("not a url")]
+    [MeshInlineData("https://localhost/admin")]
+    [MeshInlineData("https://127.0.0.1/admin")]
+    [MeshInlineData("https://10.1.2.3/internal")]
+    [MeshInlineData("https://172.16.0.1/internal")]
+    [MeshInlineData("https://192.168.1.1/router")]
+    [MeshInlineData("https://169.254.169.254/latest/meta-data")]
+    public void IsFetchable_RefusesForgeableTargets(string url) =>
+        Assert.False(CreateService(allowLoopback: false).IsFetchable(url));
+
+    [MeshTheory]
+    [MeshInlineData("https://memex.meshweaver.cloud/Underwriting")]
+    [MeshInlineData("http://example.org/page")]
+    [MeshInlineData("https://8.8.8.8/page")]
+    [MeshInlineData("https://172.15.0.1/page")]
+    public void IsFetchable_AllowsPublicTargets(string url) =>
+        Assert.True(CreateService(allowLoopback: false).IsFetchable(url));
+
+    public async ValueTask InitializeAsync() => server = await TestOgServer.StartAsync();
+
+    // Async teardown because the Kestrel-backed TestOgServer stops asynchronously (#2436); a
+    // blocking bridge here is what BlockingBridgeInTestRatchetGuard exists to prevent.
+    public async ValueTask DisposeAsync()
+    {
+        await server.DisposeAsync();
+        pools.Dispose();
+        http.Dispose();
+    }
+}

@@ -1,0 +1,553 @@
+// <meshweaver>
+// Id: Testing/CompilerPipeline/CompilationCacheServiceTest
+// DisplayName: Testing/CompilerPipeline/CompilationCacheServiceTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.IO;
+using System.Linq;
+using MeshWeaver.Graph.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+
+/// <summary>
+/// Tests for CompilationCacheService - cache management for dynamic compilation.
+/// </summary>
+public class CompilationCacheServiceTest : IDisposable
+{
+    private readonly string _testCacheDir;
+    private readonly CompilationCacheService _service;
+
+    public CompilationCacheServiceTest()
+    {
+        // Create a unique test directory for each test run
+        _testCacheDir = Path.Combine(Path.GetTempPath(), $"mesh-cache-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_testCacheDir);
+
+        var options = Options.Create(new CompilationCacheOptions
+        {
+            CacheDirectory = _testCacheDir,
+            EnableCompilationCache = true,
+            EnableSourceDebugging = true
+        });
+
+        _service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
+    }
+
+    public void Dispose()
+    {
+        // Cleanup test directory
+        if (Directory.Exists(_testCacheDir))
+        {
+            try
+            {
+                Directory.Delete(_testCacheDir, recursive: true);
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+        }
+    }
+
+    [MeshFact]
+    public void CacheDirectory_ReturnsAbsolutePath()
+    {
+        // Act
+        var cacheDir = _service.CacheDirectory;
+
+        // Assert
+        cacheDir.Should().Be(_testCacheDir);
+        Path.IsPathRooted(cacheDir).Should().BeTrue();
+    }
+
+    [MeshFact]
+    public void SanitizeNodeName_ReplacesInvalidCharacters()
+    {
+        // Arrange & Act
+        var result = _service.SanitizeNodeName("graph/org/project");
+
+        // Assert
+        result.Should().Be("graph_org_project");
+        result.Should().NotContain("/");
+    }
+
+    [MeshFact]
+    public void SanitizeNodeName_HandlesSpecialCharacters()
+    {
+        // Arrange & Act
+        var result = _service.SanitizeNodeName("path:with*special?chars");
+
+        // Assert
+        result.Should().NotContain(":");
+        result.Should().NotContain("*");
+        result.Should().NotContain("?");
+    }
+
+    [MeshFact]
+    public void SanitizeNodeName_EnsuresValidIdentifier()
+    {
+        // Arrange & Act
+        var result = _service.SanitizeNodeName("123-starts-with-number");
+
+        // Assert
+        result.Should().StartWith("Node_", "Identifiers must start with a letter");
+    }
+
+    [MeshFact]
+    public void GetDllPath_ReturnsCorrectPath()
+    {
+        // Arrange
+        var nodeName = "test_node";
+
+        // Act
+        var dllPath = _service.GetDllPath(nodeName);
+
+        // Assert
+        dllPath.Should().Be(Path.Combine(_testCacheDir, "test_node.dll"));
+    }
+
+    [MeshFact]
+    public void GetPdbPath_ReturnsCorrectPath()
+    {
+        // Arrange
+        var nodeName = "test_node";
+
+        // Act
+        var pdbPath = _service.GetPdbPath(nodeName);
+
+        // Assert
+        pdbPath.Should().Be(Path.Combine(_testCacheDir, "test_node.pdb"));
+    }
+
+    [MeshFact]
+    public void GetSourcePath_ReturnsCorrectPath()
+    {
+        // Arrange
+        var nodeName = "test_node";
+
+        // Act
+        var sourcePath = _service.GetSourcePath(nodeName);
+
+        // Assert
+        sourcePath.Should().Be(Path.Combine(_testCacheDir, "test_node.cs"));
+    }
+
+    [MeshFact]
+    public void IsCacheValid_ReturnsFalse_WhenDllDoesNotExist()
+    {
+        // Arrange
+        var nodeName = "nonexistent";
+        var lastModified = DateTimeOffset.UtcNow;
+
+        // Act
+        var isValid = _service.IsCacheValid(nodeName, lastModified);
+
+        // Assert
+        isValid.Should().BeFalse();
+    }
+
+    [MeshFact]
+    public void IsCacheValid_ReturnsFalse_WhenPdbDoesNotExist()
+    {
+        // Arrange
+        var nodeName = "dll_only";
+        File.WriteAllText(_service.GetDllPath(nodeName), "dummy dll");
+        var lastModified = DateTimeOffset.UtcNow.AddMinutes(-5);
+
+        // Act
+        var isValid = _service.IsCacheValid(nodeName, lastModified);
+
+        // Assert
+        isValid.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Lays out the timestamped-subdir cache that <see cref="CompilationCacheService.TryGetLatestCachedDllPath"/>
+    /// expects: <c>{cacheDir}/{nodeName}_{ticks_hex}/{nodeName}.{dll,pdb,inputdigest}</c>
+    /// plus the flat <c>{cacheDir}/{nodeName}.cs</c> source mirror. Mirrors what
+    /// <see cref="MeshNodeCompilationService.CompileToDiskAsync"/> writes at runtime — including
+    /// the generated-input digest, which the emit publishes inside the same staged directory as
+    /// the assembly (#3892).
+    /// </summary>
+    private string CreateCacheArtifacts(string nodeName, DateTime? dllWriteTime = null)
+    {
+        var subdir = Path.Combine(_testCacheDir, $"{nodeName}_{DateTimeOffset.UtcNow.Ticks:x}");
+        Directory.CreateDirectory(subdir);
+        var dllPath = Path.Combine(subdir, $"{nodeName}.dll");
+        var pdbPath = Path.Combine(subdir, $"{nodeName}.pdb");
+        var sourcePath = _service.GetSourcePath(nodeName);
+        File.WriteAllText(dllPath, "dummy dll");
+        File.WriteAllText(pdbPath, "dummy pdb");
+        File.WriteAllText(sourcePath, "dummy source");
+        File.WriteAllText(GeneratedInputDigestFile.PathFor(dllPath), "gdummydigest");
+        if (dllWriteTime is { } t)
+            File.SetLastWriteTimeUtc(dllPath, t);
+        return dllPath;
+    }
+
+    [MeshFact]
+    public void IsCacheValid_ReturnsTrue_WhenCacheIsNewer()
+    {
+        // Arrange — write a subdir-style cache entry matching the runtime layout.
+        var nodeName = "valid_cache";
+        CreateCacheArtifacts(nodeName);
+
+        // Node was modified before the cache was created
+        var lastModified = DateTimeOffset.UtcNow.AddMinutes(-5);
+
+        // Act
+        var isValid = _service.IsCacheValid(nodeName, lastModified);
+
+        // Assert
+        isValid.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 An artifact set WITHOUT its generated-input digest is INCOMPLETE, not merely undocumented
+    /// (#3892) — the same judgement the PDB check makes one line above it.
+    ///
+    /// <para>Reusing such an entry would stamp a dependency record with no <c>!input</c> content
+    /// key, while a fresh compile of the identical content stamps one. That record is a PRODUCER
+    /// artifact: it lands on the NodeType and ships inside every bundle baked from it, so the
+    /// guard's strength would depend on whether this machine's cache was warm. One recompile is
+    /// the price, and it is paid once per type, for artifacts a build that predates the sidecar
+    /// published.</para>
+    /// </summary>
+    [MeshFact]
+    public void IsCacheValid_ReturnsFalse_WhenTheGeneratedInputDigestIsMissing()
+    {
+        var nodeName = "digestless_cache";
+        var dllPath = CreateCacheArtifacts(nodeName);
+        _service.IsCacheValid(nodeName, DateTimeOffset.UtcNow.AddMinutes(-5)).Should().BeTrue(
+            "the positive control: with every artifact present this entry IS valid, so the "
+            + "assertion below cannot pass for some unrelated reason");
+
+        File.Delete(GeneratedInputDigestFile.PathFor(dllPath));
+
+        _service.IsCacheValid(nodeName, DateTimeOffset.UtcNow.AddMinutes(-5)).Should().BeFalse(
+            "bytes whose generated-input digest is not beside them cannot be stamped with a "
+            + "content key, so serving them would produce a WEAKER dependency record than a fresh "
+            + "compile of the same content — recompile instead");
+    }
+
+    [MeshFact]
+    public void IsCacheValid_ReturnsFalse_WhenNodeIsNewer()
+    {
+        // Arrange — write a subdir-style cache entry with a backdated DLL.
+        var nodeName = "stale_cache";
+        CreateCacheArtifacts(nodeName, dllWriteTime: DateTime.UtcNow.AddHours(-1));
+
+        // Node was modified after the cache was created
+        var lastModified = DateTimeOffset.UtcNow;
+
+        // Act
+        var isValid = _service.IsCacheValid(nodeName, lastModified);
+
+        // Assert
+        isValid.Should().BeFalse();
+    }
+
+    [MeshFact]
+    public void InvalidateCache_FlipsValidityFalse()
+    {
+        // Post-NodeTypeReleaseRedesign: InvalidateCache no longer deletes cache
+        // files (release DLLs are content-keyed and accumulate; deleting them
+        // races still-mapped ALCs on Windows). Instead it flips a sticky
+        // invalidation flag the next IsCacheValid honours, and unloads the ALC
+        // for the affected NodeType. Verify the validity contract here; ALC
+        // unload is exercised by NodeTypeService / CodeEditRecompileTest.
+        var nodeName = "to_invalidate";
+        // Write a subdir-style cache entry stamped forward of "now" so
+        // IsCacheValid returns true before InvalidateCache flips the sticky flag.
+        var dllPath = CreateCacheArtifacts(nodeName, dllWriteTime: DateTime.UtcNow.AddHours(1));
+        var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
+        var sourcePath = _service.GetSourcePath(nodeName);
+        var futureStamp = DateTime.UtcNow.AddHours(1);
+        File.SetLastWriteTimeUtc(pdbPath, futureStamp);
+        File.SetLastWriteTimeUtc(sourcePath, futureStamp);
+
+        var anyTime = DateTimeOffset.UtcNow.AddMinutes(-30);
+        _service.IsCacheValid(nodeName, anyTime).Should().BeTrue(
+            "all three artifacts exist and are newer than the lastModified");
+
+        _service.InvalidateCache(nodeName);
+
+        _service.IsCacheValid(nodeName, anyTime).Should().BeFalse(
+            "InvalidateCache flips a sticky flag; the next IsCacheValid must return false " +
+            "until a fresh compile + MarkCacheFresh clears it");
+    }
+
+    [MeshFact]
+    public void InvalidateCache_DoesNotThrow_WhenFilesDoNotExist()
+    {
+        // Arrange
+        var nodeName = "nonexistent_cache";
+
+        // Act & Assert
+        var act = () => _service.InvalidateCache(nodeName);
+        act.Should().NotThrow();
+    }
+
+    [MeshFact]
+    public void GetAllCachedAssemblyPaths_ReturnsAllDlls()
+    {
+        // Arrange
+        File.WriteAllText(Path.Combine(_testCacheDir, "node1.dll"), "dll1");
+        File.WriteAllText(Path.Combine(_testCacheDir, "node2.dll"), "dll2");
+        File.WriteAllText(Path.Combine(_testCacheDir, "node3.dll"), "dll3");
+        File.WriteAllText(Path.Combine(_testCacheDir, "other.pdb"), "pdb"); // Should be ignored
+
+        // Act
+        var paths = _service.GetAllCachedAssemblyPaths().ToList();
+
+        // Assert
+        paths.Should().HaveCount(3);
+        paths.Should().AllSatisfy(p => p.Should().EndWith(".dll"));
+    }
+
+    [MeshFact]
+    public void GetAllCachedAssemblyPaths_ReturnsEmpty_WhenNoCacheExists()
+    {
+        // Arrange
+        var emptyDir = Path.Combine(Path.GetTempPath(), $"empty-cache-{Guid.NewGuid():N}");
+        var options = Options.Create(new CompilationCacheOptions { CacheDirectory = emptyDir });
+        var service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
+
+        // Act
+        var paths = service.GetAllCachedAssemblyPaths();
+
+        // Assert
+        paths.Should().BeEmpty();
+    }
+
+    [MeshFact]
+    public void EnsureCacheDirectoryExists_CreatesDirectory()
+    {
+        // Arrange
+        var newDir = Path.Combine(Path.GetTempPath(), $"new-cache-{Guid.NewGuid():N}");
+        var options = Options.Create(new CompilationCacheOptions { CacheDirectory = newDir });
+        var service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
+
+        try
+        {
+            // Act
+            service.EnsureCacheDirectoryExists();
+
+            // Assert
+            Directory.Exists(newDir).Should().BeTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(newDir))
+                Directory.Delete(newDir);
+        }
+    }
+}
+
+/// <summary>
+/// Tests for CompilationCacheService when caching is disabled.
+/// </summary>
+public class CompilationCacheServiceDisabledTest
+{
+    [MeshFact]
+    public void IsCacheValid_ReturnsFalse_WhenCachingDisabled()
+    {
+        // Arrange
+        var options = Options.Create(new CompilationCacheOptions
+        {
+            EnableCompilationCache = false
+        });
+        var service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
+
+        // Act
+        var isValid = service.IsCacheValid("any_node", DateTimeOffset.UtcNow);
+
+        // Assert
+        isValid.Should().BeFalse();
+    }
+}
+
+/// <summary>
+/// Tests for CompilationCacheService AssemblyLoadContext management.
+/// </summary>
+public class CompilationCacheServiceLoadContextTest : IDisposable
+{
+    private readonly string _testCacheDir;
+    private readonly CompilationCacheService _service;
+
+    public CompilationCacheServiceLoadContextTest()
+    {
+        _testCacheDir = Path.Combine(Path.GetTempPath(), $"load-context-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_testCacheDir);
+
+        var options = Options.Create(new CompilationCacheOptions
+        {
+            CacheDirectory = _testCacheDir,
+            EnableCompilationCache = true,
+            EnableSourceDebugging = true
+        });
+
+        _service = new CompilationCacheService(options, NullLogger<CompilationCacheService>.Instance);
+    }
+
+    public void Dispose()
+    {
+        _service.Dispose();
+
+        if (Directory.Exists(_testCacheDir))
+        {
+            try
+            {
+                Directory.Delete(_testCacheDir, recursive: true);
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+        }
+    }
+
+    [MeshFact]
+    public void GetOrCreateLoadContext_CreatesNewContext()
+    {
+        // Arrange
+        var nodeName = "test_context";
+
+        // Act
+        var context = _service.GetOrCreateLoadContext(nodeName);
+
+        // Assert
+        context.Should().NotBeNull();
+        context.NodeName.Should().Be(nodeName);
+        context.IsCollectible.Should().BeTrue("Context should be collectible for unloading");
+        context.IsDisposed.Should().BeFalse();
+    }
+
+    [MeshFact]
+    public void GetOrCreateLoadContext_ReturnsSameContextForSameNode()
+    {
+        // Arrange
+        var nodeName = "same_context";
+
+        // Act
+        var context1 = _service.GetOrCreateLoadContext(nodeName);
+        var context2 = _service.GetOrCreateLoadContext(nodeName);
+
+        // Assert
+        context1.Should().BeSameAs(context2, "Same context should be returned for same node");
+    }
+
+    [MeshFact]
+    public void GetOrCreateLoadContext_ReturnsDifferentContextsForDifferentNodes()
+    {
+        // Arrange & Act
+        var context1 = _service.GetOrCreateLoadContext("node1");
+        var context2 = _service.GetOrCreateLoadContext("node2");
+
+        // Assert
+        context1.Should().NotBeSameAs(context2, "Different nodes should have different contexts");
+        context1.NodeName.Should().Be("node1");
+        context2.NodeName.Should().Be("node2");
+    }
+
+    [MeshFact]
+    public void UnloadContext_DisposesAndRemovesContext()
+    {
+        // Arrange
+        var nodeName = "to_unload";
+        var context = _service.GetOrCreateLoadContext(nodeName);
+
+        // Act
+        _service.UnloadContext(nodeName);
+
+        // Assert
+        context.IsDisposed.Should().BeTrue("Context should be disposed after unload");
+
+        // New context should be created after unload
+        var newContext = _service.GetOrCreateLoadContext(nodeName);
+        newContext.Should().NotBeSameAs(context, "New context should be created after unload");
+    }
+
+    [MeshFact]
+    public void UnloadContext_DoesNotThrow_WhenContextDoesNotExist()
+    {
+        // Act
+        var act = () => _service.UnloadContext("nonexistent");
+
+        // Assert
+        act.Should().NotThrow();
+    }
+
+    [MeshFact]
+    public void LoadAssembly_ReturnsNull_WhenDllDoesNotExist()
+    {
+        // Arrange
+        var nodeName = "no_dll";
+
+        // Act
+        var assembly = _service.LoadAssembly(nodeName);
+
+        // Assert
+        assembly.Should().BeNull("No DLL exists for this node");
+    }
+
+    [MeshFact]
+    public void InvalidateCache_UnloadsContext()
+    {
+        // Arrange
+        var nodeName = "to_invalidate";
+        var context = _service.GetOrCreateLoadContext(nodeName);
+
+        // Act
+        _service.InvalidateCache(nodeName);
+
+        // Assert
+        context.IsDisposed.Should().BeTrue("Context should be disposed when cache is invalidated");
+    }
+
+    [MeshFact]
+    public void Dispose_UnloadsAllContexts()
+    {
+        // Arrange
+        var context1 = _service.GetOrCreateLoadContext("node1");
+        var context2 = _service.GetOrCreateLoadContext("node2");
+        var context3 = _service.GetOrCreateLoadContext("node3");
+
+        // Act
+        _service.Dispose();
+
+        // Assert
+        context1.IsDisposed.Should().BeTrue();
+        context2.IsDisposed.Should().BeTrue();
+        context3.IsDisposed.Should().BeTrue();
+    }
+
+    [MeshFact]
+    public void GetOrCreateLoadContext_ThrowsAfterDispose()
+    {
+        // Arrange
+        _service.Dispose();
+
+        // Act
+        var act = () => { _service.GetOrCreateLoadContext("test"); };
+
+        // Assert
+        act.Should().Throw<ObjectDisposedException>();
+    }
+
+    [MeshFact]
+    public void LoadAssembly_ThrowsAfterDispose()
+    {
+        // Arrange
+        _service.Dispose();
+
+        // Act
+        var act = () => { _service.LoadAssembly("test"); };
+
+        // Assert
+        act.Should().Throw<ObjectDisposedException>();
+    }
+}

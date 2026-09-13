@@ -1,0 +1,21 @@
+{
+  "$type": "MeshNode",
+  "id": "Data",
+  "namespace": "Testing",
+  "path": "Testing/Data",
+  "mainNode": "Testing/Data",
+  "name": "MeshWeaver.Data.Test (in-mesh)",
+  "description": "MeshWeaver.Data.Test migrated in-mesh (.github/scripts/convert-xunit-to-inmesh.py, 2026-09-13): 76 of 78 files as [MeshFact] cases run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh. Refused, still on xunit: 2 — StreamUpdateIdentityTest.cs: acts as an arbitrary identity — declined by design; TransientInitializationFaultRetiresTheActivationTest.cs: needs Postgres — stays on xunit.",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "state": "Active",
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "description": "An in-mesh test suite.",
+    "configuration": "config => config.WithContentType<MeshWeaver.Markdown.MarkdownContent>().AddMarkdownViews().AddLayout(layout => layout.WithView(\"Tests\", (host, ctx) => MeshWeaver.Testing.InMesh.MeshTestRunner.Area(host, \"Testing/Data\", typeof(AReAsksNotFoundIsAVerdictTest).Assembly)))",
+    "includeGlobalTypes": true,
+    "sources": [
+      "namespace:Source scope:subtree"
+    ]
+  }
+}

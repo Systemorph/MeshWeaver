@@ -1,0 +1,415 @@
+// <meshweaver>
+// Id: Testing/MessagingHub/TypeRegistryTest
+// DisplayName: Testing/MessagingHub/TypeRegistryTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.Loader;
+using System.Text.Json;
+using System.Threading.Tasks;
+using MeshWeaver.Domain;
+using MeshWeaver.Messaging.Serialization;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+public class TypeRegistryTest(MeshTestContext context) : InMeshTestBase(output)
+{
+    record SayHelloRequest : IRequest<HelloEvent>;
+
+    record HelloEvent;
+
+    private record GenericRequest<T>(T Value);
+
+    // A type deliberately NOT registered on any hub — used to prove the resolver warns when a hub
+    // serializes a type its TypeRegistry doesn't know (the "serialized from the wrong place" defect).
+    private record UnregisteredPayload(string Value);
+
+    // A stand-in for a security content type, used to pin the legacy full-name-alias ordering contract
+    // (register full name FIRST, short name LAST) that WithGraphTypes / AddAITypes / AddMeshTypes rely on.
+    private record AliasedContent(bool PublicRead);
+
+    protected override MessageHubConfiguration ConfigureHost(
+        MessageHubConfiguration configuration
+    ) => configuration.WithTypes(typeof(GenericRequest<>), typeof(List<>));
+
+    [MeshFact]
+    public void GenericTypes()
+    {
+        var host = GetHost();
+        var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        var canMap = typeRegistry.TryGetCollectionName(typeof(GenericRequest<int>), out var typeName);
+        canMap.Should().BeTrue();
+        // Short-name default: the outer generic type uses its short name `GenericRequest`1`, not the
+        // namespace-qualified full name. Round-trips back to the same type.
+        typeName.Should().Be("GenericRequest`1[Int32]");
+
+        canMap = typeRegistry.TryGetType(typeName!, out var mappedType);
+        canMap.Should().BeTrue();
+        mappedType!.Type.Should().Be(typeof(GenericRequest<int>));
+    }
+
+    [MeshFact]
+    public void GenericTypesWithNullableArguments()
+    {
+        var host = GetHost();
+        var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        // Test List<int?>
+        var canMap = typeRegistry.TryGetCollectionName(typeof(List<int?>), out var typeName);
+        canMap.Should().BeTrue();
+        typeName.Should().Be("List`1[Int32?]");
+
+        canMap = typeRegistry.TryGetType(typeName!, out var mappedType);
+        canMap.Should().BeTrue();
+        mappedType!.Type.Should().Be(typeof(List<int?>));
+
+        // Test GenericRequest<int?>
+        canMap = typeRegistry.TryGetCollectionName(typeof(GenericRequest<int?>), out typeName);
+        canMap.Should().BeTrue();
+        typeName.Should().Be("GenericRequest`1[Int32?]");
+
+        canMap = typeRegistry.TryGetType(typeName!, out mappedType);
+        canMap.Should().BeTrue();
+        mappedType!.Type.Should().Be(typeof(GenericRequest<int?>));
+    }
+
+    /// <summary>
+    /// Serializing a type that is NOT in the serializing hub's registry stamps a full-name $type and
+    /// MUST warn — that warning is how we find a node "serialized from the wrong place" (the
+    /// _Provider/_Policy storm). The warning names the type and the publishing hub, and is deduped.
+    /// </summary>
+    [MeshFact]
+    public void SerializingUnregisteredType_WarnsAndNamesThePublisher()
+    {
+        var host = GetHost();
+        var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        // Sanity: the payload type is genuinely unregistered on this hub.
+        typeRegistry.TryGetCollectionName(typeof(UnregisteredPayload), out _).Should().BeFalse();
+
+        var captured = new ConcurrentQueue<string>();
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new ObjectPolymorphicConverter(typeRegistry));
+        options.TypeInfoResolver = new PolymorphicTypeInfoResolver(
+            typeRegistry, owner: "mesh/the-publishing-hub", logger: new CapturingLogger(captured));
+
+        // Serialize through the open `object` door so the polymorphic path (and the resolver) runs.
+        var json = JsonSerializer.Serialize((object)new UnregisteredPayload("hi"), typeof(object), options);
+
+        // Short-name default (the CURE): an unregistered type is now written with its SHORT-name $type
+        // ("UnregisteredPayload"), which a reading hub that registered it under its short name RESOLVES —
+        // instead of the namespace-qualified full name that used to read back as an untyped JsonElement.
+        json.Should().Contain($"\"{nameof(UnregisteredPayload)}\"",
+            "the short-name default writes the $type as the bare type name, which reading hubs resolve");
+        json.Should().NotContain(typeof(UnregisteredPayload).FullName!,
+            "the namespace-qualified full name must no longer be emitted as the $type discriminator");
+        // ...and the resolver STILL surfaces exactly one warning naming the type + the publishing hub, so
+        // an unregistered type is still flagged for explicit registration (collision-safety + clarity).
+        var warnings = captured.Where(m =>
+            m.Contains("Unregistered type") &&
+            m.Contains(typeof(UnregisteredPayload).FullName!) &&
+            m.Contains("mesh/the-publishing-hub")).ToList();
+        warnings.Should().ContainSingle("the unregistered-type warning fires once per type and identifies the hub");
+    }
+
+    /// <summary>
+    /// The legacy full-name alias contract: registering the full name FIRST and the short
+    /// <c>nameof</c> LAST makes BOTH discriminators resolve on read while the hub keeps WRITING the
+    /// short name (nameByType is last-write-wins). This is exactly what WithGraphTypes / AddAITypes /
+    /// AddMeshTypes now do for the security content types so legacy full-name nodes deserialize.
+    /// </summary>
+    [MeshFact]
+    public void FullNameAlias_ResolvesBothDiscriminators_ButWritesShortName()
+    {
+        var host = GetHost();
+        var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        typeRegistry.WithType(typeof(AliasedContent), typeof(AliasedContent).FullName!); // full name FIRST
+        typeRegistry.WithType(typeof(AliasedContent), nameof(AliasedContent));           // short name LAST
+
+        // Read: a legacy full-name $type AND the short name both resolve to the same type.
+        typeRegistry.TryGetType(typeof(AliasedContent).FullName!, out var byFull).Should().BeTrue();
+        byFull!.Type.Should().Be(typeof(AliasedContent));
+        typeRegistry.TryGetType(nameof(AliasedContent), out var byShort).Should().BeTrue();
+        byShort!.Type.Should().Be(typeof(AliasedContent));
+
+        // Write: the hub emits the SHORT name (so it never re-introduces full-name nodes).
+        typeRegistry.TryGetCollectionName(typeof(AliasedContent), out var writeName).Should().BeTrue();
+        writeName.Should().Be(nameof(AliasedContent));
+    }
+
+    /// <summary>
+    /// Serializing a type from a COLLECTIBLE assembly (a dynamic node / kernel-script compilation —
+    /// per-compile CLR identity) must NOT adopt the type into the hub's TypeRegistry. Pre-fix, the
+    /// resolver's auto-registration poisoned the shared hub for the pod's lifetime: every later $type
+    /// resolution (e.g. mesh-query row deserialization) yielded THAT foreign CLR type, and consumers
+    /// holding their OWN compilation of the class read Content as null — the prod "BalanceSheet
+    /// dashboards render empty" outage (agentic-pensions#12). The wire shape must be unchanged (short-name
+    /// $type still written); reads on this hub degrade politely to JsonElement, which the consumer recovers.
+    /// </summary>
+    [MeshFact]
+    public void SerializingCollectibleType_DoesNotPoisonRegistry_AndDegradesReadsToJsonElement()
+    {
+        var host = GetHost();
+        var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        var collectibleType = EmitCollectibleType("SharedEntry", "Position");
+        collectibleType.Assembly.IsCollectible.Should().BeTrue(
+            "the emitted assembly must model a dynamic node compilation (loaded collectible)");
+
+        var captured = new ConcurrentQueue<string>();
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new ObjectPolymorphicConverter(typeRegistry));
+        options.TypeInfoResolver = new PolymorphicTypeInfoResolver(
+            typeRegistry, owner: "mesh/shared-hub", logger: new CapturingLogger(captured));
+
+        var instance = Activator.CreateInstance(collectibleType)!;
+        collectibleType.GetProperty("Position")!.SetValue(instance, "Assets");
+        var json = JsonSerializer.Serialize(instance, typeof(object), options);
+
+        // Wire shape unchanged: the short-name $type is still written, so hubs that DO own the type
+        // (explicit WithType/WithContentType registration) resolve it exactly as before.
+        json.Should().Contain("\"SharedEntry\"",
+            "serialization must still stamp the short-name $type discriminator");
+        json.Should().Contain("Assets", "the payload properties must serialize normally");
+
+        // The poisoning is gone: the registry must NOT have adopted the per-compile CLR identity.
+        typeRegistry.TryGetType("SharedEntry", out _).Should().BeFalse(
+            "a collectible-assembly type must never be auto-registered by serialization — it would make "
+            + "every later $type resolution on this hub yield the foreign/stale CLR type");
+        typeRegistry.TryGetCollectionName(collectibleType, out _).Should().BeFalse();
+
+        // Reads on THIS hub degrade politely to JsonElement (recoverable via ContentAs<T> at the
+        // consumer) instead of resolving to the foreign type.
+        var back = JsonSerializer.Deserialize<object>(json, options);
+        back.Should().BeOfType<JsonElement>();
+    }
+
+    /// <summary>
+    /// Emits a minimal public class with one string property into a COLLECTIBLE dynamic assembly —
+    /// the CLR shape of a compiled dynamic-node type (see CompilationCacheService: collectible ALC,
+    /// "DynamicNode_*" naming) without dragging Roslyn into this test project.
+    /// </summary>
+    private static Type EmitCollectibleType(string typeName, string propertyName)
+    {
+        var assemblyBuilder = System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
+            new System.Reflection.AssemblyName("DynamicNode_CollectibleTest"),
+            System.Reflection.Emit.AssemblyBuilderAccess.RunAndCollect);
+        var moduleBuilder = assemblyBuilder.DefineDynamicModule("main");
+        var typeBuilder = moduleBuilder.DefineType(
+            typeName, System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Class);
+        var field = typeBuilder.DefineField(
+            $"_{propertyName}", typeof(string), System.Reflection.FieldAttributes.Private);
+        var property = typeBuilder.DefineProperty(
+            propertyName, System.Reflection.PropertyAttributes.None, typeof(string), null);
+        const System.Reflection.MethodAttributes accessorAttributes =
+            System.Reflection.MethodAttributes.Public
+            | System.Reflection.MethodAttributes.SpecialName
+            | System.Reflection.MethodAttributes.HideBySig;
+        var getter = typeBuilder.DefineMethod(
+            $"get_{propertyName}", accessorAttributes, typeof(string), Type.EmptyTypes);
+        var getterIl = getter.GetILGenerator();
+        getterIl.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        getterIl.Emit(System.Reflection.Emit.OpCodes.Ldfld, field);
+        getterIl.Emit(System.Reflection.Emit.OpCodes.Ret);
+        var setter = typeBuilder.DefineMethod(
+            $"set_{propertyName}", accessorAttributes, null, new[] { typeof(string) });
+        var setterIl = setter.GetILGenerator();
+        setterIl.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        setterIl.Emit(System.Reflection.Emit.OpCodes.Ldarg_1);
+        setterIl.Emit(System.Reflection.Emit.OpCodes.Stfld, field);
+        setterIl.Emit(System.Reflection.Emit.OpCodes.Ret);
+        property.SetGetMethod(getter);
+        property.SetSetMethod(setter);
+        return typeBuilder.CreateType()!;
+    }
+
+    /// <summary>
+    /// 🚨 The TWO invariants of collectible-type eviction, pinned together because fixing one used
+    /// to break the other:
+    ///
+    /// <para><b>(1) A live user of the assembly keeps resolving (issue #1169).</b>
+    /// <c>AssemblyLoadContext.Unload()</c> is COOPERATIVE — the <c>Unloading</c> event fires at
+    /// INITIATION, while hubs whose configuration lives in that assembly are still running on it
+    /// (a NodeType recompile unloads the SUPERSEDED context the moment the new build loads;
+    /// <c>CompilationCacheService.EvictSupersededContexts</c> documents "a context still referenced
+    /// by a live hub stays fully mapped and usable"). The registry's original eviction (dfac3366d)
+    /// REMOVED the entries at that instant, so a live Store hub's own <c>StorePackage</c>
+    /// registration vanished mid-render: <c>Workspace.GetStream</c> threw "Type StorePackage is
+    /// unknown" while the hub's DataContext still knew the type source. While ANYTHING still holds
+    /// the assembly alive, the registry must keep resolving its types — by name, by type, and on
+    /// the enumeration the polymorphic resolver walks.</para>
+    ///
+    /// <para><b>(2) The registry must not ROOT the context (dfac3366d's leak + SIGSEGV).</b> Once
+    /// the last real user drops the assembly, the registry must not be what keeps it alive — a
+    /// strong entry makes every recompile leak its whole load context, and a registry outliving
+    /// freed metadata is the <c>ComputeDerivedTypes</c> AccessViolation (CI core dump, FutuRe at
+    /// recompile v5/v8/v15, exit=139). Pinned STRUCTURALLY (via reflection over the private maps)
+    /// rather than by asserting actual GC collection: the xunit v3 host roots every collectible
+    /// context loaded inside a test (verified with a registry-free baseline — load + Unload +
+    /// 10×GC.Collect never collects), so a GC-based assert can only ever fail for environmental
+    /// reasons. Structurally, non-rooting means: after Unloading fires, NO strong map
+    /// (<c>typeByName</c>/<c>nameByType</c>/<c>aliasByName</c>) holds the type — it is served
+    /// exclusively from the weak shadow (<c>WeakReference</c> + <c>ConditionalWeakTable</c>,
+    /// neither of which roots), whose dead entries are skipped and pruned.</para>
+    /// </summary>
+    [MeshFact]
+    public void CollectibleType_SurvivesUnloadInitiationWhileAlive_ButLeavesNoStrongEntry()
+    {
+        var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        var context = new AssemblyLoadContext("evict-test", isCollectible: true);
+        var reloaded = context.LoadFromAssemblyPath(typeof(HelloEvent).Assembly.Location);
+        var collectibleType = reloaded.GetType(typeof(HelloEvent).FullName!)!;
+        collectibleType.Assembly.IsCollectible.Should().BeTrue("the fixture must reproduce the recompile shape");
+        collectibleType.Should().NotBeSameAs(typeof(HelloEvent), "a reload is a new CLR identity");
+
+        typeRegistry.WithType(collectibleType, "EvictMe");
+        typeRegistry.TryGetType("EvictMe", out var registered).Should().BeTrue();
+        registered!.Type.Should().BeSameAs(collectibleType);
+
+        context.Unload();
+
+        // ── Invariant 1: while the assembly is still ALIVE (this test holds the Type, exactly
+        // like a live hub's configuration closure), unload INITIATION must not strip it.
+        typeRegistry.TryGetType("EvictMe", out var demoted).Should().BeTrue(
+            "a hub still running on a superseded assembly must keep resolving its own types "
+            + "(issue #1169: 'Type StorePackage is unknown' mid-render)");
+        demoted!.Type.Should().BeSameAs(collectibleType);
+        typeRegistry.TryGetCollectionName(collectibleType, out var name).Should().BeTrue(
+            "Workspace.GetStream<T>() asks exactly this and threw 'Type StorePackage is unknown'");
+        name.Should().Be("EvictMe");
+        typeRegistry.Types.Should().Contain(t => t.Key == "EvictMe",
+            "the polymorphic resolver still needs the $type discriminator for the live hub's data");
+
+        // ── Invariant 2: no STRONG map may still hold the type — it is served exclusively from
+        // the weak shadow, so the registry cannot root the superseded context (the leak) and
+        // cannot outlive its metadata (the SIGSEGV walk) once real users let go.
+        StrongMapsHolding(typeRegistry, collectibleType).Should().BeEmpty(
+            "after Unloading fires, only the weak shadow may serve the type — a strong entry "
+            + "would root the superseded load context forever (the recompile ALC leak dfac3366d closed)");
+    }
+
+    /// <summary>
+    /// A registration arriving AFTER its context began unloading (a serializer touching a
+    /// superseded type mid-supersession) must ALSO go to the weak shadow: the Unloading event
+    /// has already fired and will never fire again, so a strong entry could never be evicted —
+    /// a permanent root. And it must still resolve while the assembly is alive.
+    /// </summary>
+    [MeshFact]
+    public void LateRegistration_FromUnloadingContext_GoesToTheWeakShadow_NotAStrongRoot()
+    {
+        var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        var context = new AssemblyLoadContext("late-register-test", isCollectible: true);
+        var reloaded = context.LoadFromAssemblyPath(typeof(HelloEvent).Assembly.Location);
+        var collectibleType = reloaded.GetType(typeof(HelloEvent).FullName!)!;
+
+        // Teach the registry about the context (subscribes Unloading), then supersede it.
+        typeRegistry.WithType(collectibleType, "LateOriginal");
+        context.Unload();
+
+        // The late registration — after the Unloading event already fired.
+        typeRegistry.WithType(collectibleType, "LateArrival");
+
+        // It must still resolve while alive…
+        typeRegistry.TryGetType("LateArrival", out var late).Should().BeTrue();
+        late!.Type.Should().BeSameAs(collectibleType);
+        // …but never through a strong entry (see the invariant-2 note above).
+        StrongMapsHolding(typeRegistry, collectibleType).Should().BeEmpty(
+            "a registration made AFTER the context began unloading can never be evicted by the "
+            + "Unloading event (it already fired), so a strong entry would root the context forever");
+    }
+
+    /// <summary>
+    /// Names of the registry's STRONG maps that still hold <paramref name="type"/>. Reflection
+    /// over the private fields — there is deliberately no public surface for this (the project
+    /// avoids assembly-wide InternalsVisibleTo), and the property under test is precisely the
+    /// registry's internal storage shape: strong entry = roots the load context, weak-shadow
+    /// entry = does not.
+    /// </summary>
+    private static IReadOnlyList<string> StrongMapsHolding(ITypeRegistry typeRegistry, Type type)
+    {
+        var impl = typeRegistry.GetType();
+        var holding = new List<string>();
+        var typeByName = (System.Collections.IDictionary?)GetField("typeByName");
+        var aliasByName = (System.Collections.IDictionary?)GetField("aliasByName");
+        var nameByType = (System.Collections.IDictionary?)GetField("nameByType");
+        // All three, not just the first: this helper reaches into private fields by name, so a
+        // rename is the expected way it breaks. Asserting each one says WHICH field moved; the
+        // null-forgiving dereference below would instead throw a NullReferenceException that
+        // names nothing and reads like a defect in the registry rather than in this test.
+        typeByName.Should().NotBeNull("the test must track the registry's storage-field shape");
+        aliasByName.Should().NotBeNull("the test must track the registry's storage-field shape");
+        nameByType.Should().NotBeNull("the test must track the registry's storage-field shape");
+        if (typeByName!.Values.Cast<object>().Any(d => ReferenceEquals(GetDefinitionType(d), type)))
+            holding.Add("typeByName");
+        if (aliasByName!.Values.Cast<object>().Any(d => ReferenceEquals(GetDefinitionType(d), type)))
+            holding.Add("aliasByName");
+        if (nameByType!.Keys.Cast<object>().Any(k => ReferenceEquals(k, type)))
+            holding.Add("nameByType");
+        return holding;
+
+        object? GetField(string fieldName) => impl
+            .GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(typeRegistry);
+
+        static Type? GetDefinitionType(object definition) =>
+            (Type?)definition.GetType().GetProperty("Type")?.GetValue(definition);
+    }
+
+    /// <summary>
+    /// 🚨 A RECOMPILE must win the full-name alias. Every recompile of a dynamic node mints a new
+    /// collectible assembly whose types carry the SAME full name as the previous build's, and the
+    /// alias index is what resolves a full-name <c>$type</c> discriminator on the way in.
+    ///
+    /// <para><c>IndexFullNameAlias</c> used <c>TryAdd</c> for everything, on the reasoning that full
+    /// names are unique — true for an ordinary assembly, false for a rebuilt node. So the FIRST
+    /// build owned the alias forever. That was masked while a superseded context unloaded promptly
+    /// and its entries were swept; it is not masked now, because those entries are DEMOTED to the
+    /// weak shadow rather than dropped, and a context leased by a live hub does not begin unloading
+    /// at all. Resolving a live payload to a superseded assembly's type is the foreign-content
+    /// class: <c>Content is X</c> goes false and the bound view renders empty or never emits.</para>
+    /// </summary>
+    [MeshFact]
+    public void RecompiledCollectibleType_ReplacesTheFullNameAlias_RatherThanKeepingTheFirst()
+    {
+        var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        // Two builds of "the same" node type: same full name, different collectible assemblies —
+        // exactly what a recompile produces.
+        var v1 = EmitCollectibleType("RecompiledEntry", "Position");
+        var v2 = EmitCollectibleType("RecompiledEntry", "Position");
+        v1.Should().NotBeSameAs(v2, "the fixture must reproduce two distinct builds");
+        v1.FullName.Should().Be(v2.FullName, "a recompile keeps the type's full name");
+
+        // Registered under DISTINCT canonical names, so ONLY the full-name alias is under test —
+        // typeByName's last-write-wins cannot mask the defect.
+        typeRegistry.WithType(v1, "RecompiledEntry_v1");
+        typeRegistry.WithType(v2, "RecompiledEntry_v2");
+
+        typeRegistry.TryGetType(v2.FullName!, out var resolved).Should().BeTrue(
+            "the full name must still resolve after the recompile");
+        resolved!.Type.Should().BeSameAs(v2,
+            "the alias must resolve the CURRENT build; keeping the first one pins a superseded "
+            + "assembly's type, and content deserialised into it fails every 'Content is X' check "
+            + "downstream — the view then renders empty or waits forever");
+    }
+
+    private sealed class CapturingLogger(ConcurrentQueue<string> sink) : ILogger
+    {
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => sink.Enqueue(formatter(state, exception));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
+    }
+}

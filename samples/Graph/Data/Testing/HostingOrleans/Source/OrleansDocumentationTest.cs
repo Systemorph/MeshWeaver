@@ -1,0 +1,182 @@
+// <meshweaver>
+// Id: Testing/HostingOrleans/OrleansDocumentationTest
+// DisplayName: Testing/HostingOrleans/OrleansDocumentationTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using MeshWeaver.Connection.Orleans;
+using MeshWeaver.Data;
+using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Documentation;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Orleans.Hosting;
+using Orleans.TestingHost;
+
+// TODO: needs custom shared fixture — uses DocSiloConfigurator with AddDocumentation(),
+// which the SharedOrleansFixture does not configure.
+/// <summary>
+/// Tests that Documentation static nodes (from DocumentationNodeProvider) work
+/// correctly with Orleans routing — same setup as the distributed portal.
+/// Verifies: path resolution, search with names/icons, layout area loading.
+/// </summary>
+public class OrleansDocumentationTest(MeshTestContext context) : InMeshTestBase(output)
+{
+    protected TestCluster Cluster { get; private set; } = null!;
+
+    public override async ValueTask InitializeAsync()
+    {
+        await base.InitializeAsync();
+        var builder = new TestClusterBuilder();
+        // Test-sized grain directory (#2346). This class builds its own TestCluster rather than
+        // going through OrleansTestCluster.DeployAsync, so it opts in explicitly.
+        builder.AddSiloBuilderConfigurator<TestGrainDirectorySizing>();
+        builder.Options.InitialSilosCount = 1;
+        builder.AddSiloBuilderConfigurator<DocSiloConfigurator>();
+        builder.AddClientBuilderConfigurator<DocClientConfigurator>();
+        Cluster = builder.Build();
+        await Cluster.DeployAsync();
+        // Seed a default System circuit identity so portal-hub posts carry an
+        // identity (never-null AccessContext invariant). See OrleansTestIdentity.
+        OrleansTestIdentity.SeedDefaultIdentity(Cluster);
+    }
+
+    private async Task<IMessageHub> CreatePortalHubAsync()
+    {
+        var meshHub = Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
+        var routingService = Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>();
+
+        var portalHub = meshHub.GetHostedHub(
+            AddressExtensions.CreatePortalAddress(),
+            config => config
+                .AddLayoutClient()
+                .WithInitialization(hub =>
+                    hub.RegisterForDisposal(routingService.RegisterStream(hub))))!;
+
+        await Task.Delay(500);
+        return portalHub;
+    }
+
+    [MeshFact(TimeoutSeconds = 60)]
+    public async Task Search_BusinessRules_ReturnsWithNameAndIcon()
+    {
+        // Use the mesh hub from the client — same DI container in co-hosted setup
+        var meshHub = Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
+        var meshService = meshHub.ServiceProvider.GetRequiredService<IMeshService>();
+        var ct = CancellationToken.None;
+
+        // Exact same query pattern as SearchBar.ExecuteTextSearchAsync
+        var query = "*business* scope:descendants context:search is:main limit:50";
+        var results = new List<MeshNode>();
+        await foreach (var obj in meshService.QueryAsync(new MeshQueryRequest { Query = query }, ct))
+        {
+            if (obj is MeshNode n)
+                results.Add(n);
+        }
+
+        Output.WriteLine($"Search results: {results.Count}");
+        foreach (var n in results)
+            Output.WriteLine($"  {n.Path}: Name='{n.Name}', Icon='{n.Icon}'");
+
+        results.Should().NotBeEmpty("Search for 'business' should find Doc nodes");
+
+        var businessRules = results.FirstOrDefault(n => n.Path == "Doc/Architecture/BusinessRules");
+        businessRules.Should().NotBeNull("BusinessRules node should appear in search");
+        businessRules!.Name.Should().NotBeNullOrEmpty("Name must be set");
+        businessRules.Icon.Should().NotBeNullOrEmpty("Icon must be set");
+    }
+
+    [MeshFact(TimeoutSeconds = 60)]
+    public async Task DocNode_PathResolves()
+    {
+        var pathResolver = Cluster.Client.ServiceProvider.GetRequiredService<IPathResolver>();
+
+        var resolution = await pathResolver.ResolvePath("Doc/Architecture/BusinessRules").FirstAsync().Await();
+        Output.WriteLine($"Resolution: Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
+        resolution.Should().NotBeNull("Doc/Architecture/BusinessRules should resolve");
+    }
+
+    [MeshFact(TimeoutSeconds = 60)]
+    public async Task BusinessRules_LayoutArea_Loads()
+    {
+        var portal = await CreatePortalHubAsync();
+        var address = new Address("Doc/Architecture/BusinessRules");
+
+        Output.WriteLine("Pinging Doc/Architecture/BusinessRules...");
+        var response = await portal.Observe(new PingRequest(), o => o.WithTarget(address)).FirstAsync().Await(new CancellationTokenSource(30.Seconds()).Token);
+        Output.WriteLine($"Ping: {response.Message.GetType().Name}");
+
+        var workspace = portal.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
+
+        Output.WriteLine("Waiting for Overview area...");
+        var value = await stream.Timeout(30.Seconds()).FirstAsync();
+        Output.WriteLine($"Received: ValueKind={value.Value.ValueKind}");
+
+        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
+            "BusinessRules Overview should return content");
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        if (Cluster is not null)
+            OrleansClusterDisposal.DisposeInBackground(Cluster);
+        await base.DisposeAsync();
+    }
+}
+
+/// <summary>
+/// Client configurator that also registers Documentation (mirrors co-hosted portal).
+/// </summary>
+public class DocClientConfigurator : IHostConfigurator
+{
+    public void Configure(IHostBuilder hostBuilder)
+    {
+        var meshBuilder = hostBuilder.UseOrleansMeshClient();
+        meshBuilder.AddDocumentation();
+    }
+}
+
+/// <summary>
+/// Silo configurator with in-memory persistence + Documentation static provider.
+/// Mirrors the distributed portal setup without PostgreSQL.
+/// </summary>
+public class DocSiloConfigurator : ISiloConfigurator, IHostConfigurator
+{
+    public void Configure(ISiloBuilder siloBuilder)
+    {
+        siloBuilder.ConfigureMeshWeaverServer()
+            .AddMemoryGrainStorageAsDefault();
+    }
+
+    public void Configure(IHostBuilder hostBuilder)
+    {
+        // AddDocumentation registers an EmbeddedResource IPartitionStorageProvider
+        // for the "Doc" namespace; the routing-aware partitioned in-memory stack is
+        // required for that provider to actually serve reads. Plain AddInMemoryPersistence
+        // would register a single non-routing InMemoryStorageAdapter and the Doc
+        // namespace would be unreachable. See Doc/Architecture/PartitionedPersistence.md.
+        hostBuilder.UseOrleansMeshServer()
+            .AddPartitionedInMemoryPersistence()
+            .ConfigurePortalMesh()
+            .AddDocumentation()
+            .AddGraph()
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+    }
+}
+

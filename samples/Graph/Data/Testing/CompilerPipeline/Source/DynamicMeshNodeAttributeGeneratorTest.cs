@@ -1,0 +1,533 @@
+// <meshweaver>
+// Id: Testing/CompilerPipeline/DynamicMeshNodeAttributeGeneratorTest
+// DisplayName: Testing/CompilerPipeline/DynamicMeshNodeAttributeGeneratorTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+﻿using System;
+using System.Collections.Generic;
+using MeshWeaver.ContentCollections;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
+
+using MeshWeaver.Compiler;
+/// <summary>
+/// Tests for DynamicMeshNodeAttributeGenerator - generates C# source for MeshNodeAttribute.
+/// </summary>
+public class DynamicMeshNodeAttributeGeneratorTest
+{
+    private readonly DynamicMeshNodeAttributeGenerator _generator = new();
+
+    [MeshFact]
+    public void SanitizeName_ReplacesSlashes()
+    {
+        // Arrange
+        var path = "graph/org/project";
+
+        // Act
+        var sanitized = _generator.SanitizeName(path);
+
+        // Assert
+        sanitized.Should().Be("graph_org_project");
+    }
+
+    [MeshFact]
+    public void SanitizeName_RemovesSpecialCharacters()
+    {
+        // Arrange
+        var path = "my-path.with.dots";
+
+        // Act
+        var sanitized = _generator.SanitizeName(path);
+
+        // Assert
+        sanitized.Should().NotContain("-");
+        sanitized.Should().NotContain(".");
+    }
+
+    [MeshFact]
+    public void SanitizeName_EnsuresStartsWithLetter()
+    {
+        // Arrange
+        var path = "123numeric";
+
+        // Act
+        var sanitized = _generator.SanitizeName(path);
+
+        // Assert
+        char.IsLetter(sanitized[0]).Should().BeTrue();
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesCodeFromCodeConfiguration()
+    {
+        // Arrange
+        var node = MeshNode.FromPath("test/node") with
+        {
+            Name = "Test Node",
+            NodeType = "story",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record Story { public string Title { get; init; } }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert
+        source.Should().Contain("public record Story");
+        source.Should().Contain("public string Title");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesMeshNodeProperties()
+    {
+        // Arrange
+        var node = MeshNode.FromPath("org/acme") with
+        {
+            Name = "Acme Corp",
+            NodeType = "organization",
+            Icon = "Building",
+            Order = 10,
+            LastModified = DateTimeOffset.Parse("2024-01-15T10:30:00Z")
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record Organization { public string Name { get; init; } }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert
+        source.Should().Contain("Name = \"Acme Corp\"");
+        source.Should().Contain("NodeType = \"organization\"");
+        source.Should().Contain("Icon = \"Building\"");
+        source.Should().Contain("Order = 10");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_DoesNotHoistUsingDeclarations()
+    {
+        // Regression guard: `using var x = new T { ... };` inside a method has no
+        // parentheses and ends with ';', so the naive directive heuristic used to
+        // hoist it to the top of the generated file — yanking the variable out of
+        // its method (CS8805 top-level statements / CS0103 missing locals). This
+        // was the PythonDemo/PrimeReport compile failure.
+        var node = MeshNode.FromPath("test/proc") with
+        {
+            NodeType = "proc",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = """
+                using System.Diagnostics;
+
+                public static class Runner
+                {
+                    public static string Run(ProcessStartInfo psi)
+                    {
+                        using var process = new Process { StartInfo = psi };
+                        process.Start();
+                        return process.Id.ToString();
+                    }
+                }
+                """
+        };
+
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // The directive IS hoisted; the declaration stays inside the method body.
+        var assemblyAttrIndex = source.IndexOf("[assembly:");
+        var directiveIndex = source.IndexOf("using System.Diagnostics;");
+        var declarationIndex = source.IndexOf("using var process = new Process { StartInfo = psi };");
+
+        directiveIndex.Should().BeGreaterThanOrEqualTo(0);
+        declarationIndex.Should().BeGreaterThanOrEqualTo(0);
+        directiveIndex.Should().BeLessThan(assemblyAttrIndex,
+            "using DIRECTIVES must be hoisted above the assembly attribute");
+        declarationIndex.Should().BeGreaterThan(assemblyAttrIndex,
+            "a using DECLARATION must stay inside its method, never hoisted to the file top");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_GeneratesValidClassName()
+    {
+        // Arrange
+        var node = MeshNode.FromPath("graph/org/project") with
+        {
+            NodeType = "project",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record Project { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert
+        source.Should().Contain("class graph_org_projectMeshNodeProviderAttribute");
+        source.Should().Contain("[assembly: MeshWeaver.Graph.Generated.graph_org_projectMeshNodeProvider]");
+
+        // Verify assembly attribute comes before namespaces
+        var assemblyAttrIndex = source.IndexOf("[assembly:");
+        var namespaceIndex = source.IndexOf("namespace MeshWeaver.Graph.Generated");
+        assemblyAttrIndex.Should().BeLessThan(namespaceIndex, "Assembly attribute must come before namespace declarations");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesHubConfiguration()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record TestType { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert
+        source.Should().Contain("HubConfiguration = ConfigureHub");
+        source.Should().Contain("private static MessageHubConfiguration ConfigureHub");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_EscapesSpecialCharacters()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            Name = "Test \"quoted\" name",
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record TestType { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert
+        source.Should().Contain("\\\"quoted\\\"");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesRequiredUsings()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record TestType { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert
+        source.Should().Contain("using System;");
+        source.Should().Contain("using MeshWeaver.Mesh;");
+        source.Should().Contain("using MeshWeaver.Messaging;");
+        source.Should().Contain("using System.ComponentModel.DataAnnotations;");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesGeneratedComment()
+    {
+        // Arrange
+        var node = MeshNode.FromPath("my/node") with
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record TestType { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert
+        source.Should().Contain("// Auto-generated from MeshNode: my/node");
+        source.Should().Contain("// Generated at:");
+    }
+
+    // GenerateAttributeSource_IncludesAssemblyLocation deleted — MeshNode.AssemblyLocation
+    // was removed (see Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md); the
+    // cross-silo durable reference is now NodeTypeRelease.AssemblyContentPath +
+    // NodeTypeDefinition.LatestAssemblyPath, both populated at compile time by the
+    // IAssemblyStore upload. The generator no longer emits an AssemblyLocation field
+    // because the attribute consumer doesn't need it either.
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesDefaultViews_ForNonNodeTypeNodes()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test", // not "NodeType"
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record TestType { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert - AddMeshDataSource() is injected automatically for non-NodeType nodes
+        source.Should().Contain("AddMeshDataSource()",
+            "Generated code must include AddMeshDataSource() for non-NodeType nodes");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesDefaultViews_ForNodeTypeNodes()
+    {
+        // Arrange - generator checks node.Content is NodeTypeDefinition, NOT node.NodeType
+        var node = new MeshNode("Type/Test")
+        {
+            NodeType = "NodeType",
+            LastModified = DateTimeOffset.UtcNow,
+            Content = new NodeTypeDefinition { }
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record TestType { }"
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert - NodeType nodes now use AddMeshDataSource like all other nodes
+        source.Should().Contain("AddMeshDataSource()",
+            "Generated code must include AddMeshDataSource() for NodeType definition nodes");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesCustomHubConfiguration_WhenProvided()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = "public record TestType { }"
+        };
+
+        var hubConfiguration = "config => config.AddData(d => d.AddSource(s => s.WithType<TestType>()))";
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, hubConfiguration);
+
+        // Assert
+        source.Should().Contain(hubConfiguration);
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_HandlesNullCodeConfiguration()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null);
+
+        // Assert - should still generate valid code
+        source.Should().Contain("class testMeshNodeProviderAttribute");
+        source.Should().Contain("HubConfiguration = ConfigureHub");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_HandlesEmptyCode()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var codeConfig = new CodeConfiguration
+        {
+            Code = ""
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, codeConfig, null);
+
+        // Assert - should still generate valid code
+        source.Should().Contain("class testMeshNodeProviderAttribute");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesContentCollections_WhenProvided()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var contentCollections = new List<ContentCollectionConfig>
+        {
+            new()
+            {
+                Name = "docs",
+                SourceType = "FileSystem",
+                BasePath = "/data/docs"
+            }
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, contentCollections);
+
+        // Assert
+        source.Should().Contain("AddContentCollections(");
+        source.Should().Contain("new ContentCollectionConfig");
+        source.Should().Contain("Name = \"docs\"");
+        source.Should().Contain("SourceType = \"FileSystem\"");
+        source.Should().Contain("BasePath = \"/data/docs\"");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesMultipleContentCollections()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var contentCollections = new List<ContentCollectionConfig>
+        {
+            new()
+            {
+                Name = "docs",
+                SourceType = "FileSystem",
+                BasePath = "/data/docs"
+            },
+            new()
+            {
+                Name = "assets",
+                SourceType = "FileSystem",
+                BasePath = "/data/assets",
+                DisplayName = "Assets Collection"
+            }
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, contentCollections);
+
+        // Assert
+        source.Should().Contain("Name = \"docs\"");
+        source.Should().Contain("Name = \"assets\"");
+        source.Should().Contain("DisplayName = \"Assets Collection\"");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesContentCollectionSettings()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        var contentCollections = new List<ContentCollectionConfig>
+        {
+            new()
+            {
+                Name = "embedded",
+                SourceType = "EmbeddedResource",
+                Settings = new Dictionary<string, string>
+                {
+                    ["AssemblyName"] = "MyApp.Resources",
+                    ["ResourcePrefix"] = "MyApp.Resources.Content"
+                }
+            }
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, contentCollections);
+
+        // Assert
+        source.Should().Contain("Settings = new Dictionary<string, string>");
+        source.Should().Contain("[\"AssemblyName\"] = \"MyApp.Resources\"");
+        source.Should().Contain("[\"ResourcePrefix\"] = \"MyApp.Resources.Content\"");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_SkipsContentCollections_WhenNull()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, null);
+
+        // Assert
+        source.Should().NotContain("AddContentCollections(");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_SkipsContentCollections_WhenEmpty()
+    {
+        // Arrange
+        var node = new MeshNode("test")
+        {
+            NodeType = "test",
+            LastModified = DateTimeOffset.UtcNow
+        };
+
+        // Act
+        var source = _generator.GenerateAttributeSource(node, null, null, new List<ContentCollectionConfig>());
+
+        // Assert
+        source.Should().NotContain("AddContentCollections(");
+    }
+}

@@ -1,0 +1,762 @@
+// <meshweaver>
+// Id: Testing/Data/DataTest
+// DisplayName: Testing/Data/DataTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
+
+using System.Reactive.Threading.Tasks;
+/// <summary>
+/// Test data record for data plugin testing
+/// </summary>
+/// <param name="Id">Unique identifier for the data item</param>
+/// <param name="Text">Text content of the data item</param>
+public record MyData(
+    string Id,
+    [property: Required] string Text)
+{
+    /// <summary>
+    /// Initial test data collection for seeding tests
+    /// </summary>
+    public static MyData[] InitialData = [new("1", "A"), new("2", "B")];
+
+}
+
+/// <summary>
+/// Tests for data plugin functionality including CRUD operations, schema generation, and data synchronization
+/// </summary>
+/// <param name="output">Test output helper for logging</param>
+public class DataTest(MeshTestContext context) : InMeshTestBase(output)
+{
+
+    // 🚨 The type source's WithUpdate hook is an ASYNCHRONOUS write-back, NOT part of the
+    // change's publication. SynchronizationStream.SetCurrent assigns Current and then calls
+    // Store.OnNext(...) on a ReplaySubject; the data source's own subscription
+    // (TypeSourceBasedUnpartitionedDataSource.SetupDataSourceStream) is just one more
+    // subscriber, and every reduced read stream the workspace hands out is another —
+    // created lazily, per GetObservable(...) call. A ReplaySubject does not hold its gate
+    // across the fan-out, so a reader can replay/receive the new value on its own thread
+    // WHILE the write-back subscriber is still running. (DataSourceWithStorage makes the
+    // asynchrony explicit: it dispatches the write onto a separate persistence hub.)
+    // So "the host workspace surfaced the new state" says NOTHING about whether the
+    // write-back has run yet — the tests must await the write-back itself. Exposed as an
+    // observable so they can wait on that actual condition instead of sampling a field at
+    // an arbitrary moment — which raced, and failed 3 of 8 full-project runs.
+    private readonly BehaviorSubject<ImmutableDictionary<object, object>> storage =
+        new(ImmutableDictionary<object, object>.Empty);
+
+    /// <summary>The type source's persisted state; emits on every write-back.</summary>
+    private IObservable<ImmutableDictionary<object, object>> Persisted => storage;
+
+    /// <summary>
+    /// Configures the host message hub for data plugin testing
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to modify</param>
+    /// <returns>The modified configuration</returns>
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .AddData(data =>
+                data.AddSource(
+                    dataSource =>
+                        dataSource.WithType<MyData>(type =>
+                            type.WithKey(instance => instance.Id)
+                                .WithInitialData(InitializeMyData)
+                                .WithUpdate(SaveMyData)
+                        )
+                )
+            );
+    }
+
+    /// <summary>
+    /// Configures the client to connect to host data sources for MyData type
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
+    protected override MessageHubConfiguration ConfigureClient(
+        MessageHubConfiguration configuration
+    ) =>
+        base.ConfigureClient(configuration)
+            .AddData(data =>
+                data.AddHubSource(CreateHostAddress(), dataSource => dataSource.WithType<MyData>())
+            );
+
+    /// <summary>
+    /// Tests basic data plugin initialization and data loading
+    /// </summary>
+    [MeshFact]
+    public async Task InitializeTest()
+    {
+        var workspace = GetHost().GetWorkspace();
+        var response = await workspace
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Emit();
+        response.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
+    }
+
+
+    /// <summary>
+    /// Tests data update operations through the data plugin
+    /// </summary>
+    [MeshFact]
+    public async Task Update()
+    {
+        // arrange
+        var client = GetClient();
+        var updateItems = new object[] { new MyData("1", "AAA"), new MyData("3", "CCC"), };
+
+        var clientWorkspace = client.GetWorkspace();
+        var data = (await clientWorkspace
+                .GetObservable<MyData>()
+                .Should().Within(10.Seconds())
+                .Emit())!
+            .OrderBy(a => a.Id)
+            .ToArray();
+
+        data.Should().HaveCount(2);
+
+        // act
+        var updateResponse = await client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(3.Seconds()).Emit();
+
+        // asserts
+        updateResponse.Message.Should().BeOfType<DataChangeResponse>();
+        var expectedItems = new MyData[] { new("1", "AAA"), new("2", "B"), new("3", "CCC") };
+
+        data = (await clientWorkspace
+                .GetObservable<MyData>()
+                .Should().Within(10.Seconds())
+                .Match(x => x.Count == 3))!
+            .OrderBy(a => a.Id)
+            .ToArray();
+
+        data.ToArray().Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+        data = (await GetHost()
+                .GetWorkspace()
+                .GetObservable<MyData>()
+                .Should().Within(10.Seconds())
+                .Match(x => x.Count == 3))!
+            .OrderBy(a => a.Id)
+            .ToArray();
+
+        data.ToArray().Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+        // The write-back runs asynchronously alongside the read path (see the `storage`
+        // field note), so await it rather than sampling it.
+        var persisted = await Persisted
+            .Should().Within(10.Seconds())
+            .Match(s => s.Count == expectedItems.Length);
+        persisted.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+    }
+
+    /// <summary>
+    /// Tests data deletion operations through the data plugin
+    /// </summary>
+    [MeshFact]
+    public async Task Delete()
+    {
+        // arrange
+        var client = GetClient();
+
+        var data = await GetHost()
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Emit();
+        data.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
+
+        var toBeDeleted = data.Take(1).ToArray();
+        var expectedItems = data.Skip(1).ToArray();
+        // act
+        var deleteResponse = await client.Observe(DataChangeRequest.Delete(toBeDeleted, "TestUser"), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+        deleteResponse.Message.Status.Should().Be(DataChangeStatus.Committed);
+
+        // asserts — verify through host workspace (client filters out own changes via echo prevention)
+        data = await GetHost()
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Match(i => i.Count == 1);
+        data.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+        // The write-back runs asynchronously alongside the read path (see the `storage`
+        // field note), so await it rather than sampling it.
+        var persisted = await Persisted
+            .Should().Within(10.Seconds())
+            .Match(s => s.Count == expectedItems.Length);
+        persisted.Values.Should().BeEquivalentTo(expectedItems, GetHost().JsonSerializerOptions);
+    }
+
+    /// <summary>
+    /// Text change constant for testing purposes
+    /// </summary>
+    public const string TextChange = nameof(TextChange);
+
+    /// <summary>
+    /// Local import request record for activity testing
+    /// </summary>
+    public record LocalImportRequest : IRequest<ActivityLog>;
+
+    /// <summary>
+    /// Tests workspace variable usage functionality
+    /// </summary>
+    [MeshFact]
+    public async Task CheckUsagesFromWorkspaceVariable()
+    {
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+        var myInstance = await workspace
+            .GetObservable<MyData>("1")
+            .Should().Within(10.Seconds())
+            .Match(i => i is not null);
+        myInstance!.Text.Should().NotBe(TextChange);
+
+        // act
+        myInstance = myInstance with
+        {
+            Text = TextChange
+        };
+        await client.Observe(DataChangeRequest.Update([myInstance]), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        var hostWorkspace = GetHost().GetWorkspace();
+
+        var instance = await hostWorkspace
+            .GetObservable<MyData>("1")
+            .Should().Within(10.Seconds())
+            .Match(i => i?.Text == TextChange);
+        instance.Should().NotBeNull();
+        // The write-back runs asynchronously alongside the read path (see the `storage`
+        // field note), so await it rather than sampling it.
+        var persisted = await Persisted
+            .Should().Within(10.Seconds())
+            .Match(s => s.Values.Any(i => ((MyData)i).Text == TextChange));
+        persisted.Values.Should().Contain(i => ((MyData)i).Text == TextChange);
+    }
+
+    /// <summary>
+    /// Initializes test data for MyData type
+    /// </summary>
+    /// <returns>An observable yielding the initialized MyData instances</returns>
+    private IObservable<IEnumerable<MyData>> InitializeMyData()
+    {
+        storage.OnNext(MyData.InitialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x));
+        return Observable.Return<IEnumerable<MyData>>(MyData.InitialData);
+    }
+
+    /// <summary>
+    /// Saves updated MyData instances to storage
+    /// </summary>
+    /// <param name="instanceCollection">The collection of instances to save</param>
+    private void SaveMyData(InstanceCollection instanceCollection)
+    {
+        storage.OnNext(instanceCollection.Instances);
+    }
+    /// <summary>
+    /// Tests validation failure scenarios and error handling
+    /// </summary>
+    [MeshFact]
+    public async Task ValidationFailure()
+    {
+        // arrange
+        var client = GetClient();
+        var updateItems = new object[] { new MyData("5", null!) };
+
+        // act
+        var updateResponse = await client.Observe(DataChangeRequest.Update(updateItems), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(3.Seconds()).Emit();
+
+        // asserts
+        var response = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
+        response.Status.Should().Be(DataChangeStatus.Failed);
+        var log = response.Log;
+        log.Status.Should().Be(ActivityStatus.Failed);
+        var members = log
+            .Messages
+            .Where(m => m.LogLevel > LogLevel.Information)
+            .Should().ContainSingle()
+            .Which.Scopes!
+            .FirstOrDefault(s => s.Key == "members");
+        members.Value.Should().BeOfType<string[]>().Which.Single().Should().Be("Text");
+    }
+
+    /// <summary>
+    /// Tests collection reference reduction operations
+    /// </summary>
+    [MeshFact]
+    public async Task ReduceCollectionReference()
+    {
+        var host = GetHost();
+        var collection = await host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)))!
+            .Select(c => c.Value!.Instances.Values)
+            .Should().Emit();
+
+        collection.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
+    }
+
+    [MeshFact]
+    public async Task ReduceSchemaReference()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference(nameof(MyData)))!
+            .Select(c => c.Value)
+            .Should().Within(10.Seconds())
+            .Emit();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(nameof(MyData));
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
+
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
+        GetPropertyType(schemaJson.RootElement).Should().Contain("object");
+    }
+
+    [MeshFact]
+    public async Task ReduceSchemaReference_NullType_ReturnsDefaultSchema()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference(null))!
+            .Select(c => c.Value)
+            .Should().Within(10.Seconds())
+            .Emit();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
+    }
+
+    [MeshFact]
+    public async Task ReduceSchemaReference_UnknownType_ReturnsEmptySchema()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference("NonExistentType"))!
+            .Select(c => c.Value)
+            .Should().Within(10.Seconds())
+            .Emit();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be("NonExistentType");
+        schemaInfo.Schema.Should().Be("{}");
+    }
+
+    [MeshFact]
+    public async Task ReduceDataModelReference()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new DataModelReference())!
+            .Select(c => c.Value)
+            .Should().Within(10.Seconds())
+            .Emit();
+
+        result.Should().BeAssignableTo<IEnumerable<TypeDescription>>();
+        var types = ((IEnumerable<TypeDescription>)result!).ToArray();
+        types.Should().NotBeEmpty();
+        types.Should().Contain(t => t.Name.Contains("MyData"));
+    }
+
+    [MeshFact]
+    public void ReduceNodeTypeReference()
+    {
+        var host = GetHost();
+        var stream = host.GetWorkspace()
+            .GetStream(new NodeTypeReference(), x => x.ReturnNullWhenNotPresent());
+        ((object?)stream).Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Tests that GetSchemaRequest returns a valid JSON schema for MyData type
+    /// </summary>
+    [MeshFact]
+    public async Task GetSchemaRequest_ShouldReturnValidJsonSchema()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(MyData).FullName!;
+
+        // act
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(typeName)), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(typeName);
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
+
+        // Verify it's valid JSON
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
+        schemaJson.Should().NotBeNull();
+
+        // Verify it represents an object type (most likely)
+        GetPropertyType(schemaJson.RootElement).Should().Contain("object");
+
+        // Verify that it has some meaningful content - not just an empty object
+        schemaJson.RootElement.EnumerateObject().Should().NotBeEmpty();
+    }
+
+    /// <summary>
+    /// Tests that SchemaReference returns empty schema for unknown types
+    /// </summary>
+    [MeshFact]
+    public async Task SchemaReference_ForUnknownType_ShouldReturnEmptySchema()
+    {
+        // arrange
+        var client = GetClient();
+        var unknownTypeName = "UnknownType";
+
+        // act
+        var response = await client.Observe(new GetDataRequest(new SchemaReference(unknownTypeName)), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(unknownTypeName);
+        schemaInfo.Schema.Should().Be("{}");
+    }
+
+    /// <summary>
+    /// Tests that GetDomainTypesRequest returns all available registered types
+    /// </summary>
+    [MeshFact]
+    public async Task GetDomainTypesRequest_ShouldReturnAvailableTypes()
+    {
+        // arrange
+        var client = GetClient();
+
+        // act
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert
+        var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
+        typesResponse.Types.Should().NotBeEmpty();
+
+        // Should contain our test type
+        var myDataType = typesResponse.Types.FirstOrDefault(t => t.Name.Contains("MyData"));
+        myDataType.Should().NotBeNull();
+        myDataType!.DisplayName.Should().NotBeNullOrEmpty();
+        myDataType.Description.Should().NotBeNullOrEmpty();
+    }
+
+    /// <summary>
+    /// Tests that GetDomainTypesRequest returns types in sorted order
+    /// </summary>
+    [MeshFact]
+    public async Task GetDomainTypesRequest_ShouldReturnSortedTypes()
+    {
+        // arrange
+        var client = GetClient();
+
+        // act
+        var response = await client.Observe(new GetDomainTypesRequest(), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+        // assert
+        var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
+        var types = typesResponse.Types.ToArray();
+
+        // Verify types are sorted by display name
+        var sortedTypes = types.OrderBy(t => t.DisplayName).ToArray();
+        types.Select(t => t.DisplayName).Should().Equal(sortedTypes.Select(t => t.DisplayName));
+    }
+
+    /// <summary>
+    /// Tests update operations with invalid data and validation error handling
+    /// </summary>
+    [MeshFact]
+    public async Task UpdateWithInvalidData_ShouldReturnValidationErrors()
+    {
+        // arrange
+        var client = GetClient();
+        var invalidItems = new object[]
+        {
+            new MyData("1", null!), // Required field is null
+            new MyData("", "Valid text") // Empty ID
+        };
+
+        // act
+        var updateResponse = await client.Observe(DataChangeRequest.Update(invalidItems), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert
+        var response = updateResponse.Message.Should().BeOfType<DataChangeResponse>().Which;
+        response.Status.Should().Be(DataChangeStatus.Failed);
+        response.Log.Status.Should().Be(ActivityStatus.Failed);
+        response.Log.Messages.Should().NotBeEmpty();
+    }
+
+    /// <summary>
+    /// Tests updating non-existent records creates new records
+    /// </summary>
+    [MeshFact]
+    public async Task UpdateNonExistentRecord_ShouldCreateNewRecord()
+    {
+        // arrange
+        var client = GetClient();
+        var newItem = new MyData("999", "New Item");
+
+        // Verify item doesn't exist initially
+        var initialData = await GetHost()
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Emit();
+        initialData.Should().NotContain(x => x.Id == "999");
+
+        // act
+        var updateResponse = await client.Observe(DataChangeRequest.Update(new object[] { newItem }), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert
+        updateResponse.Message.Should().BeOfType<DataChangeResponse>();
+        var updatedData = await GetHost()
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Match(x => x.Any(item => item.Id == "999"));
+        updatedData.Should().Contain(x => x.Id == "999" && x.Text == "New Item");
+    }
+
+    /// <summary>
+    /// Tests handling of multiple simultaneous update operations
+    /// </summary>
+    [MeshFact]
+    public async Task MultipleSimultaneousUpdates_ShouldHandleCorrectly()
+    {
+        // arrange
+        var client = GetClient();
+        var updates1 = new object[] { new MyData("10", "Update 1") };
+        var updates2 = new object[] { new MyData("11", "Update 2") };
+        var updates3 = new object[] { new MyData("12", "Update 3") };
+
+        // act - send multiple updates simultaneously (merged so all three
+        // subscriptions fire concurrently; buffer until all three responses land)
+        var responses = await Observable.Merge(
+                client.Observe(DataChangeRequest.Update(updates1), o => o.WithTarget(CreateClientAddress())),
+                client.Observe(DataChangeRequest.Update(updates2), o => o.WithTarget(CreateClientAddress())),
+                client.Observe(DataChangeRequest.Update(updates3), o => o.WithTarget(CreateClientAddress())))
+            .Take(3)
+            .ToList()
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert
+        responses.Should().AllSatisfy(response =>
+            response.Message.Should().BeOfType<DataChangeResponse>());
+
+        var finalData = await GetHost()
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Match(x => x.Count >= 5); // Initial 2 + 3 new items
+
+        finalData.Should().Contain(x => x.Id == "10" && x.Text == "Update 1");
+        finalData.Should().Contain(x => x.Id == "11" && x.Text == "Update 2");
+        finalData.Should().Contain(x => x.Id == "12" && x.Text == "Update 3");
+    }
+
+    /// <summary>
+    /// Tests schema request behavior with null or empty type parameters - returns default type schema
+    /// </summary>
+    [MeshFact]
+    public async Task SchemaReference_WithNullOrEmptyType_ShouldReturnDefaultTypeSchema()
+    {
+        // arrange
+        var client = GetClient();
+
+        // act & assert for null - with new implementation, null type returns the first registered type's schema
+        var responseNull = await client.Observe(new GetDataRequest(new SchemaReference(null)), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        responseNull.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfoNull = responseNull.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfoNull.Schema.Should().NotBeNullOrEmpty();
+
+        // act & assert for empty string
+        var responseEmpty = await client.Observe(new GetDataRequest(new SchemaReference("")), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        responseEmpty.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfoEmpty = responseEmpty.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfoEmpty.Schema.Should().NotBeNullOrEmpty();
+    }
+
+    /// <summary>
+    /// Tests data synchronization consistency between client and host
+    /// </summary>
+    [MeshFact]
+    public async Task DataSynchronization_BetweenClientAndHost_ShouldStayConsistent()
+    {
+        // arrange
+        var client = GetClient();
+        var host = GetHost();
+        var updateItem = new MyData("1", "Updated Text");
+
+        // Get initial state
+        var initialClientData = await client
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Emit();
+
+        var initialHostData = await host
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Emit();
+
+        initialClientData.Should().BeEquivalentTo(initialHostData, GetHost().JsonSerializerOptions);
+
+        // act - update from client
+        await client.Observe(DataChangeRequest.Update([updateItem]), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert - both client and host should have the same updated data
+        var updatedClientData = await client
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Match(x => x.Any(item => item.Text == "Updated Text"));
+
+        var updatedHostData = await host
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Should().Within(10.Seconds())
+            .Match(x => x.Any(item => item.Text == "Updated Text"));
+
+        updatedClientData.Should().BeEquivalentTo(updatedHostData, GetHost().JsonSerializerOptions);
+        updatedClientData.Should().Contain(x => x.Id == "1" && x.Text == "Updated Text");
+    }
+
+    /// <summary>
+    /// Tests collection reference operations with specific data types
+    /// </summary>
+    [MeshFact]
+    public async Task CollectionReference_WithSpecificType_ShouldReturnCorrectData()
+    {
+        // arrange
+        var host = GetHost();
+        var collectionRef = new CollectionReference(nameof(MyData));
+
+        // act
+        var stream = host.GetWorkspace().GetStream(collectionRef);
+        var collection = await stream!
+            .Select(c => c.Value!.Instances.Values.Cast<MyData>().ToArray())
+            .Should().Within(10.Seconds())
+            .Emit();
+
+        // assert
+        collection.Should().BeEquivalentTo(MyData.InitialData, GetHost().JsonSerializerOptions);
+        collection.Should().AllBeOfType<MyData>();
+    }
+
+    /// <summary>
+    /// Tests GetDataRequest for retrieving collection data
+    /// </summary>
+    [MeshFact]
+    public async Task GetDataRequest_ForCollection_ShouldReturnData()
+    {
+        // arrange
+        var client = GetClient();
+        var collectionRef = new CollectionReference(nameof(MyData));
+
+        // act
+        var response = await client.Observe(new GetDataRequest(collectionRef), o => o.WithTarget(CreateHostAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert
+        var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
+        dataResponse.Data.Should().NotBeNull();
+        dataResponse.Version.Should().BeGreaterThan(0);
+
+        // Verify the returned data is valid JSON and contains expected data
+    }
+
+    /// <summary>
+    /// Tests GetDataRequest for retrieving specific entity data
+    /// </summary>
+    [MeshFact]
+    public async Task GetDataRequest_ForEntity_ShouldReturnSpecificEntity()
+    {
+        // arrange
+        var client = GetClient();
+        var entityRef = new EntityReference(nameof(MyData), "1");
+
+        // act
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        // assert
+        var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
+        dataResponse.Data.Should().NotBeNull();
+        dataResponse.Version.Should().BeGreaterThan(0);
+
+    }
+
+    /// <summary>
+    /// Tests GetDataRequest for non-existent entity
+    /// </summary>
+    [MeshFact]
+    public async Task GetDataRequest_ForNonExistentEntity_ShouldHandleGracefully()
+    {
+        // arrange
+        var client = GetClient();
+        var entityRef = new EntityReference(nameof(MyData), "999");
+
+        // act & assert - this might throw or return null/empty, depending on implementation
+        // The exact behavior should be consistent with the stream-based approach
+        var response = await client.Observe(new GetDataRequest(entityRef), o => o.WithTarget(CreateClientAddress()))
+            .Should().Within(10.Seconds()).Emit();
+
+        var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
+        dataResponse.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Helper method to get the type(s) of a property from a JSON schema element.
+    /// </summary>
+    /// <param name="propertyElement">The JSON element representing the property</param>
+    /// <returns>A list of types (handles both single type and array of types)</returns>
+    private static List<string> GetPropertyType(JsonElement propertyElement)
+    {
+        var types = new List<string>();
+
+        if (propertyElement.TryGetProperty("type", out var typeElement))
+        {
+            if (typeElement.ValueKind == JsonValueKind.Array)
+            {
+                // Handle array of types like ["string", "null"]
+                foreach (var type in typeElement.EnumerateArray())
+                {
+                    types.Add(type.GetString()!);
+                }
+            }
+            else
+            {
+                // Handle single type like "string"
+                types.Add(typeElement.GetString()!);
+            }
+        }
+
+        return types;
+    }
+}

@@ -1,0 +1,67 @@
+// <meshweaver>
+// Id: Testing/MemexPortalShared/AbsentUpdatePolicyFailsClosedTest
+// DisplayName: Testing/MemexPortalShared/AbsentUpdatePolicyFailsClosedTest — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.Text.Json;
+using Memex.Portal.Shared.SelfUpdate;
+using MeshWeaver.Hosting.SelfUpdate;
+
+/// <summary>
+/// A policy record that has LOST its <c>policy</c> field must read as
+/// <see cref="UpdatePolicyKind.None"/> — never as "auto-update enabled" (#3542, proposal 3).
+///
+/// <para>The defect this pins is a two-part mechanism, and neither part is visible on its own. The
+/// hub serializer sets <c>DefaultIgnoreCondition = WhenWritingDefault</c>, so whichever enum member
+/// is ZERO is omitted from the persisted record; and an omitted field deserializes back to that same
+/// member. <c>Continuous</c> IS the enum's zero — it still is, deliberately (reordering the enum
+/// would make an explicit <c>None</c> unwritable, which is the safety-critical direction) — so a
+/// record that lost its policy under its own bookkeeping writes read back as the MOST PERMISSIVE
+/// state, reached purely by losing information. That is how memex-cloud rolled onto a withdrawn
+/// <c>3.1.0-ci</c> line "on a policy record that lost its own policy". The cure is the NULLABLE
+/// backing field: <c>null</c> is the default that gets dropped, and it reads as <c>None</c>.</para>
+///
+/// <para>🚨 The two assertions below are a pair on purpose. Fail-closed alone would be satisfied by
+/// an enum nobody can express Continuous in; round-tripping alone would be satisfied by the old
+/// shape. Together they say: an ABSENT policy is None, and an EXPLICIT Continuous survives — which
+/// is the distinction the old shape could not make.</para>
+///
+/// <para>This pins what an absent field MEANS. What stops the field from GOING absent is
+/// <c>UnreadablePolicyRecordIsNotClobberedTest</c>: a bookkeeping write that could not read the
+/// record refuses instead of writing a default over it.</para>
+/// </summary>
+public class AbsentUpdatePolicyFailsClosedTest(MeshTestContext context) : InMeshTestBase(output)
+{
+    [MeshFact]
+    public void AnAbsentPolicyFieldReadsAsNone()
+    {
+        // A record persisted without a `policy` field — exactly what the bookkeeping write leaves
+        // behind when the policy is at the serializer's default.
+        const string withoutPolicy = """{"latestAvailableTag":"3.0.0-ci.8009"}""";
+
+        var content = JsonSerializer.Deserialize<UpdatePolicyContent>(
+            withoutPolicy, Mesh.JsonSerializerOptions);
+
+        Assert.NotNull(content);
+        Assert.Equal(UpdatePolicyKind.None, content!.Policy);
+    }
+
+    [MeshFact]
+    public void AnExplicitContinuousSurvivesTheRoundTrip()
+    {
+        // The other half: the DECLARED policy is nullable, so its default is null and every named
+        // member — Continuous included — is non-default and must be WRITTEN OUT. Otherwise an
+        // admin's explicit choice would decay into the absent case and be silently downgraded to
+        // None on the next read.
+        var chosen = new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous };
+
+        var json = JsonSerializer.Serialize(chosen, Mesh.JsonSerializerOptions);
+        Assert.Contains("Continuous", json);
+
+        var readBack = JsonSerializer.Deserialize<UpdatePolicyContent>(json, Mesh.JsonSerializerOptions);
+        Assert.Equal(UpdatePolicyKind.Continuous, readBack!.Policy);
+    }
+}

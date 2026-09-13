@@ -1,0 +1,21 @@
+{
+  "$type": "MeshNode",
+  "id": "ContentCollections",
+  "namespace": "Testing",
+  "path": "Testing/ContentCollections",
+  "mainNode": "Testing/ContentCollections",
+  "name": "MeshWeaver.ContentCollections.Test (in-mesh)",
+  "description": "MeshWeaver.ContentCollections.Test migrated in-mesh (.github/scripts/convert-xunit-to-inmesh.py, 2026-09-13): 12 of 12 files as [MeshFact] cases run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh. Refused, still on xunit: 0 — none.",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "state": "Active",
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "description": "An in-mesh test suite.",
+    "configuration": "config => config.WithContentType<MeshWeaver.Markdown.MarkdownContent>().AddMarkdownViews().AddLayout(layout => layout.WithView(\"Tests\", (host, ctx) => MeshWeaver.Testing.InMesh.MeshTestRunner.Area(host, \"Testing/ContentCollections\", typeof(ContentCollectionClaimApplyRaceTest).Assembly)))",
+    "includeGlobalTypes": true,
+    "sources": [
+      "namespace:Source scope:subtree"
+    ]
+  }
+}

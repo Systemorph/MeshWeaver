@@ -1,0 +1,21 @@
+{
+  "$type": "MeshNode",
+  "id": "Hosting",
+  "namespace": "Testing",
+  "path": "Testing/Hosting",
+  "mainNode": "Testing/Hosting",
+  "name": "MeshWeaver.Hosting.Test (in-mesh)",
+  "description": "MeshWeaver.Hosting.Test migrated in-mesh (.github/scripts/convert-xunit-to-inmesh.py, 2026-09-13): 80 of 100 files as [MeshFact] cases run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh. Refused, still on xunit: 20 — AFrozenContentCiIsReportedTest.cs: overrides ConfigureMesh — needs the per-suite configuration facility; AutocompleteHonoursReadAccessTest.cs: overrides ConfigureMesh — needs the per-suite configuration facility; BuildTriggeredSyncPinsTheBuiltCommitTest.cs: overrides ConfigureMesh — needs the per-suite configuration facility; CodeNodeRoundTripTests.cs: needs FileSystem persistence — stays on xunit; FileSystemChangeFeedTest.cs: needs FileSystem persistence — stays on xunit; FileSystemVersionStoreAtomicityTest.cs: needs FileSystem persistence — stays on xunit; GreenBuildSkipsASettledSourceTest.c.",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "state": "Active",
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "description": "An in-mesh test suite.",
+    "configuration": "config => config.WithContentType<MeshWeaver.Markdown.MarkdownContent>().AddMarkdownViews().AddLayout(layout => layout.WithView(\"Tests\", (host, ctx) => MeshWeaver.Testing.InMesh.MeshTestRunner.Area(host, \"Testing/Hosting\", typeof(ABakeCompilesTheDefinitionItResolvedTest).Assembly)))",
+    "includeGlobalTypes": true,
+    "sources": [
+      "namespace:Source scope:subtree"
+    ]
+  }
+}
