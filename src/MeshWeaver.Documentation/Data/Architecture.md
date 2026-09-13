@@ -135,6 +135,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Repairing a Stale MainNode — When the Broken Field Guards Itself](StaleMainNodeRepair)
 - [Synced Mesh Node Queries](SyncedMeshNodeQueries)
 - [Update Validators See Typed Content](UpdateValidatorsSeeTypedContent)
+- [The /api/mesh REST Contract](MeshRestApiContract) — a 200 carries the verb's JSON document and nothing else; a sentinel answer is a non-2xx JSON envelope naming the sentence and its kind
 
 ### Storage & partitions
 

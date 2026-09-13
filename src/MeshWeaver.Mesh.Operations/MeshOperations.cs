@@ -844,7 +844,7 @@ public class MeshOperations
     /// keeps model-facing text in English so tool-calling does not degrade.</para>
     /// </summary>
     private static string UnavailableMessage(string path, string reason) =>
-        $"Unavailable: {path} — this read reached no verdict, so it is UNKNOWN whether this node "
+        $"{OperationSentinel.UnavailablePrefix} {path} — this read reached no verdict, so it is UNKNOWN whether this node "
         + "exists. This is NOT 'not found': do not create, delete or recreate anything on the "
         + $"strength of it. Retry shortly. Cause: {reason}";
 
@@ -1620,7 +1620,7 @@ public class MeshOperations
                 .Catch((Exception ex) =>
                 {
                     logger.LogWarning(ex, "Error creating node");
-                    return Observable.Return($"Error creating node: {ex.Message}");
+                    return Observable.Return($"Error: creating node: {ex.Message}");
                 }));
         });
     }
@@ -1723,7 +1723,7 @@ public class MeshOperations
                                         return $"Updated: {after.Path}";
                                     }))
                                 .Catch((Exception ex) =>
-                                    Observable.Return($"Error updating {currentPath}: {ex.Message}"))));
+                                    Observable.Return($"Error: updating {currentPath}: {ex.Message}"))));
             }
 
             return perNode
@@ -1922,7 +1922,7 @@ public class MeshOperations
                                     return $"Patched: {after.Path}{versionText}";
                                 }))
                             .Catch((Exception ex) =>
-                                Observable.Return($"Error patching {merged.Path}: {ex.Message}")));
+                                Observable.Return($"Error: patching {merged.Path}: {ex.Message}")));
             })
             .Catch((Exception ex) =>
             {
@@ -2060,7 +2060,7 @@ public class MeshOperations
         AmbiguousAnchorException ambiguous =>
             $"Error: the text to replace occurs {ambiguous.OccurrenceCount} times in {resolvedPath}. Include more " +
             "surrounding context to make the match unique, or set replaceAll=true to change every occurrence.",
-        _ => $"Error editing {resolvedPath}: {ex.Message}"
+        _ => $"Error: editing {resolvedPath}: {ex.Message}"
     };
 
     /// <summary>
@@ -2679,7 +2679,7 @@ public class MeshOperations
             {
                 if (string.IsNullOrWhiteSpace(rawPath))
                 {
-                    perPath = perPath.Add(Observable.Return("Error deleting: empty path"));
+                    perPath = perPath.Add(Observable.Return("Error: deleting: empty path"));
                     continue;
                 }
 
@@ -2690,7 +2690,7 @@ public class MeshOperations
                 }
                 catch (Exception ex)
                 {
-                    perPath = perPath.Add(Observable.Return($"Error deleting '{rawPath}': {ex.Message}"));
+                    perPath = perPath.Add(Observable.Return($"Error: deleting '{rawPath}': {ex.Message}"));
                     continue;
                 }
 
@@ -2730,7 +2730,7 @@ public class MeshOperations
               $"in the GUI, under their own identity: /{path}/Delete " +
               "(a whole query result set can be offered the same way: /{anchorPath}/Delete?q=<url-encoded mesh query>, " +
               "multiple queries newline-separated inside the one encoded parameter)."
-            : $"Error deleting {path}: {ex.Message}";
+            : $"Error: deleting {path}: {ex.Message}";
 
     /// <summary>
     /// Builds the standard "content is null" rejection message for Update/Patch,
