@@ -2160,12 +2160,25 @@ jobs:
         env:
           LEDGER: ${{ inputs.ledger }}
           PUBLISH: ${{ inputs.publish }}
+          TEST_MODULES: ${{ inputs.test-modules }}
           MW_LEDGER_URL: ${{ inputs.registry-url }}
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
           MW_LEDGER_LANE: ${{ needs.select.outputs.lane }}
         run: |
           set -euo pipefail
           bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }
+          # 🚨 `test-modules` — the SAME list the `select` job's "Which selected modules still owe a
+          # test run" step cut the tests-lane matrix with. This step decides what the RECEIPT says
+          # (`tests: none|inline|lane`, below), and the two answers must agree: on Plugins#1775 the
+          # caller handed an EMPTY list (a lane-only diff — pack everything, test nothing), the
+          # tests lane's matrix was empty and the job skipped, while 41 receipts here still said
+          # `lane` — and `verify` rightly refused "the suite ran in NEITHER lane". `*` = no
+          # narrowing; the ledger's REUSE answer is honoured before this list, never after.
+          NARROWED=false
+          if [ "$(printf '%s' "$TEST_MODULES" | tr -d '[:space:]')" != "*" ]; then
+            NARROWED=true
+            printf '%s' "$TEST_MODULES" | tr ',' '\n' | tr ' ' '\n' | sed '/^$/d' | sort -u > "$RUNNER_TEMP/test-modules.txt"
+          fi
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
             ENTRY_LEDGER="$(bk get --module "$MODULE" ledger --default null)"
@@ -2198,6 +2211,10 @@ jobs:
                 fi
               else
                 echo "plan: BUILD $MODULE (ledger off) — tests: $need_test, publish: $need_publish"
+              fi
+              if [ "$need_test" = true ] && [ "$NARROWED" = true ] && ! grep -qxF "$MODULE" "$RUNNER_TEMP/test-modules.txt"; then
+                need_test=false
+                echo "plan: $MODULE is packed but NOT tested — test-modules does not name it (its suite is not owed by this change set)"
               fi
               bk set --module "$MODULE" "decision=$decision" "key=$key" "need_test=$need_test" "need_publish=$need_publish" \
                 "art_run=$art_run" "art_name=$art_name" "sha=$sha" "holder=$holder"
@@ -3696,7 +3713,9 @@ jobs:
             SUPERSEDED_BY=""; [ "$NEWER" != true ] || SUPERSEDED_BY="$(bk get --module "$MODULE" tip)"
             # 🚨 WHICH LANE OWNS THIS MODULE'S SUITE, written down rather than inferred from an `if:`
             # nobody can read after the fact. `none` — the selection says this entry owes no test run
-            # (a floor-only entry, or a ledger record that already carries a verdict); `inline` — the
+            # (a floor-only entry, a ledger record that already carries a verdict, or a module the
+            # caller's `test-modules` did not name — the plan step above and the select job's suites
+            # step cut by the same list, so this receipt and the tests matrix agree); `inline` — the
             # step above ran it in this job, which is what a PUBLISHING run does so a red suite can
             # never publish; `lane` — this call does not publish, so the `tests` job ran it beside
             # this one. `verify` pairs every `lane` against a test receipt and fails when one is
