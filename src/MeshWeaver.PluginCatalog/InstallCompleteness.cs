@@ -222,40 +222,76 @@ public static class InstallCompleteness
     /// <param name="partition">The package's target partition.</param>
     /// <param name="record">The install record's manifest.</param>
     /// <returns>A cold observable emitting exactly one verdict. Subscribe to run.</returns>
+    /// <param name="recordIdentity">
+    /// Which record version this verdict is being taken over — <see cref="DescribeRecord"/>.
+    /// Optional so the signature stays source-compatible, but a caller that HAS the record node
+    /// should always pass it: a declared count nothing can attribute to a record version is the
+    /// defect MeshWeaver#4200 cost a day of archaeology to (see
+    /// <see cref="InstallCompletenessVerdict.RecordIdentity"/>).
+    /// </param>
     public static IObservable<InstallCompletenessVerdict> Observe(
         IStorageAdapter? persistence,
         JsonSerializerOptions options,
         string packageId,
         string partition,
         PackageManifest? record,
-        FileFormatParserRegistry parsers)
+        FileFormatParserRegistry parsers,
+        string? recordIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(parsers);
         var declared = DeclaredNodePaths(record, parsers);
         var population = PopulationOf(record, parsers);
+        // 🚨 EVERY arm carries it, including the ones that are not a pass: a NotObserved that
+        // cannot say which record it failed to verify is as unattributable as an Incomplete that
+        // cannot say which record it counted (MeshWeaver#4200).
+        InstallCompletenessVerdict Attribute(InstallCompletenessVerdict verdict) =>
+            recordIdentity is { Length: > 0 } ? verdict with { RecordIdentity = recordIdentity } : verdict;
+
         if (persistence is null)
-            return Observable.Return(population.Apply(new InstallCompletenessVerdict(
+            return Observable.Return(Attribute(population.Apply(new InstallCompletenessVerdict(
                 packageId, partition, InstallCompletenessKind.NotObserved, declared.Count, 0,
                 ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-                "this host registers no storage adapter, so the mesh was NOT read")));
+                "this host registers no storage adapter, so the mesh was NOT read"))));
         // Nothing declared ⇒ nothing to read. Compare against an EMPTY observation rather than a
         // null one: the verdict is Undeclared either way, and reading the mesh to learn that would
         // be a round-trip that cannot change the answer.
         if (declared.Count == 0)
-            return Observable.Return(
-                Compare(packageId, partition, record, ImmutableHashSet<string>.Empty, parsers));
+            return Observable.Return(Attribute(
+                Compare(packageId, partition, record, ImmutableHashSet<string>.Empty, parsers)));
 
         return persistence.ReadMany(declared, options)
             .Select(n => n.Path)
             .ToList()
-            .Select(paths => Compare(packageId, partition, record,
-                paths.ToImmutableHashSet(StringComparer.Ordinal), parsers))
+            .Select(paths => Attribute(Compare(packageId, partition, record,
+                paths.ToImmutableHashSet(StringComparer.Ordinal), parsers)))
             .Catch<InstallCompletenessVerdict, Exception>(ex => Observable.Return(
-                population.Apply(new InstallCompletenessVerdict(
+                Attribute(population.Apply(new InstallCompletenessVerdict(
                     packageId, partition, InstallCompletenessKind.NotObserved, declared.Count, 0,
                     ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal),
                     $"reading the mesh failed, so completeness was NOT checked — this is not a "
-                    + $"pass. Cause: {ex.Message}"))));
+                    + $"pass. Cause: {ex.Message}")))));
+    }
+
+    /// <summary>
+    /// One line naming an install record: where it lives, which VERSION of it was read, when that
+    /// version was written, and the two stamps that identify the source snapshot behind it.
+    ///
+    /// <para>Pure, so the sweep's provenance is testable with no mesh — and public, so the caller
+    /// that actually reads the node (which is the only thing that knows its version) can build it.</para>
+    /// </summary>
+    /// <param name="path">The record node's path, e.g. <c>Plugins/Store</c>.</param>
+    /// <param name="version">The record node's version as READ — not as it is now.</param>
+    /// <param name="lastModified">When that version was written.</param>
+    /// <param name="record">The manifest, for the stamps that name the source snapshot.</param>
+    public static string DescribeRecord(
+        string path, long version, DateTimeOffset lastModified, PackageManifest? record)
+    {
+        var stamps = record is null
+            ? "no manifest"
+            : $"version {record.Version ?? "?"}, moduleVersion {record.ModuleVersion ?? "?"}, "
+              + $"installedAtUtc {record.InstalledAtUtc?.ToString("O") ?? "?"}, "
+              + $"{record.InstalledFiles?.Count ?? 0} file(s) in the map";
+        return $"{path} v{version} (written {lastModified:O}; {stamps})";
     }
 
     /// <summary>
@@ -376,7 +412,7 @@ public static class InstallCompleteness
     }
 
     /// <summary>
-    /// <see cref="Observe(IStorageAdapter, JsonSerializerOptions, string, string, PackageManifest, FileFormatParserRegistry)"/>
+    /// <see cref="Observe(IStorageAdapter, JsonSerializerOptions, string, string, PackageManifest, FileFormatParserRegistry, string)"/>
     /// against the BUILT-IN parser set alone — see the remarks on
     /// <see cref="DeclaredNodePaths(PackageManifest)"/> for why this overload exists and when it is
     /// the wrong one to call.
@@ -669,6 +705,39 @@ public sealed record InstallCompletenessVerdict(
 
     /// <summary>What this verdict counted, and over what — one clause, on every line that reports
     /// a verdict, so a wrong population is visible instead of silent.</summary>
+    /// <summary>
+    /// WHICH install record this verdict was taken over — its path, its node VERSION and the
+    /// stamps that identify the source snapshot it was written from. <c>null</c> when the caller
+    /// did not name one.
+    ///
+    /// <para>🚨 <b>Why a count needs this</b> (MeshWeaver#4200). A sweep reported
+    /// <c>201 file(s) declared</c> and named two of them ABSENT; reconciling that against the
+    /// record took a version-by-version read of <c>Plugins/Store</c> plus a commit-by-commit count
+    /// of the source repo, and the answer was that the two record versions straddling the sweep
+    /// carry a 193-file map that declares neither name. The number was right about SOMETHING and
+    /// there was no way to say what. A declared count whose record cannot be named is the same
+    /// defect as a missing denominator: it reads identically whether it was taken over the right
+    /// record or a stale one.</para>
+    ///
+    /// <para>🚨 And the record IS the eventually-consistent half. <c>Observe</c> keeps the
+    /// OBSERVED side off a query on purpose — "never a query … a stale negative here would
+    /// manufacture a shortfall" — while the DECLARED side arrives through a <c>GetQuery</c> whose
+    /// answer nothing identifies. Naming it does not make it fresh; it makes a stale one
+    /// detectable.</para>
+    /// </summary>
+    public string? RecordIdentity { get; init; }
+
+    /// <summary>
+    /// <see cref="RecordIdentity"/> for a log line — and, when the caller named none, a sentence
+    /// that SAYS so rather than a blank. "Not identified" and "identified as X" must never render
+    /// alike, for the same reason <see cref="InstallCompletenessKind.NotObserved"/> is not a pass.
+    /// </summary>
+    public string Provenance =>
+        RecordIdentity is { Length: > 0 } identity
+            ? identity
+            : "the install record was NOT identified, so this count cannot be reconciled against a "
+              + "record version";
+
     public string Population =>
         $"{DeclaredFiles} file(s) declared, {NonNodeFiles} of them not node files "
         + "(README/manifest/content assets, module sources, or an extension no parser claims)"
