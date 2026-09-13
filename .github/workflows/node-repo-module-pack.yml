@@ -498,6 +498,24 @@ on:
         type: string
         required: false
         default: ''
+      test-modules:
+        description: >
+          Which of the selected modules RUN THEIR SUITE in this call: `*` (the default) = every
+          selected module whose entry does not say `test: false`; else a comma- or
+          whitespace-separated list of module names (entry assembly names from `modules`), possibly
+          EMPTY — every selected module is still packed, inspected and (when the call publishes)
+          published, but only the listed ones run a `Module tests` leg. The caller derives it from
+          its declared test selection (MeshWeaver.Plugins scripts/ci-tests.py: a package's own
+          `moduleTests`, closed over `requires` dependents): "we should test the slow ai projects
+          only when we actually change them" (maintainer, 2026-09-13) — a build that goes FULL for a
+          lane path or a missing publication baseline no longer tests every module for it. A name
+          the selection lacks is printed and ignored (a suite cannot run for a module that is not
+          packed); the ledger's REUSE answer (needTest) is honoured before this list, never after —
+          a reused bundle owes no suite regardless. Ignored on a trunk publish? NO: trunk runs pass
+          `*` (the publication proves every module) — this input narrows PULL REQUESTS.
+        type: string
+        required: false
+        default: '*'
       superseded-image-assemblies:
         description: >
           Comma- or whitespace-separated IMAGE assembly names whose copy in the pinned platform
@@ -1187,6 +1205,7 @@ jobs:
         id: suites
         env:
           SELECTION: ${{ steps.ledger.outputs.modules }}
+          TEST_MODULES: ${{ inputs.test-modules }}
         run: |
           set -euo pipefail
           printf '%s' "${SELECTION:-[]}" > "$RUNNER_TEMP/final.json"
@@ -1194,6 +1213,20 @@ jobs:
                     if (.ledger.decision // "build") == "reuse"
                     then (.ledger.needTest == true)
                     else (.test != false) end) ]' "$RUNNER_TEMP/final.json" > "$RUNNER_TEMP/suites.json"
+          # `test-modules` (header, "Which of the selected modules RUN THEIR SUITE"): `*` keeps the
+          # answer above; a list keeps only the named modules — the others are packed, not tested.
+          if [ "$(printf '%s' "$TEST_MODULES" | tr -d '[:space:]')" != "*" ]; then
+            printf '%s' "$TEST_MODULES" | tr ',' '\n' | tr ' ' '\n' | sed '/^$/d' | sort -u > "$RUNNER_TEMP/test-modules.txt"
+            jq -c --rawfile names "$RUNNER_TEMP/test-modules.txt" \
+              '($names | split("\n") | map(select(length > 0))) as $keep | [ .[] | select(.module as $m | $keep | index($m)) ]' \
+              "$RUNNER_TEMP/suites.json" > "$RUNNER_TEMP/suites.narrowed.json"
+            dropped=$(jq -r --slurpfile n "$RUNNER_TEMP/suites.narrowed.json" '[ .[].module ] - [ $n[0][].module ] | join(", ")' "$RUNNER_TEMP/suites.json")
+            unknown=$(jq -r --rawfile names "$RUNNER_TEMP/test-modules.txt" '($names | split("\n") | map(select(length > 0))) - [ .[].module ] | join(", ")' "$RUNNER_TEMP/final.json")
+            mv "$RUNNER_TEMP/suites.narrowed.json" "$RUNNER_TEMP/suites.json"
+            echo "test-modules narrows the suites to: $(tr '\n' ' ' < "$RUNNER_TEMP/test-modules.txt")"
+            [ -z "$dropped" ] || echo "packed but NOT tested (their suite is not owed by this change set): $dropped"
+            [ -z "$unknown" ] || echo "::notice title=test-modules names modules this call did not select::$unknown — nothing to run for them; a suite runs only for a packed module"
+          fi
           count=$(jq 'length' "$RUNNER_TEMP/suites.json")
           echo "modules=$(cat "$RUNNER_TEMP/suites.json")" >> "$GITHUB_OUTPUT"
           echo "count=$count" >> "$GITHUB_OUTPUT"
