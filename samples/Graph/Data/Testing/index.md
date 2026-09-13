@@ -22,6 +22,14 @@ inventory of the facilities still missing (maintainer, 2026-09-13: "pls refactor
 | `Testing/MessagingHub` | `test/MeshWeaver.Messaging.Hub.Test` | 31 | 49 | 126 |
 | **total** | | **276** | **362** | **2073** |
 
+## Runtime, 2026-09-13 (local gate, `--seed` over the bake)
+
+| Suite | compile | render | tests |
+|---|---|---|---|
+| `Testing/ContentCollections` | ok | ok | **ok** (1/1) |
+| `Testing/CompilerPipeline`, `Graph`, `Hosting`, `Layout`, `MessagingHub`, `Data` | ok | ok | no verdict within the gate's 120 s per-area deadline — the runner needs a per-suite budget or sharding (`.github/samples-gate.allow`, one-way) |
+| `Testing/DeploymentContract` | ok | ok | 1 case reads a file by repository path — needs an in-mesh fixture |
+
 ## Projects that stay on xunit whole
 
 A suite compiles against `FrameworkBuildIdentity.ContentSurfaceAssemblies` — what every portal ships. A test project
