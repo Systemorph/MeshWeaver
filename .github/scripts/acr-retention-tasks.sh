@@ -75,10 +75,18 @@ cmd_show() {
 # is empty", and here it would decide whether a drift is excused. Callers say `|| return 1`.
 declared_ahead() {
   if ! python3 -c "
-import json
+import json, sys
 d = json.load(open('$RECORD/tasks.json'))
-a = d.get('recordAheadOfRegistry') or {}
-print(' '.join(a.get('tasks') or []) if a.get('inForce') is True else '')"; then
+a = d.get('recordAheadOfRegistry')
+if a is None:
+    print(''); sys.exit(0)
+# FAIL CLOSED ON A MALFORMED SWITCH: an inForce of the STRING true is not the BOOLEAN true, and
+# every reader asks 'is True'. A typed quote mark would read as 'nothing is declared' and skip the
+# overwrite guard below, while looking to a human exactly like an armed declaration.
+if not isinstance(a, dict) or not isinstance(a.get('inForce'), bool):
+    sys.exit('recordAheadOfRegistry.inForce is ' + repr(a.get('inForce') if isinstance(a, dict) else a)
+             + ', not a JSON boolean')
+print(' '.join(a.get('tasks') or []) if a['inForce'] else '')"; then
     echo "::error::cannot read $RECORD/tasks.json, so it is unknown whether the record is" >&2
     echo "  deliberately ahead of the registry. Refusing to decide either way." >&2
     return 1
@@ -144,6 +152,44 @@ cmd_verify() {
         echo "  $task: drift is DECLARED (tasks.json → recordAheadOfRegistry) — the record is"
         echo "    deliberately ahead of the registry and \`apply\` is what closes it:"
         sed 's/^/      /' "${live}.diff"
+        # 🚨 A DECLARATION EXCUSES THE WINDOW MOVING, NEVER THE TASK BECOMING SOMETHING ELSE.
+        # Keyed on the task NAME alone, this exemption would print — and pass — a live definition
+        # that had gained `--include-locked` (which deletes every manifest the lock protects),
+        # swapped its filters (purging a repository nobody decided to purge), or stopped being an
+        # `acr purge` at all. The record-side checks below read the RECORDED file and would never
+        # see it. So the LIVE steps of a declared task are held to the invariants that are not
+        # what the declaration is about.
+        local live_steps
+        live_steps=$(grep -E "^[[:space:]]*-[[:space:]]+cmd:" "$live" || true)
+        if [ -z "$live_steps" ]; then
+          echo "::error::the LIVE definition of '$task' has no \`cmd:\` step, so the declared drift"
+          echo "  excused a task that no longer purges anything."
+          drift=1
+        fi
+        if printf '%s\n' "$live_steps" | grep -q -- "--include-locked"; then
+          echo "::error::the LIVE definition of '$task' passes --include-locked."
+          echo "  That flag DELETES LOCKED MANIFESTS — the entire protection the lock job provides."
+          echo "  A recordAheadOfRegistry declaration is about the retention WINDOW; it does not"
+          echo "  excuse this, and without this line the drift would have printed as declared."
+          drift=1
+        fi
+        if printf '%s\n' "$live_steps" | grep -qv "acr purge"; then
+          echo "::error::the LIVE definition of '$task' has a \`cmd:\` step that is not an acr purge."
+          drift=1
+        fi
+        # The declaration is about the window, so the FILTERS must still match the record. A live
+        # filter set the record does not carry is a repository nobody reviewed into the purge.
+        local live_filters recorded_filters
+        live_filters=$(printf '%s\n' "$live_steps" | grep -o -- "--filter '[^']*'" | sort | uniq)
+        recorded_filters=$(grep -E "^[[:space:]]*-[[:space:]]+cmd:" "$recorded" \
+                             | grep -o -- "--filter '[^']*'" | sort | uniq)
+        if [ "$live_filters" != "$recorded_filters" ]; then
+          echo "::error::the LIVE definition of '$task' purges a different set of repositories than"
+          echo "  the record does. A recordAheadOfRegistry declaration covers the WINDOW, not WHAT"
+          echo "  is purged. live: $(printf '%s' "$live_filters" | tr '\n' ' ')"
+          echo "  recorded: $(printf '%s' "$recorded_filters" | tr '\n' ' ')"
+          drift=1
+        fi
       else
         echo "::error::task '$task' DRIFTED from .github/acr-retention/$task.yaml:"
         cat "${live}.diff"
@@ -238,7 +284,18 @@ cmd_verify() {
 # the pause is a reviewed diff against this record.
 assert_pause_permits_enabling() {
   local paused reenable since blocked
-  paused=$(python3 -c "import json;d=json.load(open('$RECORD/tasks.json'));print('yes' if (d.get('pause') or {}).get('inForce') is True else 'no')") || return 1
+  # 🚨 FAIL CLOSED, same reason as declared_ahead: a non-boolean `inForce` must stop the apply, not
+  # convert to `no`. `pause.inForce: "true"` would otherwise walk straight past this interlock.
+  paused=$(python3 -c "
+import json, sys
+d = json.load(open('$RECORD/tasks.json'))
+p = d.get('pause')
+if p is None:
+    print('no'); sys.exit(0)
+if not isinstance(p, dict) or not isinstance(p.get('inForce'), bool):
+    sys.exit('pause.inForce is ' + repr(p.get('inForce') if isinstance(p, dict) else p)
+             + ', not a JSON boolean — refusing to decide whether the purge is paused')
+print('yes' if p['inForce'] else 'no')") || return 1
   [ "$paused" = "yes" ] || return 0
   # 🚨 NO `|| true` — a status this cannot read must stop the apply, not be treated as Disabled.
   blocked=$(python3 -c "
