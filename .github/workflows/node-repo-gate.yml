@@ -1494,23 +1494,42 @@ jobs:
             resolve_publication_dir "$account" "$share" "$prefix"
             dir="$RESOLVED_DIR"
             # 🚨 THE ONE PLACE THIS READER MAY NOT TAKE THE READER'S FALLBACK, and it is because of
-            # the BATCH below. `download-batch` RECURSES and the CLI flattens what it finds, so
-            # reading a prefix that holds generation subdirectories would land several publications'
-            # *.zip in one seed directory — a mix, under a count that cannot see it. For a point
-            # read "fall back to the source directory" yields the previous publication WHOLE; for a
-            # recursive batch it yields a union, which is the one thing this migration exists to
-            # make unrepresentable. So: a pointer that EXISTS and was not followed is a refusal, not
-            # a fallback. It is transient by construction — the pointer is one small file write —
-            # and a re-run reads the publication that now applies.
+            # the BATCH below. `download-batch` RECURSES and the CLI FLATTENS what it finds, so
+            # reading a prefix that holds generation subdirectories lands several publications'
+            # *.zip in one seed directory — and same-named files overwrite each other, so the mix is
+            # invisible to the count on the next line as well as to the compiler. For a point read
+            # "fall back to the source directory" yields the previous publication WHOLE; for a
+            # recursive batch it yields a UNION, which is the one thing this migration exists to
+            # make unrepresentable.
+            #
+            # 🚨 The condition is a property of the BYTES, never of the pointer file. Checking only
+            # `_current` would miss the orphan: a generation publish seals its directory and THEN
+            # moves the pointer, so a failed or interrupted pointer upload leaves a generation on
+            # the share with no pointer at all — and the flat copy beside it. So whenever the
+            # resolution landed on the prefix, refuse if the prefix holds any subdirectory that is
+            # not `modules` (the one directory a flat publication legitimately carries). An
+            # unreadable listing refuses too: this step's own rule is that "could not determine" is
+            # a hold, not an absence. Every one of these is transient and a re-run reads the
+            # publication that now applies.
             if [ "$dir" = "$prefix" ]; then
-              pointed=$(az storage file exists --account-name "$account" --share-name "$share" \
-                --path "$prefix/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
-                --only-show-errors 2>/dev/null || echo unknown)
-              if [ "$pointed" != "false" ]; then
-                echo "::error::$account/$share/$prefix carries a publication pointer ($POINTER exists=$pointed) that could not be followed to a generation on the share. This seed downloads the prefix RECURSIVELY, so reading it flat could mix two publications' bundles into one seed directory — refusing rather than seeding a set no publisher produced (MeshWeaver#3461). The pointer is one small file write; re-run to read the publication that now applies."
+              subdirs=$(az storage directory list --account-name "$account" --share-name "$share" \
+                --name "$prefix" --auth-mode login --backup-intent \
+                --query "[?type=='dir'].name" -o tsv --only-show-errors 2>/dev/null || echo "__unreadable__")
+              case "$subdirs" in *__unreadable__*)
+                echo "::error::could not list the subdirectories of $account/$share/$prefix, so it cannot be established whether this prefix holds publication generations. This seed downloads it RECURSIVELY; reading it without that answer could flatten two publications into one seed directory. Refusing — an unreadable listing is a hold, not an absence (MeshWeaver#3461)."
+                exit 1 ;;
+              esac
+              stray=$(printf '%s\n' "$subdirs" | grep -v '^[[:space:]]*$' | grep -vx 'modules' || true)
+              if [ -n "$stray" ]; then
+                echo "::error::$account/$share/$prefix holds publication generation(s) [$(printf '%s' "$stray" | tr '\n' ' ')] but no pointer this reader could follow to one. This seed downloads the prefix RECURSIVELY and the CLI flattens what it finds, so reading it flat would mix those bundles with the flat copy's into one seed directory — refusing rather than seeding a set no publisher produced (MeshWeaver#3461). Either the pointer is being replaced right now (re-run), or a generation publish sealed its directory and did not move the pointer (the publisher's run says which)."
                 exit 1
               fi
             fi
+            # The generation this seed READ — carried to the module composition below, so the two
+            # steps of one gate cannot end up on two different publications of one upstream. Empty
+            # under the flat layout. One line per upstream; the composition takes the FIRST, which
+            # is the only one it resolves for (`compose_once` reads upstreams in the order given).
+            case "$dir" in "$prefix"/*) printf 'SEED_GENERATION=%s\n' "${dir#"$prefix"/}" >> "$GITHUB_ENV" ;; esac
             # EXISTENCE FIRST, fail CLOSED (the publish script's own rule): an unreadable answer
             # is not "absent", and absent is a red gate, not an empty seed.
             sealed=$(az storage file exists --account-name "$account" --share-name "$share" \
@@ -1609,8 +1628,34 @@ jobs:
                 "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
                   --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
               else
-                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
-                  --storage-target "$(printf '%s\n' $TARGETS | head -1)"
+                # 🚨 ONE PUBLICATION PER GATE, not one per STEP (MeshWeaver#3461). `seed` resolved
+                # `_current` and downloaded that generation's *.zip; resolving it again here would
+                # let a pointer that advanced in between hand this gate one generation's BUNDLES and
+                # another's MODULE bytes — the cross-step form of exactly the mix the per-module pin
+                # already prevents inside one composition. So the seed's answer is carried, never
+                # re-derived.
+                #
+                # 🚨 It is passed only when the script FETCHED AT THIS LANE'S REF understands it. The
+                # workflow is pinned by the caller's `uses:` while the script is fetched at
+                # `scripts-ref || platform-ref`, so a new workflow can meet an old script — which
+                # would exit 2 on an unknown argument and red every satellite gate. Same probe, same
+                # reason, as node-repo-publish-bake.yml's SEAL_MODULES_OWN check. Without it the
+                # script resolves the pointer itself, which is this PR's behaviour minus the
+                # cross-step pin — correct, just not pinned.
+                GEN_ARG=""
+                if [ -n "${SEED_GENERATION:-}" ] && grep -q -- '--generation' "$SCRIPT"; then
+                  GEN_ARG="$SEED_GENERATION"
+                  echo "composing modules from the generation this gate's seed read: $SEED_GENERATION"
+                elif [ -n "${SEED_GENERATION:-}" ]; then
+                  echo "::warning::the compose script at ${SCRIPTS_REF} predates MeshWeaver#3461's --generation (this gate's seed read generation $SEED_GENERATION). It will resolve the publication pointer itself, so a pointer that advances between the two steps could hand this gate one generation's bundles and another's module bytes. It stops as soon as the resolved scripts ref carries the newer script; nothing to do here."
+                fi
+                if [ -n "$GEN_ARG" ]; then
+                  "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
+                    --storage-target "$(printf '%s\n' $TARGETS | head -1)" --generation "$GEN_ARG"
+                else
+                  "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
+                    --storage-target "$(printf '%s\n' $TARGETS | head -1)"
+                fi
               fi
             else
               echo "::notice::composing registry-modules ($REGISTRY_MODULES) from the REGISTRY's package endpoint: this repo declares no upstream seed, so there is no sealed publication to take module bytes from. These bytes are whatever the module's own lane published last — a bake-consumption decline against a publication that composed different ones is expected, and is the reason to declare the upstream (upstream-seed / upstream-sources) instead."
