@@ -378,6 +378,12 @@ not deleted, so that re-enabling it is a visible act rather than a rediscovery.
 | CI images | `mw-plugin-test`, `memex-migration`, `memex-portal-ai`, `memex-portal-next`, `memex-bake` | `--ago 7d --keep 10 --untagged` |
 | Production portal | `memex-portal` | `--ago 30d --untagged` |
 
+> 🚨 **That table is the 2026-09-06 reading and the CI step has since MOVED in the record.** On
+> 2026-09-13 it became `--ago 30d --untagged` with no `--keep`, which is #3842's decided policy
+> ([ArtifactRetentionInterlock](../ArtifactRetentionInterlock) → *The window is DECIDED*). The
+> **live** task is disabled and still carries the old window; `tasks.json` declares that gap under
+> `recordAheadOfRegistry`. Read the record, not this page, for what `apply` would install.
+
 🚨 **Two steps, not one, and that is the point.** Unioning the filters under the stricter window
 would have dragged `memex-portal` from 30 days to `7d --keep 10` with nobody deciding to. The merge
 removed the second *task* — the "which of two lists?" question — while preserving each repository's

@@ -52,9 +52,16 @@
       "creationDate": "2026-08-31T20:33:48.969331+00:00",
       "notes": [
         "🚨 DISABLED 2026-09-12 — see the top-level `pause` block. This was `Enabled` at `0 3 * * *`; every note below describes the policy it runs WHEN RE-ENABLED.",
-        "ONE task, TWO steps: a 7d --keep 10 step over the CI image repositories, and a separate",
-        "30d step for memex-portal. The split is behaviour-preserving — merging the filter lists",
-        "under the stricter window would retune memex-portal without anyone deciding to.",
+        "ONE task, TWO steps: a 30d step over the CI image repositories, and a separate 30d step",
+        "for memex-portal. The filter lists stay SEPARATE even at one window — they are not",
+        "symmetric (mw-plugin-test is unique to the first, memex-portal to the second), and a",
+        "union-merge would silently retune one of them the next time either window moves.",
+        "🚨 The first step was `--ago 7d --keep 10` until 2026-09-13 (MeshWeaver#3438). #3842's",
+        "decided rule is at least 30 days by age with NO build-count quota; #3843 and #3846",
+        "clamped the bundle store and the assembly cache to it and left the registry out in as",
+        "many words. `lock-pinned-digests.py --check-retention-record` now asserts it on every",
+        "pull request. See `recordAheadOfRegistry` below: the live task still carries the old",
+        "window, and this record is what `apply` would push.",
         "Both steps share ONE 3600 s task budget; the per-step `timeout` is a per-step ceiling.",
         "🚨 NEITHER STEP PASSES `--include-locked`, and that is the whole of the pin protection:",
         "`acr purge` skips locked manifests by default. Adding that flag would delete every",
@@ -81,6 +88,17 @@
       ]
     }
   ],
+  "recordAheadOfRegistry": {
+    "inForce": true,
+    "since": "2026-09-13",
+    "tasks": [
+      "purge-old-images"
+    ],
+    "what": "purge-old-images.yaml step 1 records `--ago 30d` with no `--keep`; the live (disabled) task still carries `--ago 7d --keep 10`.",
+    "why": "#3842's decided rule — at least 30 days by age, no build-count quota — was landed in the bundle store (#3843) and the assembly cache (#3846) and explicitly NOT in the registry. The record is what `acr-retention-tasks.sh apply` pushes, so stating the decided window here is what makes re-enabling the task install a window somebody chose. Nothing was applied: this is a record change, not a registry change.",
+    "clearedBy": "the next `acr-retention-tasks.sh apply` — after which `verify` finds no drift on these tasks and reds on THIS declaration being stale, which is how it expires rather than rotting.",
+    "issue": "MeshWeaver#3438"
+  },
   "pause": {
     "inForce": true,
     "since": "2026-09-12",

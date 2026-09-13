@@ -22,7 +22,30 @@ version: v1.1.0
 # in direct contradiction, and nothing but the lock reconciles them.
 #
 # 🚨 Raising --ago / --keep is NOT a fix: it moves the cliff. A pin left stable for a quarter walks
-# off the new one just the same.
+# off the new one just the same. The window below is NOT offered as pin protection — the lock is —
+# it is the decided policy the other two stores already enforce, stated here so that re-enabling
+# this task cannot silently apply a window nobody chose.
+#
+# 🚨 THE WINDOW IS 30 DAYS BY AGE WITH NO BUILD-COUNT QUOTA, AND THAT IS A DECISION, NOT A TUNING.
+# #3842, quoted in #3438's body and in #3859's acceptance list: *retain unreferenced continuous
+# artifacts for at least 30 days by age, without a build-count quota*. #3843 clamped
+# `PrebuiltBundleRetention` to it, #3846 clamped `AssemblyCacheRetention` to it, and #3843's own
+# body records that the registry was left out: *"The ACR task record and live cloud cleanup are
+# unchanged."* This step was the third store and the one nobody asserted — it carried
+# `--ago 7d --keep 10` over five continuously-republished repositories, `memex-portal-ai` among
+# them, which is the image BOTH production portals run.
+#
+# `--keep` is gone rather than raised. It counts NEWER BUILDS, so a repository republished many
+# times a day ages its own manifests out in hours regardless of `--ago` — which is #3438's root
+# cause stated as a flag, not a second-order concern.
+#
+# 🚨 THE RECORD IS AHEAD OF THE REGISTRY HERE, ON PURPOSE, AND tasks.json DECLARES IT under
+# `recordAheadOfRegistry`. The live task is DISABLED (paused, Memex#219) and still carries
+# `--ago 7d --keep 10`; `acr-retention-tasks.sh apply` is what pushes this file onto it, so this
+# is the window a re-enable would install. Do NOT "fix" the drift by running
+# `acr-retention-tasks.sh record` — that overwrites this file FROM the live task and silently
+# restores the 7-day quota window. `lock-pinned-digests.py --check-retention-record` then reds,
+# on every pull request, which is how that mistake is caught.
 #
 # PROTECTION IS THE MANIFEST LOCK, not this policy. Live pinned digests carry
 # `--delete-enabled false`; `acr purge` skips locked manifests by default and neither step passes
@@ -36,7 +59,7 @@ version: v1.1.0
 # Doc: Doc/Architecture/PinnedImageRetention. Incidents: Memex#122, MeshWeaver#3438 (Education,
 # Manufacturing and SocialMedia CI down simultaneously 2026-09-05T15:29Z on a purged tester digest).
 steps:
-  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-bake:.*' --ago 7d --keep 10 --untagged
+  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-bake:.*' --ago 30d --untagged
     disableWorkingDirectoryOverride: true
     timeout: 3600
   - cmd: acr purge --filter 'memex-portal:.*' --ago 30d --untagged
