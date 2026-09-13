@@ -46,15 +46,15 @@ namespace MeshWeaver.Mesh;
 /// measurably false one lane over. What still posts a <see cref="DisposeRequest"/> WITHOUT
 /// consulting the lease, at the time of writing:
 /// <list type="bullet">
-///   <item><c>MeshOperations.Recycle</c> — the operations/MCP recycle. It posts directly, so an
-///     operator recycling a package root mid-install can still strand that install. Routing it
-///     through here is a separate change in a separate file.</item>
 ///   <item><c>PackageInstaller.SettleRetypedRoot</c> — deliberately, and the reason is on that
 ///     method: it is the lease HOLDER, and a holder deferring against its own lease deadlocks.</item>
 ///   <item><c>NodeTypeEnrichmentHelpers</c>' stale-build convergence and overlay self-heal — also
 ///     deliberately: they recycle per-TYPE hubs beneath a root, which is work the install is often
 ///     waiting for.</item>
-/// </list></para>
+/// </list>
+/// <c>MeshOperations.Recycle</c> — the operations/MCP recycle, which used to head that list — now
+/// consults the lease through <see cref="WhenNoInstallHoldsRoot"/>, the same gate this class waits
+/// on, rather than a second copy of the rule.</para>
 /// </summary>
 public static class HubRecycleExtensions
 {
@@ -89,7 +89,7 @@ public static class HubRecycleExtensions
     /// <c>AddressRecyclingException</c> if the address is still recycling when the budget runs out.</returns>
     public static IObservable<MeshNode?> RecycleNode(
         this IMessageHub hub, string path, TimeSpan? budget = null, string? reason = null)
-        => WaitWhileAnInstallHoldsIt(hub, path)
+        => hub.WhenNoInstallHoldsRoot(path)
             .SelectMany(_ => Observable.Defer(() =>
             {
                 hub.Post(
@@ -123,9 +123,23 @@ public static class HubRecycleExtensions
     /// <para>No registry (a host composed without <c>MeshBuilder</c>'s registrations, a bare test
     /// hub) means no lease can exist, so the answer is "proceed" and the pre-#3510 behaviour is
     /// unchanged.</para>
+    ///
+    /// <para>🚨 <b>Public because the rule must have ONE implementation, not one per recycler.</b>
+    /// <see cref="RecycleNode"/> is not the only surface that tears a package root down:
+    /// <c>MeshOperations.Recycle</c> — the operations/MCP verb — posts its own
+    /// <see cref="DisposeRequest"/> from a different assembly, and for as long as it consulted no
+    /// lease an operator could strand an install exactly the way the automatic recyclers used to.
+    /// Two copies of this predicate is how a gate that holds on one surface and not the other
+    /// drifts apart, and the difference only ever surfaces as an install that ran out its
+    /// ten-minute bound. Compose this ahead of the teardown; do not re-derive it.</para>
     /// </summary>
-    private static IObservable<System.Reactive.Unit> WaitWhileAnInstallHoldsIt(
-        IMessageHub hub, string path)
+    /// <param name="hub">The hub asking for the recycle — named in the deferral log, and the
+    /// provider the lease registry is resolved from.</param>
+    /// <param name="path">The path about to be recycled, matched against the lease EXACTLY (the
+    /// registry is deliberately not subtree-scoped — see <see cref="PackageRootInstallLeases"/>).</param>
+    /// <returns>A cold observable that emits once and completes when no install holds the path.</returns>
+    public static IObservable<System.Reactive.Unit> WhenNoInstallHoldsRoot(
+        this IMessageHub hub, string path)
         => Observable.Defer(() =>
         {
             var leases = hub.ServiceProvider.GetService<PackageRootInstallLeases>();

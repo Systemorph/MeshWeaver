@@ -3680,8 +3680,30 @@ public class MeshOperations
                 : ReconsiderRecycleThroughNodeTypeRule(resolvedPath))
             .SelectMany(outcome =>
             {
+                // 🚨 THE LEASE GATE, AFTER THE PERMISSION VERDICT AND BEFORE THE FIRST WRITE
+                // (#3510). An operator recycling a package root while that package's install is
+                // writing under it strands the install: the root's per-node children go down with
+                // it, the writes they owed acks for are never answered
+                // (`ADVANCE_WITHOUT_HANDOFF`), the nodeops handler that owed its reply to one of
+                // those acks never replies, and the install sits until its own ten-minute bound
+                // reports `[FAIL] … install: TimeoutException`. Every automatic recycler has
+                // consulted PackageRootInstallLeases since #4009; this verb was the one named hole
+                // left open ("it posts directly, so an operator recycling a package root
+                // mid-install can still strand that install").
+                //
+                // 🚨 ORDER IS LOAD-BEARING, both ways. AFTER the permission fold: a caller who may
+                // not recycle gets their refusal immediately and never waits on somebody else's
+                // install. BEFORE RecycleCore: the release-request stamp is already a WRITE into
+                // the root the install is writing, so gating only the DisposeRequest would still
+                // let the stamp race the install's own writes.
+                //
+                // It DEFERS, it does not refuse — the same contract HubRecycleExtensions states:
+                // the wait ends on a state that always arrives (the lease is tied to the install's
+                // own subscription), nothing is retried, and no bound is widened. The gate is the
+                // ONE implementation in HubRecycleExtensions, never a second copy of the rule.
                 if (outcome.IsGranted)
-                    return RecycleCore(resolvedPath);
+                    return hub.WhenNoInstallHoldsRoot(resolvedPath)
+                        .SelectMany(_ => RecycleCore(resolvedPath));
 
                 if (outcome.IsUndetermined)
                 {
