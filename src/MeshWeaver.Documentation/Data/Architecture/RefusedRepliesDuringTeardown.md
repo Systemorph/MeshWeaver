@@ -54,9 +54,9 @@ message type says it is — and it is advice to nobody:
 Every failure route in the framework answers `delivery.Sender`: `MessageService.ReportFailure`
 posts a `DeliveryFailure` to it, `NackThroughParent` NACKs it through the parent, the routing
 services' NotFound path NACKs it directly. All of them are the wrong party for a reply. And two of
-`ReportFailure`'s own exits then drop the message in silence — the `RunLevel >= DisposeHostedHubs`
-gate returns during exactly the teardown this hole opens in, and `MayAnswer()` asks whether the
-SENDER wants an answer, which is not the question a reply poses.
+`ReportFailure`'s own exits then dropped the message in silence — the `RunLevel >= DisposeHostedHubs`
+gate returned during exactly the teardown this hole opens in (removed in #4072, see below), and
+`MayAnswer()` asks whether the SENDER wants an answer, which is not the question a reply poses.
 
 ---
 
@@ -156,11 +156,127 @@ requests never reach the sink and keep the ordinary NACK path unchanged. Only a 
 messages whose waiter is somebody other than the sender. A miss costs one dictionary lookup, which
 is what makes it affordable to ask on every dropped delivery.
 
-The other abandonment path a teardown can take — `NackThroughParent`, used by the intake gate and
-the disposal drain — needs no hook, and that is checkable rather than assumed: it declines a typed
-reply on its first line (it admits only `IRequest` and `RawJson`) **and** declines everything when
-the parent is already past `DisposeHostedHubs`, which is exactly the state this defect lives in. So
-the hand-over needs the routing arms, and the storm-sensitive NACK path is left alone.
+The other abandonment path a teardown can take — `NackThroughParent`, used by the intake gate,
+the disposal drain and the handler-fault arms — declines a typed reply on its first line (it admits
+only `IRequest` and `RawJson`) **and** declines everything when the parent is already past
+`DisposeHostedHubs`. That second decline was read, until #4072, as "every sender is going away
+too"; it is not, and what happens to the NACK it drops is the next section.
+
+### The NACK's own carrier of last resort — #4072
+
+A **NACK** is the one reply whose loss is never the responder's fault to notice: it is minted
+precisely because the responder could not do its work. Three carriers used to be tried, in this
+order, and the third was not a carrier at all:
+
+| carrier | declines when |
+|---|---|
+| `NackThroughParent` — post through the parent | the parent is past `DisposeHostedHubs` |
+| the post seam's forward — `PostImplGeneric` hands a correlated reply to a live parent | the parent is past `DisposeHostedHubs` |
+| `ReportFailure` — this hub's own `Post` | **its own run level** was `>= DisposeHostedHubs` — it returned before reaching the post seam at all |
+
+The third row is the defect #4072 was filed on. The gate predates the post seam's forward, so
+every `ReportFailure` caller — the genuine-fault arm of the handler `Catch`, the routing tail, the
+unpack failure, the post-pipeline reject — computed its verdict past `DisposeHostedHubs` and then
+dropped it, while the requester burned its whole budget. `ReportFailure` now hands the answer to
+the post seam unconditionally; the seam forwards through a live parent and otherwise **stamps the
+request's trail** with what it could not do (`REPLY_REFUSED_SHUTTING_DOWN runLevel=… parent=…`),
+which is what that line used to do silently.
+
+The first two rows are the state a **whole-tree teardown** answers every sibling in: a parent
+reaches `DisposeHostedHubs` *before* it disposes its children, so no child's answer to another
+child can ever pass through it. The requester is not "going away too" — it is `Quiescing` on
+exactly that callback, re-arming its budget because the responder is a shutting-down sibling that
+"answers before it goes" (`[QUIESCE-WAIT]`), and gives up only on `[QUIESCE-CUT]`. The whole
+teardown therefore paced itself on the sum of those budgets for an answer that existed the whole
+time. Measured on `LeavingHubAdoptionSweepTest` (core `main`, 14 s, **passing**): the responder's
+trail read
+
+```text
+HANDLER_FAULT TargetInvocationException→TargetInvocationException→HubDisposingException
+  → NACK_DECLINED reason=parent-DisposeHostedHubs
+  → FAILURE_REPORTED errorType=ShuttingDown runLevel=Dead
+  → RESPONSE_POSTED type=DeliveryFailure target=cache/…
+  → REPLY_REFUSED_SHUTTING_DOWN runLevel=Dead parent=mesh/…@DisposeHostedHubs
+```
+
+while the `cache/…` requester sat `Quiescing` with that callback pending for 4 s; the mesh's
+teardown took 4.0 s and printed a "still waiting" snapshot at 3 s. With the carrier below the same
+teardown takes 2.0 s and prints nothing.
+
+**`MessageHub.TryDeliverNackInProcess`** is the fourth carrier: a `DeliveryFailure` that carries
+`PostOptions.RequestId` and that no transport can take is handed **straight to the in-process hub
+its requester lives under** — the target's host chain is climbed to the tree root, the top-level
+hub looked up (never created), the chain descended, and the delivery put on that hub's own
+intake — when that hub is still below `DisposeHostedHubs` (its gate admits replies while
+`Quiescing`, and its callbacks are cancelled from `DisposeHostedHubs` on, so a later hand-over
+would be wasted). It is offered on the post seam's refusal arm, on the two routing drop arms
+after the `IUndeliverableReplySink` has declined, and — through `ReportFailure` — at the intake
+gate's tier 2, which used to return without answering because "there is genuinely no route".
+
+Why this is not the second transport the rule above forbids:
+
+- **It carries NACKs only.** A `DeliveryFailure` acknowledges no state, so the reorder hazard that
+  keeps typed replies off any bypass — an ack overtaking the change it acknowledges — cannot
+  arise. Typed replies keep the documented drop (the `CreateOrUpdateNodeResponse` a sibling's
+  `nodeops` mints during the same teardown still costs its requester one quiesce budget).
+- **It is offered only where the drop happens.** Every other carrier has declined by the time it
+  runs; there is no post left for it to race.
+- **It lands on the requester's intake, not in its handler.** The requester's own gate decides and
+  its own pump serialises — exactly what a routed delivery would get. Nothing runs on the
+  responder's turn.
+
+Two classification changes ride along. A handler fault whose chain carries an
+`ObjectDisposedException` **while this hub's own service scope answers disposed** (the probe-gated
+`ScopeTeardown.IsTerminatedByScopeTeardown`, the same classifier `HandleInitialize` and the
+permission fold use — not the message-matching `IsDisposedContainer`, which would also catch a
+handler that reached into some *other* disposed scope) is a **teardown fact** and is answered
+`ShuttingDown` in the owner's refusal vocabulary, like a `HubDisposingException` — it used to
+fall to the genuine-fault arm and be answered `Unknown`, a bug read into a recycle. And
+the `HANDLER_FAULT` stage now names the inner exception types (`Outer→Inner→…`), because the
+dispose snapshot is the one artefact a green run keeps and #4072 was filed on a trail that could
+not tell the two apart.
+
+Pinned by `MeshWeaver.Messaging.Hub.Test.HandlerFaultPastDisposeHostedHubsTest`: a delivery
+pipeline stage detaches the handler from its turn (the `AccessControlPipeline` shape, which is how
+a handler comes to run on a hub that has moved past `DisposeHostedHubs` at all) and releases it
+once the fence — parent past `DisposeHostedHubs`, victim at `DisposeHostedHubs`, requester
+`Quiescing` — is read back. Falsified by reverting the production change: all four cases then
+time out with the requester unanswered, and the whole-tree cases hold the mesh teardown open on
+the pending callback for the requester's entire quiesce budget.
+
+**Reading a trail after this change.** The verdict is decided by the LAST post-seam stage, not by
+`RESPONSE_POSTED` alone: `NACK_DELIVERED_IN_PROCESS` / `REPLY_FORWARDED_THROUGH_PARENT` mean a
+carrier accepted it (chase the requester's side); `REPLY_REFUSED_SHUTTING_DOWN` means the seam
+refused it and names both run levels; `NACK_DECLINED reason=…` with nothing after it means every
+carrier declined and says why.
+
+**And the reply's own journey is on the same line.** A reply is posted under a fresh delivery id
+that nobody awaits, so until now every stage after `RESPONSE_POSTED` — its intake at the parent,
+its routing, its intake at the requester, the callback rule — was recorded nowhere, and the
+verdict could only say *"chase the response delivery"* (which is exactly what the 2026-09-13
+merge-queue failure on `DanglingNodeTypeUpdateTest` left a reader with: `PATCH_ACK ok →
+RESPONSE_POSTED … → PATCH_FLUSH_SUBSCRIBED ⇒ the reply was lost between the responder and the
+requester`, and nothing to chase it by). The ledger now **aliases the reply's id to the
+request** at `RESPONSE_POSTED`, so the same `Find(id)?.Add(…)` every hub already performs writes
+the reply's stages into a sub-trail rendered as `↩ reply#1: RECEIVED@… → ROUTED … → HANDLER_EXIT
+state=Processed@<requester>`, and the verdict reads its last stage: no stage at all ⇒ the post
+seam refused it or the target is outside the tree; `ROUTED … state=Failed` ⇒ routing dropped it
+and the stage names the hub; `RESPONSE_ARRIVED_NO_SUBJECT` ⇒ it arrived where no callback was
+held; a last `RECEIVED` ⇒ it is sitting in that hub's queue. Three replies per request are kept
+(a subscription is answered many times, and only the first few can say anything about a lost
+verdict). Pinned by `ReplyTrailFollowsTheRequestTest`.
+
+**And the target's pump is on the report.** A trail ending `RECEIVED → ENQUEUED → QUEUED depth=1`
+at the target and then nothing says the target never dequeued it; what it never said is WHY. The
+pending-callback report (`[STALE-CALLBACK]`, `[QUIESCE-TIMEOUT]`, the disposal snapshot) now
+prints, under each pending request whose target is a hub in this process, `target pump now:
+<address> RunLevel=… turn=<message> running <ms> buffer=… deferred=… drainsInFlight=…
+awaitingScheduler=… draining=…` — the same snapshot a hub prints for its own queue, taken for
+the hub the callback is waiting ON. Measured 2026-09-13 on the Plugins gate (#2543 / #4141): 25
+stale callbacks, every `SubscribeRequest` among them ending that way at a NodeType hub with the
+pool at `pendingWork=316`, and no line anywhere naming what that hub was doing. This reading is
+also the M1/M2 discriminator #3593 waits for, printed while the hub is alive rather than only
+from its disposal stall detector.
 
 ### What it deliberately does not cover
 
