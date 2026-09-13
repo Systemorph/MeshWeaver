@@ -1283,7 +1283,15 @@ public class MessageService : IMessageService
             // Only a reply this hub cannot admit reaches here at all: from DisposeHostedHubs to
             // ShutDown a correlated reply is ADMITTED and routed (see RefusesIntake). This branch
             // is the residue past ShutDown, and the honest answer for it.
-            if (delivery.Properties.TryGetValue(PostOptions.RequestId, out var refusedReplyRequestId)
+            // 🚨 …and NEVER answer an answer. MayAnswer() reads the answer-once contract off the
+            // ENVELOPE (#1485): it is false for a DeliveryFailure — which carries a RequestId like
+            // any other reply, so the correlation test alone would let one through and mint a NACK
+            // about a NACK — and for [CanBeIgnored] lifecycle traffic. Two concurrently disposing
+            // hubs answering each other's refusals is the ping-pong every guard on this path
+            // exists to prevent (Copilot review on #4183). Such a delivery falls through to the
+            // sender-addressed paths below, which suppress it for the same reason.
+            if (delivery.MayAnswer()
+                && delivery.Properties.TryGetValue(PostOptions.RequestId, out var refusedReplyRequestId)
                 && refusedReplyRequestId?.ToString() is { Length: > 0 } refusedRequestId
                 && delivery.Target is { } replyRequester
                 && !replyRequester.Equals(Address))

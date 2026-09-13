@@ -177,4 +177,48 @@ public class ARefusedReplyReachesItsRequesterTest(ITestOutputHelper output) : Hu
             release();
         }
     }
+
+    /// <summary>
+    /// The answer-once control: a refused <see cref="DeliveryFailure"/> is NOT answered with
+    /// another one.
+    ///
+    /// <para>🚨 A NACK carries <see cref="PostOptions.RequestId"/> exactly like any other reply, so
+    /// the correlation test alone would mint a failure ABOUT a failure — and two concurrently
+    /// disposing hubs doing that to each other is the ping-pong every guard on this path exists to
+    /// prevent. <c>MayAnswer()</c> reads that contract off the envelope; without it this case
+    /// resolves the requester's callback with a second NACK, which is how the guard is falsified.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARefusedDeliveryFailure_IsNotAnsweredWithAnotherOne()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (responder, requester, requestId, response, _, _, release) = Arrange(ct);
+        try
+        {
+            responder.Dispose();
+            await responder.DisposalCompleted.FirstOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+            var nack = new MessageDelivery<DeliveryFailure>(
+                new DeliveryFailure(ReplyFor(responder, requester.Address, requestId))
+                {
+                    ErrorType = ErrorType.ShuttingDown,
+                    Message = "an earlier refusal, correlated like any other reply"
+                },
+                new PostOptions(responder.Address)
+                    .WithTarget(requester.Address)
+                    .WithProperty(PostOptions.RequestId, requestId),
+                responder.JsonSerializerOptions);
+            responder.DeliverMessage(nack);
+
+            await Observable.FromAsync(() => response).Should().NotEmit(3.Seconds(),
+                "a refused NACK must not be answered with another NACK — the requester's callback "
+                + "stays as it was, and the two hubs do not answer each other's refusals");
+            Mesh.DescribeRequestFate(requestId).Should().NotContain("REPLY_REFUSED_REQUESTER_NACKED",
+                "the reporting branch must not have run for a DeliveryFailure");
+        }
+        finally
+        {
+            release();
+        }
+    }
 }
