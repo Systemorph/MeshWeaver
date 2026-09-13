@@ -12,15 +12,15 @@ inventory of the facilities still missing (maintainer, 2026-09-13: "pls refactor
 
 | Suite | From | Converted | Refused | Cases |
 |---|---|---|---|---|
-| `Testing/CompilerPipeline` | `test/MeshWeaver.Compiler.Pipeline.Test` | 56 | 35 | 500 |
+| `Testing/CompilerPipeline` | `test/MeshWeaver.Compiler.Pipeline.Test` | 55 | 36 | 499 |
 | `Testing/ContentCollections` | `test/MeshWeaver.ContentCollections.Test` | 1 | 11 | 1 |
-| `Testing/Data` | `test/MeshWeaver.Data.Test` | 20 | 59 | 116 |
+| `Testing/Data` | `test/MeshWeaver.Data.Test` | 25 | 54 | 185 |
 | `Testing/DeploymentContract` | `test/MeshWeaver.Deployment.Contract.Test` | 1 | 3 | 3 |
-| `Testing/Graph` | `test/MeshWeaver.Graph.Test` | 100 | 109 | 843 |
-| `Testing/Hosting` | `test/MeshWeaver.Hosting.Test` | 49 | 54 | 306 |
+| `Testing/Graph` | `test/MeshWeaver.Graph.Test` | 99 | 110 | 835 |
+| `Testing/Hosting` | `test/MeshWeaver.Hosting.Test` | 50 | 53 | 315 |
 | `Testing/Layout` | `test/MeshWeaver.Layout.Test` | 18 | 42 | 178 |
-| `Testing/MessagingHub` | `test/MeshWeaver.Messaging.Hub.Test` | 31 | 49 | 126 |
-| **total** | | **276** | **362** | **2073** |
+| `Testing/MessagingHub` | `test/MeshWeaver.Messaging.Hub.Test` | 30 | 50 | 108 |
+| **total** | | **279** | **359** | **2124** |
 
 ## Runtime, 2026-09-13 (local gate, `--seed` over the bake)
 

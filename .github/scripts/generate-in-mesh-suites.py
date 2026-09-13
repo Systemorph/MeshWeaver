@@ -113,7 +113,8 @@ def generate(suite_id: str) -> tuple[int, int, int]:
         for n in list(converted):
             text = (src_dir / n).read_text(encoding="utf-8")
             mine = set(decl.findall(text))
-            hit = sorted(t for t in gone - mine if re.search(r"\b" + re.escape(t) + r"\b", text))
+            # a TYPE reference: not a member access (`Assert.Empty(`, `Task.Run(`), not part of a longer name
+            hit = sorted(t for t in gone - mine if re.search(r"(?<![\w.])" + re.escape(t) + r"\b", text))
             if hit:
                 newly.append((n, f"uses {', '.join(hit[:3])} declared in a refused file"))
         if not newly:
