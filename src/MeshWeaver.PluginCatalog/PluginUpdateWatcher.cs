@@ -143,7 +143,27 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
         if (cache is null || config is null || !cache.Enabled)
             return;
 
-        foreach (var configured in PackageSources.FromConfiguration(hub, config, logger))
+        // 🚨 This runs inside IHostedService.StartAsync, and reading the configured sources
+        // CONSTRUCTS them — which resolves services and can throw on a mesh composed differently
+        // from the registry's. A cache invalidation that can abort a boot is far worse than the
+        // staleness it prevents: the fault is reported and the host carries on with the freshness
+        // window as the only invalidation, which is what it had a moment ago. Same rule, and the
+        // same reason, as PlatformMetricsHostedService.
+        IReadOnlyList<ConfiguredPackageSource> sources;
+        try
+        {
+            sources = PackageSources.FromConfiguration(hub, config, logger);
+        }
+        catch (Exception exception)
+        {
+            logger?.LogWarning(exception,
+                "Plugin update watcher: the configured package sources could not be read, so a green "
+                + "build will not invalidate the listing cache early. The freshness window still "
+                + "bounds staleness; nothing else is affected.");
+            return;
+        }
+
+        foreach (var configured in sources)
         {
             if (configured.RepoPath is not { Length: > 0 } src)
                 continue;
