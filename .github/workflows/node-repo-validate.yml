@@ -227,6 +227,35 @@ jobs:
       - name: "Every job in this repo's workflows is capped at 45 minutes"
         run: python3 "$RUNNER_TEMP/check-workflow-timeouts.py" --root .
 
+      # 🚨 A VENDORED RESOLVER MUST NOT DRIFT (MeshWeaver.Plugins#1565; the shape of MeshWeaver#4027).
+      # Every satellite carries `scripts/resolve-platform.py` and runs it in its own `platform-ref`
+      # job — the file that decides which sealed platform set the repository builds and tests
+      # against. Measured 2026-09-13: seven copies at six distinct sizes across the fleet, one of
+      # them (Education) an older vintage whose answer differs on a re-run and on a set whose own
+      # Plugins seal is not the newest, and no guard compared any of them to the canonical. The
+      # comparison is at the CODE level (docstrings and comments are not drift); the verdict is
+      # advisory until the date the guard carries (`RED_FROM`, one day after it landed) and red
+      # after — a canonical fetched at the lane's ref is live on merge for every caller, so the
+      # fleet must see the finding before it can fail on it. A repository with no copy passes: that
+      # is the end state (the lanes fetch the canonical themselves), not a gap.
+      - name: Fetch the platform's resolver-copy guard and the canonical resolver at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the resolver-copy guard has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-resolver-copy.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-resolver-copy.py" \
+            || { echo "::error::could not fetch .github/scripts/check-resolver-copy.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-resolver-copy.py" | grep -q "check-resolver-copy" || { echo "::error::the fetched check-resolver-copy.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/resolve-platform.canonical.py" \
+            || { echo "::error::could not fetch .github/scripts/resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the canonical the copy is compared against is unreadable, and a guard that cannot read its subject must not pass"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/resolve-platform.canonical.py" | grep -q "resolve-platform" || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} does not look like the resolver"; exit 1; }
+      - name: "A vendored resolver that drifted is named — the gate can fail (self-test)"
+        run: python3 "$RUNNER_TEMP/check-resolver-copy.py" --self-test
+      - name: "This repo's vendored resolve-platform.py matches the platform's canonical (advisory until the guard's flip date, red after)"
+        run: python3 "$RUNNER_TEMP/check-resolver-copy.py" --root . --canonical "$RUNNER_TEMP/resolve-platform.canonical.py"
+
       # 🚨 A 40-HEX SUBSTITUTION CANNOT SEE AN ABBREVIATED SHA, and the pin-move procedure in every
       # node repo's ci.yml is exactly such a substitution ("move each value by grepping its OLD
       # value"). The narrative comment names the pin SHORT — `core <9-hex>` — so the sed moves the
