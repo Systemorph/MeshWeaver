@@ -844,10 +844,7 @@ public static class PluginGateRunner
             // skill), and this tool IS the bulk shape, so the trace has to be reachable without
             // editing the tool. MW_LOG_LEVEL=Trace turns the whole run into the trace the skill
             // greps; MW_LOG_CATEGORIES narrows it to the categories that carry MESSAGE_FLOW.
-            var minLevel = Enum.TryParse<LogLevel>(
-                Environment.GetEnvironmentVariable("MW_LOG_LEVEL"), ignoreCase: true, out var lvl)
-                ? lvl
-                : LogLevel.Warning;
+            var minLevel = GateVerbosity.MinLevel;
             services.AddLogging(logging =>
             {
                 logging.SetMinimumLevel(minLevel);
@@ -895,8 +892,12 @@ public static class PluginGateRunner
                 // installer, against a job log that is otherwise the gate report and a few dozen
                 // warnings. VALUE: the next occurrence is named in one read instead of costing a
                 // release wave. The trace levels stay opt-in through MW_LOG_LEVEL.
+                // 2026-09-13: the MessageHub pair is two lines per hub disposal — hundreds per
+                // package on the plugin gate — so it is raised only under MW_LOG_LEVEL (Information
+                // or lower); the two recyclers' lines (a handful per package) stay on by default.
                 foreach (var category in RecycleAttributionCategories)
-                    logging.AddFilter(category, LogLevel.Information);
+                    if (GateVerbosity.Verbose || category != "MeshWeaver.Messaging.MessageHub")
+                        logging.AddFilter(category, LogLevel.Information);
                 foreach (var category in (Environment.GetEnvironmentVariable("MW_LOG_CATEGORIES") ?? "")
                          .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     logging.AddFilter(category, minLevel);

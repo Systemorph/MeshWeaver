@@ -113,7 +113,9 @@ public sealed record EaGraphAccess(
   which offering the consent link is truthful.
 - **`Connected`** — a credential was read (and, for `GetAccessToken`, a token was minted from it).
 - **`Undetermined`** — the read did not produce an answer: it timed out, the transport faulted, the
-  stored content could not be interpreted, or Entra refused the redemption. **Nothing is known.**
+  stored content could not be interpreted, or the token endpoint answered something that says
+  nothing about the grant (a 401 `invalid_client` — our secret —, a 429, a 5xx, a body that is not
+  the OAuth error shape). **Nothing is known.**
 
 `Undetermined` always carries a `Diagnostic`, because an undetermined state with nothing to say is
 indistinguishable from the swallow it replaces.
@@ -131,6 +133,47 @@ Classified as `NotConnected`, the same value both hands the user the consent lin
 `/auth/ea/connect` run consent; the diagnostic says the mailbox side is intact, so the plugin's
 sentence is "reconnect once", never "you never connected". The token endpoint is not asked at all
 (`AStaleGrant_IsNotOfferedToTheTokenEndpoint` counts the calls).
+
+### A refused grant is a finding, not a failure to find out
+
+Added 2026-09-13 (MeshWeaver.Plugins#1615). Until then *every* non-2xx from the token endpoint
+was `Undetermined` — the 400 `invalid_grant` Entra answers for a revoked, expired or
+password-changed refresh token included — so the assistant said "I could not determine … ask me
+again in a moment", the user asked again, the same dead token was redeemed again, and the same
+400 came back. Following the sentence's own advice could never end. Worse, the consent controller
+reads the credential **without** asking the token endpoint, classified it `Connected`, and bounced
+the reconnect link straight back without a dialog: stranded both ways.
+
+The token endpoint's answer is now read for what it says (`TokenRefusal`, pure). A 400 whose
+OAuth `error` names the grant — `invalid_grant`, `interaction_required`, `consent_required` — is
+Entra **answering** that this grant cannot be redeemed, and the remedy is consent. That refusal:
+
+1. **stamps the credential** (`EaCredential.RefusedAt` + `RefusalReason`, written through the
+   node stream as system), and
+2. answers `NotConnected` with a diagnostic that says *reconnect*, never *you never connected*.
+
+The stamp is what makes the two readers agree: `Classify` answers `NotConnected` for a stamped
+credential before the token endpoint is asked, so the assistant hands over the consent link on
+every later call without redeeming the dead token again, and `/auth/ea/connect` runs the dialog
+instead of taking its fast path. A successful consent rewrites the node without the stamp.
+
+Everything the endpoint says that is *not* about the grant stays `Undetermined`, unstamped, and
+is retried on the next call — that is what "ask me again in a moment" promises, and for an outage
+it is true. So is a token endpoint that could not be reached at all (DNS, a reset, the pool's
+timeout): caught on the redemption chain, never a fault out of the tool.
+
+Three edges the stamp is careful about: it is applied on the owner over the node's **current**
+content and only while that content still holds the token that was refused — a re-consent or a
+rotation that landed in between is left alone; a stamp that did **not** land answers
+`Undetermined` (with the refusal in the diagnostic), because handing out the consent link while
+the controller still reads `Connected` is the disagreement the stamp exists to end, and "ask again"
+is true there — the next call records it; and a call that raced the stamp (two tool calls in the
+same instant, both past the read before either stamped) redeems once more — the stamp bounds the
+redemptions to the calls in flight when it landed, not to exactly one.
+
+`EaCredentialReadTest` pins the halves against a scripted token endpoint: the refused grant reads
+`NotConnected`, is stamped (the controller's read agrees), and a later call does not redeem again;
+the 503 reads `Undetermined`, is not stamped, and is redeemed again next time.
 
 ### What a caller must do with `Undetermined`
 

@@ -260,10 +260,25 @@ public class InstallTimePrebuiltAdoptionTest(ITestOutputHelper output) : Monolit
 
         public void Dispose() { }
 
+        /// <summary>
+        /// Prints the captured Warning+ lines. The sink records EVERY level (the assertions read
+        /// <see cref="Lines"/>, and the seeder's reason line is Information), but echoing the whole
+        /// Trace capture put ~20k lines per run into the shard log (2026-09-13: shard 5 was 51k
+        /// lines, 24k of them this class's MESH dump) — the maintainer's rule is CI logs at Warning.
+        /// </summary>
         public void Dump(ITestOutputHelper output, string tag)
         {
+            var kept = 0;
             foreach (var line in _lines)
+            {
+                if (!line.StartsWith("Warning: ", StringComparison.Ordinal)
+                    && !line.StartsWith("Error: ", StringComparison.Ordinal)
+                    && !line.StartsWith("Critical: ", StringComparison.Ordinal))
+                    continue;
                 output.WriteLine($"{tag} {line}");
+                kept++;
+            }
+            output.WriteLine($"{tag}: {kept} of {_lines.Count} captured line(s) shown (Warning and above)");
         }
 
         private sealed class SinkLogger(ConcurrentQueue<string> lines) : ILogger

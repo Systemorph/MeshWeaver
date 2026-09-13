@@ -477,10 +477,18 @@ def check_callers(root: Path) -> int:
                 problems.append(f"{wf.name}: `{kid}` is published by {len(wired)} jobs ({', '.join(wired)}) "
                                 "— the same bytes would be POSTed twice from one validated call.")
             elif mode != "staged" and _norm_condition(kw.get("publish", False)) != "false":
+                # Named, never refused — and since 2026-09-11 this is the design of record, not a
+                # repository that has yet to convert: per-module deploy (maintainer directive,
+                # MeshWeaver.Plugins#1676 / MeshWeaver#4044, `Doc/Architecture/ModuleBuildArchitecture`
+                # → *Per-module deploy*) publishes each module on ITS OWN suite's verdict and never
+                # waits for the run's other gates. `staged` + the publication lane stays available
+                # as the opt-in for a repository that wants one verdict per run (MeshWeaver#3878's
+                # shape); this note must not read as a recommendation to adopt it.
                 print(f"  NOTE: {wf.name}#{kid} publishes IN-LEG (publish-mode: {mode}): each module "
-                      "reaches the registry right after its own suite, before this run's other gates "
-                      f"report (MeshWeaver#3878). Not refused here; adopt publish-mode: staged and a "
-                      f"{PUBLISH_LANE} job.")
+                      "reaches the registry on its own suite's verdict, before this run's other gates "
+                      "report — the per-module deploy of record since 2026-09-11 (MeshWeaver.Plugins#1676). "
+                      f"Not refused; `publish-mode: staged` plus a {PUBLISH_LANE} job is the opt-in for "
+                      "one verdict per run (MeshWeaver#3878).")
 
     print(f"module-publication check-callers: {n_pack} {PACK_LANE} call(s) and {n_pub} {PUBLISH_LANE} "
           f"call(s) across {len(files)} workflow file(s) under {wf_dir}")

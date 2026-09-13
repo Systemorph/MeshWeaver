@@ -17,6 +17,10 @@ FROM mcr.microsoft.com/azure-cli:2.77.0
 # configured: HostingOperator refuses with "no operator image configured" either way.
 ARG KUBECTL_VERSION=v1.31.4
 ARG HELM_VERSION=v3.16.3
+# crane (go-containerregistry): hosting-image-mirror's registry-to-registry copy of the pinned
+# platform images from ACR into the fleet registry (MeshWeaver.Plugins#1722). A manifest+blob copy
+# needs a registry client; az, kubectl and helm are not one, and docker is not in this image.
+ARG CRANE_VERSION=v0.20.3
 # Supplied by BuildKit. The binaries below are per-architecture, and hard-coding amd64 produces an
 # image that builds fine on an arm64 laptop and then cannot exec kubectl.
 ARG TARGETARCH=amd64
@@ -35,7 +39,11 @@ RUN tdnf install -y --refresh postgresql tar shadow-utils ca-certificates jq \
  && curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" \
       | tar -xz -C /tmp "linux-${TARGETARCH}/helm" \
  && mv "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm \
- && rm -rf "/tmp/linux-${TARGETARCH}"
+ && rm -rf "/tmp/linux-${TARGETARCH}" \
+ && case "${TARGETARCH}" in amd64) crane_arch=x86_64 ;; arm64) crane_arch=arm64 ;; *) echo "no crane build for ${TARGETARCH}"; exit 1 ;; esac \
+ && curl -fsSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_${crane_arch}.tar.gz" \
+      | tar -xz -C /usr/local/bin crane \
+ && chmod +x /usr/local/bin/crane
 
 COPY aks/operator/bin/ /opt/hosting/bin/
 RUN chmod +x /opt/hosting/bin/* && ln -s /opt/hosting/bin/hosting-* /usr/local/bin/

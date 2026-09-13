@@ -75,6 +75,41 @@ internal sealed class RequestFateLedger
     private readonly ConcurrentDictionary<string, RequestFate> recent = new();
     private readonly ConcurrentQueue<string> recentOrder = new();
 
+    // 🚨 A REPLY's own delivery id, aliased onto the REQUEST's trail (#4072, and the merge-queue
+    // failure of 2026-09-13 on DanglingNodeTypeUpdateTest). A reply is posted with a fresh id
+    // that nobody awaits, so every stage it passes after RESPONSE_POSTED — RECEIVED at the
+    // parent, ROUTED, RECEIVED at the requester, the callback rule — was recorded nowhere, and
+    // the verdict could only say "the reply was lost between the responder and the requester,
+    // chase the response delivery". This map is what makes that chase automatic: Find(replyId)
+    // resolves to a reply trail HELD BY the request's trail, so the same lookups every hub already
+    // performs write the reply's story next to the request's. Bounded like `recent`: an alias is
+    // registered only for a request that is itself still tracked or recent, and the ring evicts
+    // the oldest aliases first.
+    private const int AliasCap = 512;
+    private readonly ConcurrentDictionary<string, RequestFate> replyAliases = new();
+    private readonly ConcurrentQueue<string> aliasOrder = new();
+
+    /// <summary>
+    /// Records that the delivery <paramref name="replyId"/> is a REPLY to the tracked request
+    /// <paramref name="requestId"/>, so the reply's subsequent stages land on the request's trail
+    /// (as a reply sub-trail) instead of vanishing. A no-op when the request is not tracked here.
+    /// </summary>
+    /// <param name="replyId">The reply delivery's id, minted by the responder's post.</param>
+    /// <param name="requestId">The request's id (<c>PostOptions.RequestId</c> on the reply).</param>
+    public void Alias(string? replyId, string? requestId)
+    {
+        if (replyId is not { Length: > 0 } || requestId is not { Length: > 0 })
+            return;
+        if (Find(requestId) is not { } request)
+            return;
+        var reply = request.OpenReplyTrail();
+        if (reply is null || !replyAliases.TryAdd(replyId, reply))
+            return;
+        aliasOrder.Enqueue(replyId);
+        while (aliasOrder.Count > AliasCap && aliasOrder.TryDequeue(out var oldest))
+            replyAliases.TryRemove(oldest, out _);
+    }
+
     /// <summary>
     /// Starts a trail for <paramref name="messageId"/>. Called from the ONE place a hub registers a
     /// pending response callback, so "tracked" and "awaited" are the same set by construction.
@@ -126,7 +161,9 @@ internal sealed class RequestFateLedger
             return null;
         if (!tracked.IsEmpty && tracked.TryGetValue(messageId, out var fate))
             return fate;
-        return !recent.IsEmpty && recent.TryGetValue(messageId, out var late) ? late : null;
+        if (!recent.IsEmpty && recent.TryGetValue(messageId, out var late))
+            return late;
+        return !replyAliases.IsEmpty && replyAliases.TryGetValue(messageId, out var reply) ? reply : null;
     }
 
     /// <summary>
@@ -154,16 +191,46 @@ internal sealed class RequestFateLedger
     internal sealed class RequestFate
     {
         private readonly Lock gate = new();
-        private readonly long startedTicks = Stopwatch.GetTimestamp();
+        private long startedTicks = Stopwatch.GetTimestamp();
         private ImmutableList<string> head = ImmutableList<string>.Empty;
         private ImmutableList<string> tail = ImmutableList<string>.Empty;
         private int dropped;
+
+        // The replies posted for this request, in post order — each a trail of its own, written
+        // by the same Find(id)?.Add(...) every stage already performs, because the ledger aliases
+        // the reply's id to it. Capped: a stream-shaped request (a subscription) can be answered
+        // many times, and only the first few replies can say anything about a lost verdict.
+        private const int MaxReplyTrails = 3;
+        private ImmutableList<RequestFate> replies = ImmutableList<RequestFate>.Empty;
 
         internal RequestFate(string requestType, Address requester, Address? target)
         {
             RequestType = requestType;
             Requester = requester;
             Target = target;
+        }
+
+        /// <summary>
+        /// Opens a sub-trail for a reply to this request, or <c>null</c> once the cap is reached.
+        /// The sub-trail shares this request's clock, so its stamps line up with the request's.
+        /// </summary>
+        internal RequestFate? OpenReplyTrail()
+        {
+            lock (gate)
+            {
+                if (replies.Count >= MaxReplyTrails)
+                    return null;
+                var reply = new RequestFate("reply", Requester, Target) { startedTicks = startedTicks };
+                replies = replies.Add(reply);
+                return reply;
+            }
+        }
+
+        /// <summary>The ordered stages of this trail — head, then the surviving tail.</summary>
+        private ImmutableList<string> Stages()
+        {
+            lock (gate)
+                return head.AddRange(tail);
         }
 
         /// <summary>The request's type name, captured when the callback was registered.</summary>
@@ -229,8 +296,19 @@ internal sealed class RequestFateLedger
                 line += $" → …(+{truncated} middle stage(s) suppressed)…";
             if (tailSnapshot.Count > 0)
                 line += " → " + string.Join(" → ", tailSnapshot);
+            // The replies' own journeys, each on the same line (see the summary for why one line).
+            ImmutableList<RequestFate> replySnapshot;
+            lock (gate)
+                replySnapshot = replies;
+            var replyStages = ImmutableList<ImmutableList<string>>.Empty;
+            for (var i = 0; i < replySnapshot.Count; i++)
+            {
+                var stages = replySnapshot[i].Stages();
+                replyStages = replyStages.Add(stages);
+                line += $" ↩ reply#{i + 1}: {(stages.Count == 0 ? "<posted, no stage recorded yet>" : string.Join(" → ", stages))}";
+            }
             // The verdict reads head AND tail: the terminal stages it keys on live in the tail.
-            return $"{line}  ⇒ {Verdict(headSnapshot.AddRange(tailSnapshot))}";
+            return $"{line}  ⇒ {Verdict(headSnapshot.AddRange(tailSnapshot), replyStages)}";
         }
 
         /// <summary>
@@ -248,14 +326,75 @@ internal sealed class RequestFateLedger
         /// </summary>
         /// <param name="snapshot">The recorded stages, in order.</param>
         /// <returns>A single-sentence verdict.</returns>
-        private static string Verdict(ImmutableList<string> snapshot)
+        private static string Verdict(ImmutableList<string> snapshot, ImmutableList<ImmutableList<string>> replies)
         {
             bool Has(string token) => snapshot.Any(s => s.StartsWith(token, StringComparison.Ordinal));
 
+            // A reply's OWN journey decides before anything else: it is the direct evidence for the
+            // one question the RESPONSE_POSTED verdict below could only pose ("chase the response
+            // delivery"). Read the LAST reply's LAST stage — the newest answer is the one the
+            // pending callback is waiting on.
+            if (replies.Count > 0 && Has("RESPONSE_POSTED"))
+            {
+                var last = replies[^1];
+                var final = last.Count == 0 ? null : last[^1];
+                if (final is null)
+                    return "a reply WAS posted and recorded NO stage of its own after the post — it never "
+                         + "entered any hub's intake in this tree: the responder's post seam refused it "
+                         + "(look for a REPLY_REFUSED stage on the request), or its target is outside "
+                         + "this tree.";
+                // The no-subject stage is stamped on the REQUEST's trail (HandleCallbacks looks the
+                // request id up), so it is read from there.
+                if (Has("RESPONSE_ARRIVED_NO_SUBJECT"))
+                    return "the reply REACHED a hub that held no callback for this correlation (the "
+                         + "RESPONSE_ARRIVED_NO_SUBJECT stage names it) — the requester's registry entry "
+                         + "was on another hub, was registered after the reply arrived, or was already "
+                         + "resolved; the transport did its job.";
+                if (last.Any(s => s.StartsWith("HANDLER_EXIT", StringComparison.Ordinal)))
+                    return "the reply reached a hub and its rule chain RAN to completion (the reply "
+                         + "trail names the hub). If the callback is still pending: that hub is not "
+                         + "the requester (the reply was handled somewhere it was not addressed to), "
+                         + "or the requester's callback rule did not match the correlation.";
+                if (last.Any(s => s.StartsWith("ROUTED", StringComparison.Ordinal)
+                                  && s.Contains("state=Failed", StringComparison.Ordinal)))
+                    return "the reply's ROUTING FAILED — the reply trail's last hub could not forward "
+                         + "it (a refusing parent, a missing hosted hub); the requester never saw it.";
+                if (last.Any(s => s.StartsWith("DROPPED", StringComparison.Ordinal)
+                                  || s.StartsWith("SHED_", StringComparison.Ordinal)
+                                  || s.StartsWith("DEFERRED", StringComparison.Ordinal)))
+                    return "the reply was PARKED or DISCARDED by the hub named in its last stage — an "
+                         + "intake gate, the storm breaker or a closed init gate on the way to the "
+                         + "requester.";
+                return "the reply is IN TRANSIT: its last recorded stage names the hub that holds it "
+                     + "(queued, or a turn still running there) — the requester has not received it.";
+            }
+
+            // The post seam's own verdicts come FIRST (#4072): they are recorded AFTER
+            // RESPONSE_POSTED and say what became of the reply, so reading RESPONSE_POSTED alone
+            // as "lost between responder and requester" would blame the transport for a refusal
+            // the seam stamped one stage later.
+            if (Has("REPLY_REFUSED_SHUTTING_DOWN"))
+                return "a reply WAS minted and the post seam REFUSED it: the responder's own pump is "
+                     + "closed and no parent could carry it (the stage names both run levels), and it "
+                     + "was not a NACK the in-process carrier could take. Nothing transported it — the "
+                     + "requester is left to its own bound. A typed reply lost this way is the "
+                     + "documented residue of Doc/Architecture/RefusedRepliesDuringTeardown.";
+            if (Has("NACK_DELIVERED_IN_PROCESS"))
+                return "the responder's NACK was handed straight to the requester's hub in-process "
+                     + "(the parent could not carry it) and the callback is STILL pending — chase the "
+                     + "requester's OWN intake and queue, not the responder.";
+            if (Has("REPLY_FORWARDED_THROUGH_PARENT"))
+                return "a reply WAS posted and forwarded through the responder's live parent and the "
+                     + "callback is STILL pending — chase the delivery from that parent to the "
+                     + "requester, not the handler.";
             if (Has("RESPONSE_POSTED"))
                 return "a reply WAS posted for this correlation and the callback is STILL pending — "
                      + "the reply was lost between the responder and the requester, so chase the "
                      + "response delivery, not the handler.";
+            if (Has("NACK_DECLINED") && !Has("FAILURE_REPORTED"))
+                return "the delivery was abandoned or faulted, its NACK was classified, and every "
+                     + "carrier declined — the NACK_DECLINED stage names why. Nothing answered the "
+                     + "requester.";
             if (snapshot.Any(s => s.Contains("_ERROR", StringComparison.Ordinal)
                                   || s.StartsWith("HANDLER_FAULT", StringComparison.Ordinal)))
                 return "the chain FAULTED and no reply was posted — the fault is the cause; find "

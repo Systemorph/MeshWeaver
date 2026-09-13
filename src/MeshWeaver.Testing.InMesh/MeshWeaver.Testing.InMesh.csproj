@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- The in-mesh test runner (2026-09-13, Doc: Hosting/InMeshTestMigration.md in Plugins). Ships in
+         the portal image so a NodeType's `Tests` area can run [MeshFact] cases against the LIVE mesh it
+         renders in — no test host, no xunit, no process per class. Maintainer: "can we translate all of
+         it to in-mesh tests?" / "for this test, we should setup monolith routing" — the gate's mesh IS a
+         monolith-routed mesh, so the cases need no setup at all. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../MeshWeaver.Layout/MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="../MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="../MeshWeaver.Reactive.Assertions/MeshWeaver.Reactive.Assertions.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -539,6 +539,44 @@ public sealed record DataContext : IDisposable
             return;
         }
 
+        // 🚨 A TRANSIENT INFRASTRUCTURE fault is not a property of this activation (#4067, #4068):
+        // the database was unreachable, a name did not resolve. Latching the hub FAILED for it —
+        // the rejection handler below answering every later request with a terminal failure,
+        // the streams errored, nothing ever re-run — turned a two-minute DNS blip into "this node
+        // is broken until the process restarts" (memex-cloud, 2026-09-12: three DataContexts in
+        // two minutes). A hub that demand routing re-creates is RETIRED instead: the backlog
+        // behind the gate is answered "ask again" with the specific cause, the hub disposes
+        // itself, and the next delivery activates a fresh one whose data sources initialise
+        // against the dependency that has come back. Dispose FIRST so the refusal is classified
+        // ShuttingDown (the reporters read IsShuttingDown), FailGate SECOND so the caller's
+        // error names the database rather than the recycle. The root mesh hub, and any hub not
+        // declared WithReactivationOnDemand, keeps the latch — retiring it would not bring it
+        // back — and its log line says so.
+        if (allInit.IsFaulted && InfrastructureFault.IsTransient(allInit.Exception))
+        {
+            if (Hub.Configuration.ReactivatesOnDemand
+                && Hub.Address.Type != AddressExtensions.MeshType)
+            {
+                var reason = ShutdownNack.RetryForTheAuthoritativeAnswer(
+                    Hub.Address,
+                    null,
+                    "its DataContext initialization met a transient infrastructure fault "
+                    + $"({allInit.Exception!.GetBaseException().GetType().Name}: "
+                    + $"{allInit.Exception.GetBaseException().Message}) and this activation is retired");
+                logger.LogWarning(allInit.Exception,
+                    "DataContext initialization for {Address} met a transient infrastructure fault — retiring "
+                    + "this activation instead of latching it FAILED; the address reactivates on the next "
+                    + "delivery and initializes again. {Reason}", Hub.Address, reason);
+                Hub.Dispose();
+                Hub.FailGate(InitializationGateName, reason);
+                return;
+            }
+            logger.LogError(allInit.Exception,
+                "DataContext initialization failed for {Address} on a TRANSIENT infrastructure fault, but this "
+                + "hub is not re-created on demand (no WithReactivationOnDemand), so it stays FAILED until it "
+                + "is recycled or the process restarts.", Hub.Address);
+        }
+
         Exception? failure = null;
         if (!allInit.IsCompleted)
         {

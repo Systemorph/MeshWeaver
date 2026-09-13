@@ -315,6 +315,18 @@ on:
         required: false
         type: boolean
         default: true
+      adopted-verdict:
+        description: >-
+          Non-empty = the URL of a completed GREEN run of the caller whose verdict this run ADOPTS,
+          because this head differs from that run's head only by main's merge and regenerated
+          generated files (the caller's lock resolver pushed it). The plan then answers
+          nothing-to-gate, naming the adopted run, and no shard runs: the content this gate would
+          test is byte-identical to what that run tested. The CALLER decides adoption (its change-set
+          classifier compares the authored diffs and reads the run through the API); this lane only
+          records the decision in the proof. Empty (the default) = gate as usual.
+        required: false
+        type: string
+        default: ''
       upstream-seed:
         description: >-
           Consume the caller's UPSTREAMS as pre-built bundles instead of staging their source:
@@ -546,6 +558,7 @@ jobs:
         id: affected
         env:
           NARROWING: ${{ inputs.affected-narrowing }}
+          ADOPTED_VERDICT: ${{ inputs.adopted-verdict }}
         # 🎯 PRs gate only the AFFECTED dependency closure — changed modules, plus every
         # transitive DEPENDENT, plus the affected set's own dependencies (the fresh gate mesh
         # needs them present to install and to resolve `shared=@…`).
@@ -553,7 +566,13 @@ jobs:
         # itself refuses an empty diff, so a wrong empty set can never pass as "nothing to test".
         run: |
           set -euo pipefail
-          if [ "$NARROWING" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ -n "$ADOPTED_VERDICT" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            # The caller adopted a green run's verdict: this head is that run's content plus main's
+            # merge and regenerated locks. Nothing to gate — said so, with the run, in the proof.
+            echo "::notice title=verdict adopted::this head differs from an already-green head only by main's merge and regenerated locks — the gate adopts $ADOPTED_VERDICT and runs no shard"
+            echo "adopted verdict: $ADOPTED_VERDICT" >> "$GITHUB_STEP_SUMMARY"
+            echo '{"mount": [], "runAll": false, "adopted": "'"$ADOPTED_VERDICT"'"}' > affected.json
+          elif [ "$NARROWING" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
             python3 scripts/affected-modules.py \
               --range "origin/${{ github.base_ref }}...HEAD" --json > affected.json
           else
@@ -593,10 +612,39 @@ jobs:
             echo "no module content affected (see the affected computation above) — nothing for the gate to test"
             exit 0
           fi
+          # 🚨 NEVER FAN OUT WIDER THAN THERE IS WORK (MeshWeaver#4175). A narrowed PR run gates the
+          # packages `affected` selected, and the fan-out is computed from the caller's input alone —
+          # so a diff touching fewer packages than `shards` produced a shard with NOTHING in it, and
+          # an empty shard is not a harmless no-op: it installs no package, so the tester's
+          # bake-consumption postcondition fires ("the bake in '/seed' declares assemblies for N
+          # NodeType(s), NONE of which this run installed — the gate judged none of the baked bytes")
+          # and the fold fails the required context. Measured on MeshWeaver.Plugins#1768, run
+          # 34749441237: shards 1-3 gated Store / AI / Hosting and adopted 17/17, 17/17, 35/35;
+          # shard 4/4 gated `0 of 3` and failed the whole run.
+          #
+          # 🚨 THE POSTCONDITION STAYS EXACTLY AS STRICT. The tempting alternative — let a shard that
+          # installed nothing pass — would make an empty leg indistinguishable from one that judged
+          # the bytes, which is the vacuous-leg shape this lane keeps having to refuse (#4155 is the
+          # same family one value along). The fan-out is what was wrong, so the fan-out is clamped.
+          # A FULL run (`run_all: true`, i.e. push / schedule / narrowing off) gates every discovered
+          # package and is never clamped: `mount` is empty there precisely because nothing was
+          # narrowed, and the shards divide a population this step cannot count.
+          EFFECTIVE="$SHARDS"
+          if [ "$RUN_ALL" != "true" ]; then
+            AFFECTED=$(printf '%s' "$MOUNT" | tr -s '[:space:]' '\n' | grep -c '[^[:space:]]' || true)
+            [ -n "$AFFECTED" ] || AFFECTED=0
+            if [ "$AFFECTED" -lt "$EFFECTIVE" ]; then
+              echo "narrowed run: $AFFECTED affected package(s) ($MOUNT) — fanning across $AFFECTED shard(s), not the caller's $SHARDS, so no shard is handed an empty slice (MeshWeaver#4175)"
+              EFFECTIVE="$AFFECTED"
+            fi
+          fi
+          # A narrowed run with a non-empty mount always has at least one package, and `run_all` with
+          # an empty mount took the `nothing_to_gate` exit above — so this can only be a lane defect.
+          [ "$EFFECTIVE" -ge 1 ] || { echo "::error::the effective shard count came out $EFFECTIVE with run_all='$RUN_ALL' and mount='$MOUNT' — refusing to plan a fan-out that gates nothing (MeshWeaver#4175)"; exit 1; }
           echo "nothing_to_gate=false" >> "$GITHUB_OUTPUT"
-          echo "shards=$SHARDS" >> "$GITHUB_OUTPUT"
-          echo "matrix=$(seq 1 "$SHARDS" | jq -R . | jq -sc 'map(tonumber)')" >> "$GITHUB_OUTPUT"
-          echo "fanning the gate out across $SHARDS shard(s)"
+          echo "shards=$EFFECTIVE" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(seq 1 "$EFFECTIVE" | jq -R . | jq -sc 'map(tonumber)')" >> "$GITHUB_OUTPUT"
+          echo "fanning the gate out across $EFFECTIVE shard(s)"
       # ───────────── THE PLATFORM: the caller's pins verbatim, or resolved HERE (the header) ─────────────
       # Not an input-shaped `if:` — the step runs whenever there is something to gate and branches
       # INSIDE on the inputs, so a caller's pin is echoed back byte-for-byte and an empty pair is
@@ -1446,6 +1494,11 @@ jobs:
           set -euo pipefail
           EXT="${RUNNER_TEMP:-/tmp}/ext-modules"; mkdir -p "$EXT"; chmod 777 "$EXT"
           BUNDLES="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$BUNDLES"
+          # Own bundles (this run's artifacts) and UPSTREAM-composed ones are kept apart, exactly as
+          # the publish-bake lane keeps them (MeshWeaver#3732): the gate composes both into the
+          # compile surface and seals nothing, but the two lanes share one step shape and one
+          # harness, so the directories are the same in both.
+          UPSTREAM="${RUNNER_TEMP:-/tmp}/ext-bundles-upstream"; mkdir -p "$UPSTREAM"
           if [ -n "${REGISTRY_MODULES:-}" ]; then
             if [ -n "${SEAL_UPSTREAMS:-}" ]; then
               # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
@@ -1467,10 +1520,10 @@ jobs:
               head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
               chmod +x "$SCRIPT"
               if [ -n "${REGISTRY_URL:-}" ]; then
-                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
+                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
                   --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
               else
-                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
+                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
                   --storage-target "$(printf '%s\n' $TARGETS | head -1)"
               fi
             else
@@ -1480,7 +1533,7 @@ jobs:
                 || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
               ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
               [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
-              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$UPSTREAM/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
                 || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
               echo "fetched $pkg@$ver from $REGISTRY_URL"
             done
@@ -1523,8 +1576,9 @@ jobs:
             else shasum -a 256 "$1" | cut -d' ' -f1; fi
           }
           DIGESTS="${RUNNER_TEMP:-/tmp}/ext-module-builds"; : > "$DIGESTS"
-          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
-            u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
+          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip "$UPSTREAM"/*.nupkg "$UPSTREAM"/*.zip; do
+            case "$b" in "$UPSTREAM"/*) origin=upstream ;; *) origin=own ;; esac
+            u="${RUNNER_TEMP:-/tmp}/unpack-$origin-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
             unzip -o -q "$b" -d "$u"
             name=""
             [ -f "$u/meshweaver/manifest.json" ] && name=$(jq -r '.module.assemblyName // empty' "$u/meshweaver/manifest.json")
@@ -1779,10 +1833,30 @@ jobs:
           SHARD_ARGS=()
           if [ -n "${SHARD:-}" ]; then
             TESTER_MOUNTS=()
-            if ! run_tester --help 2>&1 | grep -q -- '--shard'; then
-              echo "::error::this lane was called with shards>1 but the PINNED tester does not accept --shard, so it cannot gate a slice. Bump image-digest/platform-image-digest to a CD wave carrying it (both pins move together, from one wave), or set shards: 1."
+            # 🚨 CAPTURE, THEN MATCH — never `run_tester --help | grep -q`. `grep -q` exits at the
+            # FIRST match, the tester is still writing the rest of its usage, and the write that
+            # lands on the closed pipe kills it with SIGPIPE: the pipeline is then 141 under
+            # `set -o pipefail` and this assertion refuses a tester that DOES accept the flag.
+            # Measured 2026-09-13 on MeshWeaver.Plugins#1773/#1781 (jobs 103705780373 /
+            # 103705717907) and reproduced against those exact digests: mw-plugin-test
+            # @sha256:2d4c5e71 (core 14216b1b3) parses --shard and prints `[--shard <i>/<n>]` in
+            # its own --help, yet `… --help 2>&1 | grep -q -- '--shard'` returns PIPESTATUS=141 0
+            # while consuming the whole stream returns 0. It is a RACE — the same probe passed on
+            # the same lane at 07:44 (run 34745137329, four shards green) — so it reads as "the
+            # pin is too old", which sends the caller to bump a pin or drop to `shards: 1`, and
+            # neither is the fault. A substitution reads the stream to EOF, so there is no early
+            # close and no signal.
+            shard_help="$(run_tester --help 2>&1)" || {
+              echo "::error::the pinned tester could not be run to read its arguments (exit $?), so this shard cannot establish that --shard is supported. This is the tester or the platform acquisition failing, NOT a missing flag — read its output above."
               exit 1
-            fi
+            }
+            case "$shard_help" in
+              *--shard*) ;;
+              *)
+                echo "::error::this lane was called with shards>1 but the PINNED tester does not accept --shard, so it cannot gate a slice. Bump image-digest/platform-image-digest to a CD wave carrying it (both pins move together, from one wave), or set shards: 1. Its --help printed: ${shard_help}"
+                exit 1
+                ;;
+            esac
             SHARD_ARGS=(--shard "$SHARD")
             echo "this job gates shard $SHARD"
           fi

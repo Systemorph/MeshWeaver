@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# A stand-in `crane` for hosting-image-mirror's behaviour tests (MeshWeaver.Plugins#1722). Answers
+# a two-registry world from a state directory and records every invocation — argv is how the test
+# proves no credential ever travels on a command line; a password arrives on STDIN only.
+#
+#   HOSTING_IM_STATE            directory: log (every argv), images (lines `<ref> <digest>`), logins
+#   HOSTING_IM_COPY_FAIL=1      every `copy` fails
+#   HOSTING_IM_LOGIN_FAIL=<host> `auth login <host>` fails
+set -uo pipefail
+state="${HOSTING_IM_STATE:?the crane stub needs HOSTING_IM_STATE}"
+printf 'crane %s\n' "$*" >> "$state/log"
+touch "$state/images" "$state/logins"
+case "${1:-}" in
+  auth)
+    [ "${2:-}" = "login" ] || { echo "crane stub: unexpected auth verb" >&2; exit 1; }
+    host="${3:-}"; user=""; stdin=0
+    shift 3
+    while [ $# -gt 0 ]; do case "$1" in -u) user="${2:-}"; shift 2 ;; --password-stdin) stdin=1; shift ;; *) shift ;; esac; done
+    [ "$stdin" = "1" ] || { echo "crane stub: a password must arrive on stdin (--password-stdin), never argv" >&2; exit 1; }
+    secret="$(cat)"
+    [ -n "$secret" ] || { echo "crane stub: empty password on stdin" >&2; exit 1; }
+    [ "${HOSTING_IM_LOGIN_FAIL:-}" = "$host" ] && { echo "unauthorized" >&2; exit 1; }
+    printf '%s %s\n' "$host" "$user" >> "$state/logins"     # who logged in — never what with
+    exit 0 ;;
+  digest)
+    ref="${2:-}"
+    while read -r r d; do [ "$r" = "$ref" ] && { printf '%s\n' "$d"; exit 0; }; done < "$state/images"
+    echo "Error: fetching manifest ${ref}: MANIFEST_UNKNOWN: manifest unknown" >&2; exit 1 ;;
+  copy)
+    src="${2:-}" dst="${3:-}"
+    [ "${HOSTING_IM_COPY_FAIL:-0}" = "1" ] && { echo "Error: copying ${src}: unexpected status code 500" >&2; exit 1; }
+    grep -q "^${dst%%/*} " "$state/logins" || { echo "Error: pushing ${dst}: UNAUTHORIZED — not logged in to ${dst%%/*}" >&2; exit 1; }
+    d=""; while read -r r dd; do [ "$r" = "$src" ] && d="$dd"; done < "$state/images"
+    [ -n "$d" ] || { echo "Error: fetching ${src}: MANIFEST_UNKNOWN" >&2; exit 1; }
+    printf '%s %s\n' "$dst" "$d" >> "$state/images"; exit 0 ;;
+esac
+echo "crane stub: unexpected invocation: $*" >&2
+exit 1

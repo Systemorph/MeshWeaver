@@ -147,6 +147,14 @@ rule is in the mesh's pure, unit-tested plan. What the scripts themselves guaran
   needs Graph `Application.ReadWrite.OwnedBy` on an app the identity owns, else RED with the exact
   hand commands. Registering the app itself (no client id on the record) stays a hand step, and the
   step says so with the runbook's commands.
+- **`hosting-image-mirror` puts the pinned platform images into the fleet registry only when it
+  lacks them, and never re-pushes over what is there** (MeshWeaver.Plugins#1722). Portal AND
+  migration ride the same tag (Memex#141): a present tag is kept (its digest compared with ACR's, a
+  difference reported as `image_drift`), an absent one is `crane copy`-ed from ACR as the registry's
+  publisher and both digests must match before it reports; a tag absent from ACR too refuses
+  naming the sealed set to pin. The publisher password (vault) and the ACR token
+  (`az acr login --expose-token`) reach crane on stdin into a per-process `DOCKER_CONFIG` — never
+  argv, never printed. Needs `AcrPull` on the source registry for the operator identity.
 - **`hosting-export` never prints the URL it mints.** A user-delegation SAS is a bearer credential;
   it goes into a one-shot Secret the mesh reads once and deletes.
 - **`hosting-verify-catalog` proves the plugin mounts took.** An instance with green pods and an

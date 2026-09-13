@@ -706,6 +706,16 @@ public sealed class MessageHub : IMessageHub
                     return Observable.Return(request.Processed());
                 }
 
+                // 🚨 A TRANSIENT INFRASTRUCTURE fault is not a property of this activation (#4067,
+                // #4068): the database was away, a name did not resolve. Latching the hub FAILED
+                // for it turned a two-minute DNS blip into "this address is broken until the
+                // process restarts" — every later request answered with a terminal failure, no
+                // path back. A hub that demand routing re-creates is RETIRED instead: whatever is
+                // parked behind its gate is answered "ask again", and the next delivery activates
+                // a fresh hub whose BuildupActions run against the dependency that has come back.
+                if (InfrastructureFault.IsTransient(ex) && TryRetireAfterTransientInitializationFault(ex))
+                    return Observable.Return(request.Processed());
+
                 // Init failed — a BuildupAction faulted (threw) or HUNG (TimeoutException from the bound
                 // above). Do NOT leave the gate closed (→ the 30s-per-message deferral wedge): enter a
                 // FAILED state that surfaces a clear DeliveryFailure for every later request, then
@@ -716,11 +726,59 @@ public sealed class MessageHub : IMessageHub
                       + "(a hung dependency or stuck compile)"
                     : $"a BuildupAction faulted ({ex.GetType().Name}: {ex.Message})";
                 logger.LogError(ex,
-                    "Hub {Address} initialization failed — {Reason}. Hub is now in FAILED state.", Address, reason);
+                    "Hub {Address} initialization failed — {Reason}. Hub is now in FAILED state.{Recovery}",
+                    Address, reason, TransientLatchNote(ex));
                 EnterInitializationFailedState(new InvalidOperationException(reason, ex));
                 OpenGate(MessageHubConfiguration.InitializeGateName);
                 return Observable.Return(request.Failed($"Hub '{Address}' initialization failed — {reason}"));
             });
+    }
+
+    /// <summary>
+    /// The sentence appended to a FAILED-state log line when the cause was a transient
+    /// infrastructure fault on a hub that CANNOT be retired (no
+    /// <see cref="MessageHubConfiguration.WithReactivationOnDemand"/>): the latch is the honest
+    /// answer for it, and the reader must know a restart, not a fix, recovers it. Empty otherwise.
+    /// </summary>
+    private static string TransientLatchNote(Exception ex)
+        => InfrastructureFault.IsTransient(ex)
+            ? " The cause is a TRANSIENT infrastructure fault, but this hub is not re-created on demand "
+              + "(no WithReactivationOnDemand), so it stays FAILED until it is recycled or the process restarts."
+            : string.Empty;
+
+    /// <summary>
+    /// Retires this activation after its initialization met a transient infrastructure fault —
+    /// when, and only when, demand routing will re-create it
+    /// (<see cref="MessageHubConfiguration.WithReactivationOnDemand"/>).
+    ///
+    /// <para>Order matters and is deliberate: <see cref="Dispose"/> FIRST, so the refusal every
+    /// parked delivery receives is classified <see cref="ErrorType.ShuttingDown"/> (the reporters
+    /// read <see cref="IsShuttingDown"/>) and carries this activation's identity; then
+    /// <see cref="FailGate"/>, which answers the backlog now with the SPECIFIC reason instead of
+    /// leaving it to the teardown's generic "Hub is shutting down" — a reader of the caller's
+    /// error should see the database, not the recycle. Nothing is recorded in
+    /// <see cref="InitializationError"/>: this activation is going away, and the FAILED marker
+    /// exists to describe one that stays.</para>
+    /// </summary>
+    /// <param name="ex">The transient fault the initialization met.</param>
+    /// <returns><c>true</c> when the hub was retired; <c>false</c> when it is not re-created on
+    /// demand and must take the FAILED latch instead.</returns>
+    private bool TryRetireAfterTransientInitializationFault(Exception ex)
+    {
+        if (!Configuration.ReactivatesOnDemand || Address.Type == AddressExtensions.MeshType)
+            return false;
+        var reason = ShutdownNack.RetryForTheAuthoritativeAnswer(
+            Address,
+            $"RunLevel={RunLevel}, {ShutdownNack.FormatActivationTag(this)}",
+            "its initialization met a transient infrastructure fault "
+            + $"({ex.GetType().Name}: {ex.Message}) and this activation is retired");
+        logger.LogWarning(ex,
+            "Hub {Address} initialization met a transient infrastructure fault — retiring this activation "
+            + "instead of latching it FAILED; the address reactivates on the next delivery and initializes "
+            + "again. {Reason}", Address, reason);
+        Dispose();
+        FailGate(MessageHubConfiguration.InitializeGateName, reason);
+        return true;
     }
 
     /// <summary>
@@ -938,7 +996,13 @@ public sealed class MessageHub : IMessageHub
     /// LogLevel.Trace flooding. Tuned so chat / layout / routing hops only log
     /// when something is genuinely slow.
     /// </summary>
-    private static readonly long SlowDispatchTicks = (long)(TimeSpan.TicksPerMillisecond * 500);
+    // 🚨 In STOPWATCH ticks, because it is compared against `Stopwatch.GetTimestamp()` deltas
+    // (below). It used to be `TimeSpan.TicksPerMillisecond * 500` — 100-ns ticks — which on Linux
+    // (Stopwatch.Frequency = 1e9) is 5 ms, so every dispatch over 5 ms logged as SLOW: 366 lines
+    // per package install, 16,000 lines per gate shard, all at Information (measured
+    // 2026-09-13 on Plugins run 34731952463). The threshold the comment above describes — 500 ms
+    // — is what this now is, on every platform.
+    private static readonly long SlowDispatchTicks = Stopwatch.Frequency / 2;
 
     // Reactive end-to-end: IObservable, no async/await, no Task in the signature.
     // Runs INLINE on the turn thread (Defer → factory on Subscribe); a synchronous
@@ -3035,6 +3099,105 @@ public sealed class MessageHub : IMessageHub
     private int quiesceRearms;
 
     /// <summary>
+    /// Hands a <see cref="DeliveryFailure"/> that no transport can carry DIRECTLY to the in-process
+    /// hub its requester lives under, when that hub still admits replies — the carrier of last
+    /// resort for an answer minted during a whole-tree teardown (#4072).
+    ///
+    /// <para><b>Why a NACK needs its own carrier.</b> Every route out of a hub tearing down goes
+    /// through its parent: <c>NackThroughParent</c> posts through it and
+    /// <c>PostImplGeneric</c> forwards a correlated reply through it. Both decline the moment the
+    /// parent is itself past <see cref="MessageHubRunLevel.DisposeHostedHubs"/>, and at a
+    /// whole-tree teardown that is the state EVERY sibling is answered in — the parent disposes
+    /// its children only after reaching that phase. The comment those declines carried read
+    /// "every sender is going away too", which is not what happens: a sibling that is
+    /// <see cref="MessageHubRunLevel.Quiescing"/> is WAITING for exactly this answer, re-arms its
+    /// budget for it ([QUIESCE-WAIT], <see cref="AReplyIsOwedByAShuttingDownLocalHub"/>), and
+    /// only gives up on <c>[QUIESCE-CUT]</c> — so the whole teardown paces itself on the sum of
+    /// those budgets for an answer that existed the whole time. Measured on
+    /// <c>LeavingHubAdoptionSweepTest</c> (14 s, PASSING): the responder's trail ended
+    /// <c>NACK_DECLINED reason=parent-DisposeHostedHubs → FAILURE_REPORTED → RESPONSE_POSTED →
+    /// REPLY_REFUSED_SHUTTING_DOWN runLevel=Dead parent=mesh/…@DisposeHostedHubs</c>, while the
+    /// requester sat Quiescing with that callback pending for 4 s.</para>
+    ///
+    /// <para><b>Why this is not a second transport.</b> It is offered ONLY where the delivery is
+    /// being dropped — after the parent route and <see cref="IUndeliverableReplySink"/> have both
+    /// declined — so there is no post left for it to race, the precondition
+    /// <c>Doc/Architecture/RefusedRepliesDuringTeardown</c> requires. And it carries a NACK ONLY:
+    /// a <see cref="DeliveryFailure"/> acknowledges no state, so the reorder hazard that keeps
+    /// typed replies off any bypass (an ack overtaking the change it acknowledges) cannot arise.
+    /// The delivery lands on the requester's own intake — its gate decides, its pump serialises —
+    /// exactly as a routed delivery would; nothing is dispatched on the responder's turn.</para>
+    ///
+    /// <para>Resolution mirrors <see cref="AReplyIsOwedByAShuttingDownLocalHub"/>: climb the
+    /// target's host chain, look the top-level hub up under the root (never create), then shorter
+    /// prefixes for a hub hosting a sub-path. A remote requester, a requester the root does not
+    /// host, or one already past <see cref="MessageHubRunLevel.DisposeHostedHubs"/> (its intake
+    /// refuses and its callbacks are cancelled) leaves the drop as it was.</para>
+    /// </summary>
+    /// <param name="failure">The NACK, targeted at the requester and carrying <c>PostOptions.RequestId</c>.</param>
+    /// <returns><c>true</c> when the requester's hub accepted the delivery into its intake.</returns>
+    internal bool TryDeliverNackInProcess(IMessageDelivery failure)
+    {
+        if (failure.Message is not DeliveryFailure
+            || !failure.Properties.ContainsKey(PostOptions.RequestId)
+            || failure.Target is not { } target)
+            return false;
+        try
+        {
+            IMessageHub root = this;
+            while ((root as MessageHub)?.messageService is MessageService ms && ms.ParentHub is { } parent)
+                root = parent;
+            // The requester's host chain, OUTERMOST first: routing up through a non-mesh parent
+            // stamps the sender with that parent (HierarchicalRouting), so a requester nested two
+            // levels down reads `R{Host=P}` and resolves as root → P → R. Only the LAST hub has
+            // to admit the delivery; the ones in between are looked up, never posted to, so their
+            // own run level does not matter (a collection past DisposeHostedHubs still resolves
+            // existing hubs — it only refuses to CREATE).
+            var levels = ImmutableList<Address>.Empty;
+            for (var level = target; level is not null; level = level.Host)
+                levels = levels.Insert(0, level with { Host = null });
+            var requester = ResolveTopLevelHub(root, levels[0]);
+            for (var i = 1; requester is not null && i < levels.Count; i++)
+                requester = requester.GetHostedHub(levels[i], HostedHubCreation.Never);
+            if (requester is null
+                || ReferenceEquals(requester, this)
+                || requester.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                return false;
+            // The intake's verdict IS the answer: the requester can cross DisposeHostedHubs
+            // between the check above and this call, and its gate then hands back Failed
+            // (or Ignored from the storm breaker) instead of enqueueing. Claiming "delivered" on
+            // that would suppress every remaining carrier for a callback that was never resolved.
+            var accepted = requester.DeliverMessage(failure);
+            return accepted.State is not (MessageDeliveryState.Failed or MessageDeliveryState.Ignored);
+        }
+        catch (ObjectDisposedException)
+        {
+            // A hosted collection on the way is gone: nothing here can take it, the drop stands.
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The hub under <paramref name="root"/> that hosts <paramref name="top"/> — the address
+    /// itself, then shorter path prefixes for a hub hosting a sub-path — never created. Mirrors
+    /// the resolution <see cref="AReplyIsOwedByAShuttingDownLocalHub"/> and
+    /// <c>HierarchicalRouting</c> perform at the root.
+    /// </summary>
+    private static IMessageHub? ResolveTopLevelHub(IMessageHub root, Address top)
+    {
+        if (root.Address.Equals(top))
+            return root;
+        var segments = top.Segments;
+        for (var k = segments.Length; k >= 1; k--)
+        {
+            var candidate = k == segments.Length ? top : new Address(segments[..k]);
+            if (root.GetHostedHub(candidate, HostedHubCreation.Never) is { } hosted)
+                return hosted;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// True when a pending reply for <paramref name="target"/> is guaranteed to arrive from a hub in
     /// THIS mesh that is itself shutting down. Such a hub answers every delivery it accepted before
     /// it signals Dead and leaves its owner's registry: served ahead of its own ShutdownRequest, or
@@ -3364,12 +3527,64 @@ public sealed class MessageHub : IMessageHub
         var sb = new System.Text.StringBuilder();
         sb.Append(Environment.NewLine).Append("  handler-side fate (what happened to the delivery):");
         foreach (var p in pending.Take(PendingCallbackLogCap))
+        {
             sb.Append(Environment.NewLine).Append("    ").Append(p.MessageId).Append('=')
               .Append(p.RequestType).Append(": ").Append(requestFates.Describe(p.MessageId));
+            // 🚨 The TARGET's pump, as it is NOW. A trail that ends `RECEIVED → ENQUEUED → QUEUED
+            // depth=1` at the target and then nothing says the target never dequeued it — and
+            // the one thing that decides between "a turn is parked there" (its name and age),
+            // "a drain is scheduled and not running" (the scheduler holds it) and "nothing is
+            // outstanding" (the latch invariant broken) is the target's own queue snapshot, which
+            // the requester's report never carried. Measured 2026-09-13 on the Plugins gate
+            // (#2543 / #4141): 25 stale callbacks, every SubscribeRequest one of them ending
+            // exactly that way at a NodeType hub, `pendingWork=316` on the pool, and no line
+            // anywhere naming what that hub was doing.
+            var pump = DescribeLocalPump(p.Target);
+            if (pump is not null)
+                sb.Append(Environment.NewLine).Append("      target pump now: ").Append(pump);
+        }
         if (pending.Length > PendingCallbackLogCap)
             sb.Append(Environment.NewLine).Append("    …+")
               .Append(pending.Length - PendingCallbackLogCap).Append(" more not rendered");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The pump state of the in-process hub at <paramref name="target"/> — run level, the turn
+    /// executing now and for how long, queue depths, drains in flight and drains the scheduler
+    /// still holds — or <c>null</c> when the target is not a hub under this tree's root. Read-only
+    /// and lock-free: the same snapshot the disposal diagnostics print for a hub's own queue,
+    /// taken here for the hub a pending callback is waiting ON.
+    /// </summary>
+    private string? DescribeLocalPump(Address? target)
+    {
+        if (target is null)
+            return null;
+        try
+        {
+            IMessageHub root = this;
+            while ((root as MessageHub)?.messageService is MessageService ms && ms.ParentHub is { } parent)
+                root = parent;
+            var levels = ImmutableList<Address>.Empty;
+            for (var level = target; level is not null; level = level.Host)
+                levels = levels.Insert(0, level with { Host = null });
+            var hub = ResolveTopLevelHub(root, levels[0]);
+            for (var i = 1; hub is not null && i < levels.Count; i++)
+                hub = hub.GetHostedHub(levels[i], HostedHubCreation.Never);
+            if (hub is not MessageHub { messageService: MessageService service } local)
+                return null;
+            var q = service.GetQueueSnapshot();
+            var turn = q.CurrentMessage is null
+                ? "idle"
+                : $"turn={q.CurrentMessage} running {q.CurrentMessageElapsedMs}ms";
+            return $"{local.Address} RunLevel={local.RunLevel} {turn} buffer={q.Buffer} deferred={q.Deferred} "
+                 + $"drainsInFlight={q.DrainsInFlight} awaitingScheduler={q.DrainsAwaitingScheduler} "
+                 + $"draining={q.Draining} openGates={q.OpenGates}";
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

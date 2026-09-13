@@ -235,8 +235,18 @@ MODULES=("$BAKE_DIR/$MODULES_DIR_NAME"/*.module.nupkg)
 # so every consumer was told the seal carries no AI. RED, naming the pin to bump — never a seal
 # that claims completeness for bytes it did not carry.
 if [ -n "${EXT_MODULES_DIR:-}" ] && [ "${#MODULES[@]}" -eq 0 ]; then
-  echo "::error::this bake composed external modules ($(ls "$EXT_MODULES_DIR" 2>/dev/null | tr '\n' ' ')) but staged none under $BAKE_DIR/$MODULES_DIR_NAME/ — the calling workflow predates module sealing (MeshWeaver#2707) while this script does not. Bump the caller's node-repo-publish-bake.yml pin to a core commit at or after 4584ca3c5. Refusing to seal an empty module set that would claim completeness."
-  exit 1
+  # 🚨 One legitimate empty set (MeshWeaver#3732): a workflow that knows the own/upstream split
+  # says so explicitly — SEAL_MODULES_OWN=0 means every module it composed was an UPSTREAM's,
+  # taken from that upstream's sealed publication for the compile surface and deliberately NOT
+  # re-sealed here (the upstream's own seal carries it; a downstream copy is how one identity ends
+  # up holding two builds of one assembly). A workflow that does not export the count is the old
+  # skew, and stays refused.
+  if [ "${SEAL_MODULES_OWN:-}" = "0" ]; then
+    echo "module set: composed ${EXT_MODULES_UPSTREAM:-?} upstream module cop(y/ies) for the compile surface ($(ls "$EXT_MODULES_DIR" 2>/dev/null | tr '\n' ' ')) and owns none — sealing an EMPTY modules/_index by design (MeshWeaver#3732); the upstream's own publication carries those modules."
+  else
+    echo "::error::this bake composed external modules ($(ls "$EXT_MODULES_DIR" 2>/dev/null | tr '\n' ' ')) but staged none under $BAKE_DIR/$MODULES_DIR_NAME/ — the calling workflow predates module sealing (MeshWeaver#2707) while this script does not. Bump the caller's node-repo-publish-bake.yml pin to a core commit at or after 4584ca3c5. Refusing to seal an empty module set that would claim completeness."
+    exit 1
+  fi
 fi
 MODULES_INDEX_LOCAL="$SENTINEL_LOCAL_DIR/$MODULES_INDEX"
 : > "$MODULES_INDEX_LOCAL"

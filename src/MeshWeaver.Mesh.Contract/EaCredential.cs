@@ -34,4 +34,20 @@ public record EaCredential
     /// <summary>When consent was granted / the token last refreshed.</summary>
     [Browsable(false)]
     public DateTimeOffset AcquiredAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// When Microsoft's token endpoint DEFINITIVELY refused this grant (an OAuth <c>invalid_grant</c>
+    /// / <c>interaction_required</c> answer: revoked, expired, password changed, consent withdrawn),
+    /// stamped by the redemption that was refused. A stamped credential reads as NOT connected —
+    /// for the assistant, which then hands over the consent link instead of "retry in a moment", and
+    /// for the consent controller, which then runs the dialog instead of bouncing a "connected" user
+    /// back (MeshWeaver.Plugins#1615). Cleared by the next successful consent, which rewrites the
+    /// node. <c>null</c> for a grant that has never been refused.
+    /// </summary>
+    [Browsable(false)]
+    public DateTimeOffset? RefusedAt { get; init; }
+
+    /// <summary>The token endpoint's own words for the refusal (<c>error</c> + <c>error_description</c>), for the diagnostic.</summary>
+    [Browsable(false)]
+    public string? RefusalReason { get; init; }
 }

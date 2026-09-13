@@ -165,13 +165,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _workspace = workspace;
         _persistenceCore = persistenceCore;
         _hubPath = hubPath;
-        // DistinctUntilChanged drops re-emissions that already match the local
-        // state (same Version + content) — the routing layer (catalog stream /
-        // change feed) can re-publish the same node multiple times after a
-        // local write echoes through persistence; we don't want each echo to
-        // re-run the workspace pipeline. Replay(1).RefCount() so late
-        // subscribers (OwnNodeCache, future consumers) see the latest
-        // authoritative snapshot, not just future emissions.
+        // DistinctUntilChanged drops a re-emission that already matches the local state
+        // (same Version + content). Replay(1).RefCount() so late subscribers (OwnNodeCache,
+        // future consumers) see the routing layer's snapshot. 🚨 The stream is ONE-SHOT on both
+        // hosts (OwnNodeStreamHolder): this subscription is held for the hub's life, and when
+        // Orleans handed the hub the live cache view of its own path here, that lifetime hold
+        // pinned the cache entry — and through its heartbeat the grain — forever (#3432).
         _ownNodeStream = ownNodeStream?
             .DistinctUntilChanged()
             .Replay(1).RefCount();
@@ -776,14 +775,15 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     }
 
     /// <summary>
-    /// Seeds the workspace with the own MeshNode — from DURABLE STORAGE — and follows the
-    /// routing-supplied stream for subsequent live updates.
+    /// Seeds the workspace with the own MeshNode — from DURABLE STORAGE — then the
+    /// routing-supplied node.
     /// <para>
     /// The routing layer (Orleans <c>MessageHubGrain</c>, Monolith
     /// <c>MonolithRoutingService</c>) attaches an own-node observable via
     /// <see cref="OwnNodeStreamExtensions.WithOwnNodeStream"/> at hub instantiation. That
-    /// stream carries LIVE updates (and, on Orleans, the enriched node whose non-serialisable
-    /// <c>HubConfiguration</c> delegate storage cannot hold) — but it is NOT durable state:
+    /// stream is ONE-SHOT on both hosts (see <see cref="OwnNodeStreamHolder"/>) and carries, on
+    /// Orleans, the enriched node whose non-serialisable <c>HubConfiguration</c> delegate storage
+    /// cannot hold — but it is NOT durable state:
     /// both of its legs are caches. <c>PathResolutionService</c> memoizes the resolved
     /// <c>AddressResolution</c> (including its MeshNode snapshot), invalidated only by the
     /// per-silo change feed; <c>MeshNodeStreamCache</c> replays its last seen value. A

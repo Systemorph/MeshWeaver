@@ -498,6 +498,24 @@ on:
         type: string
         required: false
         default: ''
+      test-modules:
+        description: >
+          Which of the selected modules RUN THEIR SUITE in this call: `*` (the default) = every
+          selected module whose entry does not say `test: false`; else a comma- or
+          whitespace-separated list of module names (entry assembly names from `modules`), possibly
+          EMPTY — every selected module is still packed, inspected and (when the call publishes)
+          published, but only the listed ones run a `Module tests` leg. The caller derives it from
+          its declared test selection (MeshWeaver.Plugins scripts/ci-tests.py: a package's own
+          `moduleTests`, closed over `requires` dependents): "we should test the slow ai projects
+          only when we actually change them" (maintainer, 2026-09-13) — a build that goes FULL for a
+          lane path or a missing publication baseline no longer tests every module for it. A name
+          the selection lacks is printed and ignored (a suite cannot run for a module that is not
+          packed); the ledger's REUSE answer (needTest) is honoured before this list, never after —
+          a reused bundle owes no suite regardless. Ignored on a trunk publish? NO: trunk runs pass
+          `*` (the publication proves every module) — this input narrows PULL REQUESTS.
+        type: string
+        required: false
+        default: '*'
       superseded-image-assemblies:
         description: >
           Comma- or whitespace-separated IMAGE assembly names whose copy in the pinned platform
@@ -711,6 +729,21 @@ on:
           when unset — the header shows the expression) so the move is one edit to revert.
           `select`, `prepare`, `build-workspace` and `verify` ignore it — the middle two need a
           Docker daemon the scale set does not have.
+        required: false
+        type: string
+        default: ubuntu-latest
+      workspace-runner:
+        description: >-
+          The `runs-on` label for `build-workspace` — the ONE global build of every selected
+          container entry, which `docker load`s the pinned platform image and `docker run`s it as
+          the compiler, so this label must serve a Docker daemon: `ubuntu-latest` (the default,
+          today's behaviour, a 4-core VM) or the org's Docker-capable self-hosted set
+          (`aks-silos-dind`, a dind sidecar on a 16-core D16). Measured 2026-09-13 on
+          MeshWeaver.Plugins#1756's full run: 7.1 min on the hosted 4-core, on the critical path
+          of the gate (modules → pack → gate shard) — the 16-core set compiles the same workspace
+          in ~2.5 min. Wire it from a repository variable (`vars.MW_RUNNER_GATE`, the Docker set,
+          falling back to `ubuntu-latest`) so the move is one edit to revert. `prepare`, `select`
+          and `verify` ignore it.
         required: false
         type: string
         default: ubuntu-latest
@@ -1172,6 +1205,7 @@ jobs:
         id: suites
         env:
           SELECTION: ${{ steps.ledger.outputs.modules }}
+          TEST_MODULES: ${{ inputs.test-modules }}
         run: |
           set -euo pipefail
           printf '%s' "${SELECTION:-[]}" > "$RUNNER_TEMP/final.json"
@@ -1179,6 +1213,20 @@ jobs:
                     if (.ledger.decision // "build") == "reuse"
                     then (.ledger.needTest == true)
                     else (.test != false) end) ]' "$RUNNER_TEMP/final.json" > "$RUNNER_TEMP/suites.json"
+          # `test-modules` (header, "Which of the selected modules RUN THEIR SUITE"): `*` keeps the
+          # answer above; a list keeps only the named modules — the others are packed, not tested.
+          if [ "$(printf '%s' "$TEST_MODULES" | tr -d '[:space:]')" != "*" ]; then
+            printf '%s' "$TEST_MODULES" | tr ',' '\n' | tr ' ' '\n' | sed '/^$/d' | sort -u > "$RUNNER_TEMP/test-modules.txt"
+            jq -c --rawfile names "$RUNNER_TEMP/test-modules.txt" \
+              '($names | split("\n") | map(select(length > 0))) as $keep | [ .[] | select(.module as $m | $keep | index($m)) ]' \
+              "$RUNNER_TEMP/suites.json" > "$RUNNER_TEMP/suites.narrowed.json"
+            dropped=$(jq -r --slurpfile n "$RUNNER_TEMP/suites.narrowed.json" '[ .[].module ] - [ $n[0][].module ] | join(", ")' "$RUNNER_TEMP/suites.json")
+            unknown=$(jq -r --rawfile names "$RUNNER_TEMP/test-modules.txt" '($names | split("\n") | map(select(length > 0))) - [ .[].module ] | join(", ")' "$RUNNER_TEMP/final.json")
+            mv "$RUNNER_TEMP/suites.narrowed.json" "$RUNNER_TEMP/suites.json"
+            echo "test-modules narrows the suites to: $(tr '\n' ' ' < "$RUNNER_TEMP/test-modules.txt")"
+            [ -z "$dropped" ] || echo "packed but NOT tested (their suite is not owed by this change set): $dropped"
+            [ -z "$unknown" ] || echo "::notice title=test-modules names modules this call did not select::$unknown — nothing to run for them; a suite runs only for a packed module"
+          fi
           count=$(jq 'length' "$RUNNER_TEMP/suites.json")
           echo "modules=$(cat "$RUNNER_TEMP/suites.json")" >> "$GITHUB_OUTPUT"
           echo "count=$count" >> "$GITHUB_OUTPUT"
@@ -1522,7 +1570,8 @@ jobs:
     name: Build the workspace (one global build)
     needs: [select, prepare]
     if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
-    runs-on: ubuntu-latest
+    # `workspace-runner` (inputs): a Docker-capable label — the compiler is the platform image.
+    runs-on: ${{ inputs.workspace-runner }}
     timeout-minutes: 30
     # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
     # callers must remain able to grant `actions: read` without also granting an identity token.
@@ -3929,6 +3978,29 @@ jobs:
           # at another file (a job-level `env:` cannot read `runner.temp`).
           echo "BATCH_STATE=$RUNNER_TEMP/batch/state.json" >> "$GITHUB_ENV"
           python3 "$MODULE_PACK_BATCH" --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
+      # Test images come from OUR registry, never Docker Hub (maintainer, 2026-09-13: "let's get
+      # images from our own registry, not docker"): a runner that carries
+      # TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX (Memex deployments/aks/ci-runners) makes Testcontainers
+      # rewrite every Docker Hub image name to that registry, and Testcontainers takes the pull
+      # credential from the runner's docker config — so the daemon is logged in HERE, with the
+      # lane's ACR pair, before any suite starts a container. Unset prefix, or no daemon on the
+      # runner (the plain `aks-silos` set — its suites use the shared Postgres and start no
+      # container): says so and exits 0. Same step, same wording as MeshWeaver.Plugins ci.yml's
+      # host legs (Plugins#1771). An empty credential beside a set prefix is RED by name: a
+      # suite that then pulls anonymously would rate-limit at Docker Hub's 429 again.
+      - name: Log the Docker daemon into the fleet's Docker Hub mirror (when the runner names one)
+        env:
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+        run: |
+          set -euo pipefail
+          prefix="${TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:-}"
+          if [ -z "$prefix" ]; then echo "no TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX on this runner — Docker Hub names stay as they are"; exit 0; fi
+          if ! docker info >/dev/null 2>&1; then echo "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=$prefix but no Docker daemon on this runner — the suites here start no container (shared Postgres)"; exit 0; fi
+          registry="${prefix%%/*}"
+          [ -n "$ACR_USERNAME" ] && [ -n "$ACR_PASSWORD" ] || { echo "::error::TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=$prefix names $registry, but secrets.acr-username / acr-password are empty on this call — a suite that starts a container would pull anonymously (Docker Hub 429) or be refused by $registry. Pass the ACR pair."; exit 1; }
+          echo "$ACR_PASSWORD" | docker login "$registry" -u "$ACR_USERNAME" --password-stdin
+          echo "docker daemon logged into $registry — Testcontainers pulls its Docker Hub images as ${prefix}<name>"
       # 🚨 UNCONDITIONAL, and the log says why. `dotnet-sdk: by-declaration` exists so a job that
       # compiles nothing on the runner stops installing an SDK by reflex — but this job's ONLY
       # work is `dotnet test`, a verb the platform image's build-project does not have at all. So

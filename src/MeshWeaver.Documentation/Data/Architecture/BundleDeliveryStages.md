@@ -142,6 +142,21 @@ The 10 remaining failures are Reinsurance content-gate failures (7 `render:`, 3 
 
 ## Stage ② — what the guard sees, and what it does not
 
+> **2026-09-13 — defect 1 fixed at the lane.** The `ext-modules` step of `node-repo-publish-bake.yml`
+> keeps this repository's own module bundles and the ones composed from an upstream's seal in two
+> directories; both are composed into the compile surface and both take part in the one-build
+> verdict, but only the own ones are staged for `modules/_index`. A satellite that owns no module
+> seals an EMPTY index, which `publish-bake-bundles.sh` accepts only when the workflow exports
+> `SEAL_MODULES_OWN=0` (a workflow that exports nothing is still the pre-#2707 skew, refused).
+> Replayed on Crm's and Education's 2026-09-12 composition (four upstream packages, no own module):
+> before, `sealing MeshWeaver.AI as module package 'AI'` ×4 and a four-entry index; after, four
+> `composed only: … NOT in this publication's seal` lines and `sealed set: 0 own module bundle(s)
+> …; 4 upstream cop(y/ies) … NOT sealed`. Core's `plugins-bake` (four own artifacts, no upstream)
+> is unchanged: `sealed set: 4 own …; 0 upstream`. The guard's denominator is still the COMPOSED
+> set (4 on those repositories) — the population the bake loads — and pointing it at a
+> publication's ~40 module bundles remains the module-pack lane's change.
+
+
 🚨 **#3905's assertion was green in all 10 of those bake jobs — over a denominator of 4:**
 
 ```
@@ -186,6 +201,27 @@ on as if true:
 The landing-order defect recorded on that thread — a later-finishing publication with *older* content
 displacing a newer landed module — was fixed by #3996: `ModuleLandingService` compares versions
 before moving the head, and `ModuleUpdateDecision` answers `SkipOlder`.
+
+## Re-adjudicated 2026-09-13, after the daily-wave refactor
+
+The five issues were re-read against `main` (`cdb2878bb`) the day after the satellites moved to the
+daily wave (Plugins#1707/#1709, core #4085). What each stage looked like that morning, with the
+instrument and its denominator:
+
+| stage | reading, 2026-09-13 | verdict |
+|---|---|---|
+| ① write (#3461) | `verify_publication` read over every `plugins` publish job of both lanes, 2026-09-12T08:00Z → 09-13T08:00Z, by job: core `plugins-bake` **25** executed (23 sealed, 2 converged-skip), Plugins `publish-bake` **10** (8 sealed, 1 converged-skip, 1 *"a later run sealed first — not sealing backwards"* skip). **62 of 62** target verifications read `N/N file(s) hold this run's bytes … 0 byte-identical from another`; **0** MIX refusals, 0 superseded, 0 verify-incomplete. 20 distinct identities; **6 written by both lanes, all 6 with different Plugins commits**, hours apart — the routine same-prefix/different-content case, with no overlap in the window. Phase 4 unreachable from every producer: `publish-bake-bundles.sh:203` and `node-repo-publish-bake.yml:335` default `flat`, and none of the seven callers (core, Plugins, five satellites) passes `publication-layout`. 🚨 Two things the same logs showed: the never-seal-backwards guard was a **no-op in the core lane** — 5 of 25 core re-seals logged `the compare API refused to order …: gh: Not Found (HTTP 404)` → `republishing as before`, because the publish step compared with core's own `github.token`, which cannot read the private Plugins repo (fixed the same day: the step now uses the content repository's App token, the checkout's own expression); and the two lanes seal **different module sets** for one identity by construction (core 4 modules / 45 files, Plugins 5 / 46 with `defaultviews`), so "same content" across lanes is never byte-identical. | open — phase 4/5 unlanded |
+| ② compose (#3732) | `/health` ×10 per portal: `pending_module_activation` absent on all **5** distinct replica payloads (3 cloud + 2 systemorph) — half 1 met for the second day; `content-types` Degraded on all 5 with **different** sets per replica (`SocialMedia/Post ×31` dark on cloud replicas A and B, fine on C), while the node record reads `AdoptedVerified`, one MVID, fingerprints equal — the per-record/per-replica gap #4071 names. The guard's denominator is still **4** (`node-repo-publish-bake.yml`, the composed set). 🚨 The thread's "defect 1 is #3760" was wrong: #3760 (merged 2026-09-12T18:11Z) publishes to `cr.meshweaver.cloud`; composition is decided in the lane's `ext-modules` step and its seal staging — **fixed the same day by #4172**, which stages only the repository's OWN bundles (see *Stage ② — what the guard sees* above, and [CI Content Bake](../CiContentBake) → *The publication is the unit of consistency*). | open — guard population and half 2; defect 1 landed in #4172 |
+| ③ select (#3768) | `bundle_adoption` on memex.systemorph.com, both replicas: 24–26 attempts, 21–25 adopted (13 carried no NodeTypes), **1 miss** `LearningRoadmap: NoAssemblies` — a producer-side empty archive, correctly loud; `FrameworkDeclined` absent. | closed, stays closed |
+| ④ deliver (#3583 → #3845) | The wave removed neither half. The **report** moved: core CD's per-build `plugins` registration wakes every satellite via `meshweaver-upstream-published` (Crm 23 / SocialMedia 24 / Manufacturing 23 runs in 19 h; Education 42 `framework-released` on top, Education#320 unmerged; Reinsurance 0) — [The Release Wave](../TheReleaseWave) → *After phase 1*. The **condition** became total: since #3760 (18:11Z) every satellite publish-bake fails at the lane's preflight on the unprovisioned publisher password — **66 of 66** jobs, the five daily runs included (#4142) — so no satellite has sealed anything for any identity since. #3845's five holes all hold (`SealedSyncGate.cs:56-57`, `ModuleDiscoveryService.cs:694`, `GitHubActionArea.cs:86`, `GitHubSyncSettingsTab.cs:407`, #4063). | both open — the bake-side decision (identity churn options) is still Roland's |
+
+Two neighbours were adjudicated in the same pass and are recorded where they belong: #3878 (the
+whole-run registry hand-over) is **closed** — it landed, was verified three times in production, and
+was reversed nine hours later by the per-module-deploy directive
+([Module Publication Gate](../ModulePublicationGate) carries the dated supersession); #3842 /
+Plugins#1565 (no platform pins) are **delivered** — zero pin literals and zero sha-pinned lane refs on
+all six repositories' `main`, with the resolver-copy drift (seven copies, six sizes) as the one
+residual, on [The Release Wave](../TheReleaseWave).
 
 ## How to triage the next one
 
