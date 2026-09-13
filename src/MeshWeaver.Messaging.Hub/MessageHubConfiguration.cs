@@ -719,6 +719,35 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithQuiesceTimeout(TimeSpan timeout) => this with { QuiesceTimeout = timeout };
 
     /// <summary>
+    /// Declares that this hub is ACTIVATED ON DEMAND from a durable record — the routing layer
+    /// creates it for the first delivery addressed to it and creates it AGAIN, from the same
+    /// record, for the first delivery after it has gone. A per-node hub is the canonical case.
+    ///
+    /// <para>🚨 <b>What it changes.</b> An initialization that faults on a transient
+    /// infrastructure fault (<see cref="InfrastructureFault.IsTransient"/> — the database away, a
+    /// name that did not resolve) does NOT latch such a hub into the FAILED state
+    /// (<c>MessageHub.InitializationError</c>, every later request answered with a
+    /// terminal <c>DeliveryFailure</c> until the process restarts). The activation is RETIRED
+    /// instead: whatever was parked behind its init gate is answered with the transient
+    /// <c>ShuttingDown</c> refusal — "the address may reactivate; retry" — and the hub disposes
+    /// itself, so the next delivery re-creates it and its initialization runs again against the
+    /// dependency that has meanwhile come back. That is the same contract every recycle already
+    /// carries, and every caller already rides it out (the paced re-probe, the resubscribe
+    /// latch). Systemorph/MeshWeaver#4067 / #4068.</para>
+    ///
+    /// <para>A hub WITHOUT this declaration keeps the latch, because retiring it would not bring
+    /// it back: the root mesh hub is built once for the process, and a hub owned by a live object
+    /// (a synchronization stream's sub-hub) is re-created by that owner's own recovery, not by
+    /// routing. For those the FAILED state stays the honest answer, and the log names the
+    /// transient cause so the reader knows a restart — not a fix — is what recovers it.</para>
+    /// </summary>
+    /// <returns>The configuration, marked.</returns>
+    public MessageHubConfiguration WithReactivationOnDemand() => Set(new ReactivatesOnDemand());
+
+    /// <summary>True when <see cref="WithReactivationOnDemand"/> was declared.</summary>
+    public bool ReactivatesOnDemand => Get<ReactivatesOnDemand>() is not null;
+
+    /// <summary>
     /// Per-hub aggregate inbound-depth watermark for the storm breaker's Invariant-3 safety
     /// net (see <c>Doc/Architecture/ActionBlockWedgePrevention.md</c>). Default
     /// <see cref="MessageStormBreaker.DefaultAggregateWatermark"/>. When this hub's single
@@ -919,3 +948,10 @@ public record SyncPipelineConfig
 }
 
 internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, CancellationToken, IObservable<IMessageDelivery>> AsyncDelivery);
+
+/// <summary>
+/// Marker for <see cref="MessageHubConfiguration.WithReactivationOnDemand"/>: the hub is
+/// re-created by demand routing after it goes away, so a transient initialization fault retires
+/// the activation instead of latching it FAILED.
+/// </summary>
+public sealed record ReactivatesOnDemand;

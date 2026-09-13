@@ -706,6 +706,16 @@ public sealed class MessageHub : IMessageHub
                     return Observable.Return(request.Processed());
                 }
 
+                // 🚨 A TRANSIENT INFRASTRUCTURE fault is not a property of this activation (#4067,
+                // #4068): the database was away, a name did not resolve. Latching the hub FAILED
+                // for it turned a two-minute DNS blip into "this address is broken until the
+                // process restarts" — every later request answered with a terminal failure, no
+                // path back. A hub that demand routing re-creates is RETIRED instead: whatever is
+                // parked behind its gate is answered "ask again", and the next delivery activates
+                // a fresh hub whose BuildupActions run against the dependency that has come back.
+                if (InfrastructureFault.IsTransient(ex) && TryRetireAfterTransientInitializationFault(ex))
+                    return Observable.Return(request.Processed());
+
                 // Init failed — a BuildupAction faulted (threw) or HUNG (TimeoutException from the bound
                 // above). Do NOT leave the gate closed (→ the 30s-per-message deferral wedge): enter a
                 // FAILED state that surfaces a clear DeliveryFailure for every later request, then
@@ -716,11 +726,59 @@ public sealed class MessageHub : IMessageHub
                       + "(a hung dependency or stuck compile)"
                     : $"a BuildupAction faulted ({ex.GetType().Name}: {ex.Message})";
                 logger.LogError(ex,
-                    "Hub {Address} initialization failed — {Reason}. Hub is now in FAILED state.", Address, reason);
+                    "Hub {Address} initialization failed — {Reason}. Hub is now in FAILED state.{Recovery}",
+                    Address, reason, TransientLatchNote(ex));
                 EnterInitializationFailedState(new InvalidOperationException(reason, ex));
                 OpenGate(MessageHubConfiguration.InitializeGateName);
                 return Observable.Return(request.Failed($"Hub '{Address}' initialization failed — {reason}"));
             });
+    }
+
+    /// <summary>
+    /// The sentence appended to a FAILED-state log line when the cause was a transient
+    /// infrastructure fault on a hub that CANNOT be retired (no
+    /// <see cref="MessageHubConfiguration.WithReactivationOnDemand"/>): the latch is the honest
+    /// answer for it, and the reader must know a restart, not a fix, recovers it. Empty otherwise.
+    /// </summary>
+    private static string TransientLatchNote(Exception ex)
+        => InfrastructureFault.IsTransient(ex)
+            ? " The cause is a TRANSIENT infrastructure fault, but this hub is not re-created on demand "
+              + "(no WithReactivationOnDemand), so it stays FAILED until it is recycled or the process restarts."
+            : string.Empty;
+
+    /// <summary>
+    /// Retires this activation after its initialization met a transient infrastructure fault —
+    /// when, and only when, demand routing will re-create it
+    /// (<see cref="MessageHubConfiguration.WithReactivationOnDemand"/>).
+    ///
+    /// <para>Order matters and is deliberate: <see cref="Dispose"/> FIRST, so the refusal every
+    /// parked delivery receives is classified <see cref="ErrorType.ShuttingDown"/> (the reporters
+    /// read <see cref="IsShuttingDown"/>) and carries this activation's identity; then
+    /// <see cref="FailGate"/>, which answers the backlog now with the SPECIFIC reason instead of
+    /// leaving it to the teardown's generic "Hub is shutting down" — a reader of the caller's
+    /// error should see the database, not the recycle. Nothing is recorded in
+    /// <see cref="InitializationError"/>: this activation is going away, and the FAILED marker
+    /// exists to describe one that stays.</para>
+    /// </summary>
+    /// <param name="ex">The transient fault the initialization met.</param>
+    /// <returns><c>true</c> when the hub was retired; <c>false</c> when it is not re-created on
+    /// demand and must take the FAILED latch instead.</returns>
+    private bool TryRetireAfterTransientInitializationFault(Exception ex)
+    {
+        if (!Configuration.ReactivatesOnDemand || Address.Type == AddressExtensions.MeshType)
+            return false;
+        var reason = ShutdownNack.RetryForTheAuthoritativeAnswer(
+            Address,
+            $"RunLevel={RunLevel}, {ShutdownNack.FormatActivationTag(this)}",
+            "its initialization met a transient infrastructure fault "
+            + $"({ex.GetType().Name}: {ex.Message}) and this activation is retired");
+        logger.LogWarning(ex,
+            "Hub {Address} initialization met a transient infrastructure fault — retiring this activation "
+            + "instead of latching it FAILED; the address reactivates on the next delivery and initializes "
+            + "again. {Reason}", Address, reason);
+        Dispose();
+        FailGate(MessageHubConfiguration.InitializeGateName, reason);
+        return true;
     }
 
     /// <summary>
