@@ -506,6 +506,19 @@ data:
   {{- end }}
   # A TimeSpan: a real default, never "" (the same typed-key rule as SelfUpdate__MinRollInterval).
   Hosting__ReportInterval: "{{ .Values.config.memex_portal.Hosting__ReportInterval | default "01:00:00" }}"
+  # ---- The build queue (MeshWeaver.Plugins#1784 `Hosting/Build`, #1786 the `admission` job) ----
+  # Only the CONTROL instance sets these: it is the fleet's build queue — every repo's ci.yml posts a
+  # signed build-request into its inbox and waits for the MeshWeaver/admission check run the
+  # scheduler posts through the instance's GitHub App. PublicUrl is the check run's details link
+  # (→ Hosting/Builds/<repo>/<sha> on this instance); Concurrency is how many NON-trunk builds are
+  # admitted at once (trunk never counts; the code's default is 3 when the key is absent). Rendered
+  # only when set so a non-control instance carries neither (config-key-coverage).
+  {{- if .Values.config.memex_portal.Hosting__Builds__PublicUrl }}
+  Hosting__Builds__PublicUrl: "{{ .Values.config.memex_portal.Hosting__Builds__PublicUrl }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.Hosting__Builds__Concurrency }}
+  Hosting__Builds__Concurrency: "{{ .Values.config.memex_portal.Hosting__Builds__Concurrency }}"
+  {{- end }}
   # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713) -----------------
   # The URL of the control instance's signed inbox that the Feedback plugin hands a technical
   # submission (bug / idea / technical question) to after Submit — for the fleet that is
