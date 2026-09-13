@@ -3463,12 +3463,64 @@ public sealed class MessageHub : IMessageHub
         var sb = new System.Text.StringBuilder();
         sb.Append(Environment.NewLine).Append("  handler-side fate (what happened to the delivery):");
         foreach (var p in pending.Take(PendingCallbackLogCap))
+        {
             sb.Append(Environment.NewLine).Append("    ").Append(p.MessageId).Append('=')
               .Append(p.RequestType).Append(": ").Append(requestFates.Describe(p.MessageId));
+            // 🚨 The TARGET's pump, as it is NOW. A trail that ends `RECEIVED → ENQUEUED → QUEUED
+            // depth=1` at the target and then nothing says the target never dequeued it — and
+            // the one thing that decides between "a turn is parked there" (its name and age),
+            // "a drain is scheduled and not running" (the scheduler holds it) and "nothing is
+            // outstanding" (the latch invariant broken) is the target's own queue snapshot, which
+            // the requester's report never carried. Measured 2026-09-13 on the Plugins gate
+            // (#2543 / #4141): 25 stale callbacks, every SubscribeRequest one of them ending
+            // exactly that way at a NodeType hub, `pendingWork=316` on the pool, and no line
+            // anywhere naming what that hub was doing.
+            var pump = DescribeLocalPump(p.Target);
+            if (pump is not null)
+                sb.Append(Environment.NewLine).Append("      target pump now: ").Append(pump);
+        }
         if (pending.Length > PendingCallbackLogCap)
             sb.Append(Environment.NewLine).Append("    …+")
               .Append(pending.Length - PendingCallbackLogCap).Append(" more not rendered");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The pump state of the in-process hub at <paramref name="target"/> — run level, the turn
+    /// executing now and for how long, queue depths, drains in flight and drains the scheduler
+    /// still holds — or <c>null</c> when the target is not a hub under this tree's root. Read-only
+    /// and lock-free: the same snapshot the disposal diagnostics print for a hub's own queue,
+    /// taken here for the hub a pending callback is waiting ON.
+    /// </summary>
+    private string? DescribeLocalPump(Address? target)
+    {
+        if (target is null)
+            return null;
+        try
+        {
+            IMessageHub root = this;
+            while ((root as MessageHub)?.messageService is MessageService ms && ms.ParentHub is { } parent)
+                root = parent;
+            var levels = ImmutableList<Address>.Empty;
+            for (var level = target; level is not null; level = level.Host)
+                levels = levels.Insert(0, level with { Host = null });
+            var hub = ResolveTopLevelHub(root, levels[0]);
+            for (var i = 1; hub is not null && i < levels.Count; i++)
+                hub = hub.GetHostedHub(levels[i], HostedHubCreation.Never);
+            if (hub is not MessageHub { messageService: MessageService service } local)
+                return null;
+            var q = service.GetQueueSnapshot();
+            var turn = q.CurrentMessage is null
+                ? "idle"
+                : $"turn={q.CurrentMessage} running {q.CurrentMessageElapsedMs}ms";
+            return $"{local.Address} RunLevel={local.RunLevel} {turn} buffer={q.Buffer} deferred={q.Deferred} "
+                 + $"drainsInFlight={q.DrainsInFlight} awaitingScheduler={q.DrainsAwaitingScheduler} "
+                 + $"draining={q.Draining} openGates={q.OpenGates}";
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

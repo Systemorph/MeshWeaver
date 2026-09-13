@@ -266,6 +266,18 @@ held; a last `RECEIVED` ⇒ it is sitting in that hub's queue. Three replies per
 (a subscription is answered many times, and only the first few can say anything about a lost
 verdict). Pinned by `ReplyTrailFollowsTheRequestTest`.
 
+**And the target's pump is on the report.** A trail ending `RECEIVED → ENQUEUED → QUEUED depth=1`
+at the target and then nothing says the target never dequeued it; what it never said is WHY. The
+pending-callback report (`[STALE-CALLBACK]`, `[QUIESCE-TIMEOUT]`, the disposal snapshot) now
+prints, under each pending request whose target is a hub in this process, `target pump now:
+<address> RunLevel=… turn=<message> running <ms> buffer=… deferred=… drainsInFlight=…
+awaitingScheduler=… draining=…` — the same snapshot a hub prints for its own queue, taken for
+the hub the callback is waiting ON. Measured 2026-09-13 on the Plugins gate (#2543 / #4141): 25
+stale callbacks, every `SubscribeRequest` among them ending that way at a NodeType hub with the
+pool at `pendingWork=316`, and no line anywhere naming what that hub was doing. This reading is
+also the M1/M2 discriminator #3593 waits for, printed while the hub is alive rather than only
+from its disposal stall detector.
+
 ### What it deliberately does not cover
 
 - **A reply that crossed a process boundary.** It arrives packaged (`RawJson`) and its waiter is in
