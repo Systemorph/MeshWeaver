@@ -1057,6 +1057,7 @@ jobs:
           helper_help="$RUNNER_TEMP/module-pack-batch-help.txt"
           python3 "$MODULE_PACK_BATCH" --help > "$helper_help"
           grep -q -- '--workflow' "$helper_help" || { echo "::error::the resolved build-logic ref carries a module-pack-batch.py without the required --workflow contract. This workflow validates the exact YAML GitHub loaded; move an explicit build-logic-ref to a compatible commit, or omit it to use job.workflow_sha."; exit 1; }
+          python3 "$MODULE_PACK_BATCH" entry --help > /dev/null || { echo "::error::the resolved build-logic ref carries a module-pack-batch.py without the required 'entry' subcommand. The publish stand-down step reads the WHOLE matrix entry through it (#4140) — an older helper answers 'invalid choice' once per module, deep inside a subshell whose recorded reason names neither the subcommand nor the helper. Move an explicit build-logic-ref to a compatible commit, or omit it to use job.workflow_sha."; exit 1; }
           python3 build-logic/.github/scripts/node-repo-scope.py --self-test
           if [ -n "$BUILD_LOGIC_REF" ]; then
             python3 build-logic/.github/scripts/node-repo-publication-base.py --self-test

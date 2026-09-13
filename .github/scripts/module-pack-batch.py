@@ -656,6 +656,15 @@ def workflow_entry_handover_problems(workflow: str) -> list[str]:
                 "walks a dotted path INSIDE the entry — that key resolves nothing and silently "
                 "answers the --default. Read the whole entry with `bk entry --module … --phase …`."
             )
+    contract = 'python3 "$MODULE_PACK_BATCH" entry --help'
+    if workflow.count(contract) != 1:
+        problems.append(
+            "select must preflight the `entry` subcommand on the RESOLVED helper (`python3 "
+            '"$MODULE_PACK_BATCH" entry --help`) before the lane can reach the stand-down step. An '
+            "explicit build-logic-ref may pin a helper OLDER than this workflow; without the "
+            "preflight that surfaces as `invalid choice: 'entry'` once per module, inside a "
+            "subshell whose recorded reason names neither the subcommand nor the helper."
+        )
     handover = ('bk entry --module "$MODULE" --phase publish '
                 "| jq '[.]' > \"$RUNNER_TEMP/mods/$MODULE/newer-entry.json\"")
     if workflow.count(handover) != 1:
@@ -786,6 +795,11 @@ def self_test(workflow_path: Path | None = None) -> int:
         )
         check("that guard catches the scope input coming from anywhere but the entry reader",
               bool(workflow_entry_handover_problems(dropped_handover)))
+        dropped_contract = workflow.replace(
+            'python3 "$MODULE_PACK_BATCH" entry --help', "true", 1)
+        check("that guard catches select no longer preflighting `entry` on the RESOLVED helper — a "
+              "pinned build-logic-ref can be older than this workflow",
+              bool(workflow_entry_handover_problems(dropped_contract)))
 
     print("== chunk: deterministic, sorted, ≤N is one leg, singleton unchanged")
     sel = [entry("MeshWeaver.Zeta"), entry("MeshWeaver.AI"), entry("MeshWeaver.Maps"),
