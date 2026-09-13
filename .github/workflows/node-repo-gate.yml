@@ -1434,6 +1434,54 @@ jobs:
             echo "dir=$SEED_DIR" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # ══════════ THE PUBLICATION POINTER (MeshWeaver#3461, phase 3) ══════════
+          #
+          # 🚨 THE RULES ARE THE READER'S, EXACTLY (ShippedPrebuiltBundles.PublicationDirectoryOf,
+          # and the resolvers in publish-bake-bundles.sh, bake-scope.sh, carry-forward-bundles.sh
+          # and compose-sealed-modules.sh). It NEVER fails; it falls back. Absent, blank,
+          # unreadable, not a single path segment, or naming a directory that is not there ⇒ the
+          # source directory, which IS the flat layout. A pointer is a NAME: it must never be able
+          # to address bytes outside its own source directory. Change one copy, change all of them.
+          #
+          # It is duplicated here rather than sourced for the same reason registry_get is (see the
+          # note on that function): this workflow is pinned by the caller's `uses:` while the
+          # scripts are fetched at `platform-ref`, so a shared file would be a THIRD independently
+          # pinned artefact.
+          POINTER="_current"
+          RESOLVED_DIR=""
+          resolve_publication_dir() { # <account> <share> <source-dir>
+            _rp_account="$1"; _rp_share="$2"; _rp_source="$3"
+            RESOLVED_DIR="$_rp_source"
+            _rp_exists=$(az storage file exists --account-name "$_rp_account" --share-name "$_rp_share" \
+              --path "$_rp_source/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
+              --only-show-errors 2>/dev/null || echo "unknown")
+            [ "$_rp_exists" = "true" ] || return 0
+            _rp_local="$(mktemp)"
+            if ! az storage file download --account-name "$_rp_account" --share-name "$_rp_share" \
+                --path "$_rp_source/$POINTER" --dest "$_rp_local" \
+                --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+              rm -f "$_rp_local"
+              return 0
+            fi
+            _rp_named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$_rp_local" | grep -m1 '[^[:space:]]' || true)
+            rm -f "$_rp_local"
+            [ -n "$_rp_named" ] || return 0
+            case "$_rp_named" in
+              .|..|*/*|*\\*)
+                echo "::warning::$_rp_source/$POINTER names '$_rp_named', which is not a single directory name — reading $_rp_source as its own publication directory."
+                return 0 ;;
+            esac
+            _rp_exists=$(az storage directory exists --account-name "$_rp_account" --share-name "$_rp_share" \
+              --name "$_rp_source/$_rp_named" --auth-mode login --backup-intent --query exists -o tsv \
+              --only-show-errors 2>/dev/null || echo "unknown")
+            if [ "$_rp_exists" != "true" ]; then
+              echo "::warning::$_rp_source/$POINTER names generation '$_rp_named', which is not on the share (exists=$_rp_exists) — reading $_rp_source as its own publication directory."
+              return 0
+            fi
+            RESOLVED_DIR="$_rp_source/$_rp_named"
+            return 0
+          }
+
           # The FIRST target is read — every target holds the same publication (publish-bake
           # writes them all-or-nothing), so one read is the set.
           target=$(printf '%s\n' $TARGETS | head -1)
@@ -1442,7 +1490,27 @@ jobs:
           case "$rest" in */*) base="${rest#*/}" ;; esac
           fetched=0
           for src in $UPSTREAMS; do
-            dir="${base:+$base/}prebuilt-bundles/$IDENTITY/$src"
+            prefix="${base:+$base/}prebuilt-bundles/$IDENTITY/$src"
+            resolve_publication_dir "$account" "$share" "$prefix"
+            dir="$RESOLVED_DIR"
+            # 🚨 THE ONE PLACE THIS READER MAY NOT TAKE THE READER'S FALLBACK, and it is because of
+            # the BATCH below. `download-batch` RECURSES and the CLI flattens what it finds, so
+            # reading a prefix that holds generation subdirectories would land several publications'
+            # *.zip in one seed directory — a mix, under a count that cannot see it. For a point
+            # read "fall back to the source directory" yields the previous publication WHOLE; for a
+            # recursive batch it yields a union, which is the one thing this migration exists to
+            # make unrepresentable. So: a pointer that EXISTS and was not followed is a refusal, not
+            # a fallback. It is transient by construction — the pointer is one small file write —
+            # and a re-run reads the publication that now applies.
+            if [ "$dir" = "$prefix" ]; then
+              pointed=$(az storage file exists --account-name "$account" --share-name "$share" \
+                --path "$prefix/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
+                --only-show-errors 2>/dev/null || echo unknown)
+              if [ "$pointed" != "false" ]; then
+                echo "::error::$account/$share/$prefix carries a publication pointer ($POINTER exists=$pointed) that could not be followed to a generation on the share. This seed downloads the prefix RECURSIVELY, so reading it flat could mix two publications' bundles into one seed directory — refusing rather than seeding a set no publisher produced (MeshWeaver#3461). The pointer is one small file write; re-run to read the publication that now applies."
+                exit 1
+              fi
+            fi
             # EXISTENCE FIRST, fail CLOSED (the publish script's own rule): an unreadable answer
             # is not "absent", and absent is a red gate, not an empty seed.
             sealed=$(az storage file exists --account-name "$account" --share-name "$share" \

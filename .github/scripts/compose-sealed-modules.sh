@@ -53,6 +53,67 @@ case "$identity" in */*|*..*|"") echo "::error::compose-sealed-modules.sh: ident
 mkdir -p "$out"
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
+# ══════════════ THE PUBLICATION POINTER (MeshWeaver#3461, phase 3) ══════════════
+#
+# A source directory MAY hold `_current`: one line naming the SUBDIRECTORY that holds the
+# publication which currently applies. Absent, the source directory IS its own publication
+# directory — the flat layout, and the only one anything has written until a caller opts in to
+# `publication-layout: generation`.
+#
+# 🚨 WHY THIS FILE NEEDED IT. Phase 1 routed every reader the PORTAL IMAGE carries through
+# `ShippedPrebuiltBundles.PublicationDirectoryOf`; this script is not one of them — it is fetched
+# over the contents API onto a runner — so it kept composing paths under the bare prefix. That is
+# harmless only while nothing writes a generation. The moment a prefix is flipped, this reader is
+# left on the flat compatibility copy while pointer-following readers have moved on; at phase 5,
+# when the flat copy is dropped, it breaks outright. `SealedPublicationGenerations.md` names it and
+# `compose-sealed-modules.sh` by name as a PRECONDITION on flipping any prefix.
+#
+# 🚨 And MeshWeaver#4172 made it load-bearing rather than merely tidy: a downstream publication now
+# seals only its OWN modules, so an upstream's module bytes are reachable through the upstream's own
+# seal and nowhere else. There is no downstream copy left to fall back on.
+#
+# 🚨 THE RULES ARE THE READER'S, EXACTLY (`ShippedPrebuiltBundles.PublicationDirectoryOf`, and the
+# resolvers in publish-bake-bundles.sh, bake-scope.sh and carry-forward-bundles.sh). It NEVER fails;
+# it falls back. Absent, blank, unreadable, not a single path segment, or naming a directory that is
+# not there ⇒ the source directory. A pointer is a NAME: it must never be able to address bytes
+# outside its own source directory. Change one copy, change all of them.
+POINTER="_current"
+RESOLVED_DIR=""
+resolve_publication_dir() { # <account> <share> <source-dir>
+  local account="$1" share="$2" source_dir="$3" exists named local_pointer
+  RESOLVED_DIR="$source_dir"
+  exists=$(az storage file exists --account-name "$account" --share-name "$share" \
+    --path "$source_dir/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  [ "$exists" = "true" ] || return 0
+  local_pointer="$(mktemp)"
+  if ! az storage file download --account-name "$account" --share-name "$share" \
+      --path "$source_dir/$POINTER" --dest "$local_pointer" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+    rm -f "$local_pointer"
+    return 0
+  fi
+  named=$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' "$local_pointer" | grep -m1 '[^[:space:]]' || true)
+  rm -f "$local_pointer"
+  [ -n "$named" ] || return 0
+  case "$named" in
+    # A rooted name always contains a '/', so `*/*` already covers it — shellcheck SC2222 is
+    # right that a separate `/*` arm can never match anything this one does not.
+    .|..|*/*|*\\*)
+      echo "::warning::$source_dir/$POINTER names '$named', which is not a single directory name — reading $source_dir as its own publication directory."
+      return 0 ;;
+  esac
+  exists=$(az storage directory exists --account-name "$account" --share-name "$share" \
+    --name "$source_dir/$named" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$exists" != "true" ]; then
+    echo "::warning::$source_dir/$POINTER names generation '$named', which is not on the share (exists=$exists) — reading $source_dir as its own publication directory."
+    return 0
+  fi
+  RESOLVED_DIR="$source_dir/$named"
+  return 0
+}
+
 # ── re-ask a registry that has not answered yet ───────────────────────────────────────────────
 # 🚨 A 5xx is not an answer — it is the ABSENCE of one. Promoting the platform ROLLS the portal
 # that serves this registry, so every promotion opens a window in which a dependent repo's gate
@@ -142,7 +203,16 @@ sealed_modules_of() { # <source> <list-file> <generation-file>
     local account="${storage_target%%/*}" rest="${storage_target#*/}"
     local share="${rest%%/*}" base=""
     case "$rest" in */*) base="${rest#*/}" ;; esac
-    local dir="${base:+$base/}prebuilt-bundles/$identity/$src"
+    local prefix="${base:+$base/}prebuilt-bundles/$identity/$src"
+    # 🚨 The publication that APPLIES, never the prefix (MeshWeaver#3461). Under the flat layout
+    # this resolves to the prefix itself and every path below is byte-identical to what it was.
+    resolve_publication_dir "$account" "$share" "$prefix"
+    local dir="$RESOLVED_DIR"
+    # The generation this listing came from — the storage-path analogue of the registry index's
+    # `generation` field, and it travels to fetch_module for exactly the same reason: every module
+    # of one composition must come from the ONE publication instance the index was read from. Empty
+    # under the flat layout, which is what the registry path already writes when it has none.
+    case "$dir" in "$prefix"/*) printf '%s\n' "${dir#"$prefix"/}" > "$genfile" ;; esac
     local sealed
     sealed=$(az storage file exists --account-name "$account" --share-name "$share" \
       --path "$dir/_complete" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors 2>/dev/null || echo unknown)
@@ -179,10 +249,16 @@ fetch_module() { # <source> <bundle-name> <dest> [generation]
     local account="${storage_target%%/*}" rest="${storage_target#*/}"
     local share="${rest%%/*}" base=""
     case "$rest" in */*) base="${rest#*/}" ;; esac
+    # 🚨 PINNED to the generation the index came from (MeshWeaver#3461), which is the storage-path
+    # equivalent of the registry path's If-Match. A pointer that moves between the listing and this
+    # download cannot mix two publications' module bytes here: the generation directory is not
+    # rewritten in place, so these bytes are the ones the index listed. Empty ⇒ the flat layout,
+    # and the path is byte-identical to what it was.
+    local dir="${base:+$base/}prebuilt-bundles/$identity/$src${generation:+/$generation}"
     az storage file download --account-name "$account" --share-name "$share" \
-      --path "${base:+$base/}prebuilt-bundles/$identity/$src/modules/$name" --dest "$dest" \
+      --path "$dir/modules/$name" --dest "$dest" \
       --auth-mode login --backup-intent --only-show-errors > /dev/null \
-      || { echo "::error::could not download sealed module $name of '$src' for identity $identity"; return 1; }
+      || { echo "::error::could not download sealed module $name of '$src' for identity $identity from $account/$share/$dir"; return 1; }
   fi
 }
 
