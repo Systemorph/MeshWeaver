@@ -92,6 +92,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Executive Assistant Credential Reads](ExecutiveAssistantCredentialReads) — a turn that waits for a mesh read holds the queue that read's reply must travel through, and the timeout was rendered as "you never connected"
 - [Bounds Must Be Ordered](BoundsMustBeOrdered)
 - [Message-Based Communication](MessageBasedCommunication)
+- [Router Traffic Detection](RouterTrafficDetection) — the detector has two sites; the receiver names the two addresses, the origin names the call site
 - [No Static State](NoStaticState)
 - [Observable Hub Pipeline (migration design)](ObservableHubPipeline)
 - [Per-Hub TaskScheduler — Actor Isolation Across the Mesh](OrleansTaskScheduler)
