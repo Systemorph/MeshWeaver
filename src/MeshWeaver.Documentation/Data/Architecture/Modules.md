@@ -635,6 +635,50 @@ registry that cannot start delivering the module breaking it. The remedy the war
 deployment decision: delist the pack from `Modules:Assemblies` so the landed generation stops being
 shadowed.
 
+### …and the RECORD is not the resolution (#4158, ask 2)
+
+🚨 **`get_diagnostics` used to answer entirely in claims.** `mvid` on that reply is
+`NodeTypeDefinition.LatestAssemblyMvid` — the identity of the bytes a BUILD produced — and the record
+beside it says in as many words that `LatestAssemblyPath` *"is an ADDRESS, not an identity"*. The
+statement nobody could get was the one the serializer and `/schema/<Type>` actually act on: **which
+CLR type this NodeType's content resolves to here, and which assembly that type came from.** Those are
+different statements whenever two builds of one assembly NAME are in the process — a module bundle on
+the shelf and a runtime-compiled collectible build ([#3732](https://github.com/Systemorph/MeshWeaver/issues/3732)) —
+and that is precisely the state in which a stale ADOPTED build and a stale registry SHELF read the
+same from a consumer.
+
+So the reply now carries a `contentType` block, read from the live `IMeshContentTypeRegistry` at the
+moment of the call (`ResolvedContentType.Of`, `src/MeshWeaver.Messaging.Hub/Serialization/`):
+
+| field | what it answers |
+|---|---|
+| `status` | `resolved` · `unresolved` (asked, nothing registered) · `not-asked` (no registry in this process) |
+| `typeName` | the resolved type's full name |
+| `assembly` | `Assembly.Location` — **`null`, never `""`**, for an assembly loaded from a byte array |
+| `mvid` | `Assembly.ManifestModule.ModuleVersionId`, first 8 hex — minted by the compiler INTO the bytes, so it cannot be stale |
+| `collectible` | `true` ⇒ a runtime compile in this process; `false` ⇒ a module shipped with it |
+
+`collectible` + a null `assembly` is what separates the two builds of one name: an in-process compile
+has no file and a collectible context, a shipped module has both the other way round. Nothing gates on
+any of it — it is a reading, exactly like `built-from=`.
+
+Three rules, and each is held by a case that fails without it:
+
+- **Absence is PRINTED, never inferred.** `unresolved` and `not-asked` are two different sentences: a
+  missing registry MEASURED NOTHING, and reporting that as "unresolved" would report a finding nobody
+  made. The `unresolved` sentence also names the consequence — *its views render empty* — because that
+  is what an operator is actually looking at.
+- **Every key is written, always.** The block is composed as an explicit `JsonObject`, not serialised
+  from an anonymous type. Measured on the first attempt: the hub's options stamp a polymorphic `$type`
+  on a NESTED object (putting `<>f__AnonymousType15`6[…]` into an envelope people read) and their
+  default ignore condition DROPS null and default members — so `typeName`, `assembly`, `mvid` and a
+  `false` `collectible` all vanished, leaving a reader unable to tell *not reported* from *reported as
+  absent*, which is the one distinction the block exists to make.
+- **It is read from the TYPE, never from the path.** The control that holds this loads the test
+  assembly's own bytes into a collectible `AssemblyLoadContext`, so the same full name is present
+  twice; the two readings must differ. If the answer were a function of the NodeType path — or of the
+  node's record — they would be identical and that case goes red.
+
 ### Native assets — `runtimes/<rid>/native/` (#1728)
 
 A module is loaded with `Assembly.LoadFrom`, which never consults the module's own `deps.json`, so

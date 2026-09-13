@@ -4065,7 +4065,9 @@ public class MeshOperations
                     return Observable.Return(FormatDiagnostics(
                         CompilationStatus.Ok, nodeTypePath,
                         error: null, startedAt: null, lastCompiledAt: null,
-                        hub.JsonSerializerOptions));
+                        hub.JsonSerializerOptions,
+                        publishedAssemblyMvid: null,
+                        ResolveContentType(nodeTypePath)));
 
                 // Slow path: subscribe to the NodeType's live stream and wait for
                 // the CompileWatcher to settle. Where(settled).Take(1) keeps the
@@ -4110,9 +4112,17 @@ public class MeshOperations
                                     ? ReadCompileStartedAt(typeNode)
                                     : null,
                                 lastCompiledAt: null,
-                                hub.JsonSerializerOptions);
-                        return JsonSerializer.Serialize(
-                            new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
+                                hub.JsonSerializerOptions,
+                                publishedAssemblyMvid: null,
+                                // 🚨 This is the branch that most needs it: the node's own content
+                                // stayed a JsonElement, so the question "which assembly would this
+                                // type have come from" is exactly what the reader is asking.
+                                ResolveContentType(nodeTypePath));
+                        return WithContentType(
+                            JsonSerializer.Serialize(
+                                new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
+                                hub.JsonSerializerOptions),
+                            ContentTypeBlock(ResolveContentType(nodeTypePath)),
                             hub.JsonSerializerOptions);
                     });
             });
@@ -4143,6 +4153,19 @@ public class MeshOperations
                   // further write is coming and a waiter would hang out its whole budget.
                   or CompilationStatus.Unavailable;
 
+    /// <summary>
+    /// 🚨 <b>WHICH ASSEMBLY this NodeType's content type resolves to in THIS process</b> (#4158,
+    /// ask 2). Read from the live <see cref="IMeshContentTypeRegistry"/>, not from the node's
+    /// record: `mvid` on the reply below is the identity a BUILD produced, and when two builds of
+    /// one assembly name are in the process those are different statements. Never <c>null</c> —
+    /// "there is no registry here" and "the registry has no type for this NodeType" are two
+    /// printed answers, because reading a missing block as "fine" is the mistake this exists to
+    /// stop.
+    /// </summary>
+    private ResolvedContentType ResolveContentType(string nodeTypePath)
+        => ResolvedContentType.Of(
+            hub.ServiceProvider.GetService<IMeshContentTypeRegistry>(), nodeTypePath);
+
     private string FormatDiagnosticsFromDef(
         Graph.Configuration.NodeTypeDefinition def, string nodeTypePath)
     {
@@ -4168,7 +4191,10 @@ public class MeshOperations
             hub.JsonSerializerOptions,
             // WHICH build the Ok is about (#2471) — the identity a caller can compare against the
             // bytes an instance is actually serving.
-            def.LatestAssemblyMvid);
+            def.LatestAssemblyMvid,
+            // …and WHICH assembly the content type resolves to here (#4158) — the only coordinate
+            // on the reply that is a property of the loaded bytes rather than of that record.
+            ResolveContentType(nodeTypePath));
     }
 
     /// <summary>
@@ -4681,6 +4707,100 @@ public class MeshOperations
     /// unchanged.
     /// </param>
     public static string FormatDiagnostics(
+        CompilationStatus status,
+        string nodeTypePath,
+        string? error,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? lastCompiledAt,
+        JsonSerializerOptions options,
+        string? publishedAssemblyMvid)
+        => FormatDiagnostics(
+            status, nodeTypePath, error, startedAt, lastCompiledAt, options, publishedAssemblyMvid,
+            contentType: null);
+
+    /// <summary>
+    /// 🚨 <b>The overload that reports WHICH ASSEMBLY the content type actually resolved to</b>
+    /// (#4158, ask 2) — the one coordinate on this reply that is a property of the bytes LOADED
+    /// HERE rather than of a record some build wrote.
+    ///
+    /// <para>Every other identity on the line is a claim: <paramref name="publishedAssemblyMvid"/>
+    /// names the bytes a BUILD produced, <c>[ModuleLoad]</c> names the assembly a module LOADED,
+    /// and neither is the statement the serializer and <c>/schema/&lt;Type&gt;</c> act on. When two
+    /// builds of one assembly name are in the process (#3732) those diverge, and a stale adopted
+    /// build was indistinguishable from a stale registry shelf from the consumer — which is the
+    /// night of diagnosis #4158 was filed about.</para>
+    ///
+    /// <para>An OVERLOAD for the same reason the one above is: a defaulted parameter replaces the
+    /// signature a previously-built module calls.</para>
+    /// </summary>
+    /// <param name="contentType">
+    /// The reading from <see cref="ResolvedContentType.Of"/>, or <c>null</c> to omit the block
+    /// entirely (the pre-#4158 reply, kept for the legacy overloads).
+    /// </param>
+    public static string FormatDiagnostics(
+        CompilationStatus status,
+        string nodeTypePath,
+        string? error,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? lastCompiledAt,
+        JsonSerializerOptions options,
+        string? publishedAssemblyMvid,
+        ResolvedContentType? contentType)
+    {
+        return WithContentType(
+            FormatDiagnosticsCore(
+                status, nodeTypePath, error, startedAt, lastCompiledAt, options, publishedAssemblyMvid),
+            ContentTypeBlock(contentType),
+            options);
+    }
+
+    /// <summary>
+    /// The serialisable shape of a <see cref="ResolvedContentType"/> reading, or <c>null</c> for
+    /// "do not report one". 🚨 Composed ONCE and merged into whatever branch answers, rather than
+    /// repeated per branch: the question "which assembly is this NodeType's content coming from"
+    /// has the same answer whatever the compile status is, and a block that is present for some
+    /// statuses and absent for others is a reading nobody can act on.
+    ///
+    /// <para>🚨 Built as an explicit <see cref="JsonObject"/>, NOT serialised from an anonymous
+    /// type, and both reasons were measured on the first attempt. The hub's options stamp a
+    /// polymorphic <c>$type</c> on a NESTED object, which put the compiler-generated name
+    /// <c>&lt;&gt;f__AnonymousType15`6[…]</c> into a diagnostics envelope people read; and their
+    /// default ignore condition DROPS null and default members, so <c>typeName</c>, <c>assembly</c>,
+    /// <c>mvid</c> and a <c>false</c> <c>collectible</c> all vanished — leaving a reader unable to
+    /// tell "not reported" from "reported as absent", which is the exact distinction
+    /// <see cref="ResolvedContentType.Status"/> exists to make. Every key is written here, always.
+    /// </para>
+    /// </summary>
+    private static JsonObject? ContentTypeBlock(ResolvedContentType? contentType)
+        => contentType is null
+            ? null
+            : new JsonObject
+            {
+                ["status"] = contentType.Status,
+                ["typeName"] = contentType.TypeName,
+                ["assembly"] = contentType.Assembly,
+                ["mvid"] = contentType.Mvid,
+                ["collectible"] = contentType.Collectible,
+                ["message"] = contentType.Describe(),
+            };
+
+    /// <summary>
+    /// Merges the resolved-content-type block into an already-serialised diagnostics reply. Done as
+    /// a merge rather than by threading one more field through six anonymous objects: the branches
+    /// each own their own wording, and none of them is where this reading comes from.
+    /// </summary>
+    private static string WithContentType(string json, JsonObject? contentTypeBlock, JsonSerializerOptions options)
+    {
+        if (contentTypeBlock is null)
+            return json;
+        var node = JsonNode.Parse(json)?.AsObject();
+        if (node is null)
+            return json;
+        node["contentType"] = contentTypeBlock;
+        return node.ToJsonString(options);
+    }
+
+    private static string FormatDiagnosticsCore(
         CompilationStatus status,
         string nodeTypePath,
         string? error,
