@@ -145,7 +145,7 @@ A future reader should not have to reconstruct which half of this shipped.
 | | state |
 |---|---|
 | **The gate's three refusals are distinguishable**, and the resolved identity + its origin are logged on every path | **LANDED** (#4084). Log quality only: every refusal still exits 1, nothing is advisory, no retry, no fallback. |
-| **4b — resolve the identity from the newest SEALED set** instead of a moving tag | **NOT DONE, still open.** It is a resolution change, and the measurement below shrank its target. |
+| **4b — resolve the identity from the newest SEALED set** instead of a moving tag | **NOT DONE, still open — and it is the one item here that needs NO decision.** The measurement below was read as shrinking its target; the 2026-09-13 correction shows phase 1 made that path the PRIMARY one. Blocked on #4142 for validation, not on a call. |
 | Options 1–4 above | **not started.** Roland's call. |
 
 ### Why 4b shrank
@@ -169,6 +169,50 @@ wake payload and a repo pin respectively — both already **settled**, so 4b doe
 converges (*"the schedule poll does NOT retry this identity… waiting for the poll to clear this is
 waiting for something that never [comes]"*). Measured failures on that path: **0 of 2** runs — n=2,
 far too small to justify urgency, though phase 1 promotes the daily cron to the primary full run.
+
+#### 🚨 Correction (2026-09-13): 4b did not shrink — it became the PRIMARY path
+
+The two sentences above are both true and the conclusion drawn from them is wrong, and the refutation
+is the subordinate clause at the end of the second one. 4b applies to exactly one trigger path, the
+`schedule` poll. Phase 1 **promoted that poll to the primary full run**. So 4b went from covering a
+residual path with n=2 to covering *the* path, in the same change that was read as shrinking it.
+
+The `0 of 2` was measured on the `schedule` path while it was still a sideline — a rate measured under
+a regime that the same change ended. It is not evidence about the path's failure rate now, and it was
+the only number behind "far too small to justify urgency".
+
+So the standing summary needs amending: **4b is the one part of stage ④ that needs no decision from
+Roland**, and its target grew rather than shrank. What it is blocked on is *validation*, not a call:
+while [#4142](https://github.com/Systemorph/MeshWeaver/issues/4142) has every satellite's publish-bake
+failing at preflight (66 of 66 jobs from 2026-09-12T18:11Z), "the newest sealed set" resolves against
+a population that has not moved, so a resolver written against it cannot be exercised. Sequence 4b
+after #4142, not after the decision.
+
+### Re-measured 2026-09-13 on a fresh window — the rate went UP, the ratio did not move
+
+Independently derived over **2026-09-12T19:02Z → 2026-09-13T19:02Z**, `git log --first-parent` on
+`origin/main` with per-merge diffs taken as `<merge>^1..<merge>` (a plain `diff-tree` on a merge
+commit prints nothing, which reads as a confident zero):
+
+| | this window | the window above |
+|---|---|---|
+| merges to `main` | **58** | 43 |
+| touching `src/` at all | 35 | — |
+| touching any of the 26 content-surface projects | **23** | 17 |
+| identity moves (one per merge, by the mechanism) | **58** | ≥ 18 observed, 43 by mechanism |
+| **moves with no content reason** | **35 of 58 (60 %)** | ≥ 38 of 43 (88 %) |
+
+The ratio is of the same order and the *rate* is **35 % higher**: 58 identities a day against 43. The
+three premises behind it were re-checked on `bb65e1bdbe` and all hold — `Directory.Build.props` still
+lets the SDK append the commit to `AssemblyInformationalVersion`; `FrameworkBuildIdentity` still
+hashes reference assemblies over `ContentSurfaceAssemblies` with `FullMvidAssemblies` contributing
+full MVIDs; and `MeshWeaverSurfaceManifest.targets` still sits at the **repository root**, imported by
+every host, which is what makes option 3 fleet-coordinated rather than local.
+
+Read against the options table: option 3 is *more* justified than when it was costed (the churn it
+removes is larger), and option 1's convergence problem is *worse* (at 58 merges/day the identity moves
+every ≈ 25 min against a ≈ 22 min bake chain plus a ≈ 48 min image build). Neither conclusion changes
+sign; both get sharper. The decision is still Roland's.
 
 ### 🚨 Phase 1 removes the REPORT, not the CONDITION
 
