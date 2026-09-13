@@ -225,11 +225,8 @@ public class ModulePlatformSurfaceJsonTest
     /// <summary>Compiles one source file against this process's reference set.</summary>
     internal static byte[] Emit(string assemblyName, string source)
     {
-        var platform = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? string.Empty)
-            .Split(Path.PathSeparator)
-            .Where(p => p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(p))
-            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
-            .ToList();
+        // The process-wide platform set, read once — see PlatformReferences for why (#4127).
+        var platform = PlatformReferences.Platform();
         var compilation = CSharpCompilation.Create(
             assemblyName,
             [CSharpSyntaxTree.ParseText(source)],

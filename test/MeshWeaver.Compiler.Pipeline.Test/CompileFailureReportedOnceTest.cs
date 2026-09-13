@@ -67,14 +67,9 @@ public class CompileFailureReportedOnceTest : IDisposable
         }
     }
 
-    // Instance (never static — AGENTS.md "no static collections"): the runtime's reference set,
-    // so Roslyn compiles these snippets exactly as it does a real node's source.
-    private readonly IReadOnlyList<MetadataReference> references =
-        ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
-            .Split(Path.PathSeparator)
-            .Where(p => p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
-            .ToList();
+    // The runtime's reference set, so Roslyn compiles these snippets exactly as it does a real
+    // node's source — read once per process, not once per test (#4127; see PlatformReferences).
+    private readonly IReadOnlyList<MetadataReference> references = PlatformReferences.Platform();
 
     /// <summary>
     /// A real, genuinely-broken compilation — the same failure shape production hits
