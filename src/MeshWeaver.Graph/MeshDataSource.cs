@@ -759,22 +759,6 @@ public static class MeshDataSourceExtensions
     private static readonly TimeSpan SaveSampleInterval = TimeSpan.FromMilliseconds(200);
 
     /// <summary>
-    /// Coalescing window for the own-node RE-READ the change-feed reconcile performs when a
-    /// durable notification arrives without its entity (see the pipeline in
-    /// <c>SubscribeToOwnDeletion</c>). A notification storm on one path collapses to at most one
-    /// read per quiet window, and the reads are serialised, so a bulk import cannot turn a
-    /// notification storm into a read storm.
-    ///
-    /// <para>🚨 <c>Throttle</c>, deliberately NOT <c>Sample</c>: <c>Sample</c> arms a PERIODIC
-    /// timer per subscription and there is one of these subscriptions per live node hub, so an
-    /// idle mesh would pay one timer tick per hub per window for nothing. <c>Throttle</c> arms a
-    /// one-shot timer only while a burst is in flight — an idle hub costs nothing — and it always
-    /// emits the LAST trigger of a burst, so the read that CONVERGES the mirror can never be the
-    /// one that gets dropped.</para>
-    /// </summary>
-    private static readonly TimeSpan OwnNodeReReadCoalesceWindow = TimeSpan.FromMilliseconds(50);
-
-    /// <summary>
     /// Resolves the static node SERVED at <paramref name="hubPath"/>: the first
     /// non-<see cref="MeshNode.IsDefinitionOnly"/> static node across every registered
     /// <see cref="IStaticNodeProvider"/> whose <see cref="MeshNode.Path"/> matches
@@ -1319,23 +1303,24 @@ public static class MeshDataSourceExtensions
         // ordering trap the synced-query pipelines document. An OnNext into a subject whose only
         // subscription is already disposed is a harmless no-op.
         var reReadTrigger = new System.Reactive.Subjects.Subject<Unit>();
+        // 🚨 THE coalescer (ReReadCoalescing): a storm on this path collapses to at most one read
+        // per quiet window, the last trigger always reads, and reads are serialised — one at a
+        // time, so a second burst can never interleave its adoption with the first's. The
+        // process-wide StorageChangeFeedRelay coalesces through the SAME operator and window;
+        // it once read ahead of it and 200 notifications cost 201 reads (#4139).
         var reReadSub = reReadTrigger
-            .Throttle(OwnNodeReReadCoalesceWindow)
-            .Select(_ => storage.Read(ownPath, hub.JsonSerializerOptions)
+            .CoalesceReReads(_ => storage.Read(ownPath, hub.JsonSerializerOptions)
                 .Catch((Exception ex) =>
                 {
-                    // Surfaced, not swallowed: without this the Concat below would terminate on
-                    // the first transient read failure and this hub would stop reconciling for
-                    // the rest of its life. The next notification re-reads.
+                    // Surfaced, not swallowed: without this the coalescer's serialised queue would
+                    // terminate on the first transient read failure and this hub would stop
+                    // reconciling for the rest of its life. The next notification re-reads.
                     TryLogWarning(hub, ex,
                         "Own-node re-read after an entity-less change notification failed on "
                         + "{Hub} — the mirror stays on its current state until the next "
                         + "notification", hub.Address);
                     return Observable.Empty<MeshNode?>();
                 }))
-            // One read at a time: a second burst can never interleave its adoption with the
-            // first's, and at most one read per hub is ever in flight.
-            .Concat()
             .Subscribe(node =>
             {
                 // null = the row is gone (a delete landed between the notification and the read).
