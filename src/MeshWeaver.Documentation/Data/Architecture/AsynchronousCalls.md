@@ -1397,7 +1397,7 @@ The rule applies symmetrically:
 
 | Operation | Path | Where it lives |
 |---|---|---|
-| **Read own MeshNode** (init + live updates) | Routing-supplied `IObservable<MeshNode>` attached via `config.WithOwnNodeStream(...)`. `DistinctUntilChanged().Replay(1).RefCount()` filters echoes; emissions seed the workspace and push subsequent updates without a duplicate persistence read | `MessageHubGrain.OnActivateAsync` / `MonolithRoutingService.CreateHub` plumb the stream into `MeshNodeTypeSource` |
+| **Read own MeshNode** (init) | Durable seed from storage, then the routing-supplied `IObservable<MeshNode>` attached via `config.WithOwnNodeStream(...)` — **one-shot on both hosts** (the resolved, on Orleans enriched, node; see [A Hub That Pins Its Own Cache Entry](../AHubThatPinsItsOwnCacheEntry)). Live changes reach the owner as the writes themselves and, cross-process, through `IMeshChangeFeed` | `MessageHubGrain.OnActivateAsync` / `MonolithRoutingService.CreateHub` plumb the stream into `MeshNodeTypeSource` |
 | **Update own MeshNode** (editor-style writes) | Subscribe to `workspace.GetMeshNodeStream()`, `DistinctUntilChanged(n => n.Version)` to drop routing-stream echoes, `Sample(200ms)` to coalesce bursts, post `SaveMeshNodeRequest` per emission | `MeshDataSource.SubscribeToOwnDeletion` registers the persistence sampler at hub init |
 | **Create / Delete own MeshNode** | Direct `IStorageService.SaveNode` / `DeleteNode` from inside `MeshNodeTypeSource.UpdateImpl` — instant write, no debounce | Adds and deletes are infrequent and ordering matters |
 
