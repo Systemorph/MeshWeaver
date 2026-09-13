@@ -15,6 +15,14 @@
     <MeshWeaverSurfaceManifest>true</MeshWeaverSurfaceManifest>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The tester loads composed MODULES into its own process to scan their types; a Blazor/Mcp module
+         references Microsoft.AspNetCore.*, and without the shared framework the load is a FATAL
+         FileNotFoundException (Microsoft.AspNetCore.Routing) - measured 2026-09-13 composing all 41 Plugins
+         bundles. The image carries Microsoft.AspNetCore.App; the tester only has to ask for it. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <!-- ═════════ THE RAZOR COMPILER RIDES ALONG — as ASSETS, never as a reference ═════════
        `build-project` compiles .razor/.cshtml, and Razor compilation in the .NET SDK is a Roslyn
        SOURCE GENERATOR (Microsoft.CodeAnalysis.Razor.Compiler). A MeshWeaver image ships the
