@@ -150,8 +150,8 @@ and they are the two a patch verdict can arrive as:
 | `DeliveryFailure` | `DispatchFailure(requestId, …)` | the pipeline's RLS refusal — the #2661 seam |
 | anything else | *nothing; `false`* | not a guess — see below |
 
-**The correlation id is the whole test.** A request carries none — it IS the correlation — so
-requests never reach the sink and keep the ordinary NACK path unchanged. Only a message posted with
+**The correlation id is the whole test**, at all three seams. A request carries none — it IS the
+correlation — so requests never reach the sink and keep the ordinary NACK path unchanged. Only a message posted with
 `ResponseFor` / `WithRequestIdFrom` carries `PostOptions.RequestId`, and that is exactly the set of
 messages whose waiter is somebody other than the sender. A miss costs one dictionary lookup, which
 is what makes it affordable to ask on every dropped delivery.
@@ -277,6 +277,70 @@ stale callbacks, every `SubscribeRequest` among them ending that way at a NodeTy
 pool at `pendingWork=316`, and no line anywhere naming what that hub was doing. This reading is
 also the M1/M2 discriminator #3593 waits for, printed while the hub is alive rather than only
 from its disposal stall detector.
+
+### The THIRD seam — the responder's own INTAKE GATE (#4170 / #4159)
+
+The two seams above are where a reply is *refused on its way out of the process's routing*. There
+is a third, one layer earlier and inside the responder itself, and it cost 31 s per occurrence:
+**a reply's own post enters its own hub's intake first**, and `MessageService.RefusesIntake` used
+to drop it there.
+
+```text
+  → PATCH_ACK ok@TestData/dnt48714d51(+1ms)
+  → RESPONSE_POSTED type=PatchDataResponse target=cache/kRcuyK2j…@TestData/dnt48714d51(+1ms)
+↩ reply#1: RECEIVED runLevel=Quiescing@TestData/dnt48714d51(+1ms)
+  → DROPPED_SHUTTING_DOWN runLevel=DisposeHostedHubs@TestData/dnt48714d51(+1ms)
+  → NACK_DECLINED reason=not-awaited@TestData/dnt48714d51(+1ms)
+  → FAILURE_REPORTED errorType=ShuttingDown runLevel=DisposeHostedHubs@TestData/dnt48714d51(+1ms)
+  → RESPONSE_POSTED type=DeliveryFailure target=TestData/dnt48714d51@TestData/dnt48714d51(+1ms)
+  → RESPONSE_ARRIVED_NO_SUBJECT type=DeliveryFailure@TestData/dnt48714d51(+17ms)
+```
+
+Read it twice, because it contains both halves of the defect:
+
+1. **The exemption was SAMPLED, not re-checked.** Tier 1 (`Quiescing`) exempts a delivery carrying
+   `PostOptions.RequestId` — *"an ANSWER, never new work … precisely what the quiesce drain is
+   waiting for"* — and tier 2 (`DisposeHostedHubs`) refused everything. The two checks saw
+   **different run levels for one delivery**: the phase advanced between the intake stamp and the
+   gate. The owner had merged (`v=3`), acked and posted its verdict; the reply died in its own
+   intake and the caller burned the whole 31 s `WriteVerdictBound` for a write that had committed.
+2. **The refusal answered `delivery.Sender`, which for a reply is the RESPONDER.** Every
+   abandonment path here is sender-addressed; `NackThroughParent` correctly declined (a
+   `PatchDataResponse` is not an `IRequest` — `reason=not-awaited`), and `ReportFailure` then
+   posted a `DeliveryFailure` from the hub **to itself**, which its parent dutifully forwarded back
+   to nobody. The requester was never told.
+
+**The rule now**, and both halves are needed:
+
+- **A reply is an answer at every tier.** From `DisposeHostedHubs` until `ShutDown`, a delivery
+  carrying `PostOptions.RequestId` is ADMITTED and routed. It registers no callback, owes no work
+  and is addressed elsewhere, so tier 2's "no new work" never applied to it; one turn and a route
+  to a live parent is the whole cost.
+- **The exemption stops at `ShutDown`** — the same bound `ShutdownRequest` carries, for the same
+  reason. Past it `messageService.Dispose()` has drained the queues, so an admitted delivery would
+  never be dequeued by anyone: that trades a bounded wait for a permanent leak, which is the
+  exemption-outliving-its-reason defect (#3647) in a new costume.
+- **Past that bound, the refusal is reported to the REQUESTER** — the party the reply was FOR,
+  which the delivery names (`Target` + `RequestId`) — through a live parent, else through the
+  in-process carrier. Never to `delivery.Sender`.
+- 🚨 **Classified `ShuttingDown`, never `Failed`.** The work the lost reply reported may well have
+  committed — on the measured trail the merge stamped `v=3` and acked before the reply died — so
+  "failed" is a lie that makes a caller re-apply a write that landed (#3112's mistake).
+  `ShuttingDown` says what is true — the address is going away, the outcome is unconfirmed, ask
+  again — and it is the classification `UpdateRemote` re-enqueues on, so a 31 s silence becomes an
+  immediate retry.
+
+**What this does NOT do, deliberately:** it never hands the typed reply itself to a bypass. The
+reorder hazard that keeps typed replies off `IUndeliverableReplySink` is untouched — what travels
+past the transport is a *classified NACK about the reply*, which acknowledges no state and
+therefore cannot overtake anything. That is why the open design question above did not have to be
+answered to close this seam.
+
+Pinned by `MeshWeaver.Messaging.Hub.Test.ARefusedReplyReachesItsRequesterTest`: a responder held at
+`DisposeHostedHubs` by a parked child routes the reply to its live requester; the same responder
+past `ShutDown` NACKs the requester transiently and the trail says
+`REPLY_REFUSED_REQUESTER_NACKED`. Falsified by reverting the production change: both cases then
+time out at 38 s — the requester's silence, which is the defect.
 
 ### What it deliberately does not cover
 

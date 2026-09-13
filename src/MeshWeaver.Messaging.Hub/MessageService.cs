@@ -564,8 +564,9 @@ public class MessageService : IMessageService
     ///
     /// <para><b>Tier 2 — <see cref="MessageHubRunLevel.DisposeHostedHubs"/> and beyond</b> (the
     /// historical gate). Routing is over and the hosted hubs are going away, so nothing but
-    /// teardown's own <c>ShutdownRequest</c> gets in — and only while a phase is left for it to
-    /// advance (see the two exemption bounds in the body, and #3647).</para>
+    /// teardown's own <c>ShutdownRequest</c> — and a correlated REPLY on its way out — gets in,
+    /// each only while there is something left for it to do (see the three exemption bounds in the
+    /// body, #3647 and #4170).</para>
     ///
     /// <para><b>Tier 1 — <see cref="MessageHubRunLevel.Quiescing"/></b> (issue #3506). Disposal has
     /// STARTED and the hub is spending a FIXED budget draining the callbacks it already owes. A
@@ -647,8 +648,31 @@ public class MessageService : IMessageService
             // report.
             return true;
 
+        // 🚨 A REPLY IS AN ANSWER AT EVERY TIER, and the phase advancing mid-flight is exactly why
+        // this cannot be sampled once (#4170, the second leg; #4159's trail).
+        //
+        // Tier 1 below exempts a delivery carrying PostOptions.RequestId because it "is an ANSWER,
+        // never new work — it is precisely what the quiesce drain is waiting for". Tier 2 then
+        // refused the same delivery, and the two checks can see DIFFERENT run levels for ONE
+        // delivery: measured on a bake-shaped CI failure, `RECEIVED runLevel=Quiescing` and
+        // `DROPPED_SHUTTING_DOWN runLevel=DisposeHostedHubs` are stamped 0 ms apart on the SAME
+        // PatchDataResponse. The owner had merged (v=3), acked, and posted its verdict; the reply
+        // died in its own intake and the caller burned the full 31 s WriteVerdictBound.
+        //
+        // Admitting it is cheap and creates nothing: a reply registers no callback, owes no work,
+        // and is addressed ELSEWHERE — one turn, then routed to a parent that is alive (the tier-2
+        // concern is new WORK arriving, and an answer is the opposite of that).
+        //
+        // 🚨 But the exemption STOPS AT ShutDown, and that bound is load-bearing — the same one
+        // ShutdownRequest above uses, for the same shape of reason. From ShutDown on,
+        // `messageService.Dispose()` has already drained the queues and torn down the timers, so a
+        // delivery admitted here is never dequeued by anyone: that would trade a 31 s wait for a
+        // permanent leak, which is the exemption-outliving-its-reason defect (#3647) in a new
+        // costume. Past that bound the honest act is to ANSWER the requester — see the refusal
+        // branch in ScheduleNotify, which reports a correlated reply to the party it was FOR.
         if (runLevel >= MessageHubRunLevel.DisposeHostedHubs)
-            return true;
+            return runLevel >= MessageHubRunLevel.ShutDown
+                   || !delivery.Properties.ContainsKey(PostOptions.RequestId);
 
         // ---- Tier 1: Quiescing ----
         if (delivery.Properties.ContainsKey(PostOptions.RequestId))
@@ -1230,6 +1254,90 @@ public class MessageService : IMessageService
             // path, and ANY terminal treatment killed the sync stream's resubscribe latch —
             // each wedged every read of the mid-recycle NodeType.
             fate?.Add($"DROPPED_SHUTTING_DOWN runLevel={hub.RunLevel}", Address);
+
+            // 🚨 A REFUSED REPLY IS REPORTED TO THE REQUESTER, NEVER TO delivery.Sender (#4170).
+            //
+            // Everything below answers the SENDER, which is right for a REQUEST and meaningless
+            // for a REPLY: a reply's sender is the RESPONDER — this hub. Measured, on the trail
+            // that reopened #4159: a PatchDataResponse refused here produced
+            //   NACK_DECLINED reason=not-awaited        (a PatchDataResponse is not an IRequest)
+            //   FAILURE_REPORTED errorType=ShuttingDown
+            //   RESPONSE_POSTED type=DeliveryFailure target=TestData/dnt…@TestData/dnt…
+            //   RESPONSE_ARRIVED_NO_SUBJECT type=DeliveryFailure@TestData/dnt…   (+17ms)
+            // — a DeliveryFailure this hub posted to ITSELF, forwarded through the parent, and
+            // delivered back to nobody, while the actual requester (cache/…) heard nothing and
+            // burned its whole 31 s bound.
+            //
+            // The party to tell is the one the reply was FOR, and the delivery names it: its
+            // Target is the requester and its RequestId correlates the wait. So answer THAT hub,
+            // through the carriers a shutting-down hub still has (a live parent, then the
+            // in-process hand-over), and do not fall through to the sender-addressed paths.
+            //
+            // 🚨 ShuttingDown, NEVER Failed. The work the lost reply reported may well have
+            // COMMITTED — on the measured trail the merge stamped v=3 and acked before the reply
+            // died — so "failed" is a lie that makes a caller re-apply a write that landed
+            // (#3112's mistake). ShuttingDown says what is true: the address is going away, the
+            // outcome is unconfirmed, ask again — and it is the classification UpdateRemote
+            // re-enqueues on, so the caller retries at once instead of waiting out its bound.
+            //
+            // Only a reply this hub cannot admit reaches here at all: from DisposeHostedHubs to
+            // ShutDown a correlated reply is ADMITTED and routed (see RefusesIntake). This branch
+            // is the residue past ShutDown, and the honest answer for it.
+            if (delivery.Properties.TryGetValue(PostOptions.RequestId, out var refusedReplyRequestId)
+                && refusedReplyRequestId?.ToString() is { Length: > 0 } refusedRequestId
+                && delivery.Target is { } replyRequester
+                && !replyRequester.Equals(Address))
+            {
+                var replyReason = ShutdownNack.RetryForTheAuthoritativeAnswer(
+                    Address,
+                    $"RunLevel={hub.RunLevel}, {ActivationTag()}",
+                    $"its {delivery.Message?.GetType().Name ?? "reply"} for request {refusedRequestId} "
+                    + "could not leave this hub — the work it reported may have committed, so the "
+                    + "outcome is UNCONFIRMED rather than failed");
+                var replyFailure = new DeliveryFailure(delivery)
+                {
+                    ErrorType = ErrorType.ShuttingDown,
+                    Message = replyReason
+                };
+                var answered = false;
+                if (ParentHub is { } replyParent
+                    && replyParent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                {
+                    try
+                    {
+                        replyParent.Post(replyFailure,
+                            o => o.WithTarget(replyRequester).WithProperty(PostOptions.RequestId, refusedRequestId));
+                        answered = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex,
+                            "Could not report the refused reply {MessageType} (ID: {MessageId}) for request "
+                            + "{RequestId} to {Requester} through the parent of {Address}",
+                            delivery.Message?.GetType().Name, delivery.Id, refusedRequestId, replyRequester, Address);
+                    }
+                }
+
+                if (!answered && hub is MessageHub ownHub)
+                {
+                    var inProcess = new MessageDelivery<DeliveryFailure>(
+                        replyFailure,
+                        new PostOptions(Address)
+                            .WithTarget(replyRequester)
+                            .WithProperty(PostOptions.RequestId, refusedRequestId),
+                        hub.JsonSerializerOptions);
+                    answered = ownHub.TryDeliverNackInProcess(inProcess);
+                }
+
+                requestFates?.Find(refusedRequestId)?.Add(
+                    answered
+                        ? $"REPLY_REFUSED_REQUESTER_NACKED runLevel={hub.RunLevel} requester={replyRequester}"
+                        : $"REPLY_REFUSED_UNREPORTABLE runLevel={hub.RunLevel} requester={replyRequester}",
+                    Address);
+                return answered
+                    ? delivery.FailedAndNacked("Hub is shutting down")
+                    : delivery.Failed("Hub is shutting down", ErrorType.ShuttingDown);
+            }
 
             // 🚨 Both halves matter, and this site got both wrong until #2350.
             //
