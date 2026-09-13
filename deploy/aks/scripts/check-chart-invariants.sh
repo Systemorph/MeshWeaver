@@ -39,6 +39,8 @@
 #  13. the bundle-fetch shelf is the pre-warm root, pod cred   or the portal reads a shelf nobody filled
 #  14. a replica floor > 1 implies a PDB                     or one node drain evicts every replica at once
 #  15. a replica floor > 1 implies anti-affinity / spread    or every replica shares one node
+#  16. wait-for-postgres probes EVERY host the pod's connection strings name  or Init:1/1 proves
+#                                                             nothing about the connection that fails
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -112,6 +114,11 @@ COMBOS=(
   # rendered NO PodDisruptionBudget (pdb.yaml was gated on keda.enabled) and invariants 14/15 did
   # not exist: an AKS node drain evicted both pods in the same second, 503 for ~90 s.
   "two plain replicas, KEDA off (the memex shape)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.two-replicas-no-keda.yaml"
+  # 🚨 A DEDICATED orleans server (MeshWeaver#4173, #3780): the mesh database on one host, cluster
+  # membership on another. Nothing else here renders that shape, and it is the one the start-up
+  # gate was blind to — the probe read config.MEMEX_HOST while the boot opened two SECRET
+  # connection strings naming neither. Invariant 16 asserts the probe covers both.
+  "a dedicated orleans server (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.dedicated-orleans-host.yaml"
 )
 
 WORK="$(mktemp -d)"

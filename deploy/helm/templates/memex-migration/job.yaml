@@ -62,14 +62,17 @@ spec:
       initContainers:
         # Postgres and the migration can start concurrently on a fresh install; gate on Postgres
         # TCP readiness so the migration doesn't fail-fast before the DB accepts connections.
+        #
+        # 🚨 EVERY host this Job will OPEN — the mesh database it versions AND, under AdoNet, the
+        # orleans store whose tables OrleansClusteringSetup creates. Same defect and same cure as
+        # the portal's probe (MeshWeaver#4173): the host came from `config.memex_migration.MEMEX_HOST`
+        # while the connections are secrets. See templates/_database.tpl.
         - name: "wait-for-postgres"
           image: "busybox:1.36"
           command:
             - "sh"
             - "-c"
-            {{- $pgHost := .Values.postgres.enabled | ternary "memex-postgres-service" (.Values.config.memex_migration.MEMEX_HOST | default "memex-postgres-service") }}
-            {{- $pgPort := .Values.postgres.enabled | ternary "5432" (.Values.config.memex_migration.MEMEX_PORT | default "5432") }}
-            - "until nc -z {{ $pgHost }} {{ $pgPort }}; do echo 'waiting for postgres'; sleep 2; done"
+            - {{ include "memex.waitForDatabasesCommand" (dict "root" $ "half" "memex_migration") | quote }}
         {{- /* 🚨 REHEARSAL BEFORE EXECUTION (maintainer, 2026-09-07: "we must first test the
                migration process and only then execute"). The SAME image with the SAME env as the
                migration container, asked what it would do: MIGRATION_MODE=rehearse reads the
