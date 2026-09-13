@@ -45,6 +45,22 @@ jobs:
           #     10+ jobs across Plugins#1032; every build that ran was green.
           #   registry answered 503 — #2915, the plugins registry's key-resolution outage window.
           signatures='meshweaver\.azurecr\.io.*connection refused|dial tcp .*: connect: connection refused|registry answered 503 for https://memex\.meshweaver\.cloud'
+          # 🚨 BLOCK signatures span TWO consecutive log lines, so they are matched on the log with
+          # newlines collapsed to spaces (each raw line carries its ISO timestamp, hence the
+          # `[0-9TZ:.-]*` between the two halves). Same grep -E, same EVERY-job rule below.
+          #   api.github.com/app/installations/<id>/access_tokens + status: 5xx — 2026-09-13
+          #     08:56:18–08:56:40Z, run 34748690865 (push, ff277fb67) job 103701175062 "AGENTS.md
+          #     shared rule blocks": actions/create-github-app-token got `status: 500` from
+          #     GitHub's own API on all 4 of its attempts; the same gate was green on 8 other runs
+          #     between 08:49Z and 08:57Z, and the two manual `rerun-failed-jobs` POSTs at 09:01Z
+          #     and 10:1xZ ALSO answered 500 — GitHub was degraded, nothing in this repo was.
+          #     The regex asserts GitHub's OWN identity (the exact installations/access_tokens
+          #     URL in the mint's RESPONSE block, immediately followed by its status) and accepts
+          #     ONLY a 5xx there: a 401/403/404/422 on that same URL is a PERMISSION or
+          #     installation problem — the App lacks a grant, or the installation id is wrong —
+          #     and MUST NOT retry; measured on the incident log with the status mutated to 403
+          #     and 404, neither matches.
+          block_signatures="url: 'https://api\.github\.com/app/installations/[0-9]+/access_tokens', [0-9TZ:.-]*[[:space:]]*status: 5[0-9][0-9],"
           mapfile -t failed < <(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
             --jq '.jobs[] | select(.conclusion=="failure") | .id')
           if [ "${#failed[@]}" -eq 0 ]; then
@@ -60,6 +76,8 @@ jobs:
             fi
             if printf '%s' "$log" | grep -qE "$signatures"; then
               echo "job $job: matches a named transient signature."
+            elif printf '%s' "$log" | tr '\n' ' ' | grep -qE "$block_signatures"; then
+              echo "job $job: matches a named transient BLOCK signature (App-token mint answered 5xx by api.github.com)."
             else
               echo "job $job: NO named signature matched — this is (or may be) a real red, so no retry. Investigate it."
               exit 0
