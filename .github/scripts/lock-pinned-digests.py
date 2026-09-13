@@ -121,6 +121,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 import re
 import sys
 import tempfile
@@ -1648,63 +1649,102 @@ def parse_ago_days(value: str) -> float | None:
     return days if consumed == len(text) and days > 0 else None
 
 
-# 🚨 THE INVOCATION, NOT THE LINE. A `cmd:` is a SHELL line and may hold more than one command, so
-# searching the whole line lets `cmd: echo --ago 30d; acr purge --filter 'x:.*' --untagged` satisfy
-# a window the purge itself does not carry — the flag is present on the line and absent from the
-# command that deletes. Each `acr purge` is isolated at the first shell separator and checked on its
-# own, and EVERY invocation on the line must pass.
-PURGE_INVOCATION_RE = re.compile(r"acr\s+purge\b(?P<args>[^;&|\n]*)")
-# 🚨 BOTH SPELLINGS, AND THE BARE FLAG. `--keep=10` is the same quota as `--keep 10`, and a bare
-# `--keep` is a malformed step rather than a compliant one; a whitespace-only match passed all three.
-KEEP_RE = re.compile(r"--keep(?:[=\s]+(?P<value>[^\s;&|]+))?")
-AGO_RE = re.compile(r"--ago(?:[=\s]+(?P<value>[^\s;&|]+))?")
+# 🚨 TOKENS, NOT TEXT — and the reason is that both halves of this check are defeated by quoting.
+#
+#   * `acr purge --include-"locked" …` EXECUTES with the option `--include-locked` (the shell joins
+#     the quoted fragment) and matches no grep for that string. That flag deletes every manifest the
+#     lock protects, so a text search is the wrong instrument for the one invariant this whole lane
+#     rests on.
+#   * `echo "acr purge --filter 'a:.*' --ago 30d"` contains the text `acr purge` and deletes
+#     nothing, so a text search reports a compliant purge where no purge exists.
+#
+# A `cmd:` is a SHELL line: it may hold several commands, and a quoted fragment is DATA. So it is
+# tokenized the way a shell would, split on the operators, and only a command whose first two
+# tokens are literally `acr` and `purge` is a purge. Every one of them is then checked — a second
+# invocation carrying `--ago 7d` must not ride in behind a compliant first.
+SHELL_OPERATORS = {";", "&&", "||", "|", "&", "(", ")", "\n"}
+
+
+def purge_invocations(step: str) -> tuple[list[list[str]], str]:
+    """Every real `acr purge` command in one `cmd:` line, as token lists; plus a parse error."""
+    command = step.split("cmd:", 1)[1] if "cmd:" in step else step
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError as exc:
+        # Unbalanced quotes. NOT "no purge here": the step could not be read at all.
+        return [], f"the step could not be tokenized ({exc}), so nothing in it was checked"
+    commands: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token in SHELL_OPERATORS:
+            commands.append(current)
+            current = []
+        else:
+            current.append(token)
+    commands.append(current)
+    return [c for c in commands if len(c) >= 2 and c[0] == "acr" and c[1] == "purge"], ""
+
+
+def option_value(tokens: list[str], name: str) -> tuple[bool, str | None]:
+    """(present, value) for `--name value` and `--name=value`; value is None for a bare flag."""
+    for index, token in enumerate(tokens):
+        if token == name:
+            following = tokens[index + 1] if index + 1 < len(tokens) else None
+            return True, (None if following is None or following.startswith("-") else following)
+        if token.startswith(name + "="):
+            return True, token.split("=", 1)[1] or None
+    return False, None
 
 
 def check_window_policy(where: str, step: str) -> list[str]:
     """Does ONE recorded `acr purge` step obey the decided continuous-artifact window?"""
-    problems: list[str] = []
-    invocations = [match.group("args") for match in PURGE_INVOCATION_RE.finditer(step)]
+    invocations, parse_error = purge_invocations(step)
+    if parse_error:
+        return [f"{where}: {parse_error}:\n      {step.strip()[:160]}"]
     if not invocations:
         # The caller already reds on a `cmd:` that is not an `acr purge`; this is the belt, so a
         # reshaped line cannot silently skip the window check while passing that one.
-        return [f"{where}: no `acr purge` invocation could be isolated from this step, so its "
-                f"window was NOT checked:\n      {step.strip()[:160]}"]
-    for args in invocations:
-        problems.extend(check_one_invocation(where, step, args))
+        return [f"{where}: no `acr purge` command could be read from this step, so its window was "
+                f"NOT checked:\n      {step.strip()[:160]}"]
+    problems: list[str] = []
+    for tokens in invocations:
+        problems.extend(check_one_invocation(where, step, tokens))
     return problems
 
 
-def check_one_invocation(where: str, step: str, args: str) -> list[str]:
+def check_one_invocation(where: str, step: str, tokens: list[str]) -> list[str]:
     problems: list[str] = []
-    ago = AGO_RE.search(args)
-    if ago is not None and not ago.group("value"):
+    has_ago, ago_value = option_value(tokens, "--ago")
+    if has_ago and not ago_value:
         return [f"{where}: a purge step carries a bare `--ago` with no duration, so the window was "
                 f"NOT checked:\n      {step.strip()[:160]}"]
-    if not ago:
+    if not has_ago:
         problems.append(
             f"{where}: a purge step declares NO `--ago` window:\n      {step.strip()[:160]}\n"
             "    acr purge then has no age floor at all, so a manifest is eligible the moment it "
             "is superseded. The decided rule is at least "
             f"{MINIMUM_PURGE_AGE_DAYS} days by age (#3842).")
     else:
-        days = parse_ago_days(ago.group("value"))
+        days = parse_ago_days(ago_value)
         if days is None:
             problems.append(
-                f"{where}: `--ago {ago.group('value')}` could not be read as a duration, so the "
-                "window was NOT checked. An unreadable window is not a satisfied one.")
+                f"{where}: `--ago {ago_value}` could not be read as a duration, so the window was "
+                "NOT checked. An unreadable window is not a satisfied one.")
         elif days < MINIMUM_PURGE_AGE_DAYS:
             problems.append(
-                f"{where}: a purge step retains for `--ago {ago.group('value')}` "
+                f"{where}: a purge step retains for `--ago {ago_value}` "
                 f"({days:g} day(s)), under the decided floor of {MINIMUM_PURGE_AGE_DAYS} days:\n"
                 f"      {step.strip()[:160]}\n"
                 "    #3842: *retain unreferenced continuous artifacts for at least 30 days by "
                 "age*. PrebuiltBundleRetention and AssemblyCacheRetention already CLAMP to that "
                 "floor; this record is the third store and the only one nobody asserted.")
-    keep = KEEP_RE.search(args)
-    if keep:
+    has_keep, keep_value = option_value(tokens, "--keep")
+    if has_keep:
         problems.append(
             f"{where}: a purge step carries a BUILD-COUNT QUOTA "
-            f"`--keep{('=' + keep.group('value')) if keep.group('value') else ' (bare)'}`:\n"
+            f"`--keep{('=' + keep_value) if keep_value else ' (bare)'}`:\n"
             f"      {step.strip()[:160]}\n"
             "    #3842 rules one out in as many words — *without a build-count quota* — and it is "
             "the half an age window cannot replace: `--keep` counts NEWER BUILDS, so the more "
@@ -1724,9 +1764,16 @@ def check_in_force_is_boolean(manifest: dict, block: str) -> list[str]:
 
     So the SHAPE is asserted here, on every pull request, before any of them reads the value. The
     shell halves fail closed on the same condition rather than trusting this to have run."""
-    block_value = manifest.get(block)
-    if block_value is None:
+    # 🚨 ABSENT AND NULL ARE DIFFERENT FACTS. `manifest.get(block)` answers None for both, so a
+    # written `"pause": null` — a present block declaring nothing — would read exactly like a record
+    # that never had one, and every reader below it would walk past. Only a MISSING key means "no
+    # declaration"; a present null is a malformed one.
+    if block not in manifest:
         return []
+    block_value = manifest[block]
+    if block_value is None:
+        return [f"tasks.json: `{block}` is present and null. A block written as null declares "
+                "nothing while looking like a declaration; delete the key or fill it in."]
     if not isinstance(block_value, dict):
         return [f"tasks.json: `{block}` is {type(block_value).__name__}, not an object. Every "
                 "reader of it asks for fields it cannot have."]
@@ -1887,10 +1934,16 @@ def check_retention_record(root: str) -> int:
             problems.append(f"{yaml_path.name} declares no `cmd:` step — a recorded task with no "
                             "step is a record of nothing.")
         for step in steps:
-            # 🚨 THE `cmd:` LINES, NOT THE FILE. Both recorded definitions EXPLAIN in a comment
-            # that they do not pass `--include-locked`; a whole-file grep fires on that prose and
-            # reds over the sentence saying the guard is satisfied. Measured 2026-09-07.
-            if "--include-locked" in step:
+            # 🚨 THE `cmd:` LINES, NOT THE FILE — and TOKENS, not the text of the line. Both
+            # recorded definitions EXPLAIN in a comment that they do not pass `--include-locked`,
+            # and a whole-file grep fires on that prose and reds over the sentence saying the guard
+            # is satisfied (measured 2026-09-07). A substring search on the line has the opposite
+            # defect: `--include-"locked"` EXECUTES as that option and matches no such search. Both
+            # are answered by reading the step the way a shell would.
+            purges, parse_error = purge_invocations(step)
+            if parse_error:
+                problems.append(f"{yaml_path.name}: {parse_error}: {step.strip()[:120]}")
+            if any("--include-locked" in tokens for tokens in purges):
                 problems.append(
                     f"{yaml_path.name} has a purge step passing --include-locked:\n"
                     f"      {step.strip()[:160]}\n"
@@ -1927,6 +1980,35 @@ def check_retention_record(root: str) -> int:
     print(f"  every recorded step retains for at least {MINIMUM_PURGE_AGE_DAYS} days by age with "
           "no --keep build-count quota (#3842), and the record's pause declaration agrees with "
           "the statuses it is recorded beside.")
+    return 0
+
+
+def describe_purge_file(path: str) -> int:
+    """Print, as JSON, what the `cmd:` steps of ONE recorded-or-live task definition actually are.
+
+    🚨 ONE PARSER FOR BOTH SIDES. `acr-retention-tasks.sh` used to grep the live YAML for
+    `--include-locked` and for `--filter '…'`, and a grep is defeated by the shell's own quoting:
+    `--include-"locked"` executes as `--include-locked` and matches no search for that string. The
+    tokenizer above is the only thing in this repository that reads a purge step correctly, so the
+    shell asks it rather than keeping a second, weaker copy."""
+    text = Path(path).read_text(encoding="utf-8")
+    steps = [line for line in text.splitlines() if re.match(r"^\s*-\s+cmd:", line)]
+    described = []
+    for step in steps:
+        invocations, parse_error = purge_invocations(step)
+        for tokens in invocations:
+            described.append({
+                "filters": sorted(value for name, value in (
+                    (tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1))
+                    if name == "--filter"),
+                "includeLocked": "--include-locked" in tokens,
+                "ago": option_value(tokens, "--ago")[1],
+                "keep": option_value(tokens, "--keep")[1],
+            })
+        if not invocations:
+            described.append({"notAPurge": step.strip()[:160],
+                              "parseError": parse_error or None})
+    print(json.dumps({"steps": len(steps), "purges": described}))
     return 0
 
 
@@ -2689,6 +2771,36 @@ def self_test() -> int:
                                             "--untagged"),
           "ARM 31c: the `--ago=30d` spelling of a COMPLIANT window was rejected")
 
+    # ── ARM 31e: a purge step is read as TOKENS, so quoting cannot hide a flag or invent one ────
+    # 🚨 The two attacks are opposite and both defeat a text search.
+    check(check_window_policy("x.yaml", '  - cmd: acr purge --include-"locked" '
+                                        "--filter 'a:.*' --ago 30d --untagged")
+          == [] and
+          any("--include-locked" in tokens for tokens in
+              purge_invocations('  - cmd: acr purge --include-"locked" --filter \'a:.*\' '
+                                "--ago 30d --untagged")[0]),
+          "ARM 31e: `--include-\"locked\"` was not seen as `--include-locked`. The shell joins the "
+          "quoted fragment and EXECUTES that option — it deletes every manifest the lock protects "
+          "— while matching no search for the literal string")
+    check(not purge_invocations('  - cmd: echo "acr purge --filter a:.* --ago 30d --untagged"')[0],
+          "ARM 31e: text INSIDE A QUOTED ARGUMENT was read as a purge command. `echo \"acr purge "
+          "…\"` deletes nothing, so reporting it as a compliant purge describes a command that "
+          "does not run")
+    check(purge_invocations("  - cmd: acr purge --filter 'a:.*' --ago 30d")[1] == ""
+          and len(purge_invocations("  - cmd: acr purge --filter 'a:.*' --ago 30d")[0]) == 1,
+          "ARM 31e: an ordinary single purge stopped being read")
+    check(len(purge_invocations("  - cmd: acr purge --filter 'a:.*' --ago 30d && acr purge "
+                                "--filter 'b:.*' --ago 7d")[0]) == 2,
+          "ARM 31e: a second command after `&&` was not read as its own invocation")
+    check(check_window_policy("x.yaml", '  - cmd: acr purge --filter "a:.*  --ago 30d'),
+          "ARM 31e: a step with UNBALANCED QUOTES passed. It could not be tokenized at all, which "
+          "means nothing in it was checked — and that must never spell the same as compliant")
+    check(option_value(["acr", "purge", "--keep=10"], "--keep") == (True, "10")
+          and option_value(["acr", "purge", "--keep", "10"], "--keep") == (True, "10")
+          and option_value(["acr", "purge", "--keep", "--untagged"], "--keep") == (True, None)
+          and option_value(["acr", "purge"], "--keep") == (False, None),
+          "ARM 31e: the option reader disagrees with itself across the three spellings")
+
     # ── ARM 31d: a declaration whose switch is not a BOOLEAN is fail-open, and reds ─────────────
     for block in ("pause", "recordAheadOfRegistry"):
         check(any("not a JSON boolean" in problem for problem in
@@ -2702,6 +2814,12 @@ def self_test() -> int:
               "as NOT in force, so it declares nothing while looking like a declaration")
         check(check_in_force_is_boolean({block: "yes"}, block),
               f"ARM 31d: `{block}` as a scalar was accepted")
+        check(any("present and null" in problem for problem in
+                  check_in_force_is_boolean({block: None}, block)),
+              f"ARM 31d: `{block}: null` was treated as NO declaration. `dict.get` answers None "
+              "for an absent key and for a written null alike, so a present block declaring "
+              "nothing would read exactly like a record that never had one and every reader would "
+              "walk past it")
         check(not check_in_force_is_boolean({}, block),
               f"ARM 31d: an ABSENT `{block}` was reported as malformed — absent and wrong are "
               "different, and only one of them is a problem")
@@ -2881,7 +2999,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` INVOCATION rather than the shell line, every invocation on it, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks.")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` COMMAND — TOKENIZED the way a shell would, so `--include-\"locked\"` is seen as the option it executes as and `echo \"acr purge …\"` is not a purge — every command on the line, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks, as is a block written as an explicit `null`.")
     return 0
 
 
@@ -2897,6 +3015,9 @@ def main() -> int:
     parser.add_argument("--release-unpinned", action="store_true",
                         help="also RELEASE locks nothing pins any more — off by design; "
                              "MW_ACR_RELEASE_UNPINNED=true is the other way to ask")
+    parser.add_argument("--describe-purge-file", metavar="PATH",
+                        help="print, as JSON, the tokenized `acr purge` steps of one task "
+                             "definition — the parser acr-retention-tasks.sh shares")
     parser.add_argument("--check-retention-record", metavar="ROOT",
                         help="assert the committed .github/acr-retention record still describes a "
                              "purge the lock can protect against; no credential, no network")
@@ -2906,6 +3027,8 @@ def main() -> int:
 
     if args.self_test:
         return self_test()
+    if args.describe_purge_file:
+        return describe_purge_file(args.describe_purge_file)
     if args.check_retention_record:
         return check_retention_record(args.check_retention_record)
     if args.root:
