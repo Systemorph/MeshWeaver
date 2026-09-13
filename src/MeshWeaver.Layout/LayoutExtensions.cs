@@ -273,10 +273,10 @@ public static class LayoutExtensions
     )
     {
         // A stream whose hub is gone can neither parse this pointer's id (no serializer options)
-        // nor ever emit again — its store is completed or terminally faulted. So an empty sequence
-        // is EXACTLY what subscribing to it would produce, minus the NRE on the way in.
+        // nor ever emit a VALUE again — but it can still say HOW it ended, and that terminal
+        // notification belongs to the subscriber, so it is forwarded rather than replaced.
         if (stream.TryGetHub() is not { } hub)
-            return Observable.Empty<T>();
+            return TerminalOf<T>(stream);
 
         var first = true;
         var collection = referencePointer.GetSegment(0).ToString();
@@ -350,6 +350,58 @@ public static class LayoutExtensions
                 }
             );
     }
+
+    /// <summary>
+    /// The answer <see cref="GetStream{T}"/> gives for a stream whose hub is gone: no values, and
+    /// the stream's OWN terminal notification.
+    ///
+    /// <para>🚨 A dead stream is dead in one of two ways, and they end differently. A DISPOSED
+    /// stream's store is <i>completed</i>, so a late subscriber gets its replayed last frame and
+    /// then a completion. A FAULTED stream's store holds a terminal <c>OnError</c>, and under the
+    /// Rx grammar a <c>ReplaySubject</c> re-delivers that error to every later subscriber — the
+    /// fault IS the answer. Until Systemorph/MeshWeaver.Plugins#1715 both were answered with
+    /// <c>Observable.Empty</c>, on the reasoning that "a completed store would produce exactly
+    /// that" — true for the first shape and a swallow for the second: an owner's routing NotFound
+    /// that landed BEFORE the view's <c>BindData</c> subscribed reached the view as a clean empty
+    /// completion, so <c>NamedAreaView</c> never entered its error branch and rendered nothing at
+    /// all in the place of its node-gone card. The same-process second miss on a path is answered
+    /// in a few milliseconds, which is exactly the window a render's first frame takes.</para>
+    ///
+    /// <para>The replay of a terminated store is SYNCHRONOUS, inside <c>Subscribe</c>, so whether
+    /// the store has terminated is known by the time the probe subscription returns — and for the
+    /// faulted shape it is KNOWN to have terminated: <c>SynchronizationStream.FaultStore</c> errors
+    /// the store BEFORE it raises the flag <c>IsUsable</c> reads, so a stream that reads as faulted
+    /// has its fault in the store already (the reverse order left a window in which this probe saw
+    /// an open store and answered "completed" a moment before the fault arrived — Copilot's finding
+    /// on MeshWeaver#4151). A store that is still open under a hub that has merely begun winding
+    /// down (the third way <see cref="SynchronizationStreamLiveness.IsUsable"/> says no) keeps
+    /// today's answer — an immediate completion — because nothing this method can wait for will
+    /// ever arrive on it: its hub is gone, and its store is completed only by a <c>Dispose()</c>
+    /// nobody may ever call. The value replay is dropped on purpose: a frame off a frozen store is
+    /// not live data, which is what <c>TornDownStreamCallSitesTest</c> pinned when this guard was
+    /// introduced (#3321).</para>
+    /// </summary>
+    private static IObservable<T> TerminalOf<T>(ISynchronizationStream<JsonElement> stream)
+        => Observable.Create<T>(observer =>
+        {
+            var terminated = false;
+            var probe = stream.Subscribe(
+                _ => { },
+                error =>
+                {
+                    terminated = true;
+                    observer.OnError(error);
+                },
+                () =>
+                {
+                    terminated = true;
+                    observer.OnCompleted();
+                });
+            probe.Dispose();
+            if (!terminated)
+                observer.OnCompleted();
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
 
     private static bool MatchesId(object? updateId, string? targetId)
     {
