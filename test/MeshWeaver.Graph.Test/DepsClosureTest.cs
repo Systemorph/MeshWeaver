@@ -107,11 +107,169 @@ public class DepsClosureTest
     }
 
     [Fact]
-    public void NativeAssets_AreWarnedAbout_NotSilentlyDropped()
+    public void ANativeAtALayoutTheLOADERDoesNotProbe_IsNamed_AndNotCarried()
     {
         var result = DepsClosure.Derive(Graph, "MeshWeaver.Mail.MicrosoftGraph");
 
-        Assert.Contains(result.Warnings, w => w.Contains("Microsoft.Identity.Client"));
+        // This graph's native sits at `runtimes/win/lib/net8.0/…`, which is NOT the shape
+        // `ModuleNativeAssets` probes (`runtimes/<rid>/native/<file>`). Carrying it at its own path
+        // would put bytes somewhere nothing looks at — which reads as "the bundle ships it" and
+        // behaves as if it does not. So it is named instead, and the name says why.
+        Assert.Empty(result.Natives);
+        Assert.Contains(result.Warnings,
+            w => w.Contains("Microsoft.Identity.Client")
+                 && w.Contains("runtimes/win/lib/net8.0/msalruntime.dll")
+                 && w.Contains("runtimes/<rid>/native/<file>"));
+    }
+
+    /// <summary>A graph whose native package contributes NO managed assembly at all — the shape
+    /// the whole issue was measured on (<c>SQLitePCLRaw.lib.e_sqlite3</c>), and the one the old
+    /// warning could not reach.</summary>
+    private const string PureNativeGraph = """
+        {
+          "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+          "targets": {
+            ".NETCoreApp,Version=v10.0": {
+              "MeshWeaver.AppleMessages/1.0.0": {
+                "dependencies": { "SQLitePCLRaw.lib.e_sqlite3": "3.53.3", "RidPicky": "1.0.0" },
+                "runtime": { "MeshWeaver.AppleMessages.dll": {} }
+              },
+              "SQLitePCLRaw.lib.e_sqlite3/3.53.3": {
+                "runtimeTargets": {
+                  "runtimes/linux-x64/native/libe_sqlite3.so": { "rid": "linux-x64", "assetType": "native" },
+                  "runtimes/osx-arm64/native/libe_sqlite3.dylib": { "rid": "osx-arm64", "assetType": "native" },
+                  "runtimes/linux-x64/native/libe_sqlite3.a": { "rid": "linux-x64", "assetType": "native" }
+                }
+              },
+              "RidPicky/1.0.0": {
+                "runtime": { "lib/net10.0/RidPicky.dll": {} },
+                "runtimeTargets": {
+                  "runtimes/win-x64/lib/net10.0/RidPicky.dll": { "rid": "win-x64", "assetType": "runtime" }
+                }
+              }
+            }
+          },
+          "libraries": {
+            "MeshWeaver.AppleMessages/1.0.0": { "type": "project" },
+            "SQLitePCLRaw.lib.e_sqlite3/3.53.3": { "type": "package" },
+            "RidPicky/1.0.0": { "type": "package" }
+          }
+        }
+        """;
+
+    [Fact]
+    public void APackageWhoseONLYContributionIsNative_IsCarried_NotSkippedBeforeItIsLookedAt()
+    {
+        var result = DepsClosure.Derive(PureNativeGraph, "MeshWeaver.AppleMessages");
+
+        // 🚨 THE CASE THE OLD CODE COULD NOT REACH. The loop short-circuited on
+        // `RuntimeFiles.Count == 0`, so a package contributing no managed assembly was `continue`d
+        // BEFORE the native branch — it warned about nothing and dropped everything, silently.
+        Assert.Contains(result.Natives,
+            n => n.RelativePath == "runtimes/linux-x64/native/libe_sqlite3.so" && n.Rid == "linux-x64");
+        Assert.Contains(result.Natives,
+            n => n.RelativePath == "runtimes/osx-arm64/native/libe_sqlite3.dylib");
+        // Static libraries are LINK-time inputs, never loaded — the same exclusion the in-image
+        // lane has applied since #1728, and carrying them would inflate every such bundle.
+        Assert.DoesNotContain(result.Natives, n => n.RelativePath.EndsWith(".a"));
+        // …and it contributes no managed file, so the flat closure is unchanged by it.
+        Assert.DoesNotContain("libe_sqlite3.so", result.Files);
+    }
+
+    /// <summary>A graph whose native declarations probe the EDGES of the layout contract: a
+    /// deeper path that contains <c>/native/</c>, a traversal, and two libraries that differ only
+    /// in case.</summary>
+    private const string EdgeCaseGraph = """
+        {
+          "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+          "targets": {
+            ".NETCoreApp,Version=v10.0": {
+              "Edgy/1.0.0": {
+                "dependencies": { "Odd.Natives": "1.0.0", "Cased.Natives": "1.0.0" },
+                "runtime": { "Edgy.dll": {} }
+              },
+              "Odd.Natives/1.0.0": {
+                "runtimeTargets": {
+                  "runtimes/linux-x64/other/native/deep.so": { "rid": "linux-x64", "assetType": "native" },
+                  "runtimes/../../native/escape.so": { "rid": "linux-x64", "assetType": "native" },
+                  "runtimes/linux-x64/native/sub/nested.so": { "rid": "linux-x64", "assetType": "native" }
+                }
+              },
+              "Cased.Natives/1.0.0": {
+                "runtimeTargets": {
+                  "runtimes/linux-x64/native/libFoo.so": { "rid": "linux-x64", "assetType": "native" },
+                  "runtimes/linux-x64/native/libfoo.so": { "rid": "linux-x64", "assetType": "native" }
+                }
+              }
+            }
+          },
+          "libraries": {
+            "Edgy/1.0.0": { "type": "project" },
+            "Odd.Natives/1.0.0": { "type": "package" },
+            "Cased.Natives/1.0.0": { "type": "package" }
+          }
+        }
+        """;
+
+    [Theory]
+    [InlineData("runtimes/linux-x64/other/native/deep.so")]
+    [InlineData("runtimes/../../native/escape.so")]
+    [InlineData("runtimes/linux-x64/native/sub/nested.so")]
+    public void OnlyTheEXACTProbedLayoutIsCarried_TheRestAreNamed(string declared)
+    {
+        var result = DepsClosure.Derive(EdgeCaseGraph, "Edgy");
+
+        // 🚨 The loader composes its probe from exactly runtimes/<rid>/native/<file> and has no
+        // recursive walk. A `/native/` SUBSTRING test accepts all three of these: two would be
+        // carried and never probed, and the traversal would make the PACKER read outside the
+        // module directory when it resolves the path against it.
+        Assert.DoesNotContain(result.Natives, n => n.RelativePath == declared);
+        Assert.Contains(result.Warnings, w => w.Contains(declared) && w.Contains("not carried"));
+    }
+
+    [Fact]
+    public void TwoNativesDifferingONLYInCaseAreTwoLibraries_NotOne()
+    {
+        var result = DepsClosure.Derive(EdgeCaseGraph, "Edgy");
+
+        // 🚨 On a case-sensitive filesystem these are two distinct loadable files, and the
+        // resolver's own file-name matching is ordinal. A case-INSENSITIVE de-duplication (the
+        // spelling every managed assembly name in this file correctly uses, because assembly
+        // binding is case-insensitive) silently drops one — which is the exact failure mode the
+        // native section exists to end.
+        Assert.Contains(result.Natives, n => n.RelativePath == "runtimes/linux-x64/native/libFoo.so");
+        Assert.Contains(result.Natives, n => n.RelativePath == "runtimes/linux-x64/native/libfoo.so");
+    }
+
+    [Fact]
+    public void TheGuidanceInADropWarningIsSomethingACallerCanACTUALLYDo()
+    {
+        var result = DepsClosure.Derive(PureNativeGraph, "MeshWeaver.AppleMessages");
+
+        // `--with` takes a plain file name inside the module folder and REFUSES a path component,
+        // so "name it with --with" is a dead end for a value that IS a runtimes/<rid>/… path. The
+        // message must name the flatten step, or it sends the reader to an error.
+        var ridSpecific = Assert.Single(result.Warnings, w => w.Contains("RidPicky"));
+        Assert.Contains("copy the file into the module folder root", ridSpecific, StringComparison.Ordinal);
+        Assert.Contains("it refuses a path", ridSpecific, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARidSpecificMANAGEDAsset_IsStillDropped_AndIsNAMED()
+    {
+        var result = DepsClosure.Derive(PureNativeGraph, "MeshWeaver.AppleMessages");
+
+        // The negative control for the case above: `assetType: "runtime"` is NOT a native, so it
+        // must not sneak into the native section — the flat closure has one slot per assembly name
+        // and no way to choose a RID. If the derivation keyed on `runtimeTargets` alone rather
+        // than on the asset TYPE, this would be carried and the assertion fails.
+        Assert.DoesNotContain(result.Natives, n => n.Package == "RidPicky");
+        // Still dropped — but NAMED, which is the half the old warning got right and could not
+        // deliver for a pure-native package.
+        Assert.Contains(result.Warnings,
+            w => w.Contains("RidPicky") && w.Contains("runtimes/win-x64/lib/net10.0/RidPicky.dll"));
+        // The RID-agnostic copy still rides, exactly as before.
+        Assert.Contains("RidPicky.dll", result.Files);
     }
 
     /// <summary>An Import-shaped graph: the module references a MODULE-OWNED MeshWeaver.*

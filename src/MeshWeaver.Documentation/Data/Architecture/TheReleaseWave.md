@@ -165,21 +165,130 @@ difference changes an answer on the inputs that repository passes:
 
 | copy | raw lines vs canonical | code lines | what differs | changes an answer? |
 |---|---|---|---|---|
-| Crm, Reinsurance, SocialMedia, Manufacturing | 173 | **6** | three string literals: the `User-Agent` header value, one log line, one step-summary sentence | **no** — none is read by the resolution |
-| Education (vintage 2026-09-11) | 584 | **233** | lacks `refresh`/`load_baseline`/`output_rows`/`emit` (the re-run freshness path) and `PluginsPublication`/`PLUGINS_LOOKBACK` (the Plugins publication found on its own); `choose`, `Verdict`, `Chosen` differ | **yes** — on a "re-run failed jobs" it re-uses the stored resolution (the Education#320 defect), and on a set whose own Plugins seal is not the newest it decides differently |
-| Plugins (fork, 2026-09-12, #1694) | 1,031 | **527** | ADDS `ceiling_for`/`main_passed_ceiling` (a pull request resolves the newest sealed set that Plugins `main` has already PASSED on), `PublicationSource`/`publication_source`, `run_jobs_of`; LACKS the freshness path above | **yes, by design** — on `pull_request` runs the ceiling can choose an older set than the canonical would |
+| Crm, Reinsurance, SocialMedia, Manufacturing, **Education** | 173 | **6** | three string literals: the `User-Agent` header value, one log line, one step-summary sentence | **no** — none is read by the resolution |
+| Plugins (fork, 2026-09-12, #1694) | 1,031 | **520** | ADDS `ceiling_for`/`main_passed_ceiling`/`run_jobs_of` (a pull request resolves the newest sealed set that Plugins `main` has already PASSED on) and `PublicationSource`/`publication_source`/`ProvenanceUnavailable` (the chosen set's sha and release read from the platform-bake job's own final publication receipt); LACKS `platform_version` | **yes, by design** — on `pull_request` runs the ceiling can choose an older set than the canonical would |
 
-So four copies are behaviourally the canonical, one lags, one is a fork with a policy the canonical
-does not have. **The guard** — `.github/scripts/check-resolver-copy.py`, run by `node-repo-validate`
+🚨 **Education's row is the one that moved, and #4171's own body is now stale about it.** That body
+recorded Education at 233 answer-changing code lines from a 2026-09-11 vintage; re-measured on
+2026-09-13 against the same canonical it is **6**, the same three string literals as the other four.
+It converged on its own. The reading to take from that is not "the table was wrong" but the standing
+one: a drift figure is a MEASUREMENT with a date on it, and a satellite's copy moves between the
+filing and the flip — so re-run `check-resolver-copy.py` before acting on any number written here.
+
+So five copies are behaviourally the canonical and one is a fork with policy the canonical
+did not have. **The guard** — `.github/scripts/check-resolver-copy.py`, run by `node-repo-validate`
 on every satellite PR and push — compares the copy to the canonical fetched at the lane's
 `scripts-ref` at the code level, prints the functions that differ, and is **advisory until
 2026-09-15T00:00:00Z and red from then** (`RED_FROM` in the script): a canonical fetched at `main`
 is live on merge for every caller, so the fleet sees the finding for a day before it can fail on
-it. A repository with no copy passes — that is the end state. Before the flip: the four re-copy (one
-commit each), Education re-copies (its lag is answer-changing), and Plugins' ceiling is ported into
-the canonical as an opt-in — a fork cannot pass a guard whose subject is "one canonical", and that
-is the guard doing its job. The freeze (`MW_PLATFORM_REF`) is untouched: the guard compares files
-and never runs the resolver.
+it. A repository with no copy passes — that is the end state. The freeze (`MW_PLATFORM_REF`) is
+untouched: the guard compares files and never runs the resolver.
+
+### Following your own `main`: the ceiling, now an option on the canonical
+
+🚨 **A deliberate difference belongs in the canonical as an OPTION, never in a fork** — and the
+guard is what makes that rule enforceable rather than advisory. Plugins' ceiling is therefore in
+`.github/scripts/resolve-platform.py` itself, off unless asked for:
+
+| flag | what it does |
+|---|---|
+| `--passed-on-main OWNER/REPO` | reads that repository's newest successful `ci.yml` push runs on `main`, takes the core-CD run number each one's `Platform for this run` annotation names, and caps the choice at the highest of them |
+| `--passed-ceiling N` | the same cap, handed straight in — a re-resolving job passes the `ceiling` output its run's `platform-ref` job already established, so the main-run read is paid for once per run |
+
+The rule it expresses: **a pull request resolves the newest sealed set that repository's own `main`
+has already passed on.** When core seals a set that regresses the repository, `main` goes red on it
+and every open pull request keeps building on the last set main passed — before it, one such set
+reddened every open PR at once, four times in 24 h, 91 PR-hours exposed.
+
+Three properties are load-bearing and each has a self-test case that fails without it
+(`resolve-platform.py --self-test`, 58 cases):
+
+- **Opt-in.** `choose(..., passed_ceiling=None)` — every caller that does not ask — takes exactly
+  the path it took before. The self-test proves this as a PAIR on one fixture: the same runs and the
+  same registry, one argument different, opposite answers.
+- **A freeze overrides the ceiling, including an unreadable one.** `MW_PLATFORM_REF` is an
+  instruction for an incident, and the likeliest moment to need it is precisely when `main` is red
+  and has passed nothing recently — so a freeze skips the ceiling entirely rather than being checked
+  against it.
+- **"main has passed nothing" is a REFUSAL, not a fallback.** Falling back to the newest sealed set
+  would put every pull request back on an unvouched set, which is the thing the rule exists to
+  prevent. The refusal names what it read and points at `MW_PLATFORM_REF`.
+
+A run held back by the ceiling says so: `lag` on the `Chosen`, an output row, a `Platform lag
+(pull requests follow main)` notice and a summary row, each naming BOTH set ids — so "why did my
+core fix not show up in my PR?" is answered from the run's own log.
+
+### Verifying where a set came FROM: `--verify-source`
+
+The second thing Plugins' fork carried, and the second option on the canonical. By default the chosen
+set's core commit is the publishing run's `head_sha` and its release is what `Directory.Build.props`
+declares at that commit. **Neither is a statement the publication itself made**, and the publishing
+lane reuses CONTENT-ADDRESSED builds from earlier runs — so the run that published a set is not
+necessarily the run that BUILT its bytes, and `head_sha` can put a newer commit on older bytes. That
+is [#4158](https://github.com/Systemorph/MeshWeaver/issues/4158)'s defect one level up.
+
+`--verify-source` takes both from the platform bake's OWN final publication receipt — the
+`bake published: source=meshweaver-content source-sha=… release=… arch=… identity=… bundles=N …`
+line `publish-bake-bundles.sh` writes AFTER publication, convergence and the release-marker writes.
+That line names the gate-selected source and release; workflow metadata does not.
+
+- **A set that cannot attribute itself is PASSED OVER, never taken unattributed.** A missing,
+  duplicated, malformed or inconsistent receipt raises `ProvenanceUnavailable`, the reason is
+  recorded in `skipped`, and the resolution continues at an older VERIFIED set. Under a freeze the
+  same condition is fatal — **for the run the freeze NAMES**; see below, this was #4242.
+
+🚨 **"The freeze names this run" is a question, and `if freeze_kind:` is not it.** Every *"a freeze
+is an instruction, not a preference"* escalation used to be spelled that way — correct only because
+the two filters at the top of the scan had already narrowed it to one run. `--verify-source`
+deliberately does NOT apply the head-sha filter (the set's real sha is the receipt's, unknown until
+the jobs are read), so the scan reaches runs the freeze does not name, and the FIRST unsealed one
+aborted the whole resolution with a sentence that was simply false:
+
+```
+--freeze 7ee11bc7… --verify-source
+::error:: the freeze names main-cd #8531 (core e0e4aeff3), which is not a sealed set …
+```
+
+`7ee11bc7` is the head of main-cd **#8506**; #8531 was merely the newest run in the scan. Measured
+against live core CD on 2026-09-13 — and it made `--verify-source` unusable during an incident
+freeze, which is exactly when resolution has to keep working. The predicate is now
+`freeze_names_this_run`, which NARROWS and never widens: a set freeze is already one run number and
+a sha freeze without verification is already one head sha, so both answer exactly as before; the
+only case that changes is a sha freeze WITH verification, where a run that cannot produce a receipt
+carries no evidence that it is the frozen one and the scan continues.
+
+🚨 **An ABSENT receipt is not a DISAGREEMENT, and reporting one as the other cost an investigation.**
+`publication_source` used to answer *"successful platform bakes disagree on source/release (found 0
+distinct receipts)"* for a run that has **no successful platform bake at all** — an absence in the
+vocabulary of a disagreement. `choose` never asks about such a run (it skips an unsealed one first),
+but anything probing runs directly does, and on 2026-09-13 that sentence was read off eleven
+ordinary non-publishing `main-cd` runs and reported as a fleet-wide bake defect. Re-measured the
+same day over **main-cd 8505–8531**: **20 of 27 runs are UNSEALED** (they never reach the receipt
+read), **all 7 sealed runs are attributable, and NONE disagrees.** The two states are now two
+sentences, and the disagreement one names the receipts it found.
+
+One of those seven is worth reading, because it is the feature working rather than failing: **8514's
+head is `7be4af59` and its receipt names `371f289b`** — which is 8513's head. The bake reused the
+content-addressed build from the previous commit, so the receipt is right and the run head would
+have been wrong. That is precisely what `--verify-source` exists to see.
+- **A freeze BY SHA is matched against the receipt's sha**, which is the point: the run's head sha is
+  a different value and would match nothing.
+- **The log read is the only text this script ever fetches, it is bounded** (`MAX_LOG_BYTES`; over the
+  cap is a refusal, never a truncated parse that could match the wrong receipt) **and the token is
+  sent UNREDIRECTED** — a job-logs path answers a 302 to signed storage, and urllib would otherwise
+  forward this token to a host that is not GitHub and does not need it.
+
+🚨 **It grants nothing to anyone who does not ask, and that is executable rather than asserted.** The
+self-test's default case is run against a fetch that RAISES on any path ending `/logs`:
+
+> `DEFAULT (no --verify-source): head sha, and NO job log is fetched at all`
+
+Ungating the read reds that case by name (`expected a choice, got RED: a caller that did not pass
+--verify-source read a job LOG`) — along with 41 others, which is the same statement from the other
+side: the read is not a neutral addition to the default path.
+
+So the canonical needs no credential a caller does not already hold: the logs of the run it reads are
+fetched with the CALLER's own token, only when the caller passes the flag, exactly as the fork did.
 
 ## Reading a wave, in order
 

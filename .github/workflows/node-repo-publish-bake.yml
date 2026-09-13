@@ -317,17 +317,27 @@ on:
           for readers that predate pointer resolution, and THAT copy still races: flipping a
           prefix closes the window for pointer-following readers only.
 
-          🚨 DO NOT FLIP A PREFIX UNTIL EVERY PRODUCER OF IT CAN WRITE GENERATIONS. A new writer
-          and an old writer on one prefix is the half-migration to avoid: the new one moves the
-          pointer, the old one replaces the flat copy in place and never touches it, so a
-          pointer-following reader keeps serving its generation and never sees the old writer's
-          NEWER publication — a stale serve with nothing red anywhere. `plugins` is the only
-          prefix with two producers (core CD's `plugins-bake` and this repo's own `publish-bake`),
-          so it flips in ONE change set; every other prefix flips in its own repository's PR.
+          🚨 THE LAYOUT BELONGS TO THE PREFIX, NOT TO THIS INPUT — so a prefix may be flipped ONE
+          PRODUCER AT A TIME. A live `_current` means some producer already writes generations, and
+          a run that found one publishes a generation whatever this input says (loudly, naming the
+          caller to flip). That is what makes the half-migration unreachable rather than merely
+          forbidden: without it the new writer moves the pointer, the old one replaces the flat
+          copy in place and never touches it, and a pointer-following reader keeps serving its
+          generation and never sees the old writer's NEWER publication — a stale serve with
+          nothing red anywhere. `plugins` is the only prefix with two producers (core CD's
+          `plugins-bake` and this repo's own `publish-bake`), they live in two repositories that
+          cannot merge atomically, and they may now be flipped in either order; every other prefix
+          flips in its own repository's PR. Setting this input to `generation` is still what you
+          should do on both — it makes the prefix's layout explicit instead of discovered.
 
-          🚨 Retention is not implemented: generations accumulate until a sweep lands. That sweep
-          deletes from the production share, so it is its own reviewed change — and it is a
-          precondition on flipping, not a follow-up.
+          🚨 A flat caller on a migrated prefix NEVER takes the prefix back. Retiring or
+          re-pointing would move consumers backwards: the pointer is moved BEFORE the flat
+          compatibility copy is refreshed, so a run seeing an older flat copy could skip and
+          expose bytes older than the generation it displaced.
+
+          Retention is implemented (MeshWeaver#3959) and registered in the portal hosts, so
+          generations under a retained identity are collected once nothing names them and they are
+          older than the window. It is no longer a precondition on flipping.
 
           Full reference: Doc/Architecture/SealedPublicationGenerations.
         required: false
@@ -1075,7 +1085,9 @@ jobs:
           set -uo pipefail
           # 🚨 The identity is resolved two steps up, from the PORTAL image — and WHICH portal image
           # this run got depends entirely on the trigger (a repo PIN on push/pull_request, the wake's
-          # payload on repository_dispatch, a MOVING release tag on schedule). When this gate holds,
+          # payload on repository_dispatch, a platform this run resolved for itself on schedule —
+          # normally the newest platform-SEALED set, else a pin, an allow-unpinned tag or a freeze).
+          # When this gate holds,
           # "why is it waiting" is a question about that choice, and the three paths want three
           # different actions. Stating it here makes the log self-contained (MeshWeaver#3583).
           TRIGGER="event=$GITHUB_EVENT_NAME"
@@ -1138,7 +1150,7 @@ jobs:
             echo "|---|---|---|"
             echo "| \`push\` / \`pull_request\` | this repo's PIN | the PIN is wrong — move it to an identity the upstream HAS published for |"
             echo "| \`repository_dispatch\` | the wake's own payload | the wave is mid-flight; the upstream's publication re-triggers this run |"
-            echo "| \`schedule\` | a MOVING release tag this run resolved itself | nobody promised the upstream published for it |"
+            echo "| \`schedule\` | the platform this run RESOLVED for itself — printed above; normally the newest platform-SEALED set, else a caller pin, an \`allow-unpinned\` tag or an \`MW_PLATFORM_REF\` freeze | nobody promised the upstream published for THAT set |"
             echo ""
             echo "**What re-enables it:** the upstream's own \`publish-bake\`, on sealing for this"
             echo "identity, POSTs the publication to the control instance, which dispatches"
@@ -1148,16 +1160,18 @@ jobs:
             echo "MeshWeaver.Crm: a \`meshweaver-framework-released\` run failed here at 15:36Z and"
             echo "the \`meshweaver-upstream-published\` wake for the same set succeeded at 16:01Z."
             echo ""
-            echo "🚨 **The \`schedule\` poll does NOT retry this identity.** It re-resolves a moving"
-            echo "tag, so the next poll asks about whatever has been promoted since — a DIFFERENT"
-            echo "identity. Waiting for the poll to clear this is waiting for something that never"
+            echo "🚨 **The \`schedule\` poll does NOT retry this identity.** It resolves the platform"
+            echo "again next time and lands on a DIFFERENT one. That is not a resolution defect to fix"
+            echo "here: what is missing is the UPSTREAM's publication for whichever set was chosen, and"
+            echo "\`Doc/Architecture/CiContentBake\` refuses the walk-back-to-the-newest-identity-that-HAS-a"
+            echo "publication fallback by name (MeshWeaver#3583). Waiting for the poll to clear this is waiting for something that never"
             echo "happens; the dispatch above is the only thing that re-asks this question."
             echo ""
             echo "If no wake ever arrives, the upstream is not publishing for released identities at"
             echo "all. That is the UPSTREAM's red — see its own \`publish-bake\` and its own poll —"
             echo "and it is not repaired by anything in this repository."
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error title=Upstreams not ready — did not build::at least one upstream of this repo has no published artifact for framework identity ${{ steps.identity.outputs.identity }}; exiting without building. What re-enables it is the upstream's own publish-bake dispatching meshweaver-upstream-published for this identity — NOT the schedule poll, which re-resolves a moving tag and therefore asks about a different identity next time."
+          echo "::error title=Upstreams not ready — did not build::at least one upstream of this repo has no published artifact for framework identity ${{ steps.identity.outputs.identity }}; exiting without building. What re-enables it is the upstream's own publish-bake dispatching meshweaver-upstream-published for this identity — NOT the schedule poll, which resolves the platform again and therefore asks about a different identity next time."
           exit 1
       # ───────────────────── WHAT MUST ACTUALLY BE REBUILT (#1707) ─────────────────────
       # "When updating plugins, we should check from git history which modules are affected, and

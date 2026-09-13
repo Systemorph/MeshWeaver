@@ -180,6 +180,7 @@ repository on the same night.
 | surface | before | now |
 |---|---|---|
 | `get_diagnostics` (`FormatDiagnosticsFromDef`) | `status: "Ok"` | `status: "Foreign"`, with both identities in `error` |
+| `get_diagnostics`, the `contentType` block (#4158) | nothing — every identity on the reply was a claim a build wrote | the assembly the content type RESOLVED to here: path, mvid, and whether it is collectible ([Modules](/Doc/Architecture/Modules) → *…and the RECORD is not the resolution*) |
 | compile-progress overlay | `Ok` ⇒ **redirect** to the page that cannot render, which bounces back | holds, and says why — localized (`ui.compileForeignFramework`) |
 | NodeType overview progress line | ✓ **Compiled**, printing the foreign hash beside the green tick as decoration | ⚠ built for another platform build |
 

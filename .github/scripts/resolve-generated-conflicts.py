@@ -5,7 +5,11 @@ conflicts are generated `*/manifest.lock` files.
     python3 scripts/resolve-generated-conflicts.py --repo Systemorph/MeshWeaver.Plugins
     python3 scripts/resolve-generated-conflicts.py --repo … --pr 1575        # one PR
     python3 scripts/resolve-generated-conflicts.py --repo … --dry-run        # classify, touch nothing
+    python3 $RUNNER_TEMP/resolve-generated-conflicts.py --repo … --root "$GITHUB_WORKSPACE"
     python3 scripts/resolve-generated-conflicts.py --self-test
+
+The repository it acts on is `--root` (default: the working directory) — NOT wherever this file
+sits. The shared lane runs a copy fetched into `$RUNNER_TEMP`; see `resolve_root`.
 
 Run by `.github/workflows/resolve-generated-conflicts.yml` on every push to `main` (a merge that
 just landed is what makes other pull requests conflict) and on a schedule as the net.
@@ -101,6 +105,32 @@ def must(root: Path, args: list[str], **kw) -> str:
     if rc != 0:
         raise LaneDefect(f"git {' '.join(args)} failed ({rc}): {err or out}")
     return out
+
+
+def resolve_root(explicit: str | None) -> Path:
+    """The repository this lane ACTS ON — never the one this file happens to be stored in.
+
+    `Path(__file__).parent.parent` was the root until 2026-09-13, which held only while the script
+    lived at `<repo>/scripts/` and was run from its own checkout — the shape MeshWeaver.Plugins
+    still uses. The shared lane (`.github/workflows/node-repo-resolve-locks.yml`) deliberately
+    fetches this file into `$RUNNER_TEMP` and runs it against the CALLER's checkout, so that
+    expression resolved to `/home/runner/work` and every git command died with
+    `fatal: not a git repository`. The lane was therefore red on 5 of 5 runs in each of Education,
+    Reinsurance, SocialMedia, Manufacturing and Crm from the hour it was adopted, having resolved
+    nothing; Plugins stayed green only because its own copy still runs in-tree.
+
+    So the root is taken from `--root`, else the working directory, and is PROVEN to be a git work
+    tree here — a misconfiguration is named where it can be acted on, instead of surfacing from
+    inside the first fetch as a git error about a directory nobody passed.
+    """
+    start = Path(explicit).resolve() if explicit else Path.cwd()
+    rc, out, err = git(start, ["rev-parse", "--show-toplevel"])
+    if rc != 0:
+        raise LaneDefect(
+            f"{start} is not inside a git work tree ({err or out or 'no output'}). This script acts "
+            f"on the repository it is POINTED AT, not on the one it is stored in: pass "
+            f"--root <checkout>, or run it with the checkout as the working directory.")
+    return Path(out).resolve()
 
 
 def is_generated(path: str) -> bool:
@@ -465,6 +495,46 @@ def self_test() -> int:
         wts = must(work, ["worktree", "list", "--porcelain"]).count("worktree ")
         expect(wts == 1, f"{wts - 1} throwaway worktree(s) left behind")
 
+        # 6. The root comes from the ARGUMENT (or the working directory), never from this file's
+        #    own location — the shared lane runs a copy fetched into $RUNNER_TEMP, where a
+        #    `__file__`-relative root landed outside every checkout and killed the lane in five
+        #    satellites at once. Both halves, because only the pair is a guard: a root inside a
+        #    checkout resolves to its top level, and a directory outside one is REFUSED by name.
+        try:
+            expect(resolve_root(str(work / "M")) == work.resolve(),
+                   "a --root inside the checkout must resolve to the checkout's top level")
+        except LaneDefect as e:
+            failures.append(f"a --root inside the checkout was refused: {e}")
+        outside = t / "not-a-repo"
+        outside.mkdir()
+        # The negative control must be able to fail: if the temp dir is itself inside a work tree
+        # (TMPDIR under a clone), the refusal below would pass having tested nothing.
+        rc_outside, _, _ = git(outside, ["rev-parse", "--show-toplevel"])
+        expect(rc_outside != 0,
+               "the negative control is vacuous — this run's temp dir is inside a git work tree")
+        try:
+            resolve_root(str(outside))
+            failures.append("a root outside any git work tree was accepted — the lane would fail "
+                            "later, inside git, naming a directory nobody passed")
+        except LaneDefect:
+            pass
+        # …and the ENTRY POINT, which is where it actually broke: `main` must hand `run` the root it
+        # was POINTED at. A check on `resolve_root` alone would not have caught the original defect,
+        # because the offending expression lived in `main`. `run` is swapped out so this reaches no
+        # network; the swap is restored in `finally` so a failure here cannot strand the module.
+        acted_on: list[Path] = []
+        real_run = globals()["run"]
+        entry_point = globals()["main"]          # `main` is a commit sha in this scope
+        globals()["run"] = lambda root, *a, **kw: acted_on.append(root) or 0
+        try:
+            rc_main = entry_point(["--repo", "o/n", "--root", str(work / "M")])
+        finally:
+            globals()["run"] = real_run
+        expect(rc_main == 0 and acted_on == [work.resolve()],
+               f"main() must act on the repository --root names; it handed run() {acted_on} "
+               f"(rc={rc_main}) — an entry point that derives the root from __file__ lands "
+               f"outside the checkout whenever the lane delivers this script out of tree")
+
     if failures:
         print("✗ resolve-generated-conflicts self-test:")
         for f in failures:
@@ -481,7 +551,7 @@ def main(argv: list[str]) -> int:
     if "--self-test" in argv:
         return self_test()
     args = {"--repo": os.environ.get("GITHUB_REPOSITORY"), "--base": "main", "--pr": None,
-            "--platform-checker": None}
+            "--platform-checker": None, "--root": None}
     flags = {"--dry-run": False}
     it = iter(argv)
     for a in it:
@@ -499,7 +569,11 @@ def main(argv: list[str]) -> int:
     if args["--platform-checker"] and not Path(args["--platform-checker"]).is_file():
         print(f"✗ --platform-checker {args['--platform-checker']} does not exist")
         return 2
-    root = Path(__file__).resolve().parent.parent
+    try:
+        root = resolve_root(args["--root"])
+    except LaneDefect as e:
+        print(f"✗ {e}")
+        return 2
     return run(root, args["--repo"], args["--base"], only, flags["--dry-run"], args["--platform-checker"])
 
 

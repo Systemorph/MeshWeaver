@@ -31,6 +31,26 @@ byte-identical to a candidate head's, and that head's newest run of the caller's
 green. Any doubt gates as usual and prints why. Measured cause: three 30-minute Plugins runs cancelled
 by lock-only pushes on 2026-09-13 (#1788 carried eight such merges).
 
+## A shared script does not know where it is — point it at the repository
+
+The resolver moved into this repo's `.github/scripts/` and the lane **fetches it into
+`$RUNNER_TEMP`** at the caller's `scripts-ref`, then runs it against the caller's checkout. Its root
+had been `Path(__file__).parent.parent`, which was true only of the shape it came from — a copy at
+`<repo>/scripts/`, run from its own checkout. Delivered out of tree that expression resolves to
+`/home/runner/work`, and the lane's first `git fetch` died with `fatal: not a git repository`.
+
+The lane was red on **5 of 5 runs in each of Education, Reinsurance, SocialMedia, Manufacturing and
+Crm** from the hour it was adopted, having resolved nothing; Plugins stayed green because its own
+copy still runs in-tree, so the fleet's green/red split looked like an adoption gap rather than a
+defect. The lane's `--self-test` step passed throughout: every case tested a helper, and the root was
+computed in `main`.
+
+**The rule for any script this repo lends to a satellite lane: it acts on the repository it is
+POINTED at.** `--root` (default: the working directory) is resolved to a git top level and refused
+by name if there is none, and the lane passes `--root "$GITHUB_WORKSPACE"` explicitly. The self-test
+now drives the **entry point**, with `run` swapped out — the only shape that covers the wiring rather
+than the helper it calls.
+
 ## Convergence, 2026-09-13 — done
 
 | Repo | resolver | cancel rule | adoption | admission |
@@ -41,6 +61,10 @@ by lock-only pushes on 2026-09-13 (#1788 carried eight such merges).
 | SocialMedia | ✓ (#185) | ✓ (#185) | ✓ (#185) | — |
 | Crm | ✓ (#97) | ✓ (#97) | ✓ (#97) | — |
 | Manufacturing | ✓ (#86) | ✓ (#86) | ✓ (#86) | — |
+
+The resolver column means the caller is wired and the lane RESOLVES: wiring landed 16:10Z–17:20Z, and the
+lane itself only began doing anything after #4231 (the section above) — a row that said ✓ before that
+would have been describing a caller, not a resolution.
 
 All five satellite PRs merged between 16:10Z and 17:20Z on 2026-09-13, after core #4201 recorded
 their new callers in `.github/lane-caller-grants.yml` as `pending:`; this page's PR turns those rows

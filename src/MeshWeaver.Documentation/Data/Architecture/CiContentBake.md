@@ -1263,9 +1263,18 @@ MeshWeaver.Crm — a `meshweaver-framework-released` run failed the availability
 the `meshweaver-upstream-published` wake for the same set succeeded at 16:01Z.
 
 🚨 **The poll does NOT retry the identity it failed on**, and this lane's message used to claim it
-did. A poll re-resolves a *moving* tag, so the next run asks about whatever has been promoted since
-— a different identity. Waiting for tomorrow's poll to clear today's is waiting for something that
-never happens. The dispatch above is the only thing that re-asks the question, and if no wake ever
+did. A poll **resolves the platform again**, so the next run asks about whatever has been promoted
+since — a different identity. Waiting for tomorrow's poll to clear today's is waiting for something
+that never happens.
+
+> 🚨 **Historical wording, corrected 2026-09-14 (#3583).** This paragraph used to say the poll
+> "re-resolves a *moving tag*". It has not done so since the satellites adopted
+> `scripts/resolve-platform.py`: the `schedule` path resolves **the newest platform-SEALED set**
+> (`--wait-for-seal 900`), and the reusable lanes do the same when called with empty digests
+> (`39caeed993`, 2026-09-12). The conclusion above is unaffected — the set it lands on is a
+> different one each poll, which is what makes it no retry — but the mechanism is not a tag, and
+> reading it as one put an already-implemented item ("4b") on the open list twice. See
+> [Framework Identity Churn](../FrameworkIdentityChurn) → *Second correction*. The dispatch above is the only thing that re-asks the question, and if no wake ever
 arrives then the upstream is not publishing for released identities at all — **that is the
 upstream's red**, visible on its own `publish-bake` and its own poll, and nothing in the dependent
 repairs it.

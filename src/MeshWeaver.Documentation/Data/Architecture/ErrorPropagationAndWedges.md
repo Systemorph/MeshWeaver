@@ -15,6 +15,15 @@ A **wedge** is a silent hang: a request that never gets a response, a stream tha
 
 A wedge is always a *missing edge* in that propagation: somewhere an error was caught-and-ignored, a `Subscribe` had no `onError`, or a request handler finished without answering. Find that edge and route it to a sink.
 
+🚨 **First establish that it IS one.** A spinner on the page and a log that stopped are also what a
+suspended process, a starved thread pool and a dead instrument look like — four causes, four
+different owners, and until the liveness heartbeat existed, identical bytes. #4234 was filed as a
+wedge on exactly this evidence and was neither: the run's own Playwright trace showed six ordinary
+static-file `GET`s hanging in the same window, so the failing unit was the whole HTTP server, and the
+CPU samples that were read as excluding GC are falsified by a confirmed 13.64 s GC pause in the same
+artifact reading 2.14 %. Read [Which Kind of Silence](../WhichKindOfSilence) before spending a session on
+the propagation graph.
+
 ## The graceful-error sinks
 
 Propagation terminates at the sink that owns the user-visible surface for the operation's context:

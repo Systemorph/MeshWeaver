@@ -193,6 +193,49 @@ review, and now:
 Only the last line is a zero, and `ASweepThatCouldNotRun_SaysSo_InsteadOfReportingZero` pins it —
 falsified by restoring the empty sequence, which turns it red.
 
+### The verdict names the RECORD it was taken over
+
+A population without a record is half a denominator. The sweep's declared side comes from the
+install record, and on 2026-09-12 a production line read
+
+> `[InstallCompleteness] Store → 'Store': 2 of 201 declared node(s) are ABSENT.`
+> `Missing: [Store/CoverActionDispatch, Store/Plugin/Test/CoverActionIdentityTests].`
+> `Counted over: 201 file(s) declared, 0 of them not node files … → 201 distinct node path(s) compared.`
+
+Reconciling that `201` against the record took a version-by-version read of `Plugins/Store` and a
+commit-by-commit count of the package's source folder. The answer: the two record versions
+straddling the sweep — v31 (2026-09-11T21:30:55Z) and v32 (2026-09-12T02:00:24Z), whose file maps
+are byte-identical — declare **193** files and neither of those names, while a source snapshot with
+exactly 201 node-candidate files **including both** existed at 2026-09-11T21:18:59Z. The count was
+right about something; nothing in the line could say what.
+
+🚨 **That is the same defect as a missing denominator.** A count taken over the current record and a
+count taken over a stale one render identically. And the record is precisely the half that can be
+stale: `InstallCompleteness.Observe` keeps the OBSERVED side off a query on purpose — *"never a
+query … a stale negative here would manufacture a shortfall"* — while the DECLARED side arrives
+through `InstalledPackageRepairService.InstalledRecords`, an eventually-consistent `GetQuery`.
+
+So every verdict now carries `RecordIdentity` — path, node **version**, when that version was
+written, and the manifest stamps that name the source snapshot behind the map
+(`InstallCompleteness.DescribeRecord`) — and every line prints it:
+
+```
+Counted over: 201 file(s) declared, … , taken over Plugins/Store v32 (written 2026-09-12T02:00:24Z;
+version 1.9.16, moduleVersion b53d4f05232ce57f, installedAtUtc 2026-09-10T12:55:28Z,
+201 file(s) in the map)
+```
+
+Naming it does not make the read fresh — it makes a stale one **detectable**, and it puts the map's
+own size beside the count it produced, so a record that has gone backwards is visible in the line
+rather than only in an archaeology of its versions.
+
+🚨 Every arm carries it, not just the shortfall: a `NotObserved` nobody can attribute to a record
+version is as unactionable as an `Incomplete` nobody can attribute. And where a caller supplies
+none, `Provenance` says *"the install record was NOT identified"* — never a blank that reads like an
+identified one, for the same reason `NotObserved` is not a pass.
+
+`EveryVerdictNamesTheRecordVersionItWasTakenOver` pins both directions.
+
 ## Where the verdict is consumed
 
 ### The install gate — it heals
