@@ -327,11 +327,131 @@ stamp with the reason, or install it. The registry lane already carries the same
 `.github/acr-retention/instances.json`, with the reason and the issue; the two are deliberately
 separate files because they are two different stores, and neither infers the other's answer.
 
+## 🚨 A second registry: when an installation's images are somewhere this lane cannot lock
+
+**Measured 2026-09-13: the protection lane was RED, and its reason was a false sentence.** The
+01:18Z scheduled run ended:
+
+```
+##[error]AXIS 3 — installation `build` runs core c84c6c0 and its overlay
+(Systemorph/Memex deployments/aks/build/values.build.public.yaml) pins no image at all,
+so there is no repository in which to protect what it runs.
+```
+
+That overlay pins **two** images. Run through the shipped extractors, the real file answers
+`ACR pins: 0`, `foreign pins: 2 → cr.meshweaver.cloud` — `memex-portal-ai:3.0.0-ci.8411` and its
+migration twin, in **the fleet's own registry**. `REGISTRY_HOST_RE` matches `*.azurecr.io` and
+nothing else, which is correct for a lane that locks one ACR, but it made "pins its images
+elsewhere" spell identically to "pins nothing" — and *that* reading sends the reader to fix an
+extractor that is working perfectly.
+
+🚨 **And the red was not free.** `pause.reEnableWhen` is *"lock-pinned-digests is green"*, so a live
+installation moving registry was standing between the fleet and re-enabling cleanup — while the
+installation that IS exposed to the ACR purge (`memex`, six pins in this ACR) got no locks either,
+because the run refuses as a whole. One instance's registry question was holding the other's
+protection hostage.
+
+`build` is the fleet's build server and it is the first LIVE installation on `cr.meshweaver.cloud`;
+`pearl` pins there too and is declared not-installed, so it was never asked.
+
+**What the mechanism now does.** Foreign references are *extracted and named*. They are never
+locked — nothing here can write to another registry — but the three facts stay distinct:
+
+| the overlay | the run |
+|---|---|
+| pins in this ACR | protected, as before |
+| pins **only** elsewhere, **undeclared** | **RED**, naming the registry and what to write. Silently skipping would make an unprotected installation look like a protected one |
+| pins **only** elsewhere, **declared** | accepted, and printed on its **own denominator line** — `…declared OUT OF THIS REGISTRY'S SCOPE` — so it can never be counted among the answered and read as covered |
+| pins **nothing**, in any registry | RED, and the message now says "in ANY registry" so it means what it says |
+
+**`registry` in `instances.json` is a SCOPE statement, never an exemption from answering.** An
+installation carrying one is still live, still expected to answer `/api/version`, still counted. It
+is checked **both ways** against what the overlay actually pins, so it cannot go stale in silence: a
+declaration naming a registry the overlay does not pin in is RED, and so is one on an installation
+that **also** pins in this ACR — half in is not out, and excusing it wholesale would leave the half
+that IS here unprotected. It is refused on a non-live entry (which runs nothing, so needs no scope)
+and refused without a `reason`.
+
+🚨 **What retains `cr.meshweaver.cloud` is NOT established by this.** The declaration states that
+those images are out of *this lane's* reach; it does not claim anything protects them. That question
+is open on #3438 and it grows with every installation provisioned on the fleet's own registry —
+which, per the new-deployment path, is now the default.
+
+## The window is DECIDED, and the record is now held to it
+
+The policy is #3842's, quoted verbatim in #3438's body and in #3859's acceptance list:
+
+> *Retain unreferenced continuous artifacts for at least 30 days by age, without a build-count
+> quota.*
+
+**Three stores implement it; two of them were clamped to it in code and the third was not asserted
+at all.** `PrebuiltBundleRetention` clamps `MinimumAge` up to 30 days in its planner (#3843) and
+`AssemblyCacheRetention` does the same (#3846) — and both carry `KeepNewestPerSource` as a property
+that explicitly no longer drives deletion. #3843's own body records the gap in as many words: *"The
+ACR task record and live cloud cleanup are unchanged."* So `.github/acr-retention/purge-old-images.yaml`
+kept `--ago 7d --keep 10` over five continuously-republished repositories — `memex-portal-ai`
+included, the image **both production portals run** — and nothing compared it to the rule that
+governed the other two.
+
+🚨 **`--keep` is the half an age window cannot replace.** `--keep N` counts NEWER BUILDS, so the
+more often a repository is republished the FASTER its older manifests become eligible. A 30-day
+`--ago` beside a `--keep 10` still collects a manifest ten builds old on the day it is written.
+That is #3438's own root cause — *republishing frequency is what destroys a pin* — restated as a
+flag, so a quota is removed rather than raised.
+
+`lock-pinned-digests.py --check-retention-record` now asserts both halves over **every** recorded
+purge step, enabled or not — the record is what `acr-retention-tasks.sh apply` pushes, so a disabled
+task carrying a 7-day window is a 7-day window one command away from running. It needs no
+credential and runs on every pull request (`dotnet-test.yml`, the workflow-shell lane). An `--ago`
+it cannot parse is RED, not a default: a window nobody could read is one nobody checked.
+
+**This is a RECORD change, not a registry change.** The live task is disabled and still carries the
+old window; `tasks.json` declares that deliberate gap under `recordAheadOfRegistry`, and three
+things follow from the declaration rather than from anyone remembering it:
+
+- `acr-retention-tasks.sh verify` prints the declared drift instead of reporting it as an incident
+  — a drift report that is always red is one nobody reads — **and reds when a declared task shows
+  NO drift**, because after `apply` the declaration excuses nothing and would excuse the next real
+  drift.
+- `acr-retention-tasks.sh record` — the one command that overwrites the record FROM live — refuses
+  without an explicit `OVERWRITE`, because re-recording would silently restore `--ago 7d --keep 10`
+  into a file whose comments explain at length why it must not say that.
+- The gate above reds on the restored window on the very next pull request.
+
+## The re-enable interlock — the one edge this repository owns
+
+#3859's first acceptance criterion is *failed / unavailable / incomplete protection collection
+cannot be followed by deletion*. `acr-retention-tasks.sh apply` is the only thing in this repository
+that can turn a destructive schedule back on: it pushes `status` out of `tasks.json` with
+`az acr task update --status`. It used to do that with reference to nothing — so changing one word
+in `tasks.json` (`Disabled` → `Enabled`) and running `apply` restored the 03:00 purge with **no
+protection decision consulted at all**, while the `pause` block two screens below still said the
+protection was incomplete.
+
+`apply` now **refuses** while `pause.inForce` is true and any task is recorded `Enabled`, naming
+`pause.reEnableWhen`, and it refuses *before* the confirmation prompt so the prompt cannot be
+mistaken for the gate. It refuses rather than warns, and it asks for no override flag: a prompt
+answered "yes" is not a decision anyone can audit, whereas deleting the `pause` block in a reviewed
+diff that says what satisfied `reEnableWhen` is. The record's own coherence is gated too — a record
+asserting both an in-force pause and an `Enabled` task is RED, and so is every task disabled with no
+declaration explaining it, because a stopped retention and a stale record otherwise read identically.
+
+🚨 **This does not close #3859, and the distinction is the whole of what is left.** It interlocks
+the ACT of re-enabling. It does not interlock the nightly deletion: the lock is still an Actions
+cron at 01:00 and the purge still an ACR timer task at 03:00, so a given night's deletion is still
+not downstream of that night's protection verdict.
+
 ## What is still the maintainer's, and is not code
 
-1. **`purge-old-images` carries `memex-portal-ai` on its 7-day step** — the image both production
-   portals run — while the 30-day step covers only `memex-portal`, a repository no overlay pins.
-   Whether that is the intended policy is a decision, not a defect.
+0. **What retains `cr.meshweaver.cloud`.** The fleet's own registry now serves at least one live
+   installation and is the default for new ones, and `acr purge` cannot reach it. This lane
+   declares those images out of its scope; nothing yet says what keeps them, or deletes them.
+   That is the same question this page answers for the ACR, asked again about a second store.
+1. **The decided window has not been APPLIED to the registry.** The record states it; the live
+   (disabled) task still carries `--ago 7d --keep 10`. Applying it is the same act as lifting the
+   pause, and it belongs to whoever owns the registry. Its cost is storage: dropping `--keep 10`
+   and moving 7d → 30d retains strictly more, over five repositories that republish many times a
+   day.
 2. **The two clocks are still two clocks.** The lock is a GitHub Actions cron at 01:00; the purge is
    an ACR timer task at 03:00; nothing makes the second wait for the first. A pin that lands in that
    window meets the purge unprotected, and if the lock job does not run at all the purge still does.
