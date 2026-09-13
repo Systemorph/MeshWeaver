@@ -4248,8 +4248,41 @@ public static class MeshExtensions
                         .Select(saved => saved!)
                         .Do(saved =>
                         {
+                            // 🚨 THE ANNOUNCEMENT DECLARES ITS OWN CONTEXT (#4061). It is an
+                            // INFRASTRUCTURE write the framework makes on the node type's behalf —
+                            // the node above is already persisted, and this only tells the running
+                            // mesh so — but DataChangeRequest is [RequiresPermission(Update)], so
+                            // the receiving hub's gate decides it against whatever identity the
+                            // delivery carries. Carrying none meant carrying whatever ambient
+                            // AccessContext happened to be set at that instant, which is a property
+                            // of what the persistence layer last did rather than of this write: for
+                            // a Space created by an ORDINARY user the additional node is
+                            // Admin/Partition/{id}, the caller holds nothing under `Admin`, and the
+                            // gate answered "Access denied: user '…' lacks Update permission on
+                            // 'Admin/Partition/{id}'" — intermittently, because a sibling handler's
+                            // ImpersonateAsSystem scope (SpaceNodeType's creator-Admin grant) often
+                            // had not been torn down yet and the post rode it. Both identities were
+                            // measured 41 ms apart in ONE run of PostCreationAnnouncementContextTest.
+                            //
+                            // 🚨 It is WellKnownUsers.SystemContext carried as a VALUE, not
+                            // ImpersonateAsHub and not an ambient ImpersonateAsSystem scope, and
+                            // both alternatives were MEASURED to fail here:
+                            //   • a HUB credential grants Permission.Read on the hub's OWN path and
+                            //     its ancestors and nothing else (PermissionEvaluator's hub-credential
+                            //     early return, guarded by IsHubReadableScope) — an Update on some
+                            //     OTHER node's path is not in it, so the gate answered "user
+                            //     'portal/nodeops-…' lacks Update permission on '…'" verbatim; and
+                            //   • an AsyncLocal scope only covers what runs synchronously inside it,
+                            //     while this .Do runs from a previous Rx stage's completion on
+                            //     whatever thread that stage finished on — which is exactly how the
+                            //     ambient came to be the caller's here in the first place.
+                            // WellKnownUsers.SystemContext documents itself for this case, and it grants
+                            // the caller nothing: the row is already written either way, and the
+                            // additional nodes come from an INodePostCreationHandler registered in
+                            // src/, never from the request.
                             hub.Post(DataChangeRequest.Update([saved]),
-                                o => o.WithTarget(new Address(saved.Path)));
+                                o => o.WithTarget(new Address(saved.Path))
+                                    .WithAccessContext(WellKnownUsers.SystemContext));
                             logger.LogInformation(
                                 "Post-creation handler created additional node at {Path}", saved.Path);
                         })
