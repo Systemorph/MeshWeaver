@@ -1779,10 +1779,30 @@ jobs:
           SHARD_ARGS=()
           if [ -n "${SHARD:-}" ]; then
             TESTER_MOUNTS=()
-            if ! run_tester --help 2>&1 | grep -q -- '--shard'; then
-              echo "::error::this lane was called with shards>1 but the PINNED tester does not accept --shard, so it cannot gate a slice. Bump image-digest/platform-image-digest to a CD wave carrying it (both pins move together, from one wave), or set shards: 1."
+            # 🚨 CAPTURE, THEN MATCH — never `run_tester --help | grep -q`. `grep -q` exits at the
+            # FIRST match, the tester is still writing the rest of its usage, and the write that
+            # lands on the closed pipe kills it with SIGPIPE: the pipeline is then 141 under
+            # `set -o pipefail` and this assertion refuses a tester that DOES accept the flag.
+            # Measured 2026-09-13 on MeshWeaver.Plugins#1773/#1781 (jobs 103705780373 /
+            # 103705717907) and reproduced against those exact digests: mw-plugin-test
+            # @sha256:2d4c5e71 (core 14216b1b3) parses --shard and prints `[--shard <i>/<n>]` in
+            # its own --help, yet `… --help 2>&1 | grep -q -- '--shard'` returns PIPESTATUS=141 0
+            # while consuming the whole stream returns 0. It is a RACE — the same probe passed on
+            # the same lane at 07:44 (run 34745137329, four shards green) — so it reads as "the
+            # pin is too old", which sends the caller to bump a pin or drop to `shards: 1`, and
+            # neither is the fault. A substitution reads the stream to EOF, so there is no early
+            # close and no signal.
+            shard_help="$(run_tester --help 2>&1)" || {
+              echo "::error::the pinned tester could not be run to read its arguments (exit $?), so this shard cannot establish that --shard is supported. This is the tester or the platform acquisition failing, NOT a missing flag — read its output above."
               exit 1
-            fi
+            }
+            case "$shard_help" in
+              *--shard*) ;;
+              *)
+                echo "::error::this lane was called with shards>1 but the PINNED tester does not accept --shard, so it cannot gate a slice. Bump image-digest/platform-image-digest to a CD wave carrying it (both pins move together, from one wave), or set shards: 1. Its --help printed: ${shard_help}"
+                exit 1
+                ;;
+            esac
             SHARD_ARGS=(--shard "$SHARD")
             echo "this job gates shard $SHARD"
           fi
