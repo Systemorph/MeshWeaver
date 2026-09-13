@@ -264,6 +264,23 @@ version) and logged at **Error** (`[DISPOSE-DISCARD]`, event 7301) with the mess
 sender, the gates it sat behind and the run level. A hub that disposes with its gates still shut is
 the defect that line points at.
 
+🚨 **Unless the sender is the hub ITSELF — then it is Debug, and the reason is one method down.**
+`NackThroughParent` declines a self-addressed delivery with `NACK_DECLINED reason=sender-is-self`:
+there is nothing to post an answer *to*, because the pending-response registry that would resolve it
+is this hub's own and is cancelled in the same `Dispose` (`CancelCallbacks` errors those subjects
+with *"Hub … was disposed before the response arrived"* — a more informative report, reaching the
+same reader). So the Error's own sentence, *"the sender is answered `ShuttingDown`"*, was **false**
+for exactly that shape, and the defect it told the reader to hunt has no external victim to find.
+Measured in [#4178](https://github.com/Systemorph/MeshWeaver/issues/4178): 76 Error lines per
+plugin-gate shard, every one a `$model-probe/{guid}` hub discarding its **own** `GetDataRequest`
+parked behind `[DataContextInit,MeshNodeInit]` — a lifetime [Transient Node
+Probe](/Doc/Architecture/TransientNodeProbes) declares by design ("created, read once, disposed"),
+and which `MessageHub.HandleInitialize` already classifies as a recognized shutdown rather than a
+failure (#1122–#1125). The rule is the **fact, not the probe**: whenever the sender is this hub,
+nobody outside is waiting, so the discard is teardown-internal. The line still fires, still names the
+gates — only the level and the sentence follow what actually happened. A delivery from any **other**
+sender strands a real waiter on a transient NACK and stays an Error, unchanged.
+
 🚨 **There used to be a second, and it was not real.** Event 7302 reported the turns still in the
 MAIN queue when `messageService.Dispose()` ran, at Error, claiming *"the pump stops with this
 call"*. **The pump does not stop with that call and cannot**: `Dispose()` is invoked from inside the
