@@ -533,9 +533,24 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         // null email and the whole request ran with Permission.All. RunAsSystem keeps the scope
         // across the cold Observe's Subscribe (where the post is stamped) and leaves it on the way
         // out of that same Subscribe.
+        // 🚨 ISSUED OFF THE ROUTER (#1140). `hub` above is the portal hub when there is one — but
+        // the fallback, `RequestServices.GetRequiredService<IMessageHub>()`, resolves the ROOT MESH
+        // HUB in the root container, which is what a portal without the Blazor shell
+        // (Features:Gui:Blazor=false) and any request outside a circuit scope gets. Posting there
+        // makes the router an END of the delivery in both directions: the request reaches the
+        // ApiToken node's hub stamped `Sender = mesh/{id}` and the response is addressed straight
+        // back at it. `ValidateTokenRequest/Response` is named among the observed types in #1140's
+        // own evidence from memex.
+        //
+        // ReadIssuingHub, not NodeOperationIssuingHub: this is a bounded READ with an HTTP request
+        // waiting on it, and portal/reads-{meshId} registers NO handlers, so its block only ever
+        // dispatches replies to reads issued on it. Issuing it on the node-CRUD execution hub
+        // instead would put this reply in the queue behind every write in flight — #2901's
+        // ~10.3 s-then-503 shape. For any hub that is NOT the router it returns the hub unchanged,
+        // so the portal-hub path is byte-for-byte what it was.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return accessService.RunAsSystem(
-                () => hub.Observe(
+                () => hub.ReadIssuingHub().Observe(
                         new ValidateTokenRequest(rawToken),
                         o => o.WithTarget(tokenAddress))
                     .Select(d => (ValidateTokenResponse?)d.Message))
