@@ -317,16 +317,20 @@ on:
         default: true
       adopted-verdict:
         description: >-
-          Non-empty = the URL of a completed GREEN run of the caller whose verdict this run ADOPTS,
-          because this head differs from that run's head only by main's merge and regenerated
-          generated files (the caller's lock resolver pushed it). The plan then answers
-          nothing-to-gate, naming the adopted run, and no shard runs: the content this gate would
-          test is byte-identical to what that run tested. The CALLER decides adoption (its change-set
-          classifier compares the authored diffs and reads the run through the API); this lane only
-          records the decision in the proof. Empty (the default) = gate as usual.
+          `auto` (the default): the lane decides whether this head may ADOPT an earlier head's green
+          verdict — every leading first-parent commit a merge from the base (the lock resolver,
+          GitHub's update-branch, a hand merge of main) or a lock-only regeneration, the AUTHORED
+          diff (everything but manifest.lock) byte-identical to that head's, and that head's newest
+          run of the CALLER's workflow completed green (read through the API — the caller's job must
+          grant `actions: read`, else the answer is "no" with the reason and the gate runs as usual).
+          A run URL: the caller decided adoption itself (MeshWeaver.Plugins' change-set classifier)
+          and this lane only records it. `off`: never adopt. When adopted, the plan answers
+          nothing-to-gate naming the run and no shard runs — the content this gate would test is
+          byte-identical to what that run tested. Roland, 2026-09-13: "can we just change the
+          manifest and let it run?" — three 30-minute runs cancelled by lock-only pushes in one day.
         required: false
         type: string
-        default: ''
+        default: 'auto'
       upstream-seed:
         description: >-
           Consume the caller's UPSTREAMS as pre-built bundles instead of staging their source:
@@ -559,6 +563,9 @@ jobs:
         env:
           NARROWING: ${{ inputs.affected-narrowing }}
           ADOPTED_VERDICT: ${{ inputs.adopted-verdict }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          CALLER_WORKFLOW: ${{ github.workflow }}
+          GH_TOKEN: ${{ github.token }}
         # 🎯 PRs gate only the AFFECTED dependency closure — changed modules, plus every
         # transitive DEPENDENT, plus the affected set's own dependencies (the fresh gate mesh
         # needs them present to install and to resolve `shared=@…`).
@@ -566,6 +573,17 @@ jobs:
         # itself refuses an empty diff, so a wrong empty set can never pass as "nothing to test".
         run: |
           set -euo pipefail
+          if [ "$ADOPTED_VERDICT" = "auto" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            # The lane decides: fetch the platform's adopt-verdict.py at the lane's scripts ref and ask it.
+            SCRIPT="${RUNNER_TEMP:-/tmp}/adopt-verdict.py"
+            gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/adopt-verdict.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+              || { echo "::warning::could not fetch .github/scripts/adopt-verdict.py at ${SCRIPTS_REF} — gating as usual"; ADOPTED_VERDICT=''; }
+            if [ -n "$ADOPTED_VERDICT" ]; then
+              python3 "$SCRIPT" --base "origin/${{ github.base_ref }}" --workflow "$CALLER_WORKFLOW" --repo "$GITHUB_REPOSITORY" --github-output "$RUNNER_TEMP/adopt.txt" | tail -3
+              ADOPTED_VERDICT=$(grep '^adopted=' "$RUNNER_TEMP/adopt.txt" | cut -d= -f2-)
+            fi
+          fi
+          if [ "$ADOPTED_VERDICT" = "off" ]; then ADOPTED_VERDICT=''; fi
           if [ -n "$ADOPTED_VERDICT" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
             # The caller adopted a green run's verdict: this head is that run's content plus main's
             # merge and regenerated locks. Nothing to gate — said so, with the run, in the proof.

@@ -51,6 +51,17 @@ on:
         required: false
         type: string
         default: ''
+      enforce-cancel-rule:
+        description: >-
+          Run the platform's cancellation guard (.github/scripts/check-main-runs-not-cancelled.py)
+          over this repo's .github/workflows/ci.yml: nothing on main is ever cancelled, a person's
+          pull_request push supersedes, the resolver bot's never (`github.event.sender.type !=
+          'Bot'`), and no job calls the supersede lane. Fleet rule 2026-09-13 ("see that process
+          is same as in plugins everywhere"). Opt-in until every caller carries the expression;
+          then the default flips.
+        required: false
+        type: boolean
+        default: false
       check-versions-always:
         description: >-
           Run the derived-version check on EVERY event instead of main-only. Correct for a repo
@@ -126,6 +137,19 @@ jobs:
       # fails on the 404 while the caller changed nothing (check-abbreviated-shas.py, 2026-09-09,
       # Plugins#1566). `github.job_workflow_sha` is empty inside a cross-repo reusable, so the lane's
       # own ref is the `scripts-ref` input.
+      - name: The cancellation rule holds — nothing on main cancels, a person's PR push supersedes, the bot's never
+        if: ${{ inputs.enforce-cancel-rule }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-main-runs-not-cancelled.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-main-runs-not-cancelled.py" \
+            || { echo "::error::could not fetch .github/scripts/check-main-runs-not-cancelled.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-main-runs-not-cancelled.py" | grep -q "check-main-runs-not-cancelled" || { echo "::error::the fetched guard at ${SCRIPTS_REF} does not look like itself"; exit 1; }
+          python3 "$RUNNER_TEMP/check-main-runs-not-cancelled.py" --self-test
+          python3 "$RUNNER_TEMP/check-main-runs-not-cancelled.py"
+
       - name: Fetch the platform's workflow-timeout guard at the lane's scripts ref
         env:
           GH_TOKEN: ${{ github.token }}

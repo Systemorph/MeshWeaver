@@ -428,6 +428,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Mac local stack — on-device AI + local observability (M-series)](MacLocalStack)
 - [Memex Cloud Deployment](MemexCloudDeployment)
 - [Merge Queue Mechanics](MergeQueueMechanics)
+- [The fleet's ONE CI process](FleetCiProcess) — the mechanism lives here as a lane or a shared script; a satellite carries a thin caller (verdict adoption, the lock resolver, the cancellation rule)
 - [Operating from the portal, not the cluster](OperatingFromThePortal)
 - [The Payment Provider Contract](PaymentProviderContract)
 - [Pre-Boot Service Substitution](PreBootServiceSubstitution)
