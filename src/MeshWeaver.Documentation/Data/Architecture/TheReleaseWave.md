@@ -4,10 +4,16 @@ Category: Documentation
 Description: How a publication becomes a repository_dispatch across the plugin fleet — the single emitter rule, the image/digest contract that puts resolution on the RECEIVER, and the transitional gap left by retiring the GitHub-to-GitHub job
 ---
 
-A module is built against a platform **pin** *(as of 2026-09-12 no repository carries one — see
-"After phase 1" below; the wave mechanics on this page are unchanged)*, so when the platform (or an
-upstream catalog) publishes, every dependent repo must rebuild or its portals read
-`FrameworkDeclined` and adopt nothing. The mechanism that wakes them is the **release wave**: one `repository_dispatch` per
+*Historical framing, kept because it explains the wave's shape:* a module was built against a
+platform **pin**, so when the platform (or an upstream catalog) published, every dependent repo had
+to rebuild or its portals read `FrameworkDeclined` and adopted nothing. Neither half holds as of
+2026-09-12/13: no repository carries a pin (each resolves the newest sealed set at run time — see
+*After phase 1* below), and an installation's default `Modules:VersionStrictness = Family`
+(`PrebuiltAdoptionPolicy`) adopts a bundle sealed for another identity of the same major line when
+its floor is satisfied and its type links resolve — so a dependent that has not rebuilt keeps
+serving the previous sealed publication, and "no bundle yet for this identity" is an ordinary,
+bounded state rather than an adoption failure. What the wave still decides is *when* the next
+publication for a new identity exists at all. The mechanics below are unchanged by either. The mechanism that wakes them is the **release wave**: one `repository_dispatch` per
 subscribed repository.
 
 This page exists because the wave has been mis-diagnosed twice in one day, in opposite directions —
