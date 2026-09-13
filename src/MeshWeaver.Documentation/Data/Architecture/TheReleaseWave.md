@@ -218,12 +218,42 @@ A run held back by the ceiling says so: `lag` on the `Chosen`, an output row, a 
 (pull requests follow main)` notice and a summary row, each naming BOTH set ids — so "why did my
 core fix not show up in my PR?" is answered from the run's own log.
 
-**What is NOT ported, and is the remaining reason Plugins' copy cannot be a verbatim re-copy:** its
-receipt-based provenance (`publication_source` / `PublicationSource` / `ProvenanceUnavailable`),
-which reads the chosen set's core sha and release from the platform-bake job's own
-`bake published: …` log line instead of from the run's `head_sha` plus `Directory.Build.props`. That
-is a separate policy with its own credential question (it reads another repository's job LOGS), and
-it is not the ceiling. Adopting the canonical drops it; keeping it needs its own opt-in port.
+### Verifying where a set came FROM: `--verify-source`
+
+The second thing Plugins' fork carried, and the second option on the canonical. By default the chosen
+set's core commit is the publishing run's `head_sha` and its release is what `Directory.Build.props`
+declares at that commit. **Neither is a statement the publication itself made**, and the publishing
+lane reuses CONTENT-ADDRESSED builds from earlier runs — so the run that published a set is not
+necessarily the run that BUILT its bytes, and `head_sha` can put a newer commit on older bytes. That
+is [#4158](https://github.com/Systemorph/MeshWeaver/issues/4158)'s defect one level up.
+
+`--verify-source` takes both from the platform bake's OWN final publication receipt — the
+`bake published: source=meshweaver-content source-sha=… release=… arch=… identity=… bundles=N …`
+line `publish-bake-bundles.sh` writes AFTER publication, convergence and the release-marker writes.
+That line names the gate-selected source and release; workflow metadata does not.
+
+- **A set that cannot attribute itself is PASSED OVER, never taken unattributed.** A missing,
+  duplicated, malformed or inconsistent receipt raises `ProvenanceUnavailable`, the reason is
+  recorded in `skipped`, and the resolution continues at an older VERIFIED set. Under a freeze the
+  same condition is fatal — a freeze names one set and may not substitute another.
+- **A freeze BY SHA is matched against the receipt's sha**, which is the point: the run's head sha is
+  a different value and would match nothing.
+- **The log read is the only text this script ever fetches, it is bounded** (`MAX_LOG_BYTES`; over the
+  cap is a refusal, never a truncated parse that could match the wrong receipt) **and the token is
+  sent UNREDIRECTED** — a job-logs path answers a 302 to signed storage, and urllib would otherwise
+  forward this token to a host that is not GitHub and does not need it.
+
+🚨 **It grants nothing to anyone who does not ask, and that is executable rather than asserted.** The
+self-test's default case is run against a fetch that RAISES on any path ending `/logs`:
+
+> `DEFAULT (no --verify-source): head sha, and NO job log is fetched at all`
+
+Ungating the read reds that case by name (`expected a choice, got RED: a caller that did not pass
+--verify-source read a job LOG`) — along with 41 others, which is the same statement from the other
+side: the read is not a neutral addition to the default path.
+
+So the canonical needs no credential a caller does not already hold: the logs of the run it reads are
+fetched with the CALLER's own token, only when the caller passes the flag, exactly as the fork did.
 
 ## Reading a wave, in order
 

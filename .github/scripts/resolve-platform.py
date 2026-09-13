@@ -144,10 +144,11 @@ POLL_SECONDS = 30
 # when the chosen run's own seal is not green — one `jobs` call each, so this bounds the budget.
 PLUGINS_LOOKBACK = 40
 
-# GitHub REST: path → JSON. A `list` because the check-run ANNOTATIONS endpoint answers a
-# bare array; every other path this script reads answers an object, so callers that expect
-# one keep reading `.get(...)` unchanged.
-Fetch = Callable[[str], dict | list]
+# GitHub REST: path → JSON, or TEXT. A `list` because the check-run ANNOTATIONS endpoint answers a
+# bare array; a `str` because a job LOGS endpoint answers plain text (read only when a caller opts
+# into `--verify-source`). Every other path this script reads answers an object, so callers that
+# expect one keep reading `.get(...)` unchanged.
+Fetch = Callable[[str], dict | list | str]
 Resolve = Callable[[str, str], str | None]         # registry: (repo, tag) → digest or None (absent)
 
 
@@ -155,24 +156,57 @@ class ResolutionError(RuntimeError):
     """A RED verdict: what was looked for and what stood in the way. Never a silent pass."""
 
 
+class ProvenanceUnavailable(ResolutionError):
+    """The set cannot be attributed to a source; normal selection may try an older verified set."""
+
+
+# Bounds the ONE text read this script can make (`--verify-source`, off by default). A job log is a
+# stream with no declared length, so a cap is the difference between a bounded read and an OOM on a
+# runner; over the cap is a refusal, never a truncated parse that could match the wrong receipt.
+MAX_LOG_BYTES = 16 * 1024 * 1024
+FINAL_BAKE_RECEIPT = re.compile(
+    r"^(?:\d{4}-\d{2}-\d{2}T[\d:.]+Z )?bake published: ([^\r\n]+)$", re.MULTILINE)
+
+
 # ───────────────────────────── GitHub REST (public core repo) ─────────────────────────────
 
 def github_fetch_with(token: str) -> Fetch:
-    def fetch(path: str) -> dict | list:
+    def fetch(path: str) -> dict | list | str:
         last: Exception | None = None
         for attempt in range(4):
             request = urllib.request.Request(
                 f"{GITHUB_API}{path}",
                 headers={
-                    "Authorization": f"Bearer {token}",
                     "Accept": "application/vnd.github+json",
                     "X-GitHub-Api-Version": "2022-11-28",
                     "User-Agent": "meshweaver-lane-resolve-platform",
                 })
+            # 🚨 UNREDIRECTED. A job-logs path answers a 302 to SIGNED storage, and urllib forwards
+            # ordinary headers across a redirect — which would hand this token to a host that is not
+            # GitHub and does not need it. The signed URL carries its own authorisation. No JSON
+            # endpoint this script reads redirects, so nothing else changes.
+            request.add_unredirected_header("Authorization", f"Bearer {token}")
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
+                    # The ONE text read, and only for the path that has one (`--verify-source`).
+                    if path.endswith("/logs"):
+                        raw = response.read(MAX_LOG_BYTES + 1)
+                        if len(raw) > MAX_LOG_BYTES:
+                            raise ProvenanceUnavailable(f"job log {path} exceeds {MAX_LOG_BYTES} bytes")
+                        try:
+                            return raw.decode("utf-8", "strict")
+                        except UnicodeDecodeError as error:
+                            raise ProvenanceUnavailable(f"job log {path} is not UTF-8 text") from error
                     return json.load(response)
+            except ProvenanceUnavailable:
+                raise
             except urllib.error.HTTPError as error:
+                # A log that is GONE is a provenance answer, not a transport verdict: logs expire
+                # on their own retention while the run stays listed, so an older set must be tried
+                # rather than the whole resolution going red.
+                if path.endswith("/logs") and error.code in (404, 410):
+                    raise ProvenanceUnavailable(
+                        f"job log {path} is unavailable (HTTP {error.code})") from error
                 # A rate limit is transient by definition; wait for it, bounded. Anything else is
                 # a verdict about the path or the token.
                 if error.code in (403, 429) and attempt < 3:
@@ -234,6 +268,107 @@ def platform_version(fetch: Fetch, sha: str, log: Callable[[str], None] = print)
         return None
     match = PLATFORM_VERSION.search(text)
     return match.group(1) if match else None
+
+
+# ───── OPTIONAL: the publication's OWN SOURCE, read from the bake receipt (#4171) ─────
+#
+# 🚨 OFF UNLESS ASKED (`--verify-source`). Nothing below runs, and no job LOG is ever fetched,
+# without the flag; `choose(..., verify_source=False)` — every caller that does not ask — keeps
+# taking the run's `head_sha` plus the version `Directory.Build.props` declares at it.
+#
+# 🚨 WHY IT IS MORE CORRECT WHEN YOU DO ASK. The publishing lane reuses CONTENT-ADDRESSED builds
+# from earlier runs, so the run that published a set is not necessarily the run that BUILT its
+# bytes — the same defect MeshWeaver#4158 exists for one level up, where a `[ModuleLoad]` line
+# stamped with `github.sha` would put a newer commit on older bytes. `publish-bake-bundles.sh`
+# writes its final receipt AFTER publication, convergence and the release-marker writes, and that
+# line names the gate-selected SOURCE and RELEASE. Workflow metadata does not.
+#
+# 🚨 AND IT IS A REFUSAL, never a silent downgrade: a set whose receipt is missing, duplicated,
+# malformed or inconsistent raises ProvenanceUnavailable and the set is PASSED OVER with the reason
+# recorded, so the resolution continues at an older VERIFIED set instead of taking an unattributable
+# one. Under a freeze the same condition is fatal — a freeze names one set and may not substitute.
+
+class PublicationSource(NamedTuple):
+    sha: str
+    version: str
+    set_name: str
+
+
+def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
+                       receipts: dict[tuple[int, int], PublicationSource]) -> PublicationSource:
+    """Read the producer's final publication receipt, once per successful platform-bake job.
+
+    publish-bake-bundles.sh writes this AFTER publication/convergence and release-marker writes.
+    The receipt names the actual gate-selected source and release; workflow metadata does not.
+    Architecture identities may differ, but source and release must agree across every leg.
+    """
+    sources: set[PublicationSource] = set()
+    for job in jobs:
+        if not str(job.get("name", "")).startswith(REQUIRED_JOBS[2][1]):
+            continue
+        if job.get("status") != "completed" or job.get("conclusion") != "success":
+            continue
+        job_id = job.get("id")
+        if not isinstance(job_id, int) or job_id <= 0:
+            raise ProvenanceUnavailable("the successful platform bake has no usable job id")
+        key = job_id, run_number
+        if key in receipts:
+            sources.add(receipts[key])
+            continue
+        body = fetch(f"/repos/{CORE_REPO}/actions/jobs/{job_id}/logs")
+        if not isinstance(body, str):
+            raise ProvenanceUnavailable(f"platform-bake job {job_id} returned no text log")
+        records = FINAL_BAKE_RECEIPT.findall(body)
+        if len(records) != 1:
+            raise ProvenanceUnavailable(
+                f"platform-bake job {job_id} has {len(records)} final publication receipts; expected one")
+        fields: dict[str, str] = {}
+        for token in records[0].split():
+            key, separator, value = token.partition("=")
+            if not separator or not value or key in fields:
+                raise ProvenanceUnavailable(f"platform-bake job {job_id} has a malformed final receipt")
+            fields[key] = value
+        sha = fields.get("source-sha", "")
+        release = SET_NAME.fullmatch(fields.get("release", ""))
+        counts = [fields.get(key, "") for key in
+                  ("bundles", "targets-published", "targets-converged", "release-markers")]
+        if (fields.get("source") != "meshweaver-content" or not SHA.fullmatch(sha)
+                or not release or int(release.group(2)) != run_number
+                or fields.get("arch") not in ("linux-x64", "linux-arm64")
+                or not fields.get("identity") or fields["identity"] == "unknown"
+                or not all(re.fullmatch(r"[0-9]+", value) for value in counts)
+                or int(counts[0]) == 0 or int(counts[1]) + int(counts[2]) == 0 or int(counts[3]) == 0):
+            raise ProvenanceUnavailable(
+                f"platform-bake job {job_id} has an incomplete or inconsistent final publication receipt")
+        version = release.group(1)
+        receipt = PublicationSource(sha, version, f"{version}-ci.{run_number}")
+        receipts[job_id, run_number] = receipt
+        sources.add(receipt)
+    if len(sources) != 1:
+        raise ProvenanceUnavailable(
+            f"successful platform bakes disagree on source/release (found {len(sources)} distinct receipts)")
+    return next(iter(sources))
+
+
+# ──────────────── WHAT THIS REPO'S OWN `main` HAS ALREADY PASSED ON (#3842 → Roland, 2026-09-12)
+#
+# 🚨 A PULL REQUEST RESOLVES THE NEWEST SEALED SET **THAT `main` HAS ALREADY PASSED**, not simply
+# the newest sealed set. The failure mode is the whole point of the rule: when core seals a set
+# that regresses this repo, `main` goes red on it and **every open pull request keeps building on
+# the last set main passed**. Before this, one such set reddened every open PR at once, for a
+# reason no author's diff could reach — measured four times in 24 h, 91 PR-hours exposed
+# (Hosting/PullRequestDrain.md).
+#
+# The evidence is each run's OWN answer, not a second bookkeeping mechanism: every run publishes
+# `::notice title=Platform for this run::<set> — core <sha9>` from `write_outputs` below, and an
+# annotation survives with its check run. So the ceiling is read back from the newest SUCCESSFUL
+# push runs of this repo's ci.yml on main. A run whose annotation cannot be read is SKIPPED and
+# said so — never treated as "main passed nothing".
+SATELLITE_CD_WORKFLOW = "ci.yml"
+MAIN_RUNS_EXAMINED = 12          # ~a day of merges; deep enough to survive a red patch on main
+PLATFORM_REF_JOB = "Resolve the released platform"
+NOTICE_TITLE = "Platform for this run"
+NOTICE_SET = re.compile(r"(\d+\.\d+\.\d+)[.-]ci\.(\d+)")
 
 
 # ───── OPTIONAL: what the CALLING repo's own `main` has already passed on (#3842, #4171) ─────
@@ -507,13 +642,19 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
            wait_for_seal: float = 0.0, freeze: str | None = None,
            sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
            now: Callable[[], float] = time.time, migration: str | None = None,
-           passed_ceiling: int | None = None) -> Chosen:
+           passed_ceiling: int | None = None, verify_source: bool = False) -> Chosen:
     """`passed_ceiling` — OPTIONAL, and `None` (every caller that does not ask for it) leaves this
     function on exactly the path it took before the option existed. When given, it is the highest
     core-CD run number the CALLING repository's own `main` has passed on: a sealed set NEWER than
     it is passed over and said so, so a set that regresses that repository reds `main` alone
     instead of every open pull request (see `main_passed_ceiling`). A freeze overrides it, because
-    a freeze is an instruction rather than a preference."""
+    a freeze is an instruction rather than a preference.
+
+    `verify_source` — OPTIONAL, and `False` (every caller that does not ask) reads no job log and
+    keeps taking the run's `head_sha` plus the version `Directory.Build.props` declares at it. When
+    set, the set's sha and release come from the platform bake's own final publication receipt
+    instead, and a set whose receipt is missing, duplicated, malformed or inconsistent is PASSED
+    OVER with the reason recorded rather than taken unattributed (see `publication_source`)."""
     freeze_kind = freeze_value = None
     if freeze:
         freeze_kind, freeze_value = parse_freeze(freeze)
@@ -523,6 +664,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
     examined = 0
     skipped: list[str] = []
     newer_than_main: str | None = None     # the newest sealed set main has NOT passed, if any
+    receipts: dict[tuple[int, int], PublicationSource] = {}   # one log read per bake job, at most
     chosen: Chosen | None = None
     publication: PluginsPublication | None = None
     lookback = 0
@@ -556,7 +698,11 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                         f" ({publication.set_name}) — an older set than the platform chosen")
                 continue
 
-            if freeze_kind == "sha" and sha != freeze_value:
+            # 🚨 Only when the head sha IS the answer. Under `--verify-source` the set's real sha
+            # is the bake receipt's, which is not known until the run's jobs have been read — so
+            # filtering on `head_sha` here would drop exactly the runs the option exists to
+            # attribute correctly. The same check is re-applied below, against the receipt.
+            if freeze_kind == "sha" and not verify_source and sha != freeze_value:
                 continue
             if freeze_kind == "set" and number != int(SET_NAME.fullmatch(freeze_value).group(2)):
                 continue
@@ -620,9 +766,27 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                     "names a set whose Plugins publication is still sealing; taken as instructed — "
                     "the upstream fetch says whether the registry holds it yet")
 
-            if version is ...:
-                version = platform_version(fetch, sha, log=log)
-            set_name = f"{version}-ci.{number}" if version else f"ci.{number} (line unknown)"
+            if verify_source:
+                # The publication's OWN statement of what it published. A set that cannot make it
+                # is passed over, not taken unattributed; under a freeze it is fatal, because a
+                # freeze names one set and may never substitute another.
+                try:
+                    sha, version, set_name = publication_source(fetch, jobs, number, receipts)
+                except ProvenanceUnavailable as error:
+                    skipped.append(f"{label}: source/release unverified — {error}")
+                    log(f"  skip {skipped[-1]}")
+                    if freeze_kind:
+                        raise ResolutionError(
+                            f"the freeze names {label}, but its source/release is unverified: "
+                            f"{error}. Refusing to substitute another set.") from error
+                    continue
+                label = f"main-cd #{number} (core {sha[:9]} from the final platform bake)"
+                if freeze_kind == "sha" and sha != freeze_value:
+                    continue
+            else:
+                if version is ...:
+                    version = platform_version(fetch, sha, log=log)
+                set_name = f"{version}-ci.{number}" if version else f"ci.{number} (line unknown)"
             if freeze_kind == "set" and set_name != freeze_value:
                 raise ResolutionError(
                     f"the freeze names {freeze_value}, but {label} resolves to {set_name}. "
@@ -657,6 +821,9 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                       else "the newest sealed platform set this repo's `main` has passed"
                       if passed_ceiling is not None
                       else "the newest sealed platform set")
+            if verify_source and not freeze:
+                source += "; source verified by the final platform bake"
+
             if skipped and not freeze:
                 source += f" — {len(skipped)} newer run(s) passed over, see the log"
             lag = ""
@@ -667,6 +834,10 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 log(f"  {lag}")
             chosen = Chosen(sha, number, str(run.get("html_url", "")), set_name, digests,
                             v.plugins, source, lag=lag)
+            # The publication found on THIS run was named from the props at `head_sha`; when the
+            # receipt was read, the verified release is the better name for the same thing.
+            if verify_source and publication is not None and publication.run_number == number:
+                publication = publication._replace(set_name=set_name)
             if publication is not None:
                 break
             log(f"  {label}: its own Plugins seal is `{v.plugins}` — the platform is taken anyway "
@@ -1239,10 +1410,16 @@ def self_test() -> int:
     # closing sentence. A run that DID follow main says so instead — the summary may never carry a
     # lag row under a sentence claiming the newest set is always taken.
     total += 1
-    plain = output_rows(choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
-                               log=logs.append), tester, portal)
-    followed = output_rows(choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
-                                  log=logs.append, passed_ceiling=8203), tester, portal)
+    # 🚨 Guarded: a bare call here would CRASH the suite instead of failing a named case, and a
+    # traceback tells a reader which line threw but not which property broke.
+    try:
+        plain = output_rows(choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
+                                   log=logs.append), tester, portal)
+        followed = output_rows(choose(_fetch_for(two, sealed_two), _registry(full), tester, portal,
+                                      log=logs.append, passed_ceiling=8203), tester, portal)
+    except Exception as error:                       # noqa: BLE001 — a throw here IS the failure
+        plain = followed = {"lag": f"<{type(error).__name__}: {error}>"}
+        failures.append(f"output rows: resolving for the row probe threw — {error}")
     if plain.get("lag") != "" or "lag" not in plain or followed.get("lag", "") == "":
         failures.append(f"output rows: `lag` must always be present and empty by default — "
                         f"default={plain.get('lag')!r}, followed={followed.get('lag')!r}")
@@ -1328,6 +1505,105 @@ def self_test() -> int:
         failures.append("annotations as a bare array must read the same — got "
                         f"{got}{error_text}")
 
+    # ── THE OPTIONAL PUBLICATION-SOURCE VERIFICATION (#4171) ────────────────────────────────
+    # The set's sha and release read from the platform bake's OWN final receipt rather than from
+    # the run's head sha. Three properties carry it, and the FIRST is the one that decides whether
+    # this may live in the canonical at all: **no caller that does not ask reads a job log.**
+    RECEIPT_SHA = "e" * 40
+
+    def _receipt(sha: str = RECEIPT_SHA, release: str = "3.0.0-ci.8207", **over) -> str:
+        fields = {"source": "meshweaver-content", "source-sha": sha, "release": release,
+                  "arch": "linux-x64", "identity": "net10.0-abc", "bundles": "3",
+                  "targets-published": "3", "targets-converged": "0", "release-markers": "1"}
+        fields.update(over)
+        body = " ".join(f"{k}={v}" for k, v in fields.items())
+        return f"2026-09-13T00:00:00.0Z bake published: {body}\n"
+
+    def _fetch_with_logs(logs: dict[int, str], runs=None, jobs=None) -> Fetch:
+        base = _fetch_for(runs or two, jobs or sealed_two)
+
+        def fetch(path: str):
+            if path.endswith("/logs"):
+                job_id = int(path.rsplit("/", 2)[1])
+                if job_id not in logs:
+                    raise ProvenanceUnavailable(f"job log {path} is unavailable (HTTP 410)")
+                return logs[job_id]
+            return base(path)
+        return fetch
+
+    # `_jobs()` gives the bake job no id, so give one per run: the id the receipt is keyed on.
+    def _jobs_with_bake_id(bake_id: int, **kw) -> list[dict]:
+        rows = _jobs(**kw)
+        for row in rows:
+            if str(row["name"]).startswith(REQUIRED_JOBS[2][1]):
+                row["id"] = bake_id
+        return rows
+
+    id_8207, id_8203 = 70001, 70002
+    with_ids = {1000 + 8207: _jobs_with_bake_id(id_8207), 1000 + 8203: _jobs_with_bake_id(id_8203)}
+
+    # 🚨 THE CONTROL THAT LICENSES THE OPTION. A fetch that EXPLODES on any log path: the default
+    # path must never touch one, so this case fails loudly (not silently) the moment the read stops
+    # being gated on the flag. It is the credential argument made executable — nothing is read on
+    # behalf of a caller who did not ask.
+    def _no_logs_allowed(path: str):
+        if path.endswith("/logs"):
+            # A plain ResolutionError, deliberately NOT a ProvenanceUnavailable: the latter is
+            # CAUGHT by `choose` and turned into "passed over", so the breach would be reported as
+            # an ordinary skip instead of failing this case by name.
+            raise ResolutionError("a caller that did not pass --verify-source read a job LOG")
+        return _fetch_for(two, with_ids)(path)
+
+    case("DEFAULT (no --verify-source): head sha, and NO job log is fetched at all", True,
+         lambda: choose(_no_logs_allowed, _registry(full), tester, portal, log=logs.append),
+         lambda c: c.sha == A and c.set_name == "3.0.0-ci.8207"
+         and "source verified" not in c.source)
+
+    verified = _fetch_with_logs({id_8207: _receipt(), id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+                                jobs=with_ids)
+    case("…WITH it: the sha and release come from the bake's own receipt, not from head_sha", True,
+         lambda: choose(verified, _registry(full), tester, portal, log=logs.append,
+                        verify_source=True),
+         lambda c: c.sha == RECEIPT_SHA and c.sha != A and c.set_name == "3.0.0-ci.8207"
+         and "source verified" in c.source)
+
+    # A set that cannot attribute itself is PASSED OVER — never taken unattributed, and never fatal
+    # on its own: the resolution continues at an older VERIFIED set, with the reason recorded.
+    case("a set whose receipt is missing is passed over for an older VERIFIED one, and said", True,
+         lambda: choose(_fetch_with_logs({id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+                                         jobs=with_ids),
+                        _registry(full), tester, portal, log=logs.append, verify_source=True),
+         lambda c: c.set_name == "3.0.0-ci.8203"
+         and any("#8207" in s and "source/release unverified" in s for s in logs))
+    case("…and an INCONSISTENT receipt is passed over the same way", True,
+         lambda: choose(_fetch_with_logs({id_8207: _receipt(sha="not-a-sha"),
+                                          id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+                                         jobs=with_ids),
+                        _registry(full), tester, portal, log=logs.append, verify_source=True),
+         lambda c: c.set_name == "3.0.0-ci.8203")
+    case("…and a DUPLICATED receipt is refused rather than one of them picked", False,
+         lambda: choose(_fetch_with_logs({id_8207: _receipt() + _receipt(),
+                                          id_8203: _receipt() + _receipt()}, jobs=with_ids),
+                        _registry(full), tester, portal, log=logs.append, verify_source=True),
+         lambda message: "no sealed platform set" in message)
+
+    # Under a FREEZE the same condition is fatal: a freeze names one set and may not substitute.
+    case("an unverifiable set under a freeze is RED, never substituted", False,
+         lambda: choose(_fetch_with_logs({id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
+                                         jobs=with_ids),
+                        _registry(full), tester, portal, freeze="3.0.0-ci.8207",
+                        log=logs.append, verify_source=True),
+         lambda message: "unverified" in message and "Refusing to substitute" in message)
+    # …and a freeze BY SHA is matched against the receipt's sha, which is the whole point: the
+    # run's head sha is a different value and would match nothing.
+    case("a freeze by sha matches the RECEIPT's sha, not the run's head sha", True,
+         lambda: choose(verified, _registry(full), tester, portal, freeze=RECEIPT_SHA,
+                        log=logs.append, verify_source=True),
+         lambda c: c.sha == RECEIPT_SHA)
+    total += 1
+    if MAX_LOG_BYTES <= 0 or FINAL_BAKE_RECEIPT.search(_receipt()) is None:
+        failures.append("the receipt pattern must match the line publish-bake-bundles.sh writes")
+
     if failures:
         print(f"✗ resolve-platform self-test: {len(failures)} failure(s)")
         for failure in failures:
@@ -1339,8 +1615,9 @@ def self_test() -> int:
           "an unsealed or purged newer set is passed over and SAID, a sealing set is waited for on "
           "request, a freeze never substitutes, a re-run takes a newer set and keeps its baseline "
           "otherwise, the OPTIONAL main ceiling changes nothing unless asked for and refuses "
-          "rather than falling back when main has passed nothing, and every dead end is RED "
-          "naming why.")
+          "rather than falling back when main has passed nothing, the OPTIONAL source verification "
+          "reads no job log unless asked for and passes over a set it cannot attribute, and every "
+          "dead end is RED naming why.")
     return 0
 
 
@@ -1371,6 +1648,13 @@ def main() -> int:
                         help="OPTIONAL: the ceiling a `platform-ref` job already established (its "
                              "`ceiling` output) — a re-resolving job on a pull request passes it "
                              "instead of re-reading main's runs (no extra API cost).")
+    parser.add_argument("--verify-source", action="store_true",
+                        help="OPTIONAL: take the chosen set's core commit and release from the "
+                             "platform bake's OWN final publication receipt instead of the run's "
+                             "head sha. Reads that one job's log (the only text this script ever "
+                             "fetches, and only with this flag). A set whose receipt is missing, "
+                             "duplicated, malformed or inconsistent is passed over, never taken "
+                             "unattributed.")
     arguments = parser.parse_args()
 
     if arguments.self_test:
@@ -1429,7 +1713,8 @@ def main() -> int:
             print(f"following main: the newest set main has passed is core CD #{ceiling}")
     choose_fn = lambda: choose(fetch, resolve, tester, portal,  # noqa: E731 — one call, two callers
                                wait_for_seal=arguments.wait_for_seal, freeze=arguments.freeze or None,
-                               migration=migration or None, passed_ceiling=ceiling)
+                               migration=migration or None, passed_ceiling=ceiling,
+                               verify_source=arguments.verify_source)
     try:
         baseline = load_baseline(os.environ.get(BASELINE_ENV))
         if baseline is not None:
