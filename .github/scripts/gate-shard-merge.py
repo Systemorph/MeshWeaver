@@ -61,12 +61,21 @@ PLAN_RE = re.compile(
     r"^shard (?P<index>\d+)/(?P<total>\d+): gating (?P<gated>\d+) of (?P<discovered>\d+) "
     r"discovered package\(s\) — (?P<names>.*?); installing \d+ support package\(s\)")
 
-# `[PASS] Store (116 node(s), 10 type(s))`, optionally trailed by an `[upstream: …]` /
-# `[support: …]` marker. The marker is what says a line is NOT this shard's verdict.
+# `[PASS] Store (116 node(s), 10 type(s))`, optionally trailed by `[N/M content asset(s) served]`
+# (GateReport.WriteSummary, for a package that ships content assets — a GATED package still),
+# then optionally by an `[upstream: …]` / `[support: …]` marker. ONLY the marker says a line is
+# NOT this shard's verdict. 🚨 Until MeshWeaver#4155 `marker` was `.*` — everything after the
+# counts — so the content-asset annotation read as a support marker and the first real
+# `shards: 4` run (MeshWeaver.Plugins#1765, run 34745137329) was refused as "gated 49 of 69":
+# the 20 packages with content assets, every one of them judged, counted as fallen between the
+# slices. The annotation is matched by NAME here so an unknown trailer cannot be mistaken for
+# either; `_summary_blocks` refuses a trailer it does not recognise, out loud.
 PACKAGE_RE = re.compile(
     r"^\[(?P<label>PASS|FAIL|DEBT)\] (?P<id>\S+) "
-    r"(?:\((?P<nodes>\d+) node\(s\), (?P<types>\d+) type\(s\)\)|\(counts unavailable)"
-    r"(?P<marker>.*)$")
+    r"(?:\((?P<nodes>\d+) node\(s\), (?P<types>\d+) type\(s\)\)|\(counts unavailable[^)]*\))"
+    r"(?P<assets> \[\d+/\d+ content asset\(s\) served\])?"
+    r"(?P<marker> \[(?:upstream|support): [^\]]*\])*"
+    r"(?P<rest>.*)$")
 
 
 class ShardLog:
@@ -111,8 +120,14 @@ def _summary_blocks(text: str) -> tuple[list[tuple[str, str, list[str]]], str | 
             break
         package = PACKAGE_RE.match(line)
         if package:
+            if package["rest"].strip():
+                raise ValueError(
+                    f"carries a package line with a trailer this fold does not recognise — "
+                    f"{package['rest'].strip()!r} on {package['id']!r}. A trailer is either the "
+                    f"content-asset annotation or an [upstream: …]/[support: …] marker; anything "
+                    f"else would be silently read as one or the other (MeshWeaver#4155).")
             current = [line]
-            blocks.append((package["id"], package["marker"].strip(), current))
+            blocks.append((package["id"], (package["marker"] or "").strip(), current))
             continue
         if line.startswith("FATAL:"):
             # Kept with the block that follows it — it is the run's own fatal, not a package's.
@@ -269,7 +284,10 @@ def main() -> int:
 # ── self-test: the fold must be able to FAIL, and each way it can ────────────────────────────
 
 def _log(index: int, total: int, discovered: int, gated: list[str],
-         support: list[str] = (), verdict: str = "ALL GREEN.") -> str:
+         support: list[str] = (), verdict: str = "ALL GREEN.",
+         assets: list[str] = ()) -> str:
+    """`assets` names the packages whose line carries `[1/1 content asset(s) served]` — gated
+    or support alike, exactly where GateReport puts it (before any marker)."""
     names = ", ".join(gated) or "(none)"
     sup = ", ".join(support) or "(none)"
     lines = [
@@ -278,11 +296,14 @@ def _log(index: int, total: int, discovered: int, gated: list[str],
         "",
         SUMMARY_HEADER,
     ]
+    def annotation(pid: str) -> str:
+        return " [1/1 content asset(s) served]" if pid in assets else ""
     for pid in gated:
-        lines.append(f"[PASS] {pid} (3 node(s), 1 type(s))")
+        lines.append(f"[PASS] {pid} (3 node(s), 1 type(s)){annotation(pid)}")
         lines.append(f"    ok  {pid}/Type: compile=Ok render=ok tests=ok")
     for pid in support:
-        lines.append(f"[PASS] {pid} (3 node(s), 0 type(s)) [support: installed, gated on another shard]")
+        lines.append(f"[PASS] {pid} (3 node(s), 0 type(s)){annotation(pid)}"
+                     f" [support: installed, gated on another shard]")
     lines.append(verdict)
     return "\n".join(lines) + "\n"
 
@@ -308,6 +329,35 @@ def self_test() -> int:
               f"count={merged.count(f'[PASS] {pid} (')}")
     check("no support marker survives when the owner is present",
           "[support:" not in merged.split(SUMMARY_HEADER)[-1], merged[-400:])
+
+    # 🚨 MeshWeaver#4155: a GATED package whose line carries the content-asset annotation is
+    # still this shard's verdict — it must not fall between the slices — and a SUPPORT package
+    # carrying both the annotation and its marker is still support. The exact shape of
+    # MeshWeaver.Plugins run 34745137329, where 20 such packages read as unjudged.
+    merged, problems = fold({
+        1: _log(1, 2, 4, ["A", "C"], ["B"], assets=["A", "B"]),
+        2: _log(2, 2, 4, ["B", "D"], ["A"], assets=["A", "B"]),
+    }, 2)
+    check("a gated package with a content-asset annotation is gated", not problems, str(problems))
+    check("the annotation survives on the owner's line",
+          "[PASS] A (3 node(s), 1 type(s)) [1/1 content asset(s) served]" in merged, merged[-400:])
+    check("a support package with the annotation is still dropped beside its owner",
+          merged.split(SUMMARY_HEADER)[-1].count("[PASS] A (") == 1
+          and "[support:" not in merged.split(SUMMARY_HEADER)[-1], merged[-400:])
+    # The package no shard gated keeps its support copy — annotation and marker intact — so the
+    # ratchet still sees it was installed and by whom.
+    merged, problems = fold({
+        1: _log(1, 2, 3, ["A"], ["C"], assets=["C"]),
+        2: _log(2, 2, 3, ["B"], ["C"], assets=["C"]),
+    }, 2)
+    check("an ungated support package with the annotation is still a cover problem",
+          any("fell between the slices" in p for p in problems), str(problems))
+    # An unrecognised trailer is refused, never read as gated OR as support.
+    unknown = _log(2, 2, 2, ["B"]).replace("[PASS] B (3 node(s), 1 type(s))",
+                                           "[PASS] B (3 node(s), 1 type(s)) [something new]")
+    _, problems = fold({1: _log(1, 2, 2, ["A"]), 2: unknown}, 2)
+    check("an unrecognised trailer is refused by name",
+          any("does not recognise" in p and "[something new]" in p for p in problems), str(problems))
 
     # A missing shard is the finding, not a shorter merge.
     _, problems = fold({1: _log(1, 2, 4, ["A", "C"], ["B"])}, 2)
