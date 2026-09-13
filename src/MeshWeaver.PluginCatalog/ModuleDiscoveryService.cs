@@ -8,6 +8,8 @@ using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -473,7 +475,7 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
                 StringComparison.OrdinalIgnoreCase);
             if (ours && prior?.ProvisionedAt is not null
                 && string.IsNullOrWhiteSpace(syncConfig.LastSyncCommitSha))
-                return FirstImport(spaceId).Select(detail => seed with
+                return FirstImport(spaceId, source).Select(detail => seed with
                 {
                     Status = ModuleDiscoveryStatus.Provisioned,
                     Detail = $"re-running the first import, which had not landed — {detail}",
@@ -641,7 +643,7 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
                 direction: SyncDirection.ImportOnly)))
             .SelectMany(_ => AsSystem(() => PackageInstaller.EnsureDeclaredAccess(
                 hub, module, spaceId, logger)))
-            .SelectMany(_ => FirstImport(spaceId))
+            .SelectMany(_ => FirstImport(spaceId, source))
             .Select(detail => seed with
             {
                 Status = ModuleDiscoveryStatus.Provisioned,
@@ -690,21 +692,95 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     /// activity IS the failure record, and a Space that exists with a sync entry but no content yet
     /// is recoverable (the next green build re-runs the import), whereas a faulted provisioning
     /// would leave nothing recorded at all.
+    ///
+    /// <para>🚨 <b>ADOPT, THEN SYNC — this import names a commit whenever the instance has one</b>
+    /// (MeshWeaver#3845 hole 2). It used to call
+    /// <see cref="GitHubActivityExtensions.UpdateToLatestFromGitHub"/> unconditionally, which
+    /// resolves the branch AT FETCH TIME — the one thing that method's own contract says a machine
+    /// trigger must never do ("Trigger UpdateToLatestFromGitHub only from a human action"). This
+    /// scan is as unattended as a trigger gets: it runs as System, on boot and on every catalog
+    /// scan, with nobody watching. <c>SyncRefContract</c> excused it because a webhook-less consumer
+    /// has no <c>BuildCompletion</c> to pin to; the seal on the instance's own disk is a better
+    /// pin and needs no webhook, so the excuse no longer holds and the residue is closed.</para>
+    ///
+    /// <para><b>Nothing changes for a repository this instance runs no publication of</b> — that is
+    /// still a branch-tip import, which is the case <c>SyncRefContract</c>'s rationale was actually
+    /// about. What changes is a module-bearing repository whose bytes this instance DOES run: its
+    /// sources now land on the commit those bytes were baked from, so a NodeType's sources cannot
+    /// arrive ahead of the bundle that serves it.</para>
     /// </summary>
-    private IObservable<string> FirstImport(string spaceId) =>
-        // System both as the trigger identity (TriggerAuthorizedAsSystem short-circuits an ambient
-        // System caller) and as the GitHub identity (ResolveAuth falls through to the App
-        // installation token — the machine identity server-side syncs already use).
-        AsSystem(() => hub.UpdateToLatestFromGitHub(spaceId, WellKnownUsers.System))
-            .Take(1)
-            .Select(activityPath => $"first import ran ({activityPath})")
-            .Catch((Exception exception) =>
+    /// <param name="spaceId">The Space to bring up.</param>
+    /// <param name="source">The configured package source — its repo decides which seal applies.</param>
+    private IObservable<string> FirstImport(string spaceId, ConfiguredPackageSource source) =>
+        // Defer: the seal is read on SUBSCRIBE, not when the pipeline is composed — a scan composed
+        // before a publication landed and subscribed after it must see the seal, not the absence.
+        Observable.Defer(() =>
+        {
+            var plan = FirstImportPlan(source);
+            if (!plan.Proceed)
             {
-                logger?.LogWarning(exception,
-                    "[ModuleDiscovery] the first import of '{Space}' could not run; the Space and its "
-                    + "sync entry are in place and the next green build retries it.", spaceId);
-                return Observable.Return($"first import could not run: {exception.Message}");
-            });
+                // 🚨 Its own line, at Warning, exactly as the webhook path logs a held source: a
+                // first import that imports NOTHING leaves an empty Space, and an empty Space is
+                // indistinguishable from a module that simply has no content unless something says
+                // so.
+                // 🚨 And the line says WHEN it will be retried rather than "later". Evaluate's case
+                // (1) re-runs the import on the next scan (a config with no LastSyncCommitSha is the
+                // trigger) — but scans are enqueued at boot and on BuildCompletion emissions, so on
+                // an instance receiving no build webhooks the next scan IS the next boot. A seal
+                // completing mid-process is not noticed until then (MeshWeaver#4063's shape).
+                logger?.LogWarning(
+                    "[ModuleDiscovery] the first import of '{Space}' is HELD — {Reason}. The Space and "
+                    + "its sync entry are in place; the next scan retries it — that is the next green "
+                    + "build of this repo, or this instance's next start if it receives no build "
+                    + "webhooks (MeshWeaver#4063).", spaceId, plan.HoldReason);
+                return Observable.Return($"first import held — {plan.HoldReason}");
+            }
+            // System both as the trigger identity (TriggerAuthorizedAsSystem short-circuits an
+            // ambient System caller) and as the GitHub identity (ResolveAuth falls through to the
+            // App installation token — the machine identity server-side syncs already use).
+            return AsSystem(() => plan.Commit is { Length: > 0 } commit
+                    ? hub.UpdateToProvenCommitFromGitHub(spaceId, WellKnownUsers.System, commit)
+                    : hub.UpdateToLatestFromGitHub(spaceId, WellKnownUsers.System))
+                .Take(1)
+                .Select(activityPath => $"first import ran ({activityPath}; {plan.Reason})");
+        })
+        .Catch((Exception exception) =>
+        {
+            logger?.LogWarning(exception,
+                "[ModuleDiscovery] the first import of '{Space}' could not run; the Space and its "
+                + "sync entry are in place and the next green build retries it.", spaceId);
+            return Observable.Return($"first import could not run: {exception.Message}");
+        });
+
+    /// <summary>
+    /// The seal reading behind <see cref="FirstImport"/>: what this instance's framework identity has
+    /// sealed of <paramref name="source"/>'s repository, put to <see cref="SealedSyncGate"/>. A
+    /// source whose repo path is not an <c>owner/name</c> GitHub repository matches no seal and so
+    /// keeps today's behaviour — the same fail-open the gate itself has.
+    ///
+    /// <para><b>The local-disk read runs inline, deliberately, and here is the measurement.</b> Every
+    /// caller of <see cref="SealedPublicationIndex.ReadFor"/> reads it this way —
+    /// <c>GitHubWebhookProcessor</c> inside its own <c>Select</c>, and <c>ShippedPrebuiltBundles</c>
+    /// twice during seeding; there is no <c>IIoPool</c>-wrapped bundle reader to be consistent with,
+    /// so wrapping this one alone would make the four call sites disagree about a shared pure
+    /// function. It also does not reach the hub: the scan pipeline is
+    /// <c>ObserveOn(TaskPoolScheduler.Default)</c> + <c>Concat</c> precisely so a scan never runs on
+    /// the thread that queued it, so the exposure is one pool thread and the next queued scan — on a
+    /// path that already does a git fetch and a full import. Moving all four behind the pool is a
+    /// worthwhile change and it is a change to <see cref="SealedPublicationIndex"/>'s contract, not
+    /// to this call.</para>
+    /// </summary>
+    /// <param name="source">The configured package source whose repository the seal is read for.</param>
+    private SealedSyncGate.FirstImportPlan FirstImportPlan(ConfiguredPackageSource source)
+    {
+        var (owner, name) = ModuleDiscovery.SplitRepo(source.RepoPath);
+        var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+        var sealedForThisIdentity = SealedPublicationIndex.ReadFor(
+            hub.ServiceProvider.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey],
+            identity, logger);
+        return SealedSyncGate.DecideFirstImport(
+            new RepoIdentity(owner, name), sealedForThisIdentity, identity);
+    }
 
     /// <summary>The branch a sync entry commits against. A ref of <c>HEAD</c> (the catalog default,
     /// which means "whatever the registry serves") is not a branch name — a sync entry needs a real

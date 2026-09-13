@@ -237,12 +237,45 @@ had at least compiled. That is a different question — *what a publication cont
 instances may adopt it* — tracked separately (MeshWeaver.Plugins#1438, MeshWeaver#3538). This page is
 only about which commit's sources an instance receives.
 
-**One unattended import still reads a branch tip.** `ModuleDiscoveryService.FirstImport` — the
-AutoSync provisioning path — brings a newly created, still-empty Space to `main`. It is left as it is
-on purpose: a consumer instance that never receives GitHub webhooks has no `BuildCompletion` record
-to pin to, so refusing there would mean AutoSync provisioning simply never runs, and the blast radius
-is a new empty partition rather than live content going dark. It is named here so it is a known
-residue rather than an oversight.
+**The last unattended branch-tip import is closed — by a pin the residue's own rationale overlooked.**
+`ModuleDiscoveryService.FirstImport` — the AutoSync provisioning path — used to bring a newly created,
+still-empty Space to `main`. It was left that way on purpose, and the reasoning was sound as far as it
+went: *a consumer instance that never receives GitHub webhooks has no `BuildCompletion` record to pin
+to, so refusing there would mean AutoSync provisioning simply never runs.*
+
+What that argument missed is that `BuildCompletion` is not the only commit a build proved. Such a
+consumer **does** hold one, on its own disk and with no webhook involved: the `source-commit.txt`
+marker beside the bundles **sealed for its own framework identity**. That commit is strictly better
+evidence than a branch tip — it names a tree CI proved *and* the tree the bytes this instance actually
+runs were baked from. So the first import now asks `SealedSyncGate.DecideFirstImport`, and there are
+three answers:
+
+| what the seal says | what the first import does |
+|---|---|
+| no publication of this repository is sealed for this identity | resolve the branch — *the residue's case, unchanged* |
+| exactly one sealed commit, attributed by the `repository.txt` marker | `UpdateToProvenCommitFromGitHub` at that commit |
+| attributable but torn, at an unknown commit, or two seals disagreeing | **import nothing**, say why, retry next scan |
+
+The original rationale stays intact where it applied: a repository this instance runs no publication
+of still provisions at the tip, so AutoSync on a webhook-less consumer is exactly as alive as before —
+that *was* the case the residue was about. The blast radius of a hold is still "a new empty
+partition", never live content going dark.
+
+🚨 **How a hold releases, stated exactly — the loose version of this is wrong and was caught in
+review.** Two paths re-run a held first import: the discovery scan's next pass (a `_GitSync` with no
+`LastSyncCommitSha` is `ModuleDiscoveryService.Evaluate`'s re-import trigger) and
+`SealedPublicationSyncReconciler`, which brings a source onto the sealed commit when the seal is read.
+But scans are enqueued at **boot** and on **`BuildCompletion`** emissions, and the reconciler runs from
+`ShippedPrebuiltBundles.SeedPublishedRoot`, which is **boot-time** — so on an instance receiving no
+build webhooks, *both reduce to the next process start*, and a seal that completes mid-process is not
+noticed until then. That is [#4063](https://github.com/Systemorph/MeshWeaver/issues/4063)'s shape and
+this hold inherits it. The Warning the scan logs says so in those terms rather than "later", so an
+operator reading it knows which event to wait for.
+
+🚨 A first import can be attributed **only by the repository marker**. It has neither a built commit
+nor a last-sync commit, so both commit-attribution legs of `SealedSyncGate.BelongsTo` have nothing to
+compare against — a seal predating that marker therefore reads as unattributable and keeps today's
+behaviour. Unattributable is never a guess in either direction. `MeshWeaver#3845` hole 2.
 
 **Out-of-order builds can move a Space backwards.** Two green builds of one branch can finish out of
 order, so a later webhook may name an earlier commit — and it is imported, not skipped: GitHub's

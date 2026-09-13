@@ -105,6 +105,135 @@ public class SealedSyncGateTest
                 [Source("plugins-old", "Systemorph/MeshWeaver.Plugins", Sealed), Source("plugins", "Systemorph/MeshWeaver.Plugins", Built)], Identity)
             .Proceed.Should().BeTrue("any sealed source of the repository at the built commit is enough");
 
+    // ══════════════════════════════════════════════════════════════════════════
+    //  The FIRST import — adopt, then sync (MeshWeaver#3845 hole 2)
+    //
+    //  ModuleDiscoveryService.FirstImport used to resolve the BRANCH, unattended, as System, on
+    //  boot and on every catalog scan — the one thing UpdateToProvenCommitFromGitHub's own contract
+    //  forbids a machine trigger. It has no built commit to be gated against, so Decide cannot
+    //  answer for it; DecideFirstImport does, off the same seal.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void AFirstImport_OfARepositoryThisInstanceRunsNoPublicationOf_KeepsTheBranch()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins, [], Identity);
+        plan.Proceed.Should().BeTrue();
+        plan.AtBranchTip.Should().BeTrue(
+            "a consumer that runs no publication of the repo has no better pin — SyncRefContract's "
+            + "rationale for the residue, preserved exactly");
+        plan.Reason.Should().Contain("no publication of Systemorph/MeshWeaver.Plugins is sealed");
+    }
+
+    [Fact]
+    public void AFirstImport_OfARepositoryWhoseBytesThisInstanceRuns_LandsOnTheSealedCommit()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed)], Identity);
+        plan.Proceed.Should().BeTrue();
+        plan.AtBranchTip.Should().BeFalse("the branch tip is exactly what must not be resolved here");
+        plan.Commit.Should().Be(Sealed,
+            "the sources must arrive at the commit the bytes this instance runs were baked from");
+        plan.Reason.Should().Contain("sealed at abcdef12").And.Contain(Identity);
+    }
+
+    [Fact]
+    public void AFirstImport_IsNotHeldByAnotherRepositorysSeal()
+        => SealedSyncGate.DecideFirstImport(Plugins,
+                [Source("education", "Systemorph/MeshWeaver.Education", Sealed)], Identity)
+            .AtBranchTip.Should().BeTrue("the education seal says nothing about the plugins repository");
+
+    [Fact]
+    public void AFirstImport_AgainstATornPublication_Holds_RatherThanFallingBackToTheBranch()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed, sealedState: false,
+                refusal: "no completion sentinel")], Identity);
+        plan.Proceed.Should().BeFalse(
+            "'we could not establish a commit' and 'the branch tip' are different answers — "
+            + "collapsing the first into the second is the fallback #1430 removed");
+        plan.HoldReason.Should().Contain("is not sealed").And.Contain("no completion sentinel");
+        plan.Commit.Should().BeNull();
+    }
+
+    [Fact]
+    public void AFirstImport_IsHeldByATornSIBLING_EvenWhenAnotherPublicationOfTheRepoIsSealed()
+    {
+        // 🚨 The fail-open one level in: deciding on the SEALED entries alone would let a good seal
+        // override a torn sibling of the same repository, pinning the Space while part of that
+        // repository's bytes are missing here. Reported by review on #4212.
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed),
+             Source("plugins-extra", "Systemorph/MeshWeaver.Plugins", Built, sealedState: false,
+                 refusal: "no completion sentinel")], Identity);
+        plan.Proceed.Should().BeFalse(
+            "every attributable publication must be usable, not merely one of them");
+        plan.HoldReason.Should().Contain("'plugins-extra'").And.Contain("no completion sentinel");
+        plan.Commit.Should().BeNull();
+    }
+
+    [Fact]
+    public void AFirstImport_IsHeldByAnUnknownCommitSIBLING_EvenWhenAnotherPublicationIsSealed()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed),
+             Source("plugins-extra", "Systemorph/MeshWeaver.Plugins", null)], Identity);
+        plan.Proceed.Should().BeFalse();
+        plan.HoldReason.Should().Contain("an unknown commit").And.Contain("'plugins-extra'");
+    }
+
+    [Fact]
+    public void AFirstImport_HoldReason_CountsTheOtherUnusablePublications()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("a", "Systemorph/MeshWeaver.Plugins", null),
+             Source("b", "Systemorph/MeshWeaver.Plugins", Built, sealedState: false, refusal: "torn"),
+             Source("c", "Systemorph/MeshWeaver.Plugins", Sealed)], Identity);
+        plan.Proceed.Should().BeFalse();
+        plan.HoldReason.Should().Contain("and 1 more of Systemorph/MeshWeaver.Plugins",
+            "a hold that names one witness must still say how many others are in the same state");
+    }
+
+    [Fact]
+    public void AFirstImport_AgainstASealAtAnUnknownCommit_Holds()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("plugins", "Systemorph/MeshWeaver.Plugins", null)], Identity);
+        plan.Proceed.Should().BeFalse();
+        plan.HoldReason.Should().Contain("an unknown commit");
+    }
+
+    [Fact]
+    public void AFirstImport_AgainstSealsThatDisagreeAboutTheCommit_Holds_AndNamesBoth()
+    {
+        var plan = SealedSyncGate.DecideFirstImport(Plugins,
+            [Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed),
+             Source("plugins-extra", "Systemorph/MeshWeaver.Plugins", Built)], Identity);
+        plan.Proceed.Should().BeFalse("no reading here can choose between two trees");
+        plan.HoldReason.Should().Contain("'plugins' at abcdef12").And.Contain("'plugins-extra' at 12345678");
+    }
+
+    [Fact]
+    public void AFirstImport_AgainstSealsThatAgree_LandsOnTheirCommit()
+        => SealedSyncGate.DecideFirstImport(Plugins,
+                [Source("plugins", "Systemorph/MeshWeaver.Plugins", Sealed),
+                 Source("plugins-extra", "Systemorph/MeshWeaver.Plugins", Sealed)], Identity)
+            .Commit.Should().Be(Sealed);
+
+    [Fact]
+    public void AFirstImport_CannotAttributeASealThatPredatesTheRepositoryMarker()
+        => SealedSyncGate.DecideFirstImport(Plugins, [Source("plugins", null, Sealed)], Identity)
+            .AtBranchTip.Should().BeTrue(
+                "a first import has neither a built commit nor a last-sync commit, so the two "
+                + "commit-attribution legs have nothing to compare against — unattributable is "
+                + "today's behaviour, never a guess");
+
+    [Fact]
+    public void AFirstImport_MatchesTheRepositoryMarkerCaseInsensitively_LikeGitHubDoes()
+        => SealedSyncGate.DecideFirstImport(Plugins,
+                [Source("plugins", "systemorph/meshweaver.plugins", Sealed)], Identity)
+            .Commit.Should().Be(Sealed);
+
     [Theory]
     [InlineData("Systemorph/MeshWeaver.Plugins", "Systemorph", "MeshWeaver.Plugins")]
     [InlineData(" Systemorph/MeshWeaver.Plugins ", "Systemorph", "MeshWeaver.Plugins")]
