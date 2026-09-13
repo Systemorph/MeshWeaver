@@ -126,7 +126,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // two re-enqueues cover a re-enqueue that itself lands on a disposing fresh activation
     // (recycle churn). NEVER retried: silence (a busy owner still applies the original
     // patch) and every other NACK code (validation/RLS/NotFound are terminal verdicts).
-    private const int MaxOwnerDisposingReenqueues = 2;
+    // 🚨 internal, not private: LatePatchResponseRegistry.WriteTotalBound DERIVES the published
+    // outer bound on a re-enqueueing write from this count rather than restating it, so the two
+    // cannot drift the way WriteVerdictBound's prose and this path's real cost did (#3477).
+    internal const int MaxOwnerDisposingReenqueues = 2;
 
     // 🚨 How long a CONFLICT re-attempt waits for this hub's mirror to carry state the owner has
     // not already refused. Not a retry interval and not a backoff — it is the bound on ONE wait
@@ -142,6 +145,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// <see cref="BaseStateSource"/> is the only place either of them may spell it.
     /// </summary>
     internal static readonly TimeSpan BaseStateWaitBound = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// 🚨 The default budget of a one-shot <c>MeshNodeStreamExtensions.GetMeshNode</c> /
+    /// <c>GetMeshNodeOutcome</c> read. Named rather than written inline at the read, because a
+    /// re-attempt whose mirror base
+    /// turned out to be a PHANTOM pays this read on top of <see cref="BaseStateWaitBound"/> — so it
+    /// is a term in <c>LatePatchResponseRegistry.WriteTotalBound</c>, and a literal there would be a
+    /// copy of a number that can move here (#3477).
+    /// </summary>
+    internal static readonly TimeSpan DefaultNodeReadBudget = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// 🚨 The BOUNDED base read — issue #2543. Both write paths read this hub's mirror, drop the
@@ -3106,7 +3119,7 @@ public static class MeshNodeStreamExtensions
                 return Disposable.Empty;
             }
 
-            var budget = timeout ?? TimeSpan.FromSeconds(10);
+            var budget = timeout ?? MeshNodeStreamHandle.DefaultNodeReadBudget;
             var started = Stopwatch.StartNew();
             var cts = new CancellationTokenSource(budget);
             var emitted = 0;
