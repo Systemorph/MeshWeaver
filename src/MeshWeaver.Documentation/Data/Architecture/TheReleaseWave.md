@@ -154,10 +154,32 @@ VARIABLE the resolver honours by design); every `uses: Systemorph/MeshWeaver/…
 (0 of 43 pinned to a sha); `check-platform-pins.py` is invoked nowhere. Every repository resolves the
 newest sealed set at run time with `resolve-platform.py` — and **carries its own copy of it**: seven
 copies at six distinct sizes on 2026-09-13 (core 68,150 B; Crm 69,027; Reinsurance 69,035;
-SocialMedia 69,035; Manufacturing 69,037; Plugins 60,365; Education 46,786), with no drift guard
-comparing them (`node-repo-validate` checks none). The reusable lanes fetch **core's** copy at
-`scripts-ref` for their own resolution, so the copies decide only what a satellite's *own* jobs
-resolve — which is exactly the file the same-drift argument on Plugins#1565 was about.
+SocialMedia 69,035; Manufacturing 69,037; Plugins 60,365; Education 46,786). The reusable lanes fetch
+**core's** copy at `scripts-ref` for their own resolution, so the copies decide only what a
+satellite's *own* jobs resolve — which is exactly the file the same-drift argument on Plugins#1565
+was about.
+
+**What the six copies actually differ in — measured at the CODE level** (both files parsed,
+docstrings dropped, comments gone by construction, ASTs unparsed and diffed), and whether the
+difference changes an answer on the inputs that repository passes:
+
+| copy | raw lines vs canonical | code lines | what differs | changes an answer? |
+|---|---|---|---|---|
+| Crm, Reinsurance, SocialMedia, Manufacturing | 173 | **6** | three string literals: the `User-Agent` header value, one log line, one step-summary sentence | **no** — none is read by the resolution |
+| Education (vintage 2026-09-11) | 584 | **233** | lacks `refresh`/`load_baseline`/`output_rows`/`emit` (the re-run freshness path) and `PluginsPublication`/`PLUGINS_LOOKBACK` (the Plugins publication found on its own); `choose`, `Verdict`, `Chosen` differ | **yes** — on a "re-run failed jobs" it re-uses the stored resolution (the Education#320 defect), and on a set whose own Plugins seal is not the newest it decides differently |
+| Plugins (fork, 2026-09-12, #1694) | 1,031 | **527** | ADDS `ceiling_for`/`main_passed_ceiling` (a pull request resolves the newest sealed set that Plugins `main` has already PASSED on), `PublicationSource`/`publication_source`, `run_jobs_of`; LACKS the freshness path above | **yes, by design** — on `pull_request` runs the ceiling can choose an older set than the canonical would |
+
+So four copies are behaviourally the canonical, one lags, one is a fork with a policy the canonical
+does not have. **The guard** — `.github/scripts/check-resolver-copy.py`, run by `node-repo-validate`
+on every satellite PR and push — compares the copy to the canonical fetched at the lane's
+`scripts-ref` at the code level, prints the functions that differ, and is **advisory until
+2026-09-15T00:00:00Z and red from then** (`RED_FROM` in the script): a canonical fetched at `main`
+is live on merge for every caller, so the fleet sees the finding for a day before it can fail on
+it. A repository with no copy passes — that is the end state. Before the flip: the four re-copy (one
+commit each), Education re-copies (its lag is answer-changing), and Plugins' ceiling is ported into
+the canonical as an opt-in — a fork cannot pass a guard whose subject is "one canonical", and that
+is the guard doing its job. The freeze (`MW_PLATFORM_REF`) is untouched: the guard compares files
+and never runs the resolver.
 
 ## Reading a wave, in order
 
