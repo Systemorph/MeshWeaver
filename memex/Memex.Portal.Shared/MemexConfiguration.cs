@@ -310,7 +310,15 @@ public static class MemexConfiguration
                 // module's author claimed; the link probe in InstallAssemblies says whether it
                 // loads, and THAT line is the one to read when it does not.
                 (module, advisory) => Console.WriteLine(
-                    $"[ModuleActivation] store-installed module '{module}' {advisory}"));
+                    $"[ModuleActivation] store-installed module '{module}' {advisory}"),
+                // 🚨 #4161 — the framework identity THIS image was built with, which is what
+                // decides between the image's copy of a module and a store copy of the same name.
+                // The ONE public reading of the live identity, so this gate and every other
+                // consumer of it (the bundle client, the bake, the deployment report) can never
+                // disagree about what "the framework identity" is. Declines nothing on its own:
+                // only a store copy that STATES a different identity AND is shadowing a module
+                // this image ships, in which case the image's copy runs and the line above says so.
+                PrebuiltAssemblySeeder.LiveFrameworkMvid);
             // 🚨 A LISTED-BUT-ABSENT module must never crash boot. `InstallAssemblies` does
             // `Assembly.LoadFrom`, which throws FileNotFoundException, so one stale line in
             // `Modules:Assemblies` takes the whole portal down before anything is serving —
