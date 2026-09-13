@@ -2887,17 +2887,56 @@ public class MessageService : IMessageService
         // red-log pipeline files an Error as an issue. The line carries what a reader needs to
         // reproduce it: the hub, the message type and id, its sender, the gates it was parked
         // behind and this hub's run level.
+        // 🚨 …AND THE LEVEL FOLLOWS WHO IS STRANDED, because for a SELF-ADDRESSED delivery the
+        // answer is not merely undelivered — it is declined by design, one method down.
+        //
+        // `NackThroughParent` returns early with `NACK_DECLINED reason=sender-is-self` when
+        // `delivery.Sender` is this hub's own address: there is nothing to post an answer TO, since
+        // the pending-response registry that would resolve it is THIS hub's and is being cancelled
+        // in this same Dispose (CancelCallbacks errors those subjects with "Hub … was disposed
+        // before the response arrived" — a more informative report, delivered to the same reader).
+        // So the Error's own sentence, "the sender is answered ShuttingDown", was FALSE for exactly
+        // this shape, and the defect it told the reader to hunt ("find why this hub disposed before
+        // its deferred work could run") has no external victim to find.
+        //
+        // MEASURED (Systemorph/MeshWeaver#4178): 76 Error lines per plugin-gate shard, every one a
+        // `$model-probe/{guid}` hub discarding its OWN `GetDataRequest` parked behind
+        // [DataContextInit,MeshNodeInit]. A transient node probe is CREATED, READ ONCE AND DISPOSED
+        // — TransientNodeProbe states that outright, and MessageHub.HandleInitialize already
+        // classifies the same probe's dispose-during-init as a recognized shutdown rather than a
+        // failure (#1122–#1125). Its own-node read collapsing onto its synthetic address is the
+        // shape TransientProbeAddresses exists for; two other read seams already answer it
+        // directly, and this is the third, reached as a raw deferral.
+        //
+        // The rule is the FACT, not the probe: whenever the sender IS this hub, nobody outside is
+        // waiting, so the discard is teardown-internal and belongs at Debug — with the same facts,
+        // and a sentence that no longer claims an answer was sent. A delivery from ANY OTHER sender
+        // still strands a real waiter on a transient NACK and stays an Error, unchanged. This is
+        // the same discipline as the queued-turn site below (#3647): an Error that names work as
+        // lost, where no reader is left to act on it, sends the next investigator hunting a
+        // producer that did nothing wrong.
         var discarded = 0;
         DrainDeferredDeliveries((delivery, gatesAtDeferral) =>
         {
             discarded++;
-            logger.LogError(DisposalDiscardedDeferredDelivery,
-                "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
-                + "still deferred; initialization gates closed at deferral: [{Gates}] — the message is NOT processed; "
-                + "the sender is answered ShuttingDown. RunLevel={RunLevel}. Accepted work must be drained "
-                + "before a hub goes down; find why this hub disposed before its deferred work could run.",
-                Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
-                gatesAtDeferral, hub.RunLevel);
+            if (delivery.Sender is null || delivery.Sender.Equals(Address))
+                logger.LogDebug(DisposalDiscardedDeferredDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with its OWN {MessageType} "
+                    + "(id={MessageId}) still deferred; initialization gates closed at deferral: [{Gates}]. "
+                    + "RunLevel={RunLevel}. The sender IS this hub, so no answer is owed outside it and "
+                    + "none is posted — this hub's pending-response registry is cancelled in the same "
+                    + "disposal. Teardown-normal (a transient node probe is created, read once and "
+                    + "disposed by design); not a discard of anybody else's work.",
+                    Address, delivery.Message.GetType().Name, delivery.Id,
+                    gatesAtDeferral, hub.RunLevel);
+            else
+                logger.LogError(DisposalDiscardedDeferredDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
+                    + "still deferred; initialization gates closed at deferral: [{Gates}] — the message is NOT processed; "
+                    + "the sender is answered ShuttingDown. RunLevel={RunLevel}. Accepted work must be drained "
+                    + "before a hub goes down; find why this hub disposed before its deferred work could run.",
+                    Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
+                    gatesAtDeferral, hub.RunLevel);
             NackThroughParent(delivery,
                 $"Hub {Address} was disposed while {delivery.Message.GetType().Name} "
                 + $"(id={delivery.Id}) was still deferred; initialization gates closed at deferral: "
