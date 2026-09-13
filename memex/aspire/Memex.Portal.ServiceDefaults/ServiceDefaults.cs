@@ -240,7 +240,18 @@ public static class ServiceDefaults
             // early" and "the providers returned less". Healthy when no pass ran (the normal state
             // of a warm replica) and it still PRINTS, which is the whole point of the census tag.
             .AddCheck<SourceDiscoveryHealthCheck>(
-                SourceDiscoveryRegistry.HealthCheckName, tags: [ProbeEndpoints.CensusTag]);
+                SourceDiscoveryRegistry.HealthCheckName, tags: [ProbeEndpoints.CensusTag])
+            // #4063: whether this identity still has a publication of each module-bearing
+            // repository at or after its last green build. A publication seal that stops advancing
+            // freezes every GitSynced Space of that repository — silently, because a frozen source
+            // and a settled one were field-for-field identical until #4065, and because a freeze
+            // looks exactly like a quiet week from outside. Census-tagged for that reason: the
+            // CLEAN reading is the publication, so "nothing measured", "no CI bakes here", "none
+            // held" and "held for nine hours" are four different printed sentences. Degraded only
+            // past the fleet's 45-minute CI job cap, where the ordinary webhook-before-seal
+            // ordering can no longer explain the hold.
+            .AddCheck<SealedSyncHealthCheck>(
+                SealedSyncCensus.HealthCheckName, tags: [ProbeEndpoints.CensusTag]);
 
         return builder;
     }

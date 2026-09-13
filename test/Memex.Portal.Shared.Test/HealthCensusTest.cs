@@ -174,6 +174,112 @@ public class HealthCensusTest
             + "the siblings, made here on the strength of a diagnostic number.");
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#4063 reaching the wire. A publication seal that stopped advancing froze every
+    /// GitSynced Space of MeshWeaver.Plugins on BOTH production portals for nine hours, and every
+    /// surface said the sources were settled: <c>lastSyncOutcome: Imported</c>, attempted ==
+    /// synced, <c>lastAttemptWasFinal: true</c>. The instance-level fact — this identity has no
+    /// publication of that repository at or after its last green build — was stated nowhere at all.
+    /// </summary>
+    [Fact]
+    public async Task AFrozenRepository_IsDegraded_AndNamesItAndHowLongOnHealth()
+    {
+        // The health check reads DateTimeOffset.UtcNow, so the hold's first observation is placed
+        // relative to it — the duration under assertion is the one a live portal would print.
+        var census = new SealedSyncCensus();
+        census.RecordPublication(SealedAt("24c2d024"));
+        census.RecordHold(
+            "Systemorph/MeshWeaver.Plugins", "7660ca73",
+            "built at 7660ca73, not sealed for this instance (identity s6649734: "
+            + "'plugins' is sealed at 24c2d024)",
+            heldSources: 34, now: DateTimeOffset.UtcNow - TimeSpan.FromHours(9));
+
+        var body = await HealthBodyAsync(services => services.AddSingleton(census));
+
+        Assert.True(body.Contains($"{SealedSyncCensus.HealthCheckName}: Degraded", StringComparison.Ordinal),
+            "a repository frozen for nine hours by a seal that stopped advancing did not reach "
+            + "/health as a non-Healthy entry. That freeze cost nine hours of undelivered releases "
+            + $"and two sessions, with every per-node field reading 'settled'. Body was:\n{body}");
+        Assert.True(body.Contains("Systemorph/MeshWeaver.Plugins: 34 GitSynced source(s) held", StringComparison.Ordinal),
+            "the census did not name the frozen REPOSITORY and how many of its sources are held — "
+            + $"which is the whole reading #4063 asks for. Body was:\n{body}");
+        Assert.True(body.Contains("(9h 0m ago, this process only)", StringComparison.Ordinal),
+            "how long the repository has been held is missing. A duration is what separates the "
+            + "ordinary webhook-before-seal ordering from a freeze, and it is the one number no "
+            + $"existing surface carried. Body was:\n{body}");
+        Assert.True(body.Contains("'plugins' is sealed at 24c2d024", StringComparison.Ordinal),
+            "the gate's own hold reason — the same string the log line and the node's lastSyncNote "
+            + $"carry — did not survive to the health payload. Body was:\n{body}");
+    }
+
+    /// <summary>
+    /// 🚨 The pair that keeps the case above from being "degrade on any hold". The ORDINARY hold is
+    /// correct behaviour — the green-build hook fires before the repository's publish-bake seals for
+    /// this identity — so a fresh hold must stay Healthy, and still PRINT.
+    /// </summary>
+    [Fact]
+    public async Task AHoldInsideTheCiJobCap_StaysHealthy_AndStillPrintsTheRepository()
+    {
+        var census = new SealedSyncCensus();
+        census.RecordPublication(SealedAt("24c2d024"));
+        census.RecordHold(
+            "Systemorph/MeshWeaver.Plugins", "7660ca73", "built at 7660ca73, not sealed yet",
+            heldSources: 34, now: DateTimeOffset.UtcNow - TimeSpan.FromMinutes(2));
+
+        var body = await HealthBodyAsync(services => services.AddSingleton(census));
+
+        Assert.True(body.Contains($"{SealedSyncCensus.HealthCheckName}: Healthy", StringComparison.Ordinal),
+            "a two-minute hold was reported as Degraded. Every green build of every satellite is "
+            + "held for the length of one publish-bake by design, so degrading on that would leave "
+            + $"every portal permanently non-Healthy — a check that cannot pass. Body was:\n{body}");
+        Assert.True(body.Contains("Systemorph/MeshWeaver.Plugins: 34 GitSynced source(s) held", StringComparison.Ordinal),
+            "a Healthy hold printed nothing. The census tag exists so the reading is published "
+            + $"whatever the status; silence here is the #4063 blindness again. Body was:\n{body}");
+    }
+
+    /// <summary>
+    /// 🚨 The clean reading, which is the whole reason this entry is census-tagged: a freeze and a
+    /// quiet week are both "no import happened", so "none held" has to be a printed sentence.
+    /// </summary>
+    [Fact]
+    public async Task NoRepositoryHeld_IsHealthy_AndPrintsTheIdentityAndWhatItSealed()
+    {
+        var census = new SealedSyncCensus();
+        census.RecordPublication(SealedAt("4b97be19"));
+
+        var body = await HealthBodyAsync(services => services.AddSingleton(census));
+
+        Assert.True(body.Contains($"{SealedSyncCensus.HealthCheckName}: Healthy", StringComparison.Ordinal),
+            $"a replica holding nothing back reported non-Healthy. Body was:\n{body}");
+        Assert.True(body.Contains("no repository is currently held by the seal", StringComparison.Ordinal),
+            "'nothing is frozen' was not printed, so it is indistinguishable from this check never "
+            + $"having been registered — the exact ambiguity #4063 was unmeasurable inside. Body was:\n{body}");
+        Assert.True(body.Contains("'plugins' ← Systemorph/MeshWeaver.Plugins @ 4b97be19 (sealed)", StringComparison.Ordinal),
+            "the DENOMINATOR is missing: a hold count means nothing without the publication set "
+            + $"this identity actually holds. Body was:\n{body}");
+    }
+
+    /// <summary>
+    /// The third absence, spelled as its own sentence: no reading at all. Healthy — a deployment
+    /// that receives no green builds cannot have a freeze — but never silent.
+    /// </summary>
+    [Fact]
+    public async Task NoPublicationSealReadingAtAll_StillPrintsThatNothingWasMeasured()
+    {
+        var body = await HealthBodyAsync(configure: null);
+
+        Assert.True(body.Contains($"{SealedSyncCensus.HealthCheckName}:", StringComparison.Ordinal),
+            "the publication-seal census did not print at all on a host with no registry. A missing "
+            + $"instrument must never read as a clean result. Body was:\n{body}");
+        Assert.True(body.Contains("absence of measurement, NOT a clean one", StringComparison.Ordinal),
+            $"the absence is not spelled out in the body a reader curls. Body was:\n{body}");
+    }
+
+    private static SealedPublicationReading SealedAt(string commit) =>
+        new("s6649734", "/data/prebuilt-bundles",
+            [new SealedSource("plugins", "Systemorph/MeshWeaver.Plugins", commit, true, null)],
+            DateTimeOffset.UnixEpoch);
+
     private static NodeTypeBakeReportRegistry CleanBakeRegistry()
     {
         var registry = new NodeTypeBakeReportRegistry();
