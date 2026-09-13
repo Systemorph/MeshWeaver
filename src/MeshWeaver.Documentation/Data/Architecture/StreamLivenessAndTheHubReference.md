@@ -160,7 +160,17 @@ stream still completes (the value replay off a frozen store is not live data —
 exception instance, and a stream whose hub has merely begun winding down while its store is still
 open keeps the immediate completion — nothing `GetStream<T>` could wait for will ever arrive on it.
 Whether the store has terminated is known synchronously, because a `ReplaySubject` replays its
-terminal inside `Subscribe`. Pinned by
+terminal inside `Subscribe` — **and for the faulted shape it is known to have terminated, because
+of an ordering that is now part of the contract**: `FaultStore` errors the store *before* it raises
+the flag `IsUsable` reads (in a `finally`, so a throwing subscriber cannot leave the store terminal
+behind a flag that still reads live — #2387's corpse again). Flag-first, as it stood, left a
+window in which the stream read as faulted while its store was still open; a reader arriving in it
+found an open store, answered "completed", and the fault that landed a moment later reached nobody —
+the same swallow one interleaving over, named by Copilot's review of #4151. Store-first closes it:
+`ReplaySubject.OnError` marks the subject terminal under its own lock before delivering, so any
+subscribe that observes the flag observes the terminal. Pinned from inside the delivery by
+`AFaultingStream_PublishesItsTerminal_BeforeItReadsAsDead` — an observer receiving the fault reads
+`IsUsable()` as still true, and false once `OnError` has returned; flag-first fails it. Pinned by
 `TornDownStreamCallSitesTest.GetControlStream_OnAFaultedStream_ReDeliversTheFault` (identity of the
 re-delivered fault) and, in MeshWeaver.Plugins, by
 `NodeGoneIsBenignGuard.TheNodeGoneArea_StillDrawsTheCard_WhenTheFaultLandedBeforeTheViewBound`,

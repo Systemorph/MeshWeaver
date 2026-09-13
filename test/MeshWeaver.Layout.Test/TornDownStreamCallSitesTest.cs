@@ -167,18 +167,62 @@ public class TornDownStreamCallSitesTest(ITestOutputHelper output) : HubTestBase
         stream.TryGetHub().Should().BeNull(
             "precondition: a faulted stream is as dead as a disposed one to every guard (#2387)");
 
-        var terminal = await stream.GetControlStream(TestArea)
+        // EVERY notification, not the first terminal: the store still holds the frame that served
+        // the area, and a reader that forwarded the replay would emit it as a live value before the
+        // fault — the "found 1 item(s)" defect this class was written against.
+        var notifications = await stream.GetControlStream(TestArea)
             .Materialize()
-            .Where(n => n.Kind != NotificationKind.OnNext)
-            .Take(1)
+            .ToList()
             .Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
 
+        var terminal = notifications.Should().ContainSingle(
+                "a dead stream hands back no values — its replayed last frame is not live data — "
+                + "and exactly one terminal")
+            .Which;
         terminal.Kind.Should().Be(NotificationKind.OnError,
             "a late subscriber to a FAULTED store is told the fault — a completion here is the "
             + "swallow that left a view with no error branch to enter");
         terminal.Exception.Should().BeSameAs(fault,
             "…and it is the stream's own terminal, re-delivered, not a fault manufactured about it");
+    }
+
+    /// <summary>
+    /// 🚨 THE ORDER THAT MAKES THE TEST ABOVE EXACT, and the interleaving Copilot's review of
+    /// MeshWeaver#4151 named. <c>GetStream&lt;T&gt;</c> decides "dead" from
+    /// <see cref="SynchronizationStreamLiveness.IsUsable"/> and then forwards whatever terminal the
+    /// store holds. That is only correct if a stream that READS as faulted already HAS its fault in
+    /// the store. <c>FaultStore</c> used to raise the flag first and error the store second, which
+    /// opened a window: a subscriber arriving between the two found an open store, was answered
+    /// "completed", and the <c>OnError</c> that landed a moment later reached nobody — the same
+    /// swallow, one interleaving over.
+    ///
+    /// <para>Pinned from inside the delivery: an observer that is receiving the fault is, by
+    /// construction, inside <c>Store.OnError</c>, so what it reads there is the flag's state during
+    /// the transition. Store-first means the stream still reads usable at that instant and reads dead
+    /// only once the call has returned. Flag-first fails the first assertion. A subscriber arriving
+    /// during the delivery therefore always subscribes to a store that is already terminal.</para>
+    /// </summary>
+    [HubFact]
+    public async Task AFaultingStream_PublishesItsTerminal_BeforeItReadsAsDead()
+    {
+        var stream = OpenStream();
+        await stream.GetControlStream(TestArea)
+            .Should().Within(TestTimeouts.Quick).Match(x => x is HtmlControl);
+
+        bool? usableWhileTheFaultWasBeingDelivered = null;
+        using var observer = stream.Subscribe(
+            _ => { },
+            _ => usableWhileTheFaultWasBeingDelivered = stream.IsUsable());
+
+        stream.OnError(new InvalidOperationException("owner gone"));
+
+        usableWhileTheFaultWasBeingDelivered.Should().BeTrue(
+            "the store takes the terminal BEFORE the liveness flag flips, so a reader that finds the "
+            + "stream dead finds the fault already in the store — flag-first is the window in which a "
+            + "late subscriber was told 'completed' and the fault reached nobody");
+        stream.IsUsable().Should().BeFalse(
+            "…and once the fault is delivered the stream is dead to every cache (#2387)");
     }
 
     /// <summary>

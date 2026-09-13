@@ -368,13 +368,18 @@ public static class LayoutExtensions
     /// in a few milliseconds, which is exactly the window a render's first frame takes.</para>
     ///
     /// <para>The replay of a terminated store is SYNCHRONOUS, inside <c>Subscribe</c>, so whether
-    /// the store has terminated is known by the time the probe subscription returns. A store that
-    /// is still open under a hub that has merely begun winding down (the third way
-    /// <see cref="SynchronizationStreamLiveness.IsUsable"/> says no) keeps today's answer — an
-    /// immediate completion — because nothing this method can wait for will ever arrive on it: its
-    /// hub is gone, and its store is completed only by a <c>Dispose()</c> nobody may ever call.
-    /// The value replay is dropped on purpose: a frame off a frozen store is not live data, which is
-    /// what <c>TornDownStreamCallSitesTest</c> pinned when this guard was introduced (#3321).</para>
+    /// the store has terminated is known by the time the probe subscription returns — and for the
+    /// faulted shape it is KNOWN to have terminated: <c>SynchronizationStream.FaultStore</c> errors
+    /// the store BEFORE it raises the flag <c>IsUsable</c> reads, so a stream that reads as faulted
+    /// has its fault in the store already (the reverse order left a window in which this probe saw
+    /// an open store and answered "completed" a moment before the fault arrived — Copilot's finding
+    /// on MeshWeaver#4151). A store that is still open under a hub that has merely begun winding
+    /// down (the third way <see cref="SynchronizationStreamLiveness.IsUsable"/> says no) keeps
+    /// today's answer — an immediate completion — because nothing this method can wait for will
+    /// ever arrive on it: its hub is gone, and its store is completed only by a <c>Dispose()</c>
+    /// nobody may ever call. The value replay is dropped on purpose: a frame off a frozen store is
+    /// not live data, which is what <c>TornDownStreamCallSitesTest</c> pinned when this guard was
+    /// introduced (#3321).</para>
     /// </summary>
     private static IObservable<T> TerminalOf<T>(ISynchronizationStream<JsonElement> stream)
         => Observable.Create<T>(observer =>
