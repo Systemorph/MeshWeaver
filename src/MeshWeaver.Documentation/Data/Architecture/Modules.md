@@ -704,32 +704,76 @@ instead of failing cleanly.
 Two modules already needed this: Snowflake P/Invokes `libsf_mini_core.*` (and Mono.Unix), and
 Cosmos' query-plan `ServiceInterop` is native. Both were shipping with those files pruned away.
 
-🚨 **This is the IN-IMAGE closure lane only. A REGISTRY bundle (`.module.nupkg`) cannot carry a
-native asset — verified on `main` 2026-09-13 (#4126).** The resolver above is wired for both, and
-`ModuleLandingService` lays a landed bundle out under `modules/<generation>/`, so a `runtimes/` tree
-placed there WOULD resolve. Nothing puts one there:
+#### The registry bundle: derived and CARRIED (#4126, stage 1)
 
-- `src/MeshWeaver.Plugin.Build/DepsClosure.cs:148-151` takes only `runtime` entries ending in
-  `.dll`; `:152` detects `runtimeTargets` and `:182-184` turns that into a **warning** (*"declares
-  native runtimeTargets the bundle does not carry"*) — nothing ships them another way.
-- `tools/MeshWeaver.PluginTester/ContainerReferenceSet.cs:307` reads only the `runtime` section of
-  the image's `deps.json`, and `:360-370` `Resolve` marks a package `Supplied=false` when it
-  contributes no assembly — so a `build: container` module cannot even DECLARE a native-only
-  package (`ProjectBuild.cs:951-958` refuses it RED as *"PackageReference(s) the container does not
-  supply"*), although the image carries the library flat in `/app`.
-- The bundle format has two sections and both are flat: `NuGetPackageWriter.cs:64-79`
-  (`meshweaver/modules/<file>`, `meshweaver/moduleassets/` for `wwwroot/**`); the packer writes
-  exactly those (`src/MeshWeaver.Plugin.Build/ModulePackCommand.cs:667-681`), and the consumers
-  filter to flat entries (`ServedModuleBytes.cs:204-206`, `PublishedBundleCatalogue.cs:519-521`) —
-  an entry under `meshweaver/modules/runtimes/…` would be silently dropped.
+The in-image lane above has kept `runtimes/<rid>/native/**` since #1728. The REGISTRY bundle
+(`.module.nupkg`) could not carry one at all: the derivation dropped it with a warning, and the
+format had nowhere to put it. The first half of that is closed.
+
+**Derived.** `DepsClosure` now reads `runtimeTargets` and returns the loadable natives as data
+(`Result.Natives`, an `init` property — a fifth constructor parameter would be a binary break).
+🚨 The old warning had a hole that made the measured case completely silent: the loop short-circuited
+on `RuntimeFiles.Count == 0`, so a package whose ONLY contribution is native — `SQLitePCLRaw.lib.e_sqlite3`,
+the one this was measured on — was skipped BEFORE the warning could fire. It warned about nothing and
+dropped everything.
+
+**Carried.** The bundle gains a third, manifest-declared section, `meshweaver/modulenatives/`, with
+the module-relative path PRESERVED. It could not be either of the other two: every consumer of
+`meshweaver/modules/` filters to entries with no `/` in the remainder
+(`ServedModuleBytes`, `PublishedBundleCatalogue`), so a native written there is *silently skipped*
+rather than laid out; and `meshweaver/moduleassets/` means static WEB assets, where conflating a
+loadable binary with a served file would make every future rule about one apply to the other.
+
+Three things are still DROPPED, and each is now NAMED rather than silent:
+
+| declaration | what happens | why |
+|---|---|---|
+| `assetType: "native"` at `runtimes/<rid>/native/<file>` | **carried** | the exact layout `ModuleNativeAssets` probes |
+| `assetType: "native"` at any other shape | warned | bytes at a path nothing looks at read as shipped and behave as absent |
+| `assetType: "runtime"` (a RID-specific MANAGED assembly) | warned | the flat closure has one slot per assembly name and no way to choose a RID at pack time |
+| `.a` / `.lib` | excluded silently | link-time inputs, never loaded — the same exclusion the in-image lane applies |
+
+🚨 **"The exact layout" means EXACTLY FOUR SEGMENTS** — `runtimes` / `<rid>` / `native` / `<file>` —
+and that predicate has ONE spelling, `NuGetPackageWriter.IsModuleNativeLayout`, shared by the
+derivation, the packer and the reader so the three cannot drift. A `/native/` SUBSTRING test is not
+the same rule and fails three ways: `runtimes/<rid>/other/native/x.so` and
+`runtimes/<rid>/native/sub/x.so` would be carried and never probed, and `runtimes/../../native/x.so`
+would make the PACKER read outside the module directory when it resolves the path against it. The
+READER enforces it as well, not only the packer: that is the boundary for a producer-controlled
+bundle, and the landing stage writes these paths to disk for the process to LOAD.
+
+🚨 **Native paths compare ORDINAL, unlike every managed assembly name in the same derivation.**
+Assembly binding is case-insensitive; a filesystem on Linux is not, so `libFoo.so` and `libfoo.so`
+are two distinct loadable libraries and a case-insensitive de-duplication would silently drop one —
+the exact failure this section exists to end.
+
+And the guidance in a drop warning names a step the reader can actually take: `--with` accepts a
+plain file name inside the module folder and REFUSES a path component, so a `runtimes/<rid>/…` value
+has to be flattened into the module folder root first — the loader's LAST probe is that flat folder.
+Saying only "name it with `--with`" would send the reader to an error.
+
+**What is NOT done, and what each remaining stage depends on:**
+
+1. **Landing** — `ModuleLandingService` does not yet lay the section out under
+   `modules/<generation>/`, and `PluginBundleClient.LandFromBundle` does not pass it. `ValidateAssetPath`
+   already accepts the shape and the write loop already handles trees, so this is signatures plus
+   `GenerationIdOf` (which must fold the natives in, or two bundles differing only in natives collide
+   on one generation directory). Depends on nothing but itself. **Until it lands, a native rides the
+   bundle and is not written to disk** — carried, declared, and ignored.
+2. **Registry re-serve** — `ModuleBundleSource.CollectVersion` and `ServedModuleBytes.FromSealed`
+   collect flat files plus `wwwroot/**`, so a registry re-serving a shelved module would not re-emit
+   the section. Depends on (1) being the layout it re-serves.
+3. **The container lane** — `ContainerReferenceSet` reads only the `runtime` section of the image's
+   deps.json and `Resolve` marks a native-only package `Supplied=false`, so a `build: container`
+   module cannot even DECLARE the CVE-patched engine. Independent of (1) and (2); it is the other
+   closure derivation.
+4. **Warning → refusal** — only once (1)–(3) are in, and not before: today a module that needs a
+   native the bundle cannot carry still has the host-supplies-it fallback, and refusing would break
+   it with no route forward.
 
 The one native family the fleet ships through the registry today (SkiaSharp, for
-`MeshWeaver.Markdown.Export`) works because the PORTAL HOST carries the natives, the
+`MeshWeaver.Markdown.Export`) still works because the PORTAL HOST carries the natives — the
 "host happens to have it" shape the 2026-09-01 What's New called a defect for managed assemblies.
-What closing #4126 needs: `DepsClosure`/`PrivateClosure` carry `runtimeTargets` per RID, a
-manifest-declared native section in the bundle, the landing service laying it out under the module
-folder, `ContainerReferenceSet.Resolve` treating a native-only package as supplied, and the warning
-above becoming a refusal.
 
 ## The bundle lane — modules as Store packages (#1664)
 
