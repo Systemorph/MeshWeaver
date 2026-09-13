@@ -3418,7 +3418,7 @@ jobs:
                 echo "the trunk moved to $tip, but its tree equals this run's — nothing newer reaches $MODULE; publishing"
               else
                 mkdir -p "$RUNNER_TEMP/mods/$MODULE"
-                bk get --module "$MODULE" entry --default '{}' | jq '[.]' > "$RUNNER_TEMP/mods/$MODULE/newer-entry.json"
+                bk entry --module "$MODULE" --phase publish | jq '[.]' > "$RUNNER_TEMP/mods/$MODULE/newer-entry.json"
                 GITHUB_OUTPUT="$RUNNER_TEMP/mods/$MODULE/newer-scope.out" GITHUB_STEP_SUMMARY=/dev/null \
                   python3 build-logic/.github/scripts/node-repo-scope.py --for modules --root . \
                     --modules "@$RUNNER_TEMP/mods/$MODULE/newer-entry.json" --event pull_request \

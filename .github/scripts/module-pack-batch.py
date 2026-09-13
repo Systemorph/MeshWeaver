@@ -49,6 +49,7 @@ refuses to exit 0 over one.
     python3 module-pack-batch.py --state S list --ok --where decision=build
     python3 module-pack-batch.py --state S set --module M version=1.2.3 floor=3.1.0
     python3 module-pack-batch.py --state S get --module M ledger.key
+    python3 module-pack-batch.py --state S entry --module M --phase publish   # the WHOLE entry
     python3 module-pack-batch.py --state S fail --module M --phase test --reason "…"
     python3 module-pack-batch.py --state S slots --max 10 --where bundle!=
     python3 module-pack-batch.py --state S verdict --summary "$GITHUB_STEP_SUMMARY"
@@ -76,7 +77,13 @@ PHASES = ("compile", "workspace", "pack", "test", "publish")
 
 
 def die(msg: str) -> None:
-    print(f"::error::{msg}")
+    # 🚨 stderr, never stdout: every reading subcommand's stdout is a DATA channel the lane pipes
+    # (`bk entry … | jq`) or captures (`PACKAGE="$(bk get …)"`). A diagnostic printed there is eaten
+    # by the consumer — the stand-down step's `jq` swallowed it and answered `parse error`, naming
+    # nothing — or assigned into the variable as if it were the value. The sibling lane scripts
+    # (module-build-ledger.py, module-build-key.py) already write their `::error::` to stderr, which
+    # the runner annotates and the log shows either way.
+    print(f"::error::{msg}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -211,9 +218,31 @@ class State:
             die(f"module `{module}` is not in this leg's batch ({', '.join(self.doc['order']) or '<empty>'})")
         return rec
 
+    def entry_of(self, module: str, phase: str) -> dict:
+        """The WHOLE matrix entry for one module — the object the selection built and the scope
+        script reads (package/module/project/…).
+
+        🚨 `get` cannot answer this, and must never be asked to: it resolves a fact, else a dotted
+        path **INSIDE** the entry, so the key `entry` asks for a field named `entry` inside the
+        matrix entry. No matrix entry carries one, so `get … entry` answered its `--default` for
+        every module, on every runner, deterministically (#4140). There is no default here: an
+        entry this leg does not hold is a red naming the module and the phase, because every reader
+        downstream needs the package/module/project it names and can only refuse without them."""
+        rec = self.record(module)
+        e = rec["entry"]
+        if not isinstance(e, dict) or not e:
+            die(f"module `{module}` carries no matrix entry in this leg's state (needed in phase "
+                f"`{phase}`) — `init` stored {json.dumps(e)} for it, which names no package, module "
+                "or project. Nothing downstream can decide anything from that, so this is a red "
+                "here rather than an empty object handed on as if it were an answer.")
+        return e
+
     def get(self, module: str, key: str, default: str = "") -> str:
         """A fact this leg recorded, else a field of the matrix entry (dotted path allowed, e.g.
-        `ledger.key`). Booleans print as `true`/`false`; null and absent print as the default."""
+        `ledger.key`). Booleans print as `true`/`false`; null and absent print as the default.
+
+        🚨 A FIELD, never the entry itself — `get … entry` walks INTO the entry looking for a field
+        called `entry` and silently answers the default (#4140). Use `entry_of` for the whole one."""
         rec = self.record(module)
         if key in rec["facts"]:
             return rec["facts"][key]
@@ -324,6 +353,16 @@ def cmd_list(a: argparse.Namespace) -> int:
 def cmd_get(a: argparse.Namespace) -> int:
     st = state_of(a).load()
     print(st.get(a.module, a.key, a.default))
+    return 0
+
+
+def cmd_entry(a: argparse.Namespace) -> int:
+    """The whole matrix entry for one module, as JSON — the only reader of it. `--phase` names the
+    phase that needs it so a missing entry reds where the ledger can say what stopped."""
+    if a.phase not in PHASES:
+        die(f"--phase must be one of {', '.join(PHASES)} (the ledger's vocabulary), got {a.phase!r}")
+    st = state_of(a).load()
+    print(json.dumps(st.entry_of(a.module, a.phase), sort_keys=True, separators=(",", ":")))
     return 0
 
 
@@ -597,6 +636,38 @@ def workflow_script_ownership_problems(workflow: str) -> list[str]:
     return problems
 
 
+def workflow_entry_handover_problems(workflow: str) -> list[str]:
+    """The scope script that decides publish-newest-only is fed the WHOLE matrix entry, and `get`
+    cannot produce one (#4140).
+
+    `get` resolves a fact, else a DOTTED PATH **INSIDE** `rec["entry"]`, so the key `entry` asks for
+    a field NAMED `entry` inside the matrix entry — which no matrix entry carries. It therefore
+    answered its `--default` for every module, on every runner, deterministically; with
+    `--default '{}'` the stand-down step handed `node-repo-scope.py` an empty object, the scope
+    script refused it (`matrix entry missing package/module/project: {}`), and "cannot tell never
+    publishes" stood every module of every batch down. The whole entry has exactly one reader — the
+    `entry` subcommand, which reds naming the module and the phase instead of inventing a value.
+    """
+    problems: list[str] = []
+    for module, key in re.findall(r"bk get --module (\S+) ([A-Za-z0-9_.]+)", workflow):
+        if key == "entry" or key.startswith("entry."):
+            problems.append(
+                f"`bk get --module {module} {key}` asks `get` for the matrix entry itself, but `get` "
+                "walks a dotted path INSIDE the entry — that key resolves nothing and silently "
+                "answers the --default. Read the whole entry with `bk entry --module … --phase …`."
+            )
+    handover = ('bk entry --module "$MODULE" --phase publish '
+                "| jq '[.]' > \"$RUNNER_TEMP/mods/$MODULE/newer-entry.json\"")
+    if workflow.count(handover) != 1:
+        problems.append(
+            "publish-newest-only must build its scope input from the whole matrix entry exactly "
+            "once, through `bk entry --module \"$MODULE\" --phase publish` — and with NO default: a "
+            "module whose entry is missing is a red naming it, never an empty object handed to "
+            "node-repo-scope.py."
+        )
+    return problems
+
+
 def self_test(workflow_path: Path | None = None) -> int:
     import subprocess
 
@@ -694,6 +765,27 @@ def self_test(workflow_path: Path | None = None) -> int:
         )
         check("the ownership guard keeps the runtime-parity floor check on platform-ref",
               bool(workflow_script_ownership_problems(wrong_platform_semantics)))
+
+        # #4140: the stand-down step read the WHOLE matrix entry through `get`, which can only walk
+        # a path INSIDE it — so it answered `{}` for every module on every runner and every publish
+        # was stood down. The entry has its own reader now; `get` may never be asked for it.
+        handover_problems = workflow_entry_handover_problems(workflow)
+        check("publish-newest-only reads the WHOLE matrix entry through `entry`, never `get`",
+              not handover_problems, "; ".join(handover_problems))
+        regressed_handover = workflow.replace(
+            'bk entry --module "$MODULE" --phase publish',
+            "bk get --module \"$MODULE\" entry --default '{}'",
+            1,
+        )
+        check("that guard catches the #4140 shape — `bk get … entry --default '{}'`",
+              bool(workflow_entry_handover_problems(regressed_handover)))
+        dropped_handover = workflow.replace(
+            'bk entry --module "$MODULE" --phase publish | jq \'[.]\'',
+            "printf '{}' | jq '[.]'",
+            1,
+        )
+        check("that guard catches the scope input coming from anywhere but the entry reader",
+              bool(workflow_entry_handover_problems(dropped_handover)))
 
     print("== chunk: deterministic, sorted, ≤N is one leg, singleton unchanged")
     sel = [entry("MeshWeaver.Zeta"), entry("MeshWeaver.AI"), entry("MeshWeaver.Maps"),
@@ -802,6 +894,42 @@ def self_test(workflow_path: Path | None = None) -> int:
         check("a second failure keeps the FIRST phase", "keeping that verdict" in out and State(s).load().record("MeshWeaver.Maps")["phase"] == "test", out)
         run("fail", "--module", "MeshWeaver.Maps", "--phase", "bogus", "--reason", "x", expect=1)
         run("get", "--module", "MeshWeaver.Ghost", "version", expect=1)
+
+        print("== entry: the WHOLE matrix entry, or a red naming the module and the phase (#4140)")
+
+        def as_json(text: str):
+            try:
+                return json.loads(text.strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                return None
+
+        ai_entry = entry("MeshWeaver.AI", build="container", ledger={"key": "k1", "decision": "build"})
+        check("`get` CANNOT answer the whole entry — it walks a path INSIDE it, so `entry` is a "
+              "field name that no matrix entry carries, and the --default is all you ever get",
+              st.get("MeshWeaver.AI", "entry", "{}") == "{}" and st.get("MeshWeaver.AI", "entry") == "")
+        out = run("entry", "--module", "MeshWeaver.AI", "--phase", "publish")
+        check("`entry` round-trips the whole matrix entry, verbatim", as_json(out) == ai_entry, out)
+        out = run("entry", "--module", "MeshWeaver.Maps", "--phase", "publish")
+        check("…for a module this leg failed too — the entry is what it WAS given, not a verdict",
+              as_json(out) == entry("MeshWeaver.Maps", test=False), out)
+        out = run("entry", "--module", "MeshWeaver.Ghost", "--phase", "publish", expect=1)
+        check("a module outside this leg's batch is a RED naming it, never an empty object",
+              "MeshWeaver.Ghost" in out and as_json(out) != {}, out)
+        run("entry", "--module", "MeshWeaver.AI", "--phase", "bogus", expect=1)
+        hollow = Path(td) / "hollow.json"
+        hollow.write_text(json.dumps({"order": ["MeshWeaver.AI"], "modules": {"MeshWeaver.AI": {
+            "entry": {}, "status": "ok", "phase": "", "reason": "", "facts": {}}}}), encoding="utf-8")
+        p = subprocess.run([sys.executable, here, "--state", str(hollow), "entry",
+                            "--module", "MeshWeaver.AI", "--phase", "publish"],
+                           capture_output=True, text=True)
+        check("an EMPTY matrix entry is a RED naming the module AND the phase — never `{}` handed "
+              "downstream, which is exactly what stood every Plugins publish down (#4140)",
+              p.returncode == 1 and "MeshWeaver.AI" in p.stderr and "publish" in p.stderr
+              and as_json(p.stdout) != {}, p.stdout + p.stderr)
+        check("…and that red travels on STDERR, leaving stdout empty — the lane pipes `entry` into "
+              "`jq`, so a diagnostic on stdout is eaten by the consumer and names nothing",
+              p.returncode == 1 and p.stdout.strip() == "" and "::error::" in p.stderr,
+              f"stdout={p.stdout!r} stderr={p.stderr!r}")
         out = run("slots", "--max", "10", "--where", "bundle!=")
         check("slots fill s1.. from the --ok modules carrying the fact, rest empty",
               "s1=MeshWeaver.AI" in out and "s2=\n" in out and "s10=\n" in out, out)
@@ -822,7 +950,8 @@ def self_test(workflow_path: Path | None = None) -> int:
         p = subprocess.run([sys.executable, here, "--state", str(s2), "verdict"], capture_output=True, text=True)
         check("a leg with no failed module exits 0", p.returncode == 0 and "1 ok, 0 failed" in p.stdout, p.stdout)
         p = subprocess.run([sys.executable, here, "--state", str(Path(td) / "absent.json"), "list", "--ok"], capture_output=True, text=True)
-        check("a missing state is a red, never an empty list", p.returncode == 1 and "did not run" in p.stdout, p.stdout)
+        check("a missing state is a red, never an empty list",
+              p.returncode == 1 and "did not run" in p.stderr, p.stdout + p.stderr)
 
         print("== chunk via the CLI, into GITHUB_OUTPUT")
         selp = Path(td) / "sel.json"
@@ -835,9 +964,10 @@ def self_test(workflow_path: Path | None = None) -> int:
         p = subprocess.run([sys.executable, here, "chunk", "--modules", "[]", "--size", "6", "--github-output", str(gho)], capture_output=True, text=True)
         check("an empty selection writes batch-count=0", p.returncode == 0 and "batch-count=0\n" in gho.read_text(encoding="utf-8"))
         p = subprocess.run([sys.executable, here, "chunk", "--modules", f"@{selp}", "--size", "12"], capture_output=True, text=True)
-        check("batch-size above the cap is RED", p.returncode == 1 and "1 to 10" in p.stdout, p.stdout)
+        check("batch-size above the cap is RED", p.returncode == 1 and "1 to 10" in p.stderr, p.stdout + p.stderr)
         p = subprocess.run([sys.executable, here, "chunk", "--modules", f"@{selp}", "--size", "six"], capture_output=True, text=True)
-        check("an unreadable batch-size is RED, not a default", p.returncode == 1 and "not an integer" in p.stdout, p.stdout)
+        check("an unreadable batch-size is RED, not a default",
+              p.returncode == 1 and "not an integer" in p.stderr, p.stdout + p.stderr)
 
     print()
     if failures:
@@ -873,10 +1003,14 @@ def main(argv: list[str] | None = None) -> int:
     l.add_argument("--failed", action="store_true", help="only modules that failed")
     l.add_argument("--where", action="append", help="key=value or key!=value (repeatable)")
 
-    g = sub.add_parser("get", help="one fact or entry field of one module")
+    g = sub.add_parser("get", help="one fact or entry FIELD of one module (never the entry itself)")
     g.add_argument("--module", required=True)
     g.add_argument("key")
     g.add_argument("--default", default="")
+
+    en = sub.add_parser("entry", help="the WHOLE matrix entry of one module, as JSON; no default")
+    en.add_argument("--module", required=True)
+    en.add_argument("--phase", required=True, help="the phase that needs it, for the red")
 
     se = sub.add_parser("set", help="record facts for one module")
     se.add_argument("--module", required=True)
@@ -910,7 +1044,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     return {
         "chunk": cmd_chunk, "init": cmd_init, "list": cmd_list, "get": cmd_get, "set": cmd_set,
-        "fail": cmd_fail, "slots": cmd_slots, "paths": cmd_paths, "verdict": cmd_verdict,
+        "entry": cmd_entry, "fail": cmd_fail, "slots": cmd_slots, "paths": cmd_paths,
+        "verdict": cmd_verdict,
     }[a.cmd](a)
 
 
