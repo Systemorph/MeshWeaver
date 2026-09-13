@@ -447,6 +447,107 @@ public class ModulePackCommandTest : IDisposable
                                     && Encoding.UTF8.GetString(f.Bytes) == "SDK");
     }
 
+    /// <summary>
+    /// 🚨 #4126 — a module's RID-specific NATIVE payload rides its bundle, at the path the runtime
+    /// resolver probes. Measured on <c>MeshWeaver.AppleMessages</c>, which needs
+    /// <c>libe_sqlite3</c>: before this the derivation warned and dropped it, the bundle format had
+    /// no section for it, and the module worked only where the HOST happened to ship the engine —
+    /// the same "the host happens to have it" shape the 2026-09-01 rule called a defect for managed
+    /// assemblies.
+    ///
+    /// <para>The round trip is the assertion: pack it, read it back, and check the relative path is
+    /// preserved EXACTLY — it is not decoration, it is the layout <c>ModuleNativeAssets</c> probes
+    /// (<c>&lt;moduleDir&gt;/runtimes/&lt;rid&gt;/native/&lt;lib&gt;</c>).</para>
+    ///
+    /// <para>Two negative controls travel with it. The native must NOT appear in the flat
+    /// <c>module.assemblies</c> list — every consumer of <c>meshweaver/modules</c> filters to
+    /// entries with no <c>/</c> in the remainder, so a native declared there is silently skipped
+    /// rather than laid out. And a bundle with NO native must declare no section at all, so a
+    /// bundle from before this existed and one that simply has none read the same.</para>
+    /// </summary>
+    [Fact]
+    public void DepsClosure_CarriesANativePayload_AtThePathTheLoaderProbes()
+    {
+        const string nativeRelative = "runtimes/linux-x64/native/libe_sqlite3.so";
+        var nativeDir = Path.Combine(root, "closure", "runtimes", "linux-x64", "native");
+        Directory.CreateDirectory(nativeDir);
+        File.WriteAllBytes(Path.Combine(nativeDir, "libe_sqlite3.so"), "ENGINE"u8.ToArray());
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "SQLitePCLRaw.lib.e_sqlite3": "3.53.3" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "SQLitePCLRaw.lib.e_sqlite3/3.53.3": {
+                    "runtimeTargets": {
+                      "runtimes/linux-x64/native/libe_sqlite3.so": { "rid": "linux-x64", "assetType": "native" }
+                    }
+                  }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "SQLitePCLRaw.lib.e_sqlite3/3.53.3": { "type": "package" }
+              }
+            }
+            """);
+
+        var outDir = Path.Combine(root, "out-native");
+        Assert.Equal(0, ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--deps-closure",
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.7.0",
+            "--framework-mvid", Identity,
+            "--out", outDir,
+        ]));
+
+        var bundle = File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.7.0.module.nupkg"));
+        var (manifest, files) = BundleReader.ReadModule(bundle);
+
+        Assert.Equal([nativeRelative], manifest!.Module!.NativeAssets);
+        var native = Assert.Single(BundleReader.ReadModuleNativeAssets(bundle));
+        Assert.Equal(nativeRelative, native.RelativePath);
+        Assert.Equal("ENGINE", Encoding.UTF8.GetString(native.Bytes));
+
+        // ── negative control 1: it is NOT in the flat closure, which is filtered to entries with
+        // no '/' at every consumer — a native declared there would be silently skipped.
+        Assert.DoesNotContain(manifest.Module.Assemblies!,
+            a => a.Contains('/') || a.EndsWith(".so", StringComparison.Ordinal));
+        Assert.DoesNotContain(files, f => f.FileName.Contains('/'));
+    }
+
+    [Fact]
+    public void AModuleWithNoNative_DeclaresNoNativeSectionAtAll()
+    {
+        // ── negative control 2. If the section were written empty rather than omitted, a consumer
+        // could not tell "this producer ships none" from "this producer predates the section" —
+        // and the assertion above would be reading a constant of every bundle.
+        var outDir = Path.Combine(root, "out-no-native");
+        Assert.Equal(0, ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.8.0",
+            "--framework-mvid", Identity,
+            "--out", outDir,
+        ]));
+
+        var bundle = File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.8.0.module.nupkg"));
+        var (manifest, _) = BundleReader.ReadModule(bundle);
+
+        Assert.Null(manifest!.Module!.NativeAssets);
+        Assert.Empty(BundleReader.ReadModuleNativeAssets(bundle));
+    }
+
     [Fact]
     public void DepsClosure_SkipsFrameworkTrimmedFiles_WhenOthersArePresent()
     {

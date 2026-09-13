@@ -82,6 +82,64 @@ public static class NuGetPackageWriter
     public static string ModuleAssetEntryPathFor(string relativePath) =>
         $"{ModuleAssetFolder}/{relativePath}";
 
+    /// <summary>
+    /// Where a module's RID-specific NATIVE payloads ride (#4126) — a section of its own, declared
+    /// in the manifest like the other two.
+    ///
+    /// <para>🚨 It cannot be <see cref="ModuleFolder"/>. Every consumer of that folder filters to
+    /// FLAT entries by construction — <c>ServedModuleBytes</c> and <c>PublishedBundleCatalogue</c>
+    /// both require the remainder after the prefix to contain no <c>/</c> — so a native written
+    /// under <c>meshweaver/modules/runtimes/…</c> would be SILENTLY skipped, not laid out. And it
+    /// cannot be <see cref="ModuleAssetFolder"/> either: that folder means "static WEB assets", the
+    /// landing service's own logs and docs say wwwroot, and conflating a loadable binary with a
+    /// served file would make every future rule about one apply to the other.</para>
+    ///
+    /// <para>Unlike module files, and like static assets, the relative path is PRESERVED: the
+    /// loader probes <c>&lt;moduleDir&gt;/runtimes/&lt;rid&gt;/native/&lt;lib&gt;</c>, so the path
+    /// IS the contract.</para>
+    /// </summary>
+    public const string ModuleNativeFolder = "meshweaver/modulenatives";
+
+    /// <summary>The bundle entry path for one native payload, by its module-relative path
+    /// (<c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>).</summary>
+    /// <param name="relativePath">The module-relative path, <c>/</c>-separated.</param>
+    public static string ModuleNativeEntryPathFor(string relativePath) =>
+        $"{ModuleNativeFolder}/{relativePath}";
+
+    /// <summary>
+    /// 🚨 <b>The EXACT layout a carried native must have</b> — <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>,
+    /// four segments, no more and no fewer. ONE spelling, shared by the derivation, the packer and
+    /// the reader, so the three cannot drift.
+    ///
+    /// <para><c>ModuleNativeAssets.CandidatePaths</c> composes the probe from exactly those four
+    /// parts and has no recursive walk, so a payload at <c>runtimes/&lt;rid&gt;/other/native/x.so</c>
+    /// — which a substring test for <c>/native/</c> accepts — is carried and then never looked at:
+    /// bytes that read as shipped and behave as absent, the one outcome a native section exists to
+    /// prevent.</para>
+    ///
+    /// <para>It also rejects traversal and empty segments BEFORE anything resolves the path against
+    /// a directory: the packer reads these from disk and a lander writes them to disk, so
+    /// <c>runtimes/../../native/x.so</c> must never reach either.</para>
+    /// </summary>
+    /// <param name="relativePath">The module-relative path, <c>/</c>-separated.</param>
+    /// <returns><c>true</c> when the path is exactly the probed layout.</returns>
+    public static bool IsModuleNativeLayout(string? relativePath)
+    {
+        if (string.IsNullOrEmpty(relativePath) || relativePath.Contains('\\'))
+            return false;
+        var segments = relativePath.Split('/');
+        if (segments.Length != 4)
+            return false;
+        if (!string.Equals(segments[0], "runtimes", StringComparison.Ordinal)
+            || !string.Equals(segments[2], "native", StringComparison.Ordinal))
+            return false;
+        // The RID and the file name: non-empty, and neither a traversal nor a self-reference.
+        foreach (var segment in new[] { segments[1], segments[3] })
+            if (string.IsNullOrEmpty(segment) || segment == "." || segment == "..")
+                return false;
+        return true;
+    }
+
     /// <summary>One file destined for the package.</summary>
     /// <param name="PathInPackage">Full entry path, e.g. <c>meshweaver/content/index.json</c>.</param>
     /// <param name="OpenRead">Opens the bytes. A factory rather than a byte[] so a large assembly
@@ -174,6 +232,12 @@ public static class NuGetPackageWriter
           <Default Extension="png" ContentType="application/octet" />
           <Default Extension="svg" ContentType="application/octet" />
           <Default Extension="lock" ContentType="application/octet" />
+          <!-- Native payloads (#4126). A [Content_Types].xml that does not declare an extension
+               makes the part undeclared for a strict OPC reader; these are the three shapes a
+               loadable native takes on the platforms this ships to. -->
+          <Default Extension="so" ContentType="application/octet" />
+          <Default Extension="dylib" ContentType="application/octet" />
+          <Default Extension="pdb" ContentType="application/octet" />
         </Types>
         """;
 }
