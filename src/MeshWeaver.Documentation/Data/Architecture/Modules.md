@@ -593,6 +593,17 @@ Three rules hold the field to being evidence rather than decoration:
   something would make a bundle from an older packer stop landing over a field that is allowed to be
   absent.
 
+Two hops still carry `(unrecorded)` by construction, and both are named here rather than left to be
+rediscovered from an empty field.
+
+**The registry's RE-PACK composes its own manifest, elsewhere.** A consumer landing a bundle it
+downloaded from a *producer's* publish reads that producer's manifest and records the commit
+(`PluginBundleClient.LandFromBundle`), and a registry's own `[ModuleLoad]` names it because its shelf
+entry was written by `ShelveModule`. But when a registry re-serves a shelved module it composes a
+fresh manifest, and that composer lives in the MeshWeaver.Plugins route, not in core `src/` — so a
+consumer pulling the recomposed bundle sees `(unrecorded)` until that route reads
+`ModuleActivationEntry.SourceCommit` into the manifest it writes.
+
 **The producer hop is deliberately not wired in CI yet.** `module-pack` accepts `--source-commit`, and
 the reusable `node-repo-module-pack.yml` lane does not pass it, for two separate reasons — both of
 which are the reason it is a flag and not an inference:
