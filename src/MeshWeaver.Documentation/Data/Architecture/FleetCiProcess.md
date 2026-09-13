@@ -31,12 +31,32 @@ byte-identical to a candidate head's, and that head's newest run of the caller's
 green. Any doubt gates as usual and prints why. Measured cause: three 30-minute Plugins runs cancelled
 by lock-only pushes on 2026-09-13 (#1788 carried eight such merges).
 
+## A shared script does not know where it is — point it at the repository
+
+The resolver moved into this repo's `.github/scripts/` and the lane **fetches it into
+`$RUNNER_TEMP`** at the caller's `scripts-ref`, then runs it against the caller's checkout. Its root
+had been `Path(__file__).parent.parent`, which was true only of the shape it came from — a copy at
+`<repo>/scripts/`, run from its own checkout. Delivered out of tree that expression resolves to
+`/home/runner/work`, and the lane's first `git fetch` died with `fatal: not a git repository`.
+
+The lane was red on **5 of 5 runs in each of Education, Reinsurance, SocialMedia, Manufacturing and
+Crm** from the hour it was adopted, having resolved nothing; Plugins stayed green because its own
+copy still runs in-tree, so the fleet's green/red split looked like an adoption gap rather than a
+defect. The lane's `--self-test` step passed throughout: every case tested a helper, and the root was
+computed in `main`.
+
+**The rule for any script this repo lends to a satellite lane: it acts on the repository it is
+POINTED at.** `--root` (default: the working directory) is resolved to a git top level and refused
+by name if there is none, and the lane passes `--root "$GITHUB_WORKSPACE"` explicitly. The self-test
+now drives the **entry point**, with `run` swapped out — the only shape that covers the wiring rather
+than the helper it calls.
+
 ## Convergence, 2026-09-13
 
 | Repo | resolver | cancel rule | adoption | admission |
 |---|---|---|---|---|
 | MeshWeaver.Plugins | own workflow (source of the lane) | ✓ (#1791) | own classifier (#1791) | ✓ |
-| Education, Reinsurance, SocialMedia, Crm, Manufacturing | — (next: the lane) | ref-shaped, pre-2026-09-12 (next: the expression) | ✓ once the gate lane at `@main` decides (`actions: read` to grant) | — |
+| Education, Reinsurance, SocialMedia, Crm, Manufacturing | ✓ the lane (working from 2026-09-13 evening; see above) | ref-shaped, pre-2026-09-12 (next: the expression) | ✓ once the gate lane at `@main` decides (`actions: read` to grant) | — |
 
 Each row moves by one small PR per repo: the resolver caller, the expression, `actions: read` on the
 gate call, `enforce-cancel-rule: true` on the validate call.
