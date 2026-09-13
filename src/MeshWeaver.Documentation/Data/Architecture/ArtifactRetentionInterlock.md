@@ -327,6 +327,96 @@ stamp with the reason, or install it. The registry lane already carries the same
 `.github/acr-retention/instances.json`, with the reason and the issue; the two are deliberately
 separate files because they are two different stores, and neither infers the other's answer.
 
+## 🚨 A second registry: when an installation's images are somewhere this lane cannot lock
+
+**Measured 2026-09-13: the protection lane was RED, and its reason was a false sentence.** The
+01:18Z scheduled run ended:
+
+```
+##[error]AXIS 3 — installation `build` runs core c84c6c0 and its overlay
+(Systemorph/Memex deployments/aks/build/values.build.public.yaml) pins no image at all,
+so there is no repository in which to protect what it runs.
+```
+
+That overlay pins **two** images. Run through the shipped extractors, the real file answers
+`ACR pins: 0`, `foreign pins: 2 → cr.meshweaver.cloud` — `memex-portal-ai:3.0.0-ci.8411` and its
+migration twin, in **the fleet's own registry**. `REGISTRY_HOST_RE` matches `*.azurecr.io` and
+nothing else, which is correct for a lane that locks one ACR, but it made "pins its images
+elsewhere" spell identically to "pins nothing" — and *that* reading sends the reader to fix an
+extractor that is working perfectly.
+
+🚨 **And the red was not free.** `pause.reEnableWhen` is *"lock-pinned-digests is green"*, so a live
+installation moving registry was standing between the fleet and re-enabling cleanup — while the
+installation that IS exposed to the ACR purge (`memex`, six pins in this ACR) got no locks either,
+because the run refuses as a whole. One instance's registry question was holding the other's
+protection hostage.
+
+`build` is the fleet's build server and it is the first LIVE installation on `cr.meshweaver.cloud`;
+`pearl` pins there too and is declared not-installed, so it was never asked.
+
+**What the mechanism now does.** Foreign references are *extracted and named*. They are never
+locked — nothing here can write to another registry — but the facts stay distinct:
+
+| the overlay | the run |
+|---|---|
+| pins in this ACR | protected, as before |
+| names an **undeclared** registry, anywhere | **RED**, naming the host and what to write |
+| pins **only** in a declared `fleet-unlockable` one | out of scope — counted on its own line, and that line says protection there is **UNVERIFIED** |
+| pins **both** here and in a `fleet-unlockable` one | **RED.** Half its running set would be protected and half not, and the run would report success |
+| pins **only** in declared `third-party` ones | **RED** — nothing it runs is then accounted for by any registry that holds our images |
+| pins **nothing**, in any registry | RED, and the message now says "in ANY registry" so it means what it says |
+
+### 🚨 The unit of declaration is the REGISTRY, not the installation
+
+`instances.json` gains a top-level `registries` table, and a per-instance `registry` key is
+**refused**. The reason is completeness: a per-instance field answers *"is this one out of scope"*
+and can never answer *"is every registry the fleet pins in accounted for"* — an installation pinning
+its declared registry **and** a second undeclared one would pass it with half its running set
+unnamed. Two dispositions:
+
+- **`fleet-unlockable`** — serves *our* images and this lane cannot lock them (`cr.meshweaver.cloud`).
+- **`third-party`** — the images are somebody else's and were never ours to protect (`ghcr.io`).
+
+Each needs a `reason`; an unknown disposition, a missing reason and an **undeclared host** are each
+RED. An undeclared host reds **wherever it appears**, including on an installation that also pins
+here — the branch a *"no in-scope repositories"* guard never reaches.
+
+### The table is small because it was measured, not guessed
+
+Across the fleet's **twelve** deployment overlays on 2026-09-13, exactly **two** foreign hosts:
+
+| host | references | disposition |
+|---|---|---|
+| `cr.meshweaver.cloud` | 4 (`build` ×2, `pearl` ×2) | `fleet-unlockable` |
+| `ghcr.io` | 1 (`ghcr.io/distribution/distribution` — the registry service's own image) | `third-party` |
+
+🚨 **There was a second `ghcr.io` "reference", and it was a line of PROSE** in the `ci-runners`
+overlay describing what the runner image is built from. This issue already paid for that lesson
+once: of the 31 `sha256:` tokens in its 2026-09-08 hand count, **11 were comments**, several of them
+narrating this very incident inside the files it broke. With an undeclared registry now a blocker, a
+match inside a comment would red the lane over a sentence — so whole-line comments are stripped
+before extraction, on both the ACR and the foreign path.
+
+### Two more shapes the extractor had to learn
+
+- **A `*.azurecr.io` that is not THIS registry is foreign.** `--registry meshweaver` locks
+  `meshweaver.azurecr.io` and nothing else; treating every ACR as in-scope would extract another
+  registry's repository and then look it up in — and lock it against — this one. That is this bug
+  reintroduced one registry along.
+- **Helm's split `repository:` + sibling `tag:`** form, which the ACR path has always handled. A
+  foreign-only overlay written that way extracted as *nothing* and fell straight back into
+  `pins no image at all` — this bug in its second shape.
+
+🚨 **What retains `cr.meshweaver.cloud` is NOT established by this, and the report says so in those
+words.** The out-of-scope line reads *"NOT locked here, and whether anything retains that registry is
+UNVERIFIED"* rather than the earlier *"protected by that registry's own retention"* — a summary that
+claims protection nobody has checked would make a green run read as covered and support re-enabling
+cleanup on a false premise, which is this mechanism's own failure mode committed by its own report.
+The declaration states that those images are out of *this lane's* reach; it does not claim anything
+protects them. That question
+is open on #3438 and it grows with every installation provisioned on the fleet's own registry —
+which, per the new-deployment path, is now the default.
+
 ## The window is DECIDED, and the record is now held to it
 
 The policy is #3842's, quoted verbatim in #3438's body and in #3859's acceptance list:
@@ -411,6 +501,10 @@ not downstream of that night's protection verdict.
 
 ## What is still the maintainer's, and is not code
 
+0. **What retains `cr.meshweaver.cloud`.** The fleet's own registry now serves at least one live
+   installation and is the default for new ones, and `acr purge` cannot reach it. This lane
+   declares those images out of its scope; nothing yet says what keeps them, or deletes them.
+   That is the same question this page answers for the ACR, asked again about a second store.
 1. **The decided window has not been APPLIED to the registry.** The record states it; the live
    (disabled) task still carries `--ago 7d --keep 10`. Applying it is the same act as lifting the
    pause, and it belongs to whoever owns the registry. Its cost is storage: dropping `--keep 10`
