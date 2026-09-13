@@ -1179,6 +1179,36 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
   LIVE="$RESOLVED_DIR"
   if [ "$LIVE" != "$DEST" ]; then
     echo "::notice::$ACCOUNT/$SHARE: $DEST/$POINTER names '${LIVE##*/}' — reading the live publication from there."
+    # 🚨 THE LAYOUT IS A PROPERTY OF THE PREFIX, NOT OF THIS CALLER — the half-migration this
+    # lane's own `publication-layout` description tells operators to avoid, made IMPOSSIBLE here
+    # instead of merely forbidden (MeshWeaver#3461, phase 4).
+    #
+    # A live pointer means some producer of this prefix already writes generations. A run that
+    # then published FLAT would write the prefix while every pointer-following reader kept
+    # resolving the generation — so it would seal a publication nobody serves and report success,
+    # or skip against a directory it is not writing. "A stale serve with nothing red anywhere",
+    # in that description's words.
+    #
+    # Discovering the layout rather than declaring it is what removes the coordination: the two
+    # producers of prebuilt-bundles/<identity>/plugins live in TWO REPOSITORIES and cannot merge
+    # atomically, so the flip MUST pass through a mixed state. Here the first producer to flip
+    # migrates the prefix and every other producer follows on its next publish, in whichever
+    # order they merge — no red in anyone else's repository, and no window in which a reader is
+    # sent to bytes no publisher considers current.
+    #
+    # 🚨 Deliberately NOT "delete the pointer and take the prefix back". That inverts the layout
+    # on a prefix another producer has already migrated, and it can move consumers BACKWARDS: the
+    # pointer is moved BEFORE the flat compatibility copy is refreshed, so a run that finds an
+    # older flat copy could skip, retire a NEWER generation, and expose the older bytes. Going
+    # forward is always safe; going back is not.
+    #
+    # Everything below is unchanged: LIVE stays the generation the pointer names, so every
+    # already-published / architecture / source-commit / module-set decision still reads the
+    # publication consumers are actually being served.
+    if [ "$PUBLICATION_LAYOUT" = "flat" ]; then
+      echo "::warning::$ACCOUNT/$SHARE: $DEST is on the GENERATION layout ($POINTER names '${LIVE##*/}') but this caller passes publication-layout: flat. Publishing a generation, because the layout belongs to the prefix: a flat publication here would be written where no pointer-following reader resolves it. Pass publication-layout: generation on this caller to make it explicit (MeshWeaver#3461, phase 4)."
+      PUBLICATION_LAYOUT=generation
+    fi
   fi
   # "Rebuild only when we need to" applies to the publish too (#1660 WS3), but the key is
   # CONTENT × FRAMEWORK: a sealed directory is already-published only when the framework
