@@ -1,7 +1,7 @@
 ---
 Name: The Registry Listing Cache
 Category: Architecture
-Description: "GET /api/plugins re-read the whole plugins repository on every request and blew its 30 s attempt budget about 60 times a day. What is cached is the SOURCE snapshot, never the response — which is what keeps a latency fix from becoming a disclosure."
+Description: "GET /api/plugins re-reads the whole plugins repository on every request and blew its 30 s attempt budget about 60 times a day. What is cached is the SOURCE snapshot, never the response — which is what keeps a latency fix from becoming a disclosure."
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
 ---
 
@@ -68,9 +68,17 @@ used to be a burst of clones, which is most of how the 30 s budget was reached a
 ## Invalidation, in two layers
 
 **Primary — the green build.** The registry already receives the plugins repo's webhook; a green
-build lands as `Admin/_Build/{owner}.{repo}` and `PluginUpdateWatcher.OnGreenBuild` runs.
-That call now forgets every listing of that repository, so a merge is visible on the next request
-rather than after a wait.
+build lands as `Admin/_Build/{owner}.{repo}`, and the listing for that repository is forgotten — so a
+merge is visible on the next request rather than after a wait.
+
+🚨 **Both source lists are covered, and they are genuinely different lists.** `PluginUpdateWatcher`
+historically watched only repositories named by a **`PluginCatalog` NODE** (`SourceRepoPath`), while
+`/api/plugins` serves what `PackageSources.FromConfiguration` reads from
+**`PluginCatalog:Sources:N:RepoPath`** — which is how the fleet registry is wired. Evicting only on
+the first would have left the freshness window as the *only* invalidation for the sources that
+actually matter, silently. The watcher now also opens an **evict-only** build watch per configured
+source, read through `FromConfiguration` itself so it cannot disagree with what the endpoint serves;
+a repository that is on both lists is watched once and does both.
 
 **Safety net — a freshness window.** `PluginCatalog:ListingCacheSeconds` (default **5 minutes**, `0`
 switches caching off) bounds how stale a listing may be when a broadcast never arrives. This is the

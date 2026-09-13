@@ -51,4 +51,4 @@ behaviour exactly. A malformed value falls back to the default rather than to "o
 silently bring the old cost back.
 
 **Nothing about what a registry serves changes.** The same catalog, the same entitlements, the same
-wire format — read from a repository that is no longer asked the same question sixty times an hour.
+wire format — read from a repository that is no longer asked the same question once per visitor.

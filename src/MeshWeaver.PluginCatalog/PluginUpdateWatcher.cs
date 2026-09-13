@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -117,6 +118,63 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
                 },
                 ex => logger?.LogWarning(ex, "Plugin update watcher could not read the catalog set."));
         subscriptions.Add(sub);
+
+        WatchConfiguredSourcesForListingEviction();
+    }
+
+    /// <summary>
+    /// 🚨 The listing cache has to be invalidated for the sources <c>/api/plugins</c> actually
+    /// SERVES, and those are a DIFFERENT list from the one above (#4222). <see cref="WatchCatalog"/>
+    /// walks <c>PluginCatalog</c> NODES; the registry endpoint reads
+    /// <c>PluginCatalog:Sources:N:RepoPath</c> from configuration. On a registry whose sources are
+    /// configured rather than node-declared — which is how the fleet registry is wired — the
+    /// eviction below would never have fired, and the freshness window would silently have become
+    /// the only invalidation. Read through <c>PackageSources.FromConfiguration</c> rather than
+    /// re-parsing the section, so this can never disagree with what the endpoint serves.
+    ///
+    /// <para>These watches EVICT ONLY. Reconciling installed modules is the catalog node's job and
+    /// stays there; a configured source that is also node-declared is watched once
+    /// (<see cref="watched"/>) and does both.</para>
+    /// </summary>
+    private void WatchConfiguredSourcesForListingEviction()
+    {
+        var cache = hub.ServiceProvider.GetService<PackageListingCache>();
+        var config = hub.ServiceProvider.GetService<IConfiguration>();
+        if (cache is null || config is null || !cache.Enabled)
+            return;
+
+        foreach (var configured in PackageSources.FromConfiguration(hub, config, logger))
+        {
+            if (configured.RepoPath is not { Length: > 0 } src)
+                continue;
+
+            // Only a URL can ever have a build node — a local checkout receives no webhook, and it
+            // is not cached in the first place.
+            (string Owner, string Repo) parsed;
+            try { parsed = OctokitParse(src); }
+            catch { continue; }
+            if (parsed.Owner.Length == 0 || parsed.Repo.Length == 0)
+                continue;
+
+            var buildPath = BuildCompletion.PathFor(parsed.Owner, parsed.Repo);
+            if (!watched.TryAdd(buildPath, 0))
+                continue; // a catalog node already watches this repository and evicts through OnGreenBuild
+
+            logger?.LogInformation(
+                "Plugin update watcher: configured source {Src} watches {BuildPath} to invalidate the listing cache.",
+                src, buildPath);
+
+            var evictionSub = hub.GetMeshNodeStream(buildPath)
+                .Select(n => n?.ContentAs<BuildCompletion>(hub.JsonSerializerOptions, logger))
+                .Where(b => b is not null && b.HeadSha.Length > 0)
+                .Select(b => b!)
+                .DistinctUntilChanged(b => b.HeadSha)
+                .Subscribe(
+                    build => cache.EvictRepo(build.RepositoryUrl.Length > 0 ? build.RepositoryUrl : src),
+                    ex => logger?.LogWarning(ex,
+                        "Plugin update watcher: build stream for {BuildPath} faulted.", buildPath));
+            subscriptions.Add(evictionSub);
+        }
     }
 
     private void WatchCatalog(MeshNode catalogNode)

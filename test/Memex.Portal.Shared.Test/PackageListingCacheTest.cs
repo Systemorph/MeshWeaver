@@ -250,6 +250,51 @@ public class PackageListingCacheTest
         Assert.Equal(TimeSpan.FromSeconds(45), PackageListingCache.WindowOf("45"));
     }
 
+    /// <summary>
+    /// 🚨 <c>double.TryParse</c> SUCCEEDS on these, and <c>TimeSpan.FromSeconds</c> throws on them —
+    /// inside the DI factory that builds the singleton, which would take the host down over a typo
+    /// in a config value. They are malformed values and must land on the default like any other.
+    /// </summary>
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    [InlineData("1e400")]
+    [InlineData("1e30")]
+    public void ANonFiniteOrAbsurdWindow_FallsBackToTheDefault_AndNeverThrows(string configured)
+    {
+        Assert.Equal(PackageListingCache.DefaultWindow, PackageListingCache.WindowOf(configured));
+    }
+
+    /// <summary>
+    /// 🚨 Expiry must not strip a CONCURRENT caller's fresh entry of its stamp. An entry with no
+    /// stamp can never expire again and is invisible to <see cref="PackageListingCache.EvictRepo"/>,
+    /// so the immortal-entry shape is the one to pin: after an expiry-driven re-read, the entry is
+    /// still evictable and still expires.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryRebuiltAfterExpiry_IsStillEvictableAndStillExpires()
+    {
+        var ticks = 0L;
+        var cache = new PackageListingCache(Window, () => ticks);
+        var reads = 0;
+
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        ticks += StopwatchTicks(Window) * 2;
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        Assert.Equal(2, reads);
+
+        // Still visible to the green-build signal — the property an unstamped entry would lose.
+        Assert.Equal(1, cache.EvictRepo(Repo));
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        Assert.Equal(3, reads);
+
+        // And still expiring on its own clock.
+        ticks += StopwatchTicks(Window) * 2;
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        Assert.Equal(4, reads);
+    }
+
     /// <summary>With the window at zero the wrapper is not even installed — every request reads
     /// again, exactly as before the cache existed.</summary>
     [Fact]

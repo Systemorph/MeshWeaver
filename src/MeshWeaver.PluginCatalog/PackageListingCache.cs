@@ -121,11 +121,25 @@ public sealed class PackageListingCache : IDisposable
     /// </summary>
     /// <param name="configured">The raw configured value, or null.</param>
     /// <returns>The window, or <see cref="TimeSpan.Zero"/> when caching is switched off.</returns>
-    public static TimeSpan WindowOf(string? configured) =>
-        double.TryParse(configured, System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out var seconds)
-            ? seconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(seconds)
-            : DefaultWindow;
+    public static TimeSpan WindowOf(string? configured)
+    {
+        // 🚨 `double.TryParse` SUCCEEDS on "NaN" and "Infinity", and TimeSpan.FromSeconds throws on
+        // both — inside the DI factory that builds this singleton, which would take the host down
+        // over a typo. A value that is not a finite number is a malformed value, and a malformed
+        // value falls back to the default. The upper bound is the same rule: a window longer than
+        // a day is not a configuration anybody means, and TimeSpan.FromSeconds overflows past
+        // ~2.9e8 days.
+        if (!double.TryParse(configured, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var seconds)
+            || !double.IsFinite(seconds)
+            || seconds > MaximumWindow.TotalSeconds)
+            return DefaultWindow;
+
+        return seconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(seconds);
+    }
+
+    /// <summary>One day — past this a configured value is a typo, not an intention.</summary>
+    public static readonly TimeSpan MaximumWindow = TimeSpan.FromDays(1);
 
     /// <summary>
     /// The listing for <paramref name="key"/> — the cached one when it is inside the window, a fresh
@@ -143,11 +157,14 @@ public sealed class PackageListingCache : IDisposable
         if (!Enabled)
             return produce();
 
+        // 🚨 The stamp is NOT removed here, and that is deliberate. Removing it in one operation
+        // and the promise in another lets a concurrent caller's FRESH entry be stripped of its
+        // stamp — and an entry with no stamp can never expire again and is invisible to
+        // EvictRepo, which walks these keys. Invalidating the promise alone is enough: the next
+        // GetOrAdd runs the factory, which OVERWRITES the stamp. The set of keys here is therefore
+        // exactly the set of listings this cache has ever held, which is what EvictRepo needs.
         if (builtAt.TryGetValue(key, out var at) && Elapsed(at) > Window)
-        {
             promises.Invalidate(key);
-            builtAt.TryRemove(key, out _);
-        }
 
         return promises.GetOrAdd(key, k =>
         {
