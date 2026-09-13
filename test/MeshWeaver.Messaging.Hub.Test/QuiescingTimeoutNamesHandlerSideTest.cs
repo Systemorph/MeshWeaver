@@ -140,9 +140,18 @@ public class QuiescingTimeoutNamesHandlerSideTest(ITestOutputHelper output) : Hu
 
         summary.Should().Contain("RESPONSE_POSTED",
             "the handler did answer this correlation — the trail must say so");
-        summary.Should().Contain("a reply WAS posted for this correlation and the callback is STILL pending",
+        // The reply's OWN journey is on the trail (#4072): it names the hub the misrouted reply was
+        // handled on, and the verdict reads it — so this shape is not merely "told apart from a
+        // handler that never replied", it says WHERE the answer went instead.
+        summary.Should().Contain($"↩ reply#1:",
+            "a posted reply's stages are rendered as a sub-trail of the request");
+        summary.Should().Contain($"HANDLER_EXIT state=Processed@{CreateMeshAddress()}",
+            "the reply was handled on the mesh hub it was (mis)addressed to");
+        summary.Should().Contain("the reply REACHED a hub that held no callback for this correlation",
             "this is the 'reply lost on the way home' shape, and it must be told apart from a "
-            + "handler that never replied");
+            + "handler that never replied — and now from a reply still in transit");
+        summary.Should().NotContain("a handler was entered and no reply",
+            "the 'no reply at all' verdict must not fire for a request that WAS answered");
     }
 
     /// <summary>

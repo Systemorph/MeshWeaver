@@ -76,11 +76,8 @@ public class ReflectionCacheEvictionTest
 
     private static byte[] CompileWidget()
     {
-        var tpa = (string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!;
-        var references = tpa
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
-            .ToArray();
+        // The process-wide platform set, read once — see PlatformReferences for why (#4127).
+        var references = PlatformReferences.Platform();
 
         var compilation = CSharpCompilation.Create(
             "EvictionTestWidget",

@@ -405,6 +405,12 @@ name: node-repo module pack
 # (`Module bundles`), which is untouched. A caller that wants the old one-leg-per-module shape
 # passes `batch-size: 1`. Doc: Doc/Architecture/ModuleBuildArchitecture ("The pipeline, end to
 # end", the 2026-09-12 batching note).
+#
+# `solo-modules` (2026-09-12, later the same day) sets the suites that DOMINATE a leg apart: each
+# named module that is in the selection gets a leg of its own, first in the matrix, and the rest
+# are striped as above. Measured on MeshWeaver.Plugins#1736: MeshWeaver.AI was ~6 of the 8.6 min
+# of the leg it shared with five modules whose suites run in seconds. Same per-module semantics —
+# a solo leg IS the singleton shape a batch-size of 1 gives every module.
 
 on:
   workflow_call:
@@ -708,6 +714,21 @@ on:
         required: false
         type: string
         default: ubuntu-latest
+      workspace-runner:
+        description: >-
+          The `runs-on` label for `build-workspace` — the ONE global build of every selected
+          container entry, which `docker load`s the pinned platform image and `docker run`s it as
+          the compiler, so this label must serve a Docker daemon: `ubuntu-latest` (the default,
+          today's behaviour, a 4-core VM) or the org's Docker-capable self-hosted set
+          (`aks-silos-dind`, a dind sidecar on a 16-core D16). Measured 2026-09-13 on
+          MeshWeaver.Plugins#1756's full run: 7.1 min on the hosted 4-core, on the critical path
+          of the gate (modules → pack → gate shard) — the 16-core set compiles the same workspace
+          in ~2.5 min. Wire it from a repository variable (`vars.MW_RUNNER_GATE`, the Docker set,
+          falling back to `ubuntu-latest`) so the move is one edit to revert. `prepare`, `select`
+          and `verify` ignore it.
+        required: false
+        type: string
+        default: ubuntu-latest
       batch-size:
         description: >-
           How many modules ONE `pack` leg (and one `tests` leg) carries — see "Batched legs" at
@@ -722,6 +743,20 @@ on:
         required: false
         type: number
         default: 6
+      solo-modules:
+        description: >-
+          Module names (whitespace/comma separated) that get a `pack` / `tests` leg OF THEIR OWN,
+          placed first in the matrix, while every other selected module is batched as above.
+          For the suites that dominate a leg: measured 2026-09-12 on MeshWeaver.Plugins#1736,
+          MeshWeaver.AI (1,992 tests, 2.5 min of suite plus its own compile) was ~6 of the 8.6
+          min of the leg it shared with five modules whose suites run in seconds. A solo leg has
+          the singleton shape — job name, `module-bundle-<module>` artifact and receipts are the
+          ones a batch-size of 1 would give it — and a name not in the selection is simply not
+          there (selections are incremental; absent is the normal case, never an error). Empty
+          by default: nothing is set apart unless the caller says so.
+        required: false
+        type: string
+        default: ''
     secrets:
       publish-token:
         description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
@@ -1172,18 +1207,19 @@ jobs:
         id: batches
         env:
           BATCH_SIZE: ${{ inputs.batch-size }}
+          SOLO_MODULES: ${{ inputs.solo-modules }}
         run: |
           set -euo pipefail
           echo "pack legs:"
           python3 "$MODULE_PACK_BATCH" chunk \
-            --modules "@$RUNNER_TEMP/final.json" --size "$BATCH_SIZE" --github-output "$GITHUB_OUTPUT"
+            --modules "@$RUNNER_TEMP/final.json" --size "$BATCH_SIZE" --solo "$SOLO_MODULES" --github-output "$GITHUB_OUTPUT"
           echo "tests legs:"
           python3 "$MODULE_PACK_BATCH" chunk \
-            --modules "@$RUNNER_TEMP/suites.json" --size "$BATCH_SIZE" --github-output "$GITHUB_OUTPUT" --prefix test-
+            --modules "@$RUNNER_TEMP/suites.json" --size "$BATCH_SIZE" --solo "$SOLO_MODULES" --github-output "$GITHUB_OUTPUT" --prefix test-
           {
             echo "### Batched legs"
             echo
-            echo "\`batch-size: $BATCH_SIZE\` — $(jq 'length' "$RUNNER_TEMP/final.json") selected module(s) in $(sed -n 's/^batch-count=//p' "$GITHUB_OUTPUT" | tail -1) pack leg(s); $(jq 'length' "$RUNNER_TEMP/suites.json") suite(s) in $(sed -n 's/^test-batch-count=//p' "$GITHUB_OUTPUT" | tail -1) tests leg(s)."
+            echo "\`batch-size: $BATCH_SIZE\`${SOLO_MODULES:+, \`solo-modules: $SOLO_MODULES\`} — $(jq 'length' "$RUNNER_TEMP/final.json") selected module(s) in $(sed -n 's/^batch-count=//p' "$GITHUB_OUTPUT" | tail -1) pack leg(s); $(jq 'length' "$RUNNER_TEMP/suites.json") suite(s) in $(sed -n 's/^test-batch-count=//p' "$GITHUB_OUTPUT" | tail -1) tests leg(s)."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────── THE SHARED BUILD ENVIRONMENT, WARMED ONCE ───────────────────
@@ -1501,7 +1537,8 @@ jobs:
     name: Build the workspace (one global build)
     needs: [select, prepare]
     if: needs.select.result == 'success' && needs.select.outputs.count != '0' && needs.prepare.result == 'success'
-    runs-on: ubuntu-latest
+    # `workspace-runner` (inputs): a Docker-capable label — the compiler is the platform image.
+    runs-on: ${{ inputs.workspace-runner }}
     timeout-minutes: 30
     # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
     # callers must remain able to grant `actions: read` without also granting an identity token.
@@ -3908,6 +3945,29 @@ jobs:
           # at another file (a job-level `env:` cannot read `runner.temp`).
           echo "BATCH_STATE=$RUNNER_TEMP/batch/state.json" >> "$GITHUB_ENV"
           python3 "$MODULE_PACK_BATCH" --state "$RUNNER_TEMP/batch/state.json" init --batch "@$RUNNER_TEMP/batch/batch.json"
+      # Test images come from OUR registry, never Docker Hub (maintainer, 2026-09-13: "let's get
+      # images from our own registry, not docker"): a runner that carries
+      # TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX (Memex deployments/aks/ci-runners) makes Testcontainers
+      # rewrite every Docker Hub image name to that registry, and Testcontainers takes the pull
+      # credential from the runner's docker config — so the daemon is logged in HERE, with the
+      # lane's ACR pair, before any suite starts a container. Unset prefix, or no daemon on the
+      # runner (the plain `aks-silos` set — its suites use the shared Postgres and start no
+      # container): says so and exits 0. Same step, same wording as MeshWeaver.Plugins ci.yml's
+      # host legs (Plugins#1771). An empty credential beside a set prefix is RED by name: a
+      # suite that then pulls anonymously would rate-limit at Docker Hub's 429 again.
+      - name: Log the Docker daemon into the fleet's Docker Hub mirror (when the runner names one)
+        env:
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+        run: |
+          set -euo pipefail
+          prefix="${TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX:-}"
+          if [ -z "$prefix" ]; then echo "no TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX on this runner — Docker Hub names stay as they are"; exit 0; fi
+          if ! docker info >/dev/null 2>&1; then echo "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=$prefix but no Docker daemon on this runner — the suites here start no container (shared Postgres)"; exit 0; fi
+          registry="${prefix%%/*}"
+          [ -n "$ACR_USERNAME" ] && [ -n "$ACR_PASSWORD" ] || { echo "::error::TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=$prefix names $registry, but secrets.acr-username / acr-password are empty on this call — a suite that starts a container would pull anonymously (Docker Hub 429) or be refused by $registry. Pass the ACR pair."; exit 1; }
+          echo "$ACR_PASSWORD" | docker login "$registry" -u "$ACR_USERNAME" --password-stdin
+          echo "docker daemon logged into $registry — Testcontainers pulls its Docker Hub images as ${prefix}<name>"
       # 🚨 UNCONDITIONAL, and the log says why. `dotnet-sdk: by-declaration` exists so a job that
       # compiles nothing on the runner stops installing an SDK by reflex — but this job's ONLY
       # work is `dotnet test`, a verb the platform image's build-project does not have at all. So

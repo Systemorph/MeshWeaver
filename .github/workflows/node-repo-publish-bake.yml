@@ -1606,7 +1606,17 @@ jobs:
           # Read-only: publish-bake-bundles.sh orders the sealed commit against this bake's through
           # the compare API and refuses to seal BACKWARDS (per-module deploy). A token that cannot
           # read the content repository just makes the comparison unavailable, and the script says so.
-          GH_TOKEN: ${{ github.token }}
+          # 🚨 So it must be the CONTENT repository's token, the same one the checkout above used —
+          # `github.token` is the CALLER's, and when the caller is core CD baking the private
+          # MeshWeaver.Plugins the compare API answers 404 to it. Measured 2026-09-12/13 (#3461): in
+          # 5 of 25 core `plugins-bake` re-seals the log read "the compare API refused to order …:
+          # gh: Not Found (HTTP 404)" followed by "republishing as before" — the never-seal-backwards
+          # guard was a no-op in the one lane that has a second writer on its prefix, and only the
+          # order the runs happened to finish in kept an older Plugins bake from sealing over a
+          # newer one. The App token below is minted with contents: read on exactly that repository;
+          # for a repository baking its own content the expression falls through to github.token
+          # as before.
+          GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
           # flat (the default) or generation — see the `publication-layout` input. At `flat` the
           # script behaves byte-identically to before this input existed.
           BAKE_PUBLICATION_LAYOUT: ${{ inputs.publication-layout }}

@@ -119,6 +119,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Live Mirrors and the Change Feed](LiveMirrorsAndTheChangeFeed) — a write must not end its own streams
 - [Stream Liveness and the Hub Reference](StreamLivenessAndTheHubReference) — a stream outlived the hub it held, and the contract said it could not
 - [The sync/ Hub Population](SyncHubPopulation) — a `sync/` hub is one field of a stream and a subscription makes two of them; the only reaper of a Started one is an idle sweep the traffic keeps re-arming
+- [A Hub That Pins Its Own Cache Entry](AHubThatPinsItsOwnCacheEntry) — on Orleans every activated hub held the cache's live view of its own path for life, so the entry never released, its heartbeat kept the grain alive, and the loop closed; the one-shot own-node source that opens it
 - [The Evicted-Stream Retention](EvictedStreamRetention) — a change-feed eviction parks a remote stream and `ReclaimIfUnheld` refuses to dispose one that carries no lease entry, so every unleased call site retains one stream, and two `sync/` hubs, per change event
 - [The Read Path Minted a Hub Per Read](ReadPathStreamMinting) — a live in-process census decomposed a replica's `sync/` hubs into their holders and pinned the growth on the read path: a constant configuration took `GetDataRequest` out of the stream cache, so every read left a permanent hub behind (six reads, six hubs, measured on the running portal)
 - [The Recursive-Delete Drain](RecursiveDeleteDrain) — the plan is a snapshot the removals may exceed, the completion check must include the ROOT, and the stage bound measures progress, not duration
@@ -352,6 +353,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Cancel and Join Are Two Questions](CancelAndJoinSequencing) — a deadline that asks work to stop and a deadline that waits for it to have stopped must not share one clock
 - [Collection-Scoped Test Fixtures](CollectionScopedTestFixtures)
 - [Debugging Native Crashes (core dumps)](DebuggingNativeCrashes)
+- [Reading the Memory Watchdog](ReadingTheMemoryWatchdog) — a step with no mesh class active is a plain test class, a ramp across mesh classes is retention; the guard states what it measured, never a cause
 - [Debugging Postgres in Prod / Test](DebuggingPostgres)
 - [Decentralised Tests](DecentralisedTests)
 - [Gate Content Assets](GateContentAssets)

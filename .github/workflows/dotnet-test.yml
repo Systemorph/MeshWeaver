@@ -1968,6 +1968,16 @@ jobs:
     - name: "The gate host composes by its rules and refuses a partial one (self-test)"
       run: bash .github/scripts/compose-gate-host.sh --self-test
 
+    # 🚨 The other half of the same property since MeshWeaver#4113: WHERE a gate shard's platform
+    # comes from. When the runner node mounts the CI platform volume the shard runs the tester as a
+    # process off that share, and a set that is absent, half-written or paired with another portal
+    # must be RED naming `ci-platform-refresh` — NEVER a silent fall back to `docker pull`, which
+    # would hide a dead refresh job for as long as the registry answers. The refusals are only
+    # worth having if they can fire, so the script proves each one against a synthetic volume here,
+    # on every platform PR, exactly as compose-gate-host.sh does above.
+    - name: "A gate shard refuses a platform volume it cannot trust (self-test)"
+      run: bash .github/scripts/resolve-gate-platform.sh --self-test
+
     # The platform resolver the node-repo gate and publish-bake lanes run when a caller pins no
     # digest (2026-09-12: "for compile always find latest package of platform and plugins") —
     # fetched by the lanes at their scripts-ref. Its 43 offline cases prove the seal is the trio,
