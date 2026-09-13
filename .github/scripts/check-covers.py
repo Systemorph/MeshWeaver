@@ -22,8 +22,9 @@ authored line breaks are not what a reader sees.
 
 ## The ratchet
 
-`cover-prose.allow` lists `Repo/Module` entries exempted from the limit. It is **seeded empty** and
-may only SHRINK — an entry is a promise to come back, and seeding it with today's debt would make
+`cover-prose.allow` lists top-level plugin folder names (`Pricing`, not `Reinsurance/Pricing`) exempted
+from the limit; `cover-contrast.allow` lists `contrast:<Module>:<background|secondaryBackground>` keys.
+Both are **seeded empty** and may only SHRINK — an entry is a promise to come back, and seeding it with today's debt would make
 that debt permanent (AGENTS.md, "Standing up a NEW plugin repo").
 
     python3 check-covers.py --root .              # gate the repo at .
@@ -276,24 +277,51 @@ def contrast_self_test() -> list[str]:
     if evaluate_hero_cta("SelfTest", shipped, {"contrast:SelfTest:background",
                                                "contrast:SelfTest:secondaryBackground"}):
         failures.append("the allow ratchet does not silence an entry")
+    # …and an exemption is only EARNED by a finding it silences: on the shipped palette both keys
+    # silence something; on the fixed palette the same keys silence nothing and must read stale.
+    used = silenced_contrast_keys("SelfTest", shipped, {"contrast:SelfTest:background",
+                                                         "contrast:SelfTest:secondaryBackground",
+                                                         "contrast:Other:background"})
+    if used != {"contrast:SelfTest:background", "contrast:SelfTest:secondaryBackground"}:
+        failures.append(f"silenced keys on the shipped palette = {sorted(used)}, expected exactly the "
+                        f"two that silence a finding (never a key for another module)")
+    if silenced_contrast_keys("SelfTest", {"background": "#065f46", "foreground": "#ecfdf5"},
+                              {"contrast:SelfTest:background"}):
+        failures.append("a contrast exemption on a FIXED palette reads as used — stale entries "
+                        "would never be reported")
 
     return failures
 
 
 def evaluate_hero_cta(module: str, palette: dict, allow: set[str]) -> list[str]:
     """The judgement itself, over a palette rather than a folder — so `--self-test` can drive it."""
+    return [problem for _, problem in judge_hero_cta(module, palette) if _ not in allow]
+
+
+def silenced_contrast_keys(module: str, palette: dict, allow: set[str]) -> set[str]:
+    """The allow keys that actually SILENCED a finding on this palette — the only ones that earn
+    their place. An exemption that silences nothing is debt someone already paid (see
+    `stale_entries`), and the gate reports it as such rather than carrying it forever."""
+    return {key for key, _ in judge_hero_cta(module, palette) if key in allow}
+
+
+def judge_hero_cta(module: str, palette: dict) -> list[tuple[str, str]]:
+    """Every finding on a palette as `(allow key, problem)`, BEFORE any exemption is applied."""
     pairs = (
         ("background", "foreground", "the accent pill (Resume / Start / Get)"),
         ("secondaryBackground", "secondaryForeground", "the quiet pills beside it"),
     )
-    problems: list[str] = []
+    findings: list[tuple[str, list[str]]] = []
     for bg_key, fg_key, what in pairs:
         declared_bg, declared_fg = palette.get(bg_key), palette.get(fg_key)
         if not declared_bg and not declared_fg:
             continue
+        # One allow key per PAIR: the pair's problems collect under it and are flattened on return,
+        # so an exemption silences the whole pair and `silenced_contrast_keys` can tell whether it
+        # silenced anything at all.
         key = f"contrast:{module}:{bg_key}"
-        if key in allow:
-            continue
+        problems: list[str] = []
+        findings.append((key, problems))
         surface = parse_colour(declared_bg, PAGE_GROUND) if declared_bg else PAGE_GROUND
         if surface is None:
             problems.append(
@@ -321,7 +349,16 @@ def evaluate_hero_cta(module: str, palette: dict, allow: set[str]) -> list[str]:
                     f"{module}/index.json: heroCta.{fg_key} '{declared_fg}' is {ratio:.2f}:1 on "
                     f"heroCta.{bg_key} '{declared_bg or '(the page)'}', below "
                     f"{MIN_LABEL_CONTRAST}:1 — {what} carries a label a reader cannot make out")
-    return problems
+    return [(key, problem) for key, pair_problems in findings for problem in pair_problems]
+
+
+def stale_entries(allow: set[str], rows: list[tuple[str, int, int, str]], limit: int) -> list[str]:
+    """Prose exemptions that no longer silence anything: the module is under the limit, or it is
+    gone (deleted or renamed). Both used to be invisible — the old check only looked at entries
+    with a matching CURRENT row, so an exemption for a module that had been removed survived
+    forever and the ratchet could grow by attrition."""
+    return sorted(m for m in allow
+                  if not any(module == m and longest > limit for module, longest, _, _ in rows))
 
 
 def main() -> int:
@@ -347,10 +384,12 @@ def main() -> int:
     rows = []
     contrast_allow = read_allow(root, CONTRAST_ALLOW_FILE)
     palette_problems = []
+    contrast_used: set[str] = set()
     for module, content in covers(root):
         palette = content.get("heroCta")
         if isinstance(palette, dict):
             palette_problems += evaluate_hero_cta(module, palette, contrast_allow)
+            contrast_used |= silenced_contrast_keys(module, palette, contrast_allow)
         elif palette is not None:
             palette_problems.append(f"{module}/index.json: heroCta is not an object")
         paras = paragraphs(content.get("body") or "")
@@ -371,9 +410,10 @@ def main() -> int:
 
     failures = [r for r in rows if r[1] > args.max and r[0] not in allow]
     # An allow entry that no longer needs to be there is debt someone already paid — make deleting
-    # it the required next step, exactly as plugin-tests.allow does.
-    stale = sorted(m for m in allow
-                   if any(module == m and longest <= args.max for module, longest, _, _ in rows))
+    # it the required next step, exactly as plugin-tests.allow does. Both allow-files, both ways
+    # an entry can stop earning its place (the module fixed, or the module gone).
+    stale = stale_entries(allow, rows, args.max)
+    stale_contrast = sorted(contrast_allow - contrast_used)
 
     for module, longest, _, worst in sorted(failures, key=lambda r: -r[1]):
         print(f"✗ {module}: a prose paragraph of {longest} characters "
@@ -381,12 +421,16 @@ def main() -> int:
         print(f"    “{worst[:120]}…”")
     for module in stale:
         print(f"✗ {module} is listed in {ALLOW_FILE} but no longer needs to be — delete the line.")
+    for key in stale_contrast:
+        print(f"✗ {key} is listed in {CONTRAST_ALLOW_FILE} but silences nothing — delete the line.")
     for problem in palette_problems:
         print(f"✗ {problem}")
 
-    if failures or stale or palette_problems:
-        print(f"\n{len(failures)} wall(s) of text, {len(palette_problems)} unreadable pill(s), "
-              f"{len(stale)} stale exemption(s). "
+    if failures or stale or stale_contrast or palette_problems:
+        # "heroCta problem", not "unreadable pill": the list also carries values the gate could
+        # not parse and palettes that are not objects, and the fix differs for each.
+        print(f"\n{len(failures)} wall(s) of text, {len(palette_problems)} heroCta problem(s), "
+              f"{len(stale) + len(stale_contrast)} stale exemption(s). "
               f"`--report` ranks every cover.")
         return 1
 
@@ -428,6 +472,15 @@ def self_test() -> int:
         if actual != expected:
             failures.append(f"{label}: expected longest {expected}, got {actual}")
 
+    # The prose ratchet's stale rule, both directions: an entry keeps its place only while its
+    # module is present AND over the limit. Fixed ⇒ stale; deleted/renamed ⇒ stale (this second
+    # direction is the one the old check missed); still over ⇒ kept.
+    rows = [("Fixed", 100, 1, ""), ("StillOver", DEFAULT_MAX + 1, 1, "")]
+    got = stale_entries({"Fixed", "Gone", "StillOver"}, rows, DEFAULT_MAX)
+    if got != ["Fixed", "Gone"]:
+        failures.append(f"stale prose exemptions = {got}, expected ['Fixed', 'Gone'] "
+                        f"(a fixed module and a module that no longer exists)")
+
     # And the gate must actually TRIP: a body one character over the limit fails, one at the limit
     # passes. A limit compared with the wrong operator is invisible to every case above.
     at_limit = paragraphs("x" * DEFAULT_MAX)[0]
@@ -447,7 +500,8 @@ def self_test() -> int:
         return 1
     print(f"✓ check-covers self-test: {len(cases)} measurement case(s), "
           f"{sum(1 for _, _, e in cases if e == 0)} of them structure that must NOT count, "
-          f"the limit boundary, and the heroCta contrast maths in both directions.")
+          f"the limit boundary, both allow ratchets' stale rule, and the heroCta contrast maths "
+          f"in both directions.")
     return 0
 
 
