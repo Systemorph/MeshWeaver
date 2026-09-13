@@ -261,6 +261,96 @@ If that production comes back `Red`, the tick holds; the now-recorded `Red` make
 step past that candidate. The two halves converge in one extra check instead of paying a gate run
 per tag.
 
+## What is not provisioned, what it costs, and what closes it (#3848)
+
+> **Measured 2026-09-13T18:45Z, read-only.** `repos/Systemorph/MeshWeaver/actions/variables`,
+> `…/actions/secrets` and `…/dependabot/secrets`: **no `COMBO_*` entry of any kind, in either
+> store.** Over the workflow's last **30** runs, `Verify` is `skipped` in **30 of 30** — not one
+> instance has ever been verified. `Admin/UpdatePolicy.comboVerifications` is `[]` on **both** live
+> instances.
+
+### 🚨 The 16 GREEN runs verified exactly as much as the 14 red ones: nothing
+
+Of those 30 runs, **14 are red** (the preflight naming the unprovisioned inputs) and **16 are
+green** — and every one of the greens is the *no-candidate* branch: the triggering CD run concluded
+`cancelled` (the one-pending-slot concurrency rule), so there was nothing to verify and the
+`verdict` job exits 0 saying so. That branch is correct and it is the reason the gate does not cry
+wolf on routine traffic. But it means **the workflow's conclusion is not a reading of whether
+anything is verified**, and counting greens is the one way to get this wrong. The reading that
+answers the question is `Verify`'s conclusion — `skipped` in all 30 — and the `instances=N`
+denominator the verdict job prints.
+
+### The provisioning, as a one-read task
+
+All four go in the **Actions** store of `Systemorph/MeshWeaver` and **only** there:
+`combo-verify.yml` fires on `workflow_run` and `workflow_dispatch` and **never** on
+`pull_request`, so its `secrets.` never resolve against the Dependabot store (there is no Dependabot
+*variables* store at all). The two `AZURE_*` and two `FLEET_READER_*` secrets the same preflight
+asserts are already provisioned for `main-cd`.
+
+| Name | Kind | Value | Where it comes from |
+|---|---|---|---|
+| `COMBO_VERIFY_INSTANCES` | variable | `[{"name":"memex","baseUrl":"https://memex.systemorph.com"},{"name":"memex-cloud","baseUrl":"https://memex.meshweaver.cloud"}]` | plain data — see the next section for why it should not be a variable at all |
+| `COMBO_VERIFY_SOURCES` | variable | space-separated `name=url`, e.g. `plugins=https://github.com/Systemorph/MeshWeaver.Plugins` | the module source repositories the verifier materialises |
+| `COMBO_VERIFY_KEYS` | secret | `{"<instance>":"mwi_…"}`, one per instance | 🚨 **ISSUED, never recovered.** An `mwi_` instance-registry key is stored hash-only (`InstanceKeys` persists `Hash(raw)`), so an existing key cannot be read back — a NEW key is issued per instance, additively, and separately revocable. |
+| `COMBO_VERIFY_TOKENS` | secret | `{"<instance>":"mw_…"}`, one per instance | an API token of a **global admin** on that instance. #3891 made this removable — see below — but the lander still uses it, so it is required until that switch lands. |
+
+The names are asserted at `combo-verify.yml:96-133` and each `missing+=` line already names what to
+provision; the `verdict` job at `:254-278` separates *no candidate* from *the preflight failed* from
+*verification did not succeed*, so a red here reads as "verification never ran, provision X" rather
+than as "verification failed". **That half of the lane is not the defect.**
+
+### What being UNVERIFIED costs today: nothing gates on it
+
+Two independent reasons, and both were measured rather than assumed:
+
+1. **By design, an absent verdict neither clears nor refuses.** `ComboClearanceKind.NotVerified`
+   "refuses nothing, because refusing on it would freeze every instance in the fleet on the day this
+   gate shipped" (`ComboClearance.cs:20-30`). Only a `Refused` — a recorded **Red** — removes a
+   candidate from the walk (`SelfUpdateHostedService.cs:891`) or holds a roll (`:1014`). An
+   unverified roll is **applied**, with `LogWarning("[SelfUpdate] rolled {Tag} WITHOUT combo
+   clearance")` and the verdict marked `Unverified` (`:1048-1056`). The other two readers —
+   `PlatformUpdateStatus.cs:105` and `UpdatePolicySettingsTab.cs:249` — block or display only on a
+   Red.
+2. **The one consumer is switched off on both live instances.** `Admin/UpdatePolicy` on
+   memex.systemorph.com and on memex.meshweaver.cloud both read
+   `lastCheckVerdict: "updates are disabled on this install (Admin/UpdatePolicy = None); the
+   registry was not listed."` So the self-update poller — the only thing in this repository that
+   consults a verdict at decision time — is not deciding anything to begin with.
+
+That is **not** an argument for leaving it unprovisioned: the gate exists so that the day
+self-update is switched back on, a candidate a live instance cannot serve is refused rather than
+rolled. It is an argument about *priority* — this is a latent gate, not a live incident, and it
+should be read that way when it is scheduled against work that is bleeding.
+
+### 🚨 The instance list should not be a repo variable, and closing that needs NO new credential
+
+#3842 rules out hand-maintained pins, and `vars.COMBO_VERIFY_INSTANCES` is one. The issue's own
+remainder list records step 3 — enumerate instances at run time — as *depending* on a credential
+for reading the control instance's `Deployments/*` records. **That dependency does not hold for the
+route this repository already uses.** `lock-pinned-digests.py`'s AXIS 3 derives the same roster from
+the deployment overlays — every `Hosting__Deployment:` plus its `ingress.host` — using only the
+read-only **fleet-reader** GitHub App, and `.github/acr-retention/instances.json` declares the
+installations that are deliberately not live. `combo-verify.yml` **already asserts that App's two
+secrets** (`:99-100`) and **already mints its token** (`:173-183`), so the derivation needs nothing
+that is not already in the lane.
+
+So the remainder, in dependency order and with the dependency corrected:
+
+1. **Enumerate instances from the deployment overlays** and drop `vars.COMBO_VERIFY_INSTANCES`.
+   Needs no new credential. `check-combo-verify.py` must keep driving the vacuous-green case — an
+   empty derived roster is a RED, never an empty matrix.
+2. **Grant `verify:combo` to the build identity on each instance.** Portal data, per instance,
+   provisionable only by an operator. `POST /api/plugins/combo-verification` requires
+   `outcome.Build?.Allows(BuildVerbs.Verify, "combo")` (`ReleaseGateEndpoints.cs:291, :302`) — an
+   `mwi_` instance key alone does **not** satisfy it, so this cannot be worked around from CI.
+3. **Switch the lander off the admin token**, dropping `COMBO_VERIFY_TOKENS` from the preflight and
+   the job env in the same diff — an input asserted but no longer consumed is the no-skip-trapdoor
+   rule in reverse. This must land *after* 2, or the POST is refused on every instance and the lane
+   is red deeper in, wearing an HTTP 401 that names no secret.
+
+Until 2 is provisioned, no amount of workflow work in this repository makes the lane green.
+
 ## Known boundary: the combo moves
 
 A verdict names the `ComboReadAt` of the snapshot it verified. An instance whose modules sync forward
