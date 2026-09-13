@@ -22,10 +22,12 @@ namespace MeshWeaver.Hosting.Test;
 /// feed. Each feed must reach that replica's <see cref="InProcessMeshChangeFeed"/> directly; one
 /// Orleans grain activation cannot deliver into the process memory of every silo.
 ///
-/// <para>The compatibility read a hint-less notification owes goes through
+/// <para>The compatibility read that a hint-less notification requires goes through
 /// <see cref="ReReadCoalescing"/>, so these tests drive it on a <see cref="TestScheduler"/>: a
-/// hinted or entity-bearing notification is relayed synchronously on <c>Announce</c>, a hint-less
-/// one is relayed once the path has been quiet for <see cref="ReReadCoalescing.Window"/>.</para>
+/// hinted or entity-bearing notification is relayed synchronously on <c>Announce</c>; a hint-less
+/// one is relayed once the path has been quiet for <see cref="ReReadCoalescing.Window"/>, and only
+/// if nothing newer arrived on that path in the meantime — the newest notification on a path
+/// always wins, so a read in flight is overtaken by any later arrival and says nothing.</para>
 /// </summary>
 public class StorageChangeFeedRelayTest
 {
@@ -152,13 +154,11 @@ public class StorageChangeFeedRelayTest
     }
 
     /// <summary>
-    /// The one reordering the two lanes can produce on a path: a hint-less create/update whose
-    /// coalesced read runs AFTER a delete that was relayed at once. The read finds no row, and the
-    /// relay must then say nothing — the delete already invalidated the path, and a
-    /// <c>Created</c>/<c>Updated</c> carrying no node and no version after it is a retype to
-    /// "(none)" as far as <c>NodeTypeRebindWatcher.RequiresRebind</c> can tell (a recycle of a
-    /// hub the delete is already tearing down, with a misleading reason). The read itself is
-    /// the positive control: it ran, and found nothing.
+    /// A hint-less create followed by a delete on the same path, inside the quiet window: the
+    /// burst ends on the delete, which is self-contained and already the newest thing to say, so
+    /// no read is owed at all — and nothing can publish a <c>Created</c> carrying no node and no
+    /// version after the <c>Deleted</c>, which <c>NodeTypeRebindWatcher.RequiresRebind</c> would
+    /// read as a retype to "(none)" and answer with a recycle of a hub the delete is tearing down.
     /// </summary>
     [Fact]
     public async Task AnEntitylessCreateFollowedByADeleteOnOnePath_NeverResurrectsIt()
@@ -168,7 +168,9 @@ public class StorageChangeFeedRelayTest
         await durable.Write(Node(version: 1, nodeType: "Hosting/Publication"), json).Should().Emit();
         using var adapter = new ControllableNotificationAdapter(durable);
         var received = new ImmutableSignal<MeshChangeEvent>();
-        using var relay = new StorageChangeFeedRelay(adapter, received.Add, scheduler: scheduler);
+        var readBound = ReReadCoalescing.Window * 2;
+        using var relay = new StorageChangeFeedRelay(
+            adapter, received.Add, legacyReadTimeout: readBound, scheduler: scheduler);
 
         adapter.Announce(new DataChangeNotification(
             Path, DataChangeKind.Created, Entity: null, DateTimeOffset.UtcNow));
@@ -178,31 +180,90 @@ public class StorageChangeFeedRelayTest
 
         received.Items.Select(e => (e.Kind, e.Version)).Should().Equal(
             new[] { (MeshChangeKind.Deleted, 0L) },
-            "a delete is self-contained and relayed at once, ahead of the coalesced read");
-        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+            "a delete is self-contained and relayed at once");
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks + readBound.Ticks);
 
-        adapter.ReadCalls.Should().Be(1, "the create's coalesced read ran — and found no row");
+        adapter.ReadCalls.Should().Be(0,
+            "the burst ended on the delete, which already said the newest thing there is to say "
+            + "about this path — a read for the older create is not owed");
+        received.Items.Select(e => (e.Kind, e.Version)).Should().Equal(
+            new[] { (MeshChangeKind.Deleted, 0L) });
+    }
+
+    /// <summary>
+    /// The same delete landing while the create's read is already IN FLIGHT: the delete is relayed
+    /// at once and overtakes the read, which then says nothing — not a path-only fallback, not a
+    /// stale row.
+    /// </summary>
+    [Fact]
+    public async Task ADeleteDuringTheCreatesRead_OvertakesIt_AndNothingResurrectsThePath()
+    {
+        var scheduler = new TestScheduler();
+        var durable = new InMemoryStorageAdapter();
+        await durable.Write(Node(version: 1, nodeType: "Hosting/Publication"), json).Should().Emit();
+        using var adapter = new ControllableNotificationAdapter(durable) { NeverRead = true };
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        var readBound = ReReadCoalescing.Window * 2;
+        using var relay = new StorageChangeFeedRelay(
+            adapter, received.Add, legacyReadTimeout: readBound, scheduler: scheduler);
+
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Created, Entity: null, DateTimeOffset.UtcNow));
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+        adapter.ReadCalls.Should().Be(1, "the create's read is in flight");
+        adapter.InFlightReads.Should().Be(1);
+
+        await durable.Delete(Path).Should().Emit();
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Deleted, Entity: null, DateTimeOffset.UtcNow));
+
+        received.Items.Select(e => (e.Kind, e.Version)).Should().Equal(
+            new[] { (MeshChangeKind.Deleted, 0L) });
+        adapter.InFlightReads.Should().Be(0, "the delete overtook the read and ended it");
+        scheduler.AdvanceBy(readBound.Ticks);
         received.Items.Select(e => (e.Kind, e.Version)).Should().Equal(
             new[] { (MeshChangeKind.Deleted, 0L) },
+            "an overtaken read says nothing — not even its path-only fallback at the bound");
+    }
+
+    /// <summary>
+    /// A read that finds NO row says nothing: the row is gone, and whatever removed it was
+    /// self-contained and relayed on arrival. The read is the positive control — it ran.
+    /// </summary>
+    [Fact]
+    public void AReadThatFindsNoRow_SaysNothing()
+    {
+        var scheduler = new TestScheduler();
+        var durable = new InMemoryStorageAdapter();
+        using var adapter = new ControllableNotificationAdapter(durable);
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        using var relay = new StorageChangeFeedRelay(adapter, received.Add, scheduler: scheduler);
+
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+
+        adapter.ReadCalls.Should().Be(1, "the read ran");
+        received.Items.Should().BeEmpty(
             "a row the read cannot find was deleted, and the delete already invalidated the path: "
-            + "a Created after it, carrying no node and no version, would read as a retype to "
+            + "an Updated after it, carrying no node and no version, would read as a retype to "
             + "'(none)' to the rebind watcher");
     }
 
     /// <summary>
-    /// Reads on one path are serialised even when a burst lands while the previous read is still
-    /// in flight: the second read queues behind the first instead of racing it, so a slow answer
-    /// for an older commit can never be published after the answer for a newer one.
+    /// The newest notification on a path wins across bursts too: a hint-less notification that
+    /// lands while an earlier one's read is still in flight overtakes that read (it ends, and
+    /// says nothing), and the newer burst's own read is the one that speaks. Reads on a path
+    /// therefore never overlap.
     /// </summary>
     [Fact]
-    public void ABurstDuringAnInFlightRead_QueuesBehindIt_AndNeverRacesIt()
+    public async Task AnArrivalDuringAnInFlightRead_OvertakesIt_AndOnlyTheNewerReadSpeaks()
     {
         var scheduler = new TestScheduler();
         var durable = new InMemoryStorageAdapter();
+        await durable.Write(Node(version: 5, nodeType: "Hosting/Publication"), json).Should().Emit();
         using var adapter = new ControllableNotificationAdapter(durable) { NeverRead = true };
         var received = new ImmutableSignal<MeshChangeEvent>();
-        // A read bound LONGER than the quiet window: the second burst's window closes while the
-        // first read is still inside its bound, which is the only way two reads could overlap.
         var readBound = ReReadCoalescing.Window * 2;
         using var relay = new StorageChangeFeedRelay(
             adapter, received.Add, legacyReadTimeout: readBound, scheduler: scheduler);
@@ -211,22 +272,102 @@ public class StorageChangeFeedRelayTest
             Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
         scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
         adapter.ReadCalls.Should().Be(1, "the first burst's read is in flight");
+        adapter.InFlightReads.Should().Be(1);
 
-        // The next notification arrives while that read has not answered, and its own quiet
-        // window closes while the first read is still in flight.
+        // The store moves and the next notification arrives while that read has not answered.
+        adapter.NeverRead = false;
+        await durable.Write(Node(version: 6, nodeType: "Hosting/Publication"), json).Should().Emit();
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+        adapter.InFlightReads.Should().Be(0, "the newer notification overtook the in-flight read");
+        received.Items.Should().BeEmpty("an overtaken read says nothing");
+
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+        adapter.ReadCalls.Should().Be(2, "the newer burst reads for itself");
+        received.Items.Select(e => e.Version).Should().Equal(new[] { 6L },
+            "only the newest information about the path is published");
+        scheduler.AdvanceBy(readBound.Ticks);
+        received.Items.Select(e => e.Version).Should().Equal(new[] { 6L },
+            "the overtaken read cannot land its path-only fallback later either");
+        adapter.MaxInFlightReads.Should().Be(1, "reads on a path never overlap");
+    }
+
+    /// <summary>
+    /// Three waves, each landing while the previous read is still inside its bound, then a wave
+    /// after the group has closed: every read is overtaken or over before the next starts, so the
+    /// path's reads never overlap — including across the group boundary, where the previous
+    /// design could close a group while a queued read was still running.
+    /// </summary>
+    [Fact]
+    public void ThreeSlowWaves_ThenAWaveAfterTheGroupClosed_NeverOverlapReads()
+    {
+        var scheduler = new TestScheduler();
+        var durable = new InMemoryStorageAdapter();
+        using var adapter = new ControllableNotificationAdapter(durable) { NeverRead = true };
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        var readBound = ReReadCoalescing.Window * 2;
+        using var relay = new StorageChangeFeedRelay(
+            adapter, received.Add, legacyReadTimeout: readBound, scheduler: scheduler);
+
+        for (var wave = 1; wave <= 3; wave++)
+        {
+            adapter.Announce(new DataChangeNotification(
+                Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+            scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+            adapter.ReadCalls.Should().Be(wave, $"wave {wave} reads once its window closes");
+            adapter.InFlightReads.Should().Be(1);
+        }
+        received.Items.Should().BeEmpty("every earlier read was overtaken before it answered");
+
+        // The third read runs to its bound: one path-only fallback, and the group closes right
+        // after it (window + bound past the last notification).
+        scheduler.AdvanceBy(readBound.Ticks);
+        received.Items.Select(e => e.Version).Should().Equal(new[] { 0L });
+        adapter.InFlightReads.Should().Be(0);
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+
+        // A wave after the group closed opens a new group; nothing is in flight for it to race.
         adapter.Announce(new DataChangeNotification(
             Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
         scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
-        adapter.ReadCalls.Should().Be(1,
-            "the second read is queued behind the in-flight one, not started beside it");
-        received.Items.Should().BeEmpty();
-
-        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
-        received.Items.Select(e => e.Version).Should().Equal(new[] { 0L },
-            "the first read hit its bound and resolved to a path-only invalidation");
-        adapter.ReadCalls.Should().Be(2, "only now does the queued read start");
+        adapter.ReadCalls.Should().Be(4);
         scheduler.AdvanceBy(readBound.Ticks);
         received.Items.Select(e => e.Version).Should().Equal(0L, 0L);
+        adapter.MaxInFlightReads.Should().Be(1, "reads on a path never overlap, across groups too");
+    }
+
+    /// <summary>
+    /// A hinted notification inside the quiet window ends the burst: it is relayed at once and it
+    /// is newer than the hint-less one before it, so no read is owed for that burst at all.
+    /// </summary>
+    [Fact]
+    public void AHintedNotificationInsideTheQuietWindow_EndsTheBurst_SoNoReadIsOwed()
+    {
+        var scheduler = new TestScheduler();
+        var durable = new InMemoryStorageAdapter();
+        using var adapter = new ControllableNotificationAdapter(durable);
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        var readBound = ReReadCoalescing.Window * 2;
+        using var relay = new StorageChangeFeedRelay(
+            adapter, received.Add, legacyReadTimeout: readBound, scheduler: scheduler);
+
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow)
+        {
+            NodeType = "Hosting/Publication",
+            Version = 52,
+        });
+
+        received.Items.Select(e => (e.Path, e.Version)).Should().Equal(
+            new[] { (Path, 52L) },
+            "a hinted invalidation is self-contained and is relayed at once");
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks + readBound.Ticks);
+        adapter.ReadCalls.Should().Be(0,
+            "the burst ended on the hinted notification, which is newer than the hint-less one — "
+            + "a read would only repeat what it already said");
+        received.Items.Select(e => (e.Path, e.Version)).Should().Equal(new[] { (Path, 52L) });
     }
 
     [Fact]
@@ -245,30 +386,31 @@ public class StorageChangeFeedRelayTest
 
         adapter.Announce(new DataChangeNotification(
             Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+        received.Items.Select(e => (e.Path, e.Version, e.NodeType)).Should().Equal(
+            new[] { (Path, 0L, (string?)null) },
+            "a read that faults leaves the row's state unknown, so the path is still invalidated");
+
+        // The fault did not terminate the path's read queue: the next hint-less notification
+        // reads, and reads the row.
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+        received.Items.Select(e => (e.Version, e.NodeType)).Should().Equal(
+            (0L, (string?)null),
+            (20L, "Hosting/Publication"));
+
+        // And a hinted commit is never held behind any of it.
         adapter.Announce(new DataChangeNotification(
             Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow)
         {
             NodeType = "Hosting/Publication",
             Version = 21,
         });
-
-        received.Items.Select(e => (e.Path, e.Version, e.NodeType)).Should().Equal(
-            new[] { (Path, 21L, (string?)"Hosting/Publication") },
-            "a hinted notification needs no read and is never held behind a coalescing window");
-        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
-        received.Items.Select(e => (e.Path, e.Version, e.NodeType)).Should().Equal(
-            (Path, 21L, "Hosting/Publication"),
-            (Path, 0L, (string?)null));
-
-        // The fault did not terminate the path's serialised read queue: the next legacy
-        // notification reads, and reads the row.
-        adapter.Announce(new DataChangeNotification(
-            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
-        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
         received.Items.Select(e => (e.Version, e.NodeType)).Should().Equal(
-            (21L, "Hosting/Publication"),
             (0L, (string?)null),
-            (20L, "Hosting/Publication"));
+            (20L, "Hosting/Publication"),
+            (21L, "Hosting/Publication"));
     }
 
     [Fact]
@@ -335,7 +477,7 @@ public class StorageChangeFeedRelayTest
     }
 
     [Fact]
-    public void NeverAnsweringLegacyRead_IsBounded_AndCannotBlockTheNextHintedInvalidation()
+    public void ANeverAnsweringRead_IsBounded_ByThePathOnlyFallback()
     {
         var scheduler = new TestScheduler();
         var durable = new InMemoryStorageAdapter();
@@ -346,6 +488,30 @@ public class StorageChangeFeedRelayTest
 
         adapter.Announce(new DataChangeNotification(
             Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+        adapter.ReadCalls.Should().Be(1);
+        received.Items.Should().BeEmpty("the read is inside its budget");
+
+        scheduler.AdvanceBy(11);
+        received.Items.Select(e => (e.Path, e.Version)).Should().Equal(new[] { (Path, 0L) },
+            "a silent read is bounded: the path is invalidated without node or version");
+    }
+
+    [Fact]
+    public void AHintedNotificationDuringAnInFlightRead_OvertakesIt_AndIsNeverHeldBehindIt()
+    {
+        var scheduler = new TestScheduler();
+        var durable = new InMemoryStorageAdapter();
+        using var adapter = new ControllableNotificationAdapter(durable) { NeverRead = true };
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        using var relay = new StorageChangeFeedRelay(
+            adapter, received.Add, legacyReadTimeout: TimeSpan.FromTicks(10), scheduler: scheduler);
+
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow));
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+        adapter.InFlightReads.Should().Be(1, "the hint-less notification's read is in flight");
+
         adapter.Announce(new DataChangeNotification(
             Path, DataChangeKind.Updated, Entity: null, DateTimeOffset.UtcNow)
         {
@@ -357,13 +523,12 @@ public class StorageChangeFeedRelayTest
             new[] { (Path, 52L) },
             "a hinted invalidation is self-contained and is relayed at once — never behind a "
             + "compatibility read that may sit at its bound");
-        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
-        adapter.ReadCalls.Should().Be(1);
+        adapter.InFlightReads.Should().Be(0, "and it overtook that read");
         scheduler.AdvanceBy(11);
-
-        received.Items.Select(e => (e.Path, e.Version)).Should().Equal(
-            (Path, 52L),
-            (Path, 0L));
+        received.Items.Select(e => (e.Path, e.Version)).Should().Equal(new[] { (Path, 52L) },
+            "the overtaken read's version-zero fallback can never land after the newer event — "
+            + "the remote-stream resubscribe gate would read it as 'behind' and resubscribe a "
+            + "healthy stream");
     }
 
     [Fact]
@@ -453,14 +618,25 @@ public class StorageChangeFeedRelayTest
         public string? SerializedRead { get; set; }
         public int ReadCalls { get; private set; }
         public ImmutableList<string> ReadPaths { get; private set; } = ImmutableList<string>.Empty;
+        /// <summary>Reads subscribed and neither completed nor disposed — the overlap instrument.</summary>
+        public int InFlightReads { get; private set; }
+        public int MaxInFlightReads { get; private set; }
         public IObservable<DataChangeNotification> Changes => changes;
 
         public void Announce(DataChangeNotification notification) => changes.OnNext(notification);
 
         public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+            => Observable.Defer(() =>
+            {
+                ReadCalls++;
+                ReadPaths = ReadPaths.Add(path);
+                InFlightReads++;
+                MaxInFlightReads = Math.Max(MaxInFlightReads, InFlightReads);
+                return ReadCore(path, options).Finally(() => InFlightReads--);
+            });
+
+        private IObservable<MeshNode?> ReadCore(string path, JsonSerializerOptions options)
         {
-            ReadCalls++;
-            ReadPaths = ReadPaths.Add(path);
             if (NextReadError is { } ex)
             {
                 NextReadError = null;

@@ -17,9 +17,11 @@ one path cost 201 reads where the contract is a handful, and every plugins `main
 set stopped on it, which also skipped module tagging and the platform bake behind the red.
 
 The relay's compatibility read now goes through the same per-path coalescer the per-node hub's own
-reconcile has always used: at most one read per 50 ms of quiet on a path, the last notification of
-a burst is the one that reads, and reads on a path are serialised so a burst that lands while a
-read is in flight queues behind it. A notification that already carries the node, or its node type
-and version, or announces a delete, is relayed at once as before. The PostgreSQL feed's own
-notification shape — identifiers only, never the node — is now recognised as its designed shape
-rather than logged as an error on every notification.
+reconcile has always used: at most one read per 50 ms of quiet on a path, and the last notification
+of a burst is the one that decides. A notification that already carries the node, or its node type
+and version, or announces a delete, is relayed at once as before — and it is newer than any read
+still pending for that path, so it ends the burst without a read and overtakes a read in flight,
+which then says nothing. A read that finds the row gone says nothing either, since the delete that
+removed it was already relayed. The PostgreSQL feed's own notification shape — identifiers only,
+never the node — is now recognised as its designed shape rather than logged as an error on every
+notification.

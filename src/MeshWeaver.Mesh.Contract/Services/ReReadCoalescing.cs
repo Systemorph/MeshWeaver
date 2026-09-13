@@ -4,8 +4,8 @@ using System.Reactive.Linq;
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
-/// THE coalescer for the re-read a durable change notification triggers when it arrives without
-/// its entity. Every source whose notification can outrun row visibility delivers <c>Entity = null</c>
+/// THE coalescer for the re-read that a durable change notification triggers when it arrives
+/// without its entity. Every source whose notification can outrun row visibility delivers <c>Entity = null</c>
 /// by contract — PostgreSQL's LISTEN/NOTIFY, the Cosmos change feed, the Snowflake poller — so a
 /// consumer that needs the row re-reads it. There are two such consumers, the per-node hub's
 /// own-node reconcile in <c>MeshDataSource</c> and the process-wide

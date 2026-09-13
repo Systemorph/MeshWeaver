@@ -19,24 +19,36 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <para>The relay is owned by the mesh-scoped <see cref="InProcessMeshChangeFeed"/> and dies with
 /// it. A notification that carries what the consumers need — the node itself, or the
 /// <see cref="DataChangeNotification.NodeType"/> + <see cref="DataChangeNotification.Version"/>
-/// hints, or a delete — is relayed at once, in arrival order. A create/update that carries none of
-/// it (the mixed-version rollout: an older backend payload with only path/op, or a backend-private
-/// descriptor) needs one authoritative storage read before a consumer that filters on type sees
-/// it.</para>
+/// hints, or a delete — is <b>self-contained</b> and is relayed at once, in arrival order. A
+/// create/update that carries none of it (the mixed-version rollout: an older backend payload with
+/// only path/op, or a backend-private descriptor) needs one authoritative storage read before a
+/// consumer that filters on type sees it.</para>
 ///
-/// <para>🚨 That read goes through <see cref="ReReadCoalescing"/> — THE coalescer the per-node hub's
-/// own reconcile in <c>MeshDataSource</c> already uses — per path: a burst of notifications on one
-/// path collapses to at most one read per quiet <see cref="ReReadCoalescing.Window"/>, the LAST
-/// notification of a burst always reads, and the reads on a path are serialised. The relay once
-/// read ahead of that coalescer, once per notification, and a burst of 200 entity-less
-/// notifications on one path cost 201 reads instead of a handful — a notification storm turned
-/// into a read storm on every replica (#4139, the shape #223 guards against). A path's group
-/// lives the quiet window plus the read bound past its last notification — long enough for its
-/// coalesced read to be over, so a burst that lands during that read queues behind it instead of
-/// racing it — and then closes, so an idle process holds no state per path ever notified. A read
-/// that fails or stays silent past its bound still emits a path-only version-zero invalidation,
-/// so one backend fault cannot leave the replica's exact-path cache untouched; a read that finds
-/// NO row emits nothing — the delete that removed it was self-contained and relayed at once.</para>
+/// <para>🚨 That read goes through <see cref="ReReadCoalescing"/> — THE coalescer the per-node
+/// hub's own reconcile in <c>MeshDataSource</c> already uses — per path. Every notification on a
+/// path joins that path's group; the coalescer fires once the path has been quiet for
+/// <see cref="ReReadCoalescing.Window"/>, with the LAST notification of the burst, and a read is
+/// owed only when that last notification is not self-contained (a burst that ends on a hinted
+/// update or a delete has already said the newest thing there is to say). The relay once read
+/// ahead of that coalescer, once per notification, and a burst of 200 entity-less notifications
+/// on one path cost 201 reads instead of a handful — a notification storm turned into a read storm
+/// on every replica (#4139, the shape #223 guards against).</para>
+///
+/// <para><b>The newest notification on a path always wins.</b> A read in flight is overtaken by
+/// ANY later notification on its path and then says nothing: the later one is either
+/// self-contained (already relayed, newer than anything the read could return) or starts its own
+/// coalesced read. So a read's result is published only while it is the newest information about
+/// its path, and a path-only fallback for a read that faulted or timed out can never land after a
+/// newer event. A path's group lives the quiet window plus the read bound past its last
+/// notification: with overtaking, at most one read is ever pending per group, it starts at the
+/// window and is over by the bound, so a notification that arrives during it joins the same group
+/// and overtakes it, and a notification after the group closed finds no read in flight. Reads on a
+/// path are serialised by construction; an idle path holds no state.</para>
+///
+/// <para>A read that faults or stays silent past its bound still emits a path-only version-zero
+/// invalidation, so one backend fault cannot leave the replica's exact-path cache untouched. A read
+/// that finds NO row emits nothing: the row is gone, and the delete that removed it is
+/// self-contained and was relayed on arrival.</para>
 /// </remarks>
 internal sealed class StorageChangeFeedRelay : IDisposable
 {
@@ -68,29 +80,31 @@ internal sealed class StorageChangeFeedRelay : IDisposable
         this.scheduler = scheduler ?? Scheduler.Default;
 
         subscription = storage.Changes
+            // Classify never throws: a throw here would reach the terminal error arm below and
+            // this replica would miss every later commit.
             .Select(Classify)
             .Where(arrival => arrival.Path.Length > 0)
-            .Publish(arrivals => arrivals
-                // Self-contained: relayed in arrival order, nothing to wait for.
+            // One group per path, alive (quiet window + read bound) past its last notification —
+            // see the class remarks for why that bound holds with overtaking.
+            .GroupByUntil(
+                arrival => arrival.Path,
+                group => group.Throttle(
+                    ReReadCoalescing.Window + this.legacyReadTimeout, this.scheduler),
+                StringComparer.OrdinalIgnoreCase)
+            .SelectMany(group => group
+                // Self-contained: relayed at once, in arrival order.
                 .Where(arrival => !arrival.NeedsCompatibilityRead)
                 .SelectMany(arrival => Observable.Defer(() =>
                         Observable.Return(ToMeshChange(arrival.Notification, arrival.Node)))
                     .Catch((Exception ex) => PathOnlyFallback(arrival.Notification, ex)))
-                // Entity-less create/update without hints: ONE coalesced read per path per quiet
-                // window, never one per notification. A path's group lives (quiet window + read
-                // bound) past its last notification: the coalesced read starts at the window and
-                // is over — answered, faulted or timed out — by the bound, so a notification that
-                // arrives while a read is in flight joins the SAME group and queues behind it.
-                // Reads on a path are serialised by construction, and a path that fell silent
-                // holds no state.
-                .Merge(arrivals
-                    .Where(arrival => arrival.NeedsCompatibilityRead)
-                    .GroupByUntil(
-                        arrival => arrival.Path,
-                        group => group.Throttle(
-                            ReReadCoalescing.Window + this.legacyReadTimeout, this.scheduler),
-                        StringComparer.OrdinalIgnoreCase)
-                    .SelectMany(group => group.CoalesceReReads(ReadThenResolve, this.scheduler))))
+                // Coalesced: the LAST notification of a burst, once the path has been quiet for
+                // the window; a read only when that one is not self-contained, and the read is
+                // overtaken — completes empty — by any later notification on this path.
+                .Merge(group.CoalesceReReads(
+                    last => last.NeedsCompatibilityRead
+                        ? ReadThenResolve(last).TakeUntil(group)
+                        : Observable.Empty<MeshChangeEvent>(),
+                    this.scheduler)))
             .Subscribe(
                 PublishSafely,
                 ex => logger?.LogError(ex,
@@ -118,23 +132,40 @@ internal sealed class StorageChangeFeedRelay : IDisposable
     }
 
     private Arrival Classify(DataChangeNotification notification)
-        // No logger on purpose: a foreign entity is the DESIGNED shape of the PostgreSQL feed (a
-        // ChangedNodeDescriptor, never a MeshNode), so "not convertible" here is a classification,
-        // not a fault — with a logger it was one Error line per NOTIFY per replica. A payload that
-        // fails to parse is not lost: it takes the coalesced read, and THAT logs when it fails.
-        => new(notification, NormalizePath(notification.Path),
-            notification.Entity.As<MeshNode>(readOptions));
+        => new(notification, NormalizePath(notification.Path), TryReadNode(notification));
+
+    private MeshNode? TryReadNode(DataChangeNotification notification)
+    {
+        try
+        {
+            // No logger on purpose: a foreign entity is the DESIGNED shape of the PostgreSQL feed
+            // (a ChangedNodeDescriptor, never a MeshNode), so "not convertible" is a
+            // classification here, not a fault — with a logger it was one Error line per NOTIFY
+            // per replica. As<T> recovers from the JSON exception family itself; anything else a
+            // converter throws is isolated below the same way, and the notification is not lost
+            // either way: it takes the coalesced read, and THAT logs when it fails.
+            return notification.Entity.As<MeshNode>(readOptions);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex,
+                "Storage change-feed relay could not read the entity of {Kind} {Path}; "
+                + "treating the notification as entity-less",
+                notification.Kind, notification.Path);
+            return null;
+        }
+    }
 
     private IObservable<MeshChangeEvent> ReadThenResolve(Arrival arrival)
         => Observable.Defer(() => storage.Read(arrival.Path, readOptions)
                 .Take(1)
                 .Timeout(legacyReadTimeout, scheduler)
                 // No row = the row is gone: a delete landed between the notification and this
-                // read, and THAT delete is self-contained, so it was relayed at once — ahead of
-                // this read. Nothing to say here (the same rule as the per-node hub's own
-                // reconcile): a Created/Updated carrying no node and no version AFTER the
-                // Deleted would read as a retype to "(none)" to NodeTypeRebindWatcher and recycle
-                // a hub the delete is already tearing down.
+                // read, and THAT delete is self-contained, so it was relayed on arrival. Nothing
+                // to say here (the same rule as the per-node hub's own reconcile): a
+                // Created/Updated carrying no node and no version AFTER the Deleted would read as
+                // a retype to "(none)" to NodeTypeRebindWatcher and recycle a hub the delete is
+                // already tearing down.
                 .Where(nodeAtCommit => nodeAtCommit is not null)
                 .Select(nodeAtCommit => ToMeshChange(arrival.Notification, nodeAtCommit)))
             // A read that FAULTS or stays silent past its bound is a different case: the row's
