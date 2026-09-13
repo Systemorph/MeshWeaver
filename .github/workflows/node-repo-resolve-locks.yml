@@ -1,0 +1,139 @@
+# ──────────── Resolve generated-lock conflicts (reusable) ────────────
+#
+# A pull request that conflicts ONLY on generated `*/manifest.lock` files lands anyway: this lane
+# merges `main` into every such open PR of the CALLER, regenerates the locks over the merged tree
+# with the caller's own `scripts/gen-manifests.py` (checked against the platform's canonical copy),
+# and pushes as the org's meshweaver-cloud App — a push that STARTS CI (a GITHUB_TOKEN push would not,
+# #2916). One source file in the conflict set and it does nothing: a real conflict is the author's.
+#
+# Fleet rule (Roland, 2026-09-13, "see that process is same as in plugins everywhere ⇒ harmonize"):
+# every node repo calls THIS lane instead of carrying its own resolver. The resolver itself is
+# `.github/scripts/resolve-generated-conflicts.py` in this repo (moved from MeshWeaver.Plugins),
+# fetched at the lane's `scripts-ref`. The push it makes is a merge from main, so the caller's next
+# run ADOPTS the previous verdict (node-repo-gate.yml `adopted-verdict: auto`,
+# .github/scripts/adopt-verdict.py) and `cancel-in-progress` must exempt the bot
+# (`github.event.sender.type != 'Bot'`, .github/scripts/check-main-runs-not-cancelled.py).
+#
+# Caller shape (12 lines; the App secrets are per repo):
+#
+#   on:
+#     push: { branches: [main] }
+#     schedule: [{ cron: "17 * * * *" }]
+#     workflow_dispatch: { inputs: { pr: {...}, dry-run: {...} } }
+#   jobs:
+#     resolve:
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-resolve-locks.yml@main
+#       with: { pr: ${{ inputs.pr }}, dry-run: ${{ inputs.dry-run == true }} }
+#       secrets:
+#         MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+#         MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+name: Resolve generated-lock conflicts (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pr:
+        description: One pull request number to resolve; empty = every open PR that qualifies.
+        required: false
+        type: string
+        default: ''
+      dry-run:
+        description: Classify and report; merge and push nothing.
+        required: false
+        type: boolean
+        default: false
+      scripts-ref:
+        description: The ref of Systemorph/MeshWeaver the resolver and the manifest checker are fetched at.
+        required: false
+        type: string
+        default: main
+    secrets:
+      MESHWEAVER_APP_ID:
+        description: App id of the org's meshweaver-cloud GitHub App (Contents + Pull requests write on the caller).
+        required: true
+      MESHWEAVER_APP_PRIVATE_KEY:
+        description: Private key (PEM) of that App.
+        required: true
+
+concurrency:
+  group: resolve-generated-locks-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Merge main into lock-only-conflicting PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: The App credential, or a red run naming what to provision
+        env:
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID          app id of the org's meshweaver-cloud GitHub App")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY private key (PEM) of that App")
+          [ "${#missing[@]}" -eq 0 ] || { echo "::error::the lock resolver needs the App — provision in the CALLER repo, then re-run:"; printf '  %s\n' "${missing[@]}"; exit 1; }
+
+      - name: Mint an installation token whose pushes start CI
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0          # merge bases and the release tags gen-manifests.py derives from
+          token: ${{ steps.token.outputs.token }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Commit as the App's bot identity
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          id=$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)
+          [ -n "$id" ] || { echo "::error::could not resolve the user id of ${SLUG}[bot]"; exit 1; }
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
+
+      - name: Fetch the platform's resolver and manifest checker at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          for s in resolve-generated-conflicts.py gen-manifests.py; do
+            gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/${s}?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/${s}" \
+              || { echo "::error::could not fetch .github/scripts/${s} at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+            head -c 400 "$RUNNER_TEMP/${s}" | grep -q "manifest" || { echo "::error::the fetched ${s} at ${SCRIPTS_REF} does not look like itself"; exit 1; }
+          done
+          [ -f scripts/gen-manifests.py ] || { echo "::error::this repo has no scripts/gen-manifests.py — the resolver regenerates locks with the repo's own generator"; exit 1; }
+
+      - name: The resolver can refuse (self-test)
+        run: python3 "$RUNNER_TEMP/resolve-generated-conflicts.py" --self-test
+
+      - name: Resolve every open PR whose only conflicts are generated locks
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_COMMENT_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$GITHUB_REPOSITORY" --platform-checker "$RUNNER_TEMP/gen-manifests.py")
+          [ -n "${PR:-}" ] && args+=(--pr "$PR")
+          [ "${DRY_RUN:-false}" = "true" ] && args+=(--dry-run)
+          python3 "$RUNNER_TEMP/resolve-generated-conflicts.py" "${args[@]}"
