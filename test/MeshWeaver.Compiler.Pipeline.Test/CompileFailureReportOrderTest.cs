@@ -73,14 +73,10 @@ public class CompileFailureReportOrderTest : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    // Instance, never static (AGENTS.md "no static collections"): the runtime's reference set, so
-    // Roslyn produces the diagnostics it really produces rather than a hand-written string.
-    private readonly IReadOnlyList<MetadataReference> _references =
-        ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
-            .Split(Path.PathSeparator)
-            .Where(p => p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
-            .ToList();
+    // The runtime's reference set, so Roslyn produces the diagnostics it really produces rather
+    // than a hand-written string — read once per process, not once per test (#4127; see
+    // PlatformReferences).
+    private readonly IReadOnlyList<MetadataReference> _references = PlatformReferences.Platform();
 
     /// <summary>
     /// A REAL failed compile of the incident's node, so the message under test is the message

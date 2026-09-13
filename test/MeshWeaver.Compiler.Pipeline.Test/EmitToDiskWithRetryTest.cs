@@ -65,11 +65,8 @@ public class EmitToDiskWithRetryTest : IDisposable
             }
             """);
 
-        var references = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string) ?? string.Empty)
-            .Split(Path.PathSeparator)
-            .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
-            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
-            .ToList();
+        // The process-wide platform set, read once — see PlatformReferences for why (#4127).
+        var references = PlatformReferences.Platform();
 
         var compilation = CSharpCompilation.Create(
             assemblyName, [tree], references,
