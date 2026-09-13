@@ -343,11 +343,47 @@ green. (`repository.txt` was added under this rule and says so in place.)
   did not create. The collector is the portal's own `PrebuiltBundleStore` sweep, one level down from
   the identity rules it already applies.
 
-### Phase 3 — every producer's pin reaches phase 2 *(open — the next step)*
+### Phase 3 — the remaining readers resolve the pointer *(landed)*, and every producer's pin reaches phase 2 *(open)*
 
-Only now is the condition both satisfiable and meaningful: a producer past phase 2 *can* write
-generations and is still writing flat. Core CD needs no pin move. The four satellites move theirs the
-way they always do.
+Two halves, and the code half is done.
+
+**The two Azure-direct readers now resolve the pointer.** `compose-sealed-modules.sh` (the
+`--storage-target` OIDC fallback) and `node-repo-gate.yml`'s `seed` step `download-batch` composed
+their paths under the bare `prebuilt-bundles/<identity>/<source>/` prefix, because phase 1 routed
+the readers the PORTAL IMAGE carries and neither of these is one. Both now call the same resolver
+by the same rules.
+
+- `compose-sealed-modules.sh` also records the generation its module *index* came from and pins
+  each module download to it — the storage-path equivalent of the registry path's `If-Match`, and
+  a property that lane never had: a pointer that moves between the listing and a download can no
+  longer mix two publications' module bytes, because a generation directory is not rewritten in
+  place.
+- 🚨 **The gate's `seed` is the one reader that may NOT take the reader's fall-back, and it is
+  because of the BATCH.** `download-batch` recurses and the CLI flattens what it finds. For a point
+  read, "fall back to the source directory" yields the previous publication *whole*; for a
+  recursive batch over a prefix holding generations it yields a **union** — and same-named files
+  overwrite each other, so the mix is invisible to the step's own count as well as to the compiler.
+  So a pointer that EXISTS and could not be followed is a **refusal** there, not a fall-back. It is
+  transient by construction (the pointer is one small file write) and a re-run reads what now
+  applies.
+
+🚨 **Neither Azure path had ever been executed by anything.** `test-sealed-module-compose.py` runs
+the script with `--registry-url` only, and its gate case runs `seed` with `TARGETS=""` — so the
+whole `download-batch` block was dead to every harness in the repository.
+`test-publication-pointer-readers.py` executes both, against a share carrying a flat copy and a
+generation whose files share names and differ in bytes, so the verdict is *which publication
+landed*. Measured on the pre-change readers: **5 of its 8 cases fail**, the three that pass being
+the no-pointer controls that pin today's flat behaviour as byte-identical. `bake-scope.sh
+--self-test` — one of the two proofs this page leans on for phase 2's reader half, and until now
+run by no workflow at all — is wired into the same lane.
+
+🚨 **And #4172 made this load-bearing rather than tidy.** A downstream publication now seals only
+its OWN modules, so an upstream's module bytes are reachable through the upstream's own seal and
+nowhere else. There is no downstream copy left to fall back on, which makes
+`compose-sealed-modules.sh` the single path to them.
+
+**The pin half is still open.** A producer past phase 2 *can* write generations and is still writing
+flat. Core CD needs no pin move; the satellites move theirs the way they always do.
 
 ### Phase 4 — flip, one prefix at a time *(open)*
 
@@ -432,7 +468,10 @@ was ever visible instead of silently shipping a mixed set.
   defaults to `flat`. Nothing anywhere writes a generation until a caller opts in, and the three
   control cases in `test-publish-bake-overlap.py` are the regression suite proving the default path
   is byte-identical to what it was.
-- **Phases 3–5 are open**, tracked on
+- **Phase 3's reader half is landed** — `compose-sealed-modules.sh` and `node-repo-gate.yml`'s
+  `seed` resolve the pointer, both are executed by `test-publication-pointer-readers.py`, and
+  `bake-scope.sh --self-test` is wired into CI beside it. Its pin half, and **phases 4–5**, are
+  open, tracked on
   [#3461](https://github.com/Systemorph/MeshWeaver/issues/3461). Until the writer flips, **the window
   is shrunk, not closed**: the publisher's postcondition still carries the whole load, and the
   interval between its last verification read and the seal is still live.
@@ -450,11 +489,19 @@ was ever visible instead of silently shipping a mixed set.
   to 1 on that incident. The **residual is a sibling that has not sealed yet when this run's sweep
   ends** (21 seconds, measured), and that is not shrinkable by any amount of checking: it is what
   phases 2–5 exist for.
-- **The next change is phase 3** — each producer's `platform-ref` reaches the writer commit, **and
-  the two remaining Azure-direct readers (`compose-sealed-modules.sh`, `node-repo-gate.yml`'s
-  `download-batch`) are routed through the same pointer resolution.** Only then is flipping a prefix
-  both possible and meaningful. `plugins` flips in ONE change set because
-  it is the only prefix with two producers; the rest flip one repository at a time.
+- **The next change is the FLIP, and it is a scope call rather than a code one.** Measured over
+  2026-09-12T08:00Z → 09-13T08:00Z, every `plugins` publish job of both lanes: core `plugins-bake`
+  **25** executed (23 sealed), Plugins `publish-bake` **10** (8 sealed); **62 of 62** target
+  verifications read *"N/N file(s) hold this run's bytes … 0 byte-identical from another"*; **0**
+  MIX refusals; 20 distinct identities, **6 written by both lanes** — all 6 at different Plugins
+  commits, hours apart, with no overlap in the window. So the defect is **latent, not active**, and
+  the postcondition is carrying it.
+  Flipping is still worth doing, but it is not a core-only change: `plugins` must flip in ONE change
+  set across BOTH producers (core CD's `plugins-bake` and the satellite's own `publish-bake`, which
+  lives in another repository), and measured 2026-09-13 **no caller anywhere passes
+  `publication-layout`** — core's `main-cd.yml` `plugins-bake` does not, so the prefix's core-side
+  producer is `flat` too. The single-producer prefixes each flip in their own repository's PR. What
+  phase 3 removes is the reason a flip could not be attempted at all.
 - 🚨 **Flipping `plugins` does not by itself stop the publish reds.** The flat compatibility copy is
   still replaced in place and still races, so an overlap still costs that copy and still fails the
   job — the postcondition covering it is unchanged. What the flip buys immediately is that the
