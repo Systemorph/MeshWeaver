@@ -152,6 +152,44 @@ public class StorageChangeFeedRelayTest
     }
 
     /// <summary>
+    /// The one reordering the two lanes can produce on a path: a hint-less create/update whose
+    /// coalesced read runs AFTER a delete that was relayed at once. The read finds no row, and the
+    /// relay must then say nothing — the delete already invalidated the path, and a
+    /// <c>Created</c>/<c>Updated</c> carrying no node and no version after it is a retype to
+    /// "(none)" as far as <c>NodeTypeRebindWatcher.RequiresRebind</c> can tell (a recycle of a
+    /// hub the delete is already tearing down, with a misleading reason). The read itself is
+    /// the positive control: it ran, and found nothing.
+    /// </summary>
+    [Fact]
+    public async Task AnEntitylessCreateFollowedByADeleteOnOnePath_NeverResurrectsIt()
+    {
+        var scheduler = new TestScheduler();
+        var durable = new InMemoryStorageAdapter();
+        await durable.Write(Node(version: 1, nodeType: "Hosting/Publication"), json).Should().Emit();
+        using var adapter = new ControllableNotificationAdapter(durable);
+        var received = new ImmutableSignal<MeshChangeEvent>();
+        using var relay = new StorageChangeFeedRelay(adapter, received.Add, scheduler: scheduler);
+
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Created, Entity: null, DateTimeOffset.UtcNow));
+        await durable.Delete(Path).Should().Emit();
+        adapter.Announce(new DataChangeNotification(
+            Path, DataChangeKind.Deleted, Entity: null, DateTimeOffset.UtcNow));
+
+        received.Items.Select(e => (e.Kind, e.Version)).Should().Equal(
+            new[] { (MeshChangeKind.Deleted, 0L) },
+            "a delete is self-contained and relayed at once, ahead of the coalesced read");
+        scheduler.AdvanceBy(ReReadCoalescing.Window.Ticks);
+
+        adapter.ReadCalls.Should().Be(1, "the create's coalesced read ran — and found no row");
+        received.Items.Select(e => (e.Kind, e.Version)).Should().Equal(
+            new[] { (MeshChangeKind.Deleted, 0L) },
+            "a row the read cannot find was deleted, and the delete already invalidated the path: "
+            + "a Created after it, carrying no node and no version, would read as a retype to "
+            + "'(none)' to the rebind watcher");
+    }
+
+    /// <summary>
     /// Reads on one path are serialised even when a burst lands while the previous read is still
     /// in flight: the second read queues behind the first instead of racing it, so a slow answer
     /// for an older commit can never be published after the answer for a newer one.

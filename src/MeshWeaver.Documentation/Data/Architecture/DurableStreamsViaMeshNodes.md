@@ -196,9 +196,13 @@ Orleans broadcast during the additive rollout:
    hints from their entity immediately; older and path-only backend payloads leave them null. Core
    lands first, the trigger change in the PostgreSql adapter second; the relay below tolerates a
    payload without them by re-reading the node before any consumer that filters on type sees the
-   event. That compatibility read has a five-second bound. An error, silence or missing row still
-   emits a path-only version-zero invalidation, so one backend fault cannot wedge the serial relay
-   or leave the replica's exact-path cache untouched.
+   event. That compatibility read has a five-second bound. An error or silence still emits a
+   path-only version-zero invalidation, so one backend fault cannot wedge the serial relay or leave
+   the replica's exact-path cache untouched. A read that finds NO row emits nothing: the row is
+   gone, the delete that removed it is self-contained and was relayed at once, ahead of the read —
+   and a `Created`/`Updated` with no node and no version AFTER that `Deleted` would read as a
+   retype to "(none)" to `NodeTypeRebindWatcher` and recycle a hub the delete is already tearing
+   down. Same rule as the per-node hub's own reconcile.
 
    🚨 **The compatibility read is coalesced per path, through the ONE coalescer**
    (`ReReadCoalescing` in `MeshWeaver.Mesh.Contract`: a 50 ms `Throttle` that always emits the

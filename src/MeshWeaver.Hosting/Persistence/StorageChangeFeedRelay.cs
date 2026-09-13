@@ -31,10 +31,12 @@ namespace MeshWeaver.Hosting.Persistence;
 /// read ahead of that coalescer, once per notification, and a burst of 200 entity-less
 /// notifications on one path cost 201 reads instead of a handful — a notification storm turned
 /// into a read storm on every replica (#4139, the shape #223 guards against). A path's group
-/// closes the moment it has been quiet for the same window, so an idle process holds no state per
-/// path ever notified, and a read that fails, stays silent past its bound, or finds no row still
-/// emits a path-only version-zero invalidation, so one backend fault cannot leave the replica's
-/// exact-path cache untouched.</para>
+/// lives the quiet window plus the read bound past its last notification — long enough for its
+/// coalesced read to be over, so a burst that lands during that read queues behind it instead of
+/// racing it — and then closes, so an idle process holds no state per path ever notified. A read
+/// that fails or stays silent past its bound still emits a path-only version-zero invalidation,
+/// so one backend fault cannot leave the replica's exact-path cache untouched; a read that finds
+/// NO row emits nothing — the delete that removed it was self-contained and relayed at once.</para>
 /// </remarks>
 internal sealed class StorageChangeFeedRelay : IDisposable
 {
@@ -127,9 +129,17 @@ internal sealed class StorageChangeFeedRelay : IDisposable
         => Observable.Defer(() => storage.Read(arrival.Path, readOptions)
                 .Take(1)
                 .Timeout(legacyReadTimeout, scheduler)
-                .DefaultIfEmpty(null)
+                // No row = the row is gone: a delete landed between the notification and this
+                // read, and THAT delete is self-contained, so it was relayed at once — ahead of
+                // this read. Nothing to say here (the same rule as the per-node hub's own
+                // reconcile): a Created/Updated carrying no node and no version AFTER the
+                // Deleted would read as a retype to "(none)" to NodeTypeRebindWatcher and recycle
+                // a hub the delete is already tearing down.
+                .Where(nodeAtCommit => nodeAtCommit is not null)
                 .Select(nodeAtCommit => ToMeshChange(arrival.Notification, nodeAtCommit)))
-            // Inside the coalescer's serialised queue a fault must resolve to a value or to
+            // A read that FAULTS or stays silent past its bound is a different case: the row's
+            // state is unknown, so the path is still invalidated, without node or version.
+            // Inside the coalescer's serialised queue the fault must resolve to a value or to
             // nothing — never propagate — or the queue terminates and this path stops relaying.
             .Catch((Exception ex) => PathOnlyFallback(arrival.Notification, ex));
 
