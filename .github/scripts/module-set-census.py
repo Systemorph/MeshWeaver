@@ -108,12 +108,22 @@ def census(bundle: Path) -> list[dict]:
 
 
 def _receipts(directory: Path, lane: str, declared: list[str]) -> list[dict]:
-    """This lane's receipts for this call's declared modules.
+    """The receipts to read, optionally narrowed to one lane and one call's matrix.
 
-    🚨 Both filters, for the reason `verify` already states about its own accounting: artifacts are
-    RUN-wide, so a repo calling the lane twice in one run has both calls' receipts on disk. `--lane`
-    separates them structurally (the stamp the producer wrote); `--declared` separates them by the
-    matrix this call actually asked for. Either alone has been wrong before (Plugins#1077).
+    🚨 **THE WORKFLOW PASSES NEITHER FILTER, AND THAT IS THE POINT.** `verify`'s own build
+    accounting narrows by `--lane` and `--declared` because it answers *"did THIS call build what it
+    was asked to"*, where attributing a sibling call's evidence to this one was a real defect
+    (Plugins#1077). This reading asks the opposite question — *"does this PUBLICATION carry one
+    assembly name at two builds"* — and a publication is composed from SEVERAL calls: MeshWeaver.
+    Plugins invokes the lane twice in one run (`modules-floor` and `modules-rest`), with different
+    lane stamps, and the 15-copies/3-builds measurement this whole reading exists for spanned
+    exactly those calls. Narrowing by lane here would make each verifier drop the other call's
+    receipts and report a confident zero — the same denominator error as the composed-set guard,
+    one level up. So the caller downloads every receipt in the RUN and passes no filter, and the
+    verdict prints which lanes it folded so a reader can see whether both calls were present.
+
+    The parameters stay because narrowing is occasionally the right question to ask by hand, and
+    because a filter that exists but is not exercised is a filter nobody has watched work.
     """
     wanted = set(declared)
     out = []
@@ -151,13 +161,19 @@ def verdict(receipts: list[dict], enforce: bool, out=sys.stdout) -> int:
     shared = sorted({n for n in names if len({c[2] for c in copies if c[0] == n}) > 1})
     diverged = sorted({n for n in names if len({c[1] for c in copies if c[0] == n}) > 1})
 
+    lanes = sorted({r.get("lane") or "<unstamped>" for r in receipts})
     print(
         f"publication module set: {len(copies)} MeshWeaver.* assembly file(s) across "
-        f"{len(measured)} module bundle(s) of {len(receipts)} in this lane, {len(names)} distinct "
+        f"{len(measured)} module bundle(s) of {len(receipts)} read, {len(names)} distinct "
         f"name(s), {len(shared)} carried by more than one bundle, {len(diverged)} carried at more "
         f"than one BUILD",
         file=out,
     )
+    # 🚨 WHICH CALLS WERE FOLDED, on every run. A publication is composed from several calls of this
+    # lane, and this reading is only publication-wide if it saw them all — so the lanes are named
+    # rather than assumed. One lane where the repo makes two calls is a reading that has already
+    # narrowed itself, and nothing else on the line would show it.
+    print(f"  folded {len(lanes)} lane(s): {', '.join(lanes) if lanes else '<none>'}", file=out)
     if silent:
         print(
             f"  not measured: {len(silent)} bundle(s) carry no assembly census on their receipt "
@@ -285,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         # 🚨 An absent directory is ZERO EVIDENCE and must say so in the denominator, never read as
         # a clean set. `verify` judges whether the receipts should have been there.
         print("publication module set: 0 MeshWeaver.* assembly file(s) across 0 module bundle(s) "
-              "of 0 in this lane, 0 distinct name(s), 0 carried by more than one bundle, 0 carried "
+              "of 0 read, 0 distinct name(s), 0 carried by more than one bundle, 0 carried "
               "at more than one BUILD")
         print(f"  no receipts directory at {args.receipts} — nothing was measured")
         return 0

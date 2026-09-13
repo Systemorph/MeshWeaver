@@ -4479,21 +4479,36 @@ jobs:
       # roll for the whole fleet. Moving that refusal earlier is the point — read the denominator
       # line on the first waves, then add `--enforce` with the evidence of what it refuses.
       # `if: always()` so a red verifier above does not also hide the number.
+      # 🚨 EVERY receipt in the RUN, not this call's — deliberately the opposite narrowing from the
+      # build accounting above, and the reason is the same denominator argument one level up. A
+      # PUBLICATION is composed from several calls of this lane (MeshWeaver.Plugins invokes it twice
+      # in one run, `modules-floor` and `modules-rest`, with different lane stamps), and the
+      # 15-copies/3-builds measurement this reading exists for spanned exactly those calls. Filtering
+      # by lane would make each verifier drop the other call's receipts and print a confident zero.
+      # The verdict names the lanes it folded so "publication-wide" is checkable, not assumed.
+      - name: Collect every receipt in this run (the publication spans calls)
+        if: always()
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: module-pack-receipt-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/receipts-run
       - name: The publication's module set, read at one build per assembly name
         if: always()
-        # A REPORT: it must never be the reason this required context goes red. When it becomes a
-        # refusal, this line and `--enforce` move together — and `test-module-set-census.py` pins
-        # that they are in step, so the promotion cannot happen by halves.
-        continue-on-error: true
-        env:
-          DECLARED: ${{ inputs.modules }}
-          LANE: ${{ needs.select.outputs.lane }}
+        # 🚨 NO `continue-on-error`. This is a REPORT about divergence — the script exits 0 when it
+        # FINDS divergence, because no lane passes `--enforce` yet — so the only way this step can
+        # fail is that the reading did not happen: a malformed receipt, a helper the build-logic ref
+        # does not carry, a changed CLI. Tolerating that is exactly the skip-trapdoor AGENTS.md
+        # forbids: it would leave this required job green while promising a reading nobody took, and
+        # "the gate never ran" would be spelled like "the gate passed". When the report becomes a
+        # refusal, `--enforce` is added here and `test-module-set-census.py` pins that the two move
+        # together, so the promotion cannot happen by halves.
         run: |
           set -euo pipefail
-          python3 build-logic/.github/scripts/module-set-census.py verdict \
-            --receipts "$RUNNER_TEMP/receipts" \
-            --lane "$LANE" \
-            --declared "$DECLARED"
+          helper=build-logic/.github/scripts/module-set-census.py
+          [ -f "$helper" ] || { echo "::error::$helper is not present, so the publication's module set was NOT read. On a run whose \`select\` job failed the build-logic checkout is skipped and this is downstream of that failure; otherwise the resolved build-logic ref predates MeshWeaver#3732."; exit 1; }
+          python3 "$helper" verdict --receipts "$RUNNER_TEMP/receipts-run"
 
       # ─────────── WHICH COMPILER BUILT WHAT — a NUMBER, on every run ───────────
       # 🚨 The split between `memex build project` (the container: no SDK, no NuGet, the image's own

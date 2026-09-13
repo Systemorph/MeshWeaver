@@ -192,15 +192,27 @@ def test_verdict(module) -> None:
     # 🚨 The denominator's two zero-shapes. A reading over nothing must never be spelled like a
     # clean reading over something.
     code, text = capture(module, [])
-    check("across 0 module bundle(s) of 0 in this lane" in text,
+    check("across 0 module bundle(s) of 0 read" in text,
           "no receipts at all prints a ZERO denominator", text.strip())
 
     silent = [receipt("MeshWeaver.AI", None), identical[0]]
     code, text = capture(module, silent)
-    check("across 1 module bundle(s) of 2 in this lane" in text,
+    check("across 1 module bundle(s) of 2 read" in text,
           "a receipt with no census is NOT counted as measured", text.strip())
     check("not measured: 1 bundle(s)" in text and "MeshWeaver.AI" in text,
           "…and is named, with the reason", text.strip())
+
+    # 🚨 The reading is only publication-wide if it saw every call, so it NAMES the lanes it folded.
+    two_calls = [
+        receipt("MeshWeaver.AI", [{"name": "S", "sha256": a, "role": "riding"}], lane="modules-floor"),
+        receipt("MeshWeaver.Mcp", [{"name": "S", "sha256": b, "role": "riding"}], lane="modules-rest"),
+    ]
+    code, text = capture(module, two_calls)
+    check("folded 2 lane(s): modules-floor, modules-rest" in text,
+          "the verdict names which calls it folded", text.strip())
+    check("1 carried at more than one BUILD" in text,
+          "…and a divergence ACROSS two calls is exactly what a lane-filtered reading would miss",
+          text.strip())
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -272,14 +284,28 @@ def test_wiring() -> None:
           "the pack leg takes the census of the bundle it just produced")
     check('"$MODULE_SET_CENSUS" --self-test' in text,
           "the select job's preflight PROVES the fetched helper works, not just that it exists")
-    check("module-set-census.py verdict" in text,
-          "the verify job reads the verdict (module-set-census.py verdict)")
-    check(re.search(r"module-set-census\.py verdict[^\n]*(\n[^\n]*)*?--lane", text) is not None,
-          "…passing --lane, without which a sibling call's receipts answer this one")
-    check(re.search(r"module-set-census\.py verdict[^\n]*(\n[^\n]*)*?--declared", text) is not None,
-          "…and --declared, the other half of the same attribution")
-    check("--enforce" not in text.split("module-set-census.py verdict")[-1].split("\n\n")[0],
+    check("module-set-census.py" in text and "verdict --receipts" in text,
+          "the verify job reads the verdict")
+    # 🚨 The reading must be RUN-wide, not call-wide. A publication spans several calls of this
+    # lane; narrowing by lane would make each verifier drop the other call's receipts and print a
+    # confident zero — the same denominator error this whole reading exists to fix, one level up.
+    tail = text.split("verdict --receipts")[-1].split("\n\n")[0]
+    check("--lane" not in tail,
+          "the verdict passes NO --lane — a publication spans calls, so folding them is the point")
+    check("--declared" not in tail,
+          "…and no --declared, for the same reason")
+    check("pattern: module-pack-receipt-*" in text,
+          "…fed by a download of EVERY receipt in the run, not the lane-scoped one")
+    check("--enforce" not in tail,
           "the verdict is NOT enforced yet — deliberate, and pinned so a change is visible")
+    # 🚨 The report must still be able to go RED when the reading DID NOT HAPPEN. `continue-on-error`
+    # there would leave a required job green while promising a reading nobody took.
+    step = text.split("The publication's module set, read at one build per assembly name")[-1]
+    step = step.split("      - name:")[0]
+    # Match the KEY, not the phrase: the step's own comment explains why it has none, and a bare
+    # substring check hits that comment and reports a pass as a failure.
+    check(not re.search(r"^\s*continue-on-error\s*:", step, re.M),
+          "the reader step carries NO continue-on-error — a reading that cannot fail is not a reading")
     # The census must be embedded in the receipt, or `verify` has nothing to read.
     check('"assemblies"' in text or "assemblies:" in text or "--argjson asm" in text,
           "the census lands ON the receipt, which is the only thing verify collects")

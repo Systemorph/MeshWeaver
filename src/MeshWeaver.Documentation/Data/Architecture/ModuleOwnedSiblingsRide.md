@@ -475,10 +475,26 @@ its own comment. So the reading is split to match:
   entry assembly unpack over each other, which is the accident of glob order that hid this in the
   first place), with its role (`declared` per the manifest's `module.assemblyName`, else `riding`).
   It rides the receipt.
-* **`module-set-census.py verdict`**, in `verify`: the same arithmetic, over every receipt of the
-  lane, with its denominator printed on every run — including the two shapes that print a zero while
-  looking like a clean measurement (no receipts directory; a receipt carrying no census, which is
-  counted and **named** as unmeasured rather than folded into the clean count).
+* **`module-set-census.py verdict`**, in `verify`: the same arithmetic over the receipts, with its
+  denominator printed on every run — including the two shapes that print a zero while looking like a
+  clean measurement (no receipts directory; a receipt carrying no census, which is counted and
+  **named** as unmeasured rather than folded into the clean count).
+
+🚨 **It reads every receipt in the RUN, and passes no `--lane` — the opposite narrowing from the
+build accounting beside it, on purpose.** That accounting asks *"did THIS call build what it was
+asked to"*, where attributing a sibling call's evidence to this one was a real defect (Plugins#1077).
+This reading asks whether a **publication** carries one name at two builds, and a publication is
+composed from several calls: MeshWeaver.Plugins invokes the lane twice in one run (`modules-floor`
+and `modules-rest`) with different lane stamps, and the 15-copies/3-builds measurement above spanned
+exactly those calls. Narrowing by lane would make each verifier drop the other call's receipts and
+print a confident zero — this page's own denominator error, one level up. The verdict therefore
+**names the lanes it folded** on every run, so "publication-wide" is checkable rather than assumed.
+
+🚨 **And the reader step carries no `continue-on-error`.** The script exits 0 when it *finds*
+divergence (that is the report posture), so the only way the step can fail is that the reading did
+not happen — a malformed receipt, a helper the build-logic ref does not carry, a changed CLI.
+Tolerating that would leave a required job green while promising a reading nobody took, which is the
+skip-trapdoor rule exactly.
 
 ### It REPORTS; it does not yet refuse — and the reason is evidence
 
