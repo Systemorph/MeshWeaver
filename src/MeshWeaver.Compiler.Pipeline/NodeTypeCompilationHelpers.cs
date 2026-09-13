@@ -1141,6 +1141,89 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
+    /// 🚨 <b>Can the adoption three-way be ANSWERED from this record right now?</b> (#2813 for the
+    /// absent live fingerprint, #4208 for the source set that has not landed.) ONE definition,
+    /// used by the pure judgement itself, by both watchers that decide whether to hand it the
+    /// one-shot stamp request, and by the seeder's pre-write decline — so no two of them can
+    /// disagree about when the question is answerable, which is the same reason
+    /// <see cref="ApplyAdoptedSourceStamp"/> is shared by all three writers.
+    ///
+    /// <para>Three ways it is answerable, and nothing else is:</para>
+    /// <list type="bullet">
+    ///   <item><b>No adopted fingerprint</b> — a legacy bundle. The verdict is
+    ///     <see cref="BuildProvenance.AdoptedUnverified"/> and it needs no live counterpart.</item>
+    ///   <item><b>The two fingerprints are EQUAL</b> — a match is a match, including the honest
+    ///     empty==empty of a type that genuinely compiles from no sources at all.</item>
+    ///   <item><b>A declared source query MATCHED something</b> — <paramref name="liveSources"/>
+    ///     is non-empty, so a disagreement is a measurement of the sources this mesh holds rather
+    ///     than the absence of one.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>The witness is the SNAPSHOT, not the fingerprint</b>, and that distinction is
+    /// load-bearing. The empty fold is not a reliable proxy for "no source matched": the tick
+    /// snapshot counts every matched node, while the fingerprint is folded over
+    /// <c>NodeCompileShaping.CollectCompileSources</c>, which deliberately DROPS executable cells
+    /// and blank files. A type whose only matched node is one of those has an established source
+    /// set and an empty-fold fingerprint — reading the hash as the witness would defer its
+    /// adoption indefinitely, trading #4208's park for a permanent hold. "Did any declared query
+    /// match a node?" is the question #4208 is actually about ("MISSING SOURCES: 3 of 3 declared
+    /// source queries matched NO nodes on this mesh"), and the snapshot is the thing that answers
+    /// it.</para>
+    ///
+    /// <para>🚨 <b>False means DEFER, never refuse.</b> The stamp request is one-shot: answering
+    /// it from a source set nobody established spends the only chance to refuse and records a
+    /// verdict nobody measured. The two unanswerable states — the fingerprint not published yet
+    /// (#2813) and the sources not imported yet (#4208) — are both expected to end in the same
+    /// event, the sources watcher's next publication, which fulfils the standing request in the
+    /// same write it establishes the value from.</para>
+    ///
+    /// <para><b>Residue, named rather than assumed.</b> A source set that is empty because it was
+    /// DELETED (rather than not yet imported) is indistinguishable from here — no witness anybody
+    /// holds separates them — so its stamp request stays standing indefinitely. That is bounded
+    /// and benign: the adopted build keeps serving, <c>CompiledSources</c> and
+    /// <c>CurrentSourceVersions</c> are both empty so <c>IsDirty</c> is false, nothing recompiles
+    /// and nothing parks, and <see cref="ApplyAdoptedSourceStampAndReport"/> logs a Warning naming
+    /// the type on every judgement attempt. The alternative — refusing on an absence — is what
+    /// #4208 measured: a compile against nothing, CS0246s about correct code, and a parked type.
+    /// </para>
+    /// </summary>
+    /// <param name="def">The owner's own definition.</param>
+    /// <param name="liveSources">The live source snapshot to judge against — the value
+    /// <see cref="ApplyAdoptedSourceStamp"/> is about to write, or
+    /// <see cref="NodeTypeDefinition.CurrentSourceVersions"/> for a caller that only observes.</param>
+    internal static bool CanJudgeAdoption(
+        NodeTypeDefinition def, IReadOnlyDictionary<string, long>? liveSources)
+        => CanJudgeAdoption(
+            def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint, liveSources);
+
+    /// <summary>
+    /// <see cref="CanJudgeAdoption(NodeTypeDefinition, IReadOnlyDictionary{string, long})"/> for a
+    /// caller whose producer fingerprint is NOT on the record yet.
+    ///
+    /// <para>🚨 The seeder's pre-write decline is exactly that caller, and reading
+    /// <c>AdoptedSourceFingerprint</c> off the observed node there is a silent no-op: at pre-write
+    /// time the adoption has not happened, so that field is null, the legacy-bundle row answers
+    /// "judgeable", and the decline fires on the very absence it was meant to defer on. The
+    /// producer's value is the BUNDLE's, and it arrives as an argument.</para>
+    /// </summary>
+    /// <param name="adoptedFingerprint">What the producer says these bytes were built from.</param>
+    /// <param name="liveFingerprint">The owner's published
+    /// <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>.</param>
+    /// <param name="liveSources">The live source snapshot — the witness.</param>
+    internal static bool CanJudgeAdoption(
+        string? adoptedFingerprint,
+        string? liveFingerprint,
+        IReadOnlyDictionary<string, long>? liveSources)
+    {
+        if (adoptedFingerprint is not { Length: > 0 } adopted)
+            return true;
+        if (liveFingerprint is not { Length: > 0 } live)
+            return false;
+        return string.Equals(adopted, live, StringComparison.Ordinal)
+               || liveSources is { Count: > 0 };
+    }
+
+    /// <summary>
     /// THE adopted-build source stamp (#1834), as a PURE function — and, since #2813, the place
     /// the adoption is CHECKED rather than merely asserted.
     ///
@@ -1167,6 +1250,12 @@ internal static class NodeTypeCompilationHelpers
     ///   <item><term>absent (a legacy bundle, or the owner's own not computed yet)</term>
     ///     <description>stamp — provenance is UNKNOWN, not proven stale;
     ///     <see cref="BuildProvenance.AdoptedUnverified"/></description></item>
+    ///   <item><term>🚨 present and DISAGREEING, but NOT ONE declared source query has matched a
+    ///     node on this mesh (#4208)</term><description>DEFER — the record is returned untouched,
+    ///     so the one-shot stamp request is left STANDING and the sources watcher's next
+    ///     publication judges it. See
+    ///     <see cref="CanJudgeAdoption(NodeTypeDefinition, IReadOnlyDictionary{string, long})"/>
+    ///     </description></item>
     /// </list>
     ///
     /// <para>Pure so all three rows are unit-testable with no hub, no mesh and no timing, and
@@ -1227,6 +1316,37 @@ internal static class NodeTypeCompilationHelpers
 
         if (string.Equals(adopted, live, StringComparison.Ordinal))
             return stamped with { BuildProvenance = BuildProvenance.AdoptedVerified };
+
+        // ── #4208 — THE FINGERPRINTS DIFFER, BUT THE LIVE ONE ESTABLISHES NOTHING. ─────────────
+        // An EMPTY compile input folds to a perfectly well-formed 16-character value, so the
+        // absence guard above — `is not { Length: > 0 }` — accepts it, and every branch below then
+        // reads "not one of this NodeType's sources is on this mesh" as "the source MOVED past
+        // these bytes". Those are different sentences: the second is a measurement, the first is
+        // the absence of one. Measured on MeshWeaver.Reinsurance#204 (2026-09-13): the bake's
+        // assembly for Reinsurance/AggregateSection was adopted and judged 2 ms later against
+        // e3b0c44298fc1c14 — the empty fold — because the type sorts ahead of the
+        // Reinsurance/Source/* nodes its shared=@… queries read and they had not been written yet.
+        // The refusal dispatched a compile; that compile ran with 3 of 3 declared queries matching
+        // NO nodes and parked the type on CS0246s about code nothing is wrong with.
+        //
+        // 🚨 It returns `def` — NOT `stamped` — so RequestedSourceStampAt is LEFT STANDING. That is
+        // the whole fix, and it is the same shape as the #3129 leaving-owner decline: the judgement
+        // is DEFERRED, not spent. The request is one-shot, so consuming it here would record a
+        // verdict from an empty set and close the question for good. Leaving it standing makes the
+        // wait REACTIVE with nothing added: the sources watcher re-publishes the full set on every
+        // source arrival (a live synced query, no timer and no poll), and that publication fulfils
+        // the standing request in the same write — at which point the fingerprints agree and the
+        // adoption verifies, exactly as it does for every sibling that activates after its sources.
+        //
+        // Nothing is stranded meanwhile: CompiledSources and CurrentSourceVersions are both empty,
+        // so IsDirty is false and the install's release request is satisfied by the adopted build
+        // instead of compiling it.
+        //
+        // Ordered AFTER the equality check on purpose — a type that genuinely compiles from no
+        // sources carries the empty fold on BOTH sides, and that is an honest match, which is
+        // exactly what CanJudgeAdoption's middle clause says.
+        if (!CanJudgeAdoption(def, snapshot))
+            return def;
 
         // ── #3583 — the fingerprints DIFFER: the source MOVED past these bytes. Whether the bytes
         // may keep serving is NOT the fingerprint's call any more; it is MODULE VERSION
@@ -1383,6 +1503,33 @@ internal static class NodeTypeCompilationHelpers
             return def;
         }
 
+        // 🚨 #4208 — DEFER, and say so. Checked before the call rather than inferred from its
+        // result, because "the judgement was deferred" and "the judgement ran and changed nothing"
+        // are different facts and a reader of this log must not have to tell them apart from a
+        // record. The pure function declines the same question identically; this branch exists so
+        // the decline is AUDIBLE — on the gate mesh, which runs at Warning, it is the one line that
+        // says a NodeType was activated ahead of the sources it declares.
+        if (!CanJudgeAdoption(def, snapshot))
+        {
+            logger?.LogWarning(
+                "[AdoptedSourceStamp] {HubPath}: the adoption is NOT judged yet (#4208) — the "
+                + "bundle records source fingerprint {Adopted}, and there is NOTHING established to "
+                + "compare it against: {Reason} (live fingerprint {Live}). The stamp request is left "
+                + "STANDING and the adopted build keeps serving; the sources watcher's next "
+                + "publication judges it. Nothing is wrong with this type — it was activated ahead "
+                + "of the sources it declares.",
+                hubPath, def.AdoptedSourceFingerprint,
+                def.CurrentSourceFingerprint is not { Length: > 0 }
+                    ? "the owner has not published a live fingerprint yet"
+                    : "not one of its declared source queries has matched a node on this mesh"
+                      + (NodeTypeSourceFingerprint.EmptySourceSet.Equals(
+                             def.CurrentSourceFingerprint, StringComparison.Ordinal)
+                          ? ", and the live fingerprint is the EMPTY fold"
+                          : ""),
+                def.CurrentSourceFingerprint ?? "(not computed)");
+            return def;
+        }
+
         var canCompileLocally = !PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
         // The hub is in hand here, so the refusal branch's Pending dispatch is stamped with the
         // REAL module fingerprint rather than the safe-but-blind default (#3390).
@@ -1499,8 +1646,13 @@ internal static class NodeTypeCompilationHelpers
                     // precisely that state, and it is transient — only the sources watcher holds
                     // the live source nodes, and its publication both computes the fingerprint and
                     // carries the stamp. So wait for it here, exactly as we wait for the snapshot.
-                    && (def.AdoptedSourceFingerprint is not { Length: > 0 }
-                        || def.CurrentSourceFingerprint is { Length: > 0 })),
+                    //
+                    // 🚨 #4208 — …and an EMPTY fold is the same state wearing a well-formed value,
+                    // so the question is asked through CanJudgeAdoption rather than as
+                    // `is { Length: > 0 }`. Not advancing the high-water mark for a request this
+                    // pass will not answer is the point: the mark advances only on the commit path,
+                    // and a deferred judgement commits nothing.
+                    && CanJudgeAdoption(def, def.CurrentSourceVersions)),
             node =>
             {
                 var observed = (NodeTypeDefinition)node!.Content!;
@@ -2149,10 +2301,13 @@ internal static class NodeTypeCompilationHelpers
                         // permanently. Leaving it standing costs a recompile of a type that may
                         // have been adoptable — the safe direction, and the one #1834 was
                         // optimising away, not the one it was preventing.
+                        //
+                        // 🚨 #4208 — and the same rule for a live fingerprint computed over an
+                        // EMPTY source set, which is a well-formed value that establishes nothing.
+                        // CanJudgeAdoption is the one place both absences are named.
                         if (def.RequestedSourceStampAt is not null
                             && def.CurrentSourceVersions is { } liveSources
-                            && (def.AdoptedSourceFingerprint is not { Length: > 0 }
-                                || def.CurrentSourceFingerprint is { Length: > 0 }))
+                            && CanJudgeAdoption(def, liveSources))
                             def = ApplyAdoptedSourceStampAndReport(def, liveSources, hub, hubPath, logger);
                         // 🚨 Gate on the CARRIED triggerAt, NOT def.RequestedReleaseAt
                         // (which may have flapped back to an older value). Already

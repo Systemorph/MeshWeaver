@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -44,26 +45,52 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
     private const string LiveAssemblyPath = "live/LeavingSweepType.dll";
     private const string LiveMvid = "11ee0000aaaa0000";
     /// <summary>
-    /// 🚨 The fingerprint the OWNER will hold for this fixture type — computed with the product's
-    /// own function over the type's live source set, which for a fixture type is EMPTY.
+    /// 🚨 The fixture type's ONE source node. It is here because the subject of the second test —
+    /// a refusal — needs a live source set that ESTABLISHES something (MeshWeaver#4208).
     ///
-    /// <para>It used to be the literal <c>"live-fingerprint-fixture"</c>, on the reasoning that "a
-    /// sourceless fixture type publishes nothing that could move it". That is false: a sourceless
-    /// type publishes the fingerprint of the empty source set, and the owner's sources watcher
-    /// writes it over whatever the fixture seeded — at a moment nothing in the test controls. When
-    /// it landed mid-test the CONTROL arm's matching bundle stopped matching, the owner refused the
-    /// adoption it was supposed to accept, cleared the coordinates and dispatched a fresh compile,
-    /// and the final assertion waited 20 s for an MVID that was never going to arrive. Twice on the
-    /// merge queue for PR #3143 (runs 33673071012 and 33669188031), where a queue red costs every
-    /// PR behind it.</para>
+    /// <para>The fingerprint used to be <c>NodeTypeSourceFingerprint.Compute([], …)</c>: the value
+    /// the owner's watcher computes for a SOURCELESS fixture type, chosen so the watcher's
+    /// recompute could not move it mid-test (it had been a hand-picked literal, and the watcher
+    /// overwriting it reddened the merge queue twice on PR #3143). That removed the race and left
+    /// a different problem: the empty fold is what a NodeType activated BEFORE its sources landed
+    /// also publishes, and a refusal read off it is a conclusion about a source set nobody has
+    /// established — which is exactly the defect #4208 fixes. The seeder now DEFERS there, so a
+    /// sourceless fixture can no longer reach the decline this test is about.</para>
     ///
-    /// <para>Stating the value the product itself computes removes the race rather than narrowing
-    /// it: the watcher's recompute now writes the SAME value, so there is no window in which the
-    /// two arms mean something different. The two arms still differ by exactly one thing — whether
-    /// the producer's fingerprint equals the live one — which is the whole subject of the test.</para>
+    /// <para>A real source node removes both problems at once. The fingerprint is still stated
+    /// with the product's own function — over THIS node, so the watcher's recompute writes the
+    /// same value and cannot move it — and it now ESTABLISHES a source set, which is what a
+    /// refusal requires. Nothing compiles: the fixture record carries <c>CompilationStatus.Ok</c>
+    /// and a usable build, so no kickoff arms.</para>
     /// </summary>
-    private static readonly string FixtureLiveFingerprint =
-        NodeTypeSourceFingerprint.Compute([], "type/FixtureLiveSources");
+    private static MeshNode SourceNode(string typePath) =>
+        new("fixture", $"{typePath}/Source")
+        {
+            NodeType = "Code",
+            Name = "fixture",
+            State = MeshNodeState.Active,
+            Content = new CodeConfiguration
+            {
+                Language = "csharp",
+                Code = "public static class LeavingSweepFixture { public static int N() => 3; }",
+            },
+        };
+
+    /// <summary>The fingerprint the OWNER computes for this fixture type — the product's own
+    /// function over the type's one source node, so the sources watcher's recompute writes the
+    /// same value and there is no window in which the two arms mean something different.</summary>
+    private static string LiveFingerprintFor(string typePath) =>
+        NodeTypeSourceFingerprint.Compute([SourceNode(typePath)], typePath);
+
+    /// <summary>🚨 The live source SNAPSHOT — the witness a decline needs (MeshWeaver#4208). The
+    /// seeder and the owner both ask "did any declared query match a node here?", and a record
+    /// carrying no snapshot answers NO, at which point the adoption is DEFERRED and the decline
+    /// these arms are about is unreachable. The tick value is arbitrary and stable: nothing reads
+    /// it, and the sources watcher's own recompute would write a real one that is equally
+    /// non-empty.</summary>
+    private static ImmutableDictionary<string, long> LiveSnapshotFor(string typePath) =>
+        ImmutableDictionary<string, long>.Empty.SetItem(
+            SourceNode(typePath).Path, 638_000_000_000_000_000);
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -87,7 +114,10 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>A NodeType that already serves a usable build compiled on this mesh — the record
     /// a sweep on another generation would clobber.</summary>
-    private async Task CreateLiveType(string typePath)
+    /// <returns>The live source fingerprint the OWNER published for this type — the value both
+    /// the seeder's pre-write check and the owner's stamp check read, taken from the product
+    /// rather than asserted by the fixture.</returns>
+    private async Task<string> CreateLiveType(string typePath)
     {
         var typeNode = MeshNode.FromPath(typePath) with
         {
@@ -101,18 +131,31 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
                 LatestAssemblyPath = LiveAssemblyPath,
                 LatestAssemblyMvid = LiveMvid,
                 CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
-                CurrentSourceFingerprint = FixtureLiveFingerprint,
+                CurrentSourceFingerprint = LiveFingerprintFor(typePath),
+                CurrentSourceVersions = LiveSnapshotFor(typePath),
             },
         };
-        await MeshService.CreateNode(typeNode).Should().Within(20.Seconds()).Emit();
+        await MeshService.CreateNode(typeNode)
+            .SelectMany(_ => MeshService.CreateNode(SourceNode(typePath)))
+            .Should().Within(20.Seconds()).Emit();
         // Wait for BOTH fields, not just the MVID: the live fingerprint is what the seeder's
         // pre-write check and the owner's stamp check both read, so a test that proceeds before it
         // is observable is deciding against a record it has not established.
+        //
+        // 🚨 #4208 — and it waits for an ESTABLISHED one. The watcher's FIRST publication may well
+        // be the empty fold (the source node's own arrival is what moves it), and a decline read
+        // off that value is the defect, not the subject: the seeder defers there. Waiting on
+        // Establishes is therefore the precondition of the experiment, not a convenience.
+        var expected = LiveFingerprintFor(typePath);
+        LiveSnapshotFor(typePath).Should().NotBeEmpty(
+            "the fixture's source node is what makes the live set ESTABLISHED at all — without a "
+            + "matched node the seeder correctly DEFERS instead of declining (MeshWeaver#4208), so "
+            + "the experiment below would have no subject");
         await Mesh.GetMeshNodeStream(typePath).Should().Within(20.Seconds())
             .Match(n => n?.Content is NodeTypeDefinition d
                         && string.Equals(d.LatestAssemblyMvid, LiveMvid, StringComparison.Ordinal)
-                        && string.Equals(d.CurrentSourceFingerprint, FixtureLiveFingerprint,
-                            StringComparison.Ordinal));
+                        && string.Equals(d.CurrentSourceFingerprint, expected, StringComparison.Ordinal));
+        return expected;
     }
 
     private static IObservable<bool> Seed(IMessageHub hub, string typePath, byte[] bytes, string? fingerprint) =>
@@ -174,15 +217,13 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
     public async Task ABundleWhoseFingerprintDisagreesWithTheLiveSource_IsDeclinedBeforeItWrites()
     {
         const string typePath = "type/StaleBundleType";
-        await CreateLiveType(typePath);
+        // The seeder decides on the owner's CURRENT snapshot of the node, and this IS that value —
+        // read back from the owner rather than asserted here, so the watcher's own recompute
+        // cannot disagree with it under either arm. See SourceNode for what a hand-picked literal,
+        // and then the empty fold, each cost here.
+        var liveFingerprint = await CreateLiveType(typePath);
         var bytes = BundleBytes();
         var bundleMvid = ServedBuildIdentity.OfBytes(bytes);
-
-        // The seeder decides on the owner's CURRENT snapshot of the node, and this IS that value:
-        // the owner's sources watcher computes the same function over the same (empty) source set,
-        // so its recompute writes the fingerprint back unchanged and cannot move under either arm.
-        // See FixtureLiveFingerprint for what a hand-picked literal cost here.
-        var liveFingerprint = FixtureLiveFingerprint;
 
         // THE STALE ARM — the producer names sources that are not the ones this mesh holds.
         var sweep = SweepHub("sweep");
