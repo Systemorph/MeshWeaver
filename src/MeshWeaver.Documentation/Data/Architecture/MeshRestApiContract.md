@@ -17,14 +17,17 @@ HTTP. This page is the contract those callers may rely on.
 
 | the verb produced | status | body |
 |---|---|---|
-| a JSON document | **200** `application/json` | the document, verbatim |
+| the verb's success answer | **200** `application/json` | verbatim — a JSON document from the read verbs (`get`, `search`, `query-nodes`, `resolve`, `content/list`, …); the mutation verbs' acknowledgement as they write it today (`Created: {path}`, `Updated: …`, `Patched: …`, `Deleted: …`, `Moved: …`) |
 | `Not found: …` | **404** | `{ "error": "Not found: …", "kind": "NotFound" }` |
 | `Unavailable: …` | **503** | `{ "error": "Unavailable: …", "kind": "Unavailable" }` |
 | `Error: …` | **500** | `{ "error": "Error: …", "kind": "Error" }` |
 
-So `response.ok` means exactly one thing — *here is the document* — and a caller that checks the
-status before parsing is correct by construction. The sentence is kept verbatim in `error` because
-it is the part that names the path and the cause; `kind` is the machine-readable half.
+So `response.ok` means exactly one thing — *the verb succeeded* — and a caller that checks the
+status before parsing is correct by construction. For a read verb the 200 body is the document;
+for a mutation verb it is the prose acknowledgement those verbs have always written, which is a
+separate contract question (a JSON acknowledgement would be the next step, not a status code) and
+is deliberately unchanged here. The sentence is kept verbatim in `error` because it is the part
+that names the path and the cause; `kind` is the machine-readable half.
 
 Two things are deliberately NOT part of this contract:
 
@@ -61,9 +64,13 @@ parse error.
 
 `MeshWeaver.AI.OperationSentinel` (in `MeshWeaver.Mesh.Operations`, beside the verbs that write the
 sentinels) owns the three prefixes and the classification `Classify(string) → SentinelVerdict?`
-carrying the kind AND the HTTP status. Both hosts map through it, so the portal and the sidecar
-cannot disagree, and the prefix test is exact rather than heuristic: a JSON document begins with
-`{`, `[`, a quote, a digit or a keyword, never with `Not found:`.
+carrying the kind AND the HTTP status. The portal maps through it (MeshWeaver#4143) and the Plugins
+sidecar adopts the same function once a sealed set carries it (MeshWeaver.Plugins#1767), so the
+two cannot disagree; the prefix test is exact rather than heuristic — a JSON document begins with
+`{`, `[`, a quote, a digit or a keyword, never with `Not found:`. The verbs write the sentinels as
+interpolated literals at some forty sites; `UnavailableMessage` writes through the constant, and
+`OperationSentinelPrefixTest` ties the other two: every `Error:` / `Not found:` literal in
+`MeshOperations.cs` must classify, so a writer that drifts from the classifier is red in CI.
 
 The CLI is the one consumer that does not link it — `memex` is deliberately dependency-free — so it
 recognises the envelope by its wire shape (`error` beside a `kind` naming one of the three) and
