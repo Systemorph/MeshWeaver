@@ -2765,7 +2765,21 @@ public static class PackageInstaller
         var rootTypeIsStatic = root is null
             || string.IsNullOrEmpty(root.NodeType)
             || hub.ServiceProvider.FindStaticNode(root.NodeType!) is not null;
-        var placeholderRoot = root is not null && !rootTypeIsStatic
+        // 🚨 The placeholder dance exists for ONE case: a root whose NodeType is defined IN THIS
+        // package, so the type cannot be loadable before the package's own NodeType node lands and
+        // compiles — the root is written as a Space first, retyped in stage 2, and its hub recycled
+        // (SettleRetypedRoot). A root typed by ANOTHER package (every satellite of Store: Hosting,
+        // Signature, Essentials … are Store/Plugin) needs none of it — the type is registered or
+        // it is not, exactly as for any instance — yet until 2026-09-13 every non-static root took
+        // the dance: one placeholder write, one retype, one hub recycle per package, and behind the
+        // recycle a batch of [UpdateQueue] ADVANCE_WITHOUT_HANDOFF bound=5000ms waits on the
+        // compile-state writes of the package's types (13 s per package on the plugin gate,
+        // measured on Plugins run 34731952463). Maintainer: "must be done on running mesh not ramp
+        // up and down". So: a placeholder only when the root's type is in-package.
+        var rootTypeInPackage = root is not null && !string.IsNullOrEmpty(root.NodeType)
+            && nodes.Any(n => ImportWriteOrder.IsNodeTypeDefinition(n)
+                && string.Equals(n.Path, root.NodeType, StringComparison.Ordinal));
+        var placeholderRoot = root is not null && !rootTypeIsStatic && rootTypeInPackage
             ? root with { NodeType = "Space", Content = null }
             : null;
         var stage0 = root is null ? Array.Empty<MeshNode>() : new[] { placeholderRoot ?? root };
