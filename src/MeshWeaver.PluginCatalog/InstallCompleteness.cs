@@ -236,7 +236,7 @@ public static class InstallCompleteness
         string partition,
         PackageManifest? record,
         FileFormatParserRegistry parsers,
-        string? recordIdentity = null)
+        string? recordIdentity)
     {
         ArgumentNullException.ThrowIfNull(parsers);
         var declared = DeclaredNodePaths(record, parsers);
@@ -293,6 +293,29 @@ public static class InstallCompleteness
               + $"{record.InstalledFiles?.Count ?? 0} file(s) in the map";
         return $"{path} v{version} (written {lastModified:O}; {stamps})";
     }
+
+    /// <summary>
+    /// <c>Observe</c> without a record identity.
+    ///
+    /// <para>🚨 <b>This overload exists for BINARY compatibility and is not redundant.</b> Adding
+    /// an optional parameter to the seven-parameter method above would have been source-compatible and silently
+    /// binary-BREAKING: the six-parameter metadata signature disappears, and an assembly compiled
+    /// against it fails at run time with <c>MissingMethodException</c> — the failure shape that
+    /// cannot be seen by any compile in this repository, because nothing here is compiled against
+    /// an older core. Two real overloads keep both signatures in the metadata.</para>
+    ///
+    /// <para>A caller that HAS the record node should use the other one: a declared count nothing
+    /// can attribute to a record version is the defect MeshWeaver#4200 cost a day of archaeology
+    /// to (see <see cref="InstallCompletenessVerdict.RecordIdentity"/>).</para>
+    /// </summary>
+    public static IObservable<InstallCompletenessVerdict> Observe(
+        IStorageAdapter? persistence,
+        JsonSerializerOptions options,
+        string packageId,
+        string partition,
+        PackageManifest? record,
+        FileFormatParserRegistry parsers) =>
+        Observe(persistence, options, packageId, partition, record, parsers, null);
 
     /// <summary>
     /// The population a verdict was taken over, computed ONCE per record: how many files the

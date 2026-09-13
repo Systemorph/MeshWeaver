@@ -1,8 +1,9 @@
 ---
-nodeType: WhatsNew
-title: The install check says which record it counted
-category: Fix
-date: 2026-09-13
+Name: The install check says which record it counted
+Category: Fix
+Description: The boot-time install check now names the install record its numbers were taken over — path, version and map size — so a count taken over a stale record stops reading like one taken over the current one.
+Icon: DocumentSearch
+Order: -20260913
 ---
 
 The boot-time install check reports how many nodes a package declares and which of them are missing

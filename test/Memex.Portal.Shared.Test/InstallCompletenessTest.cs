@@ -275,6 +275,47 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
     /// not be read, are NOT passes. If either returned <c>Complete</c>, "not checked" and "clean"
     /// would be the same answer — which is the bug, not the fix.
     /// </summary>
+    [Fact]
+    public void NotCheckedIsNeverClean()
+    {
+        var parsers = Parsers();
+        var declared = new PackageManifest
+        {
+            Id = Package,
+            TargetPartition = Package,
+            InstalledFiles = ImmutableSortedDictionary<string, string>.Empty
+                .Add($"{Package}/Guide.md", "bbb"),
+        };
+
+        InstallCompleteness.Compare(Package, Package, null, ImmutableHashSet<string>.Empty, parsers)
+            .Kind.Should().Be(InstallCompletenessKind.Undeclared,
+                "no record at all means nothing declares what should be here");
+
+        InstallCompleteness
+            .Compare(Package, Package, new PackageManifest { Id = Package }, ImmutableHashSet<string>.Empty, parsers)
+            .IsComplete.Should().BeFalse(
+                "a record with no file map cannot be compared against anything — reporting that as "
+                + "complete is the 'zero found, zero expected, green' family");
+
+        InstallCompleteness.Compare(Package, Package, declared, null, parsers)
+            .Kind.Should().Be(InstallCompletenessKind.NotObserved,
+                "a mesh that could not be read was NOT checked; a failed read must never be spelled "
+                + "the same way as a real negative");
+
+        InstallCompleteness.Compare(Package, Package, declared, null, parsers)
+            .IsComplete.Should().BeFalse("and it is not a pass");
+
+        InstallCompleteness
+            .Compare(Package, Package, declared, ImmutableHashSet.Create(StringComparer.Ordinal, GuidePath), parsers)
+            .IsComplete.Should().BeTrue("the one case that IS a pass: every declared node observed");
+
+        var short_ = InstallCompleteness.Compare(
+            Package, Package, declared, ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal),
+            parsers);
+        short_.Kind.Should().Be(InstallCompletenessKind.Incomplete);
+        short_.Missing.Should().ContainSingle().Which.Should().Be(GuidePath);
+    }
+
     /// <summary>
     /// 🚨 <b>A DECLARED COUNT MUST NAME THE RECORD IT WAS TAKEN OVER</b> — MeshWeaver#4200.
     ///
@@ -334,48 +375,21 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
         unattributed.Provenance.Should().Contain("NOT identified");
         unattributed.Provenance.Should().NotBeNullOrWhiteSpace(
             "a provenance nobody supplied must be a sentence, not an empty string in a log line");
+
+        // 🚨 AND THE SELECT THAT FEEDS IT. A test that only exercises DescribeRecord with
+        // hand-supplied values would still pass with `version`/`lastModified` dropped from the
+        // listing — at which point every verdict names a record it cannot identify and nothing is
+        // red. The projection is the other half of the same guarantee.
+        InstalledPackageRepairService.RecordsQuery.Should().Contain("select:",
+            "the listing projects — it does not read whole nodes");
+        InstalledPackageRepairService.RecordsQuery.Should().Contain("version",
+            "the record's VERSION is what makes a declared count attributable");
+        InstalledPackageRepairService.RecordsQuery.Should().Contain("lastModified",
+            "and when that version was written");
+        InstalledPackageRepairService.RecordsQuery.Should().Contain("content",
+            "the control: the manifest itself must still be selected, or nothing is declared at all");
     }
 
-    [Fact]
-    public void NotCheckedIsNeverClean()
-    {
-        var parsers = Parsers();
-        var declared = new PackageManifest
-        {
-            Id = Package,
-            TargetPartition = Package,
-            InstalledFiles = ImmutableSortedDictionary<string, string>.Empty
-                .Add($"{Package}/Guide.md", "bbb"),
-        };
-
-        InstallCompleteness.Compare(Package, Package, null, ImmutableHashSet<string>.Empty, parsers)
-            .Kind.Should().Be(InstallCompletenessKind.Undeclared,
-                "no record at all means nothing declares what should be here");
-
-        InstallCompleteness
-            .Compare(Package, Package, new PackageManifest { Id = Package }, ImmutableHashSet<string>.Empty, parsers)
-            .IsComplete.Should().BeFalse(
-                "a record with no file map cannot be compared against anything — reporting that as "
-                + "complete is the 'zero found, zero expected, green' family");
-
-        InstallCompleteness.Compare(Package, Package, declared, null, parsers)
-            .Kind.Should().Be(InstallCompletenessKind.NotObserved,
-                "a mesh that could not be read was NOT checked; a failed read must never be spelled "
-                + "the same way as a real negative");
-
-        InstallCompleteness.Compare(Package, Package, declared, null, parsers)
-            .IsComplete.Should().BeFalse("and it is not a pass");
-
-        InstallCompleteness
-            .Compare(Package, Package, declared, ImmutableHashSet.Create(StringComparer.Ordinal, GuidePath), parsers)
-            .IsComplete.Should().BeTrue("the one case that IS a pass: every declared node observed");
-
-        var short_ = InstallCompleteness.Compare(
-            Package, Package, declared, ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-            parsers);
-        short_.Kind.Should().Be(InstallCompletenessKind.Incomplete);
-        short_.Missing.Should().ContainSingle().Which.Should().Be(GuidePath);
-    }
 
     /// <summary>
     /// A record whose file map addresses a DIFFERENT partition cannot be compared against this one,

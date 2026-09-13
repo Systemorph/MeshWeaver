@@ -454,6 +454,26 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     }
 
     /// <summary>One recorded install: its id, its target partition and the manifest recorded for it.</summary>
+    /// <summary>
+    /// The listing every install record is read through — exposed so the SELECT can be asserted
+    /// rather than merely intended.
+    ///
+    /// <para>🚨 <b><c>version</c> and <c>lastModified</c> are load-bearing</b> (MeshWeaver#4200).
+    /// This listing is the eventually-consistent half of the completeness comparison — a
+    /// <c>GetQuery</c>, while the observed half is deliberately kept off one — so its answer has to
+    /// be ATTRIBUTABLE. Without those two fields a verdict says "201 file(s) declared" over a
+    /// record nothing can name, and reconciling that took a version-by-version read of the record
+    /// plus a commit-by-commit count of the source repo.</para>
+    ///
+    /// <para>🚨 And a comment saying so is not a guard: dropping either field from this string is
+    /// invisible at every compile and shows up only as a log line that has quietly stopped naming
+    /// its record. <c>EveryVerdictNamesTheRecordVersionItWasTakenOver</c> asserts the SELECT.</para>
+    /// </summary>
+    public static string RecordsQuery =>
+        $"namespace:{PackageInstaller.InstalledPartition} "
+        + $"nodeType:{PackageInstaller.PackageNodeType} "
+        + "select:path,id,name,nodeType,content,version,lastModified";
+
     /// <param name="Identity">Which record node VERSION this entry was read from
     /// (<see cref="InstallCompleteness.DescribeRecord"/>) — carried so every verdict can name the
     /// record it was taken over (MeshWeaver#4200).</param>
@@ -468,15 +488,7 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     /// </summary>
     private IObservable<IReadOnlyList<InstalledRecord>> InstalledRecords(ILogger? logger) =>
         hub.GetWorkspace()
-            .GetQuery("installed-packages-repair",
-                $"namespace:{PackageInstaller.InstalledPartition} "
-                // 🚨 `version` and `lastModified` are part of the SELECT because this listing is
-                // the eventually-consistent half of the completeness comparison and its answer has
-                // to be attributable. Without them a verdict says "201 file(s) declared" over a
-                // record nothing can name, and reconciling that took a version-by-version read of
-                // the record plus a commit-by-commit count of the source repo (MeshWeaver#4200).
-                + $"nodeType:{PackageInstaller.PackageNodeType} "
-                + "select:path,id,name,nodeType,content,version,lastModified")
+            .GetQuery("installed-packages-repair", RecordsQuery)
             .Take(1)
             .Timeout(TimeSpan.FromMinutes(2))
             .Select(nodes => (IReadOnlyList<InstalledRecord>)nodes
