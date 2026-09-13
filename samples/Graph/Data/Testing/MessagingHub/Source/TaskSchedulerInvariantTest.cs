@@ -21,7 +21,7 @@ using System.Reactive.Threading.Tasks;
 /// scheduler — that's how Orleans glue couples the root grain hub to the
 /// grain's scheduler. See <c>Doc/Architecture/OrleansTaskScheduler.md</c>.
 /// </summary>
-public class TaskSchedulerInvariantTest(MeshTestContext context) : InMeshTestBase(output)
+public class TaskSchedulerInvariantTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record WhereAmIRequest : IRequest<WhereAmIResponse>;
 

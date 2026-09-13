@@ -33,7 +33,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// so adding the type had to be additive. A future edit that "tidies" the wording would silently
 /// re-classify live incidents — this test is what stops it.</para>
 /// </summary>
-public class HubDisposedBeforeResponseIsClassifiedTest(MeshTestContext context) : InMeshTestBase(output)
+public class HubDisposedBeforeResponseIsClassifiedTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record NeverAnswered : IRequest<NeverAnsweredResponse>;
 

@@ -36,7 +36,7 @@ using MeshWeaver.Markdown;
 /// then <c>ParseAreaAndId</c> on the remainder — because a link can resolve to a node and still
 /// address the wrong area, which renders a blank pane rather than a 404.</para>
 /// </summary>
-public class GlobalSettingsNavigationRouteTest(MeshTestContext context) : InMeshTestBase(output)
+public class GlobalSettingsNavigationRouteTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Every tab a settings link can point at. Read from the seeds themselves (not a copy) so the

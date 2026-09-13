@@ -13,7 +13,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-public class ActivityReleaseLifetimeTest(MeshTestContext context) : InMeshTestBase(output)
+public class ActivityReleaseLifetimeTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact]
     public async Task TerminalCompletion_DoesNotResolveServicesFromTheDisposedWriter()

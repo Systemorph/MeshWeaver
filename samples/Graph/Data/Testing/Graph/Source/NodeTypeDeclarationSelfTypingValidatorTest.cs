@@ -28,7 +28,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// RUNTIME — a repair path, a plugin-installed NodeType, a hand-authored MCP write. This validator
 /// closes that gap at the one place every such write passes through: Create/Update validation.</para>
 /// </summary>
-public class NodeTypeDeclarationSelfTypingValidatorTest(MeshTestContext context) : InMeshTestBase(output)
+public class NodeTypeDeclarationSelfTypingValidatorTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private NodeTypeDeclarationSelfTypingValidator Guard =>
         Mesh.ServiceProvider.GetServices<INodeValidator>()

@@ -41,7 +41,7 @@ using MeshWeaver.Utils;
 /// would leave the lock green and the Space skipped for ever — it would look right and change
 /// nothing, so that is the assertion.</para>
 /// </summary>
-public class RefusedContentSyncIsNotSuccessTest(MeshTestContext context) : InMeshTestBase(output)
+public class RefusedContentSyncIsNotSuccessTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>A source that ships nodes and, optionally, one inline content sync.</summary>
     private sealed class ContentRepoSource(string partition) : IStaticRepoSource

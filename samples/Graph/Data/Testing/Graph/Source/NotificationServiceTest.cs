@@ -29,7 +29,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// arbitrary <c>mainNodePath</c> it does not own, so the calls run under System — the same
 /// impersonation its real caller (<see cref="NotificationService.Dispatch"/>) already applies.</para>
 /// </summary>
-public class NotificationServiceTest(MeshTestContext context) : InMeshTestBase(output)
+public class NotificationServiceTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();

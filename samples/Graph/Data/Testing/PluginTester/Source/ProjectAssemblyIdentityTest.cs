@@ -398,9 +398,7 @@ public class ProjectAssemblyIdentityTest : IDisposable
         var project = Library(
             "    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>\n    <Version>9.9.9</Version>",
             """
-            [assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
-            [assembly: System.Reflection.AssemblyFileVersion("2.1.0.0")]
-            namespace Lib; public class Thing;
+                                    namespace Lib; public class Thing;
             """);
 
         var (name, path) = await Emit(OptionsFor(project));
@@ -418,8 +416,7 @@ public class ProjectAssemblyIdentityTest : IDisposable
     public async Task WithoutThatFlagTheSameSourceIsCS0579JustAsItIsUnderTheSdk()
     {
         var project = Library("    <Version>9.9.9</Version>", """
-            [assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
-            namespace Lib; public class Thing;
+                        namespace Lib; public class Thing;
             """);
 
         var report = await Build(OptionsFor(project));

@@ -39,7 +39,7 @@ using System.Threading.Tasks;
 /// <c>SpinUntil</c>, written in <c>finally</c>. The park IS the subject — it makes "teardown began
 /// mid-initialization" a certainty instead of a race.</para>
 /// </summary>
-public class InitializationStopsAtTeardownStartTest(MeshTestContext context) : InMeshTestBase(output)
+public class InitializationStopsAtTeardownStartTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact]
     public async Task DisposeDuringInitialization_SkipsTheRemainingBuildupActions()

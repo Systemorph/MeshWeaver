@@ -69,7 +69,7 @@ public class QuiesceStartNamesTheAskerTest : InMeshTestBase
         return line!;
     }
 
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task ARoutedDisposeRequestFromAnotherHub_NamesThatSender()
     {
         var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "asked-by-other"), c => c)!;
@@ -95,7 +95,7 @@ public class QuiesceStartNamesTheAskerTest : InMeshTestBase
     /// misread as a routing oddity. This is #3510's LEADING hypothesis, so it is the reading that
     /// must not be ambiguous.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task ASelfPostedDisposeRequest_SaysSoRatherThanNamingTheHubTwice()
     {
         var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "asked-by-self"), c => c)!;
@@ -117,7 +117,7 @@ public class QuiesceStartNamesTheAskerTest : InMeshTestBase
     /// message path, which is what #3510 needed and could not get. Host teardown, an owner
     /// disposing its children and a <c>using</c> all land here.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task ADirectDispose_SaysNoRoutedRequestBroughtItDown()
     {
         var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "asked-by-nobody"), c => c)!;
@@ -139,7 +139,7 @@ public class QuiesceStartNamesTheAskerTest : InMeshTestBase
     /// <see href="/Doc/Architecture/ControlsThatCannotFail">one word covering three states</see>
     /// shape. The poster has always known why. Now the request carries it.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task ADisposeRequestCarryingAReason_PrintsThatReason()
     {
         var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "asked-with-reason"), c => c)!;
@@ -170,7 +170,7 @@ public class QuiesceStartNamesTheAskerTest : InMeshTestBase
     /// plausible reason, or that silently dropped the field when there was none, would pass
     /// <see cref="ADisposeRequestCarryingAReason_PrintsThatReason"/> and fail here.</para>
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task ADisposeRequestWithNoReason_SaysTheCallerDidNotStateOne()
     {
         var victim = (MessageHub)Mesh.GetHostedHub(new Address("victim", "asked-no-reason"), c => c)!;
@@ -203,7 +203,7 @@ public class QuiesceStartNamesTheAskerTest : InMeshTestBase
     /// <para>Now the child names the cascade AND the originating teardown, so one line answers
     /// both halves without a second log to correlate against.</para>
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task AChildTornDownWithItsOwner_NamesTheCascadeAndTheOriginatingTeardown()
     {
         var root = (MessageHub)Mesh.GetHostedHub(new Address("root", "recycled-mid-install"), c => c)!;
@@ -241,7 +241,7 @@ public class QuiesceStartNamesTheAskerTest : InMeshTestBase
     /// had — the absence of a routed request, which rules the message path out. An ordinary hub
     /// disposed on its own must still read as one.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task AHubDisposedOnItsOwn_IsNotReportedAsACascade()
     {
         var lonely = (MessageHub)Mesh.GetHostedHub(new Address("lonely", "no-owner-teardown"), c => c)!;

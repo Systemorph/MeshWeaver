@@ -46,7 +46,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// hub whose scope is alive (including an <see cref="ObjectDisposedException"/> from an unrelated
 /// disposed dependency) must still enter the FAILED state.</para>
 /// </summary>
-public class ScopeDisposedDuringInitializationTest(MeshTestContext context) : InMeshTestBase(output)
+public class ScopeDisposedDuringInitializationTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Registered in the hub's OWN scope and resolved by the BuildupAction — i.e. created AFTER

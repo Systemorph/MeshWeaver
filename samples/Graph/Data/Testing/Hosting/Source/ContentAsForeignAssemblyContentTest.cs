@@ -32,7 +32,7 @@ using MeshWeaver.Mesh;
 /// type. A same-shaped foreign-assembly instance carries the authoritative JSON shape — recover
 /// it by round-tripping through JSON, exactly like the degraded-JsonElement path.</para>
 /// </summary>
-public class ContentAsForeignAssemblyContentTest(MeshTestContext context) : InMeshTestBase(output)
+public class ContentAsForeignAssemblyContentTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// The "query layer's" MeshNode: Content serialized and rehydrated through the HOST hub's

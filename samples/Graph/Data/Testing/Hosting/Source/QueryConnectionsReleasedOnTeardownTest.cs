@@ -48,7 +48,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// the released count mean anything: a cache that never registered a connection would read
 /// zero before AND after.</para>
 /// </summary>
-public class QueryConnectionsReleasedOnTeardownTest(MeshTestContext context) : InMeshTestBase(output)
+public class QueryConnectionsReleasedOnTeardownTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private MeshNodeStreamCache Cache =>
         (MeshNodeStreamCache)Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();

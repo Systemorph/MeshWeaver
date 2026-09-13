@@ -36,7 +36,7 @@ using System.Threading.Tasks;
 /// started" and proves it holds for 1 s. This proves it must hold for longer than the cap, because
 /// nothing about an in-flight construction promises to finish inside an arbitrary 5 s.</para>
 /// </summary>
-public class HostedHubDisposalJoinTest(MeshTestContext context) : InMeshTestBase(output)
+public class HostedHubDisposalJoinTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Sits between the removed 5 s cap and <c>MessageHub</c>'s 8 s disposal stall budget — the only
@@ -51,7 +51,7 @@ public class HostedHubDisposalJoinTest(MeshTestContext context) : InMeshTestBase
     /// finish. Before the fix the owner abandoned it at the 5 s cap and reported itself fully
     /// disposed; after it, the join waits for the answer it is joining.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task DisposalWaitsForAnInflightConstruction_PastTheOldFiveSecondCap()
     {
         var client = GetClient();
@@ -115,7 +115,7 @@ public class HostedHubDisposalJoinTest(MeshTestContext context) : InMeshTestBase
     /// teardown with nothing wedged must still complete PROMPTLY. Removing a cap is only correct if
     /// the join was never what made the common case fast — it was not; the children answer at once.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task OrdinaryDisposalStillCompletesPromptly()
     {
         var client = GetClient();

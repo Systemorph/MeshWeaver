@@ -32,7 +32,7 @@ using Microsoft.Extensions.DependencyInjection;
 ///     fan-out was always empty. Register it and BOTH tests here tell you which assertions move.</item>
 /// </list>
 /// </summary>
-public class SecurityQueryRootLegRegistryTest(MeshTestContext context) : InMeshTestBase(output)
+public class SecurityQueryRootLegRegistryTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private Dictionary<string, string?> RegisteredGlobalSatellites()
     {

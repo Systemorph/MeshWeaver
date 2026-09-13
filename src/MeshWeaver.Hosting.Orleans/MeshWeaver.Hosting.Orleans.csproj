@@ -5,6 +5,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_HostingOrleans" />
   </ItemGroup>
 
     <ItemGroup>

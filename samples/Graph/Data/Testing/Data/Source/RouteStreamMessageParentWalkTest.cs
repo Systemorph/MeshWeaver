@@ -20,7 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// synchronously so consumers can react to slow-registering sub-hubs
 /// without polling.
 /// </summary>
-public class RouteStreamMessageParentWalkTest(MeshTestContext context) : InMeshTestBase(output)
+public class RouteStreamMessageParentWalkTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Walks the parent chain: ensures that when a child hub looks for a

@@ -1,0 +1,298 @@
+// <meshweaver>
+// Id: Testing/Documentation/MigrationWorkloadModelGuard
+// DisplayName: Testing/Documentation/MigrationWorkloadModelGuard — migrated from xunit (convert-xunit-to-inmesh.py)
+// </meshweaver>
+#nullable enable
+using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.InMesh;
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+
+/// <summary>
+/// 🚨 <b>The database migration is a RUN-ONCE workload, and nothing in this repo may say otherwise</b>
+/// (#1788).
+///
+/// <para><b>What went wrong.</b> The migration container runs the migration, prints
+/// <c>Database migration completed. Version: N</c>, and exits 0. Modelled as a <b>Deployment</b>
+/// that is a crash loop by construction: the kubelet restarts it, forever. Three production
+/// namespaces sat at 50/53/38 restarts (memex-cloud reached 87 in nine hours), and each restart
+/// rebuilt <c>public.top_level_index</c> across every partition schema — so the "benign
+/// CrashLoopBackOff" the docs told everyone to expect was a CPU storm.</para>
+///
+/// <para><b>Why it is a correctness problem, not tidiness.</b> A standing crash loop makes "is
+/// anything crash-looping in prod?" — the first question anyone asks in an incident — permanently
+/// unanswerable: a genuine migration failure looks exactly like the documented noise. That is this
+/// repo's central failure mode (silence indistinguishable from success), and the cure is to model
+/// the workload correctly so the ambiguity cannot exist.</para>
+///
+/// <para><b>The chart is already right; the PROSE was what kept the wrong model alive.</b>
+/// <c>deploy/helm/templates/memex-migration/job.yaml</c> has rendered a <c>Job</c> since #145 —
+/// there is no Deployment template and there never was one to port. What survived was a set of
+/// commands, in <c>AGENTS.md</c> and the deploy scripts, telling operators to
+/// <c>kubectl set image</c> / <c>rollout restart</c> a <c>memex-migration-deployment</c> the chart
+/// does not define. Every one of those either fails or keeps a cluster-only orphan alive. This
+/// guard is what stops them coming back — a text guard because the invariant lives across a Helm
+/// template, several shell scripts and a markdown file, where no unit test can observe it.</para>
+///
+/// <para>🚨 What this guard deliberately does NOT assert: that no file MENTIONS
+/// <c>memex-migration-deployment</c>. Several must — <c>deploy/aks/SELF-UPDATE.md</c> and
+/// <c>Doc/Architecture/DeploymentAKS.md</c> carry the warning that the self-updater still targets
+/// that name, and the chart's own RBAC still grants it (removing that grant before the updater
+/// stops patching it would turn a harmless call into a 403 mid-roll). Naming the problem is the
+/// opposite of repeating it. The assertion is on COMMANDS.</para>
+/// </summary>
+public class MigrationWorkloadModelGuard
+{
+    private const string MigrationTemplates = "deploy/helm/templates/memex-migration";
+    private const string Job = "deploy/helm/templates/memex-migration/job.yaml";
+
+    /// <summary>
+    /// The workload itself: a Job that runs to completion and stops. <c>restartPolicy: Never</c>
+    /// is the line that makes "it exited 0" mean finished rather than "restart it".
+    /// </summary>
+    [MeshFact]
+    public void TheMigration_IsAJobThatRunsToCompletion_NeverADeployment()
+    {
+        var dir = Path.Combine(FindRepoRoot(), MigrationTemplates);
+        var templates = Directory.GetFiles(dir, "*.yaml");
+
+        foreach (var template in templates)
+        {
+            var body = ExecutableLinesOf(File.ReadAllText(template));
+            Assert.False(
+                Regex.IsMatch(body, @"^kind:\s*""?Deployment""?", RegexOptions.Multiline),
+                $"{Path.GetRelativePath(FindRepoRoot(), template)} declares a Deployment. The "
+                + "migration runs once and exits 0, so a Deployment restarts it forever — 310 "
+                + "restarts a day pegging a core, and a permanent CrashLoopBackOff that makes a "
+                + "REAL migration failure unreadable (#1788).");
+        }
+
+        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Job)));
+
+        Assert.True(Regex.IsMatch(job, @"^kind:\s*""?Job""?", RegexOptions.Multiline),
+            $"{Job} must declare kind: Job — the workload model is the fix.");
+
+        Assert.True(job.Contains("restartPolicy: \"Never\"", StringComparison.Ordinal),
+            $"{Job} must set restartPolicy: Never. Without it the pod is restarted on exit and the "
+            + "Job form buys nothing.");
+
+        Assert.True(job.Contains(".Release.Revision", StringComparison.Ordinal),
+            $"{Job}'s name must embed .Release.Revision so a new migration actually RUNS on the "
+            + "next helm upgrade — a Job with a stable name is created once and then silently "
+            + "skipped, which would leave the schema behind while everything looked fine.");
+
+        Assert.True(job.Contains("ttlSecondsAfterFinished", StringComparison.Ordinal),
+            $"{Job} must set ttlSecondsAfterFinished so completed Jobs clean themselves up rather "
+            + "than accumulating one object per upgrade.");
+    }
+
+    /// <summary>
+    /// 🚨 The migration has a BUDGET, enforced twice from ONE number (maintainer, 2026-09-07:
+    /// "cap it", "enforce a time limit of 10 min per job", "if they want more than 10, they have to
+    /// configure explicitly"). Measured that day on memex-cloud: the <c>3.0.0-ci.8009</c> Job had
+    /// been running 4 h 30 min — seventy seconds of schema work, then a row-at-a-time embedding
+    /// backfill over 220 partition schemas — with its deploy long since reported failed and nothing
+    /// naming the cause. Inside the process <c>MIGRATION_BUDGET_MINUTES</c> makes the runner fail
+    /// RED naming the step; outside, <c>activeDeadlineSeconds</c> makes Kubernetes kill the Job at
+    /// the same budget. Both derive from <c>migration.budgetMinutes</c>, default 10, so a deployment
+    /// that needs more writes the number into its overlay — never gets it by default.
+    /// </summary>
+    [MeshFact]
+    public void TheMigration_HasABudget_TenMinutesUnlessConfiguredExplicitly()
+    {
+        var root = FindRepoRoot();
+        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Job)));
+        var values = File.ReadAllText(Path.Combine(root, "deploy/helm/values.yaml"));
+
+        Assert.True(Regex.IsMatch(job, @"^\s*activeDeadlineSeconds:.*\.Values\.migration\.budgetMinutes", RegexOptions.Multiline),
+            $"{Job} must set activeDeadlineSeconds FROM .Values.migration.budgetMinutes — the Job's outside "
+            + "cap and the process's inside budget are one number, or the two drift and one of them lies.");
+        Assert.True(job.Contains("MIGRATION_BUDGET_MINUTES", StringComparison.Ordinal)
+                    && job.Contains(".Values.migration.budgetMinutes", StringComparison.Ordinal),
+            $"{Job} must pass MIGRATION_BUDGET_MINUTES from .Values.migration.budgetMinutes so the runner "
+            + "fails RED naming the step that outlived the budget, before Kubernetes kills the pod.");
+        var budget = Regex.Match(values, @"^migration:\s*\n(?:.*\n)*?\s+budgetMinutes:\s*(\d+)", RegexOptions.Multiline);
+        Assert.True(budget.Success, "deploy/helm/values.yaml must declare migration.budgetMinutes");
+        Assert.Equal("10", budget.Groups[1].Value);
+    }
+
+    /// <summary>
+    /// 🚨 Rehearsal BEFORE execution (maintainer, 2026-09-07: "we must first test the migration
+    /// process and only then execute"). The Job's init container runs the same image with
+    /// <c>MIGRATION_MODE=rehearse</c> — counts what the pending repairs would touch, executes
+    /// nothing — and a failed init container never lets the migration container start. The
+    /// ordering is the pod's, not a convention; this pins that the init container exists, runs
+    /// the migration image, carries the mode, and is on by default.
+    /// </summary>
+    [MeshFact]
+    public void TheMigration_IsRehearsedByAnInitContainer_BeforeItRuns()
+    {
+        var root = FindRepoRoot();
+        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Job)));
+        var values = File.ReadAllText(Path.Combine(root, "deploy/helm/values.yaml"));
+
+        var init = job.IndexOf("initContainers:", StringComparison.Ordinal);
+        var main = job.IndexOf("containers:", init + 1, StringComparison.Ordinal);
+        Assert.True(init >= 0 && main > init, $"{Job} must declare initContainers before containers");
+        var initBlock = job[init..main];
+        Assert.Contains("memex-migration-rehearsal", initBlock);
+        Assert.Contains(".Values.migration.image", initBlock);
+        Assert.True(Regex.IsMatch(initBlock, @"MIGRATION_MODE""?\s*\n\s*value:\s*""?rehearse", RegexOptions.Multiline),
+            "the rehearsal init container must run the migration image with MIGRATION_MODE=rehearse");
+        var rehearse = Regex.Match(values, @"^migration:\s*\n(?:.*\n)*?\s+rehearse:\s*(\w+)", RegexOptions.Multiline);
+        Assert.True(rehearse.Success && rehearse.Groups[1].Value == "true",
+            "deploy/helm/values.yaml must declare migration.rehearse: true — tested first is the default, not an option");
+    }
+
+    /// <summary>
+    /// 🚨 And no command anywhere in the repo may roll the migration as a Deployment. Each of
+    /// these was live until #1788: <c>AGENTS.md</c> — the file every agent loads first — carried
+    /// both a <c>set image</c> and a <c>rollout restart</c> against
+    /// <c>deployment/memex-migration-deployment</c>, plus the instruction to treat the resulting
+    /// crash loop as benign. <c>deploy/aks/scripts/deploy.sh</c> carried the same two, one of them
+    /// unguarded, so a documented deploy always printed an error nobody read.
+    ///
+    /// <para>The scan is over COMMANDS: a <c>kubectl</c> verb applied to that object name. Prose
+    /// that names it in order to warn about it is untouched, and must stay that way — the
+    /// self-updater and the chart's RBAC still target it, and the day that changes is the day the
+    /// warnings can go.</para>
+    /// </summary>
+    [MeshFact]
+    public void NoCommandInThisRepo_RollsTheMigrationAsADeployment()
+    {
+        var root = FindRepoRoot();
+
+        // kubectl <verb> ... deployment/memex-migration-deployment  (or "deployment memex-…")
+        var command = new Regex(
+            @"kubectl[^\n]*?\bdeployment[/ ]memex-migration-deployment\b",
+            RegexOptions.IgnoreCase);
+
+        var offenders = ScannedFiles(root)
+            .Where(file => command.IsMatch(File.ReadAllText(file)))
+            .Select(file => Path.GetRelativePath(root, file))
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(offenders.Length == 0,
+            "these files still issue a kubectl command against 'memex-migration-deployment', a "
+            + "workload the chart does not define (it renders a Job — see "
+            + $"{Job}): {string.Join(", ", offenders)}. Such a command either errors, or keeps a "
+            + "cluster-only orphan Deployment alive that re-runs the migration forever (#1788).");
+    }
+
+    /// <summary>
+    /// 🚨 And nothing may teach the reader to EXPECT the crash loop. "Benign `CrashLoopBackOff`" is
+    /// how the wrong model survived so many deploys: it told every operator and every agent that a
+    /// crash-looping migration pod is the normal state, which is exactly what made a real migration
+    /// failure invisible. The pod restarting is not benign and, with the Job model, does not happen.
+    ///
+    /// <para>🚨 <b>A claim, not a rebuttal.</b> The phrase must stay quotable, because several
+    /// files exist specifically to refute it — <c>job.yaml</c>'s own header ("the 'benign
+    /// CrashLoopBackOff' the docs assumed was actually a CPU storm") and the verify steps in
+    /// <c>DeploymentAKS.md</c> / <c>MemexCloudDeployment.md</c>. So a match is an offence only when
+    /// the SENTENCE carrying it does not also negate or historicise it. That is a tripwire on the
+    /// wording, deliberately weaker than the command scan above: a determined rewording gets
+    /// through, but the operative regression — a command that rolls the migration as a Deployment —
+    /// is caught structurally either way.</para>
+    /// </summary>
+    [MeshFact]
+    public void NoDocument_TeachesThatACrashLoopingMigrationIsNormal()
+    {
+        var root = FindRepoRoot();
+
+        // "benign"/"harmless"/"expected" within the same sentence as the crash loop.
+        var excuse = new Regex(
+            @"[^.\n]*?(?:(?:benign|harmless|expected|normal)[^.\n]{0,80}CrashLoopBackOff"
+            + @"|CrashLoopBackOff[^.\n]{0,80}(?:is|are)\s+(?:benign|harmless|expected|normal))[^.\n]*",
+            RegexOptions.IgnoreCase);
+
+        // A sentence that says the phrase in order to deny it, or to report that it USED to be
+        // said, is the opposite of the defect and must keep working.
+        string[] rebuttals =
+            ["not ", "n't", "never", "no longer", "used to", "assumed", "previously", "was ", "were ",
+             "replaced", "legacy", "wrongly", "falsely", "instead of"];
+
+        var offenders = ScannedFiles(root)
+            .Select(file => (File: file, Claims: excuse.Matches(File.ReadAllText(file))
+                .Select(m => m.Value)
+                .Where(sentence => !rebuttals.Any(r =>
+                    sentence.Contains(r, StringComparison.OrdinalIgnoreCase)))
+                .ToArray()))
+            .Where(x => x.Claims.Length > 0)
+            .Select(x => $"{Path.GetRelativePath(root, x.File)} ({x.Claims[0].Trim()})")
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(offenders.Length == 0,
+            "these files describe a CrashLoopBackOff as benign/expected: "
+            + $"{string.Join(" · ", offenders)}. A standing crash loop makes 'is anything "
+            + "crash-looping in prod?' permanently unanswerable, so a genuine failure reads as the "
+            + "documented noise. Model the workload correctly instead of documenting the symptom "
+            + "(#1788).");
+    }
+
+    /// <summary>
+    /// The files this guard reads: the operator-facing prose and scripts that can put a command in
+    /// front of a human. Deliberately NOT the whole tree — <c>bin/</c>, <c>obj/</c> and the test
+    /// sources (this file names both strings) would make it match itself.
+    ///
+    /// <para>🚨 <b><c>.claude/skills/</c> is a root because the deployment runbook MOVED there.</b>
+    /// <c>AGENTS.md</c> was compacted by factoring its bulk into on-demand skills, and the AKS
+    /// build/roll/verify commands — the exact prose this guard exists to police — went with it. A
+    /// guard whose subject relocates and whose roots do not keeps passing while scanning nothing,
+    /// which is the same skip-trapdoor shape the CI rules forbid. So the skills root is
+    /// <b>required</b>: <see cref="Directory.EnumerateFiles(string,string,SearchOption)"/> throws if
+    /// it is renamed or deleted, and the guard fails loudly instead of quietly checking less.</para>
+    /// </summary>
+    private static string[] ScannedFiles(string root) =>
+    [
+        .. new[] { "AGENTS.md", "CLAUDE.md" }
+            .Select(name => Path.Combine(root, name))
+            .Where(File.Exists),
+        .. Directory.EnumerateFiles(
+                Path.Combine(root, ".claude", "skills"), "*.md", SearchOption.AllDirectories),
+        .. Directory.EnumerateFiles(Path.Combine(root, "deploy"), "*", SearchOption.AllDirectories)
+            .Where(f => f.EndsWith(".md", StringComparison.Ordinal)
+                        || f.EndsWith(".sh", StringComparison.Ordinal)
+                        || f.EndsWith(".yaml", StringComparison.Ordinal)),
+        .. Directory.EnumerateFiles(
+                Path.Combine(root, "src", "MeshWeaver.Documentation", "Data"),
+                "*.md", SearchOption.AllDirectories),
+        // 🚨 `content/` held only content/ai, which LEAVES with the AI engine (#2276) — so this
+        // ONE root is allowed to be absent, guarded rather than dropped so the scan keeps working
+        // both before and after the move. Enumerating it unconditionally threw
+        // DirectoryNotFoundException and took the whole guard down, which is how a deletion
+        // elsewhere silently disarmed a check here. The subject moved rather than disappeared:
+        // MeshWeaver.AI/Data/Skill/logon-action.md discusses migrations, so MeshWeaver.Plugins
+        // carries the matching guard over its own copy. A guard cannot police sources it cannot
+        // see — and one that scans nothing still passes.
+        .. OptionalMarkdownIn(Path.Combine(root, "content")),
+    ];
+
+    private static IEnumerable<string> OptionalMarkdownIn(string directory) =>
+        Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, "*.md", SearchOption.AllDirectories)
+            : [];
+
+    /// <summary>
+    /// Comment lines are stripped before probing the templates, for the same reason
+    /// <see cref="DrainDeadlineGuard"/> strips them: <c>job.yaml</c>'s header explains the
+    /// Deployment it REPLACED, so an unstripped scan would find "Deployment" in the explanation
+    /// and fail on the very comment that documents the fix.
+    /// </summary>
+    private static string ExecutableLinesOf(string yaml) =>
+        string.Join("\n", yaml.Split('\n')
+            .Where(line => !line.TrimStart().StartsWith('#')));
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        return dir?.FullName
+            ?? throw new InvalidOperationException(
+                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
+    }
+}

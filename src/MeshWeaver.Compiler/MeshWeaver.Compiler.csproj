@@ -16,6 +16,7 @@
     <InternalsVisibleTo Include="MeshWeaver.Graph" />
     <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline" />
     <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_CompilerPipeline" />
     <!-- NodeTypeBatchBake / the pre-warmer drive the same toolchain (ApplyQueryChange,
          EmitCanaryDataKey). -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting" />
@@ -35,6 +36,7 @@
          mw-plugin-test.dll, and an IVT naming the project grants nothing at all. -->
     <InternalsVisibleTo Include="mw-plugin-test" />
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <InternalsVisibleTo Include="DynamicNode_Testing_Graph" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
   </ItemGroup>

@@ -34,7 +34,7 @@ using System.Threading.Tasks;
 /// assertions: the posted ShutdownRequest cannot be processed, so the ONLY thing
 /// that can freeze the descendants is the synchronous cascade inside Dispose().</para>
 /// </summary>
-public class TeardownHubCreationFreezeTest(MeshTestContext context) : InMeshTestBase(output)
+public class TeardownHubCreationFreezeTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record Blocker;
 

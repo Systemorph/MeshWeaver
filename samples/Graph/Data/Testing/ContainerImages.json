@@ -5,7 +5,7 @@
   "path": "Testing/ContainerImages",
   "mainNode": "Testing/ContainerImages",
   "name": "MeshWeaver.ContainerImages.Test (in-mesh)",
-  "description": "MeshWeaver.ContainerImages.Test migrated in-mesh (.github/scripts/convert-xunit-to-inmesh.py, 2026-09-13): 6 of 7 files as [MeshFact] cases run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh. Refused, still on xunit: 1 — ContainerImageRecordingTest.cs: overrides ConfigureMesh — needs the per-suite configuration facility.",
+  "description": "MeshWeaver.ContainerImages.Test migrated in-mesh (.github/scripts/generate-in-mesh-suites.py, 2026-09-13): 5 of 8 files, 30 [MeshFact]/[MeshTheory] cases, run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh; InMeshTestBase and XunitShims laid in from .github/scripts/in-mesh/. Refused, still on xunit: 3 — ContainerImageRecordingTest.cs: overrides ConfigureMesh — needs the per-suite configuration facility; MirrorCacheTest.cs: builds an ASP.NET host — the host assembly is not on the NodeType reference set; PullSurfaceTest.cs: builds an ASP.NET host — the host assembly is not on the NodeType reference set",
   "nodeType": "NodeType",
   "category": "Types",
   "state": "Active",

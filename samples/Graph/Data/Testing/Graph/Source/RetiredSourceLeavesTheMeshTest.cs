@@ -54,7 +54,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// authored content. Both tests below therefore carry an authored node through every pass and assert
 /// it survives — including the re-import the fix newly causes.</para>
 /// </summary>
-public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTestBase(output)
+public class RetiredSourceLeavesTheMeshTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>The person whose edit must survive every prune — the control on the opposite danger.</summary>
     private static readonly AccessContext Author = new()

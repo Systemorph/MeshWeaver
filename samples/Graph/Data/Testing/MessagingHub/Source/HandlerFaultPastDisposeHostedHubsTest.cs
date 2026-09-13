@@ -37,7 +37,7 @@ using System.Threading.Tasks;
 /// re-armed its budget waiting for it. Each test below pins one loss; the contract they share is
 /// that the requester hears a <see cref="DeliveryFailure"/> and not its own quiesce cut-off.</para>
 /// </summary>
-public class HandlerFaultPastDisposeHostedHubsTest(MeshTestContext context) : InMeshTestBase(output)
+public class HandlerFaultPastDisposeHostedHubsTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record FaultingRequest : IRequest<FaultResponse>;
 

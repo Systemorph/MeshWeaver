@@ -49,8 +49,7 @@ using MeshWeaver.Messaging;
 /// hub-shaped side effect is a self-<see cref="DisposeRequest"/>, so "the hub actually disposed"
 /// is a stronger proof than "Post was called".</para>
 /// </summary>
-public class ARecycleWaitsForTheInstallHoldingTheRootTest(MeshTestContext context)
-    : InMeshTestBase(output)
+public class ARecycleWaitsForTheInstallHoldingTheRootTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private const string RootPath = "Hosting";
     private const string BenignRootPath = "HostingBenign";

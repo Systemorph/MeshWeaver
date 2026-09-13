@@ -37,7 +37,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// NodeType declares via <c>WithContentType</c> must be in the static registry</b> — the
 /// validator's strict branch assumes exactly that.</para>
 /// </summary>
-public class EmailContentDiscriminatorTest(MeshTestContext context) : InMeshTestBase(output)
+public class EmailContentDiscriminatorTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private ContentDiscriminatorValidator Guard =>
         Mesh.ServiceProvider.GetServices<INodeValidator>()

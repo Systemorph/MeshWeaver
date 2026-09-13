@@ -32,7 +32,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// count the test itself kept. Nothing is mocked: the repair runs against the same monolith mesh,
 /// storage adapter and query providers the portal uses.</para>
 /// </summary>
-public class StaleMainNodeRepairTest(MeshTestContext context) : InMeshTestBase(output)
+public class StaleMainNodeRepairTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// The one place a wait is decided (<see cref="TestTimeouts"/>) — never a hand-written literal,

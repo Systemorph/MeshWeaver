@@ -36,12 +36,12 @@ using System.Threading.Tasks;
 /// is precisely the resurrection the suppression above exists to prevent.</description></item>
 /// </list>
 /// </summary>
-public class RecycleAnnouncementTest(MeshTestContext context) : InMeshTestBase(output)
+public class RecycleAnnouncementTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private static readonly Address RecycledAddress = new("recycled", "1");
     private static readonly Address DirectAddress = new("direct", "1");
 
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task RoutedDisposeRequest_Announces_Once_AndBeforeTheTeardownStarts()
     {
         var host = GetHost();
@@ -76,7 +76,7 @@ public class RecycleAnnouncementTest(MeshTestContext context) : InMeshTestBase(o
             + "teardown; announcing from inside the teardown is the phase inversion being fixed");
     }
 
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task DirectDispose_DoesNotAnnounce()
     {
         var host = GetHost();

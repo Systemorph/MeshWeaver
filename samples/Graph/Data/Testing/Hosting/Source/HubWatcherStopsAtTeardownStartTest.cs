@@ -36,7 +36,7 @@ using MeshWeaver.Messaging;
 /// of its source after <c>Dispose()</c> returned, the only thing that can have stopped it is the
 /// hub's synchronous teardown signal.</para>
 /// </summary>
-public class HubWatcherStopsAtTeardownStartTest(MeshTestContext context) : InMeshTestBase(output)
+public class HubWatcherStopsAtTeardownStartTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record Blocker;
 

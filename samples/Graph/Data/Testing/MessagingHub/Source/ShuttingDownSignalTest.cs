@@ -29,7 +29,7 @@ using System.Threading.Tasks;
 /// <c>ShutdownRequest</c> provably cannot be processed during the assertions — the only thing that
 /// can have raised the signal on a descendant is the synchronous cascade inside <c>Dispose()</c>.</para>
 /// </summary>
-public class ShuttingDownSignalTest(MeshTestContext context) : InMeshTestBase(output)
+public class ShuttingDownSignalTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record Blocker;
 

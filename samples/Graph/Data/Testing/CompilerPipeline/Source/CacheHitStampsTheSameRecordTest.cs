@@ -53,7 +53,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// already accepts), so nothing about the input can differ between them and the ONLY variable left
 /// is how the compiler reached the assembly.</para>
 /// </summary>
-public class CacheHitStampsTheSameRecordTest(MeshTestContext context) : InMeshTestBase(output)
+public class CacheHitStampsTheSameRecordTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private const string TypePath = "type/CacheHitContentKey";
 

@@ -33,7 +33,7 @@ using System.Threading.Tasks;
 /// reactive dispose actions in <c>DisposeImpl</c> already had, and which the synchronous ones did
 /// not.</para>
 /// </summary>
-public class DisposalRegistrantFaultIsolationTest(MeshTestContext context) : InMeshTestBase(output)
+public class DisposalRegistrantFaultIsolationTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>Throws on disposal — the registrant that used to end the walk.</summary>
     private sealed class ThrowsOnDispose : IDisposable

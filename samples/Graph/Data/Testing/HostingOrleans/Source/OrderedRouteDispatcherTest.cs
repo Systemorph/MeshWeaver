@@ -33,7 +33,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 /// pins the behaviour of the shape this replaced (one <c>SubscribeThroughPool</c> per delivery),
 /// which starts every leg at once and therefore cannot preserve any order.</para>
 /// </summary>
-public class OrderedRouteDispatcherTest(MeshTestContext context) : InMeshTestBase(output)
+public class OrderedRouteDispatcherTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private const string Destination = "client/subscriber-1";
     private const string OtherDestination = "client/subscriber-2";

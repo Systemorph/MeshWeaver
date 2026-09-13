@@ -17,6 +17,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using MeshWeaver.Testing.InMesh;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// What a migrated xunit test class inherits instead of <c>MonolithMeshTestBase</c>: the SAME
@@ -27,7 +28,8 @@ using Microsoft.Extensions.DependencyInjection;
 /// bound to the mesh the <c>Tests</c> area renders in (the gate's mesh: one process, monolith
 /// routing), with the class's own partition instead of a fresh host. Maintainer, 2026-09-13:
 /// "for this test, we should setup monolith routing" / "no special setup or anything?" — none:
-/// the mesh is up before the first case runs. Written by convert-xunit-to-inmesh.py's output.
+/// the mesh is up before the first case runs. Laid into every suite by generate-in-mesh-suites.py
+/// from .github/scripts/in-mesh/InMeshTestBase.cs.
 /// </summary>
 public abstract class InMeshTestBase
 {
@@ -39,6 +41,37 @@ public abstract class InMeshTestBase
         Context = context;
         Output = new TestOutput(context.Output);
     }
+
+    /// <summary>For a migrated class with no constructor of its own: the runner's ambient context.</summary>
+    protected InMeshTestBase() : this(MeshTestContext.Current ?? throw new InvalidOperationException(
+        "no MeshTestContext is current — the runner sets it before constructing a test class")) { }
+
+    /// <summary>The xunit estate's field name for its output helper (<c>output.WriteLine(…)</c>).</summary>
+    protected TestOutput output => Output;
+
+    // ── HubTestBase's vocabulary (test/MeshWeaver.Fixture/HubTestBase.cs), bound to the LIVE mesh ──
+    // The xunit fixture stands up a host hub and client hubs of its own; in-mesh the host IS the
+    // mesh the Tests area renders in. A class that configures the host (ConfigureHost/ConfigureClient/
+    // ConfigureMesh overrides, GetHost(config)) is refused by the converter — that is the pre-boot
+    // substitution facility, not something this base can fake.
+    protected const string MeshType = "mesh";
+    protected const string HostType = "host";
+    protected const string ClientType = "client";
+
+    /// <summary>The live mesh's address (the fixture's separate host hub has no in-mesh twin).</summary>
+    protected Address CreateMeshAddress(string? id = null) => Mesh.Address;
+
+    /// <summary>The live mesh's address — every post the xunit test aimed at "the host" lands here.</summary>
+    protected Address CreateHostAddress(string? id = null) => Mesh.Address;
+
+    /// <summary>A fresh client address, the shape <see cref="GetClient"/> registers.</summary>
+    protected static Address CreateClientAddress(string? id = null) => new(ClientType, id ?? Guid.NewGuid().ToString("N")[..12]);
+
+    /// <summary>The host hub of the xunit fixture: in-mesh, the mesh itself.</summary>
+    protected IMessageHub GetHost() => Mesh;
+
+    /// <summary>A logger for the test class (the fixture's <c>Logger</c> field).</summary>
+    protected ILogger Logger => Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType().Name);
 
     /// <summary>The mesh hub (the xunit base's <c>Mesh</c>).</summary>
     protected IMessageHub Mesh => Context.Hub;

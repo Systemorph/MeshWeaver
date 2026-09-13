@@ -21,7 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// snapshot. Exercises the real compiler and emitted methods, including the test registration
 /// source, without a sleep, mocked compiler, or altered file timestamp.
 /// </summary>
-public class CompileCacheInputFreshnessTest(MeshTestContext context) : InMeshTestBase(output)
+public class CompileCacheInputFreshnessTest(MeshTestContext context) : InMeshTestBase(context)
 {
     // The real fixture shares disk cache per test class; each case owns a distinct artifact.
     private readonly string typePath = "type/CompileCacheInputFreshness" + Guid.NewGuid().ToString("N");

@@ -25,7 +25,7 @@ using MeshWeaver.Mesh;
 /// <para>These tests assert the MEASUREMENT, not the plumbing: a meter that exists but reports
 /// nothing is worth exactly what the silence it replaced was worth.</para>
 /// </summary>
-public class PlatformMetricsTest(MeshTestContext context) : InMeshTestBase(output)
+public class PlatformMetricsTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>Collects one scrape of the platform meter into a list.</summary>
     private static List<(long Value, string Kind, string RunLevel)> Scrape(PlatformMetrics _)
@@ -57,8 +57,8 @@ public class PlatformMetricsTest(MeshTestContext context) : InMeshTestBase(outpu
     /// investigations needed — by address KIND and by RUN LEVEL. Before this, both figures required
     /// a heap dump.
     /// </summary>
-    [HubFact]
-    public void TheMeterReportsLiveHubs_ByKindAndRunLevel()
+    [MeshFact(TimeoutSeconds = 30)]
+    public async Task TheMeterReportsLiveHubs_ByKindAndRunLevel()
     {
         var host = GetHost();
         using var metrics = new PlatformMetrics(host);
@@ -66,6 +66,15 @@ public class PlatformMetricsTest(MeshTestContext context) : InMeshTestBase(outpu
         // A hosted hub, so the walk has something below the root to find.
         var child = host.GetHostedHub(new Address("victim", "metrics-1"), c => c);
         child.Should().NotBeNull();
+
+        // 🚨 GetHostedHub returns a hub that is STARTING, not started: the constructor posts an
+        // InitializeHubRequest onto the hub's own queue and RunLevel only becomes Started when the
+        // last initialization gate opens on that loop. A scrape taken straight after creation
+        // therefore measures {Starting, Starting} on a slow runner — which is what shard 2 reported
+        // on 2026-09-13 (run 34748571694, job 103701109437): a race in this test, not a hub stuck.
+        // The assertion is about the Started bucket, so wait for the hubs to reach it first.
+        await host.Started.WaitAsync(TestTimeouts.Convergence, CancellationToken.None);
+        await child!.Started.WaitAsync(TestTimeouts.Convergence, CancellationToken.None);
 
         var taken = Scrape(metrics);
 
@@ -87,7 +96,7 @@ public class PlatformMetricsTest(MeshTestContext context) : InMeshTestBase(outpu
     /// <c>sync/{guid}</c> — the population that reached 6,925 on one replica — and the meter would
     /// become the second thing nobody can afford to collect. The tag is the address's TYPE.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void TheKindTagIsTheAddressTYPE_NotTheAddress()
     {
         var host = GetHost();
@@ -127,7 +136,7 @@ public class PlatformMetricsTest(MeshTestContext context) : InMeshTestBase(outpu
     /// own address carries a host chain is not constructible through the public hub API this rig
     /// uses, and an assertion that cannot fail is not one.</para>
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void ToStringCarriesTheHostChain_TypeDoesNot()
     {
         var hosted = new Address("solo") { Host = new Address("portal", "xyz") };
@@ -147,7 +156,7 @@ public class PlatformMetricsTest(MeshTestContext context) : InMeshTestBase(outpu
     /// SILENT — indistinguishable from a mesh with no hubs, which is the exact failure this issue
     /// is about. A disposed root is the cheapest way to fault the walk.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task ADisposedRoot_ReportsNothing_RatherThanThrowing()
     {
         var host = GetHost();

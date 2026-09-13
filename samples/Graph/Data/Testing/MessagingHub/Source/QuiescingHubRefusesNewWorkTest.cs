@@ -43,7 +43,7 @@ using System.Threading.Tasks;
 /// test asserts disposal completes far INSIDE it, which is the positive signal that the hub left
 /// the phase by DRAINING (<c>[QUIESCE-OK]</c>) rather than by timing out.</para>
 /// </summary>
-public class QuiescingHubRefusesNewWorkTest(MeshTestContext context) : InMeshTestBase(output)
+public class QuiescingHubRefusesNewWorkTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>A request the sink hub parks: received, and not answered until the test releases it.</summary>
     private record ParkedRequest : IRequest<ParkedResponse>;

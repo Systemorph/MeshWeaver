@@ -39,7 +39,7 @@ using MeshWeaver.Data.Serialization;
 /// test host. The assertion is stronger than "it terminated" — it is that the instance value was
 /// never traversed at all.</para>
 /// </summary>
-public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
+public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private const int ReentrancyBudget = 8;
 
@@ -101,7 +101,7 @@ public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
     /// VALUES are never traversed — the property that makes it bounded for ANY object graph, not
     /// just this one.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void CyclicStoreGraph_HashesWithoutTraversingInstanceValues()
     {
         var (store, collection, change, probe) = BuildCyclicGraph();
@@ -121,7 +121,7 @@ public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
     /// The hash must be stable, not merely terminating — a hash that varies between calls silently
     /// corrupts every dictionary it is used in.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void CyclicStoreGraph_HashIsStableAcrossCalls()
     {
         var (store, collection, change, _) = BuildCyclicGraph();
@@ -136,7 +136,7 @@ public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
     /// <see cref="InvalidOperationException"/> ("Sequence contains no elements") for a store with
     /// no collections — a latent crash on the emptiest possible input.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void EmptyEntityStore_Hashes_WithoutThrowing()
     {
         Action hashEmptyStore = () => { _ = new EntityStore().GetHashCode(); };
@@ -151,7 +151,7 @@ public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
     /// The hash/equals contract: equal objects hash equal. The hashes got WEAKER (keys and counts
     /// rather than values) — weaker is fine, inconsistent is not.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void EqualStoresAndCollections_HashEqual()
     {
         InstanceCollection Collection() => new(
@@ -180,7 +180,7 @@ public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
     /// The weakened hash still has to discriminate on the things it claims to hash — otherwise it
     /// degenerates every dictionary into a linked list.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void DifferentKeysOrSizes_HashDifferently()
     {
         var a = new InstanceCollection(new Dictionary<object, object> { ["a"] = "x" });
@@ -206,7 +206,7 @@ public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
     /// live streams (each owning its own ReplaySubject, hub and disposal state) are never the same
     /// stream.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void Stream_And_ItsConfiguration_HashByIdentity_NotStructurally()
     {
         var host = GetHost();
@@ -236,7 +236,7 @@ public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
     /// Reference identity is the SEMANTICS, not just the mechanism: two streams built with the
     /// same identity, host and reference are still two different live streams.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void TwoDistinctStreams_AreNeverEqual()
     {
         var host = GetHost();
@@ -258,7 +258,7 @@ public class HashRecursionTest(MeshTestContext context) : InMeshTestBase(output)
     /// <c>with</c>-based builder throughout: WithClientId / WithSubscriber / AsInfrastructure / …),
     /// while its owning stream participates by reference only.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void StreamConfiguration_KeepsValueSemantics_OverItsOwnSettings()
     {
         var host = GetHost();

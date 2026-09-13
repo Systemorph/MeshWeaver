@@ -45,7 +45,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// the instance must still end up bound to the type's own content-type-registering
 /// configuration — i.e. with typed content rather than a permanently untyped JsonElement.</para>
 /// </summary>
-public class IndeterminateProbeReResolutionTest(MeshTestContext context) : InMeshTestBase(output)
+public class IndeterminateProbeReResolutionTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Stand-in for a dynamically compiled NodeType's content type. What matters is that it is
@@ -118,7 +118,7 @@ public class IndeterminateProbeReResolutionTest(MeshTestContext context) : InMes
     /// <c>ProbeLateContent</c> was registered nowhere and the row's content stayed an untyped
     /// JsonElement for the grain's whole lifetime.</para>
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task IndeterminateProbe_ThenLateRegistration_EndsWithTypedContent()
     {
         // The NodeType's REAL configuration: the delegate that registers the content type.

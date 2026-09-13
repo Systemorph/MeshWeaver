@@ -1296,8 +1296,7 @@ public class ConfiguredModuleActivationTest
             using System;
             using System.Collections.Generic;
             using MeshWeaver.Mesh;
-            [assembly: ThrowingModule]
-            public sealed class ThrowingModuleAttribute : MeshNodeProviderAttribute
+                        public sealed class ThrowingModuleAttribute : MeshNodeProviderAttribute
             {
                 public override IEnumerable<MeshNode> Nodes =>
                     throw new MissingMethodException("Method not found: 'Void MeshWeaver.Mesh.Gone..ctor()'.");

@@ -19,7 +19,7 @@ using System.Threading.Tasks;
 ///   <item>an unhandled non-request → <see cref="ErrorType.Ignored"/> (MessageService reports the on-target Ignored).</item>
 /// </list>
 /// </summary>
-public class UnhandledMessageReportsFailureTest(MeshTestContext context) : InMeshTestBase(output)
+public class UnhandledMessageReportsFailureTest(MeshTestContext context) : InMeshTestBase(context)
 {
     // The host (base ConfigureHost) registers NO handler for these, so they reach it unhandled.
     record UnhandledRequest : IRequest<UnhandledResponse>;

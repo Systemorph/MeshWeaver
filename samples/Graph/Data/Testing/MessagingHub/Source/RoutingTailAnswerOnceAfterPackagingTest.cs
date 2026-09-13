@@ -28,7 +28,7 @@ using System.Text.Json;
 /// pod shutdown. The route handler below returns exactly that shape (packaged, then
 /// <c>Failed(…, ShuttingDown)</c>) so the seam is exercised without a cluster.</para>
 /// </summary>
-public class RoutingTailAnswerOnceAfterPackagingTest(MeshTestContext context) : InMeshTestBase(output)
+public class RoutingTailAnswerOnceAfterPackagingTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private static readonly Address RouterAddress = new("mesh", "routing-tail");
     private static readonly Address SenderAddress = new("client", "routing-tail-sender");

@@ -30,7 +30,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// silently — a cap dropped from the query, or the sweep quietly widened to span partitions, would
 /// leave every other case here green.</para>
 /// </summary>
-public class NotificationRetentionTest(MeshTestContext context) : InMeshTestBase(output)
+public class NotificationRetentionTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Every wait in this class. <see cref="TestTimeouts.Convergence"/> rather than a hand-written

@@ -36,7 +36,7 @@ using MeshWeaver.Messaging;
 /// OnNext/OnError/OnCompleted per the Rx grammar, so an in-flight teardown delivery lands as a
 /// no-op no matter how the threads interleave — there is no window left to guard.</para>
 /// </summary>
-public class SyncStreamDisposalCompletionTest(MeshTestContext context) : InMeshTestBase(output)
+public class SyncStreamDisposalCompletionTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record Empty;
 
@@ -70,7 +70,7 @@ public class SyncStreamDisposalCompletionTest(MeshTestContext context) : InMeshT
     /// (<c>Store.Dispose()</c> in <c>Dispose()</c> made the delivery throw
     /// ObjectDisposedException); GREEN after (the completed-not-disposed store ignores it).
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public void CompletionDelivery_InterleavedWithDisposal_IsANoOp_NeverThrows()
     {
         var stream = new ProbeStream(GetHost());
@@ -100,7 +100,7 @@ public class SyncStreamDisposalCompletionTest(MeshTestContext context) : InMeshT
     /// store made <c>Subscribe</c> throw ObjectDisposedException, which was swallowed into a
     /// no-op subscription — the late subscriber never heard anything, forever.
     /// </summary>
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task HubDisposal_CompletesActiveSubscribers_AndLateSubscribersStillSeeCompletion()
     {
         var host = GetHost();

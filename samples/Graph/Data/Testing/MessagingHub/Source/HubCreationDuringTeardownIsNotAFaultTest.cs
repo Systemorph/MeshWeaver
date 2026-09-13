@@ -29,7 +29,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// so the disposed-container case reproduces the incident's exact frame rather than simulating it.
 /// No mocks: <see cref="HostedHubsCollection"/> is exercised through its own public surface.</para>
 /// </summary>
-public class HubCreationDuringTeardownIsNotAFaultTest(MeshTestContext context) : InMeshTestBase(output)
+public class HubCreationDuringTeardownIsNotAFaultTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// A configuration that faults while the host is fully alive — the condition that MUST stay

@@ -24,7 +24,7 @@ using System.Threading;
 /// <c>BeginAsyncOperation</c> / the HeartBeatEvent handler.</item>
 /// </list>
 /// </summary>
-public class RequestGrainDeactivationTest(MeshTestContext context) : InMeshTestBase(output)
+public class RequestGrainDeactivationTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact]
     public void NoCallbackRegistered_MonolithHosting_ReturnsFalse()

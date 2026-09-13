@@ -43,7 +43,7 @@ using Microsoft.CodeAnalysis.CSharp;
 /// collectible generations, the silence #3911 describes becomes reachable again and this goes red.
 /// </para>
 /// </summary>
-public class TwoCollectibleGenerationsContentReadTest(MeshTestContext context) : InMeshTestBase(output)
+public class TwoCollectibleGenerationsContentReadTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private const string AssemblyName = "DynamicNode_Hosting_InstanceAction";
 

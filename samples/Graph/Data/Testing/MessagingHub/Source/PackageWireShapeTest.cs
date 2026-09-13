@@ -18,7 +18,7 @@ using System.Text.Json;
 /// (PascalCase, RawJson as a <c>{"Content": …}</c> record) put a frame on the gRPC/SignalR wire
 /// that no client contract recognizes — the gRPC-web live takeover silently rendered nothing.
 /// </summary>
-public class PackageWireShapeTest(MeshTestContext context) : InMeshTestBase(output)
+public class PackageWireShapeTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record WireEvent(RawJson Change, string ChangeType);
 

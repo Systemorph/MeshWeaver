@@ -57,7 +57,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// not land, which is the premise; the oversized file supplies the MEASUREMENT, and sizing it over
 /// the budget is what makes the two halves separable — test 2 changes ONLY that.</para>
 /// </summary>
-public class RefusedContentSyncIsVisibleTest(MeshTestContext context) : InMeshTestBase(output)
+public class RefusedContentSyncIsVisibleTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>A source that ships nodes and, optionally, inline content syncs.</summary>
     private sealed class ContentRepoSource(string partition) : IStaticRepoSource

@@ -37,7 +37,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// applying the produced configuration to a bare <see cref="MessageHubConfiguration"/> — the same
 /// value a caller's <c>DeliveryFailure</c> would carry.</para>
 /// </summary>
-public class ExecuteTimeInterlockTest(MeshTestContext context) : InMeshTestBase(output)
+public class ExecuteTimeInterlockTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private static readonly TimeSpan EnrichBudget = TimeSpan.FromSeconds(20);
 

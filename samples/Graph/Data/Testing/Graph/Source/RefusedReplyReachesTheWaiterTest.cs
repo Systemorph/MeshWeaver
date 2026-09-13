@@ -58,8 +58,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// never travelled after it (negative control) — so the only thing that can answer the caller is
 /// the in-process hand-over. Neither control depends on which layer performs it.</para>
 /// </summary>
-public class RefusedReplyReachesTheWaiterTest(MeshTestContext context)
-    : InMeshTestBase(output)
+public class RefusedReplyReachesTheWaiterTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>A message whose handler parks the owner's single-threaded action block.</summary>
     private record ParkTurn;

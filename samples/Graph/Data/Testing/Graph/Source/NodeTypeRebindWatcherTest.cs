@@ -47,7 +47,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// proof than "Post was called with the right target": a wrongly-targeted post would simply never
 /// dispose THIS hub.</para>
 /// </summary>
-public class NodeTypeRebindWatcherTest(MeshTestContext context) : InMeshTestBase(output)
+public class NodeTypeRebindWatcherTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private const string InstancePath = "Store";
     private const string BoundType = "Space";

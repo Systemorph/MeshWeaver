@@ -30,7 +30,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// (per-compile identity, <c>PolymorphicTypeInfoResolver</c> refuses to auto-adopt it) — without
 /// dragging Roslyn into a unit test.</para>
 /// </summary>
-public class ReimportTypedContentRecoveryTest(MeshTestContext context) : InMeshTestBase(output)
+public class ReimportTypedContentRecoveryTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// The seam-level regression, at the recovery boundary the degrade seams

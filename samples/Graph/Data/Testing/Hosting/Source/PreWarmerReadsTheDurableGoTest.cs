@@ -63,7 +63,7 @@ using Microsoft.Extensions.Logging;
 /// than passing silently. Only the fault is injected, exactly as
 /// <c>BuildCoordinationRetryTest</c> injects one into <c>RetryUnreachableCoordination</c>.</para>
 /// </summary>
-public class PreWarmerReadsTheDurableGoTest(MeshTestContext context) : InMeshTestBase(output)
+public class PreWarmerReadsTheDurableGoTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>This pod's own framework fingerprint — the shape the incident carried.</summary>
     private const string MyFingerprint = "s2f227642b1c4419aa1b1a7d5d21a2f11";

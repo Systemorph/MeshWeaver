@@ -39,7 +39,7 @@ using MeshWeaver.Messaging;
 /// <see cref="InitializationErrorSurfacedTest"/> pin the OTHER side: a fault on a hub that is
 /// NOT shutting down still enters the FAILED state.</para>
 /// </summary>
-public class DisposeDuringInitializationTest(MeshTestContext context) : InMeshTestBase(output)
+public class DisposeDuringInitializationTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record SlowRequest : IRequest<SlowResponse>;
 

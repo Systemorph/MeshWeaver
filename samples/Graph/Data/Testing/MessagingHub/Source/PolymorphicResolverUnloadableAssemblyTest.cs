@@ -37,7 +37,7 @@ using Microsoft.Extensions.Logging;
 /// module must succeed, and the unloadable remainder must surface as ONE warning per assembly
 /// naming the assembly and the missing dependency.</para>
 /// </summary>
-public class PolymorphicResolverUnloadableAssemblyTest(MeshTestContext context) : InMeshTestBase(output)
+public class PolymorphicResolverUnloadableAssemblyTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact]
     public void SerializationSurvivesAnAssemblyWhoseTypesDoNotAllLoad_AndWarnsOncePerAssembly()

@@ -585,8 +585,7 @@ public class ModulePlatformLinkTest : IDisposable
         const string contractName = "MeshWeaver.Test.VersionedContract";
         const string moduleName = "MeshWeaver.Test.VersionTolerantPack";
         var builtContract = Emit(contractName, $$"""
-            [assembly: System.Reflection.AssemblyVersion("{{builtVersion}}")]
-            namespace MeshWeaver.Test;
+                        namespace MeshWeaver.Test;
             public class StableApi { public int Answer() => 1; }
             """);
         var module = Emit(moduleName, """
@@ -595,8 +594,7 @@ public class ModulePlatformLinkTest : IDisposable
             }
             """, extra: MetadataReference.CreateFromImage(builtContract));
         var runningContract = Emit(contractName, $$"""
-            [assembly: System.Reflection.AssemblyVersion("{{runningVersion}}")]
-            namespace MeshWeaver.Test;
+                        namespace MeshWeaver.Test;
             public class StableApi { public int Answer() => 42; public string Extra() => "new"; }
             public class UnusedAddition { }
             """);
@@ -623,8 +621,7 @@ public class ModulePlatformLinkTest : IDisposable
         const string contractName = "MeshWeaver.Test.VersionedContract";
         const string moduleName = "MeshWeaver.Test.VersionAheadPack";
         var builtContract = Emit(contractName, """
-            [assembly: System.Reflection.AssemblyVersion("9.0.0.0")]
-            namespace MeshWeaver.Test;
+                        namespace MeshWeaver.Test;
             public class StableApi { public int Answer() => 1; }
             """);
         var module = Emit(moduleName, """
@@ -633,8 +630,7 @@ public class ModulePlatformLinkTest : IDisposable
             }
             """, extra: MetadataReference.CreateFromImage(builtContract));
         var runningContract = Emit(contractName, """
-            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-            namespace MeshWeaver.Test;
+                        namespace MeshWeaver.Test;
             public class StableApi { public int Answer() => 42; public string Extra() => "new"; }
             """);
 
@@ -657,16 +653,14 @@ public class ModulePlatformLinkTest : IDisposable
         const string contractName = "MeshWeaver.Test.SameVersionContract";
         const string moduleName = "MeshWeaver.Test.RemovedApiPack";
         var builtContract = Emit(contractName, """
-            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-            namespace MeshWeaver.Test;
+                        namespace MeshWeaver.Test;
             public class RequiredApi { }
             """);
         var module = Emit(moduleName, """
             public class View { public MeshWeaver.Test.RequiredApi Render() => new(); }
             """, extra: MetadataReference.CreateFromImage(builtContract));
         var runningContract = Emit(contractName, """
-            [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-            namespace MeshWeaver.Test;
+                        namespace MeshWeaver.Test;
             public class UnrelatedApi { }
             """);
 

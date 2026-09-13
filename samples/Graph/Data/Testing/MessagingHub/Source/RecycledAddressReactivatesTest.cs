@@ -37,7 +37,7 @@ using System.Threading.Tasks;
 /// up a second hub on a live address would be a duplicate activation. Dead is the point at which
 /// waiting can no longer help anyone.</para>
 /// </summary>
-public class RecycledAddressReactivatesTest(MeshTestContext context) : InMeshTestBase(output)
+public class RecycledAddressReactivatesTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact(TimeoutSeconds = 1)]
     public async Task ADeadHostedHub_IsNeverHandedOutAgain()

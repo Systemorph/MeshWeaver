@@ -35,7 +35,7 @@ using MeshWeaver.Messaging;
 /// sync hub startup canceled, no unobserved fatal):
 /// <c>MeshWeaver.Data.Test.TeardownPendingSubscribeGracefulTest</c>.</para>
 /// </summary>
-public class FailStartupTeardownClassificationTest(MeshTestContext context) : InMeshTestBase(output)
+public class FailStartupTeardownClassificationTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Creates a client hub whose initialization never completes on its own (the init

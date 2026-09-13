@@ -5,7 +5,7 @@
   "path": "Testing/Cli",
   "mainNode": "Testing/Cli",
   "name": "MeshWeaver.Cli.Test (in-mesh)",
-  "description": "MeshWeaver.Cli.Test migrated in-mesh (.github/scripts/convert-xunit-to-inmesh.py, 2026-09-13): 1 of 2 files as [MeshFact] cases run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh. Refused, still on xunit: 1 — GateHostCompositionTest.cs: spawns a process — stays on xunit.",
+  "description": "MeshWeaver.Cli.Test migrated in-mesh (.github/scripts/generate-in-mesh-suites.py, 2026-09-13): 1 of 2 files, 4 [MeshFact]/[MeshTheory] cases, run by MeshWeaver.Testing.InMesh.MeshTestRunner (#4184) in the samples gate's mesh; InMeshTestBase and XunitShims laid in from .github/scripts/in-mesh/. Refused, still on xunit: 1 — GateHostCompositionTest.cs: spawns a process — stays on xunit",
   "nodeType": "NodeType",
   "category": "Types",
   "state": "Active",

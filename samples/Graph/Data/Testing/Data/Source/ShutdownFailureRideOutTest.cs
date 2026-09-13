@@ -45,14 +45,14 @@ using MeshWeaver.Messaging;
 /// than no prose, because it reads as coverage. What DOES pin a consumer of the classification is
 /// <c>MeshWeaver.Layout.Test.SubscribeDuringRecycleTest</c>.</para>
 /// </summary>
-public class ShutdownFailureRideOutTest(MeshTestContext context) : InMeshTestBase(output)
+public class ShutdownFailureRideOutTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record Empty;
 
     private const string TransientRejectMessage = "transient-shutdown-reject";
     private const string TerminalFailureMessage = "terminal-failure";
 
-    [HubFact]
+    [MeshFact(TimeoutSeconds = 30)]
     public async Task ShuttingDownFailure_IsRiddenOut_WhileAnyOtherFailureStaysTerminal()
     {
         var ct = CancellationToken.None;

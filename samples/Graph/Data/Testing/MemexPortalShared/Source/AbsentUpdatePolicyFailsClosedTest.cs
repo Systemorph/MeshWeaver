@@ -33,7 +33,7 @@ using MeshWeaver.Hosting.SelfUpdate;
 /// <c>UnreadablePolicyRecordIsNotClobberedTest</c>: a bookkeeping write that could not read the
 /// record refuses instead of writing a default over it.</para>
 /// </summary>
-public class AbsentUpdatePolicyFailsClosedTest(MeshTestContext context) : InMeshTestBase(output)
+public class AbsentUpdatePolicyFailsClosedTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact]
     public void AnAbsentPolicyFieldReadsAsNone()

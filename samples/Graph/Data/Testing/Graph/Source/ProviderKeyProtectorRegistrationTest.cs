@@ -29,8 +29,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// rather than passing plaintext through when no master key is configured. So this test asserts
 /// the value that registration is FOR: the stored form is ciphertext, not the input.</para>
 /// </summary>
-public class ProviderKeyProtectorRegistrationTest(MeshTestContext context)
-    : InMeshTestBase(output)
+public class ProviderKeyProtectorRegistrationTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact(TimeoutSeconds = 30)]
     public void AddGraph_RegistersTheCredentialProtector()

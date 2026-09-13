@@ -54,7 +54,7 @@ using MeshWeaver.Mesh;
 /// real "unregistered NodeType" failure mode, not an artifact of a hub missing a DI registration.
 /// </para>
 /// </summary>
-public class NodeTypeEnrichmentDoubleCallTest(MeshTestContext context) : InMeshTestBase(output)
+public class NodeTypeEnrichmentDoubleCallTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// The fast-probe budget (mirrors <c>NodeTypeEnrichmentHelpers.NodeTypeProbeTimeout</c> = 3s)

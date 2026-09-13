@@ -6,9 +6,8 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
-﻿using MeshWeaver.Fixture;
 
-public class LayoutSynchronizationTest(MeshTestContext context) : InMeshTestBase(output)
+public class LayoutSynchronizationTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact]
     public void TestEqualityLabel()

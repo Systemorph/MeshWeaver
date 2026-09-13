@@ -6,7 +6,7 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging;
 /// <summary>
 /// Tests for Activity operations including lifecycle management and sub-activities
 /// </summary>
-public class ActivityTest(MeshTestContext context) : InMeshTestBase(output)
+public class ActivityTest(MeshTestContext context) : InMeshTestBase(context)
 {
     /// <summary>
     /// Tests basic activity creation, sub-activity management, and completion with status validation

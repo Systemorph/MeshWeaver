@@ -20,13 +20,24 @@ import re, sys, pathlib
 
 REFUSE = [
     (r"override\s+MeshBuilder\s+ConfigureMesh", "overrides ConfigureMesh — needs the per-suite configuration facility"),
+    (r"override\s+MessageHubConfiguration\s+Configure(Host|Client|Mesh)\b", "overrides the fixture's Configure(Host|Client|Mesh) — the pre-boot service substitution facility, not something the live mesh can fake"),
+    (r"\bGetHost\(\s*[^)\s]", "configures the host hub (GetHost(config)) — the pre-boot substitution facility"),
     (r"ClrMd|DataTarget|MiniDump", "reads process dumps — stays on xunit"),
     (r"Testcontainers|Npgsql|PostgreSql", "needs Postgres — stays on xunit"),
     (r"FileSystemStorage|AddFileSystemPersistence|FileSystemPersistence", "needs FileSystem persistence — stays on xunit"),
     (r"SetHostIdentity|ImpersonateAs\(", "acts as an arbitrary identity — declined by design"),
     (r"Process\.Start|new Process\(", "spawns a process — stays on xunit"),
     (r"IClassFixture<|ICollectionFixture<", "uses an xunit fixture — needs a hand port"),
+    (r"\bIAsyncLifetime\b", "implements IAsyncLifetime (InitializeAsync/DisposeAsync) — the runner has no per-class lifecycle hook yet"),
     (r"Observable\.Using\([^\n]*Impersonate", "opens an impersonation scope with Observable.Using — the in-mesh shape is AsSystem (check-impersonation.py); needs a hand port"),
+    (r"\.ToTask\(", "bridges an observable to a Task with .ToTask( — forbidden in every gated root (ObservableToTaskBridgeGuard); compose reactively first"),
+    (r"using Microsoft\.Playwright|\bIPage\b|\bIBrowser\b|PortalFixture", "drives a browser (Playwright) — an e2e host, not an in-mesh case"),
+    (r"^using Orleans|OrleansSharedTestBase|\bTestCluster\b|\bISiloHost\b|\bRoutingGrain\b|\bIGrainFactory\b", "needs the Orleans silo host — the gate's mesh is the monolith"),
+    (r"using MeshWeaver\.Testing\.Xunit\b|MeshWeaver\.Testing\.Xunit\.", "tests the xunit adapter itself (MeshWeaver.Testing.Xunit is not a platform assembly)"),
+    (r"using MeshWeaver\.Hosting\.AspNetCore|WebApplication\.CreateBuilder|\bIApplicationBuilder\b", "builds an ASP.NET host — the host assembly is not on the NodeType reference set"),
+    (r"FindRepositoryRoot|ScannedRoots|RatchetedRoots|ProductionRoots|GetRepositoryRoot|\bRepoRoot\b", "reads the repository tree from the test bin (a source-scanning guard) — no tree in a mesh; stays on xunit"),
+    (r"\bTestScheduler\b|Microsoft\.Reactive\.Testing", "uses Microsoft.Reactive.Testing's TestScheduler — not a platform assembly"),
+    (r"\bawait\b[^;]*?(GetMeshNodeStream|GetWorkspace\(|GetDataStream|GetRemoteStream|IMeshService|meshService\.|ObserveQuery|GetQuery\(|\.Query\(|\.CreateNode\(|\.UpdateNode\(|\.DeleteNode\(|\.CopyNode\()", "awaits a mesh read/write directly (HubReachableAsyncGuard.NoNewAwaitOfAMeshRead) — compose reactively and subscribe, or wait through ObserveCompletion"),
 ]
 
 def convert(text: str, node_id: str) -> tuple[str | None, str]:
@@ -44,7 +55,12 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     s = re.sub(r"\[Fact(\(([^)]*)\))?\]", lambda m: "[MeshFact" + (f"({_args(m.group(2))})" if m.group(2) else "") + "]", s)
     s = re.sub(r"\[Theory(\(([^)]*)\))?\]", lambda m: "[MeshTheory" + (f"({_args(m.group(2))})" if m.group(2) else "") + "]", s)
     s = s.replace("[InlineData(", "[MeshInlineData(")
+    s = re.sub(r"\[HubFact(\(([^)]*)\))?\]", lambda m: "[MeshFact(TimeoutSeconds = 30" + (", " + _args(m.group(2)) if m.group(2) else "") + ")]", s)
     s = re.sub(r":\s*(MonolithMeshTestBase|HubTestBase|TestBase)\b(?!<)", ": InMeshTestBase", s)
+    # a primary constructor forwarding the xunit output to its base: `X(ITestOutputHelper output) : Base(output)`
+    s = re.sub(r"\(ITestOutputHelper\s+output\)\s*:\s*InMeshTestBase\(output\)", "(MeshTestContext context) : InMeshTestBase(context)", s)
+    s = re.sub(r"\[assembly:[^\]]*\]\s*\n", "", s)
+    s = s.lstrip("\ufeff")
     s = re.sub(r"\(ITestOutputHelper\s+output\)\s*:\s*base\(output\)", "(MeshTestContext context) : base(context)", s)
     s = re.sub(r"\(ITestOutputHelper\s+output\)", "(MeshTestContext context)", s)
     s = s.replace("TestContext.Current.CancellationToken", "CancellationToken.None")
@@ -98,7 +114,15 @@ public class SampleTest : MonolithMeshTestBase
     assert convert("using Testcontainers.PostgreSql;", "x")[0] is None
     assert convert("var x = Observable.Using(() => access.ImpersonateAsSystem(), _ => y);", "x")[0] is None
     assert "AsSystem(access, () => Mesh.CreateNode(n))" in convert("var r = access.RunAsSystem(() => Mesh.CreateNode(n));", "x")[0]
-    print("✓ convert-xunit-to-inmesh self-test: attributes, base, ctor, usings, header; refusals name their reason"); return 0
+    assert convert("var t = obs.ToTask();", "x")[0] is None
+    assert convert("var n = await ws.GetMeshNodeStream(p).FirstAsync();", "x")[0] is None
+    assert convert("class X : HubTestBase { protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration c) => c; }", "x")[0] is None
+    assert convert("var h = GetHost(c => c.AddData());", "x")[0] is None
+    assert convert("var h = GetHost();", "x")[0] is not None
+    assert convert("using Microsoft.Playwright;", "x")[0] is None
+    assert "[MeshFact(TimeoutSeconds = 30)]" in convert("[HubFact]\npublic void A() {}", "x")[0]
+    assert "(MeshTestContext context) : InMeshTestBase(context)" in convert("public class T(ITestOutputHelper output) : HubTestBase(output) {}", "x")[0]
+    print("✓ convert-xunit-to-inmesh self-test: attributes (HubFact too), base, ctor (primary too), usings, header; refusals name their reason — ToTask, awaited mesh reads, host configuration, browsers, Orleans"); return 0
 
 def main() -> int:
     if "--self-test" in sys.argv: return self_test()

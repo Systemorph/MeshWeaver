@@ -27,7 +27,7 @@ using System.Threading.Tasks;
 /// shape: the latch proves construction is mid-flight before disposal starts, the gate
 /// holds it there until the test has asserted disposal is waiting.</para>
 /// </summary>
-public class InflightHubCreationDrainTest(MeshTestContext context) : InMeshTestBase(output)
+public class InflightHubCreationDrainTest(MeshTestContext context) : InMeshTestBase(context)
 {
     [MeshFact]
     public async Task Disposal_WaitsForInflightConstruction_ThenDisposesTheLateHub()

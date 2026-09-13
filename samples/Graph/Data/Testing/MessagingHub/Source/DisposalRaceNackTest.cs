@@ -43,7 +43,7 @@ using System.Threading.Tasks;
 /// (<c>RunLevel &gt;= DisposeHostedHubs</c>) and is dropped, which is precisely how the disposal
 /// branch's NACK went missing while looking correct in the source.</para>
 /// </summary>
-public class DisposalRaceNackTest(MeshTestContext context) : InMeshTestBase(output)
+public class DisposalRaceNackTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private record RaceRequest : IRequest<RaceResponse>;
 

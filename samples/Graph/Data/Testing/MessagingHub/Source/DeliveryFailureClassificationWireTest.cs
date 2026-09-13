@@ -23,7 +23,7 @@ using System.Text.Json;
 /// <c>ErrorType</c> came back <see cref="ErrorType.Unknown"/> — a caller cannot tell a broken
 /// NodeType from any other failure.</para>
 /// </summary>
-public class DeliveryFailureClassificationWireTest(MeshTestContext context) : InMeshTestBase(output)
+public class DeliveryFailureClassificationWireTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private static IMessageDelivery ADelivery() =>
         new MessageDelivery<RawJson>

@@ -50,7 +50,7 @@ using Microsoft.Extensions.DependencyInjection;
 /// assertion would measure the compiler's timing rather than this decision. Same reason
 /// <c>IsCompileSettled</c> and <c>PreferAuthoritative</c> are exposed and tested directly.</para>
 /// </summary>
-public class NodeTypeFirstCompileKickoffTest(MeshTestContext context) : InMeshTestBase(output)
+public class NodeTypeFirstCompileKickoffTest(MeshTestContext context) : InMeshTestBase(context)
 {
     private const string NodeTypePath = $"{TestPartition}/PandasExplorerProbe";
 
