@@ -238,9 +238,16 @@ public class NodeTypeRebindWatcherTest(ITestOutputHelper output) : HubTestBase(o
         var wrapped = NodeTypeRebindWatcher.WithNodeTypeRebind(node, Mesh, logger: null);
 
         wrapped.HubConfiguration.Should().NotBeNull().And.NotBeSameAs(node.HubConfiguration);
-        wrapped.HubConfiguration!(new MessageHubConfiguration(
+        var composed = wrapped.HubConfiguration!(new MessageHubConfiguration(
             new ServiceCollection().BuildServiceProvider(), new Address("Store")));
         applied.Should().Be(1, "the node's own configuration must still be applied");
+
+        // #4067/#4068: this wrap is the ONE funnel every per-node activation passes, and it is
+        // where a per-node hub is declared re-creatable on demand — the declaration that lets a
+        // transient infrastructure fault at init retire the activation instead of latching it.
+        composed.ReactivatesOnDemand.Should().BeTrue(
+            "a per-node hub is re-created by demand routing after it goes away, so its transient "
+            + "init faults must retire rather than latch — declared here, for every activation path");
     }
 
     [Fact]
