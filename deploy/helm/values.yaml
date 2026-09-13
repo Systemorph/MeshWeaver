@@ -949,6 +949,11 @@ config:
     Hosting__Deployment: ""
     Hosting__ReportTo: ""
     Hosting__ReportInterval: "01:00:00"
+    # ---- The build queue (MeshWeaver.Plugins#1784 / #1786). Set ONLY on the control instance:
+    # the public URL the admission check run links to, and how many non-trunk builds it admits
+    # at once (trunk never counts). Empty = not the queue (the instance renders neither key).
+    Hosting__Builds__PublicUrl: ""
+    Hosting__Builds__Concurrency: ""
     # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713). The signed inbox
     # the Feedback plugin hands a technical submission to; the fleet value is
     # https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds. Empty = hand-over OFF (the
