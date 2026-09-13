@@ -1605,6 +1605,181 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
 
 # ── The retention record: a credential-free assertion that runs on every pull request ──────────
 
+# 🚨 THE DECIDED WINDOW FOR CONTINUOUS ARTIFACTS, and it is not a preference of this script.
+# The platform owner's rule (#3842, quoted verbatim in #3438's body and in #3859's acceptance
+# list): *"Retain unreferenced continuous artifacts for at least 30 days by age, without a
+# build-count quota."* Two code paths already CLAMP to it rather than default to it —
+# `PrebuiltBundleRetention` (src/MeshWeaver.Hosting/PrebuiltBundleRetention.cs, `MinimumAge` and
+# the `< 30 days ⇒ 30 days` clamp in its planner) and `AssemblyCacheRetention`
+# (src/MeshWeaver.Compiler.Pipeline/AssemblyCacheRetention.cs, the same clamp) — and both carry
+# `KeepNewestPerSource` as a property that explicitly NO LONGER DRIVES DELETION.
+#
+# The registry lane was the third store and the one nobody asserted. #3843's own body says so:
+# *"The ACR task record and live cloud cleanup are unchanged."* So the recorded purge kept
+# `--ago 7d --keep 10` over five continuously-republished repositories — `memex-portal-ai`
+# included, which is the image BOTH production portals run — while the rule that governs the
+# other two stores said 30 days and no quota. Nothing compared them.
+#
+# 🚨 `--keep` IS THE BUILD-COUNT QUOTA, AND IT IS THE HALF THE AGE WINDOW CANNOT REPLACE. `--keep N`
+# counts NEWER BUILDS, so the more often a repository is republished the faster its older manifests
+# become eligible — which is why frequent republishing DESTROYS a pin rather than protecting it
+# (#3438's own root cause). A 30-day `--ago` beside a `--keep 10` still collects a manifest ten
+# builds old on the day it is written. Both halves, or neither is the rule.
+MINIMUM_PURGE_AGE_DAYS = 30
+AGO_UNIT_DAYS = {"d": 1.0, "h": 1.0 / 24, "m": 1.0 / 1440, "s": 1.0 / 86400}
+AGO_TOKEN_RE = re.compile(r"(\d+)([dhms])")
+
+
+def parse_ago_days(value: str) -> float | None:
+    """`--ago` as DAYS, or None when it cannot be read.
+
+    🚨 UNPARSEABLE IS None, NEVER ZERO AND NEVER A DEFAULT. The caller reds on None. A duration
+    this function cannot read is one nobody has checked, and folding it into a number would spell
+    "not measured" exactly like "measured and fine" — the confusion #3438 is made of."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    consumed = 0
+    days = 0.0
+    for amount, unit in AGO_TOKEN_RE.findall(text):
+        consumed += len(amount) + len(unit)
+        days += int(amount) * AGO_UNIT_DAYS[unit]
+    # Every character must have been part of a token, or something was silently ignored.
+    return days if consumed == len(text) and days > 0 else None
+
+
+# 🚨 THE INVOCATION, NOT THE LINE. A `cmd:` is a SHELL line and may hold more than one command, so
+# searching the whole line lets `cmd: echo --ago 30d; acr purge --filter 'x:.*' --untagged` satisfy
+# a window the purge itself does not carry — the flag is present on the line and absent from the
+# command that deletes. Each `acr purge` is isolated at the first shell separator and checked on its
+# own, and EVERY invocation on the line must pass.
+PURGE_INVOCATION_RE = re.compile(r"acr\s+purge\b(?P<args>[^;&|\n]*)")
+# 🚨 BOTH SPELLINGS, AND THE BARE FLAG. `--keep=10` is the same quota as `--keep 10`, and a bare
+# `--keep` is a malformed step rather than a compliant one; a whitespace-only match passed all three.
+KEEP_RE = re.compile(r"--keep(?:[=\s]+(?P<value>[^\s;&|]+))?")
+AGO_RE = re.compile(r"--ago(?:[=\s]+(?P<value>[^\s;&|]+))?")
+
+
+def check_window_policy(where: str, step: str) -> list[str]:
+    """Does ONE recorded `acr purge` step obey the decided continuous-artifact window?"""
+    problems: list[str] = []
+    invocations = [match.group("args") for match in PURGE_INVOCATION_RE.finditer(step)]
+    if not invocations:
+        # The caller already reds on a `cmd:` that is not an `acr purge`; this is the belt, so a
+        # reshaped line cannot silently skip the window check while passing that one.
+        return [f"{where}: no `acr purge` invocation could be isolated from this step, so its "
+                f"window was NOT checked:\n      {step.strip()[:160]}"]
+    for args in invocations:
+        problems.extend(check_one_invocation(where, step, args))
+    return problems
+
+
+def check_one_invocation(where: str, step: str, args: str) -> list[str]:
+    problems: list[str] = []
+    ago = AGO_RE.search(args)
+    if ago is not None and not ago.group("value"):
+        return [f"{where}: a purge step carries a bare `--ago` with no duration, so the window was "
+                f"NOT checked:\n      {step.strip()[:160]}"]
+    if not ago:
+        problems.append(
+            f"{where}: a purge step declares NO `--ago` window:\n      {step.strip()[:160]}\n"
+            "    acr purge then has no age floor at all, so a manifest is eligible the moment it "
+            "is superseded. The decided rule is at least "
+            f"{MINIMUM_PURGE_AGE_DAYS} days by age (#3842).")
+    else:
+        days = parse_ago_days(ago.group("value"))
+        if days is None:
+            problems.append(
+                f"{where}: `--ago {ago.group('value')}` could not be read as a duration, so the "
+                "window was NOT checked. An unreadable window is not a satisfied one.")
+        elif days < MINIMUM_PURGE_AGE_DAYS:
+            problems.append(
+                f"{where}: a purge step retains for `--ago {ago.group('value')}` "
+                f"({days:g} day(s)), under the decided floor of {MINIMUM_PURGE_AGE_DAYS} days:\n"
+                f"      {step.strip()[:160]}\n"
+                "    #3842: *retain unreferenced continuous artifacts for at least 30 days by "
+                "age*. PrebuiltBundleRetention and AssemblyCacheRetention already CLAMP to that "
+                "floor; this record is the third store and the only one nobody asserted.")
+    keep = KEEP_RE.search(args)
+    if keep:
+        problems.append(
+            f"{where}: a purge step carries a BUILD-COUNT QUOTA "
+            f"`--keep{('=' + keep.group('value')) if keep.group('value') else ' (bare)'}`:\n"
+            f"      {step.strip()[:160]}\n"
+            "    #3842 rules one out in as many words — *without a build-count quota* — and it is "
+            "the half an age window cannot replace: `--keep` counts NEWER BUILDS, so the more "
+            "often a repository is republished the FASTER its older manifests become eligible. "
+            "That is #3438's own root cause, not a second-order concern.")
+    return problems
+
+
+def check_in_force_is_boolean(manifest: dict, block: str) -> list[str]:
+    """🚨 A DECLARATION WHOSE SWITCH IS NOT A BOOLEAN IS FAIL-OPEN, AND SILENTLY.
+
+    Every reader of these blocks asks `inForce is True`, which is correct for a JSON boolean and
+    catastrophic for `"true"`: a string is not `True`, so a record that LOOKS like an in-force pause
+    reads as no pause at all — `apply` proceeds past the interlock, `record` skips the overwrite
+    guard, and this very coherence check passes an `Enabled` task sitting under an apparent pause.
+    A typed quote mark would disarm three guards at once and every one of them would report success.
+
+    So the SHAPE is asserted here, on every pull request, before any of them reads the value. The
+    shell halves fail closed on the same condition rather than trusting this to have run."""
+    block_value = manifest.get(block)
+    if block_value is None:
+        return []
+    if not isinstance(block_value, dict):
+        return [f"tasks.json: `{block}` is {type(block_value).__name__}, not an object. Every "
+                "reader of it asks for fields it cannot have."]
+    if "inForce" not in block_value:
+        return [f"tasks.json: `{block}` has no `inForce`. Every reader treats its absence as NOT "
+                "in force, so a declaration written without it silently declares nothing."]
+    if not isinstance(block_value["inForce"], bool):
+        return [f"tasks.json: `{block}.inForce` is {block_value['inForce']!r}, not a JSON boolean. "
+                "`\"true\"` is not `true`: every reader asks `is True`, so a quoted value disarms "
+                "the guard while reading, to a human, as if it were armed."]
+    return []
+
+
+def check_pause_coherence(manifest: dict) -> list[str]:
+    """Is the record's pause DECLARATION consistent with the statuses it is recorded beside?
+
+    🚨 A PAUSE IS A CLAIM ABOUT THE REGISTRY, AND THE RECORD CAN CONTRADICT IT SILENTLY.
+    `retention_windows` prints "PAUSED" only when it finds no ENABLED step, so a task flipped to
+    `Enabled` while `pause.inForce` is still true makes the report print windows and never mention
+    the pause — a record asserting both that cleanup is stopped and that it runs at 03:00, with
+    nothing red. The reverse is the shape that goes stale: every task Disabled and no declaration,
+    which reads identically to a retention that silently stopped.
+    """
+    problems: list[str] = []
+    problems.extend(check_in_force_is_boolean(manifest, "pause"))
+    problems.extend(check_in_force_is_boolean(manifest, "recordAheadOfRegistry"))
+    pause = manifest.get("pause") or {}
+    in_force = pause.get("inForce") is True
+    tasks = manifest.get("tasks") or []
+    enabled = [str(task.get("name")) for task in tasks
+               if str(task.get("status", "")).lower() == "enabled"]
+    if in_force:
+        for field_name in ("since", "reason", "reEnableWhen"):
+            if not str(pause.get(field_name, "")).strip():
+                problems.append(
+                    f"tasks.json: `pause.inForce` is true with no `{field_name}`. A pause with no "
+                    f"{field_name} is indistinguishable from a retention that silently stopped — "
+                    "which is the state #3438 spent a week telling apart from a policy.")
+        if enabled:
+            problems.append(
+                f"tasks.json: `pause.inForce` is true and {enabled} is recorded `Enabled`. The "
+                "record then asserts both that cleanup is stopped and that it runs on its "
+                "schedule, and the report prints the window without ever mentioning the pause. "
+                "Lift the pause deliberately (delete the block, citing what satisfied "
+                "`reEnableWhen`) or record the task as Disabled — never both.")
+    elif not enabled:
+        problems.append(
+            "tasks.json: every recorded task is Disabled and no in-force `pause` explains it. A "
+            "stopped retention and a stale record read identically, and only one of them is a "
+            "decision. Declare the pause (`inForce`/`since`/`reason`/`reEnableWhen`) or record "
+            "the enabled task.")
+    return problems
+
 
 def retention_windows(root: str) -> tuple[list[str], str]:
     """The ENABLED purge steps this protection is racing, as recorded — the "over what window" half
@@ -1725,6 +1900,11 @@ def check_retention_record(root: str) -> int:
             if "acr purge" not in step:
                 problems.append(f"{yaml_path.name} has a `cmd:` step that is not an `acr purge`: "
                                 f"{step.strip()[:120]} — this record is for retention tasks.")
+            # 🚨 EVERY RECORDED STEP, not only the enabled ones. The record is what
+            # `acr-retention-tasks.sh apply` PUSHES, so a disabled task carrying a 7-day window is
+            # a 7-day window one command away from running — which is exactly the state this
+            # record was in while the pause held it off.
+            problems.extend(check_window_policy(yaml_path.name, step))
 
     # 🚨 THE DENOMINATOR. Zero recorded tasks, or zero steps across them, reads exactly like a
     # clean record while having inspected nothing — the confusion #3438 is made of.
@@ -1736,12 +1916,17 @@ def check_retention_record(root: str) -> int:
         problems.append("ZERO purge steps were found across every recorded task, so the "
                         "--include-locked assertion inspected nothing.")
 
+    problems.extend(check_pause_coherence(manifest))
+
     for problem in problems:
         print(f"::error::{problem}")
     if problems:
         return 1
     print("  no recorded purge step passes --include-locked, so `acr purge` skips locked "
           "manifests — which is what makes a lock a protection.")
+    print(f"  every recorded step retains for at least {MINIMUM_PURGE_AGE_DAYS} days by age with "
+          "no --keep build-count quota (#3842), and the record's pause declaration agrees with "
+          "the statuses it is recorded beside.")
     return 0
 
 
@@ -2443,6 +2628,113 @@ def self_test() -> int:
               "ARM 24c: a MISSING retention record reported windows, or reported no problem — "
               "an unstatable window must say so, never print as an empty list")
 
+    # ── ARM 31: the decided WINDOW is asserted on the record, and the assertion can fail ────────
+    # 🚨 The control that matters is the one this repository's own record FAILED on 2026-09-13:
+    # `--ago 7d --keep 10` over `memex-portal-ai`, the image both production portals run. It is
+    # driven here as a literal so the arm still fires the day the record is right.
+    check(check_window_policy("x.yaml", "  - cmd: acr purge --filter 'memex-portal-ai:.*' "
+                                        "--ago 7d --keep 10 --untagged"),
+          "ARM 31: the exact step this repository carried until 2026-09-13 — a 7-day window with a "
+          "ten-build quota over the image both production portals run — passed the window policy")
+    check(any("--keep" in problem for problem in
+              check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 90d "
+                                            "--keep 10 --untagged")),
+          "ARM 31: a BUILD-COUNT QUOTA beside a generous age window passed. `--keep` counts NEWER "
+          "BUILDS, so a repository republished many times a day ages its own manifests out in "
+          "hours whatever `--ago` says — the age window cannot replace this half (#3842)")
+    check(check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --untagged"),
+          "ARM 31: a purge step with NO `--ago` at all passed — no age floor is not a long one")
+    check(any("could not be read" in problem for problem in
+              check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago forever "
+                                            "--untagged")),
+          "ARM 31: an UNREADABLE `--ago` passed. A window nobody could parse is a window nobody "
+          "checked, and it must never spell the same as one that was checked and was fine")
+    check(not check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 30d "
+                                            "--untagged"),
+          "ARM 31: the DECIDED window itself was rejected — the gate would red on the fix, which "
+          "is how a gate gets muted")
+    check(not check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 720h "
+                                            "--untagged"),
+          "ARM 31: 720h is 30 days and was rejected; the unit table is what makes this a duration "
+          "comparison rather than a string match")
+    check(parse_ago_days("7d") == 7 and parse_ago_days("1d12h") == 1.5
+          and parse_ago_days("30") is None and parse_ago_days("30dx") is None,
+          "ARM 31: the `--ago` parser is wrong — a bare number or a trailing character must be "
+          "UNREADABLE, never a silent default")
+
+    # ── ARM 31c: the window is read off the INVOCATION, and both `--keep` spellings count ──────
+    # Review findings on #4213, each driven as its own arm.
+    check(check_window_policy("x.yaml", "  - cmd: echo --ago 30d; acr purge --filter 'a:.*' "
+                                        "--untagged"),
+          "ARM 31c: a `--ago` sitting on the LINE but not in the `acr purge` INVOCATION satisfied "
+          "the window. A `cmd:` is a shell line and may hold more than one command; the flag that "
+          "counts is the one on the command that DELETES")
+    check(any("BUILD-COUNT QUOTA" in problem for problem in
+              check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 30d "
+                                            "--keep=10 --untagged")),
+          "ARM 31c: `--keep=10` passed. It is the same quota as `--keep 10`, and a whitespace-only "
+          "match reads the compliant spelling and misses the other")
+    check(any("bare" in problem for problem in
+              check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 30d --keep")),
+          "ARM 31c: a BARE `--keep` passed — a malformed step is not a compliant one")
+    check(check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago --untagged"),
+          "ARM 31c: a bare `--ago` with no duration passed, so the window was never checked")
+    check(any("--ago 7d" in problem for problem in
+              check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 30d "
+                                            "--untagged && acr purge --filter 'b:.*' --ago 7d "
+                                            "--untagged")),
+          "ARM 31c: a SECOND `acr purge` on the same line escaped the window check — every "
+          "invocation deletes, so every invocation is checked")
+    check(not check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago=30d "
+                                            "--untagged"),
+          "ARM 31c: the `--ago=30d` spelling of a COMPLIANT window was rejected")
+
+    # ── ARM 31d: a declaration whose switch is not a BOOLEAN is fail-open, and reds ─────────────
+    for block in ("pause", "recordAheadOfRegistry"):
+        check(any("not a JSON boolean" in problem for problem in
+                  check_in_force_is_boolean({block: {"inForce": "true"}}, block)),
+              f"ARM 31d: `{block}.inForce` as the STRING \"true\" was accepted. Every reader asks "
+              "`is True`, which is False for a string — so a typed quote mark disarms the "
+              "interlock, the overwrite guard and the coherence gate at once, while reading to a "
+              "human as if it were armed")
+        check(check_in_force_is_boolean({block: {}}, block),
+              f"ARM 31d: `{block}` with no `inForce` was accepted; every reader treats its absence "
+              "as NOT in force, so it declares nothing while looking like a declaration")
+        check(check_in_force_is_boolean({block: "yes"}, block),
+              f"ARM 31d: `{block}` as a scalar was accepted")
+        check(not check_in_force_is_boolean({}, block),
+              f"ARM 31d: an ABSENT `{block}` was reported as malformed — absent and wrong are "
+              "different, and only one of them is a problem")
+        check(not check_in_force_is_boolean({block: {"inForce": False}}, block),
+              f"ARM 31d: a well-formed `{block}.inForce: false` was rejected")
+    check(any("not a JSON boolean" in problem for problem in check_pause_coherence(
+              {"tasks": [{"name": "t", "status": "Enabled"}],
+               "pause": {"inForce": "true", "since": "s", "reason": "r", "reEnableWhen": "w"}})),
+          "ARM 31d: the coherence gate passed an `Enabled` task sitting under a pause whose "
+          "`inForce` is a string — the exact record the apply interlock would also walk past")
+
+    # ── ARM 31b: the PAUSE declaration and the recorded statuses cannot contradict each other ───
+    check(any("is recorded `Enabled`" in problem for problem in check_pause_coherence(
+              {"tasks": [{"name": "t", "status": "Enabled"}],
+               "pause": {"inForce": True, "since": "s", "reason": "r", "reEnableWhen": "w"}})),
+          "ARM 31b: a record asserting BOTH an in-force pause and an Enabled purge task passed. "
+          "`retention_windows` prints the window and never mentions the pause in that state, so "
+          "the contradiction is invisible in the report")
+    check(any("no `reEnableWhen`" in problem for problem in check_pause_coherence(
+              {"tasks": [{"name": "t", "status": "Disabled"}],
+               "pause": {"inForce": True, "since": "s", "reason": "r"}})),
+          "ARM 31b: a pause with no re-enable condition passed — that is a retention that stopped, "
+          "written as if it were a decision")
+    check(check_pause_coherence({"tasks": [{"name": "t", "status": "Disabled"}]}),
+          "ARM 31b: every task Disabled with NO declaration passed. A stopped retention and a "
+          "stale record read identically, and only one of them is a decision")
+    check(not check_pause_coherence({"tasks": [{"name": "t", "status": "Enabled"}]}),
+          "ARM 31b: an ordinary running retention with no pause block was rejected")
+    check(not check_pause_coherence(
+              {"tasks": [{"name": "t", "status": "Disabled"}],
+               "pause": {"inForce": True, "since": "s", "reason": "r", "reEnableWhen": "w"}}),
+          "ARM 31b: this repository's own paused shape was rejected")
+
     # ── ARM 24d: a roster that declares one installation TWICE decides nothing, and reds ────────
     with tempfile.TemporaryDirectory() as scratch:
         folder = Path(scratch) / ".github" / "acr-retention"
@@ -2589,7 +2881,7 @@ env:
           "unresolved tag / indeterminate / unreadable registry all RED with nothing released, "
           "release arm off by default and live when enabled, report-only writes nothing, a lock "
           "write that exits 0 without taking and one whose read-back cannot answer are both RED "
-          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run().")
+          "and counted as protecting NOTHING, and the two existing pin extractors still agree. AXIS 3: the set an installation is RUNNING is locked though no file pins it, its migration twin with it, the TAG is locked beside the manifest, an installation that did not answer is INCOMPLETE and refuses the unlock arm, silence is never retirement, a stale roster entry and an unknown running set are RED, the digest extractor is controlled against a fixture rather than inferred from the fleet, a tag lock that did not take is counted as protecting NOTHING, a locked INDEX is expanded to the platform manifests acr-cli would otherwise collect out from under it, and the harness provably drives the same path as run(). THE RECORD: every recorded purge step is held to #3842's decided window — at least 30 days by age, no `--keep` build-count quota — with the exact `--ago 7d --keep 10` step this repository carried until 2026-09-13 driven as a literal control, a bare or unreadable `--ago` RED, and the decided window itself proven to PASS; and the pause declaration cannot contradict the statuses it is recorded beside, in either direction. The window is read off each `acr purge` INVOCATION rather than the shell line, every invocation on it, `--keep=N` and a bare `--keep` count as quotas, a bare `--ago` is unchecked rather than compliant, and a declaration whose `inForce` is the STRING \"true\" — which every `is True` reader silently treats as absent — is RED in both blocks.")
     return 0
 
 
