@@ -1080,6 +1080,35 @@ move_pointer() { # <account> <share> <dest>
   echo "pointer: $account/$share/$dest/$POINTER -> $PUBLICATION (this publication is now the live one)"
 }
 
+# Removes a pointer this run has just made wrong. Called ONLY from the flat branch, ONLY when the
+# resolution above found a live generation, and ONLY after this run's flat publication is sealed —
+# so a refusal earlier leaves the previous generation intact and still pointed at, and a reader is
+# never sent to the prefix while it is being filled in.
+#
+# 🚨 A POSTCONDITION, not a check-then-act: the delete is ATTEMPTED and then the absence is READ
+# BACK. A concurrent producer removing the same pointer first makes the delete fail with
+# ResourceNotFound, which is a success for this run's purpose; only a pointer still standing
+# afterwards is a refusal. Asking "does it exist" first and deleting on the answer would be the
+# race this file spends 900 lines refusing to be.
+#
+# 🚨 It deletes a ROUTING STATEMENT, never content. Every generation directory stays exactly where
+# it is — retention collects the ones nothing names once they are older than its window, by its own
+# rules, and a generation is protected by AGE from its first byte. Nothing here can strand bytes.
+retire_pointer() { # <account> <share> <dest>
+  local account="$1" share="$2" dest="$3" still
+  az storage file delete --account-name "$account" --share-name "$share" \
+    --path "$dest/$POINTER" --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 || true
+  still=$(az storage file exists --account-name "$account" --share-name "$share" \
+    --path "$dest/$POINTER" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  if [ "$still" = "false" ]; then
+    echo "::warning::retired $account/$share/$dest/$POINTER — this run published the FLAT directory, so the flat publication is the live one again. Consumers resolve $dest itself until a generation publisher writes a new pointer."
+    return 0
+  fi
+  echo "::error::$dest/$POINTER could not be retired (exists=$still) under $account/$share. This run sealed the FLAT publication, but every consumer resolves the pointer, so they would keep serving the generation it names and this run's bytes would reach nobody. Remove $POINTER by hand, or flip this caller to publication-layout: generation."
+  exit 1
+}
+
 # ONE publication, in whichever layout this caller selected. Everything above this function writes
 # ONE directory; this is the only place that knows there can be two.
 #
@@ -1146,7 +1175,22 @@ publish_publication() { # <account> <share> <dest> <live-was-sealed>
 # their blast radius shrinks from "the whole publication" to "this target".
 OUTCOMES="$SENTINEL_LOCAL_DIR/outcomes"
 : > "$OUTCOMES"
+# 🚨 THE ONE SUCCESS EXIT OF A TARGET. Everything below returns 0 through five different paths
+# (published, converged, already-published, surface-unchanged, not-sealing-backwards) and REFUSES by
+# `exit 1`, which ends this subshell. So a step placed here runs exactly when this target's
+# publication STANDS — never after a refusal, and never on a path someone adds later and forgets to
+# thread it through. That is why retiring a pointer this run invalidated lives here and not inside
+# `publish_publication`: three of the five success paths never call it.
 publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `exit 1` fails this target only
+  publish_to_target_inner "$1"
+  # Last, deliberately: until this line the prefix's consumers are still resolving the generation
+  # the pointer names — a whole, sealed publication — rather than a flat directory that may have
+  # been mid-replace. Retiring it here moves them, in one small write, onto the publication this
+  # run has just proven.
+  [ "${RETIRE_POINTER:-false}" != "true" ] || retire_pointer "$ACCOUNT" "$SHARE" "$DEST"
+}
+
+publish_to_target_inner() { # <target>
   local target="$1"
   ACCOUNT="${target%%/*}"
   REST="${target#*/}"
@@ -1177,7 +1221,26 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
   # every read below is byte-identical to what it has always been.
   resolve_publication_dir "$ACCOUNT" "$SHARE" "$DEST"
   LIVE="$RESOLVED_DIR"
-  if [ "$LIVE" != "$DEST" ]; then
+  # 🚨 A MIXED PREFIX — one producer flipped to `generation`, this one has not — and it is the
+  # state phase 4 MUST pass through, because the two producers of `prebuilt-bundles/<id>/plugins`
+  # live in two repositories and cannot merge atomically (MeshWeaver#3461). Without the branch
+  # below this run would read every "is it already published / which architecture / which source
+  # commit" answer off the GENERATION the pointer names, and then write the FLAT directory — so it
+  # would either skip against a directory it is not writing, or publish into a directory no reader
+  # resolves and report success while every consumer kept serving the older generation. That is
+  # this issue's own failure mode ("one seal, self-consistent to every consumer, and wrong"),
+  # reachable the moment ONE of the seven callers passes `publication-layout: generation`.
+  #
+  # The rule: THE LAYOUT THIS RUN PUBLISHES IN DECIDES WHICH DIRECTORY IS LIVE FOR IT. A flat run
+  # writes the prefix, so the prefix is what it must reason about — and the pointer it found is
+  # retired once that publication is sealed (`retire_pointer`), which returns the prefix to
+  # last-writer-wins, i.e. exactly today's semantics. Loud, never silent: a half-flipped fleet
+  # must not read as intentional.
+  if [ "$LIVE" != "$DEST" ] && [ "$PUBLICATION_LAYOUT" = "flat" ]; then
+    echo "::warning::$ACCOUNT/$SHARE: $DEST/$POINTER names generation '${LIVE##*/}', but this run publishes the FLAT layout (publication-layout: flat). Reading and writing $DEST, and retiring the pointer once this publication is sealed — otherwise consumers would keep resolving '${LIVE##*/}' and serve bytes this run replaced. Another producer of this prefix has flipped to the generation layout; flip this caller too (MeshWeaver#3461, phase 4)."
+    LIVE="$DEST"
+    RETIRE_POINTER=true
+  elif [ "$LIVE" != "$DEST" ]; then
     echo "::notice::$ACCOUNT/$SHARE: $DEST/$POINTER names '${LIVE##*/}' — reading the live publication from there."
   fi
   # "Rebuild only when we need to" applies to the publish too (#1660 WS3), but the key is

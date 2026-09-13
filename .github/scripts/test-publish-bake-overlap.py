@@ -1133,6 +1133,57 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               r.returncode != 0 and "is not a known publication layout" in r.stdout
               and not h.shelf().sealed(), f"rc={r.returncode}")
 
+    # ── MIXED LAYOUT: one producer of a prefix has flipped to `generation` and the other has not.
+    # ── This is not a hypothetical: `prebuilt-bundles/<identity>/plugins` has TWO producers living
+    # ── in TWO repositories (core CD's `plugins-bake` and the MeshWeaver.Plugins satellite's own
+    # ── `publish-bake`), so phase 4 CANNOT be one atomic change set — the fleet must pass through
+    # ── this state. Before the fix the flat producer read every "already published / which
+    # ── architecture / which source commit" answer off the GENERATION the pointer names and then
+    # ── wrote the FLAT directory, so it published into a directory no reader resolves and reported
+    # ── success while every consumer kept serving the older generation: one seal, self-consistent
+    # ── to every consumer, and wrong — this issue's own failure mode, one layout further in.
+    print("\nmixed layout — a FLAT publisher on a prefix a generation publisher pointed at:")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3501", gen)
+    tok_gen = "Systemorph-MeshWeaver-3501-1"
+    r = h.publish(sat, "Systemorph/MeshWeaver.Plugins", "3502")     # flat — the default, unflipped
+    s = h.shelf()
+    check("the fixture really is mixed (a generation exists AND this run sealed the flat directory)",
+          s.generations() == [tok_gen] and s.sealed()
+          and set(s.bakes_present()) - {"<marker>"} == {"satellite"},
+          f"generations={s.generations()}, {denominator(s)}")
+    if expect_defect:
+        check("PRE-FIX: the pointer still names the generation, so every consumer serves the OLDER "
+              "publication while this run reports success",
+              r.returncode == 0 and s.pointer() == tok_gen, f"rc={r.returncode}, _current={s.pointer()!r}")
+    else:
+        check("the pointer is retired, so the publication this run sealed is the one consumers resolve",
+              r.returncode == 0 and s.pointer() == "",
+              f"rc={r.returncode}, _current={s.pointer()!r}")
+        check("…and the run says so out loud, naming the mixed layout rather than fixing it quietly",
+              "retired" in r.stdout and "publication-layout: flat" in r.stdout,
+              "a half-flipped fleet must not read as intentional")
+        check("the generation itself is untouched — a routing statement was retired, never content",
+              s.under(tok_gen).sealed() and len(s.under(tok_gen).files()) == EXPECTED_FILES,
+              f"{tok_gen}: {denominator(s.under(tok_gen))}")
+
+    # ── …and the SKIP path, which is the one nobody reads. A flat run whose content is already on
+    # ── the prefix writes nothing at all; if the pointer survived only there, the trap would stand
+    # ── for exactly the runs that produce no output to look at.
+    print("\nmixed layout — the skip path retires it too (a run that writes nothing still moves the prefix):")
+    h.reset()
+    h.publish(core, "Systemorph/MeshWeaver", "3601", gen)
+    r = h.publish(core, "Systemorph/MeshWeaver", "3602")            # the SAME content, flat
+    s = h.shelf()
+    check("the fixture really did skip (not vacuous — nothing was republished)",
+          r.returncode == 0 and "already published; skipping" in r.stdout, f"rc={r.returncode}")
+    if expect_defect:
+        check("PRE-FIX: nothing was written and the pointer still routes consumers to the generation",
+              s.pointer() == "Systemorph-MeshWeaver-3601-1", f"_current={s.pointer()!r}")
+    else:
+        check("the pointer is retired even on a run that publishes nothing",
+              s.pointer() == "", f"_current={s.pointer()!r}")
+
     # ── FAIL CLOSED: a file that cannot be read back is refused, not assumed unchanged. ────────
     print("\nfail-closed (an unreadable answer is not a permissive one):")
     h.reset()
