@@ -441,9 +441,28 @@ def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Pa
             fail(f"{lane}: the legacy fallback did not SAY why it sealed the upstream copies:\n"
                  f"{legacy.stdout[-500:]}")
             return
+        # 🚨 AND THE TOLERANCE HAS AN END: past LEGACY_PUBLISHER_RED_FROM the same pre-#3732
+        # publisher is a REFUSAL, not a warning — a publisher that old means the resolved set
+        # stopped advancing, which is a different defect and must not be absorbed here. Executed by
+        # moving the constant into the past, so the case reads the branch rather than the clock.
+        expired = body.replace('LEGACY_PUBLISHER_RED_FROM="2026-09-15T00:00:00Z"',
+                               'LEGACY_PUBLISHER_RED_FROM="2000-01-01T00:00:00Z"')
+        if expired == body:
+            fail(f"{lane}: LEGACY_PUBLISHER_RED_FROM is not in the step — the tolerance has no "
+                 "stated end, and this case would pass having checked nothing")
+            return
+        work4 = tmp / "legacy-publisher-expired"
+        work4.mkdir()
+        past = run_step(expired, work4, own, upstream=upstream, cwd=legacy_publisher_root(tmp))
+        if past.returncode == 0 or "not advancing" not in past.stdout + past.stderr:
+            fail(f"{lane}: past its stated end the legacy publisher was still tolerated "
+                 f"(rc={past.returncode}) — an undated tolerance is how a known defect rides for a "
+                 f"month:\n{(past.stdout + past.stderr)[-500:]}")
+            return
         ok(f"{lane}: 1 own bundle sealed, 4 upstream copies composed and guarded but NOT sealed; "
            "with the rule removed all 5 are sealed (falsification arm); with a PRE-#3732 publisher "
-           "on disk all 5 are sealed and the log says why")
+           "on disk all 5 are sealed and the log says why — and past the branch's stated end that "
+           "same publisher is REFUSED, naming the set that stopped advancing")
     else:
         if sealed:
             fail(f"{lane}: the gate lane sealed {sealed} — it publishes nothing and must stage nothing")

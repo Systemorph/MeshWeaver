@@ -1276,13 +1276,28 @@ jobs:
           # caller's pin") and would red every satellite publish-bake in the window, since the
           # satellites own no module at all. So the publisher is PROBED — the same sparse checkout
           # the compose script comes from — and an old one keeps the old behaviour, loudly.
+          # 🚨 TRANSITIONAL, AND IT HAS A STATED END — an undated tolerance is how a known defect
+          # rides for a month behind a warning nobody re-reads (the `"signature":"not-required"`
+          # inbox, #3312). The branch below ends the moment a lane resolves a sealed platform set
+          # whose core commit CONTAINS this change: the satellites resolve the newest sealed set on
+          # every run, core cuts one roughly every 20 minutes, so the window is ~1 hour, not a day.
+          # Until then a downstream still seals its upstream's modules — #3732's defect 1, tolerated
+          # on purpose rather than traded for a fleet-wide red. From LEGACY_PUBLISHER_RED_FROM the
+          # tolerance is a REFUSAL: a publisher that old means the resolved set stopped advancing,
+          # which is a different defect (#4063 / #4142's shape) and must not be absorbed here.
+          LEGACY_PUBLISHER_RED_FROM="2026-09-15T00:00:00Z"
           PUBLISHER="mw-platform-gate/.github/scripts/publish-bake-bundles.sh"
           LEGACY_PUBLISHER=false
           if [ ! -f "$PUBLISHER" ]; then
             echo "::warning::$PUBLISHER is not in this checkout — assuming a publisher that understands the own/upstream seal split (MeshWeaver#3732). If the publish step below refuses an empty module set, that assumption was wrong and the lane's scripts-ref needs to move."
           elif ! grep -q 'SEAL_MODULES_OWN' "$PUBLISHER"; then
             LEGACY_PUBLISHER=true
-            echo "::warning::the publisher at this lane's scripts ref predates MeshWeaver#3732 (no SEAL_MODULES_OWN): it would refuse a publication that stages no module of its own. Sealing upstream copies as before — this publication will carry its upstream's modules, which is the defect #3732 removes. It stops as soon as the resolved platform set carries the newer publisher; nothing to do here."
+            NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            if [ "$NOW" \> "$LEGACY_PUBLISHER_RED_FROM" ]; then
+              echo "::error::the publisher at this lane's scripts ref STILL predates MeshWeaver#3732 (no SEAL_MODULES_OWN) at $NOW, past $LEGACY_PUBLISHER_RED_FROM. The compatibility branch was for the ~1 hour it takes the newest SEALED set to carry a core merge; a publisher this old means the set this run resolved is not advancing — read the resolver's chosen set and core CD's recent seals (MeshWeaver#4063, MeshWeaver#4142 are the two shapes that stop it), and do NOT re-seal upstream modules to get past this."
+              exit 1
+            fi
+            echo "::warning::the publisher at this lane's scripts ref predates MeshWeaver#3732 (no SEAL_MODULES_OWN): it would refuse a publication that stages no module of its own. Sealing upstream copies as before — so THIS publication carries its upstream's modules, which is exactly the defect #3732 removes, tolerated for the skew window only. It ends with the first sealed set whose core commit contains that change (normally the next set, ~20 min). If this line is still printing after $LEGACY_PUBLISHER_RED_FROM the run FAILS instead: a publisher that old is a set that stopped advancing, not a skew."
           fi
           if [ -n "${REGISTRY_MODULES:-}" ]; then
             if [ -n "${SEAL_UPSTREAMS:-}" ]; then
