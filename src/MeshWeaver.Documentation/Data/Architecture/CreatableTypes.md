@@ -32,13 +32,16 @@ the parent offers none, so a Required field blocks the submit. Without that, a p
 types and still create `Markdown` for anyone who submitted without touching the field — the menu
 honouring the declaration and the write ignoring it.
 
-🚨 **But say plainly what this is: CURATION, not access control.** `CreatableTypes` shapes what the
-Create form offers and submits. It is **not** enforced at the create boundary — `CreateNodeRequest`
-runs the permission pipeline and `NodeTypeResolution`, and asks nothing about the parent's
-declaration. A caller that posts a create directly, or forges the form's `/data` value, can still
-create a type the parent does not list; what stops them creating anything at all is
-`Permission.Create`, which is the actual control. Do not reach for `CreatableTypes` to keep a type
-out of a partition — reach for permissions.
+🚨 **Say plainly what this is: CURATION, not access control** — and note that it is now enforced in
+both halves. `CreatableTypes` shapes what the Create form offers and submits, **and**
+`CreateNodeRequest` refuses a type the parent's NodeType does not allow
+(`CreatableTypesCreationValidator`, [issue #4077](https://github.com/Systemorph/MeshWeaver/issues/4077)) —
+so a caller posting the verb directly, an agent tool call, or a forged `/data/{form}/type` value no
+longer writes a type the declaration withholds. What it is still NOT is an access control:
+`Permission.Create` is what decides whether a caller may create anything at all, it runs on the same
+boundary, and it is the fail-closed one. Do not reach for `CreatableTypes` to keep a type out of a
+partition — reach for permissions. The boundary rules are in
+[What the boundary enforces](#what-the-boundary-enforces) below.
 
 🚨 **Both shapes of the field come out of the same resolved set**, and that is why the type field is
 one branch rather than two. `?types=X` (the MeshSearch "+" button) RESTRICTS: a single value renders
@@ -143,6 +146,71 @@ what let the retired form pass 25 *instances* of opted-out types (every `*/_Acce
 the `Admin/Partition/*` records, the `*/_Policy` nodes, the `Templates/Import/*` templates) into a
 picker that is supposed to list types. See [Query Syntax](/Doc/DataMesh/QuerySyntax) for the `context:` qualifier and the other contexts.
 
+## What the boundary enforces
+
+`CreateNodeRequest` (and the bulk `CreateNodesRequest`, and `CreateOrUpdateNodeRequest`'s create
+branch — all three run the same `INodeValidator` chain) refuses a create whose **namespace** resolves
+to a node whose NodeType declares an explicit `CreatableTypes` list not containing the incoming
+`NodeType`. The refusal is `NodeCreationRejectionReason.InvalidNodeType` and names the type, the
+parent TYPE that declared the restriction, and the allowed set.
+
+**The governing parent is the NAMESPACE**, never the page the form was opened on: the form lets a
+person pick a namespace other than the node they started from, so the boundary judges where the node
+is actually going.
+
+### The allowed set needs no discovery query
+
+A whitelist only ever NARROWS auto-discovery — `BuildInfos` filters the query rows and the static
+bucket down to it — so when one is declared, the offered set is exactly
+`CreatableTypes ∪ (globals when IncludeGlobalTypes)`. That is computable from the parent's
+`NodeTypeDefinition` alone, so the boundary costs at most **two anchored reads** (the parent, then its
+type definition), both resolved for free when the parent or the type is a static registration, and
+only for a parent that declares a list.
+
+🚨 Both reads are **anchored `path:` queries, never point reads**: the parent of a create MAY NOT
+EXIST, and a point read of an absent node answers a routing NotFound that terminates the stream AND
+opens the storm-breaker on that path — which fast-fails the very write being gated (see
+[CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess)).
+
+### What is never refused
+
+| | why |
+|---|---|
+| A parent that declares **no** `CreatableTypes` | the documented default: declaring nothing restricts nothing. The validator is a no-op. |
+| A **root-level** create (no namespace) | there is no parent node to carry a declaration. |
+| A **sibling satellite** — `{parent}/_Access`, `_GitSync`, `_Policy`, `_Entitlements` … | governance bookkeeping filed BESIDE a node, not content created under it. Refusing these would break the partition bootstrap on any type that declares a list. |
+| An **untyped** node | a whitelist of types has nothing to say about a node that names none, and untyped nodes are legal everywhere. |
+| A write by the **platform itself** | see below. |
+
+### The import / sync bypass is the SYSTEM identity
+
+The package installer, GitSync, plugin installs, migrations, repair services and seed providers write
+under `WellKnownUsers.System` (or a hub credential). **They are never curated.** Curation describes
+what a *person* may create through the product; a whitelist that refused an import would turn a
+presentation setting into fleet-wide data loss wearing the look of corruption.
+
+That choice also pays for itself: those writers are exactly the ones that fan a create out over
+hundreds of paths, so the bulk path pays **no** read per node. The bypass is the identity rather than
+a request flag because the bulk verb rebuilds an inner `CreateNodeRequest` per node, so an outer flag
+would not survive the fan-out.
+
+### 🚨 When the parent cannot be read, the create PROCEEDS
+
+If the parent — or the parent's type definition — cannot be read, the validator **allows** the create
+and logs a warning naming the path.
+
+That is deliberately the opposite of the house default for a validator
+(`NodeRejectionReason.Unavailable`, [#1446](https://github.com/Systemorph/MeshWeaver/issues/1446),
+which fails closed), and the reason is what this control *is*. `Permission.Create` gates creation, it
+runs on the same boundary, and it already fails closed — so failing closed here would add nothing to
+the security posture while converting a transient read failure into "no creates under this parent at
+all": an availability incident wearing a policy decision's clothes, which is the collapse
+`Unavailable` exists to prevent.
+
+It is also why this differs from `BuildInfoFromConfig`, which fails CLOSED on an unprobed
+declaration. Same rule, honestly applied to two different consequences: there, failing closed means
+"do not OFFER a type" and costs a person one menu entry; here it would mean "refuse a WRITE".
+
 ## Two rules that look like details and are not
 
 🚨 **The static bucket is filtered by the create-context opt-out, NEVER by `NodeType == "NodeType"`.**
@@ -168,6 +236,7 @@ menu through the static bucket, which is where they actually live.
 | The declaration | `src/MeshWeaver.Graph.Contract/NodeTypeDefinition.cs` (`CreatableTypes`, `IncludeGlobalTypes`) |
 | The global set | `src/MeshWeaver.Mesh.Contract/MeshConfiguration.cs` (`GlobalCreatableTypes`) |
 | The form | `src/MeshWeaver.Graph/CreateLayoutArea.cs` |
-| The tests | `test/MeshWeaver.Graph.Test/CreateMenuHonoursTheParentTypeTest.cs` |
+| The boundary | `src/MeshWeaver.Graph/Configuration/CreatableTypesCreationValidator.cs` |
+| The tests | `test/MeshWeaver.Graph.Test/CreateMenuHonoursTheParentTypeTest.cs` (the form) · `test/MeshWeaver.Graph.Test/CreateBoundaryHonoursCreatableTypesTest.cs` (the boundary) |
 
 Related: [Adding a New Node Type](/Doc/Architecture/AddingANewNodeType) · [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess)
