@@ -285,8 +285,10 @@ denominator the verdict job prints.
 All four go in the **Actions** store of `Systemorph/MeshWeaver` and **only** there:
 `combo-verify.yml` fires on `workflow_run` and `workflow_dispatch` and **never** on
 `pull_request`, so its `secrets.` never resolve against the Dependabot store (there is no Dependabot
-*variables* store at all). The two `AZURE_*` and two `FLEET_READER_*` secrets the same preflight
-asserts are already provisioned for `main-cd`.
+*variables* store at all). The **three** `AZURE_*` secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`) and the two `FLEET_READER_*` secrets the same preflight asserts are
+already provisioned for `main-cd` — five of the preflight's nine inputs are therefore already in
+place, and the four below are the whole of what is missing.
 
 | Name | Kind | Value | Where it comes from |
 |---|---|---|---|
