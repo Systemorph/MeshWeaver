@@ -312,6 +312,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Reliability & wedges
 
 - **Start here:** [Error Propagation & Wedges](ErrorPropagationAndWedges) — drive wedges to 0
+- [Which Kind of Silence](WhichKindOfSilence) — a quiet log has four causes with four owners; the liveness heartbeat that separates them, and the CPU sample and page snapshot that agreed with the wrong one
 - [Action-Block Wedge Prevention](ActionBlockWedgePrevention)
 - [Riding Out a ShuttingDown Address](RidingOutAShuttingDownAddress) — the one transient NACK, and the two axes a ride-out must bound separately
 - [Hub Initialization Failure](HubInitializationFailure)
