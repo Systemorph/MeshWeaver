@@ -249,7 +249,7 @@ public static class MeshApiEndpoints
         var ops = new MeshOperations(sessionHub);
         var timeout = Math.Clamp(body.TimeoutSeconds ?? DefaultRenderAreaTimeoutSeconds, 1, 120);
         return ops.RenderArea(body.Path, body.Area, body.Id, timeout)
-            .Select(json => (IResult)Results.Content(json, "application/json"))
+            .Select(Ship)
             .Catch((TimeoutException _) => Observable.Return((IResult)Results.Json(
                 new
                 {
@@ -315,7 +315,7 @@ public static class MeshApiEndpoints
                 ? Observable.Return(upload.Failure)
                 : new MeshOperations(ResolveSession(http, rootHub))
                     .Upload(upload.Path!, upload.Bytes!)
-                    .Select(result => (IResult)Results.Content(result, "application/json")))
+                    .Select(Ship))
             .FirstAsync()
             .ObserveCompletion(LateFault(http, "/api/mesh/upload"), ct)!;
 
@@ -411,14 +411,42 @@ public static class MeshApiEndpoints
     {
         var sessionHub = ResolveSession(http, rootHub);
         var ops = new MeshOperations(sessionHub);
-        // MeshOperations returns either a JSON document or an "Error: …" sentinel string.
-        // Both are safe to ship as application/json — the error string is just a JSON-quoted
-        // value the client can branch on (mirrors the MCP-tool contract).
         return work(ops)
-            .Select(result => (IResult)Results.Content(result, "application/json"))
+            .Select(Ship)
             .FirstAsync()
             .ObserveCompletion(LateFault(http, $"{http.Request.Path}"), ct)!;
     }
+
+    /// <summary>
+    /// Ships one <see cref="MeshOperations"/> verb result over HTTP. A JSON document goes out
+    /// verbatim as <c>200 application/json</c>; a sentinel sentence (<c>"Error: …"</c>,
+    /// <c>"Not found: …"</c>, <c>"Unavailable: …"</c>) goes out as the status
+    /// <see cref="OperationSentinel"/> assigns it — 500 / 404 / 503 — with a JSON body
+    /// <c>{ "error": &lt;the sentence&gt;, "kind": &lt;kind&gt; }</c>.
+    ///
+    /// <para>🚨 It used to ship the sentence raw with a 200 and <c>application/json</c>, on the
+    /// theory that "the error string is just a JSON-quoted value the client can branch on". It was
+    /// never quoted: a bare <c>Unavailable: …</c> is not JSON, so <c>response.ok()</c> passed and
+    /// the caller died inside <c>JSON.parse</c> with nothing naming the path or the reason
+    /// (MeshWeaver.Plugins#1699, Education's install e2e). Every HTTP client of these verbs — the
+    /// grpc-web SDK, portal-next's SSR, the CLI — checks the status FIRST and only then sniffs the
+    /// prefix, so a non-2xx lands them on the branch they already have for the sentinel; none of
+    /// them handled <c>Unavailable:</c> at all. The MCP tool result is untouched: there the
+    /// sentence IS the contract, and the reader is a model.</para>
+    /// </summary>
+    internal static IResult Ship(string result)
+    {
+        var verdict = OperationSentinel.Classify(result);
+        return verdict is null
+            ? Results.Content(result, "application/json")
+            : Results.Json(new SentinelBody(result, verdict.Kind.ToString()), statusCode: verdict.HttpStatus);
+    }
+
+    /// <summary>The JSON body of a non-2xx verb answer: the sentinel sentence and its kind. Minimal
+    /// APIs serialize it camelCase — <c>{ "error": …, "kind": … }</c> on the wire.</summary>
+    /// <param name="Error">The sentence, verbatim — it names the path and the cause.</param>
+    /// <param name="Kind"><c>Error</c>, <c>NotFound</c> or <c>Unavailable</c>.</param>
+    public sealed record SentinelBody(string Error, string Kind);
 
     private static string ResolveBaseUrl(HttpContext http, IOptions<McpConfiguration>? mcp)
     {
