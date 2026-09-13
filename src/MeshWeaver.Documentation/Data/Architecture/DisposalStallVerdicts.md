@@ -700,9 +700,24 @@ post a `DisposeRequest` without consulting it:
 
 | poster | why it is outside | |
 |---|---|---|
-| `MeshOperations.Recycle` | the operations / MCP recycle posts directly. An operator recycling a package root mid-install can still strand that install. | **an uncovered case** — routing it through the gate is a separate change |
 | `PackageInstaller.SettleRetypedRoot` | it is the lease HOLDER; a holder deferring against its own lease is a deadlock, and its recycle is ordered and waited on | **deliberate** |
 | `NodeTypeEnrichmentHelpers` (stale-build convergence, overlay self-heal) | they recycle per-TYPE hubs *beneath* a root, which is work the install is often waiting for | **deliberate** |
+
+🚨 **`MeshOperations.Recycle` — the operations / MCP verb — used to head that table as the one
+UNCOVERED case**, and it is the one an operator can reach by hand: it posted its own
+`DisposeRequest` and consulted nothing, so recycling a package root mid-install reproduced CD 7950's
+harm exactly. It now composes `HubRecycleExtensions.WhenNoInstallHoldsRoot` — the same gate
+`RecycleNode` waits on, made public for this and deliberately NOT re-derived, because two copies of
+this predicate is how a rule that holds on one surface and not the other drifts apart.
+
+Two things about WHERE the hop sits, both load-bearing. **After the permission fold**: a caller who
+may not recycle is refused at once and never waits on somebody else's install. **Before
+`RecycleCore`**: the release-request stamp `RecycleCore` issues is itself a write into the root the
+install is writing, so gating only the `DisposeRequest` would still let that write race the install
+— which is why `OperatorRecycleWaitsForTheInstallHoldingTheRootTest` asserts the operation emits
+NOTHING rather than merely that the hub survived. Its negative control (the hop removed, both
+projects rebuilt) emits `{"status":"Recycled", …}` while the lease is held; the pass-through case
+stays green.
 
 ### Two repairs considered and REJECTED, with the reason
 
