@@ -1253,6 +1253,52 @@ jobs:
           set -euo pipefail
           EXT="${RUNNER_TEMP:-/tmp}/ext-modules"; mkdir -p "$EXT"; chmod 777 "$EXT"
           BUNDLES="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$BUNDLES"
+          # 🚨 TWO ORIGINS, TWO DIRECTORIES (MeshWeaver#3732, defect 1). `$BUNDLES` holds THIS
+          # repository's own module bundles — the artifacts its module-pack jobs built in this run.
+          # `$UPSTREAM` holds what was composed from an UPSTREAM's sealed publication (or, for a repo
+          # that declares no upstream, from the registry's package endpoint). Both are composed into
+          # the compile surface below and both take part in the one-build-per-name verdict, because
+          # the bake loads them all — but ONLY the first is SEALED into this publication's
+          # `modules/_index`. A downstream that re-seals its upstream's modules hands every reader
+          # of the identity a second copy of each to choose between (`crm` measured on
+          # memex.systemorph.com 2026-09-08 with two builds of MeshWeaver.Markdown.Collaboration, one
+          # riding each publication), and it is what made `Modules:VersionStrictness` readers answer
+          # `SealedSetInconsistent` for the whole identity. The upstream's own seal carries its
+          # modules; a consumer composes each package from the FIRST upstream whose seal lists it
+          # (compose-sealed-modules.sh), so nothing downstream loses a module it declared.
+          UPSTREAM="${RUNNER_TEMP:-/tmp}/ext-bundles-upstream"; mkdir -p "$UPSTREAM"
+          # 🚨 THE PUBLISHER MOVES AT ITS OWN REF, so this step must not assume it understands the
+          # split (Copilot review, #4172). `publish-bake-bundles.sh` is checked out at
+          # `scripts-ref || platform-ref` — a satellite resolves that to the newest SEALED set, which
+          # lags core `main` by up to an hour — while this workflow is whatever `uses: …@main` gives.
+          # A NEW workflow staging own-only against an OLD publisher would hit its
+          # "composed modules but staged none" refusal, which names the wrong cause ("bump the
+          # caller's pin") and would red every satellite publish-bake in the window, since the
+          # satellites own no module at all. So the publisher is PROBED — the same sparse checkout
+          # the compose script comes from — and an old one keeps the old behaviour, loudly.
+          # 🚨 TRANSITIONAL, AND IT HAS A STATED END — an undated tolerance is how a known defect
+          # rides for a month behind a warning nobody re-reads (the `"signature":"not-required"`
+          # inbox, #3312). The branch below ends the moment a lane resolves a sealed platform set
+          # whose core commit CONTAINS this change: the satellites resolve the newest sealed set on
+          # every run, core cuts one roughly every 20 minutes, so the window is ~1 hour, not a day.
+          # Until then a downstream still seals its upstream's modules — #3732's defect 1, tolerated
+          # on purpose rather than traded for a fleet-wide red. From LEGACY_PUBLISHER_RED_FROM the
+          # tolerance is a REFUSAL: a publisher that old means the resolved set stopped advancing,
+          # which is a different defect (#4063 / #4142's shape) and must not be absorbed here.
+          LEGACY_PUBLISHER_RED_FROM="2026-09-15T00:00:00Z"
+          PUBLISHER="mw-platform-gate/.github/scripts/publish-bake-bundles.sh"
+          LEGACY_PUBLISHER=false
+          if [ ! -f "$PUBLISHER" ]; then
+            echo "::warning::$PUBLISHER is not in this checkout — assuming a publisher that understands the own/upstream seal split (MeshWeaver#3732). If the publish step below refuses an empty module set, that assumption was wrong and the lane's scripts-ref needs to move."
+          elif ! grep -q 'SEAL_MODULES_OWN' "$PUBLISHER"; then
+            LEGACY_PUBLISHER=true
+            NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            if [ "$NOW" \> "$LEGACY_PUBLISHER_RED_FROM" ]; then
+              echo "::error::the publisher at this lane's scripts ref STILL predates MeshWeaver#3732 (no SEAL_MODULES_OWN) at $NOW, past $LEGACY_PUBLISHER_RED_FROM. The compatibility branch was for the ~1 hour it takes the newest SEALED set to carry a core merge; a publisher this old means the set this run resolved is not advancing — read the resolver's chosen set and core CD's recent seals (MeshWeaver#4063, MeshWeaver#4142 are the two shapes that stop it), and do NOT re-seal upstream modules to get past this."
+              exit 1
+            fi
+            echo "::warning::the publisher at this lane's scripts ref predates MeshWeaver#3732 (no SEAL_MODULES_OWN): it would refuse a publication that stages no module of its own. Sealing upstream copies as before — so THIS publication carries its upstream's modules, which is exactly the defect #3732 removes, tolerated for the skew window only. It ends with the first sealed set whose core commit contains that change (normally the next set, ~20 min). If this line is still printing after $LEGACY_PUBLISHER_RED_FROM the run FAILS instead: a publisher that old is a set that stopped advancing, not a skew."
+          fi
           if [ -n "${REGISTRY_MODULES:-}" ]; then
             if [ -n "${SEAL_UPSTREAMS:-}" ]; then
               # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
@@ -1260,7 +1306,7 @@ jobs:
               # package endpoint. No fallback — a missing seal or module set is RED in the script.
               [ -n "${REGISTRY_URL:-}" ] || { echo "::error::upstream-sources is set but registry-url is empty — the bake reads sealed module sets from the registry."; exit 1; }
               mw-platform-gate/.github/scripts/compose-sealed-modules.sh --identity "$IDENTITY" --packages "$REGISTRY_MODULES" \
-                --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
+                --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
             else
               echo "::notice::composing registry-modules ($REGISTRY_MODULES) from the REGISTRY's package endpoint: this repo declares no upstream seed, so there is no sealed publication to take module bytes from. These bytes are whatever the module's own lane published last — a bake-consumption decline against a publication that composed different ones is expected, and is the reason to declare the upstream (upstream-seed / upstream-sources) instead."
             for pkg in ${REGISTRY_MODULES:-}; do
@@ -1268,7 +1314,7 @@ jobs:
                 || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
               ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
               [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
-              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$UPSTREAM/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
                 || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
               echo "fetched $pkg@$ver from $REGISTRY_URL"
             done
@@ -1311,8 +1357,11 @@ jobs:
             else shasum -a 256 "$1" | cut -d' ' -f1; fi
           }
           DIGESTS="${RUNNER_TEMP:-/tmp}/ext-module-builds"; : > "$DIGESTS"
-          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
-            u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
+          SEALED_OWN=0
+          UPSTREAM_COMPOSED=0
+          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip "$UPSTREAM"/*.nupkg "$UPSTREAM"/*.zip; do
+            case "$b" in "$UPSTREAM"/*) origin=upstream ;; *) origin=own ;; esac
+            u="${RUNNER_TEMP:-/tmp}/unpack-$origin-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
             unzip -o -q "$b" -d "$u"
             name=""
             [ -f "$u/meshweaver/manifest.json" ] && name=$(jq -r '.module.assemblyName // empty' "$u/meshweaver/manifest.json")
@@ -1380,9 +1429,19 @@ jobs:
               pkg=$(printf '%s' "$stem" | sed -E 's/\.[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.+-]*)?$//')
             fi
             [ -n "$pkg" ] || { echo "::error::$(basename "$b"): cannot derive the package id this bundle seals under — no manifest plugin id, and the file name is not MeshWeaver.Plugin.<pkg>.<version>.module.nupkg / <pkg>.bundle.zip / <pkg>.module.nupkg"; exit 1; }
-            SEAL="${RUNNER_TEMP:-/tmp}/seal-modules"; mkdir -p "$SEAL"
-            cp "$b" "$SEAL/$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
-            echo "sealing $name as module package '$pkg'"
+            if [ "$origin" = "own" ] || [ "$LEGACY_PUBLISHER" = "true" ]; then
+              SEAL="${RUNNER_TEMP:-/tmp}/seal-modules"; mkdir -p "$SEAL"
+              cp "$b" "$SEAL/$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
+              SEALED_OWN=$((SEALED_OWN + 1))
+              if [ "$origin" = "own" ]; then
+                echo "sealing $name as module package '$pkg'"
+              else
+                echo "sealing $name as module package '$pkg' — an UPSTREAM's module, sealed only because the publisher at this lane's scripts ref predates MeshWeaver#3732"
+              fi
+            else
+              UPSTREAM_COMPOSED=$((UPSTREAM_COMPOSED + 1))
+              echo "composed only: $name (package '$pkg') is an UPSTREAM's module — in this bake's compile surface, NOT in this publication's seal; its own source's publication carries it (MeshWeaver#3732)"
+            fi
           done
           [ -n "$MODULE_ARGS" ] || { echo "::error::external modules were requested but none were assembled — the artifact pattern matched nothing and no registry bundle was fetched."; exit 1; }
           # ───── THE VERDICT ON THE SET (MeshWeaver#3732; the reading is collected above) ─────
@@ -1405,9 +1464,19 @@ jobs:
             exit 1
           fi
           echo "external modules: $MODULE_COUNT composed, $ASSET_MODULES of them carrying static web assets, $ASSET_FILES asset file(s) landed module-relative under /ext/<module>/"
+          # 🚨 The SEALED set is a different population from the COMPOSED set, and both denominators
+          # are printed: the verdict above covers everything the bake loads; the seal carries only
+          # what this repository owns. A satellite that owns no module seals an EMPTY set — which a
+          # reader distinguishes from "predates module sealing" by the presence of modules/_index.
+          echo "sealed set: $SEALED_OWN own module bundle(s) go into this publication's modules/_index; $UPSTREAM_COMPOSED upstream cop(y/ies) composed for the compile surface only and NOT sealed here (MeshWeaver#3732)"
           echo "EXT_MODULES_DIR=$EXT" >> "$GITHUB_ENV"
           echo "EXT_MODULE_ARGS=$MODULE_ARGS" >> "$GITHUB_ENV"
           echo "SEAL_MODULES_DIR=${RUNNER_TEMP:-/tmp}/seal-modules" >> "$GITHUB_ENV"
+          # Read by publish-bake-bundles.sh: a bake that composed modules but STAGED none is a
+          # version-skew refusal there (workflow predates module sealing) — unless this step says
+          # the staged set is empty BECAUSE every composed module was an upstream's (own = 0).
+          echo "SEAL_MODULES_OWN=$SEALED_OWN" >> "$GITHUB_ENV"
+          echo "EXT_MODULES_UPSTREAM=$UPSTREAM_COMPOSED" >> "$GITHUB_ENV"
       - name: Bake (compiler --output), then gate a mesh against it (--seed)
         # scope=none means the decision above VERIFIED that this exact content is already sealed
         # for this framework identity at every target — a positive finding, logged with both

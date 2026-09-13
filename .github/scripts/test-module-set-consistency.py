@@ -76,6 +76,7 @@ _spec.loader.exec_module(_harness)
 extract_step = _harness.extract_step
 run_step = _harness.run_step
 ext_dir = _harness.ext_dir
+seal_dir = _harness.seal_dir
 module_folder = _harness.module_folder
 
 FAILURES: list[str] = []
@@ -338,7 +339,139 @@ def case_blind_arm_shows_its_zero(lane: str, body: str, tmp: Path) -> None:
     ok(f"{lane}: falsification arm `blind` — a misdirected check passes, and its ZERO is on the log")
 
 
+def seal_upstream_too(body: str) -> str:
+    """Falsification arm for the seal rule: make the step seal upstream copies as well as its own —
+    the pre-#3732 behaviour — and check the case below notices."""
+    target = 'if [ "$origin" = "own" ] || [ "$LEGACY_PUBLISHER" = "true" ]; then'
+    mutated = body.replace(target, 'if true; then')
+    if mutated == body:
+        die("the own-only seal branch is not in the step — the falsification arm below would "
+            "mutate nothing and pass having checked nothing")
+    return mutated
+
+
+def legacy_publisher_root(tmp: Path) -> str:
+    """A checkout root holding a PRE-#3732 publisher at the path the step probes: the fallback must
+    then seal everything, so a workflow at `@main` cannot red a satellite whose scripts-ref still
+    resolves to an older core commit (Copilot review, #4172)."""
+    root = tmp / "legacy-publisher-root"
+    (root / "mw-platform-gate" / ".github" / "scripts").mkdir(parents=True, exist_ok=True)
+    (root / "mw-platform-gate" / ".github" / "scripts" / "publish-bake-bundles.sh").write_text(
+        "#!/usr/bin/env bash\n# a publisher that predates the split: no such variable here\n",
+        encoding="utf-8")
+    return str(root)
+
+
+def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Path) -> None:
+    """MeshWeaver#3732, defect 1: a module composed from an UPSTREAM's sealed publication is in the
+    compile surface and in the one-build verdict, and NEVER in this publication's seal. Own bundles
+    are sealed. Both directions, then the falsification arm (seal everything, as before)."""
+    work = tmp / "upstream"
+    work.mkdir()
+    own_dir = tmp / "own"
+    own_dir.mkdir()
+    up_dir = tmp / "up"
+    up_dir.mkdir()
+    # The shape Crm's and Education's publish-bake actually run (2026-09-12 logs): four packages
+    # composed from `plugins`' seal — AI, Essentials (whose module is Markdown.Collaboration), Maps,
+    # Stripe — and one own module. Names as the logs print them; bytes synthetic.
+    make_bundle(own_dir / "crm.module.nupkg", "MeshWeaver.Crm", {"MeshWeaver.Shared": BUILD_A})
+    for package, module in (("ai", "MeshWeaver.AI"), ("essentials", "MeshWeaver.Markdown.Collaboration"),
+                            ("maps", "MeshWeaver.Maps"), ("stripe", "MeshWeaver.Payments.Stripe")):
+        make_bundle(up_dir / f"{package}.module.nupkg", module, {"MeshWeaver.Shared": BUILD_A})
+    own = [own_dir / "crm.module.nupkg"]
+    upstream = sorted(up_dir.glob("*.nupkg"))
+
+    result = run_step(body, work, own, upstream=upstream)
+    line = summary_line(result.stdout)
+    print(f"        {line or '(no denominator line)'}")
+    if result.returncode != 0:
+        fail(f"{lane}: own + upstream set was refused: {result.stderr.strip()[-400:]}")
+        return
+    # Compile surface: every bundle, own and upstream, is composed and counted.
+    composed = {p.name for p in ext_dir(work).iterdir()}
+    expected = {"MeshWeaver.Crm", "MeshWeaver.AI", "MeshWeaver.Markdown.Collaboration",
+                "MeshWeaver.Maps", "MeshWeaver.Payments.Stripe"}
+    if composed != expected:
+        fail(f"{lane}: composed set is {sorted(composed)}, expected {sorted(expected)} — an upstream "
+             "copy must still reach the compile surface")
+        return
+    if not line.startswith("module set: 10 MeshWeaver.* assembly file(s) across 5 bundle(s)"):
+        fail(f"{lane}: the verdict's denominator does not cover both origins ({line!r})")
+        return
+    sealed = sorted(p.name for p in seal_dir(work).iterdir()) if seal_dir(work).is_dir() else []
+    if lane == "node-repo-publish-bake.yml":
+        if sealed != ["crm.module.nupkg"]:
+            fail(f"{lane}: the seal holds {sealed}, expected exactly ['crm.module.nupkg'] — an "
+                 "upstream's module must never be re-sealed by a downstream (MeshWeaver#3732)")
+            return
+        if "sealed set: 1 own module bundle(s)" not in result.stdout \
+                or "4 upstream cop(y/ies) composed for the compile surface only" not in result.stdout:
+            fail(f"{lane}: the sealed-set denominator line is missing or wrong:\n{result.stdout[-600:]}")
+            return
+        # Falsification: seal everything, as the lane did before — the seal must now hold copies.
+        work2 = tmp / "upstream-sealed-too"
+        work2.mkdir()
+        mutated = run_step(seal_upstream_too(body), work2, own, upstream=upstream)
+        sealed2 = sorted(p.name for p in seal_dir(work2).iterdir()) if seal_dir(work2).is_dir() else []
+        # The seal names a bundle by its manifest `plugin` id, which make_bundle derives from the
+        # module name (`MeshWeaver.X` → `X`), lower-cased by the step.
+        all_sealed = sorted(f"{m.replace('MeshWeaver.', '').lower()}.module.nupkg"
+                            for m in expected)
+        if mutated.returncode != 0 or sealed2 != all_sealed:
+            fail(f"{lane}: with the own-only rule REMOVED the seal held {sealed2} (rc={mutated.returncode}) "
+                 "— the positive case above could not have failed, so it proves nothing")
+            return
+        # 🚨 THE PUBLISHER'S VINTAGE DECIDES, and both vintages are executed. The step probes
+        # `mw-platform-gate/.github/scripts/publish-bake-bundles.sh` — checked out at the lane's
+        # scripts ref, which a satellite resolves to the newest SEALED set and therefore lags core
+        # `main`. With a PRE-#3732 publisher there the step must keep the old behaviour (seal
+        # everything) rather than stage an own-empty set that publisher would refuse. Without this
+        # case the probe could be inverted and every case above would still pass.
+        work3 = tmp / "legacy-publisher-run"
+        work3.mkdir()
+        legacy = run_step(body, work3, own, upstream=upstream, cwd=legacy_publisher_root(tmp))
+        sealed3 = sorted(p.name for p in seal_dir(work3).iterdir()) if seal_dir(work3).is_dir() else []
+        if legacy.returncode != 0 or sealed3 != all_sealed:
+            fail(f"{lane}: with a PRE-#3732 publisher on disk the step sealed {sealed3} "
+                 f"(rc={legacy.returncode}), expected all {len(all_sealed)} — that publisher refuses "
+                 "an own-empty set, so the step must keep the old behaviour there")
+            return
+        if "predates MeshWeaver#3732" not in legacy.stdout:
+            fail(f"{lane}: the legacy fallback did not SAY why it sealed the upstream copies:\n"
+                 f"{legacy.stdout[-500:]}")
+            return
+        # 🚨 AND THE TOLERANCE HAS AN END: past LEGACY_PUBLISHER_RED_FROM the same pre-#3732
+        # publisher is a REFUSAL, not a warning — a publisher that old means the resolved set
+        # stopped advancing, which is a different defect and must not be absorbed here. Executed by
+        # moving the constant into the past, so the case reads the branch rather than the clock.
+        expired = body.replace('LEGACY_PUBLISHER_RED_FROM="2026-09-15T00:00:00Z"',
+                               'LEGACY_PUBLISHER_RED_FROM="2000-01-01T00:00:00Z"')
+        if expired == body:
+            fail(f"{lane}: LEGACY_PUBLISHER_RED_FROM is not in the step — the tolerance has no "
+                 "stated end, and this case would pass having checked nothing")
+            return
+        work4 = tmp / "legacy-publisher-expired"
+        work4.mkdir()
+        past = run_step(expired, work4, own, upstream=upstream, cwd=legacy_publisher_root(tmp))
+        if past.returncode == 0 or "not advancing" not in past.stdout + past.stderr:
+            fail(f"{lane}: past its stated end the legacy publisher was still tolerated "
+                 f"(rc={past.returncode}) — an undated tolerance is how a known defect rides for a "
+                 f"month:\n{(past.stdout + past.stderr)[-500:]}")
+            return
+        ok(f"{lane}: 1 own bundle sealed, 4 upstream copies composed and guarded but NOT sealed; "
+           "with the rule removed all 5 are sealed (falsification arm); with a PRE-#3732 publisher "
+           "on disk all 5 are sealed and the log says why — and past the branch's stated end that "
+           "same publisher is REFUSED, naming the set that stopped advancing")
+    else:
+        if sealed:
+            fail(f"{lane}: the gate lane sealed {sealed} — it publishes nothing and must stage nothing")
+            return
+        ok(f"{lane}: 5 composed (1 own + 4 upstream), nothing sealed — the gate stages no seal")
+
+
 CASES = (
+    case_upstream_copies_are_composed_never_sealed,
     case_divergent_is_refused,
     case_declared_vs_riding_is_labelled,
     case_same_entry_from_two_bundles_is_refused,
