@@ -150,4 +150,33 @@ public class ProcessLivenessTest
         ProcessLiveness.PeriodOf("ten").Should().Be(ProcessLiveness.DefaultPeriod);
         ProcessLiveness.PeriodOf("10s").Should().Be(ProcessLiveness.DefaultPeriod);
     }
+
+    /// <summary>
+    /// 🚨 These four PARSE. <c>double.TryParse</c> accepts them and <c>TimeSpan.FromSeconds</c>
+    /// throws on every one — the throw is caught at the call site, so the host boots and the
+    /// heartbeat simply never runs, which is precisely the silent removal the case above forbids.
+    /// A value that is not a finite number, or one past <see cref="ProcessLiveness.MaximumPeriod"/>,
+    /// is a malformed value and lands on the default like any other.
+    /// </summary>
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    [InlineData("1e400")]
+    [InlineData("1e30")]
+    public void ANonFiniteOrAbsurdCadence_FallsBackToTheDefault_AndNeverThrows(string configured)
+    {
+        ProcessLiveness.PeriodOf(configured).Should().Be(ProcessLiveness.DefaultPeriod);
+    }
+
+    /// <summary>
+    /// 🚨 The negative control for the case above, so the bound cannot silently swallow a legitimate
+    /// long cadence: a value INSIDE <see cref="ProcessLiveness.MaximumPeriod"/> is honoured.
+    /// </summary>
+    [Fact]
+    public void ALongButFiniteCadence_IsHonoured()
+    {
+        ProcessLiveness.PeriodOf("3600").Should().Be(TimeSpan.FromHours(1));
+        ProcessLiveness.PeriodOf("86400").Should().Be(ProcessLiveness.MaximumPeriod);
+    }
 }

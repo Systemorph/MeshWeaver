@@ -32,7 +32,9 @@ public sealed record ProcessLivenessSample(
 /// silence a quiet window was — see <see cref="ProcessLiveness"/>.
 /// </summary>
 /// <param name="Current">This tick's raw sample.</param>
-/// <param name="Gap">Wall-clock time since the previous tick, or null on the first tick.</param>
+/// <param name="Gap">Monotonic time since the previous tick, or null on the first tick. Never wall
+/// time — a clock step would forge an overrun, which is why <see cref="ProcessLivenessSample.Elapsed"/>
+/// is a <see cref="System.Diagnostics.Stopwatch"/> reading.</param>
 /// <param name="Period">The cadence this heartbeat was asked to keep.</param>
 /// <param name="Gen0Delta">Gen-0 collections since the previous tick, or null on the first.</param>
 /// <param name="Gen1Delta">Gen-1 collections since the previous tick, or null on the first.</param>
@@ -183,10 +185,24 @@ public static class ProcessLiveness
     /// </summary>
     /// <param name="configured">The raw configured value, or null.</param>
     /// <returns>The cadence, or <see cref="TimeSpan.Zero"/> when the heartbeat is switched off.</returns>
-    public static TimeSpan PeriodOf(string? configured) =>
-        double.TryParse(configured, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
-            ? seconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(seconds)
-            : DefaultPeriod;
+    public static TimeSpan PeriodOf(string? configured)
+    {
+        // 🚨 `double.TryParse` SUCCEEDS on "NaN", "Infinity" and "1e400", and
+        // `TimeSpan.FromSeconds` THROWS on every one of them. The throw is caught where this is
+        // called, so the host still boots — and the heartbeat silently does not run, which is the
+        // exact outcome the paragraph above says a typo must never produce. A value that is not a
+        // finite number is a malformed value and lands on the default like any other; so does one
+        // past `MaximumPeriod`, where the configured number is a typo rather than an intention.
+        if (!double.TryParse(configured, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+            || !double.IsFinite(seconds)
+            || seconds > MaximumPeriod.TotalSeconds)
+            return DefaultPeriod;
+
+        return seconds <= 0 ? TimeSpan.Zero : TimeSpan.FromSeconds(seconds);
+    }
+
+    /// <summary>One day — a cadence past this is a typo, and the instrument would publish nothing.</summary>
+    public static readonly TimeSpan MaximumPeriod = TimeSpan.FromDays(1);
 
     /// <summary>The production probe: what the runtime says right now.</summary>
     /// <param name="tickSeq">This tick's number.</param>
