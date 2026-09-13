@@ -22,7 +22,52 @@ and, if none arrives, fails the write:
 |---|---|---|
 | `LatePatchResponseRegistry.LateResponseWatchBound` | 30 s | the registry stops honouring a late verdict here |
 | `LatePatchResponseRegistry.VerdictBoundGrace` | 1 s | **deliberate** slack so the caller's failure cannot race a verdict that is still admissible |
-| `LatePatchResponseRegistry.WriteVerdictBound` | **31 s** | the instant the caller is told `OwnerUnreachable` |
+| `LatePatchResponseRegistry.WriteVerdictBound` | **31 s** | the instant the caller is told `OwnerUnreachable` **for one attempt** |
+| `LatePatchResponseRegistry.WriteTotalBound` | **203 s** | the same, for a write that RE-ENQUEUES — derived, never typed |
+
+## 🚨 One bound was not one bound, and its name did not say so (#3477)
+
+`WriteVerdictBound`'s own documentation read *"the outer bound on a caller-visible mesh WRITE"* with
+no qualifier, and `TestTimeouts.Convergence` derived from it — so **every waiter in the fleet was
+handed a deadline a legitimate write can exceed by about 3×**.
+
+It is armed **per attempt**. A write the owner NACKs as never-applied is re-enqueued
+(`MeshNodeStreamHandle.MaxOwnerDisposingReenqueues`, currently 2), and every re-attempt arms a FRESH
+deadline from its OWN post and pays a base read — plus, on a phantom base, an authoritative re-read —
+**outside** it. The terms compose **additively**, not as alternatives:
+
+```
+attempt 0 : BaseStateWaitBound 30 s  →  post  →  WriteVerdictBound 31 s
+re-attempt: BaseStateWaitBound 30 s + DefaultNodeReadBudget 10 s  →  post  →  WriteVerdictBound 31 s
+            ────────────────────────────────────────────────────────────────────────────────────
+total     : 61 + 2 × 71 = 203 s   against a published 31 s
+```
+
+So the waiter expired while the framework's named terminal (`OwnerUnreachable`, carrying `corr=`)
+was still due, and the failure read `System.TimeoutException : The operation has timed out.` — the
+sighting #3477 was filed on, twice. **Reading the terms as alternatives (take the maximum) is what
+made that region look impossible instead of merely silent**; `LatePatchResponseRegistry` already
+records the identical mistake about the owner-side paths.
+
+### The rule, so a reader picks rather than defaults
+
+| the waiter | the bound | example |
+|---|---|---|
+| can cover a **RE-ENQUEUE** | `WriteTotalBound` (tests: `TestTimeouts.WriteConvergence`) | `LateNackReenqueueTest` — the owner NACK **is** the subject, so re-attempts are the expected path |
+| covers **ONE attempt** | `WriteVerdictBound` (tests: `TestTimeouts.Convergence`) | `MeshExtensions.InnerCreateVerdictBound` — the CREATE leg has no owner-side `OwnerDisposing` NACK (the open half of #3510) and never re-enqueues |
+
+🚨 **`WriteTotalBound` is DERIVED from the re-enqueue path's own constants, never typed** — the two
+cannot drift the way the prose and the path already did once. And it is **not** the default: pointing
+a general convergence wait at it would multiply every wedged test's failure time to buy headroom
+almost nothing needs, and the ratchet on test bounds only moves down. Two named bounds with a stated
+rule is the honest shape; one bound sized for the worst caller is not.
+
+🚨 **The outer kill has to move with the inner wait.** A re-enqueue-covering test's
+`[Fact(Timeout = …)]` must dominate `TestTimeouts.WriteTestMilliseconds`, not `TestMilliseconds`.
+That literal has now fallen below its inner wait **twice** — at `90_000` (below `Convergence`) and at
+`240_000` (below `WriteConvergence`) — and both times the result was an xunit kill with no assertion
+and no named wait. `TestTimeoutsTest.TheOuterKillDominatesTheInnerWait` is what holds the pair
+together, because a literal cannot enforce itself.
 
 The grace is the interesting part. Someone thought carefully about ordering *those two* bounds, and
 wrote a comment saying so: fire at the same instant and you race an admissible verdict, so add a

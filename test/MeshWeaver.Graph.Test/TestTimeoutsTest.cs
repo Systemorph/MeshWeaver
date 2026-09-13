@@ -72,6 +72,102 @@ public class TestTimeoutsTest
             + "the failure can never say why.");
     }
 
+    /// <summary>
+    /// 🚨 <b>THE CONTROL FOR #3477. A wait that can cover a RE-ENQUEUE must dominate what a
+    /// re-enqueue actually costs — not what ONE attempt costs.</b>
+    ///
+    /// <para><b>What was wrong, and why it could not be seen.</b> <c>WriteVerdictBound</c> is armed
+    /// PER ATTEMPT and its doc said it was the outer bound on a write, full stop. Every waiter in
+    /// the fleet derived from it through <c>TestTimeouts.Convergence</c>. But a write the owner
+    /// NACKs as never-applied is re-enqueued up to
+    /// <c>MeshNodeStreamHandle.MaxOwnerDisposingReenqueues</c> times, each re-attempt arming a FRESH
+    /// deadline from its own post and paying a base read (and, on a phantom base, an authoritative
+    /// re-read) OUTSIDE it. So a legitimate write could run to <c>WriteTotalBound</c> while every
+    /// waiter had already given up — and the failure then read
+    /// <c>System.TimeoutException : The operation has timed out.</c>, verbatim what #3477 was filed
+    /// on, with <c>OwnerUnreachable … corr=</c> discarded unread.</para>
+    ///
+    /// <para><b>Why this assertion is the control rather than a config echo.</b> It does not
+    /// restate a number: it recomputes the worst case from the SAME constants the re-enqueue path
+    /// spends and asserts the wait dominates it. Pointing <c>WriteConvergence</c> back at
+    /// <c>WriteVerdictBound</c> — the pre-#3477 derivation — fails it at every factor, because 208
+    /// s of legitimate write does not fit inside a 36 s wait. And it fails for the RIGHT reason: the
+    /// message prints both numbers and names the re-enqueue chain.</para>
+    ///
+    /// <para>🚨 The composition is ADDITIVE, which is the mistake this issue made about itself: the
+    /// terms were once read as alternatives (take the maximum) and the region between the two
+    /// bounds then looks impossible rather than merely silent.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(null)]      // local
+    [InlineData("1")]
+    [InlineData("3")]
+    [InlineData("10")]
+    public void AWriteWaitDominatesWhatAReEnqueueActuallyCosts(string? factor)
+    {
+        using var _ = new EnvironmentVariable("GITHUB_ACTIONS", factor is null ? null : "true");
+        using var __ = new EnvironmentVariable("MW_TEST_TIMEOUT_FACTOR", factor);
+
+        // Recomposed from the constants the path spends, NOT copied from WriteTotalBound — a
+        // control that reads the value under test cannot fail when that value is wrong.
+        var perAttemptVerdict = LatePatchResponseRegistry.WriteVerdictBound;
+        var worstCase = MeshNodeStreamHandle.BaseStateWaitBound + perAttemptVerdict
+            + MeshNodeStreamHandle.MaxOwnerDisposingReenqueues
+              * (MeshNodeStreamHandle.BaseStateWaitBound
+                 + MeshNodeStreamHandle.DefaultNodeReadBudget
+                 + perAttemptVerdict);
+
+        Assert.True(
+            LatePatchResponseRegistry.WriteTotalBound >= worstCase,
+            $"WriteTotalBound ({LatePatchResponseRegistry.WriteTotalBound.TotalSeconds:0.##}s) must "
+            + $"cover what the re-enqueue path actually spends ({worstCase.TotalSeconds:0.##}s): "
+            + "attempt 0's base read + verdict, then one base read + authoritative re-read + a FRESH "
+            + "verdict per re-attempt. If this fails, the published total has drifted from the path "
+            + "— fix the derivation, never the number.");
+
+        Assert.True(
+            TestTimeouts.WriteConvergence > worstCase,
+            $"a wait on a write that can RE-ENQUEUE ({TestTimeouts.WriteConvergence.TotalSeconds:0.##}s) "
+            + $"must exceed what such a write legitimately costs ({worstCase.TotalSeconds:0.##}s), or "
+            + "it expires while UpdateRemote's own terminal is still due and the failure reads as an "
+            + "anonymous TimeoutException instead of OwnerUnreachable — #3477. 🚨 Convergence "
+            + $"({TestTimeouts.Convergence.TotalSeconds:0.##}s) is the PER-ATTEMPT wait and is NOT a "
+            + "substitute here; that substitution is the defect this test exists to refuse.");
+
+        Assert.True(
+            TestTimeouts.WriteConvergence > TestTimeouts.Convergence,
+            "the re-enqueue wait must be the longer of the two — if they are equal, one of them is "
+            + "not derived from the bound it claims to be derived from");
+    }
+
+    /// <summary>
+    /// 🚨 The xunit kill must dominate the inner wait for the WRITE scale too — the same invariant
+    /// <c>TestMilliseconds</c> states, at the scale a re-enqueueing test uses. An attribute argument
+    /// must be a compile-time constant, so <c>LateNackReenqueueTest</c> writes a literal; this is
+    /// what stops that literal from silently falling below the wait again. It has now done so twice:
+    /// at 90_000 (below Convergence) and at 240_000 (below WriteConvergence), and both times the
+    /// result was a kill with no assertion and no named wait.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("1")]
+    [InlineData("3")]
+    public void TheOuterKillDominatesTheInnerWait(string? factor)
+    {
+        using var _ = new EnvironmentVariable("GITHUB_ACTIONS", factor is null ? null : "true");
+        using var __ = new EnvironmentVariable("MW_TEST_TIMEOUT_FACTOR", factor);
+
+        // Both re-enqueue-covering tests carry this literal: LateNackReenqueueTest and
+        // LateNackReenqueueCorrelationTest. One constant, because they must not drift apart.
+        const int reEnqueueTestTimeoutMs = 600_000;
+        Assert.True(
+            reEnqueueTestTimeoutMs > TestTimeouts.WriteTestMilliseconds,
+            $"the re-enqueue tests' [Fact(Timeout = {reEnqueueTestTimeoutMs})] must exceed "
+            + $"TestTimeouts.WriteTestMilliseconds ({TestTimeouts.WriteTestMilliseconds}), or xunit "
+            + "kills the test before its inner wait can report what it was waiting for. Raise the "
+            + "literal in BOTH files — do not lower this bound.");
+    }
+
     /// <summary>The ordering of the three convergence scales holds wherever it runs.</summary>
     [Fact]
     public void TheScalesAreOrdered()
