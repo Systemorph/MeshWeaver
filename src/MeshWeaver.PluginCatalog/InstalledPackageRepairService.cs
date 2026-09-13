@@ -318,7 +318,8 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             : records
                 .Select(record => InstallCompleteness.Observe(
                     persistence, hub.JsonSerializerOptions,
-                    record.PackageId, record.Partition, record.Manifest, parsers))
+                    record.PackageId, record.Partition, record.Manifest, parsers,
+                    record.Identity))
                 .ToObservable()
                 .Concat();
 
@@ -333,12 +334,13 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     logger?.LogError(
                         "[InstallCompleteness] {Package} → '{Partition}': {Missing} of {Declared} "
                         + "declared node(s) are ABSENT. Missing: [{Paths}]. Counted over: "
-                        + "{Population}. The install record says this package is up to date; the "
+                        + "{Population}, taken over {Record}. The install record says this package "
+                        + "is up to date; the "
                         + "mesh disagrees. Reinstalling it now repairs it — the up-to-date gate no "
                         + "longer skips an incomplete install (MeshWeaver#3485).",
                         verdict.PackageId, verdict.Partition, verdict.Missing.Count,
                         verdict.Declared, string.Join(", ", verdict.Missing.Take(20)),
-                        verdict.Population);
+                        verdict.Population, verdict.Provenance);
 
                 foreach (var verdict in verdicts.Where(v => v.Kind is InstallCompletenessKind.RootWithoutRecord))
                     logger?.LogError(
@@ -354,10 +356,10 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                                  or InstallCompletenessKind.Undeclared))
                     logger?.LogWarning(
                         "[InstallCompleteness] {Package} → '{Partition}': NOT VERIFIED ({Kind}) — "
-                        + "{Because}. Counted over: {Population}. This is not a clean bill of "
-                        + "health; it is an absence of one.",
+                        + "{Because}. Counted over: {Population}, taken over {Record}. This is "
+                        + "not a clean bill of health; it is an absence of one.",
                         verdict.PackageId, verdict.Partition, verdict.Kind, verdict.Because,
-                        verdict.Population);
+                        verdict.Population, verdict.Provenance);
 
                 var summary = InstallCompleteness.Summarize(verdicts);
                 logger?.LogInformation(
@@ -452,7 +454,31 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     }
 
     /// <summary>One recorded install: its id, its target partition and the manifest recorded for it.</summary>
-    private sealed record InstalledRecord(string PackageId, string Partition, PackageManifest Manifest);
+    /// <summary>
+    /// The listing every install record is read through — exposed so the SELECT can be asserted
+    /// rather than merely intended.
+    ///
+    /// <para>🚨 <b><c>version</c> and <c>lastModified</c> are load-bearing</b> (MeshWeaver#4200).
+    /// This listing is the eventually-consistent half of the completeness comparison — a
+    /// <c>GetQuery</c>, while the observed half is deliberately kept off one — so its answer has to
+    /// be ATTRIBUTABLE. Without those two fields a verdict says "201 file(s) declared" over a
+    /// record nothing can name, and reconciling that took a version-by-version read of the record
+    /// plus a commit-by-commit count of the source repo.</para>
+    ///
+    /// <para>🚨 And a comment saying so is not a guard: dropping either field from this string is
+    /// invisible at every compile and shows up only as a log line that has quietly stopped naming
+    /// its record. <c>EveryVerdictNamesTheRecordVersionItWasTakenOver</c> asserts the SELECT.</para>
+    /// </summary>
+    public static string RecordsQuery =>
+        $"namespace:{PackageInstaller.InstalledPartition} "
+        + $"nodeType:{PackageInstaller.PackageNodeType} "
+        + "select:path,id,name,nodeType,content,version,lastModified";
+
+    /// <param name="Identity">Which record node VERSION this entry was read from
+    /// (<see cref="InstallCompleteness.DescribeRecord"/>) — carried so every verdict can name the
+    /// record it was taken over (MeshWeaver#4200).</param>
+    private sealed record InstalledRecord(
+        string PackageId, string Partition, PackageManifest Manifest, string Identity);
 
     /// <summary>
     /// Every recorded install, one entry per partition. Reads the <c>Package</c> records the
@@ -462,9 +488,7 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     /// </summary>
     private IObservable<IReadOnlyList<InstalledRecord>> InstalledRecords(ILogger? logger) =>
         hub.GetWorkspace()
-            .GetQuery("installed-packages-repair",
-                $"namespace:{PackageInstaller.InstalledPartition} "
-                + $"nodeType:{PackageInstaller.PackageNodeType} select:path,id,name,nodeType,content")
+            .GetQuery("installed-packages-repair", RecordsQuery)
             .Take(1)
             .Timeout(TimeSpan.FromMinutes(2))
             .Select(nodes => (IReadOnlyList<InstalledRecord>)nodes
@@ -474,7 +498,9 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                 .Select(x => new InstalledRecord(
                     x.Node.Id,
                     PackageInstaller.TargetPartitionOf(x.Node.Id, x.Manifest!),
-                    x.Manifest!))
+                    x.Manifest!,
+                    InstallCompleteness.DescribeRecord(
+                        x.Node.Path, x.Node.Version, x.Node.LastModified, x.Manifest)))
                 .Where(r => !string.IsNullOrWhiteSpace(r.Partition))
                 .GroupBy(r => r.Partition, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())

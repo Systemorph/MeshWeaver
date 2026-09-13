@@ -317,6 +317,81 @@ public class InstallCompletenessTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     /// <summary>
+    /// 🚨 <b>A DECLARED COUNT MUST NAME THE RECORD IT WAS TAKEN OVER</b> — MeshWeaver#4200.
+    ///
+    /// <para>A production sweep reported <c>201 file(s) declared</c> and named two of them ABSENT.
+    /// Reconciling that number took a version-by-version read of <c>Plugins/Store</c> plus a
+    /// commit-by-commit count of the source repo — and the answer was that the two record versions
+    /// straddling the sweep carry a 193-file map declaring neither name. The count was right about
+    /// SOMETHING and nothing in the line could say what.</para>
+    ///
+    /// <para>This is the same defect as a missing denominator: a count taken over the right record
+    /// and one taken over a stale record render identically. And the record is exactly the half
+    /// that CAN be stale — the observed side is kept off a query on purpose, while the declared
+    /// side arrives through an eventually-consistent <c>GetQuery</c>.</para>
+    /// </summary>
+    [Fact]
+    public async Task EveryVerdictNamesTheRecordVersionItWasTakenOver()
+    {
+        var record = new PackageManifest
+        {
+            Id = Package,
+            TargetPartition = Package,
+            Version = "1.9.16",
+            ModuleVersion = "b53d4f05232ce57f",
+            InstalledAtUtc = new DateTimeOffset(2026, 9, 10, 12, 55, 28, TimeSpan.Zero),
+            InstalledFiles = ImmutableSortedDictionary<string, string>.Empty
+                .Add($"{Package}/Guide.md", "bbb"),
+        };
+
+        var identity = InstallCompleteness.DescribeRecord(
+            $"Plugins/{Package}", 32, new DateTimeOffset(2026, 9, 12, 2, 0, 24, TimeSpan.Zero), record);
+
+        identity.Should().Contain("v32", "the NODE VERSION is the part that says WHICH record was read");
+        identity.Should().Contain("2026-09-12T02:00:24", "and when that version was written");
+        identity.Should().Contain("1.9.16").And.Contain("b53d4f05232ce57f",
+            "the stamps identify the SOURCE snapshot the map was written from");
+        identity.Should().Contain("installedAtUtc 2026-09-10T12:55:28",
+            "which can be older than the version that carries it — that gap is the thing to see");
+        identity.Should().Contain("1 file(s) in the map",
+            "the map's own size, so a regressed map is visible beside the count it produced");
+
+        // 🚨 The arm that is NOT a pass carries it too: a NotObserved nobody can attribute is as
+        // unactionable as an Incomplete nobody can attribute.
+        // awaited, never bridged to a blocking wait — BlockingBridgeInTestRatchetGuard (#2013).
+        var notObserved = await InstallCompleteness
+            .Observe(null, Mesh.JsonSerializerOptions, Package, Package, record, Parsers(), identity)
+            .FirstAsync().Timeout(TestTimeouts.Convergence);
+        notObserved.Kind.Should().Be(InstallCompletenessKind.NotObserved);
+        notObserved.RecordIdentity.Should().Be(identity);
+        notObserved.Provenance.Should().Be(identity);
+
+        // 🚨 AND THE ABSENCE SAYS SO. "Not identified" must never render as a blank that reads like
+        // an identified one — the same rule that makes NotObserved not a pass.
+        var unattributed = await InstallCompleteness
+            .Observe(null, Mesh.JsonSerializerOptions, Package, Package, record, Parsers())
+            .FirstAsync().Timeout(TestTimeouts.Convergence);
+        unattributed.RecordIdentity.Should().BeNull();
+        unattributed.Provenance.Should().Contain("NOT identified");
+        unattributed.Provenance.Should().NotBeNullOrWhiteSpace(
+            "a provenance nobody supplied must be a sentence, not an empty string in a log line");
+
+        // 🚨 AND THE SELECT THAT FEEDS IT. A test that only exercises DescribeRecord with
+        // hand-supplied values would still pass with `version`/`lastModified` dropped from the
+        // listing — at which point every verdict names a record it cannot identify and nothing is
+        // red. The projection is the other half of the same guarantee.
+        InstalledPackageRepairService.RecordsQuery.Should().Contain("select:",
+            "the listing projects — it does not read whole nodes");
+        InstalledPackageRepairService.RecordsQuery.Should().Contain("version",
+            "the record's VERSION is what makes a declared count attributable");
+        InstalledPackageRepairService.RecordsQuery.Should().Contain("lastModified",
+            "and when that version was written");
+        InstalledPackageRepairService.RecordsQuery.Should().Contain("content",
+            "the control: the manifest itself must still be selected, or nothing is declared at all");
+    }
+
+
+    /// <summary>
     /// A record whose file map addresses a DIFFERENT partition cannot be compared against this one,
     /// and guessing a rebase would manufacture a shortfall out of a naming difference. It reports
     /// <see cref="InstallCompletenessKind.Undeclared"/> — unverifiable, never "incomplete".
