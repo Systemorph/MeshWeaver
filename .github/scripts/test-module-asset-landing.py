@@ -226,7 +226,8 @@ def realistic_assets(module: str) -> dict[str, bytes]:
 
 # ── running the real step ───────────────────────────────────────────────────────────────────
 def run_step(body: str, workdir: Path, bundles: list[Path],
-             upstream: list[Path] | None = None) -> subprocess.CompletedProcess[str]:
+             upstream: list[Path] | None = None,
+             cwd: str | None = None) -> subprocess.CompletedProcess[str]:
     """`bundles` are THIS repository's own module bundles (the artifact download's directory);
     `upstream` are bundles an upstream's sealed publication supplied — the directory
     compose-sealed-modules.sh writes to (MeshWeaver#3732). Placing them there directly stands in
@@ -258,8 +259,10 @@ def run_step(body: str, workdir: Path, bundles: list[Path],
         "PLATFORM_REF": "",
         "GH_TOKEN": "",
     })
+    # `cwd` stands in for the lane's checkout root: the step probes
+    # `mw-platform-gate/.github/scripts/publish-bake-bundles.sh` relative to it (MeshWeaver#3732).
     return subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env,
-                          cwd=workdir)
+                          cwd=cwd or workdir)
 
 
 def ext_dir(workdir: Path) -> Path:

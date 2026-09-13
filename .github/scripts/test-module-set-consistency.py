@@ -342,11 +342,24 @@ def case_blind_arm_shows_its_zero(lane: str, body: str, tmp: Path) -> None:
 def seal_upstream_too(body: str) -> str:
     """Falsification arm for the seal rule: make the step seal upstream copies as well as its own —
     the pre-#3732 behaviour — and check the case below notices."""
-    mutated = body.replace('if [ "$origin" = "own" ]; then', 'if true; then')
+    target = 'if [ "$origin" = "own" ] || [ "$LEGACY_PUBLISHER" = "true" ]; then'
+    mutated = body.replace(target, 'if true; then')
     if mutated == body:
-        die("the own-only seal branch (`if [ \"$origin\" = \"own\" ]`) is not in the step — the "
-            "falsification arm below would mutate nothing and pass having checked nothing")
+        die("the own-only seal branch is not in the step — the falsification arm below would "
+            "mutate nothing and pass having checked nothing")
     return mutated
+
+
+def legacy_publisher_root(tmp: Path) -> str:
+    """A checkout root holding a PRE-#3732 publisher at the path the step probes: the fallback must
+    then seal everything, so a workflow at `@main` cannot red a satellite whose scripts-ref still
+    resolves to an older core commit (Copilot review, #4172)."""
+    root = tmp / "legacy-publisher-root"
+    (root / "mw-platform-gate" / ".github" / "scripts").mkdir(parents=True, exist_ok=True)
+    (root / "mw-platform-gate" / ".github" / "scripts" / "publish-bake-bundles.sh").write_text(
+        "#!/usr/bin/env bash\n# a publisher that predates the split: no such variable here\n",
+        encoding="utf-8")
+    return str(root)
 
 
 def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Path) -> None:
@@ -409,8 +422,28 @@ def case_upstream_copies_are_composed_never_sealed(lane: str, body: str, tmp: Pa
             fail(f"{lane}: with the own-only rule REMOVED the seal held {sealed2} (rc={mutated.returncode}) "
                  "— the positive case above could not have failed, so it proves nothing")
             return
+        # 🚨 THE PUBLISHER'S VINTAGE DECIDES, and both vintages are executed. The step probes
+        # `mw-platform-gate/.github/scripts/publish-bake-bundles.sh` — checked out at the lane's
+        # scripts ref, which a satellite resolves to the newest SEALED set and therefore lags core
+        # `main`. With a PRE-#3732 publisher there the step must keep the old behaviour (seal
+        # everything) rather than stage an own-empty set that publisher would refuse. Without this
+        # case the probe could be inverted and every case above would still pass.
+        work3 = tmp / "legacy-publisher-run"
+        work3.mkdir()
+        legacy = run_step(body, work3, own, upstream=upstream, cwd=legacy_publisher_root(tmp))
+        sealed3 = sorted(p.name for p in seal_dir(work3).iterdir()) if seal_dir(work3).is_dir() else []
+        if legacy.returncode != 0 or sealed3 != all_sealed:
+            fail(f"{lane}: with a PRE-#3732 publisher on disk the step sealed {sealed3} "
+                 f"(rc={legacy.returncode}), expected all {len(all_sealed)} — that publisher refuses "
+                 "an own-empty set, so the step must keep the old behaviour there")
+            return
+        if "predates MeshWeaver#3732" not in legacy.stdout:
+            fail(f"{lane}: the legacy fallback did not SAY why it sealed the upstream copies:\n"
+                 f"{legacy.stdout[-500:]}")
+            return
         ok(f"{lane}: 1 own bundle sealed, 4 upstream copies composed and guarded but NOT sealed; "
-           "with the rule removed all 5 are sealed (falsification arm)")
+           "with the rule removed all 5 are sealed (falsification arm); with a PRE-#3732 publisher "
+           "on disk all 5 are sealed and the log says why")
     else:
         if sealed:
             fail(f"{lane}: the gate lane sealed {sealed} — it publishes nothing and must stage nothing")
