@@ -142,12 +142,22 @@ is mvid:…`. On 2026-08-29 that was every satellite, red at once, with no diff 
 
 **The publication is the unit of consistency.** Since #2707:
 
-- `publish-bake-bundles.sh` seals the composed bundles WITH the publication —
+- `publish-bake-bundles.sh` seals the bundles the repository **OWNS** with the publication —
   `prebuilt-bundles/<identity>/<source>/modules/<pkg>.module.nupkg`, listed in `modules/_index`,
-  written strictly before `_complete`. A bake that composed nothing seals an **empty** index, so a
+  written strictly before `_complete`. A bake that owns nothing seals an **empty** index, so a
   reader can tell "composed nothing" from "predates module sealing"; a sealed publication with no
   index is republished on the source's next bake even when its content is unchanged — that is what
   converges the fleet without anyone re-baking by hand.
+  🚨 **Only its own** (2026-09-13, #3732): a downstream composes its upstream's modules into the
+  bake's compile surface and does **not** re-seal them. Until then every satellite re-published the
+  four Plugins modules it composed, so one framework identity held five copies of each — and when
+  the upstream resealed the identity with a newer build the copies diverged, which is what
+  `ReleaseAvailability` answers `SealedSetInconsistent` for. The seal now carries one copy of each
+  module, in the publication of the source that owns it; a consumer composes each package from the
+  first upstream whose seal lists it, exactly as below. The lane prints both denominators —
+  `sealed set: N own module bundle(s) …; M upstream cop(y/ies) composed for the compile surface
+  only and NOT sealed here` — and the one-build-per-name verdict still covers the whole COMPOSED
+  set, because that is what the bake loads.
 - The registry serves the set: `GET …/prebuilt/<identity>/<source>/modules` (the index's list, 404
   *saying* "predates module sealing" for an old seal) and `…/modules/<bundle>` (listed names only).
 - `compose-sealed-modules.sh` — called by `node-repo-gate.yml`, `node-repo-compile-check.yml` and

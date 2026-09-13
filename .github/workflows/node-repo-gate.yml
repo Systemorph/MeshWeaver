@@ -1446,6 +1446,11 @@ jobs:
           set -euo pipefail
           EXT="${RUNNER_TEMP:-/tmp}/ext-modules"; mkdir -p "$EXT"; chmod 777 "$EXT"
           BUNDLES="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$BUNDLES"
+          # Own bundles (this run's artifacts) and UPSTREAM-composed ones are kept apart, exactly as
+          # the publish-bake lane keeps them (MeshWeaver#3732): the gate composes both into the
+          # compile surface and seals nothing, but the two lanes share one step shape and one
+          # harness, so the directories are the same in both.
+          UPSTREAM="${RUNNER_TEMP:-/tmp}/ext-bundles-upstream"; mkdir -p "$UPSTREAM"
           if [ -n "${REGISTRY_MODULES:-}" ]; then
             if [ -n "${SEAL_UPSTREAMS:-}" ]; then
               # 🚨 The publication is the unit of consistency (MeshWeaver#2698): module bytes come
@@ -1467,10 +1472,10 @@ jobs:
               head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
               chmod +x "$SCRIPT"
               if [ -n "${REGISTRY_URL:-}" ]; then
-                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
+                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
                   --registry-url "$REGISTRY_URL" --registry-key "$REGISTRY_KEY"
               else
-                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$BUNDLES" \
+                "$SCRIPT" --identity "$IDENTITY" --packages "$REGISTRY_MODULES" --upstreams "$SEAL_UPSTREAMS" --out "$UPSTREAM" \
                   --storage-target "$(printf '%s\n' $TARGETS | head -1)"
               fi
             else
@@ -1480,7 +1485,7 @@ jobs:
                 || { echo "::error::registry index unreadable at $REGISTRY_URL (registry-modules: $pkg)"; exit 1; }
               ver=$(jq -r --arg p "$pkg" '(.bundles // .Bundles // [])[] | select(((.plugin // .Plugin)|ascii_downcase)==($p|ascii_downcase)) | (.version // .Version)' <<<"$idx" | head -1)
               [ -n "$ver" ] || { echo "::error::the registry at $REGISTRY_URL does not advertise package '$pkg' to this instance key — check the key's grants, and that the upstream wave has published the bundle."; exit 1; }
-              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$BUNDLES/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
+              curl -fsS -H "Authorization: Bearer $REGISTRY_KEY" -o "$UPSTREAM/$pkg.bundle.zip" "$REGISTRY_URL/api/plugins/bundles/$pkg/$ver" \
                 || { echo "::error::download failed for $pkg@$ver from $REGISTRY_URL"; exit 1; }
               echo "fetched $pkg@$ver from $REGISTRY_URL"
             done
@@ -1523,8 +1528,9 @@ jobs:
             else shasum -a 256 "$1" | cut -d' ' -f1; fi
           }
           DIGESTS="${RUNNER_TEMP:-/tmp}/ext-module-builds"; : > "$DIGESTS"
-          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip; do
-            u="${RUNNER_TEMP:-/tmp}/unpack-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
+          for b in "$BUNDLES"/*.nupkg "$BUNDLES"/*.zip "$UPSTREAM"/*.nupkg "$UPSTREAM"/*.zip; do
+            case "$b" in "$UPSTREAM"/*) origin=upstream ;; *) origin=own ;; esac
+            u="${RUNNER_TEMP:-/tmp}/unpack-$origin-$(basename "$b")"; rm -rf "$u"; mkdir -p "$u"
             unzip -o -q "$b" -d "$u"
             name=""
             [ -f "$u/meshweaver/manifest.json" ] && name=$(jq -r '.module.assemblyName // empty' "$u/meshweaver/manifest.json")

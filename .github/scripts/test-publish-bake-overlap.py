@@ -699,6 +699,35 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
           r.returncode == 0 and s.sealed() and "already published; skipping" in r.stdout,
           f"rc={r.returncode}, {denominator(s)}")
 
+    # ── AN OWN-EMPTY MODULE SET is sealed when the workflow SAYS so, and refused when it does not. ──
+    # MeshWeaver#3732: a downstream composes its upstream's modules for the compile surface and
+    # seals none of them, so its bake stages ZERO modules while EXT_MODULES_DIR is set. The
+    # workflow that knows the split exports SEAL_MODULES_OWN=0 and the script seals an EMPTY
+    # modules/_index; the same shape WITHOUT that export is the pre-#2707 workflow skew and stays
+    # refused — both directions, on the same bake.
+    h.reset()
+    downstream = Bake(work, "downstream", "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0")
+    for m in list((downstream.dir / "modules").iterdir()):
+        m.unlink()
+    ext = work / "ext-modules-composed"
+    (ext / "MeshWeaver.AI").mkdir(parents=True, exist_ok=True)
+    r = h.publish(downstream, "Systemorph/MeshWeaver.Crm", "3001",
+                  {"EXT_MODULES_DIR": str(ext), "SEAL_MODULES_OWN": "0", "EXT_MODULES_UPSTREAM": "1"})
+    s = h.shelf()
+    index = s.dest / "modules" / "_index"
+    check("a bake that composed only UPSTREAM modules (SEAL_MODULES_OWN=0) seals an EMPTY modules/_index",
+          r.returncode == 0 and s.sealed() and index.is_file() and index.read_text() == ""
+          and "sealing an EMPTY modules/_index by design (MeshWeaver#3732)" in r.stdout,
+          f"rc={r.returncode}, sealed={s.sealed()}, index={(index.read_text() if index.is_file() else 'absent')!r}")
+    h.reset()
+    r = h.publish(downstream, "Systemorph/MeshWeaver.Crm", "3002",
+                  {"EXT_MODULES_DIR": str(ext), "SEAL_MODULES_OWN": None, "EXT_MODULES_UPSTREAM": None})
+    s = h.shelf()
+    check("…and the same bake from a workflow that does NOT export the own count is still refused (skew)",
+          r.returncode != 0 and not s.sealed()
+          and "Refusing to seal an empty module set that would claim completeness" in r.stdout + r.stderr,
+          f"rc={r.returncode}, sealed={s.sealed()}")
+
     # ── THE PLATFORM SURFACE rides the publication, and its absence is loud, not fatal. #3651 ──
     #
     # The release gate links a landed module against platform-surface.json to answer "would it load
