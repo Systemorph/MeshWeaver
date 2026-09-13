@@ -19,15 +19,23 @@
     "entry with no `reason`, as is an entry naming an installation no overlay declares (a stale",
     "exemption hides the next one).",
     "",
-    "🚨 `registry` IS A SCOPE STATEMENT, NOT AN EXEMPTION FROM ANSWERING. An entry carrying one is",
-    "still LIVE, still expected to answer `/api/version`, still counted — and it prints on its own",
-    "line in the report (`…declared OUT OF THIS REGISTRY'S SCOPE`) so it can never be read as",
-    "protected. The single thing it says is that this installation's images are served by a",
-    "registry `acr purge` cannot reach and this lane cannot lock, so there is nothing HERE to",
-    "protect for it. It is checked BOTH ways against what the overlay actually pins: a declaration",
-    "naming a registry the overlay does not pin in is RED, and so is one on an installation that",
-    "ALSO pins in this ACR (half in is not out). It is refused on a non-live entry, and refused",
-    "without a `reason`.",
+    "🚨 `registries` (below) ACCOUNTS FOR EVERY REGISTRY THE FLEET'S OVERLAYS NAME, and the UNIT",
+    "is the registry rather than the installation — deliberately. A per-instance field answers",
+    "'is this one out of scope' and can never answer 'is every registry the fleet pins in",
+    "accounted for': an installation pinning its declared registry AND a second undeclared one",
+    "would pass it with half its running set unnamed. A per-instance `registry` key is therefore",
+    "REFUSED, so a stale one cannot sit there looking like a declaration.",
+    "",
+    "Two dispositions, and the difference is load-bearing:",
+    "  fleet-unlockable  serves OUR images and this lane cannot lock them. An installation running",
+    "                    from one is out of THIS lane's scope — still live, still expected to",
+    "                    answer, still counted, and printed on its own line saying protection there",
+    "                    is UNVERIFIED. It never claims the other registry protects anything.",
+    "  third-party       the images are somebody else's and were never ours to protect. Reported,",
+    "                    never a blocker.",
+    "An UNDECLARED host is a BLOCKER wherever it appears — including on an installation that also",
+    "pins in this ACR, where half its running set would otherwise be protected and half not while",
+    "the run reported success.",
     "",
     "Removing an entry is how an installation re-enters the expected set.",
     "",
@@ -37,12 +45,25 @@
     "answer over the public internet. If one ever cannot, that is a decision to take then, in a",
     "reviewed diff, and it needs its own state rather than being filed under `retired`."
   ],
+  "registries": {
+    "cr.meshweaver.cloud": {
+      "disposition": "fleet-unlockable",
+      "reason": "The fleet's OWN container registry, hosted by MeshWeaver (MeshWeaver#3697) and the default for newly provisioned instances. `acr purge` cannot reach it and this lane cannot lock a manifest there, so an installation running from it is out of THIS lane's scope. 🚨 THAT IS NOT A CLAIM THAT ANYTHING RETAINS IT: what keeps — or deletes — images in cr.meshweaver.cloud is established by nothing, and is an open item on MeshWeaver#3438. Measured 2026-09-13: 4 references across the fleet's overlays (build x2, pearl x2).",
+      "declaredAt": "2026-09-13",
+      "issue": "MeshWeaver#3438"
+    },
+    "ghcr.io": {
+      "disposition": "third-party",
+      "reason": "Somebody else's images, never ours to protect and never published by this fleet. Measured 2026-09-13: 2 references across the fleet's overlays — `ghcr.io/distribution/distribution` (the registry service's own image, in memex-cloud's overlay) and one line of PROSE in the ci-runners overlay describing what the runner image is built from. The second is why whole-line comments are stripped before extraction.",
+      "declaredAt": "2026-09-13",
+      "issue": "MeshWeaver#3438"
+    }
+  },
   "instances": [
     {
       "id": "build",
       "state": "live",
-      "registry": "cr.meshweaver.cloud",
-      "reason": "The fleet's build server (build.meshweaver.cloud, MeshWeaver.Plugins#1784). It is LIVE and it ANSWERS — the 2026-09-13 01:18Z run read core c84c6c0 from it — but deployments/aks/build/values.build.public.yaml pins `cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411` and its migration twin in the FLEET'S OWN registry, which `acr purge` cannot reach and this lane cannot lock. Before this entry the ACR-scoped extractor read that overlay as pinning ZERO and the run refused with `pins no image at all` — a false sentence that reddened the lane from 2026-09-13 and, because `pause.reEnableWhen` is `lock-pinned-digests is green`, stood between the fleet and re-enabling cleanup. 🚨 WHAT RETAINS cr.meshweaver.cloud IS NOT ESTABLISHED HERE and is tracked on MeshWeaver#3438: this entry states that the images are out of THIS lane's reach, never that something else is protecting them. Delete it the day the overlay pins in this ACR again.",
+      "reason": "The fleet's build server (build.meshweaver.cloud, MeshWeaver.Plugins#1784). It is LIVE and it ANSWERS — the 2026-09-13 01:18Z run read core c84c6c0 from it — but deployments/aks/build/values.build.public.yaml pins `cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411` and its migration twin in the FLEET'S OWN registry, which `acr purge` cannot reach and this lane cannot lock. Before this entry the ACR-scoped extractor read that overlay as pinning ZERO and the run refused with `pins no image at all` — a false sentence that reddened the lane from 2026-09-13 and, because `pause.reEnableWhen` is `lock-pinned-digests is green`, stood between the fleet and re-enabling cleanup. 🚨 WHAT RETAINS cr.meshweaver.cloud IS NOT ESTABLISHED HERE and is tracked on MeshWeaver#3438; the `registries` table below is where that is stated, and it states that nothing has been checked. This entry only records that the installation is live and answering.",
       "declaredAt": "2026-09-13",
       "issue": "MeshWeaver#3438"
     },

@@ -205,6 +205,30 @@ FOREIGN_INLINE_RE = re.compile(
     r"/(?P<repo>[A-Za-z0-9][A-Za-z0-9._/-]*):(?P<tag>[A-Za-z0-9_][A-Za-z0-9._-]*)"
 )
 
+# Shape B for a foreign registry — helm's split `repository:` + sibling `tag:`, the same convention
+# the ACR path already handles. A foreign-only overlay written that way would otherwise extract as
+# NOTHING and fall straight back into `pins no image at all`: this bug, in its second shape.
+FOREIGN_REPOSITORY_RE = re.compile(
+    r"^(?P<indent>[ \t]*)repository[ \t]*:[ \t]*(?P<quote>['\"]?)"
+    r"(?P<host>[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+)"
+    r"/(?P<repo>[A-Za-z0-9][A-Za-z0-9._/-]*?)(?P=quote)[ \t]*(?:#[^\r\n]*)?$"
+)
+
+# 🚨 A COMMENT IS PROSE, NOT A PIN — and this issue already paid for the lesson once: eleven of the
+# thirty-one `sha256:` tokens in the 2026-09-08 hand count were comments, several of them narrating
+# THIS incident inside the very files it broke, so a counter that does not exclude them over-reports
+# by more than a third. Measured 2026-09-13 on the fleet's twelve overlays: of two `ghcr.io`
+# references, ONE is a line of prose in `ci-runners` explaining what the runner image is built from.
+# With an undeclared registry now a BLOCKER, a match inside a comment would red the lane over a
+# sentence.
+COMMENT_LINE_RE = re.compile(r"^[ \t]*#")
+
+
+def without_comments(text: str) -> str:
+    """The overlay with whole-line comments removed. Trailing `# …` is left alone — the shapes above
+    already tolerate it, and cutting at a `#` would truncate a value that legitimately contains one."""
+    return "\n".join("" if COMMENT_LINE_RE.match(line) else line for line in text.splitlines())
+
 # A `${{ … }}` / `{{ … }}` value is a template, not a pin.
 TEMPLATED_RE = re.compile(r"\{\{")
 
@@ -225,29 +249,64 @@ def is_overlay_path(path: str) -> bool:
     return bool(OVERLAY_FILE_RE.match(parts[-1]))
 
 
-def extract_foreign_pins(text: str) -> list[tuple[str, str, str]]:
+def extract_foreign_pins(text: str, registry: str) -> list[tuple[str, str, str]]:
     """(registry host, repo, tag) for every image reference in a registry this lane does NOT lock.
 
-    Deliberately a SUPERSET minus the ACR matches, rather than a list of known hosts: a host nobody
-    thought of must show up as foreign, never as nothing."""
-    acr = {(m.group("host"), m.group("repo"), m.group("tag"))
-           for m in OVERLAY_INLINE_RE.finditer(text)}
+    Deliberately a SUPERSET minus THIS registry's own matches, rather than a list of known hosts: a
+    host nobody thought of must show up as foreign, never as nothing.
+
+    🚨 `registry` IS THE ONE THIS RUN LOCKS, NOT "ANY ACR". `--registry meshweaver` locks
+    `meshweaver.azurecr.io` and nothing else, so a pin in a DIFFERENT `*.azurecr.io` is foreign too
+    — treating every ACR as in-scope would extract its repository and then look it up in the wrong
+    registry, which is this bug reintroduced one registry along."""
+    mine = f"{registry}.azurecr.io"
+    body = without_comments(text)
     foreign: list[tuple[str, str, str]] = []
-    for match in FOREIGN_INLINE_RE.finditer(text):
-        triple = (match.group("host"), match.group("repo"), match.group("tag"))
-        if triple in acr or triple[0].endswith(".azurecr.io"):
-            continue
-        if TEMPLATED_RE.search(match.group(0)):
-            continue
+
+    def add(host: str, repo: str, tag: str, matched: str) -> None:
+        if host == mine or TEMPLATED_RE.search(matched):
+            return
+        triple = (host, repo, tag)
         if triple not in foreign:
             foreign.append(triple)
+
+    for match in FOREIGN_INLINE_RE.finditer(body):
+        add(match.group("host"), match.group("repo"), match.group("tag"), match.group(0))
+
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        repo_match = FOREIGN_REPOSITORY_RE.match(line)
+        if not repo_match or TEMPLATED_RE.search(line):
+            continue
+        indent = len(repo_match.group("indent").replace("\t", "    "))
+        for follower in lines[index + 1:]:
+            if not follower.strip():
+                continue
+            follower_indent = len(follower[: len(follower) - len(follower.lstrip())]
+                                  .replace("\t", "    "))
+            if follower_indent < indent:
+                break
+            if follower_indent > indent:
+                continue
+            tag_match = OVERLAY_TAG_RE.match(follower)
+            if tag_match and not TEMPLATED_RE.search(follower):
+                add(repo_match.group("host"), repo_match.group("repo"), tag_match.group("tag"),
+                    line + follower)
+            break
     return foreign
 
 
-def extract_overlay_pins(text: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """(pins, floating) as (acr_repo, tag) pairs, from one overlay file's text."""
+def extract_overlay_pins(text: str, registry: str = "") -> tuple[list[tuple[str, str]],
+                                                                 list[tuple[str, str]]]:
+    """(pins, floating) as (acr_repo, tag) pairs, from one overlay file's text.
+
+    🚨 `registry`, when given, is the ONE this run locks: a `*.azurecr.io` host that is not it is
+    NOT this lane's repository and is left to `extract_foreign_pins`. Empty keeps the historical
+    any-ACR behaviour for callers that have no registry to compare against."""
     pins: list[tuple[str, str]] = []
     floating: list[tuple[str, str]] = []
+    mine = f"{registry}.azurecr.io" if registry else ""
+    text = without_comments(text)
 
     def add(repo: str, tag: str) -> None:
         pair = (repo, tag)
@@ -258,12 +317,16 @@ def extract_overlay_pins(text: str) -> tuple[list[tuple[str, str]], list[tuple[s
             pins.append(pair)
 
     for match in OVERLAY_INLINE_RE.finditer(text):
+        if mine and match.group("host") + ".azurecr.io" != mine:
+            continue
         add(match.group("repo"), match.group("tag"))
 
     lines = text.splitlines()
     for index, line in enumerate(lines):
         repo_match = OVERLAY_REPOSITORY_RE.match(line)
         if not repo_match or TEMPLATED_RE.search(line):
+            continue
+        if mine and repo_match.group("host") + ".azurecr.io" != mine:
             continue
         indent = len(repo_match.group("indent").replace("\t", "    "))
         # The sibling `tag:` is in the SAME mapping block: same indent, before the block ends.
@@ -349,7 +412,7 @@ class OverlayScan:
     unreadable: str | None = None
 
 
-def scan_overlays_remote(gh_repo: str) -> OverlayScan:
+def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
     scan = OverlayScan(gh_repo=gh_repo)
     rc, out, err = consistency.gh_api(f"repos/{gh_repo}/git/trees/HEAD?recursive=1")
     if rc != 0:
@@ -392,17 +455,17 @@ def scan_overlays_remote(gh_repo: str) -> OverlayScan:
             scan.unreadable = f"could not decode {path}: {exc}"
             return scan
         scan.files += 1
-        pins, floating = extract_overlay_pins(text)
+        pins, floating = extract_overlay_pins(text, registry)
         scan.pins.extend((repo, tag, path) for repo, tag in pins)
         scan.floating.extend((repo, tag, path) for repo, tag in floating)
         scan.instances.extend((ident, host, path)
                               for ident, host in extract_overlay_instances(text))
         scan.foreign.extend((host, repo, tag, path)
-                            for host, repo, tag in extract_foreign_pins(text))
+                            for host, repo, tag in extract_foreign_pins(text, registry))
     return scan
 
 
-def scan_overlays_local(root: str, gh_repo: str) -> OverlayScan:
+def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
     scan = OverlayScan(gh_repo=gh_repo)
     base = Path(root)
     if not base.is_dir():
@@ -414,12 +477,12 @@ def scan_overlays_local(root: str, gh_repo: str) -> OverlayScan:
             continue
         scan.files += 1
         text = path.read_text(encoding="utf-8", errors="replace")
-        pins, floating = extract_overlay_pins(text)
+        pins, floating = extract_overlay_pins(text, registry)
         scan.pins.extend((repo, tag, rel) for repo, tag in pins)
         scan.floating.extend((repo, tag, rel) for repo, tag in floating)
         scan.instances.extend((ident, host, rel) for ident, host in extract_overlay_instances(text))
         scan.foreign.extend((host, repo, tag, rel)
-                            for host, repo, tag in extract_foreign_pins(text))
+                            for host, repo, tag in extract_foreign_pins(text, registry))
     return scan
 
 
@@ -664,12 +727,12 @@ class Instance:
     version: str | None = None
     error: str = ""              # why it could not be asked, or could not be believed
     manifests: list[str] = field(default_factory=list)   # the closure this instance pins alive
-    # Declared out of this lane's scope: live, answering, and served by another registry.
+    # Declared out of this lane's scope: live, answering, and served by a fleet-unlockable registry.
     out_of_scope: bool = False
     # Registry hosts THIS installation's overlay pins images in, other than the ACR this lane locks.
     foreign_registries: list[str] = field(default_factory=list)
-    # The host its roster entry declares as out of this lane's scope, if any.
-    declared_registry: str = ""
+    # Those of them declared `fleet-unlockable` — the ones that make it out of scope.
+    unlockable_registries: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -824,6 +887,67 @@ INSTANCE_PROBE_TIMEOUT = 25
 VERSION_ROUTE = "/api/version"
 
 
+REGISTRY_DISPOSITIONS = {"fleet-unlockable", "third-party"}
+
+
+def read_registry_dispositions(root: str) -> tuple[dict[str, tuple[str, str]], list[str]]:
+    """What every registry the fleet's overlays name is, and what protects it — or that nothing does.
+
+    🚨 THE UNIT IS THE REGISTRY, NOT THE INSTANCE, and that is what makes the declaration COMPLETE.
+    A per-installation field answers "is this one out of scope"; it cannot answer "is every registry
+    the fleet pins in accounted for". An installation pinning its declared registry AND a second
+    undeclared one would pass a per-instance check while half its running set went unnamed.
+
+    Two dispositions, and the difference is load-bearing:
+
+      fleet-unlockable  a registry that serves MESHWEAVER'S OWN images and that this lane cannot
+                        lock (`cr.meshweaver.cloud`). An installation running from one is out of
+                        THIS lane's scope; whether anything retains it is a separate question, and
+                        the `reason` is where that is stated rather than assumed.
+      third-party       a registry whose images are somebody else's and were never this lane's to
+                        protect (`ghcr.io/distribution/distribution` — the registry service's own
+                        image). Reported, never a blocker.
+
+    An UNDECLARED host is a blocker wherever it appears. Measured 2026-09-13 across the fleet's
+    twelve overlays: exactly two hosts, `cr.meshweaver.cloud` (4 references) and `ghcr.io` (2, one
+    of which was a line of prose) — so the table is small, and an addition to it is a reviewed
+    sentence about a registry rather than a silent widening."""
+    path = Path(root) / ".github" / "acr-retention" / ROSTER_PATH
+    if not path.is_file():
+        return {}, []          # the roster reader already reds on a missing file
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, []          # …and on an unreadable one
+    table: dict[str, tuple[str, str]] = {}
+    problems: list[str] = []
+    registries = document.get("registries")
+    if registries is None:
+        return {}, [f"{ROSTER_PATH}: no `registries` table. Every registry the fleet's overlays "
+                    "name has to be accounted for, and an absent table accounts for none of them."]
+    if not isinstance(registries, dict):
+        return {}, [f"{ROSTER_PATH}: `registries` is not an object."]
+    for host, entry in registries.items():
+        if not isinstance(entry, dict):
+            problems.append(f"{ROSTER_PATH}: `registries.{host}` is not an object.")
+            continue
+        disposition = str(entry.get("disposition", "")).strip()
+        reason = str(entry.get("reason", "")).strip()
+        if disposition not in REGISTRY_DISPOSITIONS:
+            problems.append(f"{ROSTER_PATH}: `registries.{host}.disposition` is "
+                            f"{disposition!r}; expected one of "
+                            + ", ".join(sorted(REGISTRY_DISPOSITIONS)) + ".")
+            continue
+        if not reason:
+            problems.append(
+                f"{ROSTER_PATH}: `registries.{host}` has no `reason`. Declaring a registry out of "
+                "this lane's reach without saying what — if anything — protects it instead is "
+                "exactly where the next gap goes unnoticed.")
+            continue
+        table[host] = (disposition, reason)
+    return table, problems
+
+
 def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], list[str]]:
     """The DECLARED state of any installation that is not live, from `.github/acr-retention/`.
 
@@ -856,22 +980,16 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], li
             problems.append(f"{ROSTER_PATH}: `{ident}` has state {state!r}; expected one of "
                             + ", ".join(sorted(ROSTER_STATES)) + ".")
             continue
-        # 🚨 `registry` DECLARES A SCOPE, NEVER AN EXEMPTION FROM ANSWERING. An installation
-        # carrying one is still LIVE, still expected to answer `/api/version`, still counted — the
-        # single thing it says is that the images it runs are served by a registry this lane cannot
-        # lock, so there is nothing here to protect for it. It is checked BOTH ways against what
-        # the overlay actually pins (`resolve_running_sets`), so it cannot go stale in silence.
-        if registry and state != "live":
+        # 🚨 A PER-INSTANCE `registry` CANNOT BE COMPLETE, so it is refused rather than supported.
+        # It answers "is THIS one out of scope" and never "is every registry the fleet pins in
+        # accounted for" — an installation pinning its declared registry AND a second undeclared
+        # one would pass it with half its running set unnamed. The `registries` table one level up
+        # is the unit that can be complete; see `read_registry_dispositions`.
+        if registry:
             problems.append(
-                f"{ROSTER_PATH}: `{ident}` is {state} AND declares `registry`. A non-live "
-                "installation runs nothing, so it needs no scope statement — the two together "
-                "read as an exemption wearing two hats. Keep the state, drop the registry.")
-            continue
-        if registry and not reason:
-            problems.append(
-                f"{ROSTER_PATH}: `{ident}` declares `registry` with no `reason`. Saying that an "
-                "installation's images are out of this lane's reach without saying what protects "
-                "them instead is where the next gap goes unnoticed.")
+                f"{ROSTER_PATH}: `{ident}` carries a per-instance `registry`. Declare the registry "
+                "in the top-level `registries` table instead — per instance it can never be shown "
+                "to cover every registry the fleet pins in.")
             continue
         if state != "live" and not reason:
             problems.append(f"{ROSTER_PATH}: `{ident}` is {state} with no `reason`. A declaration "
@@ -886,7 +1004,7 @@ def read_instance_roster(root: str) -> tuple[dict[str, tuple[str, str, str]], li
                 "Which one is in force would be decided by the order of the array, so neither is. "
                 "Delete the line that no longer applies.")
             continue
-        roster[ident] = (state, reason, registry)
+        roster[ident] = (state, reason, "")
     return roster, problems
 
 
@@ -943,9 +1061,9 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str]]
                     f"installation `{ident}` is declared by two overlays ({existing.source} and "
                     f"{source}), so which host answers for it is ambiguous.")
                 continue
-            state, reason, registry = roster.get(ident, ("live", "", ""))
+            state, reason, _ = roster.get(ident, ("live", "", ""))
             instances[ident] = Instance(id=ident, host=host, source=source, state=state,
-                                        reason=reason, declared_registry=registry,
+                                        reason=reason,
                                         foreign_registries=sorted({
                                             foreign_host for foreign_host, _, _, foreign_where
                                             in scan.foreign if foreign_where == where}))
@@ -966,6 +1084,33 @@ def build_instances(axis2: list[OverlayScan], roster: dict[str, tuple[str, str]]
     return list(instances.values()), blockers
 
 
+def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, str]]) -> None:
+    """Hold EVERY registry the fleet's overlays name to the declaration table, before anything
+    decides an installation is covered.
+
+    🚨 THIS RUNS OVER EVERY LIVE INSTALLATION, NOT ONLY THE ONES WITH NOTHING IN THIS ACR. An
+    installation that pins here AND somewhere else is the case a per-instance scope field cannot
+    see: its ACR half gets locked, the run reports success, and the other half — which is also what
+    it is RUNNING — is protected by nothing and named by nobody. Half covered reported as covered
+    is precisely the shape this whole mechanism exists to refuse."""
+    for instance in sorted(plan.instances, key=lambda i: i.id):
+        if instance.state != "live" or not instance.foreign_registries:
+            continue
+        undeclared = [host for host in instance.foreign_registries if host not in dispositions]
+        if undeclared:
+            plan.blockers.append(
+                f"AXIS 3 — installation `{instance.id}` pins images in "
+                f"{', '.join(undeclared)}, which `.github/acr-retention/{ROSTER_PATH}` does not "
+                "account for. An unknown registry is not a registry with nothing in it: declare it "
+                "in the `registries` table as `fleet-unlockable` (it serves our images and this "
+                "lane cannot lock them — say what retains it, or that nothing does) or "
+                "`third-party` (the images are somebody else's and were never ours to protect).")
+            continue
+        instance.unlockable_registries = [
+            host for host in instance.foreign_registries
+            if dispositions[host][0] == "fleet-unlockable"]
+
+
 def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
                          repositories_of: dict[str, list[str]]) -> None:
     """Protect the closure of every image set each live installation is running.
@@ -984,26 +1129,20 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
             continue
         patterns = running_tag_patterns(instance.commit)
         repositories = repositories_of.get(instance.id, [])
-        # 🚨 A DECLARATION THAT NAMES A REGISTRY THE OVERLAY DOES NOT PIN IS STALE, and a stale
-        # exemption hides the next one — the same rule the roster's own orphan check follows. It is
-        # checked whether or not the instance has ACR repositories, so it cannot outlive a move
-        # BACK to this registry.
-        if instance.declared_registry and instance.declared_registry not in instance.foreign_registries:
+        # 🚨 HALF COVERED IS NOT COVERED. An installation whose overlay pins BOTH here and in a
+        # fleet-unlockable registry has part of its running set protected and part of it not, and
+        # locking the half that is here while reporting success is how a partially-protected
+        # installation reads as a protected one. The declaration accounts for the registry; it does
+        # not make the unprotected half disappear. Nothing in the fleet is in this state today
+        # (measured 2026-09-13), so it costs nothing now and fires exactly when the migration
+        # reaches an installation that still pins here.
+        if repositories and instance.unlockable_registries:
             plan.blockers.append(
-                f"AXIS 3 — `{instance.id}` declares `registry: {instance.declared_registry}` in "
-                f"{ROSTER_PATH} and its overlay ({instance.source}) pins no image there"
-                + (f" (it pins in {', '.join(instance.foreign_registries)})"
-                   if instance.foreign_registries else "")
-                + ". A scope statement that matches nothing exempts nothing and hides the next "
-                  "one — delete the line or correct the host.")
-            continue
-        if repositories and instance.declared_registry:
-            plan.blockers.append(
-                f"AXIS 3 — `{instance.id}` declares `registry: {instance.declared_registry}` as "
-                f"out of this lane's scope, AND its overlay pins {len(repositories)} repository"
-                f"(ies) in the registry this run DOES lock ({', '.join(repositories)}). It is not "
-                "out of scope; it is half in. Protect the half that is here, and delete the "
-                "declaration.")
+                f"AXIS 3 — installation `{instance.id}` pins {len(repositories)} repository(ies) "
+                f"in the registry this run locks ({', '.join(repositories)}) AND images in "
+                f"{', '.join(instance.unlockable_registries)}, which it cannot. Half its running "
+                "set would be protected and half would not, and the run would report success. "
+                "Finish the move, or move it back.")
             continue
         if not repositories:
             # 🚨 "PINS NO IMAGE AT ALL" WAS FALSE ON 2026-09-13 AND THAT IS WHY THIS BRANCH SPLIT.
@@ -1013,17 +1152,19 @@ def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
             # pinned nothing, which reads as a broken matcher and sent the reader to the wrong
             # place. The images are real; they are simply not in the registry this lane locks.
             if instance.foreign_registries:
-                if instance.declared_registry:
+                # Every foreign host is declared by now (classify_foreign_registries blocks
+                # otherwise), so this is out of scope exactly when a fleet-unlockable one is why
+                # there is nothing here to protect.
+                if instance.unlockable_registries:
                     instance.out_of_scope = True
                     continue
                 plan.blockers.append(
                     f"AXIS 3 — installation `{instance.id}` runs core {instance.commit[:7]} and "
-                    f"its overlay ({instance.source}) pins its images in "
-                    f"{', '.join(instance.foreign_registries)}, NOT in the registry this run "
-                    "locks. Nothing here can protect them, and silently skipping it would make an "
-                    "unprotected installation look like a protected one. Declare the scope in "
-                    f"`.github/acr-retention/{ROSTER_PATH}` — `registry` plus a `reason` saying "
-                    "what retains that registry instead — or move the pins back.")
+                    f"its overlay ({instance.source}) pins images ONLY in "
+                    f"{', '.join(instance.foreign_registries)}, every one of them declared "
+                    "`third-party` — so nothing it runs is accounted for by any registry that "
+                    "holds our images. Either its portal images are missing from the overlay, or "
+                    "one of those hosts is really `fleet-unlockable`.")
                 continue
             plan.blockers.append(
                 f"AXIS 3 — installation `{instance.id}` runs core {instance.commit[:7]} and its "
@@ -1373,9 +1514,15 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
     # would be counted among the answered and read as covered. It is live, it answered, and
     # NOTHING here protects what it runs; that has to be legible without opening the roster.
     out_of_scope = [i for i in plan.instances if i.out_of_scope]
-    emit(f"      …declared OUT OF THIS REGISTRY'S SCOPE   {len(out_of_scope)}"
-         + (f"  ({', '.join(f'{i.id} → {i.declared_registry}' for i in out_of_scope)}"
-            + " — protected by that registry's own retention, not by this run)"
+    # 🚨 IT SAYS UNVERIFIED, NOT PROTECTED. The declaration states only that this lane cannot lock
+    # those images; `instances.json` and Doc/Architecture/ArtifactRetentionInterlock both record
+    # that what retains that registry is NOT established. A summary line claiming the other
+    # registry protects them would make a green run read as covered and support re-enabling
+    # cleanup on a premise nobody has checked — the false green this mechanism exists to refuse,
+    # committed by its own report.
+    emit(f"      …OUT OF THIS REGISTRY'S SCOPE (declared)  {len(out_of_scope)}"
+         + (f"  ({', '.join(f'{i.id} → {i.unlockable_registries[0]}' for i in out_of_scope)}"
+            + " — NOT locked here, and whether anything retains that registry is UNVERIFIED)"
             if out_of_scope else ""))
     for instance in sorted(plan.instances, key=lambda i: i.id):
         if instance.state != "live":
@@ -1383,7 +1530,8 @@ def report(plan: Plan, axis1, axis2: list[OverlayScan], registry_name: str,
         elif instance.out_of_scope:
             emit(f"        {instance.id:<18} core "
                  f"{(instance.commit or '???????')[:7]} — images in "
-                 f"{instance.declared_registry}, OUT OF SCOPE here: {instance.reason}")
+                 f"{', '.join(instance.unlockable_registries)}; NOT locked by this run, and "
+                 "protection there is UNVERIFIED")
         elif instance.commit and not instance.error:
             emit(f"        {instance.id:<18} core {instance.commit[:7]} "
                  f"({instance.version or 'no version'}) → {len(instance.manifests)} manifest(s) "
@@ -1651,10 +1799,10 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
     for gh_repo in repos:
         if local_root:
             axis1.append(consistency.scan_local(local_root, gh_repo))
-            axis2.append(scan_overlays_local(local_root, gh_repo))
+            axis2.append(scan_overlays_local(local_root, gh_repo, registry_name))
         else:
             axis1.append(consistency.scan_remote(gh_repo))
-            axis2.append(scan_overlays_remote(gh_repo))
+            axis2.append(scan_overlays_remote(gh_repo, registry_name))
 
     inventory, inventory_errors = read_inventory(registry)
     plan = build_plan(axis1, axis2)
@@ -1666,6 +1814,8 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
     # AXIS 3 — the installations, asked what they are RUNNING rather than what they should run.
     roster, roster_problems = read_instance_roster(local_root or ".")
     plan.blockers.extend(roster_problems)
+    dispositions, disposition_problems = read_registry_dispositions(local_root or ".")
+    plan.blockers.extend(disposition_problems)
     plan.instances, instance_blockers = build_instances(axis2, roster)
     plan.blockers.extend(instance_blockers)
     if not plan.instances and not any(scan.unreadable for scan in axis2):
@@ -1682,6 +1832,7 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
 
     # 🚨 AXIS 3 FIRST. `resolve_and_classify` is what splits `plan.wanted` into already-protected
     # and to-lock, so anything added to `wanted` after it runs is wanted by nobody who locks.
+    classify_foreign_registries(plan, dispositions)
     resolve_running_sets(plan, inventory, repositories_of)
     resolve_and_classify(plan, registry, inventory, inventory_errors)
     classify_tags(plan, registry)
@@ -2164,16 +2315,17 @@ def _scan1(gh_repo: str, text: str):
     return scan
 
 
-def _scan2(gh_repo: str, text: str, where: str = "deployments/aks/x/values.x.yaml") -> OverlayScan:
+def _scan2(gh_repo: str, text: str, where: str = "deployments/aks/x/values.x.yaml",
+           registry: str = "meshweaver") -> OverlayScan:
     scan = OverlayScan(gh_repo=gh_repo, files=1)
-    pins, floating = extract_overlay_pins(text)
+    pins, floating = extract_overlay_pins(text, registry)
     scan.pins = [(repo, tag, where) for repo, tag in pins]
     scan.floating = [(repo, tag, where) for repo, tag in floating]
     scan.instances = [(ident, host, where) for ident, host in extract_overlay_instances(text)]
     # Mirrors both production scanners — ARM 29 compares the call lists, and an out-of-scope arm
     # driven over a harness that never extracts a foreign pin would be about nothing.
     scan.foreign = [(host, repo, tag, where)
-                    for host, repo, tag in extract_foreign_pins(text)]
+                    for host, repo, tag in extract_foreign_pins(text, registry)]
     return scan
 
 
@@ -2265,8 +2417,10 @@ def _answers(commit: str | None = RUNNING_COMMIT, error: str = ""):
 
 def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
            release_enabled: bool = False,
-           roster: dict[str, tuple[str, str]] | None = None,
-           probe=None) -> tuple[Plan, list[str], FakeRegistry]:
+           roster: dict[str, tuple[str, str, str]] | None = None,
+           probe=None,
+           dispositions: dict[str, tuple[str, str]] | None = None,
+           ) -> tuple[Plan, list[str], FakeRegistry]:
     """The SAME sequence `run()` performs, minus the report — so the self-test falsifies the real
     decision path rather than a paraphrase of it. Its per-lock chatter is swallowed; the assertions
     read `registry.writes` / `registry.tag_writes`, which is what would actually reach the registry.
@@ -2288,6 +2442,7 @@ def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
                                  if f"{scan.gh_repo} {where}" == instance.source})
             for instance in plan.instances
         }
+        classify_foreign_registries(plan, dispositions or {})
         resolve_running_sets(plan, inventory, repositories_of)
         resolve_and_classify(plan, registry, inventory, inventory_errors)
         classify_tags(plan, registry)
@@ -2716,11 +2871,13 @@ def self_test() -> int:
               "ARM 24c: a MISSING retention record reported windows, or reported no problem — "
               "an unstatable window must say so, never print as an empty list")
 
-    # ── ARM 32: an installation served by ANOTHER REGISTRY is named, never read as pinning zero ─
+    # ── ARM 32: another registry is NAMED, and the declaration must be COMPLETE ─────────────────
     # 🚨 THE LIVE CASE. On 2026-09-13 the scheduled run died saying installation `build` "pins no
     # image at all" — while its overlay pinned two images in `cr.meshweaver.cloud`. The lane was
     # red, nothing was locked, and `pause.reEnableWhen` reads "lock-pinned-digests is green", so
     # the false sentence was standing between the fleet and re-enabling cleanup.
+    FLEET_UNLOCKABLE = {"cr.meshweaver.cloud": ("fleet-unlockable", "ours, not lockable here")}
+    THIRD_PARTY = {"ghcr.io": ("third-party", "somebody else's")}
     foreign_scan = _scan2("Systemorph/Memex", FIXTURE_OVERLAY_FOREIGN,
                           "deployments/aks/build/values.build.public.yaml")
     check([h for h, _, _, _ in foreign_scan.foreign] == ["cr.meshweaver.cloud"] * 2,
@@ -2731,117 +2888,141 @@ def self_test() -> int:
 
     plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
                         probe=_answers())
-    check(any("cr.meshweaver.cloud" in b and "NOT in the registry this run" in b
-              for b in plan.blockers),
-          f"ARM 32: an UNDECLARED installation served by another registry did not red naming that "
-          f"registry: {plan.blockers}")
+    check(any("does not account for" in b and "cr.meshweaver.cloud" in b for b in plan.blockers),
+          f"ARM 32: an UNDECLARED registry did not red naming it: {plan.blockers}")
     check(not any("pins no image at all" in b for b in plan.blockers),
           "ARM 32: the run still says an overlay with two pins in it 'pins no image at all'. That "
           "sentence is FALSE and it sends the reader to fix an extractor that is working")
 
-    # Declared: live, answering, counted, and NOT a blocker — but visible in its own line.
     plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
-                        probe=_answers(),
-                        roster={"build": ("live", "the fleet's own registry retains it",
-                                          "cr.meshweaver.cloud")})
+                        probe=_answers(), dispositions=FLEET_UNLOCKABLE)
     check(not plan.blockers,
-          f"ARM 32: a DECLARED out-of-scope installation still blocked the run: {plan.blockers}")
+          f"ARM 32: a DECLARED fleet-unlockable installation still blocked the run: {plan.blockers}")
     check([i.id for i in plan.instances if i.out_of_scope] == ["build"],
           "ARM 32: a declared out-of-scope installation was not marked as such, so it would be "
           "counted among the answered and read as PROTECTED")
 
-    # A declaration naming a registry the overlay does not pin is stale, and a stale exemption
-    # hides the next one.
+    # 🚨 A `third-party` disposition must NOT make an installation out of scope: its portal images
+    # are then accounted for by nothing that holds our images, which is a different incident.
     plan, _, _ = _drive(clean1, clean2 + [foreign_scan], FakeRegistry(_inventory(), FAKE_TAGS),
                         probe=_answers(),
-                        roster={"build": ("live", "r", "ghcr.io")})
-    check(any("pins no image there" in b for b in plan.blockers),
-          f"ARM 32: a STALE registry declaration was honoured: {plan.blockers}")
+                        dispositions={"cr.meshweaver.cloud": ("third-party", "wrong on purpose")})
+    check(any("every one of them declared `third-party`" in b for b in plan.blockers),
+          f"ARM 32: an installation whose ONLY images are declared third-party passed as out of "
+          f"scope — nothing it runs is then accounted for by any registry of ours: {plan.blockers}")
+    check(not any(i.out_of_scope for i in plan.instances),
+          "ARM 32: a third-party disposition marked an installation OUT OF SCOPE")
 
-    # Half in is not out: an installation pinning in BOTH registries must be protected here.
+    # 🚨 HALF COVERED IS NOT COVERED — the case a per-instance field cannot see.
     both = _scan2("Systemorph/Memex",
                   FIXTURE_OVERLAY_INSTANCE + '\nextra:\n'
                   '  image: "cr.meshweaver.cloud/memex-migration:3.0.0-ci.8411"\n',
                   "deployments/aks/half/values.half.public.yaml")
-    plan, _, _ = _drive(clean1, clean2 + [both], FakeRegistry(_inventory(), FAKE_TAGS), probe=_answers(),
-                        roster={"memex": ("live", "r", "cr.meshweaver.cloud")})
-    check(any("half in" in b for b in plan.blockers),
-          f"ARM 32: an installation pinning in BOTH registries was excused wholesale by a scope "
-          f"declaration, which would leave its ACR half unprotected: {plan.blockers}")
+    plan, _, _ = _drive(clean1, clean2 + [both], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+    check(any("Half its running" in b for b in plan.blockers),
+          f"ARM 32: an installation pinning in BOTH registries passed. Its ACR half would be "
+          f"locked, the run would report success, and the other half — also what it is RUNNING — "
+          f"would be protected by nothing: {plan.blockers}")
+    # …and undeclared on a mixed overlay reds too, rather than being skipped because the ACR half
+    # is non-empty (the branch a `if not repositories` guard never reaches).
+    plan, _, _ = _drive(clean1, clean2 + [both], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers())
+    check(any("does not account for" in b for b in plan.blockers),
+          f"ARM 32: a mixed-registry overlay with NO declaration was silently accepted because it "
+          f"had in-scope repositories: {plan.blockers}")
 
-    # The roster reader refuses the two shapes that turn a scope statement into an exemption.
+    # 🚨 THE DECLARATION MUST COVER THE COMPLETE FOREIGN SET. One declared host plus one undeclared
+    # one must not read as covered.
+    two_hosts = _scan2("Systemorph/Memex",
+                       FIXTURE_OVERLAY_FOREIGN + '\nsidecar:\n'
+                       '  image: "quay.io/thing/sidecar:9.9"\n',
+                       "deployments/aks/two/values.two.public.yaml")
+    plan, _, _ = _drive(clean1, clean2 + [two_hosts], FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+    check(any("quay.io" in b and "does not account for" in b for b in plan.blockers),
+          f"ARM 32: a SECOND, undeclared registry was ignored because the first one was declared — "
+          f"the declaration has to cover the whole foreign set: {plan.blockers}")
+
+    # 🚨 A `*.azurecr.io` THAT IS NOT THIS REGISTRY IS FOREIGN. Extracting it as an in-scope
+    # repository would look it up in — and lock it against — the wrong registry.
+    other_acr = FIXTURE_OVERLAY_INSTANCE.replace("meshweaver.azurecr.io", "somebodyelse.azurecr.io")
+    check(not extract_overlay_pins(other_acr, "meshweaver")[0],
+          "ARM 32: a pin in a DIFFERENT *.azurecr.io was extracted as this lane's repository")
+    check([h for h, _, _ in extract_foreign_pins(other_acr, "meshweaver")]
+          == ["somebodyelse.azurecr.io"] * 2,
+          f"ARM 32: a pin in a DIFFERENT *.azurecr.io was not reported as foreign: "
+          f"{extract_foreign_pins(other_acr, 'meshweaver')}")
+    check(len(extract_overlay_pins(FIXTURE_OVERLAY_INSTANCE, "meshweaver")[0]) == 2,
+          "ARM 32: this registry's OWN pins stopped being extracted once the host is compared")
+
+    # 🚨 A COMMENT IS PROSE, NOT A PIN — and one of the fleet's two `ghcr.io` references is exactly
+    # that. With an undeclared registry now a blocker, matching inside a comment reds over a
+    # sentence; this issue's own 2026-09-08 hand count found 11 of 31 tokens in comments.
+    commented = ('# ghcr.io/actions/actions-runner:2.337.0 is what the runner is built from\n'
+                 + FIXTURE_OVERLAY_FOREIGN)
+    check([h for h, _, _ in extract_foreign_pins(commented, "meshweaver")]
+          == ["cr.meshweaver.cloud"] * 2,
+          f"ARM 32: a reference inside a COMMENT was extracted as a pin: "
+          f"{extract_foreign_pins(commented, 'meshweaver')}")
+    check(not extract_overlay_pins("# meshweaver.azurecr.io/memex-portal-ai:3.0.0\n",
+                                   "meshweaver")[0],
+          "ARM 32: an ACR reference inside a COMMENT was extracted as a pin")
+
+    # 🚨 HELM'S SPLIT SHAPE, FOR A FOREIGN REGISTRY. The ACR path has always handled it; without
+    # the same for foreign, an overlay written that way extracts as NOTHING and falls back into
+    # `pins no image at all` — this bug in its second shape.
+    split = """
+config:
+  memex_portal:
+    Hosting__Deployment: "split"
+portal:
+  image:
+    repository: cr.meshweaver.cloud/memex-portal-ai
+    tag: "3.0.0-ci.8411"
+ingress:
+  host: "split.example.cloud"
+"""
+    check([h for h, _, _ in extract_foreign_pins(split, "meshweaver")] == ["cr.meshweaver.cloud"],
+          f"ARM 32: helm's split `repository:`/`tag:` shape produced NO foreign pin, so an overlay "
+          f"written that way still falls into 'pins no image at all': "
+          f"{extract_foreign_pins(split, 'meshweaver')}")
+
+    # The disposition table itself refuses the shapes that turn it into a blanket exemption.
     with tempfile.TemporaryDirectory() as scratch:
         folder = Path(scratch) / ".github" / "acr-retention"
         folder.mkdir(parents=True)
-        (folder / ROSTER_PATH).write_text(
-            '{"instances": [{"id": "x", "state": "retired", "reason": "r",'
+        target = folder / ROSTER_PATH
+
+        def dispositions_of(document: str):
+            target.write_text(document, encoding="utf-8")
+            return read_registry_dispositions(scratch)
+
+        _, problems = dispositions_of('{"instances": []}')
+        check(any("no `registries` table" in problem for problem in problems),
+              f"ARM 32: a roster with NO registries table accounted for every registry: {problems}")
+        _, problems = dispositions_of(
+            '{"registries": {"x.io": {"disposition": "ignore", "reason": "r"}}}')
+        check(any("expected one of" in problem for problem in problems),
+              f"ARM 32: an unknown disposition was accepted: {problems}")
+        _, problems = dispositions_of(
+            '{"registries": {"x.io": {"disposition": "third-party"}}}')
+        check(any("no `reason`" in problem for problem in problems),
+              f"ARM 32: a registry declared with no reason was accepted: {problems}")
+        target.write_text(
+            '{"registries": {}, "instances": [{"id": "x", "state": "live",'
             ' "registry": "cr.meshweaver.cloud"}]}', encoding="utf-8")
         _, problems = read_instance_roster(scratch)
-        check(any("needs no scope statement" in problem for problem in problems),
-              f"ARM 32: a NON-LIVE entry carrying a `registry` was accepted: {problems}")
-        (folder / ROSTER_PATH).write_text(
-            '{"instances": [{"id": "x", "state": "live", "registry": "cr.meshweaver.cloud"}]}',
-            encoding="utf-8")
-        _, problems = read_instance_roster(scratch)
-        check(any("with no `reason`" in problem for problem in problems),
-              f"ARM 32: a scope declaration with no reason was accepted — saying an installation "
-              f"is out of reach without saying what protects it instead: {problems}")
+        check(any("per-instance `registry`" in problem for problem in problems),
+              f"ARM 32: a per-instance `registry` key was accepted — it can never be shown to "
+              f"cover every registry the fleet pins in: {problems}")
 
-    # ── ARM 31: the decided WINDOW is asserted on the record, and the assertion can fail ────────
-    # 🚨 The control that matters is the one this repository's own record FAILED on 2026-09-13:
-    # `--ago 7d --keep 10` over `memex-portal-ai`, the image both production portals run. It is
-    # driven here as a literal so the arm still fires the day the record is right.
-    check(check_window_policy("x.yaml", "  - cmd: acr purge --filter 'memex-portal-ai:.*' "
-                                        "--ago 7d --keep 10 --untagged"),
-          "ARM 31: the exact step this repository carried until 2026-09-13 — a 7-day window with a "
-          "ten-build quota over the image both production portals run — passed the window policy")
-    check(any("--keep" in problem for problem in
-              check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 90d "
-                                            "--keep 10 --untagged")),
-          "ARM 31: a BUILD-COUNT QUOTA beside a generous age window passed. `--keep` counts NEWER "
-          "BUILDS, so a repository republished many times a day ages its own manifests out in "
-          "hours whatever `--ago` says — the age window cannot replace this half (#3842)")
-    check(check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --untagged"),
-          "ARM 31: a purge step with NO `--ago` at all passed — no age floor is not a long one")
-    check(any("could not be read" in problem for problem in
-              check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago forever "
-                                            "--untagged")),
-          "ARM 31: an UNREADABLE `--ago` passed. A window nobody could parse is a window nobody "
-          "checked, and it must never spell the same as one that was checked and was fine")
-    check(not check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 30d "
-                                            "--untagged"),
-          "ARM 31: the DECIDED window itself was rejected — the gate would red on the fix, which "
-          "is how a gate gets muted")
-    check(not check_window_policy("x.yaml", "  - cmd: acr purge --filter 'a:.*' --ago 720h "
-                                            "--untagged"),
-          "ARM 31: 720h is 30 days and was rejected; the unit table is what makes this a duration "
-          "comparison rather than a string match")
-    check(parse_ago_days("7d") == 7 and parse_ago_days("1d12h") == 1.5
-          and parse_ago_days("30") is None and parse_ago_days("30dx") is None,
-          "ARM 31: the `--ago` parser is wrong — a bare number or a trailing character must be "
-          "UNREADABLE, never a silent default")
-
-    # ── ARM 31b: the PAUSE declaration and the recorded statuses cannot contradict each other ───
-    check(any("is recorded `Enabled`" in problem for problem in check_pause_coherence(
-              {"tasks": [{"name": "t", "status": "Enabled"}],
-               "pause": {"inForce": True, "since": "s", "reason": "r", "reEnableWhen": "w"}})),
-          "ARM 31b: a record asserting BOTH an in-force pause and an Enabled purge task passed. "
-          "`retention_windows` prints the window and never mentions the pause in that state, so "
-          "the contradiction is invisible in the report")
-    check(any("no `reEnableWhen`" in problem for problem in check_pause_coherence(
-              {"tasks": [{"name": "t", "status": "Disabled"}],
-               "pause": {"inForce": True, "since": "s", "reason": "r"}})),
-          "ARM 31b: a pause with no re-enable condition passed — that is a retention that stopped, "
-          "written as if it were a decision")
-    check(check_pause_coherence({"tasks": [{"name": "t", "status": "Disabled"}]}),
-          "ARM 31b: every task Disabled with NO declaration passed. A stopped retention and a "
-          "stale record read identically, and only one of them is a decision")
-    check(not check_pause_coherence({"tasks": [{"name": "t", "status": "Enabled"}]}),
-          "ARM 31b: an ordinary running retention with no pause block was rejected")
-    check(not check_pause_coherence(
-              {"tasks": [{"name": "t", "status": "Disabled"}],
-               "pause": {"inForce": True, "since": "s", "reason": "r", "reEnableWhen": "w"}}),
-          "ARM 31b: this repository's own paused shape was rejected")
+    dispositions, problems = read_registry_dispositions(str(HERE.parent.parent))
+    check(not problems,
+          f"ARM 32: this repository's own `registries` table does not validate: {problems}")
+    check(set(dispositions) >= {"cr.meshweaver.cloud", "ghcr.io"},
+          f"ARM 32: the two hosts measured across the fleet's overlays on 2026-09-13 are not both "
+          f"declared: {sorted(dispositions)}")
 
     # ── ARM 24d: a roster that declares one installation TWICE decides nothing, and reds ────────
     with tempfile.TemporaryDirectory() as scratch:
@@ -2956,6 +3137,7 @@ env:
     # scanners and the roster file.
     run_calls = _calls(run) - {"report", "emit", "print", "Registry", "len", "bool", "sorted",
                                "set", "any", "all", "read_instance_roster",
+                               "read_registry_dispositions",
                                "scan_overlays_local", "scan_overlays_remote"}
     missing = run_calls - _calls(_drive)
     check(not missing,
@@ -2966,7 +3148,8 @@ env:
     # above can pass while `run()` no longer PERFORMS the step, because the harness has its own copy
     # of the sequence. Deleting `extractor_control()` from `run()` alone left this self-test green
     # until this check existed. Name the steps the protection decision must make.
-    required = {"extractor_control", "read_instance_roster", "build_instances",
+    required = {"extractor_control", "read_instance_roster", "read_registry_dispositions",
+                "build_instances", "classify_foreign_registries",
                 "resolve_running_sets", "resolve_and_classify", "classify_tags",
                 "read_inventory", "build_plan", "apply_locks", "apply_tag_locks"}
     # expand_platform_closure is called from inside resolve_and_classify, so it is asserted here

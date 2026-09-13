@@ -33,22 +33,31 @@ was sitting between the fleet and resuming cleanup at all.
 ## What changed
 
 Images in another registry are now **found and named**. They are still never locked — nothing here
-can write to somebody else's registry — but three situations that used to look identical no longer
+can write to somebody else's registry — but the situations that used to look identical no longer
 do:
 
 - **Pinned here** — protected, as before.
-- **Pinned only elsewhere, and nobody said so** — still a refusal, but it names the registry and
-  says exactly what to write down. Skipping silently would make an unprotected installation look
-  like a protected one.
-- **Pinned only elsewhere, and declared** — accepted, and printed on its own line in the run's
-  summary, so it can never be counted among the protected ones.
+- **Any registry nobody has written down** — still a refusal, but it names the registry and says
+  exactly what to record. Skipping silently would make an unprotected installation look like a
+  protected one.
+- **Pinned only in a registry recorded as ours-but-unreachable** — accepted, and printed on its own
+  line in the run's summary, which says protection there is **unverified** rather than claiming
+  somebody else is handling it.
+- **Pinned both here and there** — a refusal. Half of what it runs would be protected and half not,
+  and the run would report success.
 - **Pinning nothing at all, anywhere** — still a refusal, and the message now says "in any
   registry", so it means what it says.
 
-A declaration is a statement of **scope, never an excuse from being asked**. The installation is
-still live, still has to answer for itself, still counted. It is checked in both directions against
-what is actually configured, so it cannot quietly go stale: naming a registry that is not used is a
-failure, and so is declaring an installation out of scope while half its images are still here.
+The thing written down is the **registry**, not the installation. That is what makes it possible to
+say the list is complete: a note attached to one installation answers "is this one out of scope" and
+can never answer "is every registry we pull from accounted for" — an installation using its recorded
+registry *and* a second unrecorded one would pass such a note with half its images unnamed.
+
+Two entries cover the whole fleet today, and they were measured rather than guessed. One of the two
+"references" that turned up during that measurement was a **line of prose** in a comment describing
+what an image is built from — so comments are now stripped before anything is extracted, on both
+paths. With an unrecorded registry being a refusal, a match inside a comment would stop the job over
+a sentence.
 
 ## What is not answered
 
