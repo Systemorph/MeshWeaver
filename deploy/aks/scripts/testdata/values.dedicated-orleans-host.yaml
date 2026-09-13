@@ -1,0 +1,66 @@
+# FIXTURE for check-chart-invariants.sh — a DEDICATED orleans server (MeshWeaver#4173, #3780).
+#
+# 🚨 The shape nothing else in this repo renders, and the one the guard was blind to. The mesh
+# database is on one host and Orleans cluster membership is on ANOTHER — a supported configuration
+# (`ConnectionStrings__orleans` is explicit, and "it always wins"), and until #4173 the
+# `wait-for-postgres` init container probed neither of them: it probed
+# `config.memex_portal.MEMEX_HOST`, which is `memex-postgres-service` by chart default and is a
+# CONFIG value on the other side of the values from the SECRETS the boot actually opens.
+#
+# What that produced at boot is #3780: the pod passes `Init:1/1`, the silo reaches lifecycle stage
+# `RuntimeGrainServices`, and `MembershipTableManager` fails —
+#
+#     Npgsql.NpgsqlException: Name or service not known
+#      ---> System.Net.Sockets.SocketException: Name or service not known
+#            at System.Net.Dns.GetHostEntryOrAddressesCore(...)
+#
+# — on a host no gate had ever looked at, with the init container's PASS saying nothing about the
+# connection that failed. #4173's stated verification is exactly this render: `MEMEX_HOST` naming
+# one host and an explicit `ConnectionStrings__orleans` naming another, asserting that the output
+# either probes the second or fails the render. Invariant 16 is that assertion.
+#
+# 🚨 The orleans half is also a COMMA-SEPARATED FAILOVER LIST, which is the second thing nothing
+# else here renders. Npgsql may open ANY member of it, so a probe that covered only the first would
+# pass having waited for `orleans-a` while the process connects to `orleans-b` — the same "the gate
+# passed says nothing about the connection that failed" defect one level down. Invariant 16 requires
+# every member to be probed; the waiter treats the group as "any ONE of these answers", because
+# demanding a standby be up would block a valid deployment.
+#
+# Everything below that is not the subject is only what invariants 2–4 and 14–15 demand of any
+# replica floor above one. Placeholders, no credential; none of these hosts exists.
+replicas:
+  portal: 2
+keda:
+  enabled: false
+config:
+  memex_portal:
+    Deployment__Orleans__Clustering: "AdoNet"
+    # Deliberately LEFT at the chart default (memex-postgres-service) — it is the value the old
+    # probe read, and it names neither host below. That divergence IS the fixture.
+secrets:
+  memex_portal:
+    ConnectionStrings__memex: "Host=mesh-db.example.test;Port=5432;Database=memex;Username=memex;Password=placeholder"
+    ConnectionStrings__orleans: "Host=orleans-a.example.test,orleans-b.example.test;Port=6432;Database=orleans;Username=memex;Password=placeholder"
+  memex_migration:
+    ConnectionStrings__memex: "Host=mesh-db.example.test;Port=5432;Database=memex;Username=memex;Password=placeholder"
+    ConnectionStrings__orleans: "Host=orleans-a.example.test,orleans-b.example.test;Port=6432;Database=orleans;Username=memex;Password=placeholder"
+persistence:
+  data:
+    claimName: "memex-data"
+    create: true
+    size: "128Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+  content:
+    claimName: "memex-content"
+    create: true
+    size: "64Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
+    mountPath: "/mnt/content"
+  users:
+    claimName: "memex-users"
+    create: true
+    size: "32Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"
