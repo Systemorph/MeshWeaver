@@ -162,7 +162,21 @@ printf '%s\n' "$WEIGHTS" > "$weights_file"
 # The weights arrive as a FILE, not `awk -v` — macOS's awk rejects a -v value
 # containing newlines ("newline in string"), so the -v form silently worked on
 # the runner while failing for anyone verifying a change locally.
+# ── The change set's selection (affected-tests.py, 2026-09-13) ──────────────────────────
+# TEST_SELECTION=all (or unset) keeps every project; =incremental keeps the names listed in
+# TEST_PROJECTS (comma-separated); =none keeps nothing — the caller decides what an empty shard
+# means (a pull request whose change no test project reads). The SAME env reaches the build's
+# packaging and every test shard, so the two assignments stay identical.
+select_projects() {
+  case "${TEST_SELECTION:-all}" in
+    none) echo "shard-assign: TEST_SELECTION=none — no project is owed" >&2 ;;
+    incremental)
+      awk -v keep=",${TEST_PROJECTS:-}," '{ n=$0; sub(/.*\//,"",n); sub(/\.csproj$/,"",n); if (index(keep, "," n ",")) print }' ;;
+    *) cat ;;
+  esac
+}
 find test -name '*.csproj' ! -path '*/bin/*' \
+  | select_projects \
   | awk -v dflt="$DEFAULT_WEIGHT" '
       FNR == NR { if (NF >= 2) { weight[$2] = $1; if (NF >= 3) parts[$2] = $3 } next }
       {
