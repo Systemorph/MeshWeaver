@@ -198,16 +198,22 @@ public static class InstallCompleteness
     /// breaker on the owning hub). A read that faults yields
     /// <see cref="InstallCompletenessKind.NotObserved"/>.</para>
     ///
-    /// <para>🚨 <b>That claim holds because <c>PersistenceService.ReadMany</c> OVERRIDES the
-    /// batch</b> (#4200) — do not read it as a property of this call site. The adapter resolved
-    /// here is the guard chain over that facade, and until the override existed the facade
-    /// inherited the interface DEFAULT, <c>Observable.Merge(paths.Select(Read))</c>: precisely the
-    /// N point reads this paragraph says are avoided, with a backend's batched implementation
-    /// unreachable. The consequence landed HERE, because the two paths do not fail alike — a
-    /// Postgres point read CATCHES <c>42P01 undefined_table</c> and answers <c>null</c>, so a
-    /// partition whose satellite table was never created was spelled exactly like an absent node
-    /// and became <see cref="InstallCompletenessKind.Incomplete"/> plus an ABSENT name, where the
-    /// batched read faults and reaches the <c>.Catch</c> below as the honest
+    /// <para>🚨 <b>That claim is a property of the CHAIN, not of this call site</b> (#4200) — every
+    /// layer has to forward the batch, and one that does not sends dispatch to the interface
+    /// DEFAULT, <c>Observable.Merge(paths.Select(Read))</c>, inside itself: precisely the N point
+    /// reads this paragraph says are avoided, with everything batched below it unreachable. The
+    /// adapter resolved here is <c>SubtreeDeletionGuard → MonotonicWriteGuard → VersionWriting →
+    /// PersistenceService</c>, and until this change the facade declared no <c>ReadMany</c> and
+    /// <c>VersionWritingStorageAdapter</c> declared none either — so fixing only one of them would
+    /// have changed nothing observable here. <c>StorageAdapterDecoratorsForwardBatchReadGuard</c>
+    /// now holds every decorator to the forward, which is what makes the sentence above
+    /// maintainable rather than merely true today.</para>
+    ///
+    /// <para>The consequence landed HERE because the two paths do not fail alike: a Postgres point
+    /// read CATCHES <c>42P01 undefined_table</c> and answers <c>null</c>, so a partition whose
+    /// satellite table was never created was spelled exactly like an absent node and became
+    /// <see cref="InstallCompletenessKind.Incomplete"/> plus an ABSENT name, where the batched read
+    /// faults and reaches the <c>.Catch</c> below as the honest
     /// <see cref="InstallCompletenessKind.NotObserved"/>.</para>
     /// </summary>
     /// <param name="persistence">The storage adapter; <c>null</c> yields <c>NotObserved</c>.</param>

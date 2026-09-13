@@ -103,6 +103,34 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
 
     /// <inheritdoc/>
     /// <remarks>
+    /// 🚨 <b>What this override buys, stated exactly, because it is NOT a wire-level batch.</b>
+    /// There is no batched READ message — <see cref="WriteMany"/> can group nodes into one
+    /// <c>WriteBatchRequest</c> per owning hub because that multi-node producer exists, and its
+    /// read counterpart does not (<c>ReadNodeRequest</c> carries a single path). A true batch here
+    /// needs a <c>ReadNodesRequest</c> plus its handler; this override does not invent one, and
+    /// says so rather than implying a round-trip saving it does not make.
+    ///
+    /// <para>What it DOES fix is the same thing the facade's override fixes, one layer out: the
+    /// interface default fans the batch into one <see cref="Read"/> per path through <c>this</c>,
+    /// and <see cref="Read"/> is wrapped in
+    /// <see cref="LegacyUserPartitionRepair.ReadWithRepair"/> — so a bulk read of paths that may
+    /// be absent ran a legacy-twin probe, and potentially a durable WRITE, PER MISSING PATH. The
+    /// repair is for a bare partition-ROOT point read; a batch of declared child paths is not that
+    /// shape (see <c>PersistenceService.ReadMany</c>). Routing to <see cref="ReadCore"/> keeps the
+    /// per-path fan-out and drops the repair from it; missing paths are simply absent, as the
+    /// contract says.</para>
+    /// </remarks>
+    public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+        => paths.Count == 0
+            ? Observable.Empty<MeshNode>()
+            : paths
+                .Select(p => ReadCore(p, options))
+                .Merge()
+                .Where(node => node is not null)
+                .Select(node => node!);
+
+    /// <inheritdoc/>
+    /// <remarks>
     /// Returns null when no partition-storage hub claims the path so the
     /// outer try-then-claim chain (<see cref="PersistenceService.Write"/>)
     /// can fall through to the next writable provider.

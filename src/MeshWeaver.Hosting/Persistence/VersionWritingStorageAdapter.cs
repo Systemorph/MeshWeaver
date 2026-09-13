@@ -37,6 +37,26 @@ internal class VersionWritingStorageAdapter(
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => inner.Read(path, options);
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 <b>Decorator MUST forward ReadMany</b> — the same rule, and the same silence, as
+    /// <see cref="Changes"/> above. Without this the interface default applies
+    /// (<c>Observable.Merge(paths.Select(Read))</c>), so a batch handed to this decorator is
+    /// fanned back out into one point read per path THROUGH <c>this</c>, and the batched
+    /// implementation below (<c>PersistenceService.ReadMany</c> → a backend's
+    /// <c>WHERE path = ANY($1)</c>) is never reached. This decorator is the production chain's
+    /// third layer — <c>SubtreeDeletionGuard → MonotonicWriteGuard → VersionWriting → inner</c>,
+    /// built by <c>PersistenceExtensions.DecorateStorageAdapterWithVersionWriting</c> — so its
+    /// missing override alone degraded EVERY batched read in every deployed host, whatever the
+    /// layers around it did (#4200).
+    ///
+    /// <para>Pure delegation is the whole implementation: a READ records no version history, so
+    /// there is nothing for this decorator to add on the way past — exactly like
+    /// <see cref="Read"/>.</para>
+    /// </remarks>
+    public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
+        => inner.ReadMany(paths, options);
+
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
         var write = inner.Write(node, options);

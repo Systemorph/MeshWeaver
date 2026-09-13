@@ -145,6 +145,55 @@ public class PersistenceServiceReadManyBatchTest
     }
 
     /// <summary>
+    /// 🚨 <b>THE PRODUCTION STACK, not a bare facade.</b> The facade's override is worth nothing if
+    /// a decorator above it does not forward the batch — and one did not: the chain
+    /// <c>PersistenceExtensions.DecorateStorageAdapterWithVersionWriting</c> registers is
+    /// <c>SubtreeDeletionGuard → MonotonicWriteGuard → VersionWriting → PersistenceService</c>, and
+    /// <c>VersionWritingStorageAdapter</c> declared no <c>ReadMany</c>. Dispatch therefore landed on
+    /// the interface default INSIDE the chain, fanned the batch back out through that decorator's
+    /// own single-path <c>Read</c>, and the facade's override was never reached — so every arm
+    /// above could pass while every deployed host still degraded.
+    ///
+    /// <para>This arm exercises the chain in the production ORDER and asserts the batch arrives at
+    /// the provider's batched entry point. It is the one that catches a NEW decorator forgetting
+    /// the forward, which is the defect this whole change is about;
+    /// <c>StorageAdapterDecoratorsForwardBatchReadGuard</c> is the same rule enforced statically
+    /// over every decorator in the assembly, so a decorator nobody wires into this test is still
+    /// held to it.</para>
+    /// </summary>
+    [Fact]
+    public async Task TheProductionDecoratorChain_StillReachesTheBatchedEntryPoint()
+    {
+        var store = new RecordingAdapter([Node(Shared, "s"), Node(OnlyInA, "a"), Node(OnlyInB, "b")]);
+
+        // The exact composition DecorateStorageAdapterWithVersionWriting builds, in its order.
+        IStorageAdapter production = new SubtreeDeletionGuardStorageAdapter(
+            new MonotonicWriteGuardStorageAdapter(
+                new VersionWritingStorageAdapter(
+                    new PersistenceService([new Provider("A", store)]),
+                    versionQuery: null)),
+            registry: null);
+
+        var read = await production
+            .ReadMany([Shared, OnlyInA, OnlyInB], Options)
+            .ToList()
+            .Timeout(TestTimeouts.Quick)
+            .Await(TestContext.Current.CancellationToken);
+
+        read.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal).Should().Equal(
+            [OnlyInA, OnlyInB, Shared],
+            "the chain must still return every node the batch asked for");
+        store.BatchCalls.Should().Be(1,
+            "EVERY layer of the production chain must forward the batch — one that does not sends "
+            + "dispatch to the interface default inside the chain, and the facade's override below "
+            + "it is then unreachable however correct it is (#4200)");
+        store.SingleReads.Should().Be(0,
+            "a decorator that silently fans a batch back into point reads is the whole defect, and "
+            + "it is invisible from outside: the results are identical, only the failure modes and "
+            + "the round-trips differ");
+    }
+
+    /// <summary>
     /// 🚨 A provider whose BATCH faults must fault the read — never be read as "these nodes are
     /// absent".
     ///

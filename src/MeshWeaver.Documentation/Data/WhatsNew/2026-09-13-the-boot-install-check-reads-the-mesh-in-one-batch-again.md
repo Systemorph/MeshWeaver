@@ -13,10 +13,10 @@ the package wrote, and the sweep reads them back. The rule it follows is written
 does it — read the whole declared set in ONE batch, never one probe per path, because a probe for a
 path that may not be there is the shape that trips a storm breaker on the node's owning hub.
 
-The rule was not what ran. The storage facade every portal actually uses did not implement the
-batched read, so it fell back to the framework default — one probe per path, all at once, for every
-batched read in the platform. A backend that really can read a hundred paths in one query was
-never asked to.
+The rule was not what ran. Reads reach storage through a short stack of layers, and the batched read
+survives only if **every** layer passes it on. Two of them did not — they inherited a framework
+fallback that quietly turns a batch back into one probe per path — so for every batched read in the
+platform, a backend that really can read a hundred paths in one query was never asked to.
 
 **The interesting part is not the extra round-trips; it is that the two reads do not fail the same
 way.** A single-path read against Postgres treats a partition whose table was never created as an
@@ -27,8 +27,9 @@ boot, for a package that was fine. Nodes under a `Source/` or `Test/` path are s
 from their siblings, so they could meet this on their own while the other two hundred nodes of the
 same package read back normally.
 
-The facade now forwards the batch: providers are tried in order, the first that holds a path serves
-it, and each next provider is asked only for what is still unanswered. A store that cannot answer
-now faults instead of shrugging, and the sweep reports the honest verdict — *the mesh could not be
-read, so completeness was not checked, and this is not a pass* — rather than a list of missing
-nodes that are not missing.
+Every layer now forwards the batch, and the layer that does the work walks the stores in order: the
+first store that holds a path serves it, and each next store is asked only for what is still
+unanswered. A store that cannot answer now faults instead of shrugging, and the sweep reports the
+honest verdict — *the mesh could not be read, so completeness was not checked, and this is not a
+pass* — rather than a list of missing nodes that are not missing. A new check holds every layer to
+the forward, so the next one added cannot quietly drop it again.
