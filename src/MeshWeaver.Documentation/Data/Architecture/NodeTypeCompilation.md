@@ -1339,48 +1339,45 @@ getter, and `flat=SAME-FRAME` silently stops meaning what it says. The shape is 
 own binding (`SourceModule.GlobalNamespace`, `ContainingType`, `Arity`, members), not by matching the
 literal, so a rewrite that preserves the shape passes and one that does not cannot.
 
-#### Leg 5 — the pristine-COMPILER control (`compiler=`, 2026-09-13)
+#### Leg 5 — implemented 2026-09-13 (`PrivateRoslynCopy`)
 
-Legs 1–4 have one ceiling in common that none of them can see over: **all four execute the same
-`Microsoft.CodeAnalysis*.dll`** — the same mapped image, the same native code, the same statics.
-Leg 2 varies the references, leg 4 the source, leg 3 the call site; nothing varies the compiler.
-So `BELOW-ROSLYN` — "the broken state is below Roslyn (CLR heap / JIT / GC)" — has been read on
-every occurrence from evidence that only ever showed "not the references" and "not the source",
-and the 2026-09-12 supersession check named this as the decisive control still unbuilt.
+The pristine-COMPILER control specified below (see *"Leg 5 — a pristine COMPILER control — is
+the experiment that settles it"*) is built: `PrivateRoslynCopy.Emit` in `MeshWeaver.Compiler`.
+It rides the same two verdicts legs 3 and 4 ride (`BELOW-ROSLYN`, `DIVERGENT`), on both emit paths
+(the disk emit's catch and, since the same change, `EmitToMemory`'s — a deployment emitting to
+memory used to lose every `#890` reading). The readings and what they settle are in that
+section's table — one `compiler=` format, spelled once:
 
-`PrivateRoslynCopy.Emit` (`MeshWeaver.Compiler`) is that control. On the same two verdicts legs
-3 and 4 ride on, it loads `Microsoft.CodeAnalysis` and `Microsoft.CodeAnalysis.CSharp` a SECOND
-time — from freshly read bytes, into a collectible `AssemblyLoadContext` that serves the two to
-each other and lets every other dependency fall through to the default context — and drives
-`EmitCanarySource` through that private copy by reflection, against an image-backed CoreLib
-reference the private copy builds itself (leg 2's shape). Nothing of the shared copy is touched:
-not its statics, not its caches, not its JIT'd code.
+- `compiler=PRIVATE-COPY-EMITS` / `compiler=PRIVATE-COPY-THREW <Type> at <frame>` — the two
+  answers;
+- `compiler=PRIVATE-COPY-DIAGNOSTICS(<ids>)` — the private copy compiled and REFUSED the canary, a
+  shape no other leg has ever produced for this source; read the ids before drawing anything;
+- `compiler=UNAVAILABLE(…)` / `compiler=NOT-RUN` — the leg could not run / no probe supplied.
+  🚨 `THREW` is reserved for a throw from the private copy's `Emit` STAGE; a throw from parse,
+  reference, options or create is `UNAVAILABLE(stage=… threw …)` — the control was never asked to
+  emit, so it has not answered.
 
-| verdict | meaning | where it sends triage |
-|---|---|---|
-| `compiler=PRIVATE-COPY-EMITS` | a never-before-executed Roslyn emits the source the shared one cannot, same process, same CLR | 🚨 **the broken state lives IN the shared copy** — a static, a cache, a miscompiled method — not below it. `BELOW-ROSLYN` was NOT earned. The remedy is to scope the shared compiler out (a per-generation compiler context); a `dotnet/runtime` report is not what the evidence supports |
-| `compiler=PRIVATE-COPY-THREW … at …` | even fresh compiler code cannot emit | the process cannot emit at all: `BELOW-ROSLYN` is earned, and the private copy's throwing frame is the reproduction to file |
-| `compiler=PRIVATE-COPY-DIAGNOSTICS(…)` | the private copy compiled and REFUSED the canary | no other leg has ever produced this for this source — read the ids before concluding anything |
-| `compiler=PRIVATE-COPY-UNAVAILABLE(…)` | the leg could not run (a single-file host with no on-disk Roslyn, a context that handed the shared assembly back, a Roslyn shape this reflection does not know) | its own verdict, never folded into the others |
-| `compiler=NOT-RUN` | no probe supplied | an absent reading is visible as absent |
-
-Cost: two assembly loads (~15 MB read), one tiny emit, one `Unload()` — on the already-failing
-terminal path only, never on a success or an ordinary compile error. Measured on a healthy process:
-~1 s for the first run including both loads.
+Implementation facts that matter for reading it: both assemblies are loaded from freshly read
+bytes into one collectible `AssemblyLoadContext` that serves them to each other and lets every
+other dependency (BCL, `System.Collections.Immutable`, `System.Reflection.Metadata`) fall through
+to the default context; the canary is driven by reflection against an image-backed CoreLib
+reference the private copy builds itself (leg 2's shape); the reflection binds the private copy's
+own types by full name and fills every optional parameter with its declared default; the context
+is unloaded after the emit. Cost: ~1 s on a healthy process including both loads, on the
+already-failing path only.
 
 🚨 **The control that cannot run is the trap this leg is most exposed to**, and
 `EmitCanaryPrivateCompilerLegTest` is the guard: on a healthy process the only acceptable reading
-is `PRIVATE-COPY-EMITS`, twice in a row (the context is collectible and re-created per run). A
-Roslyn upgrade that renames a type or reshapes `Create`/`Emit` turns the reflection into
-`UNAVAILABLE` — visibly, as a red test, not silently on the next occurrence. The reflection binds
-to the private copy's OWN types by full name and fills every optional parameter with its declared
-default, so it names nothing of Roslyn's optional-parameter surface.
+is `PRIVATE-COPY-EMITS`, twice in a row (the context is re-created per run). A Roslyn upgrade that
+renames a type or reshapes `Create`/`Emit` turns the reflection into `UNAVAILABLE` — visibly, as a
+red test, not silently on the next occurrence.
 
-**What the next occurrence therefore prints, for the first time:** `compiler=PRIVATE-COPY-EMITS`
-or `compiler=PRIVATE-COPY-THREW@<frame>` on the same line as `canary=`, `dissect=` and `flat=`.
-The 2026-09-12 check on #890 stated the closing condition as exactly that reading; until it is
-read on an occurrence, every `BELOW-ROSLYN` on this thread is to be taken as "not the references
-and not the source", no more.
+**What the next occurrence therefore prints, for the first time:** a `compiler=` reading on the
+same line as `canary=`, `dissect=` and `flat=`. The 2026-09-12 check stated the closing condition
+as exactly that reading; until it is read on an occurrence, every `BELOW-ROSLYN` on this thread is
+to be taken as "not the references and not the source", no more. The tiering residual stated
+below is unchanged: a single `PRIVATE-COPY-EMITS` does not separate fresh mapping from fresh native
+code, and the follow-up is to repeat the private emit until it tiers up.
 
 #### The first `dissect=` readings, 2026-09-06 — and what they do and do not settle
 
@@ -1616,7 +1613,8 @@ analogue of what leg 2 did for CoreLib:
 |---|---|
 | `compiler=PRIVATE-COPY-EMITS` | a second, freshly loaded and freshly JIT-compiled Roslyn emits the shape the shared one cannot ⇒ the fault travels with **this process's copy of the compiler**, not with the CLR heap. `BELOW-ROSLYN`'s "below Roslyn" is then void, the `dotnet/runtime` venue is wrong, and the search moves to the image, its mapping, or the native code produced for it |
 | `compiler=PRIVATE-COPY-THREW@<same frame>` | the compiler binary is intact and freshly compiled code fails identically ⇒ **the first evidence that actually earns `BELOW-ROSLYN`**, and the first thing a `dotnet/runtime` report could carry that is not an absence |
-| `compiler=UNAVAILABLE(…)` / `NOT-RUN` | the private copy could not be built or driven — its own verdict, never folded into either of the above (the same rule leg 2's `INCONCLUSIVE` follows) |
+| `compiler=PRIVATE-COPY-DIAGNOSTICS(<ids>)` | the private copy compiled the canary and refused it with diagnostics — a shape no other leg has produced for this source; read the ids before concluding anything |
+| `compiler=UNAVAILABLE(…)` / `NOT-RUN` | the private copy could not be built or driven (a stage before `Emit` threw, no on-disk image, the context handed the shared assembly back) — its own verdict, never folded into either of the above (the same rule leg 2's `INCONCLUSIVE` follows) |
 
 Two residuals, stated because the leg is only a control for what it does not share: the BCL,
 `System.Collections.Immutable` and `System.Reflection.Metadata` still resolve to the Default context,

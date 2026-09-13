@@ -65,7 +65,7 @@ public class EmitCanaryPrivateCompilerLegTest(ITestOutputHelper output)
                 "THREW NullReferenceException at MetadataWriter.GetConsolidatedTypeParameters: x",
                 "THREW NullReferenceException at MetadataWriter.GetConsolidatedTypeParameters: x",
                 compiler: () => throw new InvalidOperationException("the probe itself is broken"))
-            .Should().Contain("compiler=PRIVATE-COPY-UNAVAILABLE",
+            .Should().Contain("compiler=UNAVAILABLE",
                 "a probe that faults must say it said nothing, never become a verdict");
     }
 }

@@ -861,10 +861,12 @@ public static class EmitPipeline
             + "one-method reproduction. RESIDUAL: both legs still run on the one "
             + "CLR, so this does not separate a corrupted heap from a miscompiled Roslyn method; "
             + "#613 is the SIGNALLING twin and is where a faulting address actually comes from. "
-            + "🚨 THEN READ compiler=: it is the one leg that does not run the shared Roslyn — "
-            + "PRIVATE-COPY-EMITS means a fresh copy of the compiler emits this very source in this "
-            + "very process, so the fault is in the shared copy's state or code and NOT below "
-            + "Roslyn after all; PRIVATE-COPY-THREW at the same frame is what earns this verdict. "
+            + "🚨 THEN READ compiler=: it is the one leg that does not run the shared Roslyn. "
+            + "PRIVATE-COPY-EMITS means a fresh, freshly JIT-compiled copy of the compiler emits this "
+            + "very source in this very process, so the fault travels with this process's copy of the "
+            + "compiler (its image, its mapping, or the native code produced for it), not with the CLR "
+            + "heap — 'below Roslyn' is then void; PRIVATE-COPY-THREW at the same frame is what earns "
+            + "this verdict. "
             + Dissection(dissect)
             + " " + Flatness(flat, sharedSite)
             + " " + PrivateRoslynCopy.Render(compiler);
@@ -1200,7 +1202,19 @@ public static class EmitPipeline
         var emitOptions = new EmitOptions(
             debugInformationFormat: DebugInformationFormat.PortablePdb);
 
-        var emitResult = compilation.Emit(dllStream, pdbStream, options: emitOptions, cancellationToken: ct);
+        EmitResult emitResult;
+        try
+        {
+            emitResult = compilation.Emit(dllStream, pdbStream, options: emitOptions, cancellationToken: ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The same stamp the disk path applies: an emit-phase THROW (not a diagnostic) carries
+            // the canary verdict on the ORIGINAL exception, unwrapped. Without it a deployment that
+            // emits to memory (EnableDiskCache=false) lost every #890 reading — legs 1–5 alike.
+            ex.Data[EmitCanaryDataKey] = ProbeSharedEmitState(compilation);
+            throw;
+        }
 
         if (!emitResult.Success)
             throw new CompilationException(nodePath,
