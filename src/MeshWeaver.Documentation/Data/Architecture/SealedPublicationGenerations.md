@@ -387,10 +387,51 @@ flat. Core CD needs no pin move; the satellites move theirs the way they always 
 
 ### Phase 4 — flip, one prefix at a time *(open)*
 
-Set `publication-layout: generation` on every producer of one prefix, **in one change set where a
-prefix has more than one producer**. That is `plugins` and nothing else: core CD's `plugins-bake` and
-MeshWeaver.Plugins' `publish-bake`, flipped together, platform half first. The single-producer
-prefixes each flip in their own repository's PR.
+Set `publication-layout: generation` on every producer of one prefix. The multi-producer prefix is
+`plugins` and nothing else: core CD's `plugins-bake` and MeshWeaver.Plugins' `publish-bake`. The
+single-producer prefixes each flip in their own repository's PR.
+
+🚨 **"In one change set" was stated here as the precondition, and it is not available.** The two
+producers of `plugins` live in **two repositories**, which cannot merge atomically, and one of them
+publishes on every core build. So the flip *must* pass through a prefix where one producer writes
+generations and the other still writes flat — the question is only for how long. Requiring an atomic
+change set does not avoid that state; it just leaves it unhandled.
+
+#### A MIXED prefix — and what the writer now does about it *(landed)*
+
+Before this, a **flat** run on a prefix carrying a live `_current` was the silent-stale-serve this
+whole page exists to remove, one layout further in. `resolve_publication_dir` runs on every run
+regardless of layout, so the flat run read *every* decision — already published? which architecture?
+which source commit? does it carry a module set? — off the **generation the pointer names**, and then
+wrote the **flat directory**. Two outcomes, both wrong and neither visible:
+
+* it **published into a directory no reader resolves** and reported success, while every consumer
+  went on serving the older generation — indefinitely, since nothing else retires a pointer;
+* or it **skipped** ("already published") against a directory it was not writing.
+
+Measured against the pre-fix script by `test-publish-bake-overlap.py`: a generation publication of
+core's content followed by a flat publication of the satellite's left `_current` naming the
+generation, with the flat directory sealed and holding all-satellite bytes — one seal,
+self-consistent to every consumer, and wrong.
+
+**The rule now is: the layout a run publishes in decides which directory is live *for that run*.** A
+flat run reads and writes the prefix, and the pointer it found is **retired** — `retire_pointer`,
+after the publication stands — which returns the prefix to last-writer-wins, i.e. exactly today's
+semantics. Three properties are load-bearing:
+
+| | |
+|---|---|
+| **Last, never first** | the pointer is retired only once this target's publication stands. Until then consumers resolve the generation — whole and sealed — rather than a flat directory mid-replace. A refusal earlier leaves the generation live. |
+| **A postcondition, not a check-then-act** | the delete is attempted and the *absence is read back*. A concurrent producer deleting it first is a success for this run; only a pointer still standing afterwards fails the target, loudly, naming the by-hand repair. |
+| **A routing statement, never content** | every generation directory stays where it is. Retention collects the ones nothing names once they age out, by its own rules, and a generation is protected by age from its first byte. |
+
+It is announced as a `::warning::` on both sides — the resolution ("this run publishes flat; flip
+this caller too") and the retirement — because a half-flipped fleet must not read as intentional.
+
+**Consequence for the flip:** `plugins` can now be flipped **one producer at a time**, in whichever
+order the two repositories merge. Between the two merges the prefix behaves exactly as it does today
+(the flat producer wins the prefix when it publishes; the generation producer wins it back, with its
+own pointer, when it publishes) and says so in both runs' logs.
 
 🚨 **The residual window is a pin bump inside one lane.** Even a single-producer prefix has a moment
 where a run started before the flip is still in flight while a run after it writes a generation. The
@@ -496,12 +537,14 @@ was ever visible instead of silently shipping a mixed set.
   MIX refusals; 20 distinct identities, **6 written by both lanes** — all 6 at different Plugins
   commits, hours apart, with no overlap in the window. So the defect is **latent, not active**, and
   the postcondition is carrying it.
-  Flipping is still worth doing, but it is not a core-only change: `plugins` must flip in ONE change
-  set across BOTH producers (core CD's `plugins-bake` and the satellite's own `publish-bake`, which
-  lives in another repository), and measured 2026-09-13 **no caller anywhere passes
-  `publication-layout`** — core's `main-cd.yml` `plugins-bake` does not, so the prefix's core-side
-  producer is `flat` too. The single-producer prefixes each flip in their own repository's PR. What
-  phase 3 removes is the reason a flip could not be attempted at all.
+  Flipping is still not a core-only change — `plugins`' other producer lives in another repository —
+  and measured 2026-09-13 **no caller anywhere passes `publication-layout`**, core's `main-cd.yml`
+  `plugins-bake` included, so the prefix's core-side producer is `flat` too. What has changed is
+  that it no longer has to be **one** change set: since the writer retires a pointer it invalidates
+  (phase 4 above), the two producers may flip in either order and the interval between the two
+  merges behaves exactly as the fleet does today, loudly. What phase 3 removed was the reason a flip
+  could not be attempted at all; what this removes is the reason it had to be attempted atomically
+  across two repositories.
 - 🚨 **Flipping `plugins` does not by itself stop the publish reds.** The flat compatibility copy is
   still replaced in place and still races, so an overlap still costs that copy and still fails the
   job — the postcondition covering it is unchanged. What the flip buys immediately is that the
@@ -521,16 +564,25 @@ was ever visible instead of silently shipping a mixed set.
 
 ## Verification
 
-- `.github/scripts/test-publish-bake-overlap.py` — **82 assertions**, executing the REAL publish
+- `.github/scripts/test-publish-bake-overlap.py` — **90 assertions** (measured 2026-09-14), executing
+  the REAL publish
   script against a stub share (the stub `az` for the per-target decisions, a fake share backend for
   the bulk helper's uploads and read-back) and reading every verdict off the BYTES. The writer half is covered by
-  five generation cases: one publisher writes and seals under its own token and the pointer names it;
+  seven generation cases: one publisher writes and seals under its own token and the pointer names it;
   **two interleaved publishers each seal their OWN generation, neither directory holds a byte of the
   other, both are complete, and `_current` names exactly one of them**; "already published" is
   resolved *through* the pointer rather than off the prefix; every unusable pointer shape (escaping,
-  rooted, `..`, blank, dangling) degrades to the prefix; and an unrecognised selector is refused. The
+  rooted, `..`, blank, dangling) degrades to the prefix; an unrecognised selector is refused; and the
+  two **mixed-layout** cases — a flat publisher that republishes over a pointed-at prefix, and one
+  that skips — assert the pointer is retired, that the run says so, and that the generation's own
+  bytes are untouched. The
   three flat controls are unchanged and are the regression suite for the default.
-  🚨 **Negative control:** run against the pre-change script, **16 of the 67 fail**.
+  🚨 **Negative control:** run against the pre-change script, **16 of the 67 fail**. For the
+  mixed-layout half specifically, run against `origin/main`'s script on 2026-09-14:
+  **87 passed, 3 failed** — exactly the three new assertions, with `_current` reading
+  `Systemorph-MeshWeaver-3501-1` and `Systemorph-MeshWeaver-3601-1` — while both cases' own
+  "the fixture really is mixed" / "really did skip" non-vacuity checks passed, so the cases
+  exercised the path rather than failing to reach it.
 - `bake-scope.sh --self-test` — four pointer-resolution assertions, and the positive one is
   discriminating by construction: the flat copy and the generation record *different* baselines (a
   diverged commit versus an ancestor), so the verdict itself says which was read. A resolver that
