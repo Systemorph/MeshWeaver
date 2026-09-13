@@ -167,6 +167,27 @@ public static class PackageSources
         if (sourceRepoPath is not { Length: > 0 } src)
             return null;
         var subdir = sourceSubdir ?? "";
+        // 🚨 ONE wrapping site (#4222), and the construction is split out so it stays that way. This
+        // factory runs PER REQUEST — PluginRegistryEndpoints.Sources rebuilds every source on every
+        // GET /api/plugins — so a cache the source instance owned would be thrown away with it, and
+        // the mesh-scoped PackageListingCache is where it has to live. What is cached is the SOURCE
+        // snapshot, pre-grant-filter: the per-caller decisions still run on every request, so one
+        // instance's catalog can never be served to another (#3768). A new source SHAPE added to
+        // Build below is cached by construction rather than by whoever adds it remembering.
+        //
+        // 🚨 REMOTE sources only, and that is a correctness boundary rather than a tuning choice. The
+        // defect is a repository fetched OVER THE NETWORK per request (12-19 s to first byte); a
+        // LOCAL directory read is cheap, has no webhook to invalidate it, and its listed version is
+        // contractually a function of the files on disk RIGHT NOW — a mounted source must report an
+        // edit on the very next listing (LocalSourceContentVersionTest). Caching one would make a
+        // local-dev or air-gapped registry report yesterday's content for five minutes.
+        var inner = Build(hub, src, subdir, logger, nodeRepo);
+        return inner is null || !IsUrl(src) ? inner : Cached(hub, inner, src, subdir, nodeRepo);
+    }
+
+    private static IPackageSource? Build(
+        IMessageHub hub, string src, string subdir, ILogger? logger, bool nodeRepo)
+    {
         if (IsUrl(src))
         {
             var client = hub.ServiceProvider.GetService<IGitHubRepoClient>();
@@ -198,6 +219,24 @@ public static class PackageSources
         var git = new GitCli(hub.ServiceProvider.GetRequiredService<IoPoolRegistry>());
         return new GitPackageSource(git, src, subdir, logger);
     }
+
+    /// <summary>
+    /// Routes <paramref name="inner"/>'s listing through the mesh's <see cref="PackageListingCache"/>
+    /// when one is registered (<c>AddPluginCatalog</c>), so the repository is read once per freshness
+    /// window instead of once per request (#4222). A mesh without the catalog registered — a bare
+    /// test mesh, a CLI — gets the source unchanged.
+    /// </summary>
+    private static IPackageSource Cached(
+        IMessageHub hub, IPackageSource inner, string repoUrl, string subdir, bool nodeRepo)
+        => hub.ServiceProvider.GetService<PackageListingCache>() is { } cache
+            ? cache.Wrap(inner, repoUrl, subdir, nodeRepo ? NodeRepoFormat : ManifestRepoFormat)
+            : inner;
+
+    /// <summary>Format discriminator for a node-native repo, so two readings of one repository cannot share a cache entry.</summary>
+    private const string NodeRepoFormat = "node";
+
+    /// <summary>Format discriminator for a <c>package.json</c>-manifest repo.</summary>
+    private const string ManifestRepoFormat = "package.json";
 
     /// <summary>
     /// The git package sources this instance has configured, in configured order — the ONE reading
