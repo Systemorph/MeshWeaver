@@ -341,15 +341,24 @@ public static class ShippedPrebuiltBundles
             {
                 OnDeclined = path => declined.TryAdd(path, 0),
             };
-            var exactSealed = SealedPublicationIndex.ReadFor(publishedRoot, identity, logger);
+            // 🚨 ONE resolution, two readers (#3461). The markers the sync reconciler decides on
+            // and the bundles this pass adopts must come from the SAME publication: resolving the
+            // pointer here and again inside the walk would straddle a pointer move and hand the
+            // reconciler one generation's commit while the bytes came from another.
+            var resolved = SealedPublicationIndex.ReadResolvedFor(publishedRoot, identity, logger);
+            var exactSealed = resolved.Select(r => r.Source).ToList();
+            var publicationDirectories = resolved.ToDictionary(
+                r => r.Source.Source, r => r.Directory, StringComparer.OrdinalIgnoreCase);
             // 🚨 The census DENOMINATOR (#4063). This is the same reading SealedSyncGate decides
             // on, taken at the same moment the bundles are adopted — so /health states what this
-            // identity holds, not what a later, differently-timed read would say.
+            // identity holds, not what a later, differently-timed read would say. It is the SAME
+            // snapshot the walk below composes under, so the number on /health and the bytes on
+            // disk can never describe two different publications either.
             mesh.ServiceProvider.GetService<SealedSyncCensus>()?.RecordPublication(
                 new SealedPublicationReading(
                     identity, publishedRoot, [.. exactSealed], DateTimeOffset.UtcNow));
             return SeedBundles(mesh, dir,
-                    () => CompletePublishedBundlesOf(dir, logger)
+                    () => CompletePublishedBundlesOf(dir, logger, publicationDirectories: publicationDirectories)
                         .Concat(FallbackPublishedBundlesOf(publishedRoot, identity, exactSealed, context, logger))
                         .ToList(),
                     logger, context: context)
@@ -485,8 +494,14 @@ public static class ShippedPrebuiltBundles
     /// absence at the open and lets every other I/O failure surface.</para>
     /// </summary>
     /// <param name="readLines">Test seam: the seal read to perform. Production passes none.</param>
+    /// <param name="publicationDirectories">🚨 The publication each source was ALREADY resolved to
+    /// by this pass, when the caller took a snapshot (#3461). Two independent resolutions of one
+    /// pointer are two publications whenever it moves between them, so a caller that also read the
+    /// seal index passes what it read there instead of letting this walk resolve again. Absent —
+    /// every other caller — each source is resolved here exactly as before.</param>
     internal static List<string> CompletePublishedBundlesOf(
-        string identityDirectory, ILogger? logger, Func<string, string[]>? readLines = null)
+        string identityDirectory, ILogger? logger, Func<string, string[]>? readLines = null,
+        IReadOnlyDictionary<string, string>? publicationDirectories = null)
     {
         var bundles = new List<string>();
         foreach (var source in Directory
@@ -498,7 +513,11 @@ public static class ShippedPrebuiltBundles
             // under `source`. Resolving and then composing against the source directory would
             // read the flat layout's bytes while reporting the generation's, which during the
             // migration is a silent wrong answer rather than a missing one.
-            var sourceDir = PublicationDirectoryOf(source, logger);
+            var sourceDir =
+                publicationDirectories is not null
+                && publicationDirectories.TryGetValue(Path.GetFileName(source)!, out var pinned)
+                    ? pinned
+                    : PublicationDirectoryOf(source, logger);
             var sentinel = Path.Combine(sourceDir, CompletionSentinelFileName);
             // 🚨 #3876: the OPEN decides absence, never a preceding File.Exists. The publisher
             // unseals before it republishes (several times an hour during a release) and retention
