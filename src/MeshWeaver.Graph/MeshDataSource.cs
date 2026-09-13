@@ -2008,11 +2008,11 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
         _logger?.LogDebug("[DIAG-MeshDataSource] WithMeshNodes hubPath='{HubPath}'", _hubPath);
 
-        // Routing layer (MessageHubGrain / MonolithRoutingService) already loaded
-        // the node when resolving the address — and on Orleans it carries a live
-        // catalog stream that emits subsequent updates. Prefer that over a
-        // duplicate persistence read here. MeshNodeTypeSource consumes the stream
-        // for both the initial seed AND ongoing pushes into the workspace.
+        // Routing layer (MessageHubGrain / MonolithRoutingService) already loaded the node
+        // when resolving the address; MeshNodeTypeSource takes it as the routing seed (and,
+        // on Orleans, as the enriched node). ONE-SHOT on both hosts — see OwnNodeStreamHolder:
+        // live changes reach this hub as the writes themselves and through IMeshChangeFeed,
+        // never through this stream (#3432).
         var ownStream = Workspace.Hub.Configuration.Get<OwnNodeStreamHolder>()?.Stream;
 
         // Check if this hub path is served from a static source: AddMeshNodes built-ins
