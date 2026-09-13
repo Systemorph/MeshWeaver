@@ -6,6 +6,11 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;

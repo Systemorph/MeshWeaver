@@ -5,6 +5,11 @@
 #nullable enable
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using MeshWeaver.ContentCollections;
@@ -145,7 +150,20 @@ public class DynamicMeshNodeAttributeGeneratorTest
         var source = _generator.GenerateAttributeSource(node, codeConfig, null);
 
         // The directive IS hoisted; the declaration stays inside the method body.
-        var assemblyAttrIndex = source.IndexOf("    public void GenerateAttributeSource_GeneratesValidClassName()
+        var assemblyAttrIndex = source.IndexOf("[assembly:");
+        var directiveIndex = source.IndexOf("using System.Diagnostics;");
+        var declarationIndex = source.IndexOf("using var process = new Process { StartInfo = psi };");
+
+        directiveIndex.Should().BeGreaterThanOrEqualTo(0);
+        declarationIndex.Should().BeGreaterThanOrEqualTo(0);
+        directiveIndex.Should().BeLessThan(assemblyAttrIndex,
+            "using DIRECTIVES must be hoisted above the assembly attribute");
+        declarationIndex.Should().BeGreaterThan(assemblyAttrIndex,
+            "a using DECLARATION must stay inside its method, never hoisted to the file top");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_GeneratesValidClassName()
     {
         // Arrange
         var node = MeshNode.FromPath("graph/org/project") with
@@ -167,7 +185,13 @@ public class DynamicMeshNodeAttributeGeneratorTest
         source.Should().Contain("[assembly: MeshWeaver.Graph.Generated.graph_org_projectMeshNodeProvider]");
 
         // Verify assembly attribute comes before namespaces
-        var assemblyAttrIndex = source.IndexOf("    public void GenerateAttributeSource_IncludesHubConfiguration()
+        var assemblyAttrIndex = source.IndexOf("[assembly:");
+        var namespaceIndex = source.IndexOf("namespace MeshWeaver.Graph.Generated");
+        assemblyAttrIndex.Should().BeLessThan(namespaceIndex, "Assembly attribute must come before namespace declarations");
+    }
+
+    [MeshFact]
+    public void GenerateAttributeSource_IncludesHubConfiguration()
     {
         // Arrange
         var node = new MeshNode("test")

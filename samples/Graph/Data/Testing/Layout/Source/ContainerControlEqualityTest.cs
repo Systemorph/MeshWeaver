@@ -6,6 +6,11 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using MeshWeaver.Layout;
 using System.Linq;
 
@@ -16,7 +21,6 @@ using System.Linq;
 /// </summary>
 public class ContainerControlEqualityTest(MeshTestContext context) : InMeshTestBase(context)
 {
-    private readonly ITestOutputHelper output = output;
 
     [MeshFact]
     public void StackControl_WithDifferentViews_ShouldNotBeEqual()

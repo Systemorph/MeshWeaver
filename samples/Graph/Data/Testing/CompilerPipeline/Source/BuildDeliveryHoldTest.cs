@@ -6,6 +6,11 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using MeshWeaver.Graph;

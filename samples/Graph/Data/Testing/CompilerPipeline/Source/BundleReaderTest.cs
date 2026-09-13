@@ -6,6 +6,12 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 #pragma warning disable CS1591
 
 using System.Text;
@@ -24,7 +30,7 @@ using MeshWeaver.Plugin.Packaging;
 /// </summary>
 public class BundleReaderTest
 {
-    private static readonly PluginManifest Manifest =
+    private static readonly MeshWeaver.Plugin.Packaging.PluginManifest Manifest =
         new("ThreeBody", "MeshWeaver.Plugin.ThreeBody", "1.3.2", "ThreeBody", null, []);
 
     private static byte[] WriteBundle(params (string NodePath, byte[] Bytes)[] assemblies)

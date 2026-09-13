@@ -28,7 +28,7 @@ REFUSE = [
     (r"SetHostIdentity|ImpersonateAs\(", "acts as an arbitrary identity — declined by design"),
     (r"Process\.Start|new Process\(", "spawns a process — stays on xunit"),
     (r"IClassFixture<|ICollectionFixture<", "uses an xunit fixture — needs a hand port"),
-    (r"\bIAsyncLifetime\b", "implements IAsyncLifetime (InitializeAsync/DisposeAsync) — the runner has no per-class lifecycle hook yet"),
+    (r"\bIAsyncLifetime\b|override\s+(async\s+)?(ValueTask|Task)\s+(DisposeAsync|InitializeAsync)\b", "implements IAsyncLifetime / overrides the fixture's InitializeAsync/DisposeAsync — the runner has no per-class lifecycle hook yet"),
     (r"Observable\.Using\([^\n]*Impersonate", "opens an impersonation scope with Observable.Using — the in-mesh shape is AsSystem (check-impersonation.py); needs a hand port"),
     (r"\.ToTask\(", "bridges an observable to a Task with .ToTask( — forbidden in every gated root (ObservableToTaskBridgeGuard); compose reactively first"),
     (r"using Microsoft\.Playwright|\bIPage\b|\bIBrowser\b|PortalFixture", "drives a browser (Playwright) — an e2e host, not an in-mesh case"),
@@ -40,6 +40,8 @@ REFUSE = [
     (r"FindRepositoryRoot|ScannedRoots|RatchetedRoots|ProductionRoots|GetRepositoryRoot|\bRepoRoot\b", "reads the repository tree from the test bin (a source-scanning guard) — no tree in a mesh; stays on xunit"),
     (r"(?m)^using MeshWeaver\.Plugin\.Build|^using MeshWeaver\.ContainerImages|MeshWeaver\.ComboVerifier|^using MeshWeaver\.PluginTester|\bModulePackCommand\b|\bContainerImageCatalog\b|\bDockerImageGate\b", "tests build tooling (MeshWeaver.Plugin.Build, ContainerImages, the tester, ComboVerifier) — not a content-surface assembly"),
     (r"(?m)^namespace [\w.]+\s*\n?\{[^\n]*\n(?:.*\n)*?^namespace ", "several brace-form namespaces in one file — in-mesh sources are one compilation; needs a hand split"),
+    (r"\bFreshThread\b|\bFileOutput\b|\.QueryAsync\(|\bHostBuilder\b", "uses the xunit fixture's helpers (FreshThread, FileOutput, QueryAsync, HostBuilder) — not on the platform"),
+    (r"base\.DisposeAsync\(|await DisposeAsync\(", "calls the fixture's DisposeAsync — the runner has no per-class lifecycle hook yet"),
     (r"\bTestScheduler\b|Microsoft\.Reactive\.Testing", "uses Microsoft.Reactive.Testing's TestScheduler — not a platform assembly"),
     (r"\bawait\b[^;]*?(GetMeshNodeStream|GetWorkspace\(|GetDataStream|GetRemoteStream|IMeshService|meshService\.|ObserveQuery|GetQuery\(|\.Query\(|\.CreateNode\(|\.UpdateNode\(|\.DeleteNode\(|\.CopyNode\()", "awaits a mesh read/write directly (HubReachableAsyncGuard.NoNewAwaitOfAMeshRead) — compose reactively and subscribe, or wait through ObserveCompletion"),
 ]
@@ -53,7 +55,7 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     s = re.sub(r"^using FluentAssertions(\.[\w.]+)?;\n", "", s, flags=re.M)
     s = re.sub(r"^using MeshWeaver\.Fixture;\n", "", s, flags=re.M)
     s = re.sub(r"^using MeshWeaver\.Hosting\.Monolith\.TestBase;\n", "", s, flags=re.M)
-    s = re.sub(r"^namespace [\w.]+;\n\n?", "", s, flags=re.M)
+    s = re.sub(r"^namespace [\w.]+;\n\n?", "", s, count=1, flags=re.M)   # the file's own, never one quoted in a raw string
     # the brace form `namespace X { … }` would swallow every file joined after it (in-mesh sources are one
     # compilation): drop the opening line and the file's last closing brace
     # only the file's OWN top-level brace namespace (column 0, no file-scoped one) — a `namespace X {` inside
@@ -75,7 +77,7 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     s = re.sub(r":\s*(MonolithMeshTestBase|HubTestBase|TestBase)\b(?!<)", ": InMeshTestBase", s)
     # a primary constructor forwarding the xunit output to its base: `X(ITestOutputHelper output) : Base(output)`
     s = re.sub(r"\(ITestOutputHelper\s+output\)\s*:\s*InMeshTestBase\(output\)", "(MeshTestContext context) : InMeshTestBase(context)", s)
-    s = re.sub(r"\[assembly:[^\]]*\]\s*\n", "", s)
+    s = re.sub(r"^\[assembly:[^\]\n]*\]\s*\n", "", s, flags=re.M)   # column 0 only — never inside a string constant
     # hoisted usings make `Notification` ambiguous (MeshWeaver.Mesh vs System.Reactive) — the mesh's is meant
     if "using MeshWeaver.Mesh;" in s and "System.Reactive.Notification" not in s:
         s = s.replace("new Notification(", "new MeshWeaver.Mesh.Notification(")
@@ -89,14 +91,25 @@ def convert(text: str, node_id: str) -> tuple[str | None, str]:
     s = s.replace("TestContext.Current.CancellationToken", "CancellationToken.None")
     # `access.RunAsSystem(() => work)` latches the identity across threads in-mesh (core#1820): the base's
     # AsSystem(access, () => work) is the sanctioned Observable.Create shape.
-    s = re.sub(r"\b([A-Za-z_][A-Za-z0-9_.]*)\.RunAsSystem\(", r"AsSystem(\1, ", s)
+    s = re.sub(r"\b([A-Za-z_][A-Za-z0-9_.]*)\.RunAsSystem\(", r"InMeshTestBase.AsSystem(\1, ", s)
+    # a primary-constructor class that kept the xunit helper in a field: the base's Output is that field
+    s = re.sub(r"^\s*private readonly ITestOutputHelper \w+ = \w+;\n", "", s, flags=re.M)
+    s = s.replace("typeof(Xunit.FactAttribute)", "typeof(MeshFactAttribute)")
+    # a namespace-relative name the dropped `namespace MeshWeaver.…` used to resolve
+    if not re.search(r"\b(class|record|struct|enum|interface)\s+Domain\b", s):
+        s = re.sub(r"(?<![\w.])Domain\.", "MeshWeaver.Domain.", s)
+    # the two PluginManifest types: the file's own using says which one it means
+    if "using MeshWeaver.Plugin.Packaging;" in s and "using MeshWeaver.PluginCatalog;" not in s:
+        s = re.sub(r"(?<![\w.])PluginManifest(?![\w])", "MeshWeaver.Plugin.Packaging.PluginManifest", s)
     s = re.sub(r"^using Xunit\.Abstractions;\n", "", s, flags=re.M)
     # a class that only took the output helper (no base): give it the base so `output`/`Output` resolve
     s = re.sub(r"(class \w+\(MeshTestContext context\))(\s*)(?=\{|\n|$)", r"\1 : InMeshTestBase(context)\2", s)
     header = (f"// <meshweaver>\n// Id: {node_id}\n// DisplayName: {node_id} — migrated from xunit (convert-xunit-to-inmesh.py)\n// </meshweaver>\n"
               "#nullable enable\nusing MeshWeaver.Reactive.Assertions;\nusing MeshWeaver.Testing.InMesh;\n")
-    if "using System;" not in s:
-        header += "using System;\n"
+    # the xunit projects build with ImplicitUsings — the in-mesh compile has none
+    for imp in ("System", "System.Collections.Generic", "System.IO", "System.Linq", "System.Net.Http", "System.Threading", "System.Threading.Tasks"):
+        if f"using {imp};" not in s:
+            header += f"using {imp};\n"
     return header + s, "ok"
 
 def _args(a: str) -> str:
@@ -138,7 +151,7 @@ public class SampleTest : MonolithMeshTestBase
     assert convert("class X : MonolithMeshTestBase { protected override MeshBuilder ConfigureMesh(MeshBuilder b) => b; }", "x")[0] is None
     assert convert("using Testcontainers.PostgreSql;", "x")[0] is None
     assert convert("var x = Observable.Using(() => access.ImpersonateAsSystem(), _ => y);", "x")[0] is None
-    assert "AsSystem(access, () => Mesh.CreateNode(n))" in convert("var r = access.RunAsSystem(() => Mesh.CreateNode(n));", "x")[0]
+    assert "InMeshTestBase.AsSystem(access, () => Mesh.CreateNode(n))" in convert("var r = access.RunAsSystem(() => Mesh.CreateNode(n));", "x")[0]
     assert convert("var t = obs.ToTask();", "x")[0] is None
     assert convert("var n = await ws.GetMeshNodeStream(p).FirstAsync();", "x")[0] is None
     assert convert("class X : HubTestBase { protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration c) => c; }", "x")[0] is None
@@ -151,6 +164,8 @@ public class SampleTest : MonolithMeshTestBase
     assert "namespace" not in convert("namespace A.B\n{\n    public class C { }\n}\n", "x")[0]
     assert convert("namespace A.B\n{\n    public class C { }\n}\n", "x")[0].rstrip().endswith("public class C { }")
     assert "TimeSpan.FromSeconds(5)" in convert("var t = 5.Seconds();", "x")[0]
+    assert 'source.IndexOf("[assembly:");' in convert('var i = source.IndexOf("[assembly:");\n}', "x")[0]
+    assert "[assembly:" not in convert("[assembly: Foo]\nclass C { }", "x")[0]
     assert "MeshWeaver.Mesh.Notification" in convert("using MeshWeaver.Mesh;\nvar n = new Notification();", "x")[0]
     assert "MeshWeaver.Mesh.Notification" not in convert("using MeshWeaver.Mesh;\nvar n = Notification(1);", "x")[0]
     kept = convert("namespace A;\nvar s = \"namespace X\\n{\\n}\";\nclass C { }", "x")[0]

@@ -5,6 +5,11 @@
 #nullable enable
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
 using System;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -152,7 +157,7 @@ public class ExecuteTimeInterlockTest(MeshTestContext context) : InMeshTestBase(
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
-        return AsSystem(access, () => meshService.CreateNode(node))
+        return InMeshTestBase.AsSystem(access, () => meshService.CreateNode(node))
             .FirstAsync().Timeout(TimeSpan.FromSeconds(20)).Await();
     }
 }

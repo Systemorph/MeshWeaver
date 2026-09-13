@@ -5,6 +5,11 @@
 #nullable enable
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System;
 using System.Linq;
 using MeshWeaver.Layout;
@@ -17,7 +22,6 @@ using MeshWeaver.Layout.Composition;
 /// </summary>
 public class ContainerControlAreaNestingTest(MeshTestContext context) : InMeshTestBase(context)
 {
-    private readonly ITestOutputHelper output = output;
 
     [MeshFact]
     public void LayoutGridControl_WithMultipleViews_ShouldHaveCorrectAreaStructure()

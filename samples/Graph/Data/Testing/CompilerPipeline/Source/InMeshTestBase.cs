@@ -76,8 +76,12 @@ public abstract class InMeshTestBase
     /// <summary>The mesh hub (the xunit base's <c>Mesh</c>).</summary>
     protected IMessageHub Mesh => Context.Hub;
 
-    /// <summary>This class's partition — every node a case writes goes under it.</summary>
-    protected string TestPartition => Context.Partition;
+    /// <summary>This class's partition — every node a case writes goes under it. Static, read off the
+    /// runner's ambient context, because the xunit estate uses it in field initialisers.</summary>
+    protected static string TestPartition => (MeshTestContext.Current ?? throw new InvalidOperationException("no MeshTestContext is current")).Partition;
+
+    /// <summary>The fixture's <c>Services</c>: the mesh's service provider.</summary>
+    protected IServiceProvider Services => Mesh.ServiceProvider;
 
     /// <summary>The xunit <c>ITestOutputHelper</c> shape: lines land in the verdict's detail column.</summary>
     protected TestOutput Output { get; }
@@ -117,7 +121,7 @@ public abstract class InMeshTestBase
     /// latched onto a terminating thread. The xunit estate's <c>access.RunAsSystem(() => …)</c> is
     /// rewritten to this by convert-xunit-to-inmesh.py.
     /// </summary>
-    protected static IObservable<T> AsSystem<T>(AccessService? access, Func<IObservable<T>> work) =>
+    public static IObservable<T> AsSystem<T>(AccessService? access, Func<IObservable<T>> work) =>
         Observable.Create<T>(observer =>
         {
             using (access?.ImpersonateAsSystem())
@@ -155,7 +159,7 @@ public abstract class InMeshTestBase
     /// <summary>Posts a request and awaits its response under the case deadline.</summary>
     protected async Task<IMessageDelivery<TResponse>> AwaitResponseAsync<TResponse>(
         IRequest<TResponse> request, Func<PostOptions, PostOptions>? options = null, IMessageHub? hub = null, CancellationToken? ct = null)
-        => await (hub ?? RequestHub).Observe(request, options).Take(1).Timeout(Context.Deadline);
+        => (IMessageDelivery<TResponse>)await (hub ?? RequestHub).Observe(request, options).Take(1).Timeout(Context.Deadline);
 
     /// <summary>Posts a node operation to the mesh's node-operation target.</summary>
     protected IObservable<IMessageDelivery<TResponse>> ObserveNodeOperation<TResponse>(
@@ -163,7 +167,8 @@ public abstract class InMeshTestBase
     {
         var hub = RequestHub;
         var target = hub.NodeOperationTarget();
-        return hub.Observe(request, o => options is null ? o.WithTarget(target) : options(o.WithTarget(target)));
+        return hub.Observe(request, o => options is null ? o.WithTarget(target) : options(o.WithTarget(target)))
+            .Select(d => (IMessageDelivery<TResponse>)d);
     }
 
     /// <summary>The xunit ITestOutputHelper surface a migrated test calls.</summary>

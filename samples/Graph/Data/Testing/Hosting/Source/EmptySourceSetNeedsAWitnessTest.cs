@@ -6,6 +6,12 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 
 /// <summary>
 /// Systemorph/MeshWeaver#3663 — a resolved source set of ZERO is ambiguous, and the batched bake

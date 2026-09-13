@@ -5,6 +5,9 @@
 #nullable enable
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
+using System.IO;
+using System.Net.Http;
+using System.Threading;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -376,7 +379,7 @@ public class NotificationRetentionTest(MeshTestContext context) : InMeshTestBase
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
-        return AsSystem(access, () => mesh.CreateNode(node))
+        return InMeshTestBase.AsSystem(access, () => mesh.CreateNode(node))
             .FirstAsync().Timeout(Bound).Await();
     }
 }

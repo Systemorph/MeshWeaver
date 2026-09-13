@@ -71,6 +71,10 @@ public static class Assert
     public static void SkipUnless(bool condition, string reason) { if (!condition) throw Fail("skipped: " + reason); }
     public static void ProperSubset<T>(ISet<T> expectedSuperset, ISet<T>? actual) { if (actual is null || !actual.IsProperSubsetOf(expectedSuperset)) throw Fail("Assert.ProperSubset failed"); }
     public static void Raises<T>(Action<Action<T>> attach, Action<Action<T>> detach, Action testCode) { var raised = false; Action<T> h = _ => raised = true; attach(h); try { testCode(); } finally { detach(h); } if (!raised) throw Fail("Assert.Raises failed — no event"); }
+    public static void Contains<T>(T expected, IEnumerable<T> collection, IEqualityComparer<T> comparer) { if (!collection.Contains(expected, comparer)) throw Fail($"Assert.Contains failed — {Show(expected)} not in the collection"); }
+    public static void DoesNotContain<T>(T expected, IEnumerable<T> collection, IEqualityComparer<T> comparer) { if (collection.Contains(expected, comparer)) throw Fail($"Assert.DoesNotContain failed — {Show(expected)} present"); }
+    public static void StartsWith(string expected, string? actual, StringComparison comparison) { if (actual is null || !actual.StartsWith(expected, comparison)) throw Fail($"Assert.StartsWith failed — '{actual}' does not start with '{expected}'"); }
+    public static void EndsWith(string expected, string? actual, StringComparison comparison) { if (actual is null || !actual.EndsWith(expected, comparison)) throw Fail($"Assert.EndsWith failed — '{actual}' does not end with '{expected}'"); }
     private static string Show(object? v) => v is null ? "null" : v is string s ? $"'{s}'" : v.ToString() ?? "?";
 }
 

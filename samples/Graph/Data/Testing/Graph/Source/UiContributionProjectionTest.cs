@@ -6,6 +6,10 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
+using System.IO;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -280,10 +284,10 @@ public class UiContributionProjectionTest
         Assert.Equal("settings.privacy", tab.LabelKey);
         // Icon strings go through the platform's total Icon.Parse — a Fluent name becomes a
         // fluent-provider Icon object (the NavMenu renderer's contract); both slots resolve alike.
-        var icon = Assert.IsType<Domain.Icon>(tab.Icon);
-        Assert.Equal(Domain.Icon.FluentProvider, icon.Provider);
+        var icon = Assert.IsType<MeshWeaver.Domain.Icon>(tab.Icon);
+        Assert.Equal(MeshWeaver.Domain.Icon.FluentProvider, icon.Provider);
         Assert.Equal("Shield", icon.Id);
-        Assert.IsType<Domain.Icon>(tab.GroupIcon);
+        Assert.IsType<MeshWeaver.Domain.Icon>(tab.GroupIcon);
     }
 
     [MeshFact]
@@ -486,10 +490,10 @@ public class UiContributionProjectionTest
         Assert.Equal("Management", tab.Group);
         Assert.Equal("settings.notifications", tab.LabelKey);
         Assert.Equal("settings.groupManagement", tab.GroupKey);
-        var icon = Assert.IsType<Domain.Icon>(tab.Icon);
-        Assert.Equal(Domain.Icon.FluentProvider, icon.Provider);
+        var icon = Assert.IsType<MeshWeaver.Domain.Icon>(tab.Icon);
+        Assert.Equal(MeshWeaver.Domain.Icon.FluentProvider, icon.Provider);
         Assert.Equal("Alert", icon.Id);
-        Assert.IsType<Domain.Icon>(tab.GroupIcon);
+        Assert.IsType<MeshWeaver.Domain.Icon>(tab.GroupIcon);
     }
 
     /// <summary>

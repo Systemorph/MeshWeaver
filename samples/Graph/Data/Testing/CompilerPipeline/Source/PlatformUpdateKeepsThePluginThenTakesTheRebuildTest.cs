@@ -5,6 +5,8 @@
 #nullable enable
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
+using System.Net.Http;
+using System.Threading;
 #pragma warning disable CS1591
 
 using System;

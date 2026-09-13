@@ -12,7 +12,7 @@
   "content": {
     "$type": "NodeTypeDefinition",
     "description": "An in-mesh test suite.",
-    "configuration": "config => config.WithContentType<MeshWeaver.Markdown.MarkdownContent>().AddMarkdownViews().AddLayout(layout => layout.WithView(\"Tests\", (host, ctx) => MeshWeaver.Testing.InMesh.MeshTestRunner.Area(host, \"Testing/MessagingHub\", typeof(AccessContextNeverNullTest).Assembly)))",
+    "configuration": "config => config.WithContentType<MeshWeaver.Markdown.MarkdownContent>().AddMarkdownViews().AddLayout(layout => layout.WithView(\"Tests\", (host, ctx) => MeshWeaver.Testing.InMesh.MeshTestRunner.Area(host, \"Testing/MessagingHub\", typeof(ARefusedReplyReachesItsRequesterTest).Assembly)))",
     "includeGlobalTypes": true,
     "sources": [
       "namespace:Source scope:subtree"

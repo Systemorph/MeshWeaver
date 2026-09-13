@@ -5,6 +5,11 @@
 #nullable enable
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 #pragma warning disable CS1591
 
 using System.Collections.Immutable;
@@ -436,7 +441,7 @@ public class GeneratedInputIdentityTest
             // show aggregation — so use the real toolchain assemblies, which have distinct MVIDs,
             // copied under ONE shared file name in two directories.
             var real = typeof(GeneratedInputIdentity).Assembly.Location;
-            var other = typeof(Xunit.FactAttribute).Assembly.Location;
+            var other = typeof(MeshFactAttribute).Assembly.Location;
             var a = Path.Combine(dir.FullName, "a"); Directory.CreateDirectory(a);
             var b = Path.Combine(dir.FullName, "b"); Directory.CreateDirectory(b);
             var first = Path.Combine(a, "Gen.dll");

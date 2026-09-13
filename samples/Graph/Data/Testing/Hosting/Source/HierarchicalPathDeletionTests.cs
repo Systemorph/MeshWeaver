@@ -5,6 +5,8 @@
 #nullable enable
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
+using System.IO;
+using System.Net.Http;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;

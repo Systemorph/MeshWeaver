@@ -6,6 +6,11 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System.IO;
 using MeshWeaver.Plugin.Packaging;
 
@@ -45,16 +50,16 @@ public class PluginManifestVersionTest : IDisposable
     [MeshFact]
     public void TheLockWinsOverTheAuthoredVersion()
         // The whole point: the derived PATCH must survive into the package.
-        => Assert.Equal("1.3.2", PluginManifest.Read(Plugin(authored: "1.3", locked: "1.3.2"), "0.0.1").Version);
+        => Assert.Equal("1.3.2", MeshWeaver.Plugin.Packaging.PluginManifest.Read(Plugin(authored: "1.3", locked: "1.3.2"), "0.0.1").Version);
 
     [MeshFact]
     public void TheAuthoredVersionIsUsedWhenThereIsNoLock()
         // A plugin whose manifest has not been generated yet still packs, widened to three parts.
-        => Assert.Equal("1.3.0", PluginManifest.Read(Plugin(authored: "1.3", locked: null), "0.0.1").Version);
+        => Assert.Equal("1.3.0", MeshWeaver.Plugin.Packaging.PluginManifest.Read(Plugin(authored: "1.3", locked: null), "0.0.1").Version);
 
     [MeshFact]
     public void TheFallbackIsUsedWhenNeitherDeclaresOne()
-        => Assert.Equal("0.0.1", PluginManifest.Read(Plugin(authored: null, locked: null), "0.0.1").Version);
+        => Assert.Equal("0.0.1", MeshWeaver.Plugin.Packaging.PluginManifest.Read(Plugin(authored: null, locked: null), "0.0.1").Version);
 
     [MeshFact]
     public void AMalformedLockFallsBackRatherThanFailingThePack()
@@ -64,7 +69,7 @@ public class PluginManifestVersionTest : IDisposable
 
         // The lock is machine-maintained; a broken one is the generator's problem to report, and
         // failing the pack here would block a plugin for a defect in a different tool.
-        Assert.Equal("2.1.0", PluginManifest.Read(dir, "0.0.1").Version);
+        Assert.Equal("2.1.0", MeshWeaver.Plugin.Packaging.PluginManifest.Read(dir, "0.0.1").Version);
     }
 
     public void Dispose() => Directory.Delete(root, recursive: true);

@@ -41,10 +41,37 @@ def sources_of(project: str) -> list[pathlib.Path]:
     return sorted(p for p in base.rglob("*.cs") if not (set(p.relative_to(base).parts[:-1]) & SKIP_DIRS))
 
 
+def content_surface() -> set[str]:
+    """FrameworkBuildIdentity.ContentSurfaceAssemblies — the assemblies an in-mesh source can bind."""
+    text = (ROOT / "src" / "MeshWeaver.Compiler" / "FrameworkBuildIdentity.cs").read_text(encoding="utf-8")
+    body = text[text.index("ContentSurfaceAssemblies ="):]
+    body = body[:body.index("];")]
+    return set(re.findall(r'"(MeshWeaver\.[\w.]+)"', body))
+
+
+def remove_suite(suite_id: str) -> None:
+    jpath = SUITES / f"{suite_id}.json"
+    d = SUITES / suite_id
+    if d.exists():
+        for p in sorted(d.rglob("*"), reverse=True):
+            p.unlink() if p.is_file() else p.rmdir()
+        d.rmdir()
+    if jpath.exists():
+        jpath.unlink()
+
+
 def generate(suite_id: str) -> tuple[int, int, int]:
     jpath = SUITES / f"{suite_id}.json"
     doc = json.loads(jpath.read_text(encoding="utf-8"))
     project = project_of(doc)
+    under_test = project[:-len(".Test")] if project.endswith(".Test") else project
+    if under_test not in content_surface():
+        # a suite that binds an assembly the framework identity does not carry (build tooling, a host,
+        # the Orleans silo, the doc content project) cannot compile in-mesh — it stays on xunit whole
+        n = len(sources_of(project))
+        remove_suite(suite_id)
+        print(f"  {suite_id}: {n} file(s) — {under_test} is not a content-surface assembly (FrameworkBuildIdentity); suite stays on xunit")
+        return n, 0, n
     src_dir = SUITES / suite_id / "Source"
     if src_dir.exists():
         for old in src_dir.glob("*.cs"):
@@ -91,14 +118,19 @@ def generate(suite_id: str) -> tuple[int, int, int]:
             (src_dir / n).unlink()
         converted = []
     if not converted:
-        for p in sorted(src_dir.parent.rglob("*"), reverse=True):
-            p.unlink() if p.is_file() else p.rmdir()
-        src_dir.parent.rmdir() if src_dir.parent.exists() else None
-        jpath.unlink()
+        remove_suite(suite_id)
         print(f"  {suite_id}: {total} file(s), no test case survives — suite removed")
         return total, 0, len(refused)
     for t in ("InMeshTestBase.cs", "XunitShims.cs"):
         (src_dir / t).write_text((TEMPLATES / t).read_text(encoding="utf-8"), encoding="utf-8")
+    # the Tests area lambda names the suite assembly through typeof(<a class>): it must be one that survived
+    anchor = None
+    for n in converted:
+        m = re.search(r"^\s*public\s+(?:sealed\s+|partial\s+)*class\s+(\w+)", (src_dir / n).read_text(encoding="utf-8"), flags=re.M)
+        if m and "[MeshFact" in (src_dir / n).read_text(encoding="utf-8"):
+            anchor = m.group(1); break
+    if anchor:
+        doc["content"]["configuration"] = re.sub(r"typeof\(\w+\)\.Assembly", f"typeof({anchor}).Assembly", doc["content"]["configuration"])
     refused_text = ("Refused, still on xunit: " + str(len(refused)) + " — "
                     + "; ".join(f"{n}: {w}" for n, w in refused)) if refused else "Nothing refused."
     doc["description"] = (f"{project} migrated in-mesh (.github/scripts/generate-in-mesh-suites.py, 2026-09-13): "

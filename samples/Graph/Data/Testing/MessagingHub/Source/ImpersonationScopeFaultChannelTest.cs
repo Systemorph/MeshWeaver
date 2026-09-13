@@ -5,6 +5,12 @@
 #nullable enable
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System;
 using System.Reactive.Linq;
 using MeshWeaver.Messaging;
@@ -72,7 +78,7 @@ public class ImpersonationScopeFaultChannelTest
         var access = NewAccessService();
 
         var seen = 0;
-        AsSystem(access, () => Observable.Return(42)).Subscribe(v => seen = v);
+        InMeshTestBase.AsSystem(access, () => Observable.Return(42)).Subscribe(v => seen = v);
         Assert.Equal(42, seen);
 
         Exception? captured = null;

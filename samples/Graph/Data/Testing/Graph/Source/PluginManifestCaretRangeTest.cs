@@ -6,6 +6,11 @@
 using MeshWeaver.Reactive.Assertions;
 using MeshWeaver.Testing.InMesh;
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Linq;
 using MeshWeaver.Plugin.Packaging;
 
@@ -25,7 +30,7 @@ using MeshWeaver.Plugin.Packaging;
 public class PluginManifestCaretRangeTest
 {
     private static string? RangeFor(string requirement) =>
-        new PluginManifest("X", "MeshWeaver.Plugin.X", "1.0.0", "d", null, [requirement])
+        new MeshWeaver.Plugin.Packaging.PluginManifest("X", "MeshWeaver.Plugin.X", "1.0.0", "d", null, [requirement])
             .ResolveDependencies()
             .Single()
             .Range;
@@ -60,7 +65,7 @@ public class PluginManifestCaretRangeTest
     {
         // One prefix is what lets packageSourceMapping pin every plugin to the private feed with a
         // single rule; without it a typo'd id silently resolves against nuget.org.
-        var (id, _) = new PluginManifest("X", "MeshWeaver.Plugin.X", "1.0.0", "d", null, ["Store@^1.0.0"])
+        var (id, _) = new MeshWeaver.Plugin.Packaging.PluginManifest("X", "MeshWeaver.Plugin.X", "1.0.0", "d", null, ["Store@^1.0.0"])
             .ResolveDependencies()
             .Single();
 
