@@ -161,19 +161,71 @@ cleared by the next attempt that actually runs.
 on any instance that has not been rolled recently. That pair is what nine hours of undelivered
 releases looked like.
 
-## 6. What is still missing
+## 6. Convergence: what now releases a hold, and what still cannot
 
-Recording the hold makes the freeze **findable**. It does not make it **converge**, and nothing in
-the platform today does:
+Recording the hold made the freeze **findable** on one node at a time. Two further things landed,
+and one is deliberately not a code change at all.
 
-- The seal-triggered reconciler (`SealedPublicationSyncReconciler`) is the designed answer to "the
-  seal landed after the webhook" — but it is wired only into `ShippedPrebuiltBundles.SeedPublishedRoot`,
-  which `DynamicTypePreWarmerHostedService` calls **once, at `ApplicationStarted`**. The release
-  valve is a process boot.
-- A boot re-reads the same identity, so when the identity itself is the stale thing, the boot
-  converges nothing either. The only true release is a **roll onto the image the bake resolves**.
-- Nothing measures or reports the divergence. Neither portal's health, nor any gate, states "this
-  instance's identity has no publication of repository X at or after its last green build".
+### 6.1 The publication's own arrival releases the hold (`PublicationSealArrivalService`)
+
+🚨 **"It advances on the next green build" was false, and that is the part that made this
+unbounded.** The `workflow_run` hook fires when a repository's build goes green, which is *before*
+its publish-bake job seals for this identity — so the gate holds, correctly. The seal lands minutes
+later and nothing re-evaluated it. And the *next* green build does not rescue the source either:
+that delivery asks whether the seal is at the NEW head sha, which it is not, so it is held in turn.
+A repository whose bake seals after its webhook therefore **never advanced inside one process
+lifetime**. The reconciler designed for exactly this ordering had one caller,
+`ShippedPrebuiltBundles.SeedPublishedRoot`, at `ApplicationStarted`.
+
+The trigger is now the **fact**, never a timer: the publishing lane already announces each sealed
+publication in the mesh as `Hosting/PlatformBuilds/<source>`, and that write is relayed post-commit
+into every replica through `IMeshInvalidationFeed`. `PublicationSealArrivalService` listens to it,
+re-reads `SealedPublicationIndex` for this identity on the bounded file-system pool, and runs the
+same reconcile the boot sweep runs. No poller, no watchdog, no resubscribe loop, no retry — an event
+that already existed and was simply not listened to.
+
+It hands the reconciler an **empty declined-type set** on purpose, so only `ImportAtSealedCommit`
+can fire. The `ReconcileAtSealedCommit` arm exists for types the adoption sweep declined on their
+source fingerprint, and that measurement belongs to the sweep; claiming it here would report
+"nothing was declined" about a population this service never looked at.
+
+`SealArrivalReleasesHeldSourceTest` is the measurement: a green build the seal does not cover is
+held, a publication announced while the seal is still at the *old* commit moves nothing (the
+negative control that keeps this from being "import on any stimulus"), and re-sealing at the held
+commit plus one announcement releases the source with **no further webhook**.
+
+### 6.2 The divergence is published on `/health` (`publication-seal`)
+
+Nothing stated the instance-level fact: *this identity has no publication of repository X at or
+after its last green build*. `SealedSyncCensus` holds it — the identity, every publication sealed
+under it (source, producing repository, baked commit, sealed or torn), and every repository the gate
+is currently holding, with the hold reason and how long **this replica** has observed it. The boot
+sweep and every green-build delivery record into it, so the reading is as fresh as the deliveries.
+
+🚨 It is **census-tagged**, so the clean reading prints too. A freeze and a quiet week are both "no
+import happened", and an entry that printed only while unhappy would be byte-identical on the wire
+to one that was never registered. Four different printed sentences: *nothing was measured here*,
+*this deployment consumes no CI bakes*, *green builds arrived and none was held*, and *a repository
+has been held for nine hours*.
+
+Degraded only past **45 minutes**, and that threshold is derived rather than chosen: the ordinary
+hold is the webhook-before-seal ordering, every CI job in this fleet is hard-cut at 45 minutes, so a
+hold that outlives the cap cannot be that ordering. Degrading on a hold as such would leave every
+portal non-Healthy on every satellite merge — a check that cannot pass. No probe tag: a frozen
+GitSync costs *content*, and pulling the replica from the Service delivers none of it.
+
+### 6.3 What is still NOT fixed, and is a maintainer call
+
+**When the identity itself is the stale thing, no amount of re-evaluation converges anything.** A
+boot re-reads the same identity directory and finds the same stale seal; so does the arrival
+watcher. The only true release is a **roll onto the image the bake resolves** — or bakes that
+resolve the image the instances run. Which of those two is policy, not code, and it is the half this
+page cannot close.
+
+The related design question is whether a held source should be released by a publication made for
+*another* identity. That is the same question `Modules:VersionStrictness` already answers for bundle
+adoption (`Family` adopts across identities; the gate reads exact only), and it is deliberately
+unanswered here rather than answered by accident.
 
 Tracked as [Systemorph/MeshWeaver#4063](https://github.com/Systemorph/MeshWeaver/issues/4063).
 Related: [Module Publication Gate](/Doc/Architecture/ModulePublicationGate),

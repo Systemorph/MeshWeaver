@@ -313,6 +313,12 @@ public static class ShippedPrebuiltBundles
                 logger?.LogDebug(
                     "ShippedPrebuiltBundles: no published bundle root configured ({Key}) — "
                     + "CI-published bakes are not consumed here", PublishedRootConfigKey);
+                // 🚨 RECORD the absence, do not merely return it (#4063). "This deployment
+                // consumes no CI bakes" and "nobody measured" are different facts, and a census
+                // that cannot tell them apart is the instrument this issue was filed for lacking.
+                mesh.ServiceProvider.GetService<SealedSyncCensus>()?.RecordPublication(
+                    new SealedPublicationReading(
+                        PrebuiltAssemblySeeder.LiveFrameworkMvid, null, [], DateTimeOffset.UtcNow));
                 return Observable.Return(0);
             }
             var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
@@ -343,6 +349,14 @@ public static class ShippedPrebuiltBundles
             var exactSealed = resolved.Select(r => r.Source).ToList();
             var publicationDirectories = resolved.ToDictionary(
                 r => r.Source.Source, r => r.Directory, StringComparer.OrdinalIgnoreCase);
+            // 🚨 The census DENOMINATOR (#4063). This is the same reading SealedSyncGate decides
+            // on, taken at the same moment the bundles are adopted — so /health states what this
+            // identity holds, not what a later, differently-timed read would say. It is the SAME
+            // snapshot the walk below composes under, so the number on /health and the bytes on
+            // disk can never describe two different publications either.
+            mesh.ServiceProvider.GetService<SealedSyncCensus>()?.RecordPublication(
+                new SealedPublicationReading(
+                    identity, publishedRoot, [.. exactSealed], DateTimeOffset.UtcNow));
             return SeedBundles(mesh, dir,
                     () => CompletePublishedBundlesOf(dir, logger, publicationDirectories: publicationDirectories)
                         .Concat(FallbackPublishedBundlesOf(publishedRoot, identity, exactSealed, context, logger))
