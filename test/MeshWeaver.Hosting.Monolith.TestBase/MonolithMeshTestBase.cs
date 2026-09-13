@@ -552,9 +552,17 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 // RAM still surface the cumulative leak in the trace file
                 // instead of letting it grow silently.
                 var nativeBreakdown = ReadProcSelfStatus();
+                // 🚨 `managed` is the LIVE managed estimate, not what the GC has COMMITTED: a heap
+                // that grew to absorb a burst and has not yet decommitted counts in rssAnon exactly
+                // like a native block does. Print the committed size beside it, so "managed=41MiB
+                // rssAnon=6GiB" can be read for what it is — the reader could not otherwise tell
+                // a GC that is holding memory from a native allocation nobody released (#4127).
+                var gcInfo = GC.GetGCMemoryInfo();
                 var diag =
                     $"rss={rss / 1024 / 1024}MiB threshold={MemCriticalBytes / 1024 / 1024}MiB " +
                     $"managed={managed / 1024 / 1024}MiB " +
+                    $"gcCommitted={gcInfo.TotalCommittedBytes / 1024 / 1024}MiB " +
+                    $"gcHeap={gcInfo.HeapSizeBytes / 1024 / 1024}MiB " +
                     (string.IsNullOrEmpty(nativeBreakdown) ? "" : nativeBreakdown + " ");
 
                 // Only FailFast on CI — a 7 GB ubuntu-latest runner is moments
@@ -579,10 +587,22 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                     Fixture.TestTraceLog.Touch();
                     try { File.AppendAllText(MemoryDeltaLogPath, string.Empty); } catch { }
 
+                    // 🚨 The message states what was MEASURED and where to read the cause — it does
+                    // not name one. It used to assert "the cumulative Autofac Reflection.Emit factory
+                    // leak from non-shared MonolithMeshTestBase classes", and on #4127 its own trace
+                    // refuted that: every mesh class on the shard sat flat at the same RSS, and the
+                    // growth was two STEPS with no MonolithMeshTestBase class active — plain xUnit
+                    // classes compiling with Roslyn against a reference set they rebuilt per call.
+                    // A guard that names a cause its diagnostic cannot see sends the reader to the
+                    // wrong repository of fixes.
                     Environment.FailFast(
                         $"MeshWeaver test infrastructure aborted: process RSS exceeded {MemCriticalBytes / 1024 / 1024} MiB " +
-                        $"({rss / 1024 / 1024} MiB observed). This is the cumulative Autofac Reflection.Emit factory " +
-                        $"leak from non-shared MonolithMeshTestBase classes. Diagnostic: {diag}");
+                        $"({rss / 1024 / 1024} MiB observed). Diagnostic: {diag}. Read the MEM_WATCHDOG " +
+                        "trajectory in the test trace (collected-logs/_meshweaver-test-trace.log): a STEP with no " +
+                        "MonolithMeshTestBase class active between its INIT_MEM/DISPOSE_MEM lines is a plain test " +
+                        "class (a Roslyn compile rebuilding its reference set, a large allocation); a RAMP across " +
+                        "mesh classes whose DISPOSE_MEM deltas are positive is per-mesh retention (an ALC that did " +
+                        "not unload, a container root). Doc/Architecture/ReadingTheMemoryWatchdog.");
                 }
             }
             else if (rss >= MemPressureBytes)
