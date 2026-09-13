@@ -915,9 +915,17 @@ secrets:
 # enabled: true renders the memex-postgres StatefulSet/Service/Config/Secret (the self-host
 # default). Set false on environments that run an EXTERNAL Postgres (the AKS namespaces use the
 # Azure flexible server): the in-cluster resources are not rendered, and the portal's
-# wait-for-postgres init probes the EXTERNAL host from config.memex_portal.MEMEX_HOST instead —
-# a probe against the unrendered in-cluster service would wait forever (memex, 2026-08-20:
-# every new pod stuck Init:0/1 while the old one kept serving).
+# wait-for-postgres init probes the EXTERNAL host instead — a probe against the unrendered
+# in-cluster service would wait forever (memex, 2026-08-20: every new pod stuck Init:0/1 while the
+# old one kept serving).
+#
+# 🚨 That external host is now derived from the CONNECTION STRINGS the process opens
+# (secrets.<half>.ConnectionStrings__memex and, under AdoNet, __orleans — see
+# templates/_database.tpl), not from config.<half>.MEMEX_HOST. The probe read MEMEX_HOST until
+# MeshWeaver#4173, and the two come from different halves of the values with nothing comparing
+# them: an explicit ConnectionStrings__orleans naming another host was gated by nothing, which is
+# #3780 (Init:1/1, then the silo dies in MembershipTableManager on a name that never resolved).
+# MEMEX_HOST/MEMEX_PORT remain as published configuration; they no longer decide what is waited for.
 postgres:
   enabled: true
 

@@ -520,6 +520,91 @@ if _fetch is not None:
             "exists to prevent.",
         )
 
+# ---- 16. every database host the pod OPENS is a host the gate WAITS for ----
+# 🚨 MeshWeaver#4173 / #3780. `wait-for-postgres` exists to make one thing deterministic — the
+# process does not start before the database it opens is accepting connections. It used to probe a
+# host taken from `config.<half>.MEMEX_HOST`, a CONFIG value, while the boot opens
+# `ConnectionStrings__memex` and `ConnectionStrings__orleans`, which are SECRETS rendered from a
+# different half of the values. Nothing compared them. An explicit orleans host naming another
+# server was therefore gated by NOTHING: the pod passes Init:1/1, the silo reaches
+# `RuntimeGrainServices`, and `MembershipTableManager` dies on a name that never resolved — with
+# the init container's PASS saying nothing about the connection that failed, which is what makes
+# the failure read as a resolver blip instead of as a gate that was never covering that host.
+#
+# The assertion is the one sentence the gate has to be able to make: "every database this pod will
+# open is accepting connections". Checked for BOTH halves that carry one — the portal Deployment
+# and the migration Job.
+def _cs_host(cs):
+    """`host:port` for an ADO.NET connection string — the same rule memex.dbEndpoint applies."""
+    import re as _re
+    m = _re.search(r"(?i)(?:^|;)\s*(?:host|server)\s*=\s*([^;,]+)", cs or "")
+    if not m:
+        return None
+    p = _re.search(r"(?i)(?:^|;)\s*port\s*=\s*(\d+)", cs or "")
+    return f"{m.group(1).strip()}:{(p.group(1) if p else '5432')}"
+
+
+def _probe_coverage(kind_name, obj, secret_obj, label):
+    """Every host `secret_obj` names must appear in the wait-for-postgres command of `obj`."""
+    global checks
+    if obj is None or secret_obj is None:
+        return
+    checks += 1
+    pod_spec = (((obj.get("spec") or {}).get("template") or {}).get("spec")) or {}
+    waiter = next(
+        (c for c in (pod_spec.get("initContainers") or []) if c.get("name") == "wait-for-postgres"),
+        None,
+    )
+    if waiter is None:
+        finding(
+            f"{label} has no wait-for-postgres init container",
+            "the start-up ordering it guarantees is not optional — without it the process races "
+            "the database on every fresh install.",
+        )
+        return
+    probed = " ".join(waiter.get("command") or [])
+    data = secret_obj.get("stringData") or secret_obj.get("data") or {}
+    opened = {
+        key: _cs_host(value)
+        for key, value in data.items()
+        if key.startswith("ConnectionStrings__")
+    }
+    if not any(opened.values()):
+        finding(
+            f"{label}: no connection string in {kind_name} names a host",
+            "the probe then has nothing to derive, and an init container that probes nothing "
+            "PASSES — 'the gate could not run' must never read as 'the gate passed'.",
+        )
+        return
+    for key, endpoint in sorted(opened.items()):
+        if endpoint is None:
+            continue
+        if endpoint.split(":")[0] not in probed:
+            finding(
+                f"{label}: {key} names host '{endpoint}' that wait-for-postgres does not probe",
+                "the init container passing then says NOTHING about the connection this process "
+                "will open. That is exactly #3780: Init:1/1, then the silo dies in "
+                "MembershipTableManager on a name that never resolved. Derive the probe from the "
+                "connection strings (templates/_database.tpl), never from a parallel config value.",
+            )
+
+
+_probe_coverage("memex-portal-secrets", dep, secret, "portal")
+# The migration Job's name carries .Release.Revision, so it is matched by PREFIX rather than by a
+# fixed name — a lookup that silently found nothing would make this half of the check vacuous.
+_probe_coverage(
+    "memex-migration-secrets",
+    next(
+        (
+            d for d in by_kind("Job")
+            if ((d.get("metadata") or {}).get("name") or "").startswith("memex-migration-")
+        ),
+        None,
+    ),
+    next(iter(by_kind("Secret", "memex-migration-secrets")), None),
+    "migration",
+)
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(
