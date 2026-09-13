@@ -115,15 +115,19 @@ public static class DepsClosure
     public sealed record NativeAsset(string RelativePath, string Rid, string Package);
 
     /// <summary>
-    /// The ONE layout a carried native can be found at. <c>ModuleNativeAssets</c>, the runtime
-    /// resolver, probes <c>&lt;moduleDir&gt;/runtimes/&lt;rid&gt;/native/&lt;lib&gt;</c> and then
-    /// the flat folder — nothing else. A payload declared at any other shape is therefore not
-    /// carried but NAMED: carrying it at its own path would put bytes somewhere the loader will
-    /// never look, which reads as "the bundle ships it" and behaves as if it does not.
+    /// The ONE layout a carried native can be found at — <c>NuGetPackageWriter.IsModuleNativeLayout</c> owns the
+    /// spelling so the derivation, the packer and the reader cannot drift. <c>ModuleNativeAssets</c>
+    /// composes its probe from exactly <c>runtimes/&lt;rid&gt;/native/&lt;lib&gt;</c> and has no
+    /// recursive walk, so anything else is not carried but NAMED: bytes at a path the loader never
+    /// looks at read as "the bundle ships it" and behave as if it does not.
+    ///
+    /// <para>🚨 It must be the EXACT four segments, not a <c>/native/</c> substring: a substring
+    /// test accepts <c>runtimes/&lt;rid&gt;/other/native/x.so</c> (carried, never probed) and — worse
+    /// — <c>runtimes/../../native/x.so</c>, which the PACKER would resolve against the module
+    /// directory and read from outside it, before any reader could refuse the bundle.</para>
     /// </summary>
     private static bool IsProbedNativeLayout(string path) =>
-        path.StartsWith("runtimes/", StringComparison.OrdinalIgnoreCase)
-        && path.Contains("/native/", StringComparison.OrdinalIgnoreCase);
+        MeshWeaver.Plugin.Packaging.NuGetPackageWriter.IsModuleNativeLayout(path);
 
     private sealed record Node(
         string Name,
@@ -230,18 +234,26 @@ public static class DepsClosure
             // and are NAMED. Reporting them is the point: the warning this replaced could not fire
             // for a pure-native package at all, and a drop nobody is told about is how a module
             // lands that faults at first use.
+            // 🚨 Both messages name a step the reader can actually TAKE. `--with` accepts a plain
+            // file name inside the module folder and REFUSES any path component, so "name it with
+            // --with" is not executable for a value that is a `runtimes/<rid>/…` path — the copy
+            // has to be flattened into the module folder first, and saying so is the difference
+            // between advice and a dead end.
             foreach (var dropped in node.RidSpecificManaged)
                 warnings.Add(
                     $"'{name}' declares a RID-specific MANAGED asset the bundle does not carry: "
                     + $"{dropped}. The module's flat closure has one slot per assembly name and no "
-                    + "way to choose a RID at pack time; if the module needs it, name the RID's "
-                    + "copy explicitly with --with.");
+                    + "way to choose a RID at pack time. If the module needs that RID's copy, copy "
+                    + "the file into the module folder root before packing and name it with "
+                    + "--with <file name> (--with takes a plain file name; it refuses a path).");
             foreach (var unreachable in node.UnreachableNatives)
                 warnings.Add(
                     $"'{name}' declares a native asset at '{unreachable}', which is NOT the layout "
-                    + "the module loader probes (runtimes/<rid>/native/<file>) — it is not carried, "
-                    + "because bytes at a path nothing looks at read as shipped and behave as "
-                    + "absent. If the module needs it, name it explicitly with --with.");
+                    + "the module loader probes (exactly runtimes/<rid>/native/<file>) — it is not "
+                    + "carried, because bytes at a path nothing looks at read as shipped and behave "
+                    + "as absent. If the module needs it, copy it to the module folder root and "
+                    + "name it with --with <file name>: the loader's LAST probe is that flat "
+                    + "folder.");
         }
         var excluded = platformStops.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
@@ -253,9 +265,14 @@ public static class DepsClosure
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        // 🚨 ORDINAL, not OrdinalIgnoreCase. A native's identity is its FILE NAME on a
+        // case-sensitive filesystem, and `libFoo.so` and `libfoo.so` are two distinct loadable
+        // libraries on Linux — collapsing them would silently drop one, which is the failure mode
+        // this whole section exists to end. Managed assembly names elsewhere in this file are
+        // case-insensitive because assembly binding is; native paths are not.
         var carried = natives
-            .DistinctBy(n => n.RelativePath, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(n => n.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .DistinctBy(n => n.RelativePath, StringComparer.Ordinal)
+            .OrderBy(n => n.RelativePath, StringComparer.Ordinal)
             .ToList();
 
         return new Result(

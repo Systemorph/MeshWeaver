@@ -549,7 +549,10 @@ public static class ModulePackCommand
                         + $"not in this publish: {native.RelativePath}");
                     continue;
                 }
-                if (!natives.Contains(native.RelativePath, StringComparer.OrdinalIgnoreCase))
+                // ORDINAL — see DepsClosure: two natives differing only in case are two distinct
+                // loadable files on a case-sensitive filesystem, and collapsing them here would
+                // lose one after the derivation correctly kept both.
+                if (!natives.Contains(native.RelativePath, StringComparer.Ordinal))
                     natives.Add(native.RelativePath);
             }
             if (natives.Count > 0)

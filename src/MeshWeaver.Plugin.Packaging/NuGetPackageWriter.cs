@@ -106,6 +106,40 @@ public static class NuGetPackageWriter
     public static string ModuleNativeEntryPathFor(string relativePath) =>
         $"{ModuleNativeFolder}/{relativePath}";
 
+    /// <summary>
+    /// 🚨 <b>The EXACT layout a carried native must have</b> — <c>runtimes/&lt;rid&gt;/native/&lt;file&gt;</c>,
+    /// four segments, no more and no fewer. ONE spelling, shared by the derivation, the packer and
+    /// the reader, so the three cannot drift.
+    ///
+    /// <para><c>ModuleNativeAssets.CandidatePaths</c> composes the probe from exactly those four
+    /// parts and has no recursive walk, so a payload at <c>runtimes/&lt;rid&gt;/other/native/x.so</c>
+    /// — which a substring test for <c>/native/</c> accepts — is carried and then never looked at:
+    /// bytes that read as shipped and behave as absent, the one outcome a native section exists to
+    /// prevent.</para>
+    ///
+    /// <para>It also rejects traversal and empty segments BEFORE anything resolves the path against
+    /// a directory: the packer reads these from disk and a lander writes them to disk, so
+    /// <c>runtimes/../../native/x.so</c> must never reach either.</para>
+    /// </summary>
+    /// <param name="relativePath">The module-relative path, <c>/</c>-separated.</param>
+    /// <returns><c>true</c> when the path is exactly the probed layout.</returns>
+    public static bool IsModuleNativeLayout(string? relativePath)
+    {
+        if (string.IsNullOrEmpty(relativePath) || relativePath.Contains('\\'))
+            return false;
+        var segments = relativePath.Split('/');
+        if (segments.Length != 4)
+            return false;
+        if (!string.Equals(segments[0], "runtimes", StringComparison.Ordinal)
+            || !string.Equals(segments[2], "native", StringComparison.Ordinal))
+            return false;
+        // The RID and the file name: non-empty, and neither a traversal nor a self-reference.
+        foreach (var segment in new[] { segments[1], segments[3] })
+            if (string.IsNullOrEmpty(segment) || segment == "." || segment == "..")
+                return false;
+        return true;
+    }
+
     /// <summary>One file destined for the package.</summary>
     /// <param name="PathInPackage">Full entry path, e.g. <c>meshweaver/content/index.json</c>.</param>
     /// <param name="OpenRead">Opens the bytes. A factory rather than a byte[] so a large assembly

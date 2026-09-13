@@ -176,6 +176,84 @@ public class DepsClosureTest
         Assert.DoesNotContain("libe_sqlite3.so", result.Files);
     }
 
+    /// <summary>A graph whose native declarations probe the EDGES of the layout contract: a
+    /// deeper path that contains <c>/native/</c>, a traversal, and two libraries that differ only
+    /// in case.</summary>
+    private const string EdgeCaseGraph = """
+        {
+          "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+          "targets": {
+            ".NETCoreApp,Version=v10.0": {
+              "Edgy/1.0.0": {
+                "dependencies": { "Odd.Natives": "1.0.0", "Cased.Natives": "1.0.0" },
+                "runtime": { "Edgy.dll": {} }
+              },
+              "Odd.Natives/1.0.0": {
+                "runtimeTargets": {
+                  "runtimes/linux-x64/other/native/deep.so": { "rid": "linux-x64", "assetType": "native" },
+                  "runtimes/../../native/escape.so": { "rid": "linux-x64", "assetType": "native" },
+                  "runtimes/linux-x64/native/sub/nested.so": { "rid": "linux-x64", "assetType": "native" }
+                }
+              },
+              "Cased.Natives/1.0.0": {
+                "runtimeTargets": {
+                  "runtimes/linux-x64/native/libFoo.so": { "rid": "linux-x64", "assetType": "native" },
+                  "runtimes/linux-x64/native/libfoo.so": { "rid": "linux-x64", "assetType": "native" }
+                }
+              }
+            }
+          },
+          "libraries": {
+            "Edgy/1.0.0": { "type": "project" },
+            "Odd.Natives/1.0.0": { "type": "package" },
+            "Cased.Natives/1.0.0": { "type": "package" }
+          }
+        }
+        """;
+
+    [Theory]
+    [InlineData("runtimes/linux-x64/other/native/deep.so")]
+    [InlineData("runtimes/../../native/escape.so")]
+    [InlineData("runtimes/linux-x64/native/sub/nested.so")]
+    public void OnlyTheEXACTProbedLayoutIsCarried_TheRestAreNamed(string declared)
+    {
+        var result = DepsClosure.Derive(EdgeCaseGraph, "Edgy");
+
+        // 🚨 The loader composes its probe from exactly runtimes/<rid>/native/<file> and has no
+        // recursive walk. A `/native/` SUBSTRING test accepts all three of these: two would be
+        // carried and never probed, and the traversal would make the PACKER read outside the
+        // module directory when it resolves the path against it.
+        Assert.DoesNotContain(result.Natives, n => n.RelativePath == declared);
+        Assert.Contains(result.Warnings, w => w.Contains(declared) && w.Contains("not carried"));
+    }
+
+    [Fact]
+    public void TwoNativesDifferingONLYInCaseAreTwoLibraries_NotOne()
+    {
+        var result = DepsClosure.Derive(EdgeCaseGraph, "Edgy");
+
+        // 🚨 On a case-sensitive filesystem these are two distinct loadable files, and the
+        // resolver's own file-name matching is ordinal. A case-INSENSITIVE de-duplication (the
+        // spelling every managed assembly name in this file correctly uses, because assembly
+        // binding is case-insensitive) silently drops one — which is the exact failure mode the
+        // native section exists to end.
+        Assert.Contains(result.Natives, n => n.RelativePath == "runtimes/linux-x64/native/libFoo.so");
+        Assert.Contains(result.Natives, n => n.RelativePath == "runtimes/linux-x64/native/libfoo.so");
+    }
+
+    [Fact]
+    public void TheGuidanceInADropWarningIsSomethingACallerCanACTUALLYDo()
+    {
+        var result = DepsClosure.Derive(PureNativeGraph, "MeshWeaver.AppleMessages");
+
+        // `--with` takes a plain file name inside the module folder and REFUSES a path component,
+        // so "name it with --with" is a dead end for a value that IS a runtimes/<rid>/… path. The
+        // message must name the flatten step, or it sends the reader to an error.
+        var ridSpecific = Assert.Single(result.Warnings, w => w.Contains("RidPicky"));
+        Assert.Contains("copy the file into the module folder root", ridSpecific, StringComparison.Ordinal);
+        Assert.Contains("it refuses a path", ridSpecific, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ARidSpecificMANAGEDAsset_IsStillDropped_AndIsNAMED()
     {

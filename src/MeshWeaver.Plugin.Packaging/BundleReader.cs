@@ -461,13 +461,22 @@ public static class BundleReader
         var natives = new List<ModuleAsset>();
         foreach (var relative in declared)
         {
-            // The same refusal the content tree gets: a rooted or parent-traversing path would be
-            // written outside the module folder, and a native is a file the process then LOADS.
+            // 🚨 The EXACT layout, validated HERE and not only in the packer. This is the
+            // boundary for a PRODUCER-controlled bundle, and the landing stage writes these paths
+            // to disk for the process to load — so a path that is merely "not traversing" is not
+            // enough. Two refusals, because they are two different statements: one is a safety
+            // violation, the other is a payload nothing would ever probe.
             if (IsUnsafeContentPath(relative))
                 throw new InvalidOperationException(
                     $"bundle declares an unsafe native path '{relative}' — native payloads are "
                     + "written relative to the module folder and then loaded, so a rooted or "
                     + "parent-traversing path would place executable code outside it");
+            if (!NuGetPackageWriter.IsModuleNativeLayout(relative))
+                throw new InvalidOperationException(
+                    $"bundle declares a native payload at '{relative}', which is not the layout "
+                    + "the module loader probes (exactly runtimes/<rid>/native/<file>). Landing it "
+                    + "would write bytes to a path nothing ever looks at — shipped in appearance, "
+                    + "absent in behaviour — so the bundle is refused instead");
             var entry = archive.GetEntry(NuGetPackageWriter.ModuleNativeEntryPathFor(relative));
             if (entry is null)
                 return [];

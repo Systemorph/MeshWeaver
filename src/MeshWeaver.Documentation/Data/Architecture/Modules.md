@@ -689,6 +689,25 @@ Three things are still DROPPED, and each is now NAMED rather than silent:
 | `assetType: "runtime"` (a RID-specific MANAGED assembly) | warned | the flat closure has one slot per assembly name and no way to choose a RID at pack time |
 | `.a` / `.lib` | excluded silently | link-time inputs, never loaded — the same exclusion the in-image lane applies |
 
+🚨 **"The exact layout" means EXACTLY FOUR SEGMENTS** — `runtimes` / `<rid>` / `native` / `<file>` —
+and that predicate has ONE spelling, `NuGetPackageWriter.IsModuleNativeLayout`, shared by the
+derivation, the packer and the reader so the three cannot drift. A `/native/` SUBSTRING test is not
+the same rule and fails three ways: `runtimes/<rid>/other/native/x.so` and
+`runtimes/<rid>/native/sub/x.so` would be carried and never probed, and `runtimes/../../native/x.so`
+would make the PACKER read outside the module directory when it resolves the path against it. The
+READER enforces it as well, not only the packer: that is the boundary for a producer-controlled
+bundle, and the landing stage writes these paths to disk for the process to LOAD.
+
+🚨 **Native paths compare ORDINAL, unlike every managed assembly name in the same derivation.**
+Assembly binding is case-insensitive; a filesystem on Linux is not, so `libFoo.so` and `libfoo.so`
+are two distinct loadable libraries and a case-insensitive de-duplication would silently drop one —
+the exact failure this section exists to end.
+
+And the guidance in a drop warning names a step the reader can actually take: `--with` accepts a
+plain file name inside the module folder and REFUSES a path component, so a `runtimes/<rid>/…` value
+has to be flattened into the module folder root first — the loader's LAST probe is that flat folder.
+Saying only "name it with `--with`" would send the reader to an error.
+
 **What is NOT done, and what each remaining stage depends on:**
 
 1. **Landing** — `ModuleLandingService` does not yet lay the section out under
