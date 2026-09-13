@@ -105,6 +105,13 @@ internal static class NodeTypeRebindWatcher
         {
             HubConfiguration = config =>
                 baseConfig(config)
+                    // 🚨 A per-node hub is re-created by demand routing from its node whenever it
+                    // is gone — that is what makes a recycle safe, and it is what lets a
+                    // TRANSIENT initialization fault (the database away, a name unresolved —
+                    // #4067/#4068) retire the activation instead of latching it FAILED until the
+                    // process restarts. Declared HERE because this is the single funnel every
+                    // per-node activation passes (Monolith routing AND MessageHubGrain).
+                    .WithReactivationOnDemand()
                     .WithInitialization(instanceHub =>
                     {
                         // Fire-and-forget by design: a watcher that cannot be armed must never
