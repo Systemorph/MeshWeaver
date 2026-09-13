@@ -80,12 +80,31 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
 
     private static string UserId => TestUsers.Admin.ObjectId!;
 
+    private const string AnnouncementNodeType = "Hosting/PlatformBuild";
+
+    /// <summary>What the publishing lane POSTs when it seals: the identity it sealed under, the
+    /// version and the content commit. Only the node's PATH matters to the watcher; this exists so
+    /// the create is a real, typed node write rather than a bare one.</summary>
+    public record PlatformBuildAnnouncement(string Identity, string Version, string Sha);
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         StageSeal(SealedSha);
         return base.ConfigureMesh(builder)
             .AddGitHubSyncTypes()
+            // The publishing lane's announcement node type. Declared here rather than taken from
+            // the Hosting plugin (MeshWeaver.Plugins), which a core mesh does not load: the watcher
+            // keys on the PATH and never on the type, so all this has to do is let CreateNode
+            // accept a node at Hosting/PlatformBuilds/<source> the way the webhook inbox does.
+            .AddMeshNodes(new MeshNode(AnnouncementNodeType)
+            {
+                Name = "Platform Build",
+                IsSatelliteType = false,
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<PlatformBuildAnnouncement>()),
+            })
             .ConfigureServices(services =>
             {
                 services.AddGitHubSyncServices();
@@ -146,11 +165,20 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
     {
         await ArmedSpace("SealArrival");
 
+        var census = Mesh.ServiceProvider.GetRequiredService<SealedSyncCensus>();
+
         // ── the precondition: a green build the seal does not cover is HELD ──────────────
         var neverFetchedWhileHeld = repoClient.FetchedRefs.Where(r => r == LaterSha)
             .Should().NotEmit(within: TestTimeouts.Quick);
         await Deliver(LaterSha);
         await neverFetchedWhileHeld;
+
+        // …and /health says so. This is the assertion that keeps the release assertion below from
+        // being vacuous: a census that never recorded the hold would report "nothing held" at the
+        // end for the wrong reason.
+        var held = Assert.Single(census.Holds());
+        Assert.Equal(RepoFullName, held.Repository);
+        Assert.Equal(LaterSha, held.BuiltCommit);
 
         // ── the negative control: an announcement while the seal is STILL at the old commit
         //    must move nothing, or this watcher imports on any stimulus rather than on the seal ──
@@ -170,24 +198,56 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
         await AnnouncePublication();
 
         (await released).Should().Be(LaterSha);
-    }
 
-    /// <summary>The publication announcement the publishing lane writes — a REAL storage write, so
-    /// the post-commit invalidation feed that carries it is the production one. The storage adapter
-    /// relays into <c>IMeshInvalidationFeed</c>, which is the seam every replica hears on.</summary>
-    private async Task AnnouncePublication()
-    {
-        var adapter = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
-        await adapter.Write(
-                new MeshNode(SealedSourceName, "Hosting/PlatformBuilds")
-                {
-                    NodeType = "Hosting/Publication",
-                    State = MeshNodeState.Active,
-                },
-                Mesh.JsonSerializerOptions)
+        // 🚨 …and the census stops reporting the repository frozen. The HOLD is a statement about
+        // the gate's verdict, so its RELEASE has to come from the same evidence — otherwise a
+        // quiet repository would sit `publication-seal` Degraded until its next green build or a
+        // process restart, which is the #4063 blindness pointing the other way.
+        await Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .Select(_ => census.Holds())
+            .Where(h => h.Count == 0)
+            .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
             .Await();
     }
+
+    /// <summary>
+    /// The publication announcement the publishing lane writes — a REAL node write through the mesh,
+    /// never a poke at the storage adapter or at a feed.
+    ///
+    /// <para>🚨 That distinction is the load-bearing one, and it is why this helper is shaped like
+    /// this. The watcher listens on <see cref="IMeshChangeFeed"/> — the LOGICAL feed, which delivers
+    /// once, in the process that performed the write — rather than on
+    /// <c>IMeshInvalidationFeed</c>, which deliberately delivers in every replica and would have
+    /// every pod dispatch the same GitHub import. A test that published on a feed directly, or that
+    /// wrote through <c>IStorageAdapter</c> (whose durable echo reaches the invalidation feed
+    /// ONLY — <c>StorageChangeFeedRelayTest</c> pins exactly that), would have asserted the
+    /// watcher's plumbing while leaving the seam choice unmeasured. A real node write is what the
+    /// webhook inbox performs, so this is what has to reach the logical feed.</para>
+    /// </summary>
+    private async Task AnnouncePublication()
+    {
+        const string path = "Hosting/PlatformBuilds";
+        if (announced)
+        {
+            await Mesh.GetWorkspace().GetMeshNodeStream($"{path}/{SealedSourceName}")
+                .Update(node => node with { Name = "Publication " + Guid.NewGuid().ToString("N")[..8] })
+                .Timeout(TestTimeouts.Convergence)
+                .Await();
+            return;
+        }
+        await NodeFactory.CreateNode(new MeshNode(SealedSourceName, path)
+        {
+            NodeType = AnnouncementNodeType,
+            Name = "Publication",
+            State = MeshNodeState.Active,
+            Content = new PlatformBuildAnnouncement(
+                PrebuiltAssemblySeeder.LiveFrameworkMvid, "3.0.0-ci.8392", LaterSha),
+        }).Timeout(TestTimeouts.Convergence).Await();
+        announced = true;
+    }
+
+    private bool announced;
 
     private async Task<string> ArmedSpace(string prefix)
     {

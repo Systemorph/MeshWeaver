@@ -173,6 +173,16 @@ internal sealed class SealedPublicationSyncReconciler(
             .Select(match =>
             {
                 var dispatched = 0;
+                // 🚨 The census records a HOLD, so it must record the RELEASE from the same
+                // evidence (#4063). The hold is a statement about the GATE's verdict — "this
+                // identity has no publication of repository X at or after its last green build" —
+                // not about whether an import has finished, and the two must not be conflated: the
+                // imports below are dispatched, not awaited, and their own success or failure is
+                // already reported on each Space's own node. So the release is recorded when the
+                // gate let something through for this repository: an import was dispatched, or a
+                // source is AT the seal with nothing declined. Either way the repository is no
+                // longer frozen, which is the only thing the census claims.
+                var gateLetSomethingThrough = false;
                 var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
                 foreach (var node in match.Configs)
                 {
@@ -185,6 +195,7 @@ internal sealed class SealedPublicationSyncReconciler(
                     switch (plan.Action)
                     {
                         case SealedSyncReconcile.Action.ImportAtSealedCommit:
+                            gateLetSomethingThrough = true;
                             logger?.LogInformation("[SealedSync] {Space}: {Reason} — importing.", target.SpacePath, plan.Reason);
                             accessService.RunAsSystem(() => hub.UpdateToProvenCommitFromGitHub(
                                     target.SpacePath, target.UserId, commit, sourceId: target.SourceId))
@@ -198,6 +209,7 @@ internal sealed class SealedPublicationSyncReconciler(
                             dispatched++;
                             break;
                         case SealedSyncReconcile.Action.ReconcileAtSealedCommit:
+                            gateLetSomethingThrough = true;
                             logger?.LogWarning("[SealedSync] {Space}: {Reason}", target.SpacePath, plan.Reason);
                             accessService.RunAsSystem(() => hub.ReconcileAtProvenCommitFromGitHub(
                                     target.SpacePath, target.UserId, commit, sourceId: target.SourceId))
@@ -211,10 +223,14 @@ internal sealed class SealedPublicationSyncReconciler(
                             dispatched++;
                             break;
                         default:
+                            if (plan.SteadyState)
+                                gateLetSomethingThrough = true;
                             RecordHold(node.Path, target, plan, config);
                             break;
                     }
                 }
+                if (gateLetSomethingThrough)
+                    hub.ServiceProvider.GetService<SealedSyncCensus>()?.RecordRelease(repo.ToString());
                 return dispatched;
             });
     }

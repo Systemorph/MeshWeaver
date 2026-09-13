@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Security;
@@ -28,12 +29,26 @@ namespace MeshWeaver.GitSync;
 /// hours of tagged releases sat undelivered on two production portals on 2026-09-12.</para>
 ///
 /// <para><b>The trigger is the FACT, never a timer.</b> The publishing lane announces each sealed
-/// publication in the mesh as <c>Hosting/PlatformBuilds/&lt;source&gt;</c> — a node write, relayed
-/// post-commit into EVERY replica through <see cref="IMeshInvalidationFeed"/> (durable backends
-/// relay their cross-process notifications into it, so a write served by one replica reaches all of
-/// them). So the held source is released by the seal's own arrival: no poller, no watchdog, no
-/// resubscribe loop, no retry. Nothing here recovers from a state that "shouldn't happen" — it
-/// consumes an event that already exists and was simply not listened to.</para>
+/// publication in the mesh as <c>Hosting/PlatformBuilds/&lt;source&gt;</c>. The held source is
+/// released by that arrival: no poller, no watchdog, no resubscribe loop, no retry. Nothing here
+/// recovers from a state that "shouldn't happen" — it consumes an event that already existed and
+/// was simply not listened to.</para>
+///
+/// <para>🚨 <b>The LOGICAL feed, and the seam choice is the whole defence against an import
+/// storm.</b> <see cref="IMeshChangeFeed"/> delivers once, in the process that performed the write;
+/// <see cref="IMeshInvalidationFeed"/> deliberately delivers in EVERY replica, because cache
+/// invalidation must run everywhere. Subscribing to the latter would have every replica launch its
+/// own reconcile of the same sources, and the gate's idempotence only applies after one import has
+/// written — so N replicas would each dispatch the same GitHub fetch. The logical feed is the seam
+/// whose own contract names this case: <i>"Logical event consumers can send mail, RUN AN INSTANCE
+/// SYNC or append an outbox entry and therefore must retain the publisher's single logical
+/// delivery."</i> One announcement, one reconcile, fleet-wide.</para>
+///
+/// <para>…and within that one process the announcements are SERIALIZED through a subject whose
+/// runs are <c>Concat</c>-ed, never run concurrently: two sources sealing seconds apart, or one
+/// source announced twice, would otherwise have two reconciles reading the same pre-import config
+/// and dispatching the same import twice. That is the house serialization channel, not a gate — no
+/// <c>SemaphoreSlim</c>, no lock, nothing that can park a turn.</para>
 ///
 /// <para>🚨 <b>What it deliberately does NOT do.</b> It hands the reconciler an EMPTY declined-type
 /// set, so only <c>SealedSyncReconcile.Action.ImportAtSealedCommit</c> can fire. The
@@ -60,7 +75,9 @@ internal sealed class PublicationSealArrivalService(
     private static readonly string AnnouncementPrefix =
         FrameworkBroadcastOptions.PlatformBuildsTarget + "/";
 
+    private readonly Subject<MeshChangeEvent> announcements = new();
     private IDisposable? subscription;
+    private IDisposable? pump;
 
     /// <summary>Whether a committed change is a publication announcement. Pure, so the predicate
     /// that decides whether anything happens at all is testable without a mesh.</summary>
@@ -78,11 +95,21 @@ internal sealed class PublicationSealArrivalService(
         // pre-fix world (a held source waits for a restart), never a host that will not boot.
         try
         {
-            if (hub.ServiceProvider.GetService<IMeshInvalidationFeed>() is { } feed)
+            // 🚨 Concat, so one reconcile finishes before the next starts. A burst of announcements
+            // costs one reconcile each, in order, never two reading the same pre-import config.
+            pump = announcements
+                .Select(Reconcile)
+                .Concat()
+                .Subscribe(
+                    _ => { },
+                    ex => logger?.LogWarning(ex,
+                        "[SealedSync] the publication-seal reconcile channel faulted — held sources "
+                        + "will advance on the next boot"));
+            if (hub.ServiceProvider.GetService<IMeshChangeFeed>() is { } feed)
                 subscription = feed.Subscribe(OnChange);
             else
                 logger?.LogDebug(
-                    "[SealedSync] no IMeshInvalidationFeed is registered, so a publication sealed "
+                    "[SealedSync] no IMeshChangeFeed is registered, so a publication sealed "
                     + "after a green build cannot release its sources until the next boot");
         }
         catch (Exception ex)
@@ -106,24 +133,41 @@ internal sealed class PublicationSealArrivalService(
     {
         subscription?.Dispose();
         subscription = null;
+        pump?.Dispose();
+        pump = null;
+        announcements.Dispose();
     }
 
     private void OnChange(MeshChangeEvent change)
     {
         if (change.Kind == MeshChangeKind.Deleted || !IsPublicationAnnouncement(change.Path))
             return;
+        announcements.OnNext(change);
+    }
+
+    private IObservable<int> Reconcile(MeshChangeEvent change)
+    {
         var publishedRoot = configuration?[ShippedPrebuiltBundles.PublishedRootConfigKey];
         if (string.IsNullOrWhiteSpace(publishedRoot))
-            return;
+            return Observable.Return(0);
         if (hub.ServiceProvider.GetService<IPublicationSyncReconciler>() is not { } reconciler)
-            return;
+            return Observable.Return(0);
+        // 🚨 The bounded pool is RESOLVED, never fallen back on. A share read on an unbounded pool
+        // is invisible to IoPoolRegistry's teardown drain, so it can still be running after the
+        // mesh scope and its collectible ALCs are gone — the exact straggler the pool exists to
+        // prevent. No registry means this mesh is not composed the way this service needs, and the
+        // honest answer is to do nothing and say so, never to run untracked I/O.
+        if (hub.ServiceProvider.GetService<IoPoolRegistry>() is not { } pools)
+        {
+            logger?.LogWarning(
+                "[SealedSync] no IoPoolRegistry is registered, so the publication announced at "
+                + "{Path} cannot be read on a drained pool — not reading it. Held sources advance "
+                + "on the next boot.", change.Path);
+            return Observable.Return(0);
+        }
 
         var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
-        // 🚨 The seal index is a SHARE read — blocking file I/O on whatever thread published the
-        // change. It goes through the mesh's bounded pool like every other I/O leaf; running it
-        // inline would put an unbounded share read on the notification path.
-        var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
-                   ?? IoPool.Unbounded;
+        var pool = pools.Get(IoPoolNames.FileSystem);
         var census = hub.ServiceProvider.GetService<SealedSyncCensus>();
         var access = hub.ServiceProvider.GetService<AccessService>();
 
@@ -131,13 +175,13 @@ internal sealed class PublicationSealArrivalService(
         // makes (the sync configs of every space) are RLS-filtered. Without it the reconcile would
         // see an empty config set and report "nothing to do" — a false clean, which is the one
         // shape #4063 must never grow more of.
-        access.RunAsSystem(() => pool
+        return access.RunAsSystem(() => pool
                 .InvokeBlocking(_ => SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
                 .Do(sealedForThisIdentity => census?.RecordPublication(new SealedPublicationReading(
                     identity, publishedRoot, [.. sealedForThisIdentity], DateTimeOffset.UtcNow)))
                 .SelectMany(sealedForThisIdentity =>
                     reconciler.Reconcile(identity, sealedForThisIdentity, [])))
-            .Subscribe(
+            .Do(
                 dispatched =>
                 {
                     if (dispatched > 0)
@@ -149,6 +193,10 @@ internal sealed class PublicationSealArrivalService(
                 },
                 ex => logger?.LogWarning(ex,
                     "[SealedSync] reconciling the sync sources after the publication announced at "
-                    + "{Path} failed — the sources stay where they are", change.Path));
+                    + "{Path} failed — the sources stay where they are", change.Path))
+            // A faulted reconcile must not tear down the channel: the next announcement is a fresh
+            // fact and deserves a fresh attempt. This is not a retry — nothing re-runs the failed
+            // read; it simply does not poison the subscription.
+            .Catch<int, Exception>(_ => Observable.Return(0));
     }
 }
