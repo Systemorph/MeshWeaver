@@ -290,6 +290,39 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     /// <param name="nodePath">The path being written; its first segment is the partition.</param>
     /// <returns>The diagnosis, or <c>null</c> when the partition is healthy / not diagnosable.</returns>
     public static IObservable<string?> DescribeOwnerlessPartition(IMessageHub hub, string? nodePath)
+        => DescribeDeniedWrite(hub, nodePath, deniedUserId: null);
+
+    /// <summary>
+    /// 🚨 <b>The same probe, told which principal was refused — and therefore able to name the
+    /// ONE denial that is provably suspect</b> (#4061, finding 2).
+    ///
+    /// <para>A write refused on a partition whose durable store HOLDS a grant for the very
+    /// principal that was refused is not an ordinary permission decision: the permission fold and
+    /// the store disagree, and the store is the one that is authoritative. Until this overload the
+    /// generic "Access denied" was the ONLY thing said about it — the overload above answers
+    /// <c>null</c> for exactly this case, because grants EXIST, so the situation in which the
+    /// denial is least trustworthy produced the least information.</para>
+    ///
+    /// <para>That is what an intermittent CI failure looked like from the outside
+    /// (<c>SpaceDeletionPartitionDropTests</c>, a Space deleted and recreated under the same id:
+    /// <c>Access denied: Create permission required for node '&lt;space&gt;/page'</c>, no
+    /// diagnosis, and the run's own log showed the creator's grant had been written durably and
+    /// returned before the denied create began). The denial could not say whether the fold had
+    /// answered from a snapshot older than the write that authorised it, and nothing else could
+    /// say it either.</para>
+    ///
+    /// <para>🚨 <b>This does not change any verdict, and must not.</b> The decision is already
+    /// taken when this runs; the store-side grant is EVIDENCE, never an authorisation — reading it
+    /// as one would be a second, unreviewed permission path that bypasses roles, denies, policies
+    /// and group expansion entirely. It says what it saw and stops.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose service provider resolves the storage adapter.</param>
+    /// <param name="nodePath">The path being written; its first segment is the partition.</param>
+    /// <param name="deniedUserId">The principal the write was refused for, or <c>null</c> to skip
+    /// the disagreement check and answer exactly as the legacy overload does.</param>
+    /// <returns>The diagnosis, or <c>null</c> when the partition is healthy / not diagnosable.</returns>
+    public static IObservable<string?> DescribeDeniedWrite(
+        IMessageHub hub, string? nodePath, string? deniedUserId)
     {
         ArgumentNullException.ThrowIfNull(hub);
         var partition = GetFirstSegment(nodePath);
@@ -336,12 +369,23 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         // rule 2 ("no partition, no write") names — and telling a caller it "exists but carries no
         // grants" would be plainly false. Probed first so the other two reads are never paid for a
         // partition that isn't there.
+        // 🚨 The grant paths, not merely whether there ARE any — the disagreement check below needs
+        // to know WHOSE. Same read, same Catch-to-"indeterminate says nothing" rule.
+        var grantPaths = persistence.ListChildPaths($"{partition}/{AccessSegment}")
+            .Take(1)
+            .Select(children => (IReadOnlyList<string>)(children.NodePaths?.ToArray() ?? []))
+            .Catch<IReadOnlyList<string>, Exception>(_ => Observable.Return<IReadOnlyList<string>>([]));
+
         return ReadOrNull(partition)
             .Select(root => root ?? StaticRootAt(hub, partition))
             .SelectMany(root => root is null
                 ? Observable.Return<string?>(null)
-                : Observable.Zip(hasGrants, hasPolicy,
-                    (grants, policy) => grants || policy ? null : diagnosis));
+                : Observable.Zip(hasGrants, hasPolicy, grantPaths,
+                    (grants, policy, paths) => grants || policy
+                        // Grants (or a policy) exist, so this is NOT the #638 residue. But if one
+                        // of them is the refused principal's, the denial disagrees with the store.
+                        ? Disagreement(partition, deniedUserId, paths)
+                        : diagnosis));
 
         IObservable<MeshNode?> ReadOrNull(string path) =>
             persistence.Read(path, hub.JsonSerializerOptions)
@@ -349,6 +393,41 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                 .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
                 .DefaultIfEmpty(null);
     }
+
+    /// <summary>
+    /// The note for a denial the durable store disagrees with, or <c>null</c>.
+    ///
+    /// <para>Matched on the grant path's own shape — <c>{partition}/_Access/{principal}_Access</c>,
+    /// the id every creator grant is minted under — rather than by deserialising each grant. A
+    /// denial is not a place to pay N content reads, and the id is in the path by construction of
+    /// the one writer that mints them. A grant written under some other id simply does not match:
+    /// this says less than it could, never more than it knows.</para>
+    /// </summary>
+    private static string? Disagreement(
+        string partition, string? deniedUserId, IReadOnlyList<string> grantPaths)
+    {
+        if (string.IsNullOrEmpty(deniedUserId) || grantPaths.Count == 0)
+            return null;
+        var expected = $"{partition}/{AccessSegment}/{deniedUserId}{AccessIdSuffix}";
+        if (!grantPaths.Any(p => string.Equals(p, expected, StringComparison.OrdinalIgnoreCase)))
+            return null;
+        // 🚨 It says what it SAW, and names both causes rather than picking one. This probe reads
+        // PATHS, not content — so "the fold read a stale snapshot" and "that node is not a grant
+        // the fold can read" are equally consistent with the evidence, and asserting the first
+        // would send a reader to retry a state that retrying cannot fix.
+        return $"🚨 '{partition}/{AccessSegment}' holds a node at '{expected}' — the path a grant "
+               + $"for '{deniedUserId}' is minted under — that this permission check did not "
+               + "honour. The durable store and the permission fold disagree, so this denial is "
+               + "not a settled decision about your access. Two known causes: the fold answered "
+               + "from a snapshot older than the write that granted it (retrying the same "
+               + "operation normally succeeds), or that node is not a readable AccessAssignment "
+               + "(its content degraded to untyped JSON, so the fold skips it and retrying will "
+               + "not help). Please report it with this message (MeshWeaver#4061).";
+    }
+
+    /// <summary>The id suffix <c>SpacePostCreationHandler</c> mints a creator grant under —
+    /// <c>{principal}_Access</c> — which is what puts the principal in the grant's PATH.</summary>
+    private const string AccessIdSuffix = "_Access";
 
     /// <summary>
     /// The static/config node served at a partition path, or <c>null</c> — a definition-only entry
