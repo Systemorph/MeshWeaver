@@ -1,3 +1,4 @@
+using System.Threading;
 using System;
 using System.Linq;
 using System.Reactive.Linq;
@@ -20,7 +21,7 @@ public class MeshTestRunnerTests
         [MeshFact(DisplayName = "an async case")] public async Task PassesAsync() { await Task.Delay(1); }
         [MeshFact] public void Fails() => throw new InvalidOperationException("the assertion message");
         [MeshFact(Skip = "not today")] public void Skipped() => throw new Exception("never runs");
-        [MeshFact(TimeoutSeconds = 1)] public async Task Hangs() => await Task.Delay(TimeSpan.FromSeconds(30));
+        [MeshFact(TimeoutSeconds = 1)] public async Task Hangs() => await Task.Delay(Timeout.InfiniteTimeSpan);
         [MeshTheory] [MeshInlineData(1, 2)] [MeshInlineData(2, 3)] public void Adds(int a, int expected) { if (a + 1 != expected) throw new Exception($"{a}+1 != {expected}"); }
     }
 
